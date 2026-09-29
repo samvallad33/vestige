@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use borsh::BorshDeserialize;
 use strata::payload_blake3;
 use strata_gate::policy::{ANY_KIND, WILDCARD_PREFIX};
-use strata_gate::record::{RecordKind, Verdict};
+use strata_gate::record::{action_kind, EffectRecord, GateRecord, Propose, RecordKind, Verdict};
 use strata_gate::{Policy, Rule};
 use strata_kernel::fsrs::{FsrsFold, ALGO_V2};
 
@@ -17,7 +17,11 @@ use crate::store::{
     migration_node, CheckpointPayload, WritePayload,
 };
 use crate::types::{ConnectionRecord, EdgeDirection, EdgeKind, IngestInput};
-use crate::{looks_like_failure, StoreError, StrataStore};
+use crate::{
+    default_policy, effect_receipt_id, looks_like_failure, retire_rule_id, AdmissionContext,
+    EffectAction, RetireReceipt, StoreError, StrataStore, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE,
+    RULE_SUPPRESS,
+};
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("strata-store-test-{}-{name}", std::process::id()));
@@ -631,6 +635,9 @@ fn replay_store_and_migration_frames_do_not_cross_classify() {
                 StoreOp::SaveEdge { .. } => saw_edge = true,
                 StoreOp::SupersedeNode { .. } => saw_supersede = true,
                 StoreOp::ReviewNode { .. } => saw_review = true,
+                // This fixture writes no intention batch. The arm keeps the
+                // match exhaustive after UpsertIntentions landed.
+                StoreOp::UpsertIntentions { .. } => {}
             }
         } else if frame.kind == KIND_STORE_CHECKPOINT {
             store_checkpoints += 1;
@@ -1002,5 +1009,651 @@ fn review_without_clock_replays_as_unset() {
     drop(store);
     let reopened = StrataStore::open(&dir).expect("reopen");
     assert!(reopened.reviewed_at_ms(&id).is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn intention(id: &str, content: &str) -> crate::IntentionRecord {
+    crate::IntentionRecord {
+        id: id.to_string(),
+        content: content.to_string(),
+        trigger_type: "time".into(),
+        trigger_data: r#"{"type":"time","at":"2020-01-01T00:00:00Z"}"#.into(),
+        priority: 2,
+        status: "active".into(),
+        created_at_ms: 1_700_000_000_000,
+        deadline_ms: None,
+        fulfilled_at_ms: None,
+        reminder_count: 0,
+        last_reminded_at_ms: None,
+        notes: None,
+        tags: vec!["fixture".into()],
+        related_memories: Vec::new(),
+        snoozed_until_ms: None,
+        source_type: "mcp".into(),
+        source_data: None,
+        scope: Some("user".into()),
+    }
+}
+
+#[test]
+fn intention_upsert_replays_and_rejects_an_empty_id() {
+    let dir = temp_dir("intention");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let effect = store
+        .upsert_intentions(vec![intention("int-1", "Synthetic reminder")])
+        .expect("admit");
+    assert!(effect > 0);
+    assert_eq!(store.origin_seq("int-1"), Some(effect));
+    let err = store
+        .upsert_intentions(vec![intention("", "no id")])
+        .expect_err("empty id");
+    assert!(err.to_string().contains("id must not be empty"), "{err}");
+    let digest = store.state_digest();
+    drop(store);
+
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    let row = reopened.get_intention("int-1").expect("replayed");
+    assert_eq!(row.content, "Synthetic reminder");
+    assert_eq!(row.trigger_type, "time");
+    assert_eq!(reopened.state_digest(), digest);
+    assert_eq!(reopened.intentions().len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn upsert_intentions_op_round_trips_through_borsh_and_replay() {
+    let records = vec![intention("int-a", "one"), intention("int-b", "two")];
+    let op = StoreOp::UpsertIntentions {
+        records: records.clone(),
+    };
+    let bytes = borsh::to_vec(&op).expect("encode");
+    let decoded = StoreOp::try_from_slice(&bytes).expect("decode");
+    assert_eq!(decoded, op);
+
+    let dir = temp_dir("intention-roundtrip");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let effect = store.upsert_intentions(records).expect("admit");
+    let digest = store.state_digest();
+    drop(store);
+
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(reopened.origin_seq("int-a"), Some(effect));
+    assert_eq!(reopened.origin_seq("int-b"), Some(effect));
+    assert_eq!(reopened.get_intention("int-a").expect("a").content, "one");
+    assert_eq!(reopened.get_intention("int-b").expect("b").content, "two");
+    assert_eq!(reopened.state_digest(), digest);
+    let writes: Vec<_> = reopened
+        .log()
+        .read_frames(1)
+        .expect("frames")
+        .into_iter()
+        .filter(|frame| frame.kind == KIND_STORE_WRITE)
+        .collect();
+    assert_eq!(writes.len(), 1, "one op, one data frame");
+    assert_eq!(
+        StoreOp::try_from_slice(&writes[0].payload).expect("payload"),
+        op
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intention_batch_is_one_admitted_write_and_a_bad_batch_writes_nothing() {
+    let dir = temp_dir("intention-atomic");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let before = store.log().head().frames_total;
+    let effect = store
+        .upsert_intentions(vec![intention("a", "one"), intention("b", "two")])
+        .expect("admit");
+    let after = store.log().head().frames_total;
+    assert_eq!(after - before, 4, "propose, gate, effect, one data frame");
+    assert_eq!(store.origin_seq("a"), Some(effect));
+    assert_eq!(store.origin_seq("b"), Some(effect));
+    let writes = store
+        .log()
+        .read_frames(1)
+        .expect("frames")
+        .into_iter()
+        .filter(|frame| frame.kind == KIND_STORE_WRITE)
+        .count();
+    assert_eq!(writes, 1);
+
+    let head = store.log().head().frames_total;
+    let digest = store.state_digest();
+    let err = store
+        .upsert_intentions(vec![intention("a", "changed"), intention("a", "again")])
+        .expect_err("duplicate id");
+    assert!(err.to_string().contains("duplicate"), "{err}");
+    assert_eq!(store.log().head().frames_total, head);
+    assert_eq!(store.state_digest(), digest);
+    assert_eq!(store.get_intention("a").expect("a").content, "one");
+    assert_eq!(store.get_intention("b").expect("b").content, "two");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn recorded_origin_reads_the_creating_frame_and_supersede_chain() {
+    let dir = temp_dir("origin");
+    let mut store = StrataStore::open_with_policy(&dir, permissive_policy()).expect("open");
+    let old = store
+        .ingest_in_scope(input("older fact", &["seed"]), "user")
+        .expect("old");
+    let new = store
+        .ingest_in_scope(input("newer fact", &[]), "user")
+        .expect("new");
+    store.supersede(&old, &new).expect("supersede");
+    store
+        .save_connection(&ConnectionRecord {
+            source_id: new.clone(),
+            target_id: old.clone(),
+            link_type: EdgeKind::Supersedes.as_str().to_string(),
+            ..ConnectionRecord::default()
+        })
+        .expect("edge");
+
+    let origin = store.recorded_origin(&old).expect("read").expect("origin");
+    assert_eq!(origin.record.id, old);
+    assert_eq!(origin.record.content, "older fact");
+    assert_eq!(origin.record.tags, vec!["seed".to_string()]);
+    assert_eq!(origin.record.created_at_ms, 1_700_000_000_000);
+    assert_eq!(origin.frame_kind, KIND_STORE_WRITE);
+    assert_eq!(origin.effect_frame_seq.unwrap() + 1, origin.frame_seq);
+    assert_eq!(origin.supersede_chain.len(), 2);
+    assert_eq!(origin.supersede_chain[0].id, old);
+    assert_eq!(origin.supersede_chain[0].superseded_by, new);
+    assert_eq!(origin.supersede_chain[0].recorded_as, "SupersedeNode");
+    assert_eq!(origin.supersede_chain[1].recorded_as, "supersedes");
+    assert_eq!(origin.supersede_chain[1].id, old);
+    assert_eq!(origin.supersede_chain[1].superseded_by, new);
+    assert!(store
+        .recorded_origin("mem-missing")
+        .expect("read")
+        .is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn review_card_matches_independent_fsrs6_fold() {
+    let dir = temp_dir("fsrs-fold");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let id = store.ingest(input("fsrs fixture", &[])).expect("ingest");
+    store.review(&id, 4).expect("easy");
+    store.review(&id, 1).expect("again");
+    let mut state = strata_kernel::state::State::default();
+    let kernel = strata_kernel::kernel::Kernel::<strata_kernel::event::ReviewEvent>::for_version(
+        strata_kernel::fsrs::ALGO_V2,
+    )
+    .expect("v2 kernel");
+    for event in store.review_events() {
+        kernel.apply(&mut state, &event);
+    }
+    let card = store.card_state(&id).expect("card");
+    assert_eq!(card, state.cards[&handle_of(&id)]);
+    assert_eq!(card.review_count, 3);
+    assert_eq!(card.lapse_count, 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_returns_successor_and_receipt_naming_edit() {
+    let dir = temp_dir("edit-bytes");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let id = store
+        .ingest(input("original strata edit bytes", &["kept"]))
+        .expect("ingest");
+    store.review(&id, 4).expect("easy");
+    store.review(&id, 1).expect("again");
+    let before = store.card_state(&id).expect("card");
+    let old_reviews = store.review_events().len();
+    let (successor, receipt) = store
+        .edit(
+            &id,
+            "replacement strata edit bytes",
+            &AdmissionContext {
+                rule_id: Some(RULE_EDIT.to_string()),
+                confirm: false,
+            },
+        )
+        .expect("edit");
+    assert_ne!(successor, id);
+    assert_eq!(receipt.rule_id, Some(RULE_EDIT));
+    assert_eq!(receipt.receipt_id, effect_receipt_id(receipt.effect_seq));
+    assert_eq!(
+        store.get_node(&id).expect("old").superseded_by.as_deref(),
+        Some(successor.as_str())
+    );
+    assert_eq!(
+        store.get_node(&id).expect("old").content,
+        "original strata edit bytes"
+    );
+    let live = store.get_all_nodes_in_scope("");
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].id, successor);
+    assert_eq!(live[0].content, "replacement strata edit bytes");
+    assert_eq!(live[0].tags, vec!["kept".to_string()]);
+    assert_eq!(store.card_state(&id).expect("old card"), before);
+    let successor_card = store.card_state(&successor).expect("successor card");
+    assert_eq!(successor_card.review_count, 1);
+    assert_eq!(successor_card.lapse_count, 0);
+    assert_eq!(store.review_events().len(), old_reviews + 1);
+    let proof = store
+        .effect_by_seq(receipt.effect_seq)
+        .expect("prove")
+        .expect("edit effect");
+    assert_eq!(proof.action, EffectAction::Edit);
+    assert_eq!(proof.node_id, successor);
+    drop(store);
+    let mut blob = Vec::new();
+    for entry in std::fs::read_dir(dir.join("log")).expect("log dir") {
+        let path = entry.expect("entry").path();
+        if path.is_file() {
+            blob.extend(std::fs::read(&path).expect("read"));
+        }
+    }
+    assert!(blob
+        .windows(b"original strata edit bytes".len())
+        .any(|w| w == b"original strata edit bytes"));
+    assert!(blob
+        .windows(b"replacement strata edit bytes".len())
+        .any(|w| w == b"replacement strata edit bytes"));
+    let store = StrataStore::open(&dir).expect("reopen");
+    let again = store
+        .retire_receipt(receipt.effect_seq)
+        .expect("replayed receipt");
+    assert_eq!(again.rule_id, Some(RULE_EDIT));
+    assert_eq!(again.receipt_id, receipt.receipt_id);
+    assert_eq!(
+        store.get_node(&id).expect("old").content,
+        "original strata edit bytes"
+    );
+    assert_eq!(store.card_state(&id).expect("old card"), before);
+    assert_eq!(
+        store
+            .card_state(&successor)
+            .expect("successor")
+            .review_count,
+        1
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn held_edit_without_rule_id_leaves_no_live_duplicate() {
+    let dir = temp_dir("edit-held-dup");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let id = store.ingest(input("stays live", &[])).expect("ingest");
+    let live = store.get_all_nodes_in_scope("").len();
+    let total = store.node_count();
+    let err = store
+        .edit(&id, "would duplicate", &AdmissionContext::default())
+        .expect_err("no rule id");
+    assert!(matches!(err, StoreError::Held { .. }), "{err}");
+    assert_eq!(store.node_count(), total);
+    assert_eq!(store.get_all_nodes_in_scope("").len(), live);
+    assert!(store.supersession_pairs().is_empty());
+    assert_eq!(store.get_node(&id).expect("old").content, "stays live");
+    assert!(store.get_node(&id).expect("old").superseded_by.is_none());
+    let err = store
+        .edit(
+            &id,
+            "still no",
+            &AdmissionContext {
+                rule_id: Some("edited".into()),
+                confirm: true,
+            },
+        )
+        .expect_err("unknown rule");
+    assert!(matches!(err, StoreError::Held { .. }), "{err}");
+    assert_eq!(store.node_count(), total);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn ctx(rule: Option<&str>, confirm: bool) -> AdmissionContext {
+    AdmissionContext {
+        rule_id: rule.map(str::to_string),
+        confirm,
+    }
+}
+
+fn assert_held(err: StoreError) {
+    assert!(matches!(err, StoreError::Held { .. }), "{err}");
+}
+
+fn effect_frames(store: &StrataStore) -> Vec<(u64, EffectRecord)> {
+    let mut out = Vec::new();
+    let mut gseq = 0u64;
+    for frame in store.log().read_frames(1).expect("frames") {
+        let Some(kind) = RecordKind::from_u8(frame.kind) else {
+            continue;
+        };
+        if kind == RecordKind::Effect {
+            let effect = EffectRecord::try_from_slice(&frame.payload).expect("effect");
+            out.push((gseq, effect));
+        }
+        gseq += 1;
+    }
+    out
+}
+
+fn propose_at(store: &StrataStore, propose_seq: u64) -> Propose {
+    let mut gseq = 0u64;
+    for frame in store.log().read_frames(1).expect("frames") {
+        let Some(kind) = RecordKind::from_u8(frame.kind) else {
+            continue;
+        };
+        if kind == RecordKind::Propose && gseq == propose_seq {
+            return Propose::try_from_slice(&frame.payload).expect("propose");
+        }
+        gseq += 1;
+    }
+    panic!("no propose at gate seq {propose_seq}");
+}
+
+/// The admitting EffectRecord's proposal carries the rule id, and the
+/// receipt id is `eff-` plus that effect seq.
+fn assert_rule_receipt(store: &StrataStore, receipt: &RetireReceipt, rule: &'static str) {
+    assert_eq!(receipt.rule_id, Some(rule));
+    assert_eq!(receipt.receipt_id, effect_receipt_id(receipt.effect_seq));
+    assert!(receipt.receipt_id.starts_with("eff-"));
+    let effect = effect_frames(store)
+        .into_iter()
+        .find(|(seq, _)| *seq == receipt.effect_seq)
+        .map(|(_, effect)| effect)
+        .expect("EffectRecord");
+    let propose = propose_at(store, effect.propose_seq);
+    assert_eq!(propose.action_kind, action_kind::RETIRE);
+    assert_eq!(propose.action_hash, effect.action_hash);
+    assert_eq!(retire_rule_id(&propose.params_hash), Some(rule));
+    let digest_landed = store
+        .log()
+        .read_frames(1)
+        .expect("frames")
+        .into_iter()
+        .any(|frame| {
+            frame.kind == KIND_STORE_WRITE
+                && *blake3::hash(&frame.payload).as_bytes() == effect.payload_digest
+        });
+    assert!(digest_landed, "STORE_WRITE cited by the effect");
+}
+
+fn stored_gate_verdicts(store: &StrataStore) -> Vec<(u64, Verdict)> {
+    let mut out = Vec::new();
+    let mut gseq = 0u64;
+    for frame in store.log().read_frames(1).expect("frames") {
+        let Some(kind) = RecordKind::from_u8(frame.kind) else {
+            continue;
+        };
+        if kind == RecordKind::Gate {
+            let gate = GateRecord::try_from_slice(&frame.payload).expect("gate");
+            out.push((gseq, gate.verdict));
+        }
+        gseq += 1;
+    }
+    out
+}
+
+fn pair(name: &str) -> (PathBuf, StrataStore, String, String) {
+    let dir = temp_dir(name);
+    let mut store = StrataStore::open(&dir).expect("open");
+    let old = store.ingest(input("predecessor", &[])).expect("old");
+    let successor = store.ingest(input("successor", &[])).expect("new");
+    (dir, store, old, successor)
+}
+
+fn expect_allow(
+    dir: &PathBuf,
+    store: StrataStore,
+    receipt: RetireReceipt,
+    rule: &'static str,
+    old: &str,
+) {
+    assert_rule_receipt(&store, &receipt, rule);
+    assert!(store.get_node(old).expect("old").superseded_by.is_some());
+    assert_eq!(
+        store.rederive_verdicts().expect("rederive"),
+        stored_gate_verdicts(&store)
+    );
+    assert!(store.sweep().is_empty());
+    let seq = receipt.effect_seq;
+    let receipt_id = receipt.receipt_id.clone();
+    drop(store);
+    let reopened = StrataStore::open(dir).expect("reopen");
+    let again = reopened.retire_receipt(seq).expect("replayed receipt");
+    assert_eq!(again.rule_id, Some(rule));
+    assert_eq!(again.receipt_id, receipt_id);
+    assert_rule_receipt(&reopened, &again, rule);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn named_retire_rules_precede_the_catchall_hold() {
+    let policy = default_policy();
+    assert_eq!(policy.rules.len(), 6);
+    let ids = [RULE_EDIT, RULE_SUPPRESS, RULE_INTENTIONS, RULE_PURGE];
+    let mut prefixes = Vec::new();
+    for (rule, id) in policy.rules.iter().take(4).zip(ids) {
+        assert_eq!(rule.match_kind, action_kind::RETIRE);
+        assert_eq!(rule.verdict, Verdict::Allow);
+        assert_ne!(rule.match_params_hash_prefix, WILDCARD_PREFIX);
+        let mut hash = [0u8; 32];
+        hash[..8].copy_from_slice(&rule.match_params_hash_prefix);
+        assert_eq!(retire_rule_id(&hash), Some(id));
+        prefixes.push(rule.match_params_hash_prefix);
+    }
+    prefixes.sort();
+    prefixes.dedup();
+    assert_eq!(prefixes.len(), 4, "the four rule prefixes must be distinct");
+    assert_eq!(policy.rules[4].match_kind, action_kind::RETIRE);
+    assert_eq!(policy.rules[4].verdict, Verdict::Hold);
+    assert_eq!(policy.rules[4].match_params_hash_prefix, WILDCARD_PREFIX);
+    assert_eq!(policy.rules[5].match_kind, ANY_KIND);
+    assert_eq!(policy.rules[5].verdict, Verdict::Allow);
+}
+
+#[test]
+fn edit_allows_only_with_rule_id_and_successor_in_the_call() {
+    let dir = temp_dir("edit-allow");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let old = store.ingest(input("edit", &["suppress"])).expect("old");
+    store.begin_tool_call();
+    let successor = store.ingest(input("successor", &[])).expect("successor");
+    let receipt = store
+        .retire(&old, &successor, &ctx(Some(RULE_EDIT), false))
+        .expect("edit allows");
+    expect_allow(&dir, store, receipt, RULE_EDIT, &old);
+}
+
+#[test]
+fn edit_held_without_rule_id() {
+    let (dir, mut store, old, successor) = pair("edit-no-id");
+    store.begin_tool_call();
+    let err = store
+        .retire(&old, &successor, &ctx(None, false))
+        .expect_err("no rule id");
+    assert_held(err);
+    assert!(store.get_node(&old).unwrap().superseded_by.is_none());
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn empty_policy_denies_review_without_changing_the_card() {
+    let dir = temp_dir("deny-review");
+    let id = {
+        let mut store = StrataStore::open(&dir).expect("open");
+        store.ingest(input("held out", &[])).expect("ingest")
+    };
+    let mut store =
+        StrataStore::open_with_policy(&dir, Policy { rules: Vec::new() }).expect("reopen denied");
+    let before = store.card_state(&id).expect("card");
+    let err = store.review(&id, 4).expect_err("deny");
+    assert!(matches!(err, StoreError::Denied { .. }), "{err}");
+    assert_eq!(store.card_state(&id).expect("card"), before);
+    assert_eq!(store.get_node(&id).expect("node").content, "held out");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_held_with_unknown_rule_id() {
+    let (dir, mut store, old, successor) = pair("edit-unknown");
+    store.begin_tool_call();
+    let err = store
+        .retire(&old, &successor, &ctx(Some("edited"), true))
+        .expect_err("unknown id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_held_when_successor_was_not_admitted_in_this_call() {
+    let (dir, mut store, old, successor) = pair("edit-stale");
+    let err = store
+        .retire(&old, &successor, &ctx(Some(RULE_EDIT), false))
+        .expect_err("successor predates the call");
+    assert_held(err);
+    store.begin_tool_call();
+    store.end_tool_call();
+    let err = store
+        .retire(&old, &successor, &ctx(Some(RULE_EDIT), false))
+        .expect_err("call closed");
+    assert_held(err);
+    assert!(store.get_node(&old).unwrap().superseded_by.is_none());
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn suppress_allows_with_rule_id() {
+    let (dir, mut store, old, successor) = pair("suppress-allow");
+    let receipt = store
+        .retire(&old, &successor, &ctx(Some(RULE_SUPPRESS), false))
+        .expect("suppress allows");
+    expect_allow(&dir, store, receipt, RULE_SUPPRESS, &old);
+}
+
+#[test]
+fn suppress_held_without_rule_id() {
+    let (dir, mut store, old, successor) = pair("suppress-no-id");
+    let err = store
+        .retire(&old, &successor, &ctx(None, true))
+        .expect_err("no rule id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn suppress_held_with_unknown_rule_id() {
+    let (dir, mut store, old, successor) = pair("suppress-unknown");
+    let err = store
+        .retire(&old, &successor, &ctx(Some("suppressed"), false))
+        .expect_err("unknown id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intentions_allows_with_rule_id() {
+    let (dir, mut store, old, successor) = pair("intentions-allow");
+    let receipt = store
+        .retire(&old, &successor, &ctx(Some(RULE_INTENTIONS), false))
+        .expect("intentions allows");
+    expect_allow(&dir, store, receipt, RULE_INTENTIONS, &old);
+}
+
+#[test]
+fn intentions_held_without_rule_id() {
+    let (dir, mut store, old, successor) = pair("intentions-no-id");
+    let err = store
+        .retire(&old, &successor, &AdmissionContext::default())
+        .expect_err("no rule id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intentions_held_with_unknown_rule_id() {
+    let (dir, mut store, old, successor) = pair("intentions-unknown");
+    let err = store
+        .retire(&old, &successor, &ctx(Some("intention"), false))
+        .expect_err("unknown id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn purge_allows_with_rule_id_and_confirm() {
+    let (dir, mut store, old, successor) = pair("purge-allow");
+    let receipt = store
+        .retire(&old, &successor, &ctx(Some(RULE_PURGE), true))
+        .expect("purge allows");
+    expect_allow(&dir, store, receipt, RULE_PURGE, &old);
+}
+
+#[test]
+fn purge_held_without_rule_id() {
+    let (dir, mut store, old, successor) = pair("purge-no-id");
+    let err = store
+        .retire(&old, &successor, &ctx(None, true))
+        .expect_err("confirm without a rule id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn purge_held_with_unknown_rule_id() {
+    let (dir, mut store, old, successor) = pair("purge-unknown");
+    let err = store
+        .retire(&old, &successor, &ctx(Some("purged"), true))
+        .expect_err("unknown id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn purge_held_without_confirm() {
+    let (dir, mut store, old, successor) = pair("purge-noconfirm");
+    let err = store
+        .retire(&old, &successor, &ctx(Some(RULE_PURGE), false))
+        .expect_err("purge without confirm");
+    assert_held(err);
+    assert!(store.get_node(&old).unwrap().superseded_by.is_none());
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn retire_without_rule_id_stays_held() {
+    let dir = temp_dir("no-rule");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let old = store
+        .ingest(input("edit suppress intentions purge", &["purge", "edit"]))
+        .expect("old");
+    let successor = store
+        .ingest(input("suppress", &["intentions"]))
+        .expect("successor");
+    let before = effect_frames(&store).len();
+    let err = store.supersede(&old, &successor).expect_err("supersede");
+    assert_held(err);
+    let err = store
+        .retire(&old, &successor, &AdmissionContext::default())
+        .expect_err("empty context");
+    assert_held(err);
+    assert_eq!(effect_frames(&store).len(), before);
+    assert_eq!(
+        store.rederive_verdicts().expect("rederive"),
+        stored_gate_verdicts(&store)
+    );
+    assert!(store.sweep().is_empty());
+    assert!(store.get_node(&old).unwrap().superseded_by.is_none());
+    assert!(store.supersession_pairs().is_empty());
+    drop(store);
     std::fs::remove_dir_all(&dir).ok();
 }

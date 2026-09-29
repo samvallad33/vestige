@@ -48,6 +48,7 @@ lost passphrase means the encrypted data is unrecoverable — that is the point.
 | `vestige-mcp` | MCP server for local agent memory |
 | `vestige` | CLI for stats, health checks, and maintenance |
 | `vestige-restore` | Restore helper for backup recovery |
+| `vestige-upgrade` | One-shot v3 store importer |
 
 ### Verify installation
 

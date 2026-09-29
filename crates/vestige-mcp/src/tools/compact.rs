@@ -264,6 +264,7 @@ pub fn full_schema(name: &str) -> Option<Value> {
         "project" => project::schema(),
         "intention" => intention_graph::schema(),
         "smart_ingest" => smart_ingest::schema(),
+        #[cfg(feature = "connectors")]
         "source_sync" => source_sync::schema(),
         "memory_status" => memory_status::schema(),
         "maintain" => maintain::schema(),

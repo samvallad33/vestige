@@ -114,6 +114,7 @@ else
             sudo mv "$VESTIGE_TMPDIR/vestige-mcp" "$INSTALL_DIR/"
             [ -f "$VESTIGE_TMPDIR/vestige" ] && sudo mv "$VESTIGE_TMPDIR/vestige" "$INSTALL_DIR/"
             [ -f "$VESTIGE_TMPDIR/vestige-restore" ] && sudo mv "$VESTIGE_TMPDIR/vestige-restore" "$INSTALL_DIR/"
+            [ -f "$VESTIGE_TMPDIR/vestige-upgrade" ] && sudo mv "$VESTIGE_TMPDIR/vestige-upgrade" "$INSTALL_DIR/"
         fi
     fi
 
@@ -121,6 +122,7 @@ else
         mv "$VESTIGE_TMPDIR/vestige-mcp" "$INSTALL_DIR/" 2>/dev/null || true
         [ -f "$VESTIGE_TMPDIR/vestige" ] && mv "$VESTIGE_TMPDIR/vestige" "$INSTALL_DIR/" 2>/dev/null || true
         [ -f "$VESTIGE_TMPDIR/vestige-restore" ] && mv "$VESTIGE_TMPDIR/vestige-restore" "$INSTALL_DIR/" 2>/dev/null || true
+        [ -f "$VESTIGE_TMPDIR/vestige-upgrade" ] && mv "$VESTIGE_TMPDIR/vestige-upgrade" "$INSTALL_DIR/" 2>/dev/null || true
     fi
 
     VESTIGE_PATH="$INSTALL_DIR/vestige-mcp"

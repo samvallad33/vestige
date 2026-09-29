@@ -169,13 +169,10 @@ If a source memory is suppressed or purged, its replay capsule becomes
 non-replayable under its privacy state. Do not infer that a replay remains
 available after a lifecycle operation.
 
-`memory` action `purge` removes canonical content and embeddings after an
-explicit `confirm: true`. The current public purge response is a
-`legacy_audited_purge` with `unlearning.verdict: "incomplete"`: it retains only
-opaque audit/sync markers and limited metadata. It does **not** establish
-complete machine unlearning. Verify and remove copies under your own backups,
-exports, sync systems, and incident tooling according to their separate
-retention controls.
+`memory` action `purge` with `confirm: true` retires the memory under the
+`purge` rule. The response is the node id and an `eff-` receipt naming
+`purge`. A retired memory can't be retrieved. Without `confirm: true` the
+gate holds and the log stays unchanged.
 
 ## Durability and backups
 

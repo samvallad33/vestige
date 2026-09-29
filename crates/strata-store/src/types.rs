@@ -221,6 +221,69 @@ impl ConnectionRecord {
     }
 }
 
+/// One prospective intention. Timestamps are unix milliseconds supplied by
+/// the caller; this store does not read a clock. Trigger text is stored
+/// verbatim — matching stays in the tool, and it is exact or structural.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct IntentionRecord {
+    /// Caller-supplied id (the tool's uuid). The registry key.
+    pub id: String,
+    /// What to remember to do.
+    pub content: String,
+    /// `time`, `context`, `event`, `activity`, `recurring`, `compound`, or `manual`.
+    pub trigger_type: String,
+    /// Canonical trigger JSON produced by the tool.
+    pub trigger_data: String,
+    /// 1=low, 2=normal, 3=high, 4=critical.
+    pub priority: i32,
+    /// `active`, `fulfilled`, `cancelled`, or `snoozed`.
+    pub status: String,
+    /// Creation time (unix ms).
+    pub created_at_ms: i64,
+    /// Optional deadline (unix ms).
+    pub deadline_ms: Option<i64>,
+    /// Set when status becomes `fulfilled`.
+    pub fulfilled_at_ms: Option<i64>,
+    /// How many times a check has delivered this intention.
+    pub reminder_count: i32,
+    /// Last delivery time (unix ms).
+    pub last_reminded_at_ms: Option<i64>,
+    /// Free-form notes. Unused by `set`.
+    pub notes: Option<String>,
+    /// Tags, in caller order.
+    pub tags: Vec<String>,
+    /// Related memory ids, in caller order.
+    pub related_memories: Vec<String>,
+    /// Snooze deadline (unix ms).
+    pub snoozed_until_ms: Option<i64>,
+    /// `mcp` or `nlp`.
+    pub source_type: String,
+    /// Optional source payload.
+    pub source_data: Option<String>,
+    /// Project namespace. Blank resolves to `user` on read.
+    pub scope: Option<String>,
+}
+
+impl IntentionRecord {
+    /// The columns a check compares before it claims a delivery.
+    ///
+    /// Same predicate as the SQLite `UPDATE ... WHERE` in
+    /// `commit_intention_check`: identity, notes, tags, and scope are not
+    /// part of the claim.
+    pub fn same_claim(&self, other: &Self) -> bool {
+        self.trigger_type == other.trigger_type
+            && self.trigger_data == other.trigger_data
+            && self.status == other.status
+            && self.reminder_count == other.reminder_count
+            && self.last_reminded_at_ms == other.last_reminded_at_ms
+            && self.snoozed_until_ms == other.snoozed_until_ms
+            && self.content == other.content
+            && self.priority == other.priority
+            && self.deadline_ms == other.deadline_ms
+            && self.fulfilled_at_ms == other.fulfilled_at_ms
+    }
+}
+
 /// Whole-word failure markers, ported from vestige-core's
 /// `advanced::retroactive_backfill::FAILURE_MARKERS` (same list, same
 /// semantics: bare "500" and bare "pinned" stay removed).

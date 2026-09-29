@@ -5,7 +5,7 @@
 //! is a derived index rebuilt by replay on open — proven bit-identical by
 //! [`StrataStore::state_digest`] across open/close/open cycles.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -24,7 +24,8 @@ use crate::error::StoreError;
 use crate::gate_log::StrataEventLog;
 use crate::op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 use crate::types::{
-    ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, NodeRecord, VALID_FOREVER_MS,
+    ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, IntentionRecord, NodeRecord,
+    VALID_FOREVER_MS,
 };
 
 /// Subdirectory holding the durable log.
@@ -44,14 +45,127 @@ struct StoreMeta {
     head_log_seq: u64,
 }
 
-/// The default pinned policy: allow writes, hold destructive actions.
+/// Policy that admits `RETIRE` (supersede) as well as writes.
 ///
-/// Rule 1 holds every `RETIRE` action (supersession); rule 2 allows anything
-/// else under a generous blast-radius cap. First match wins; empty policy =
-/// deny everything (useful for tests).
+/// The MCP server pins [`default_policy`], which holds every retire. Tests
+/// that need a recorded supersession chain open with this policy instead.
+pub fn permissive_policy() -> Policy {
+    Policy {
+        rules: vec![Rule {
+            match_kind: ANY_KIND,
+            match_params_hash_prefix: WILDCARD_PREFIX,
+            max_blast_radius: u32::MAX,
+            forbid_forgotten_lessons: false,
+            require_human: false,
+            verdict: Verdict::Allow,
+        }],
+    }
+}
+
+/// Domain separator for a RETIRE rule id. The prefix is not a hash of node
+/// content, ids, or names.
+const RETIRE_RULE_DOMAIN: &[u8] = b"strata.retire.v1\0";
+
+/// Named RETIRE rule: successor was admitted in this tool call.
+pub const RULE_EDIT: &str = "edit";
+/// Named RETIRE rule: suppression.
+pub const RULE_SUPPRESS: &str = "suppress";
+/// Named RETIRE rule: intention update.
+pub const RULE_INTENTIONS: &str = "intentions";
+/// Named RETIRE rule: purge. Also requires [`AdmissionContext::confirm`].
+pub const RULE_PURGE: &str = "purge";
+
+const NAMED_RETIRE_RULES: [&str; 4] = [RULE_EDIT, RULE_SUPPRESS, RULE_INTENTIONS, RULE_PURGE];
+
+/// What the caller claims about a RETIRE. The gate matches the rule id here,
+/// never node content or names.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AdmissionContext {
+    /// Exact rule id: `edit`, `suppress`, `intentions`, or `purge`.
+    pub rule_id: Option<String>,
+    /// Required for `purge`. Ignored by the other three rules.
+    pub confirm: bool,
+}
+
+/// Receipt for an admitted RETIRE. `receipt_id` is `eff-` plus the effect seq.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetireReceipt {
+    /// `eff-` + 16 lowercase hex digits of [`Self::effect_seq`].
+    pub receipt_id: String,
+    /// Named rule that authorized this RETIRE, when one did.
+    pub rule_id: Option<&'static str>,
+    /// Gate-space seq of the admitting [`EffectRecord`].
+    pub effect_seq: u64,
+}
+
+/// `eff-` + 16 lowercase hex digits of the admitting effect's gate seq.
+pub fn effect_receipt_id(effect_seq: u64) -> String {
+    format!("eff-{effect_seq:016x}")
+}
+
+/// blake3(domain || rule id). Admission copies this into `PROPOSE.params_hash`
+/// only after the context's rule id matches exactly.
+fn rule_id_hash(rule_id: &str) -> [u8; 32] {
+    let mut body = Vec::with_capacity(RETIRE_RULE_DOMAIN.len() + rule_id.len());
+    body.extend_from_slice(RETIRE_RULE_DOMAIN);
+    body.extend_from_slice(rule_id.as_bytes());
+    hash32(&body)
+}
+
+fn rule_id_prefix(rule_id: &str) -> [u8; 8] {
+    let hash = rule_id_hash(rule_id);
+    let mut prefix = [0u8; 8];
+    prefix.copy_from_slice(&hash[..8]);
+    prefix
+}
+
+/// Rule id encoded in `params_hash`, or `None` when it is not one of the four.
+pub fn retire_rule_id(params_hash: &[u8; 32]) -> Option<&'static str> {
+    NAMED_RETIRE_RULES
+        .into_iter()
+        .find(|id| params_hash[..8] == rule_id_prefix(id))
+}
+
+/// `edit` also needs the successor in this tool call. `purge` also needs
+/// `confirm`. Any other id, including a missing one, does not authorize.
+fn named_retire_rule(
+    rule_id: Option<&str>,
+    confirm: bool,
+    successor_in_call: bool,
+) -> Option<&'static str> {
+    match rule_id {
+        Some(RULE_EDIT) if successor_in_call => Some(RULE_EDIT),
+        Some(RULE_SUPPRESS) => Some(RULE_SUPPRESS),
+        Some(RULE_INTENTIONS) => Some(RULE_INTENTIONS),
+        Some(RULE_PURGE) if confirm => Some(RULE_PURGE),
+        _ => None,
+    }
+}
+
+fn retire_allow(rule_id: &str) -> Rule {
+    Rule {
+        match_kind: action_kind::RETIRE,
+        match_params_hash_prefix: rule_id_prefix(rule_id),
+        max_blast_radius: u32::MAX,
+        forbid_forgotten_lessons: false,
+        require_human: false,
+        verdict: Verdict::Allow,
+    }
+}
+
+/// The default pinned policy: four named RETIRE allows, then hold every
+/// other RETIRE, then allow anything else under a blast-radius cap.
+///
+/// First match wins. A named rule matches only when admission copied that
+/// rule id's hash into `params_hash` from [`AdmissionContext`]. Empty policy
+/// denies everything (useful for tests).
 pub fn default_policy() -> Policy {
     Policy {
         rules: vec![
+            retire_allow(RULE_EDIT),
+            retire_allow(RULE_SUPPRESS),
+            retire_allow(RULE_INTENTIONS),
+            retire_allow(RULE_PURGE),
             Rule {
                 match_kind: action_kind::RETIRE,
                 match_params_hash_prefix: WILDCARD_PREFIX,
@@ -70,6 +184,38 @@ pub fn default_policy() -> Policy {
             },
         ],
     }
+}
+
+/// What an admitted node effect did. Derived by replaying the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectAction {
+    /// First upsert of a node (ingest). Folds one Good review.
+    Create,
+    /// Later upsert of an existing node (`set_created_at`). No new review.
+    Rewrite,
+    /// Successor admitted under the `edit` RETIRE rule. The predecessor stays
+    /// in the log; its card is not copied.
+    Edit,
+    /// Explicit FSRS review. `rating` is 1..=4.
+    Review,
+}
+
+/// One node effect proved from the log: covering propose, Allow gate, and a
+/// data frame whose blake3 matches the effect's payload digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectProof {
+    /// Gate-space seq of the EFFECT record (`eff-` receipt id).
+    pub effect_seq: u64,
+    /// Log seq of the STORE_WRITE frame (FSRS `event_seq` for reviews).
+    pub data_seq: u64,
+    /// Node the effect names.
+    pub node_id: String,
+    /// Which mutation landed.
+    pub action: EffectAction,
+    /// blake3 of the `StoreOp` payload. Equals `EFFECT.payload_digest`.
+    pub payload_digest: [u8; 32],
+    /// Review rating when `action` is [`EffectAction::Review`].
+    pub rating: Option<u8>,
 }
 
 /// Stable u64 card handle for a node id: first 8 bytes of blake3(id),
@@ -110,6 +256,7 @@ struct StateDigest<'a> {
     orphan_writes: u64,
     /// card handle → latest explicit `reviewed_at_ms`.
     reviewed_at: Vec<(u64, i64)>,
+    intentions: Vec<(&'a str, &'a IntentionRecord)>,
 }
 
 /// A payload is this type only when borsh consumes it exactly. Kind bytes
@@ -173,6 +320,50 @@ pub(crate) fn classify_checkpoint_payload(payload: &[u8]) -> CheckpointPayload {
     }
 }
 
+/// One recorded supersession hop, in log order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupersedeHop {
+    /// Node that was superseded.
+    pub id: String,
+    /// Node that replaced `id`.
+    pub superseded_by: String,
+    /// Log seq of the frame that recorded the hop.
+    pub frame_seq: u64,
+    /// Chain hash of that frame.
+    pub frame_hash: [u8; 32],
+    /// `SupersedeNode` for a retire op, `supersedes` for a typed edge.
+    pub recorded_as: &'static str,
+}
+
+/// Creating frame of one node, plus the supersession chain that names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedOrigin {
+    /// Log seq of the first admitted `UpsertNode` for this id.
+    pub frame_seq: u64,
+    /// Frame kind byte (`KIND_STORE_WRITE`).
+    pub frame_kind: u8,
+    /// Chain hash of the creating frame.
+    pub frame_hash: [u8; 32],
+    /// `payload_blake3` of the creating frame.
+    pub payload_blake3: [u8; 32],
+    /// Log seq of the admitting `PROPOSE`, when present.
+    pub propose_frame_seq: Option<u64>,
+    /// Log seq of the admitting `GATE`, when present.
+    pub gate_frame_seq: Option<u64>,
+    /// Log seq of the admitting `EFFECT`, when present.
+    pub effect_frame_seq: Option<u64>,
+    /// Node record carried by the creating frame.
+    pub record: NodeRecord,
+    /// Recorded supersession hops in the connected component of this node.
+    pub supersede_chain: Vec<SupersedeHop>,
+}
+
+struct AdmittedEffect {
+    effect_log_seq: u64,
+    propose_seq: u64,
+    gate_seq: u64,
+}
+
 /// The STRATA-native memory store.
 ///
 /// See the crate docs for the write path and determinism contract. v1 is
@@ -184,9 +375,11 @@ pub struct StrataStore {
     policy: Policy,
     /// Node registry (derived).
     nodes: BTreeMap<String, NodeRecord>,
-    /// node id -> gate-space effect seq of the WRITE that created it (gate
-    /// context ids; keeps the gate's `ReadNoReceipt` duty clean).
+    /// id -> gate-space effect seq of the WRITE that last admitted it (node
+    /// or intention). Gate context ids; keeps `ReadNoReceipt` clean.
     origins: BTreeMap<String, u64>,
+    /// Intention registry (derived). Not FSRS cards.
+    intentions: BTreeMap<String, IntentionRecord>,
     /// Edge list in landing order (derived).
     edges: Vec<ConnectionRecord>,
     /// source id -> edge indexes (forward).
@@ -204,6 +397,12 @@ pub struct StrataStore {
     checkpoints: Vec<Checkpoint>,
     /// Data frames that had no admitting effect in the log (ignored).
     orphan_writes: u64,
+    /// Tool call is open. `edit` may retire only a successor admitted here.
+    tool_call_open: bool,
+    /// Node ids admitted since [`StrataStore::begin_tool_call`].
+    call_admitted: BTreeSet<String>,
+    /// Admitting effect seq -> named rule, for RETIREs the context authorized.
+    retire_rules: BTreeMap<u64, &'static str>,
 }
 
 impl StrataStore {
@@ -238,6 +437,10 @@ impl StrataStore {
             reviewed_at: BTreeMap::new(),
             checkpoints: Vec::new(),
             orphan_writes: 0,
+            intentions: BTreeMap::new(),
+            tool_call_open: false,
+            call_admitted: BTreeSet::new(),
+            retire_rules: BTreeMap::new(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -288,6 +491,11 @@ impl StrataStore {
                                     })
                                 });
                             if covering_propose && admitting_gate {
+                                if let Some(propose) = propose_at.get(&effect.propose_seq) {
+                                    if let Some(rule) = retire_rule_id(&propose.params_hash) {
+                                        self.retire_rules.insert(gseq, rule);
+                                    }
+                                }
                                 pending
                                     .entry(effect.payload_digest)
                                     .or_default()
@@ -383,6 +591,12 @@ impl StrataStore {
                     }
                 }
             }
+            StoreOp::UpsertIntentions { records } => {
+                for record in records {
+                    self.origins.insert(record.id.clone(), gate_effect_seq);
+                    self.intentions.insert(record.id.clone(), record.clone());
+                }
+            }
         }
         Ok(())
     }
@@ -473,14 +687,36 @@ impl StrataStore {
         action_kind_code: u8,
         context: Vec<u64>,
     ) -> Result<(u64, u64), StoreError> {
+        self.admit_write_with_params(op, action_kind_code, context, None)
+    }
+
+    /// `params_hash` overrides the default (the op hash) when a named RETIRE
+    /// rule authorized this admission. The override is the rule-id digest,
+    /// never a digest of node content.
+    fn admit_write_with_params(
+        &mut self,
+        op: StoreOp,
+        action_kind_code: u8,
+        context: Vec<u64>,
+        params_hash: Option<[u8; 32]>,
+    ) -> Result<(u64, u64), StoreError> {
+        let fresh_id = match &op {
+            StoreOp::UpsertNode { record }
+                if self.tool_call_open && !self.nodes.contains_key(&record.id) =>
+            {
+                Some(record.id.clone())
+            }
+            _ => None,
+        };
         let op_bytes = borsh_vec(&op)?;
         let action_hash = hash32(&op_bytes);
+        let params_hash = params_hash.unwrap_or(action_hash);
 
         let mut runtime = GateRuntime::new(self.gate_log.clone(), self.policy.clone());
         let propose = Propose {
             action_hash,
             action_kind: action_kind_code,
-            params_hash: action_hash,
+            params_hash,
             context,
         };
         let propose_ack = runtime.commit_propose(propose);
@@ -513,12 +749,18 @@ impl StrataStore {
         let effect_ack: SeqAck = runtime
             .commit_effect(effect)
             .map_err(|r| StoreError::Rejected(r.to_string()))?;
+        if let Some(rule) = retire_rule_id(&params_hash) {
+            self.retire_rules.insert(effect_ack.seq, rule);
+        }
 
         // The data frame lands only after an admitted effect cites its digest.
         let data_acks = self.log.append_batch(vec![(KIND_STORE_WRITE, op_bytes)])?;
         let data_seq = data_acks[0].seq;
 
         self.apply_op(&op, effect_ack.seq, data_seq)?;
+        if let Some(id) = fresh_id {
+            self.call_admitted.insert(id);
+        }
         Ok((effect_ack.seq, data_seq))
     }
 
@@ -587,9 +829,175 @@ impl StrataStore {
         Ok(id)
     }
 
+    /// Insert or replace intentions through one admitted write.
+    ///
+    /// Returns the gate-space effect seq. The caller has already checked a
+    /// compare-and-swap when the batch is a check claim; this method does
+    /// not re-read the previous rows.
+    pub fn upsert_intentions(&mut self, records: Vec<IntentionRecord>) -> Result<u64, StoreError> {
+        if records.is_empty() {
+            return Err(StoreError::InvalidInput("intention batch is empty".into()));
+        }
+        let mut seen = BTreeSet::new();
+        for record in &records {
+            if record.id.is_empty() {
+                return Err(StoreError::InvalidInput(
+                    "intention id must not be empty".into(),
+                ));
+            }
+            if !seen.insert(record.id.as_str()) {
+                let id = &record.id;
+                return Err(StoreError::InvalidInput(format!(
+                    "duplicate intention id {id}"
+                )));
+            }
+        }
+        let ids: Vec<&str> = records.iter().map(|record| record.id.as_str()).collect();
+        let context = self.context_for(&ids);
+        let (effect_seq, _) = self.admit_write(
+            StoreOp::UpsertIntentions { records },
+            action_kind::WRITE,
+            context,
+        )?;
+        Ok(effect_seq)
+    }
+
+    /// One intention by id.
+    pub fn get_intention(&self, id: &str) -> Option<IntentionRecord> {
+        self.intentions.get(id).cloned()
+    }
+
+    /// Every intention, in id order.
+    pub fn intentions(&self) -> Vec<IntentionRecord> {
+        self.intentions.values().cloned().collect()
+    }
+
     /// Gate-space effect seq of the write that created `id`, if it exists.
     pub fn origin_seq(&self, id: &str) -> Option<u64> {
         self.origins.get(id).copied()
+    }
+
+    /// Origin of `id` read from the log: the first admitted `UpsertNode`
+    /// frame, the gate frames that admitted it, and every recorded
+    /// supersession hop in that node's chain.
+    ///
+    /// `None` when no admitted upsert names `id`. The log records no actor
+    /// and no source envelope; callers surface those as absent.
+    pub fn recorded_origin(&self, id: &str) -> Result<Option<RecordedOrigin>, StoreError> {
+        let frames = self.log.read_frames(1)?;
+        let mut propose_at: HashMap<u64, Propose> = HashMap::new();
+        let mut gates_for: HashMap<u64, Vec<(u64, GateRecord)>> = HashMap::new();
+        let mut propose_log: HashMap<u64, u64> = HashMap::new();
+        let mut gate_log: HashMap<u64, u64> = HashMap::new();
+        let mut pending: HashMap<[u8; 32], VecDeque<AdmittedEffect>> = HashMap::new();
+        let mut gate_seq_counter: u64 = 0;
+        let mut origin: Option<RecordedOrigin> = None;
+        let mut hops: Vec<SupersedeHop> = Vec::new();
+
+        for frame in &frames {
+            let seq = frame.seq;
+            if let Some(kind) = RecordKind::from_u8(frame.kind) {
+                let gseq = gate_seq_counter;
+                gate_seq_counter += 1;
+                match kind {
+                    RecordKind::Propose => {
+                        propose_log.insert(gseq, seq);
+                        if let Ok(propose) = Propose::try_from_slice(&frame.payload) {
+                            propose_at.insert(gseq, propose);
+                        }
+                    }
+                    RecordKind::Gate => {
+                        gate_log.insert(gseq, seq);
+                        if let Ok(gate) = GateRecord::try_from_slice(&frame.payload) {
+                            gates_for
+                                .entry(gate.propose_seq)
+                                .or_default()
+                                .push((gseq, gate));
+                        }
+                    }
+                    RecordKind::Effect => {
+                        if let Ok(effect) = EffectRecord::try_from_slice(&frame.payload) {
+                            let covering = propose_at
+                                .get(&effect.propose_seq)
+                                .is_some_and(|propose| propose.action_hash == effect.action_hash);
+                            let admitting =
+                                gates_for.get(&effect.propose_seq).is_some_and(|gates| {
+                                    gates.iter().any(|(gate_seq, gate)| {
+                                        *gate_seq == effect.gate_seq
+                                            && gate.verdict == Verdict::Allow
+                                            && *gate_seq < gseq
+                                    })
+                                });
+                            if covering && admitting {
+                                pending.entry(effect.payload_digest).or_default().push_back(
+                                    AdmittedEffect {
+                                        effect_log_seq: seq,
+                                        propose_seq: effect.propose_seq,
+                                        gate_seq: effect.gate_seq,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            if frame.kind != KIND_STORE_WRITE {
+                continue;
+            }
+            let digest = hash32(&frame.payload);
+            let admitted = pending.get_mut(&digest).and_then(|queue| queue.pop_front());
+            let Some(admitted) = admitted else {
+                continue;
+            };
+            let Ok(op) = StoreOp::try_from_slice(&frame.payload) else {
+                continue;
+            };
+            match op {
+                StoreOp::UpsertNode { record } if record.id == id && origin.is_none() => {
+                    origin = Some(RecordedOrigin {
+                        frame_seq: seq,
+                        frame_kind: frame.kind,
+                        frame_hash: frame.frame_hash,
+                        payload_blake3: frame.payload_blake3,
+                        propose_frame_seq: propose_log.get(&admitted.propose_seq).copied(),
+                        gate_frame_seq: gate_log.get(&admitted.gate_seq).copied(),
+                        effect_frame_seq: Some(admitted.effect_log_seq),
+                        record,
+                        supersede_chain: Vec::new(),
+                    });
+                }
+                StoreOp::SupersedeNode {
+                    id: sid,
+                    superseded_by,
+                } => {
+                    hops.push(SupersedeHop {
+                        id: sid,
+                        superseded_by,
+                        frame_seq: seq,
+                        frame_hash: frame.frame_hash,
+                        recorded_as: "SupersedeNode",
+                    });
+                }
+                StoreOp::SaveEdge { edge } if edge.link_type == EdgeKind::Supersedes.as_str() => {
+                    hops.push(SupersedeHop {
+                        id: edge.target_id,
+                        superseded_by: edge.source_id,
+                        frame_seq: seq,
+                        frame_hash: frame.frame_hash,
+                        recorded_as: "supersedes",
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let Some(mut origin) = origin else {
+            return Ok(None);
+        };
+        origin.supersede_chain = supersede_component(&hops, id);
+        Ok(Some(origin))
     }
 
     /// Every node id and the effect seq that admitted it, in id order.
@@ -626,7 +1034,7 @@ impl StrataStore {
 
     /// Append one typed edge (vocabulary-validated; the source node must
     /// exist — targets may point at non-memory artifacts like file anchors).
-    pub fn save_connection(&mut self, connection: &ConnectionRecord) -> Result<(), StoreError> {
+    pub fn save_connection(&mut self, connection: &ConnectionRecord) -> Result<u64, StoreError> {
         if EdgeKind::parse(&connection.link_type).is_none() {
             return Err(StoreError::InvalidInput(format!(
                 "link_type '{}' is not in the typed-edge vocabulary",
@@ -645,14 +1053,14 @@ impl StrataStore {
         }
         context.sort_unstable();
         context.dedup();
-        self.admit_write(
+        let (effect_seq, _) = self.admit_write(
             StoreOp::SaveEdge {
                 edge: connection.clone(),
             },
             action_kind::WRITE,
             context,
         )?;
-        Ok(())
+        Ok(effect_seq)
     }
 
     /// All edges touching a memory: outgoing first, then incoming.
@@ -689,11 +1097,64 @@ impl StrataStore {
         }
     }
 
+    /// Open a tool call. `edit` may retire a node only when its successor was
+    /// admitted after this and before [`Self::end_tool_call`].
+    pub fn begin_tool_call(&mut self) {
+        self.tool_call_open = true;
+        self.call_admitted.clear();
+    }
+
+    /// Close the tool call and drop the successor set.
+    pub fn end_tool_call(&mut self) {
+        self.tool_call_open = false;
+        self.call_admitted.clear();
+    }
+
     /// Mark `id` as superseded by `superseded_by`.
     ///
-    /// Routed as a destructive `RETIRE` action: the default policy HOLDS it;
-    /// a review-gated (permissive) policy lands it.
+    /// Routed as a `RETIRE` with no rule id. The default policy holds it.
     pub fn supersede(&mut self, id: &str, superseded_by: &str) -> Result<(), StoreError> {
+        self.admit_supersede(id, superseded_by, &AdmissionContext::default())
+            .map(|_| ())
+    }
+
+    /// RETIRE `id` in favor of `superseded_by` when `ctx` carries a named rule.
+    ///
+    /// The default policy allows exactly `edit` (successor admitted in this
+    /// tool call), `suppress`, `intentions`, and `purge` (`confirm` set).
+    /// Every other RETIRE is held. An allowed RETIRE returns an `eff-`
+    /// receipt naming the rule.
+    pub fn retire(
+        &mut self,
+        id: &str,
+        superseded_by: &str,
+        ctx: &AdmissionContext,
+    ) -> Result<RetireReceipt, StoreError> {
+        let (seq, rule_id) = self.admit_supersede(id, superseded_by, ctx)?;
+        Ok(RetireReceipt {
+            receipt_id: effect_receipt_id(seq),
+            rule_id,
+            effect_seq: seq,
+        })
+    }
+
+    /// Receipt for an allowed RETIRE, including one rebuilt by replay.
+    pub fn retire_receipt(&self, effect_seq: u64) -> Option<RetireReceipt> {
+        self.retire_rules
+            .get(&effect_seq)
+            .map(|rule| RetireReceipt {
+                receipt_id: effect_receipt_id(effect_seq),
+                rule_id: Some(*rule),
+                effect_seq,
+            })
+    }
+
+    fn admit_supersede(
+        &mut self,
+        id: &str,
+        superseded_by: &str,
+        ctx: &AdmissionContext,
+    ) -> Result<(u64, Option<&'static str>), StoreError> {
         self.require_node(id)?;
         self.require_node(superseded_by)?;
         if id == superseded_by {
@@ -706,16 +1167,20 @@ impl StrataStore {
                 "node {id} is already superseded"
             )));
         }
+        let successor_in_call = self.call_admitted.contains(superseded_by);
+        let rule = named_retire_rule(ctx.rule_id.as_deref(), ctx.confirm, successor_in_call);
+        let params = rule.map(rule_id_hash);
         let context = self.context_for(&[id, superseded_by]);
-        self.admit_write(
+        let (effect_seq, _) = self.admit_write_with_params(
             StoreOp::SupersedeNode {
                 id: id.to_string(),
                 superseded_by: superseded_by.to_string(),
             },
             action_kind::RETIRE,
             context,
+            params,
         )?;
-        Ok(())
+        Ok((effect_seq, rule))
     }
 
     /// All (superseded, superseder) pairs, ordered by superseded id.
@@ -728,26 +1193,28 @@ impl StrataStore {
 
     /// Fold an explicit FSRS review for a node (rating 1..=4).
     ///
+    /// Returns the gate-space effect seq of the admitted review.
     /// `reviewed_at_ms` is the admission clock: unix epoch milliseconds.
-    pub fn review(&mut self, id: &str, rating: u8) -> Result<(), StoreError> {
+    pub fn review(&mut self, id: &str, rating: u8) -> Result<u64, StoreError> {
         self.review_at(id, rating, Some(admission_now_ms()))
     }
 
     /// Same as [`Self::review`] with a caller-supplied clock.
     ///
     /// `None` is written as `borsh` option tag `0`, not an omitted field.
+    /// Returns the gate-space effect seq of the admitted review.
     pub fn review_at(
         &mut self,
         id: &str,
         rating: u8,
         reviewed_at_ms: Option<i64>,
-    ) -> Result<(), StoreError> {
+    ) -> Result<u64, StoreError> {
         self.require_node(id)?;
         if !(1..=4).contains(&rating) {
             return Err(StoreError::InvalidInput("rating must be 1..=4".into()));
         }
         let context = self.context_for(&[id]);
-        self.admit_write(
+        let (effect_seq, _) = self.admit_write(
             StoreOp::ReviewNode {
                 card_id: handle_of(id),
                 rating,
@@ -756,7 +1223,221 @@ impl StrataStore {
             action_kind::WRITE,
             context,
         )?;
-        Ok(())
+        Ok(effect_seq)
+    }
+
+    /// Replace `id` with a successor, then retire `id` under rule `edit`.
+    ///
+    /// Lands `UpsertNode` then `SupersedeNode` inside one tool call. The
+    /// successor is a new ingest (its own FSRS card). The predecessor's card
+    /// and bytes stay on the retired node.
+    ///
+    /// A context that is not exactly rule `edit` returns [`StoreError::Held`]
+    /// and writes nothing. An upsert cannot be rolled back, so a RETIRE that
+    /// would hold must not be preceded by a live successor.
+    pub fn edit(
+        &mut self,
+        id: &str,
+        content: &str,
+        ctx: &AdmissionContext,
+    ) -> Result<(String, RetireReceipt), StoreError> {
+        if content.trim().is_empty() {
+            return Err(StoreError::InvalidInput("content must not be empty".into()));
+        }
+        let old = self.require_node(id)?.clone();
+        if old.superseded_by.is_some() {
+            return Err(StoreError::InvalidInput(format!(
+                "node {id} is already superseded"
+            )));
+        }
+        if named_retire_rule(ctx.rule_id.as_deref(), ctx.confirm, true) != Some(RULE_EDIT) {
+            return Err(StoreError::Held {
+                propose_seq: self.gate_log.gate_frame_count(),
+            });
+        }
+        let opened = !self.tool_call_open;
+        if opened {
+            self.begin_tool_call();
+        }
+        let result = (|| {
+            let input = IngestInput {
+                content: content.to_string(),
+                source: old.source.clone(),
+                source_updated_at_ms: old.source_updated_at_ms,
+                node_type: old.node_type.clone(),
+                tags: old.tags.clone(),
+                created_at_ms: Some(old.created_at_ms),
+                valid_from_ms: Some(old.valid_from_ms),
+                valid_until_ms: Some(old.valid_until_ms),
+            };
+            let successor = self.ingest_in_scope(input, &old.scope)?;
+            let receipt = self.retire(id, &successor, ctx)?;
+            Ok((successor, receipt))
+        })();
+        if opened {
+            self.end_tool_call();
+        }
+        result
+    }
+
+    /// Review events in fold order. The kernel test replays these independently.
+    #[cfg(test)]
+    pub(crate) fn review_events(&self) -> Vec<ReviewEvent> {
+        self.review_events
+            .iter()
+            .map(|(_, _, event)| event.clone())
+            .collect()
+    }
+
+    /// Every node effect proved from the log, in effect-seq order.
+    ///
+    /// `verify_tail` checks the active segment's hash chain (and the trailer
+    /// signature when the segment is sealed). Each effect must cite an Allow
+    /// gate and a data frame with the same payload digest.
+    pub fn prove_effects(&self) -> Result<Vec<EffectProof>, StoreError> {
+        self.log.verify_tail()?;
+        let frames = self.log.read_frames(1)?;
+        let mut propose_at: HashMap<u64, Propose> = HashMap::new();
+        let mut gates_for: HashMap<u64, Vec<(u64, GateRecord)>> = HashMap::new();
+        let mut pending: HashMap<[u8; 32], VecDeque<(u64, Option<&'static str>)>> = HashMap::new();
+        let mut handles: HashMap<u64, String> = HashMap::new();
+        let mut proofs = Vec::new();
+        let mut gate_seq_counter: u64 = 0;
+
+        for frame in frames {
+            if frame.payload_blake3 != strata::payload_blake3(frame.kind, &frame.payload) {
+                return Err(StoreError::Verify(format!(
+                    "frame {} payload blake3 does not match its bytes",
+                    frame.seq
+                )));
+            }
+            if let Some(kind) = RecordKind::from_u8(frame.kind) {
+                let gseq = gate_seq_counter;
+                gate_seq_counter += 1;
+                match kind {
+                    RecordKind::Propose => {
+                        if let Ok(propose) = Propose::try_from_slice(&frame.payload) {
+                            propose_at.insert(gseq, propose);
+                        }
+                    }
+                    RecordKind::Gate => {
+                        if let Ok(gate) = GateRecord::try_from_slice(&frame.payload) {
+                            gates_for
+                                .entry(gate.propose_seq)
+                                .or_default()
+                                .push((gseq, gate));
+                        }
+                    }
+                    RecordKind::Effect => {
+                        if let Ok(effect) = EffectRecord::try_from_slice(&frame.payload) {
+                            let covering = propose_at
+                                .get(&effect.propose_seq)
+                                .is_some_and(|propose| propose.action_hash == effect.action_hash);
+                            let allowed = gates_for.get(&effect.propose_seq).is_some_and(|gates| {
+                                gates.iter().any(|(gate_seq, gate)| {
+                                    *gate_seq == effect.gate_seq
+                                        && gate.verdict == Verdict::Allow
+                                        && *gate_seq < gseq
+                                })
+                            });
+                            if covering && allowed && effect.action_hash == effect.payload_digest {
+                                let rule = propose_at
+                                    .get(&effect.propose_seq)
+                                    .and_then(|propose| retire_rule_id(&propose.params_hash));
+                                pending
+                                    .entry(effect.payload_digest)
+                                    .or_default()
+                                    .push_back((gseq, rule));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            } else if frame.kind == KIND_STORE_WRITE {
+                let digest = hash32(&frame.payload);
+                let Some((effect_seq, rule)) =
+                    pending.get_mut(&digest).and_then(|queue| queue.pop_front())
+                else {
+                    continue;
+                };
+                let Some(op) = StoreOp::try_from_slice(&frame.payload).ok() else {
+                    return Err(StoreError::Verify(format!(
+                        "admitted frame {} is not a StoreOp",
+                        frame.seq
+                    )));
+                };
+                let proof = match op {
+                    StoreOp::UpsertNode { record } => {
+                        let handle = handle_of(&record.id);
+                        let action = if handles.contains_key(&handle) {
+                            EffectAction::Rewrite
+                        } else {
+                            EffectAction::Create
+                        };
+                        handles.insert(handle, record.id.clone());
+                        EffectProof {
+                            effect_seq,
+                            data_seq: frame.seq,
+                            node_id: record.id,
+                            action,
+                            payload_digest: digest,
+                            rating: None,
+                        }
+                    }
+                    StoreOp::SupersedeNode { superseded_by, .. } if rule == Some(RULE_EDIT) => {
+                        EffectProof {
+                            effect_seq,
+                            data_seq: frame.seq,
+                            node_id: superseded_by,
+                            action: EffectAction::Edit,
+                            payload_digest: digest,
+                            rating: None,
+                        }
+                    }
+                    StoreOp::ReviewNode {
+                        card_id,
+                        rating,
+                        reviewed_at_ms: _,
+                    } => {
+                        let Some(node_id) = handles.get(&card_id).cloned() else {
+                            return Err(StoreError::Verify(format!(
+                                "review effect {effect_seq} names an unknown card"
+                            )));
+                        };
+                        EffectProof {
+                            effect_seq,
+                            data_seq: frame.seq,
+                            node_id,
+                            action: EffectAction::Review,
+                            payload_digest: digest,
+                            rating: Some(rating),
+                        }
+                    }
+                    StoreOp::SaveEdge { .. }
+                    | StoreOp::SupersedeNode { .. }
+                    | StoreOp::UpsertIntentions { .. } => continue,
+                };
+                proofs.push(proof);
+            }
+        }
+        Ok(proofs)
+    }
+
+    /// The proved effect at `effect_seq`, if the log admits one.
+    pub fn effect_by_seq(&self, effect_seq: u64) -> Result<Option<EffectProof>, StoreError> {
+        Ok(self
+            .prove_effects()?
+            .into_iter()
+            .find(|proof| proof.effect_seq == effect_seq))
+    }
+
+    /// The latest proved node effect for `node_id`.
+    pub fn latest_effect(&self, node_id: &str) -> Result<Option<EffectProof>, StoreError> {
+        Ok(self
+            .prove_effects()?
+            .into_iter()
+            .filter(|proof| proof.node_id == node_id)
+            .max_by_key(|proof| proof.effect_seq))
     }
 
     /// Review clock recorded on the latest explicit review of `id`.
@@ -966,8 +1647,8 @@ impl StrataStore {
 
     /// blake3 digest over the canonical projection of every derived map
     /// (nodes, origins, edges, FSRS state root, checkpoint hashes, orphan
-    /// count, explicit review clocks). Two stores replaying the same log
-    /// produce the same digest.
+    /// count, explicit review clocks, intentions). Two stores replaying the
+    /// same log produce the same digest.
     pub fn state_digest(&self) -> [u8; 32] {
         let digest = StateDigest {
             nodes: self.nodes.iter().map(|(k, v)| (k.as_str(), v)).collect(),
@@ -977,8 +1658,104 @@ impl StrataStore {
             checkpoints: self.checkpoints.iter().map(checkpoint_hash).collect(),
             orphan_writes: self.orphan_writes,
             reviewed_at: self.reviewed_at.iter().map(|(k, v)| (*k, *v)).collect(),
+            intentions: self
+                .intentions
+                .iter()
+                .map(|(id, record)| (id.as_str(), record))
+                .collect(),
         };
         hash32(&borsh_vec(&digest).expect("state digest serialization is infallible"))
+    }
+
+    /// Re-read the log, refuse a broken frame, and fold a fresh copy of the
+    /// derived maps. Does not append, truncate, or seal. The fold is the same
+    /// `replay` live admits use, so intentions, review clocks, and imported
+    /// frames stay in the digest.
+    pub fn refold(&self) -> Result<Refold, StoreError> {
+        self.verify_segments()?;
+        self.log.verify_tail()?;
+        let frames = self.log.read_frames(1)?;
+        let frame_count = frames.len() as u64;
+        let gate_mismatches = gate_verdict_mismatches(self, &frames)?;
+        let mut scratch = Self {
+            dir: self.dir.clone(),
+            log: self.log.clone(),
+            gate_log: self.gate_log.clone(),
+            policy: self.policy.clone(),
+            nodes: BTreeMap::new(),
+            origins: BTreeMap::new(),
+            intentions: BTreeMap::new(),
+            edges: Vec::new(),
+            forward: BTreeMap::new(),
+            reverse: BTreeMap::new(),
+            fsrs: State::default(),
+            review_events: Vec::new(),
+            reviewed_at: BTreeMap::new(),
+            checkpoints: Vec::new(),
+            orphan_writes: 0,
+            tool_call_open: false,
+            call_admitted: BTreeSet::new(),
+            retire_rules: BTreeMap::new(),
+        };
+        scratch.replay()?;
+        let mut retrievability = BTreeMap::new();
+        for id in scratch.nodes.keys() {
+            if let Some(score) = scratch.retrievability(id)? {
+                retrievability.insert(id.clone(), score);
+            }
+        }
+        let gaps = self.sweep().iter().map(gap_label).collect::<Vec<_>>();
+        Ok(Refold {
+            frames: frame_count,
+            state_digest: scratch.state_digest(),
+            nodes: scratch.nodes,
+            origins: scratch.origins,
+            retrievability,
+            gate_mismatches,
+            gaps,
+        })
+    }
+
+    /// Strict read of every segment. A torn frame, blake3 miss, or broken
+    /// chain is an error — unlike [`StrataLog::read_frames`], which stops at
+    /// the first bad frame and returns the prefix.
+    fn verify_segments(&self) -> Result<(), StoreError> {
+        let dir = self.dir.join(LOG_DIR);
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("seg") {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        if paths.is_empty() {
+            return Err(StoreError::Verify("log has no segments".into()));
+        }
+        let mut expected_prev = strata::GENESIS_PREV_SEGMENT_HASH;
+        for (i, path) in paths.iter().enumerate() {
+            let is_last = i + 1 == paths.len();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("segment");
+            let bytes = std::fs::read(path)?;
+            let scanned = scan_segment(&bytes, name)?;
+            if scanned.header.prev_segment_hash != expected_prev {
+                return Err(StoreError::Verify(format!(
+                    "{name}: segment chain link mismatch"
+                )));
+            }
+            if !is_last && scanned.trailer.is_none() {
+                return Err(StoreError::Verify(format!(
+                    "{name}: sealed segment is missing its trailer"
+                )));
+            }
+            if !is_last {
+                expected_prev = hash32(&bytes);
+            }
+        }
+        Ok(())
     }
 
     /// The pinned policy.
@@ -1024,5 +1801,162 @@ impl StrataStore {
     /// Review events retained for verification, in fold order.
     pub fn review_event_count(&self) -> usize {
         self.review_events.len()
+    }
+}
+
+/// Hops in the undirected supersession component of `id`, in log order.
+fn supersede_component(hops: &[SupersedeHop], id: &str) -> Vec<SupersedeHop> {
+    let mut ids = BTreeSet::new();
+    ids.insert(id.to_string());
+    loop {
+        let mut grew = false;
+        for hop in hops {
+            if ids.contains(&hop.id) || ids.contains(&hop.superseded_by) {
+                grew |= ids.insert(hop.id.clone());
+                grew |= ids.insert(hop.superseded_by.clone());
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    hops.iter()
+        .filter(|hop| ids.contains(&hop.id) && ids.contains(&hop.superseded_by))
+        .cloned()
+        .collect()
+}
+
+/// Fresh fold of one log. Receipt replay compares this to the live maps.
+pub struct Refold {
+    pub frames: u64,
+    pub state_digest: [u8; 32],
+    pub nodes: BTreeMap<String, NodeRecord>,
+    pub origins: BTreeMap<String, u64>,
+    pub retrievability: BTreeMap<String, f64>,
+    pub gate_mismatches: Vec<String>,
+    pub gaps: Vec<String>,
+}
+
+struct ScannedSegment {
+    header: strata::SegmentHeader,
+    trailer: Option<strata::SegmentTrailer>,
+}
+
+fn scan_segment(bytes: &[u8], name: &str) -> Result<ScannedSegment, StoreError> {
+    if bytes.len() < strata::HEADER_WIRE_SIZE {
+        return Err(StoreError::Verify(format!(
+            "{name}: segment header unreadable"
+        )));
+    }
+    let header: strata::SegmentHeader = borsh::from_slice(&bytes[..strata::HEADER_WIRE_SIZE])
+        .map_err(|_| StoreError::Verify(format!("{name}: segment header unreadable")))?;
+    if header.magic != strata::SEGMENT_MAGIC || header.version != strata::SEGMENT_VERSION {
+        return Err(StoreError::Verify(format!(
+            "{name}: segment header unreadable"
+        )));
+    }
+    let mut prev = strata::header_hash(&header);
+    let mut off = strata::HEADER_WIRE_SIZE;
+    let mut leaves = Vec::new();
+    let mut frames = 0u64;
+    loop {
+        let rem = bytes.len() - off;
+        if rem == 0 {
+            return Ok(ScannedSegment {
+                header,
+                trailer: None,
+            });
+        }
+        if rem == strata::TRAILER_WIRE_SIZE {
+            let trailer: strata::SegmentTrailer =
+                borsh::from_slice(&bytes[off..]).map_err(|_| {
+                    StoreError::Verify(format!("{name}: trailer-sized tail failed to parse"))
+                })?;
+            if trailer.frame_count != frames {
+                return Err(StoreError::Verify(format!(
+                    "{name}: trailer frame_count {} != scanned {frames}",
+                    trailer.frame_count
+                )));
+            }
+            if trailer.merkle_root != strata::merkle_root(&leaves) {
+                return Err(StoreError::Verify(format!(
+                    "{name}: trailer merkle root mismatch"
+                )));
+            }
+            return Ok(ScannedSegment {
+                header,
+                trailer: Some(trailer),
+            });
+        }
+        if rem < strata::FRAME_FIXED_WIRE_SIZE {
+            return Err(StoreError::Verify(format!(
+                "{name}: short frame header at offset {off}"
+            )));
+        }
+        let (frame, used) = strata::parse_frame(&bytes[off..]).map_err(|e| {
+            StoreError::Verify(format!("{name}: frame parse failed at offset {off}: {e}"))
+        })?;
+        if frame.payload_blake3 != strata::payload_blake3(frame.kind, &frame.payload) {
+            return Err(StoreError::Verify(format!(
+                "{name}: payload blake3 mismatch at offset {off}"
+            )));
+        }
+        if frame.prev_frame_hash != prev {
+            return Err(StoreError::Verify(format!(
+                "{name}: frame chain link mismatch at offset {off}"
+            )));
+        }
+        prev = strata::frame_hash(&frame);
+        leaves.push(frame.payload_blake3);
+        frames += 1;
+        off += used;
+    }
+}
+
+fn gate_verdict_mismatches(
+    store: &StrataStore,
+    frames: &[strata::FrameRecord],
+) -> Result<Vec<String>, StoreError> {
+    let recomputed = store.rederive_verdicts()?;
+    let mut stored = Vec::new();
+    let mut gate_seq = 0u64;
+    for frame in frames {
+        let Some(kind) = RecordKind::from_u8(frame.kind) else {
+            continue;
+        };
+        let gseq = gate_seq;
+        gate_seq += 1;
+        if kind != RecordKind::Gate {
+            continue;
+        }
+        let gate = GateRecord::try_from_slice(&frame.payload).map_err(|error| {
+            StoreError::Verify(format!("malformed gate record at seq {gseq}: {error}"))
+        })?;
+        stored.push((gseq, gate.verdict));
+    }
+    let mut out = Vec::new();
+    if stored.len() != recomputed.len() {
+        out.push("gate:count".into());
+    }
+    for (left, right) in stored.iter().zip(recomputed.iter()) {
+        if left != right {
+            out.push(format!("gate:{}", left.0));
+        }
+    }
+    Ok(out)
+}
+
+fn gap_label(gap: &strata_gate::record::GapRecord) -> String {
+    use strata_gate::record::GapDetail;
+    match &gap.detail {
+        GapDetail::OrphanEffect { effect_seq, .. } => format!("gap:orphan_effect:{effect_seq}"),
+        GapDetail::ReadNoReceipt { reader_seq, .. } => {
+            format!("gap:read_no_receipt:{reader_seq}")
+        }
+        GapDetail::DutySeqGap {
+            source,
+            expected,
+            found,
+        } => format!("gap:duty_seq_gap:{source}:{expected}:{found}"),
     }
 }

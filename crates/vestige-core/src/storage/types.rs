@@ -251,6 +251,9 @@ pub struct PurgeReport {
     pub unlearning_verdict: crate::storage::UnlearningVerdict,
     /// Fixed boundary shown by MCP callers rather than a free-form guarantee.
     pub unlearning_claim_boundary: &'static str,
+    /// `eff-` receipt when a named `purge` retire was admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_id: Option<String>,
 }
 
 // ----------------------------------------------------------------------------

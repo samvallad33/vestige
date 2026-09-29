@@ -1,0 +1,28 @@
+[package]
+name = "vestige-upgrade"
+version = "3.1.1"
+edition = "2024"
+description = "One-shot v3 SQLite to Strata upgrade. The only Vestige binary that links SQLite."
+authors = ["samvallad33"]
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "vestige-upgrade"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+directories = "6"
+# The only product binary that turns on the read-only SQLite reader.
+strata-migrate = { path = "../strata-migrate", features = ["sqlite-reader"] }
+strata-verify = { path = "../strata-verify" }
+vestige-core = { path = "../vestige-core", default-features = false }
+
+[dev-dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+sha2 = "0.11"
+tempfile = "3"
+strata = { path = "../strata" }
+strata-migrate = { path = "../strata-migrate", features = ["sqlite-reader"] }
+strata-verify = { path = "../strata-verify" }

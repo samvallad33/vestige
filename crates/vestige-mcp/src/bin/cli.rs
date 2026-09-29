@@ -724,6 +724,11 @@ fn release_asset_for(os: &str, arch: &str) -> anyhow::Result<ReleaseAsset> {
             archive_ext: "tar.gz",
             binary_suffix: "",
         }),
+        ("linux", "aarch64") => Ok(ReleaseAsset {
+            target: "aarch64-unknown-linux-gnu",
+            archive_ext: "tar.gz",
+            binary_suffix: "",
+        }),
         ("windows", "x86_64") => Ok(ReleaseAsset {
             target: "x86_64-pc-windows-msvc",
             archive_ext: "zip",
@@ -1635,7 +1640,12 @@ fn run_update(
     )?;
     verify_release_checksum(&archive_path, &checksum_path)?;
 
-    let binaries = ["vestige", "vestige-mcp", "vestige-restore"];
+    let binaries = [
+        "vestige",
+        "vestige-mcp",
+        "vestige-restore",
+        "vestige-upgrade",
+    ];
     let mut expected_members = binaries
         .iter()
         .map(|binary| format!("{}{}", binary, asset.binary_suffix))
@@ -1707,10 +1717,6 @@ fn run_update(
 
 /// Run stats command
 fn run_stats(show_tagging: bool, show_states: bool) -> anyhow::Result<()> {
-    #[cfg(feature = "migrate-to-strata")]
-    if let Some(log_dir) = upgraded_strata_log()? {
-        return run_strata_stats(&log_dir, show_tagging, show_states);
-    }
     let storage = open_storage()?;
     let stats = storage.get_stats()?;
 
@@ -2095,126 +2101,24 @@ fn cli_db_path() -> anyhow::Result<PathBuf> {
     Ok(cli_data_dir()?.join("vestige.db"))
 }
 
-/// Apply pending migrations, or rehearse them on a throwaway copy of the store.
-///
-/// A v1.x to v2.6.0 jump (issue #191) aborted at startup on a strict check
-/// that only fired once the real store was open; the only way to know in
-/// advance was to hand-copy the database and open the copy. `--dry-run` is
-/// that rehearsal as a command: copy the store and its WAL/SHM sidecars into
-/// a temp directory, report what the strict checks see on disk today, open the
-/// copy so every migration actually runs, and never touch the original.
+/// Import a v3 `vestige.db` by running `vestige-upgrade`. The file is not opened.
 fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
     let source = cli_db_path()?;
-    if !source.exists() {
+    if !vestige_mcp::v3_launch::db_present(&source) {
         anyhow::bail!("no store at {} (nothing to upgrade)", source.display());
     }
-
-    #[cfg(feature = "migrate-to-strata")]
-    if !dry_run
-        && let vestige_mcp::auto_upgrade::UpgradeStatus::StrataReady { .. } =
-            vestige_mcp::auto_upgrade::upgrade_if_needed(&source)?
-    {
-        return Ok(());
-    }
-
-    // PR 0a: a v3 SQLite store is refused before anything opens it — the
-    // 4.0 answer to a v3 store is migrate-to-strata, not upgrade. This path
-    // previously opened the source READ-ONLY but without immutable=1, which
-    // still created -wal/-shm sidecars next to the original (audit finding).
-    vestige_core::ensure_not_v3(&source)?;
-
-    if !dry_run {
-        println!("{}", "=== Vestige Upgrade ===".cyan().bold());
-        let storage = vestige_core::open_storage(Some(source.clone()))?;
-        let stats = storage.get_stats()?;
-        println!("{} {}", "Migrated:".green().bold(), source.display());
-        println!("Total memories: {}", stats.total_nodes);
-        return Ok(());
-    }
-
-    println!(
-        "{}",
-        "=== Vestige Upgrade (dry run on a copy) ===".cyan().bold()
-    );
-    let scratch = std::env::temp_dir().join(format!(
-        "vestige-upgrade-dry-run-{}-{}",
-        chrono::Utc::now().format("%Y%m%dT%H%M%S"),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&scratch)?;
-    let copy = scratch.join("vestige.db");
-    // A raw file copy of a live WAL-mode database can be torn (committed
-    // frames still sit in the WAL). `VACUUM INTO` through a read-only
-    // connection yields a transactionally consistent snapshot and cannot
-    // modify the source; it is the same mechanism `vestige-cli backup` uses,
-    // minus opening the source through Storage (which would run the very
-    // migrations we are rehearsing).
-    #[cfg(feature = "legacy-sqlite")]
-    {
-        let source_uri = format!(
-            "file:{}?mode=ro&immutable=1",
-            source
-                .to_string_lossy()
-                .replace('?', "%3f")
-                .replace('#', "%23")
-        );
-        let snapshot = rusqlite::Connection::open_with_flags(
-            source_uri,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        snapshot.execute_batch(&format!(
-            "VACUUM INTO '{}'",
-            copy.display().to_string().replace('\'', "''")
-        ))?;
-    }
-    println!("Source:   {}", source.display());
-    println!("Snapshot: {}", copy.display());
-    println!();
-
-    // Preflight reads the copy raw, before any migration runs, so the report
-    // describes the store exactly as it sits on disk today.
-    #[cfg(feature = "legacy-sqlite")]
-    {
-        let preflight = rusqlite::Connection::open(&copy)?;
-        let schema_version: Option<i64> = preflight
-            .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
-                row.get(0)
-            })
-            .ok();
+    if dry_run {
         println!(
-            "Schema version on disk: {}",
-            schema_version
-                .map(|version| version.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
+            "Dry run: vestige-upgrade would import {} and leave that file byte-identical.",
+            source.display()
         );
+        return Ok(());
     }
-    println!();
-
-    match vestige_core::open_storage(Some(copy.clone())) {
-        Ok(storage) => {
-            let stats = storage.get_stats()?;
-            println!("{}", "Migration on the copy: OK".green().bold());
-            println!("Memories after migration: {}", stats.total_nodes);
-            println!(
-                "Active embedding coverage: {}/{}",
-                stats.nodes_with_active_embeddings, stats.total_nodes
-            );
-        }
-        Err(error) => {
-            println!(
-                "{} {}",
-                "Migration on the copy: WOULD FAIL".red().bold(),
-                error
-            );
-            println!(
-                "Your original store was not modified. Please report this output at \
-                 https://github.com/samvallad33/vestige/issues"
-            );
-        }
-    }
-    println!();
-    println!("Original store untouched: {}", source.display());
-    let _ = std::fs::remove_dir_all(&scratch);
+    vestige_mcp::v3_launch::upgrade_or_refuse(&source)?;
+    println!(
+        "{} vestige.db was not modified.",
+        "Upgraded.".green().bold()
+    );
     Ok(())
 }
 
@@ -2548,97 +2452,10 @@ fn run_migrate_to_strata_linked(
     Ok(())
 }
 
-/// The strata log installed by the shared first-launch upgrade, when this
-/// data dir was a v3 store (or already held a log).
-#[cfg(feature = "migrate-to-strata")]
-fn upgraded_strata_log() -> anyhow::Result<Option<std::path::PathBuf>> {
-    let path = cli_db_path()?;
-    match vestige_mcp::auto_upgrade::upgrade_if_needed(&path)? {
-        vestige_mcp::auto_upgrade::UpgradeStatus::StrataReady { log_dir } => Ok(Some(log_dir)),
-        vestige_mcp::auto_upgrade::UpgradeStatus::NoV3 => Ok(None),
-    }
-}
-
-/// `stats` after the switch. Reads the installed log; does not open the v3 file.
-#[cfg(feature = "migrate-to-strata")]
-fn run_strata_stats(
-    log_dir: &std::path::Path,
-    show_tagging: bool,
-    show_states: bool,
-) -> anyhow::Result<()> {
-    let verified = strata_verify::migration::verify_migrated_log(log_dir)
-        .map_err(|err| anyhow::anyhow!("strata log at {}: {err}", log_dir.display()))?;
-    if !verified.ok {
-        anyhow::bail!(
-            "strata log at {} failed verification: {}",
-            log_dir.display(),
-            verified.failures.join("; ")
-        );
-    }
-    let memories = migrated_memory_count(log_dir)?;
-
-    println!("{}", "=== Vestige Memory Statistics ===".cyan().bold());
-    println!();
-    println!("{}: {}", "Total Memories".white().bold(), memories);
-    println!("{}: {}", "Store".white().bold(), log_dir.display());
-    if show_tagging || show_states {
-        println!(
-            "{}",
-            "Tagging and state breakdowns are not on the strata log yet.".yellow()
-        );
-    }
-    Ok(())
-}
-
-/// Count migrated memories without `StrataLog::open`. That open creates
-/// `strata.lock` with this process's pid and would exclude the server (and
-/// the release-matrix dump) from the same log. `stats` only reads segments.
-#[cfg(feature = "migrate-to-strata")]
-fn migrated_memory_count(log_dir: &Path) -> anyhow::Result<usize> {
-    let mut segments = Vec::new();
-    for entry in fs::read_dir(log_dir)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.ends_with(".seg") {
-            segments.push(entry.path());
-        }
-    }
-    segments.sort();
-    if segments.is_empty() {
-        anyhow::bail!("no segment files in {}", log_dir.display());
-    }
-    let mut memories = 0usize;
-    for path in segments {
-        let bytes = fs::read(&path)?;
-        let mut off = strata::HEADER_WIRE_SIZE;
-        while off < bytes.len() {
-            let Ok((frame, consumed)) = strata::parse_frame(&bytes[off..]) else {
-                break;
-            };
-            if consumed == 0 {
-                break;
-            }
-            if frame.kind == strata_migrate::records::KIND_NODE
-                && let Ok(node) = strata_migrate::records::decode_node(&frame.payload)
-                && node.node_type != "walk_receipt"
-            {
-                memories += 1;
-            }
-            off += consumed;
-        }
-    }
-    Ok(memories)
-}
-
 fn open_storage() -> anyhow::Result<std::sync::Arc<Storage>> {
     let dir = cli_data_dir()?;
-    // Same first-launch upgrade `vestige-mcp` runs before stdio. Progress
-    // stays on stderr. The strata open below does not open the v3 file.
-    #[cfg(feature = "migrate-to-strata")]
-    {
-        let _ = vestige_mcp::auto_upgrade::upgrade_if_needed(&dir.join("vestige.db"))?;
-    }
+    // Same check `vestige-mcp` runs before stdio. `vestige.db` is not opened.
+    vestige_mcp::v3_launch::upgrade_or_refuse(&dir.join("vestige.db"))?;
     Ok(vestige_mcp::strata_memory::open(&dir)?)
 }
 
@@ -3121,9 +2938,8 @@ fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
 #[cfg(not(feature = "cloud-sync"))]
 fn run_sync_cloud(_endpoint: Option<String>) -> anyhow::Result<()> {
     anyhow::bail!(
-        "this build was compiled without the `cloud-sync` feature. Official binaries from \
-         v2.3.0 include it: run `vestige update` or `npm update -g vestige-mcp-server`, \
-         then retry. Building from source? Add --features cloud-sync."
+        "this build was compiled without the `cloud-sync` feature. 4.0 builds leave \
+         it off. Building from source? Add --features cloud-sync."
     )
 }
 
@@ -4402,6 +4218,11 @@ mod tests {
         let linux = release_asset_for("linux", "x86_64").unwrap();
         assert_eq!(linux.target, "x86_64-unknown-linux-gnu");
         assert_eq!(linux.archive_ext, "tar.gz");
+
+        let linux_arm = release_asset_for("linux", "aarch64").unwrap();
+        assert_eq!(linux_arm.target, "aarch64-unknown-linux-gnu");
+        assert_eq!(linux_arm.archive_ext, "tar.gz");
+        assert_eq!(linux_arm.binary_suffix, "");
 
         let windows = release_asset_for("windows", "x86_64").unwrap();
         assert_eq!(windows.target, "x86_64-pc-windows-msvc");

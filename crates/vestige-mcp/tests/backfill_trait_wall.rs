@@ -2,7 +2,8 @@
 //!
 //! The backfill MCP tool runs end-to-end against `WallMockStore`, a pure
 //! in-memory mock that implements the storage trait (`MemoryStoreSend`) and
-//! overrides ONLY the seven methods backfill needs. Every other trait method
+//! overrides only the methods backfill needs, plus `db_path` so the Strata
+//! probe can tell this mock is not a log. Every other trait method
 //! resolves to the wall's loud defaults (`Err(StorageError::Init("... not
 //! implemented by this backend"))` / `unimplemented!`), and the async seam is
 //! stubbed with `MemoryStoreError::Backend`. There is no SQLite anywhere in
@@ -12,6 +13,7 @@
 //! tools layer is engine-agnostic: a second backend (STRATA) that implements
 //! the same trait can serve the same tool.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -31,6 +33,7 @@ struct WallMockStore {
     connections: Mutex<Vec<ConnectionRecord>>,
     promoted: Mutex<Vec<String>>,
     saved_edges: Mutex<Vec<String>>,
+    path: PathBuf,
 }
 
 impl WallMockStore {
@@ -40,6 +43,7 @@ impl WallMockStore {
             connections: Mutex::new(Vec::new()),
             promoted: Mutex::new(Vec::new()),
             saved_edges: Mutex::new(Vec::new()),
+            path: PathBuf::from("wall-mock.db"),
         }
     }
 
@@ -61,7 +65,12 @@ fn node(id: &str, content: &str, tags: &[&str], days_ago: i64) -> KnowledgeNode 
 }
 
 impl MemoryStoreSend for WallMockStore {
-    // ---- the seven methods the backfill tool actually touches ----
+    // Filename is not `log`, so `is_strata_backend` stays false.
+    fn db_path(&self) -> &Path {
+        &self.path
+    }
+
+    // ---- the methods the backfill tool actually touches ----
 
     fn get_node(&self, id: &str) -> MockResult<Option<KnowledgeNode>> {
         Ok(self

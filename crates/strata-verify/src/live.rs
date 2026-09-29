@@ -23,6 +23,7 @@ pub(crate) struct LiveVerifyReport {
 }
 
 pub(crate) fn is_live_store(dir: &Path) -> bool {
+    // A fresh store has segments and no anchor until the first seal.
     readonly::dir_has_segments(&dir.join(LOG_DIR))
 }
 

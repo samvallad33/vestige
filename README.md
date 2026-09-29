@@ -30,7 +30,7 @@ Agents re-learn the same lessons. They recommend a change you already tested and
 
 ## Install
 
-Download a release archive from [GitHub Releases](https://github.com/samvallad33/vestige/releases/latest). No Docker, no signup, no compile step. The archives are `vestige-mcp-aarch64-apple-darwin.tar.gz` (macOS ARM), `vestige-mcp-x86_64-apple-darwin.tar.gz` (macOS Intel), `vestige-mcp-x86_64-unknown-linux-gnu.tar.gz` (Linux x86_64), `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz` (Linux arm64), and `vestige-mcp-x86_64-pc-windows-msvc.zip` (Windows x86_64). Each one contains three binaries: `vestige` (the CLI), `vestige-mcp` (the MCP server), and `vestige-restore`.
+Download a release archive from [GitHub Releases](https://github.com/samvallad33/vestige/releases/latest). No Docker, no signup, no compile step. The archives are `vestige-mcp-aarch64-apple-darwin.tar.gz` (macOS ARM), `vestige-mcp-x86_64-apple-darwin.tar.gz` (macOS Intel), `vestige-mcp-x86_64-unknown-linux-gnu.tar.gz` (Linux x86_64), `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz` (Linux arm64), and `vestige-mcp-x86_64-pc-windows-msvc.zip` (Windows x86_64). Each one contains four binaries: `vestige` (the CLI), `vestige-mcp` (the MCP server), `vestige-restore`, and `vestige-upgrade` (the v3 importer).
 
 Prefer Homebrew?
 
@@ -71,7 +71,7 @@ limit = 10
 
 `lean` presets brief detail and a limit of 5. `audit` presets full detail. `research` presets full detail and a limit of 25. `default` leaves the historical tool limits alone.
 
-Verify the CLI: `vestige dashboard`. It binds `http://127.0.0.1:3927` (override with `--port`) and `/` redirects to `/dashboard`. The first start of `vestige-mcp` downloads the Nomic embedding model (about 130 MB) and logs the milestone that keyword search works immediately and semantic ranking joins when the runtime is ready. Until then, `recall` and a save that stored no vector carry a `warming` block. The Jina reranker (about 150 MB) loads in the background; until it does, ranking stays BM25. A release build also compares its version with the npm registry for `vestige-mcp-server`. When a newer version is published it sends an MCP `notifications/message` on logger `vestige.update` (`newer_version_available`). It does not update itself, and a failed check is skipped. After those downloads, memory calls stay on the machine. `source_sync` and `vestige sync --cloud` are the calls that use the network. Full walkthrough: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+Verify the CLI: `vestige dashboard`. It binds `http://127.0.0.1:3927` (override with `--port`) and `/` redirects to `/dashboard`. The first start of `vestige-mcp` downloads the Nomic embedding model (about 130 MB) and logs the milestone that keyword search works immediately and semantic ranking joins when the runtime is ready. Until then, `recall` and a save that stored no vector carry a `warming` block. The Jina reranker (about 150 MB) loads in the background; until it does, ranking stays BM25. After those downloads, memory calls stay on the machine. `source_sync` (`--features connectors`) and `vestige sync --cloud` (`--features cloud-sync`) are the calls that use the network. Neither feature is on in a 4.0 default build. Full walkthrough: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
 
 `vestige --help` lists the CLI. The subcommands are `stats`, `health`, `consolidate`, `upgrade`, `update`, `sandwich`, `embeddings`, `restore`, `backup`, `export`, `portable-export`, `portable-import`, `sync`, `gc`, `dashboard`, `ingest`, `scan-secrets`, `backfill`, `recall`, `compose`, `project`, and `serve`. `--data-dir` is global.
 
@@ -176,15 +176,15 @@ The mechanisms below are implemented in the Rust engine. Write-up: [docs/SCIENCE
 | `graph` | Chains, associations, bridges, predictions, composition topology. `label` is the write |
 | `intention` | Set, check, update, list. `graph` runs the evidence-aware plan |
 | `maintain` | `consolidate`, `dream`, `gc` (dry run unless you turn it off), `importance_score`, `backup`, `export`, `restore` |
-| `memory` | `get`, `get_batch`, `state`, `promote`, `demote`, `edit`, `purge` (`confirm=true`). `delete` aliases `purge`. Demote does not delete |
+| `memory` | `get`, `get_batch`, `state`, `promote`, `demote`, `edit`, `purge` (`confirm=true`; retired, can't be retrieved). `delete` aliases `purge`. Demote does not delete |
 | `memory_status` | `health`, `retention`, `timeline`, `changelog`, `stats`, `tools`. `view=tools` plus `tool` unfolds one full schema |
 | `project` | Preview a fenced region of `CLAUDE.md` or `MEMORY.md`. `write` needs `confirm=true` and replaces only the fence |
-| `purge` | Remove one memory's content and embeddings. Irreversible; `confirm=true` required. `destructiveHint` is true, and `_meta["anthropic/requiresUserInteraction"]` is true, so the client prompts. Same path as `memory` action `purge`. The tombstone is an opaque marker; the reason is logged, not stored |
+| `purge` | Retire one memory so it can't be retrieved. `confirm=true` required. `destructiveHint` is true, and `_meta["anthropic/requiresUserInteraction"]` is true, so the client prompts. Same path as `memory` action `purge`. Returns the node id and an `eff-` receipt naming `purge` |
 | `receipt` | `get` a stored receipt, or `replay` it with named slots withheld |
 | `recall` | `lookup` (hybrid search), `reason`, or `contradictions`. Retrieval does not change strength |
 | `session_start` | Memories, open intentions, status, predictions, and codebase context under one budget |
 | `smart_ingest` | Create, merge, or supersede through prediction-error gating. `items` batches up to 20 |
-| `source_sync` | Index GitHub (`GITHUB_TOKEN`) or Redmine (`REDMINE_URL`, `REDMINE_API_KEY`) into local memories |
+| `source_sync` | Index GitHub (`GITHUB_TOKEN`) or Redmine (`REDMINE_URL`, `REDMINE_API_KEY`) into local memories. Opt-in (`--features connectors`); absent from a default `tools/list` |
 | `suppress` | Hold a memory out of retrieval and speed its decay. `reverse=true` undoes it inside 24 hours when the stored snapshot still matches |
 
 Full contracts: [docs/TOOL-CONTRACTS.md](docs/TOOL-CONTRACTS.md) · Hygiene and standing habits: [docs/MEMORY_HYGIENE.md](docs/MEMORY_HYGIENE.md)
@@ -201,7 +201,7 @@ The server binds **http://127.0.0.1:3927** and redirects `/` to **/dashboard**. 
 
 | | |
 |---|---|
-| Engine | Rust 2024. Release archives ship `vestige`, `vestige-mcp`, and `vestige-restore` |
+| Engine | Rust 2024. Release archives ship `vestige`, `vestige-mcp`, `vestige-restore`, and `vestige-upgrade` |
 | Retrieval | Nomic Embed Text v1.5, Matryoshka 768d truncated to 256d, USearch HNSW, SQLite FTS5. The background reranker is Jina Reranker v1 Turbo; until it loads, ranking stays BM25 |
 | Storage | SQLite. SQLCipher is the optional `encryption` feature plus `VESTIGE_ENCRYPTION_KEY`, not the default build. See [docs/STORAGE.md](docs/STORAGE.md) |
 | First run | About 130 MB for the embedding model and about 150 MB for the reranker. Keyword search and a `warming` block until the embedding runtime is ready; BM25 until the reranker loads. A release build hints when npm has a newer `vestige-mcp-server`, and does not update itself |

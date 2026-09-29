@@ -4,6 +4,8 @@
 //! `VESTIGE_MCP_BIN` defaults to the package binary. `VESTIGE_BIN` is the
 //! `vestige` binary built with `--features migrate-to-strata`.
 
+#![cfg(feature = "migrate-to-strata")]
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

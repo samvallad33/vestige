@@ -16,9 +16,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Every shipped feature set must resolve without reqwest. Runs before the
+  # matrix builds so a regression cannot upload an artifact.
+  no-http-client:
+    name: Release feature sets do not link reqwest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Reject reqwest in every release feature set
+        run: bash scripts/check-release-no-reqwest.sh
+
   build:
     # Benchmark evidence releases must not build or publish product binaries.
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    needs: [no-http-client]
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -35,7 +53,7 @@ jobs:
             # generates 0 embeddings, and no model download is ever attempted.
             # usearch builds cleanly on MSVC because vestige-core pins it with
             # features=["fp16lib"] (see crates/vestige-core/Cargo.toml).
-            cargo_flags: "--no-default-features --features embeddings,ort-download,vector-search,cloud-sync,connectors"
+            cargo_flags: "--no-default-features --features embeddings,ort-download,vector-search"
             needs_onnxruntime: false
           # Intel Mac uses the ort-dynamic feature to runtime-link against a
           # system libonnxruntime (Homebrew), sidestepping the missing
@@ -45,7 +63,7 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
-            cargo_flags: "--no-default-features --features ort-dynamic,vector-search,cloud-sync,connectors"
+            cargo_flags: "--no-default-features --features ort-dynamic,vector-search"
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -150,7 +168,9 @@ jobs:
           NODE
 
       - name: Build
-        run: cargo build --locked --package vestige-mcp --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+        run: |
+          cargo build --locked --package vestige-mcp --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+          cargo build --locked --package vestige-upgrade --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
@@ -158,9 +178,9 @@ jobs:
           cp docs/INSTALL-INTEL-MAC.md target/${{ matrix.target }}/release/ 2>/dev/null || true
           cd target/${{ matrix.target }}/release
           if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore INSTALL-INTEL-MAC.md
+            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade INSTALL-INTEL-MAC.md
           else
-            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore
+            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
           fi
 
       - name: Package (Windows)
@@ -168,7 +188,11 @@ jobs:
         shell: pwsh
         run: |
           cd target/${{ matrix.target }}/release
-          Compress-Archive -Path vestige-mcp.exe,vestige.exe,vestige-restore.exe -DestinationPath ../../../vestige-mcp-${{ matrix.target }}.zip
+          Compress-Archive -Path vestige-mcp.exe,vestige.exe,vestige-restore.exe,vestige-upgrade.exe -DestinationPath ../../../vestige-mcp-${{ matrix.target }}.zip
+
+      - name: Require vestige-upgrade in the archive
+        shell: bash
+        run: bash scripts/check-release-archive.sh vestige-mcp-${{ matrix.target }}.${{ matrix.archive }}
 
       - name: Generate checksum
         shell: bash
@@ -196,6 +220,7 @@ jobs:
   # runner label begins deprecation in 2026; a container keeps this floor.
   build-linux:
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    needs: [no-http-client]
     name: Build x86_64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-latest
     container: ubuntu:22.04
@@ -324,12 +349,17 @@ jobs:
           ORT_CXX_STDLIB: static=stdc++
           CXXSTDLIB: static=stdc++
           RUSTFLAGS: -C link-arg=-static-libstdc++ -L native=/usr/lib/gcc/x86_64-linux-gnu/13
-        run: cargo build --locked --package vestige-mcp --release --target x86_64-unknown-linux-gnu
+        run: |
+          cargo build --locked --package vestige-mcp --release --target x86_64-unknown-linux-gnu
+          cargo build --locked --package vestige-upgrade --release --target x86_64-unknown-linux-gnu
 
       - name: Package
         run: |
           cd target/x86_64-unknown-linux-gnu/release
-          tar -czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore
+          tar -czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
+
+      - name: Require vestige-upgrade in the archive
+        run: bash scripts/check-release-archive.sh vestige-mcp-x86_64-unknown-linux-gnu.tar.gz
 
       - name: Check glibc ceiling
         run: bash scripts/check-linux-glibc.sh target/x86_64-unknown-linux-gnu/release/vestige-mcp
@@ -399,6 +429,7 @@ jobs:
   # aarch64 Linux asset (#240): the x86_64 job on GitHub's arm64 runner, same
   # Ubuntu 22.04 container for the glibc 2.35 floor, same checks and smokes.
   build-linux-arm64:
+    needs: [no-http-client]
     name: Build aarch64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-24.04-arm
     container: ubuntu:22.04
@@ -527,12 +558,17 @@ jobs:
           ORT_CXX_STDLIB: static=stdc++
           CXXSTDLIB: static=stdc++
           RUSTFLAGS: -C link-arg=-static-libstdc++ -L native=/usr/lib/gcc/aarch64-linux-gnu/13
-        run: cargo build --locked --package vestige-mcp --release --target aarch64-unknown-linux-gnu
+        run: |
+          cargo build --locked --package vestige-mcp --release --target aarch64-unknown-linux-gnu
+          cargo build --locked --package vestige-upgrade --release --target aarch64-unknown-linux-gnu
 
       - name: Package
         run: |
           cd target/aarch64-unknown-linux-gnu/release
-          tar -czf ../../../vestige-mcp-aarch64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore
+          tar -czf ../../../vestige-mcp-aarch64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
+
+      - name: Require vestige-upgrade in the archive
+        run: bash scripts/check-release-archive.sh vestige-mcp-aarch64-unknown-linux-gnu.tar.gz
 
       - name: Check glibc ceiling
         run: bash scripts/check-linux-glibc.sh target/aarch64-unknown-linux-gnu/release/vestige-mcp
@@ -723,6 +759,7 @@ jobs:
   # libc/libm/libdl/liblog appear as runtime dependencies. No npm installer
   # mapping yet — on-device Termux users build from source or take the asset.
   build-android:
+    needs: [no-http-client]
     name: Build aarch64-linux-android (no embeddings)
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
     runs-on: ubuntu-latest
@@ -773,7 +810,8 @@ jobs:
           # cargo-ndk 4 takes the API level as --platform; a bare -p is handed
           # to cargo as --package, and "unknown package: 24" is what you get.
           cargo ndk -t arm64-v8a --platform "$ANDROID_API" build --release -p vestige-mcp \
-            --no-default-features --features connectors,cloud-sync
+            --no-default-features
+          cargo ndk -t arm64-v8a --platform "$ANDROID_API" build --release -p vestige-upgrade
 
       - name: Only bionic may be a runtime dependency
         run: |
@@ -789,7 +827,10 @@ jobs:
       - name: Package
         run: |
           cd target/aarch64-linux-android/release
-          tar czf ../../../vestige-mcp-aarch64-linux-android.tar.gz vestige-mcp
+          tar czf ../../../vestige-mcp-aarch64-linux-android.tar.gz vestige-mcp vestige-upgrade
+
+      - name: Require vestige-upgrade in the archive
+        run: bash scripts/check-release-archive.sh vestige-mcp-aarch64-linux-android.tar.gz
 
       - name: Upload android artifact
         uses: actions/upload-artifact@v4

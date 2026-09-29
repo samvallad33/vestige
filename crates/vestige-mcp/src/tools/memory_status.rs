@@ -244,6 +244,9 @@ pub fn execute_coverage(storage: &Arc<Storage>) -> Result<Value, String> {
 /// the operator-controlled role/weight policy snapshot and the process actor
 /// identity. Read-only; every list is bounded.
 pub fn execute_provenance(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        return crate::strata_memory::execute_node_provenance(storage.as_ref(), args.as_ref());
+    }
     const MAX_PROVENANCE_RESULTS: usize = 50;
     let memory_id = args
         .as_ref()
@@ -561,5 +564,186 @@ mod tests {
             Some(serde_json::json!({ "view": "provenance", "actorId": "did:key:z6MkNobody" }));
         let value = execute(&storage, &cognitive, &oc, args).await.unwrap();
         assert_eq!(value["count"], 0);
+    }
+}
+
+#[cfg(test)]
+mod strata_stdio {
+    use super::*;
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+    fn init_line() -> String {
+        json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "provenance-probe", "version": "1"}
+            }
+        })
+        .to_string()
+            + "\n"
+    }
+
+    fn hex32(bytes: &[u8; 32]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(64);
+        for byte in bytes {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        out
+    }
+
+    async fn drive(storage: Arc<Storage>, input: String) -> Vec<Value> {
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let server = crate::server::McpServer::new(storage, cognitive);
+        let (mut client_w, server_r) = tokio::io::duplex(1 << 16);
+        let (server_w, mut client_r) = tokio::io::duplex(1 << 20);
+        let handle = tokio::spawn(async move {
+            crate::protocol::stdio::run_io(server, None, BufReader::new(server_r), server_w).await
+        });
+        client_w.write_all(input.as_bytes()).await.unwrap();
+        drop(client_w);
+        let mut buf = String::new();
+        client_r.read_to_string(&mut buf).await.unwrap();
+        handle.await.unwrap().unwrap();
+        buf.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str::<Value>(line).expect("json"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn provenance_stdio_returns_the_planted_origin() {
+        const CREATED_MS: i64 = 1_700_000_000_000;
+        let dir = tempfile::TempDir::new().unwrap();
+        let (origin_id, successor_id, frame_hash, frame_seq, hop_hash) = {
+            let mut store = strata_store::StrataStore::open_with_policy(
+                dir.path(),
+                strata_store::permissive_policy(),
+            )
+            .unwrap();
+            let origin_id = store
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "planted origin fact".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "decision".into(),
+                        tags: vec!["prov-seed".into()],
+                        created_at_ms: Some(CREATED_MS),
+                        valid_from_ms: Some(CREATED_MS),
+                        valid_until_ms: None,
+                    },
+                    "user",
+                )
+                .unwrap();
+            let successor_id = store
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "planted successor fact".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "fact".into(),
+                        tags: vec!["prov-next".into()],
+                        created_at_ms: Some(CREATED_MS + 111_000),
+                        valid_from_ms: None,
+                        valid_until_ms: None,
+                    },
+                    "user",
+                )
+                .unwrap();
+            store.supersede(&origin_id, &successor_id).unwrap();
+            let origin = store.recorded_origin(&origin_id).unwrap().unwrap();
+            assert_eq!(origin.record.content, "planted origin fact");
+            assert_eq!(origin.supersede_chain.len(), 1);
+            (
+                origin_id,
+                successor_id,
+                hex32(&origin.frame_hash),
+                origin.frame_seq,
+                hex32(&origin.supersede_chain[0].frame_hash),
+            )
+        };
+
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let input = init_line()
+            + &format!(
+                "{}\n{}\n{}\n",
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+                json!({
+                    "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": {
+                        "name": "memory_status",
+                        "arguments": {"view": "provenance", "memoryId": origin_id}
+                    }
+                }),
+                json!({
+                    "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                    "params": {
+                        "name": "memory_status",
+                        "arguments": {"view": "provenance", "memoryId": "mem-00000000000000ff"}
+                    }
+                })
+            );
+        let out = drive(storage, input).await;
+        let listed = out
+            .iter()
+            .find(|v| v["id"] == json!(1))
+            .expect("tools/list");
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        let advertises: Vec<&str> = tools
+            .iter()
+            .filter(|tool| {
+                tool["inputSchema"]["properties"]["view"]["enum"]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|value| value == "provenance"))
+            })
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(advertises, vec!["memory_status"]);
+
+        let call = out
+            .iter()
+            .find(|v| v["id"] == json!(2))
+            .expect("tools/call");
+        assert_ne!(call["result"]["isError"], json!(true), "{call}");
+        let body = &call["result"]["structuredContent"];
+        assert_eq!(body["view"], "provenance");
+        assert_eq!(body["status"], "completed");
+        assert_eq!(body["found"], true);
+        assert_eq!(body["memoryId"], origin_id);
+        assert_eq!(body["origin"]["record"]["content"], "planted origin fact");
+        assert_eq!(body["origin"]["record"]["nodeType"], "decision");
+        assert_eq!(body["origin"]["record"]["tags"], json!(["prov-seed"]));
+        assert_eq!(body["origin"]["record"]["scope"], "user");
+        assert_eq!(body["origin"]["record"]["id"], origin_id);
+        assert_eq!(body["origin"]["timestamps"]["createdAtMs"], CREATED_MS);
+        assert_eq!(body["origin"]["timestamps"]["validFromMs"], CREATED_MS);
+        assert!(body["origin"]["timestamps"]["validUntilMs"].is_null());
+        assert!(body["origin"]["actor"].is_null());
+        assert!(body["origin"]["source"].is_null());
+        assert_eq!(body["origin"]["frame"]["kind"], 32);
+        assert_eq!(body["origin"]["frame"]["kindName"], "STORE_WRITE");
+        assert_eq!(body["origin"]["frame"]["op"], "UpsertNode");
+        assert_eq!(body["origin"]["frame"]["seq"], frame_seq);
+        assert_eq!(body["origin"]["frame"]["frameHash"], frame_hash);
+        assert_eq!(
+            body["origin"]["frame"]["effectSeq"].as_u64().unwrap() + 1,
+            frame_seq
+        );
+        assert_eq!(body["supersedeChain"].as_array().unwrap().len(), 1);
+        assert_eq!(body["supersedeChain"][0]["id"], origin_id);
+        assert_eq!(body["supersedeChain"][0]["supersededBy"], successor_id);
+        assert_eq!(body["supersedeChain"][0]["recordedAs"], "SupersedeNode");
+        assert_eq!(body["supersedeChain"][0]["frameHash"], hop_hash);
+
+        let missing = out.iter().find(|v| v["id"] == json!(3)).expect("missing");
+        assert_ne!(missing["result"]["isError"], json!(true), "{missing}");
+        let missing_body = &missing["result"]["structuredContent"];
+        assert_eq!(missing_body["status"], "completed");
+        assert_eq!(missing_body["found"], false);
     }
 }

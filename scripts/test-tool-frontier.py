@@ -95,7 +95,8 @@ def run(binary, output):
             handshake()
             catalog = rpc("tools/list", {})["tools"]
             names = [x["name"] for x in catalog]
-            assert len(names) == 18, names
+            assert len(names) == 17, names
+            assert "source_sync" not in names, names
             guide = tool("memory_status", {"view": "tools"})["tools"]
             assert [x["name"] for x in guide] == names
             for entry, definition in zip(guide, catalog):
@@ -148,6 +149,19 @@ def run(binary, output):
             assert marker in json.dumps(handle) and handle["exact"] is True
             passed("ingest, exact get, write receipt, and handle recall; query recall is refused")
 
+            created_intention = tool("intention", {
+                "action": "set",
+                "description": "Synthetic reminder",
+                "trigger": {"type": "time", "at": "2020-01-01T00:00:00Z"},
+            })
+            intention_id = created_intention["intentionId"]
+            assert created_intention["success"] is True
+            assert created_intention["receiptId"].startswith("eff-")
+            assert intention_id in created_intention["receipt"]["retrieved"]
+            listed = tool("intention", {"action": "list"})
+            assert any(row["id"] == intention_id for row in listed["intentions"])
+            passed("intention set admits a receipt and lists the row")
+
             proc.terminate()
             proc.wait(timeout=10)
             assert_no_sqlite()
@@ -155,21 +169,148 @@ def run(binary, output):
             handshake()
             again = tool("memory", {"action": "get", "id": node_id})
             assert marker in json.dumps(again)
+            restarted = tool("intention", {"action": "list"})
+            assert any(row["id"] == intention_id and row["description"] == "Synthetic reminder"
+                       for row in restarted["intentions"])
             assert_no_sqlite()
             passed("empty-dir restart keeps the node and creates no sqlite file")
 
             typed("recall", {"mode": "reason", "query": marker}, "similarity_disabled")
             typed("recall", {"mode": "contradictions"}, "similarity_disabled")
-            typed("receipt", {"action": "replay", "receipt_id": node_id, "withheld_slots": []}, "pending_strata")
-            typed("memory", {"action": "promote", "id": node_id, "reason": "fixture"}, "pending_strata")
-            typed("memory", {"action": "edit", "id": node_id, "content": "edited"}, "pending_strata")
-            typed("purge", {"id": node_id, "confirm": True}, "pending_strata")
+            replay_args = {"action": "replay", "receipt_id": node_id, "withheld_slots": []}
+            replayed = tool("receipt", replay_args)
+            repeated = tool("receipt", replay_args)
+            assert repeated == replayed
+            assert replayed["kind"] == "strata" and replayed["matched"] is True
+            assert replayed["mismatches"] == [] and replayed["readOnly"] is True
+            assert replayed["nodeId"] == node_id and replayed["stateDigest"] == replayed["replayedDigest"]
+            passed("receipt replay matches the log and repeats")
+            promoted = tool("memory", {"action": "promote", "id": node_id, "reason": "fixture"})
+            assert promoted["action"] == "promoted" and promoted["success"] is True
+            promote_receipt = promoted["receiptId"]
+            assert promote_receipt.startswith("eff-")
+            proved = tool("receipt", {"action": "get", "receipt_id": promote_receipt})
+            assert proved["attestation"]["verification"]["locallyVerified"] is True
+            assert proved["receipt"]["mutations"][0]["kind"] == "promoted"
+            assert node_id in proved["receipt"]["retrieved"]
+            demoted = tool("memory", {"action": "demote", "id": node_id, "reason": "fixture"})
+            assert demoted["action"] == "demoted" and "NOT deleted" in demoted["note"]
+            assert demoted["receiptId"].startswith("eff-") and demoted["receiptId"] != promote_receipt
+            edited = tool("memory", {"action": "edit", "id": node_id, "content": "edited fixture"})
+            successor = edited["nodeId"]
+            assert edited["action"] == "edit" and edited["embeddingStatus"] == "refused"
+            assert successor != node_id and edited["rule"] == "edit" and edited["supersedes"] == node_id
+            edit_receipt = tool("receipt", {"action": "get", "receipt_id": edited["receiptId"]})
+            assert edit_receipt["attestation"]["verification"]["locallyVerified"] is True
+            assert edit_receipt["receipt"]["mutations"][0]["kind"] == "edited"
+            assert "rule=edit" in edit_receipt["receipt"]["mutations"][0]["note"]
+            assert "edited fixture" in json.dumps(tool("memory", {"action": "get", "id": successor}))
+            hidden_edit = tool("memory", {"action": "get", "id": node_id})
+            assert hidden_edit["message"] == "retired, can't be retrieved"
+            retired = tool("recall", {"handle": node_id})
+            assert node_id not in json.dumps(retired.get("nodes", []))
+            live = tool("recall", {"handle": successor})
+            assert "edited fixture" in json.dumps(live)
+            typed("memory", {"action": "promote", "id": "not-a-handle"}, "Invalid memory ID")
+            typed("memory", {"action": "edit", "id": "mem-ffffffffffffffff", "content": "nope"}, "not found")
+            doomed = tool("smart_ingest", {"content": "STRATA_PURGE_DOOMED", "forceCreate": True})
+            doomed_id = doomed["nodeId"]
+            typed("purge", {"id": doomed_id, "confirm": False}, "confirm=true")
+            purged = tool("purge", {"id": doomed_id, "confirm": True})
+            assert purged["rule"] == "purge" and purged["nodeId"] == doomed_id
+            assert str(purged["receiptId"]).startswith("eff-")
+            hidden = tool("memory", {"action": "get", "id": doomed_id})
+            assert "STRATA_PURGE_DOOMED" not in json.dumps(hidden)
+            assert hidden["message"] == "retired, can't be retrieved"
             context = tool("codebase", {"action": "get_context", "codebase": "fixture"})
             assert marker not in json.dumps(context)
-            typed("project", {"action": "preview"}, "pending_strata")
-            typed("intention", {"action": "set", "description": "Synthetic reminder",
-                                "trigger": {"type": "time", "at": "2020-01-01T00:00:00Z"}}, "pending_strata")
-            tool("source_sync", {"source": "gitlab", "repo": "a/b"}, error=True)
+            project_preview = tool("project", {"action": "preview"})
+            defaults = tool("project", {})
+            project_again = tool("project", {"action": "preview"})
+            assert defaults == project_preview == project_again
+            assert project_preview["action"] == "preview" and project_preview["scope"] == "user"
+            assert project_preview["itemCount"] == 0 and marker not in json.dumps(project_preview["region"])
+            target_root = root / "projection"
+            target_root.mkdir()
+            write_args = {
+                "action": "write",
+                "path": "CLAUDE.md",
+                "root": str(target_root),
+                "confirm": True,
+            }
+            written = tool("project", write_args)
+            assert written["action"] == "write" and written["written"] is True
+            assert written.get("refused") is not True
+            assert written["receipt"]["receiptId"].startswith("eff-")
+            assert written["receipt"]["hash"]
+            target = target_root / "CLAUDE.md"
+            first_bytes = target.read_bytes()
+            assert b"vestige:projection:begin" in first_bytes
+            assert marker.encode() not in first_bytes
+            second = tool("project", write_args)
+            assert second["written"] is False and second["receipt"]["hash"] == written["receipt"]["hash"]
+            assert target.read_bytes() == first_bytes
+            after = tool("project", {})
+            assert after["region"] == project_preview["region"] and after["itemCount"] == 0
+            passed("project {}, preview, and write complete; an untagged fact is not projected")
+            checked = tool("intention", {"action": "check", "context": {
+                "current_time": "2020-01-02T00:00:00Z"}})
+            assert any(row["id"] == intention_id for row in checked["triggered"])
+            assert checked["receiptId"].startswith("eff-")
+            updated = tool("intention", {"action": "update", "id": intention_id, "status": "complete"})
+            assert updated["success"] is True and updated["receiptId"].startswith("eff-")
+            fulfilled = tool("intention", {"action": "list", "filter_status": "fulfilled"})
+            assert any(row["id"] == intention_id for row in fulfilled["intentions"])
+            planned = tool("intention", {
+                "action": "graph",
+                "scope": "user",
+                "at": "2026-10-01T09:00:00Z",
+                "command": {
+                    "action": "plan",
+                    "id": "fixture-plan",
+                    "description": "Synthetic graph plan",
+                    "requirements": [],
+                    "conflict_keys": [],
+                },
+            })
+            assert isinstance(planned.get("journal_seq"), int) and planned["journal_seq"] >= 1
+            graph_replay = tool("intention", {
+                "action": "graph",
+                "scope": "user",
+                "command": {"action": "replay"},
+            })
+            assert graph_replay["matched"] is True and graph_replay["commands"] == 1
+            explained = tool("intention", {
+                "action": "graph",
+                "scope": "user",
+                "at": "2026-10-01T09:00:00Z",
+                "command": {"action": "explain", "id": "fixture-plan"},
+            })
+            assert "Synthetic graph plan" in json.dumps(explained)
+            passed("intention graph replays the recorded plan")
+            typed("intention", {"action": "set", "description": "  "}, "empty")
+            # connectors is off in a default build: source_sync is not a tool.
+            seq += 1
+            request = {
+                "jsonrpc": "2.0", "id": seq, "method": "tools/call",
+                "params": {"name": "source_sync", "arguments": {"source": "gitlab", "repo": "a/b"}},
+            }
+            proc.stdin.write(json.dumps(request) + "\n")
+            proc.stdin.flush()
+            while True:
+                if not select.select([proc.stdout], [], [], 60)[0]:
+                    raise TimeoutError("source_sync")
+                line = proc.stdout.readline()
+                if not line:
+                    raise RuntimeError("MCP process exited")
+                response = json.loads(line)
+                if response.get("id") == seq:
+                    transcript.append({"request": request, "response": response})
+                    assert "result" not in response, response
+                    assert response["error"]["code"] == -32602, response
+                    assert "Unknown tool" in response["error"]["message"], response
+                    assert "source_sync" in response["error"]["message"], response
+                    break
             for view in ("health", "retention", "timeline", "changelog", "stats", "coverage"):
                 tool("memory_status", {"view": view})
             score = tool("maintain", {"action": "importance_score", "content": "Synthetic fixture design decision"})
@@ -192,7 +333,7 @@ def run(binary, output):
             missing = [name for name in names if name not in called]
             assert not missing, missing
             assert_no_sqlite()
-            passed("all 18 tools answered on Strata: real writes, or a typed error")
+            passed("all 17 tools answered on Strata: real writes, or a typed error")
         finally:
             if proc and proc.poll() is None:
                 proc.terminate()

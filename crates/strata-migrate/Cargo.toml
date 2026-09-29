@@ -13,8 +13,9 @@ publish = false
 [workspace]
 
 [features]
-# On for this crate's own tests and `vestige migrate-to-strata`. The default
-# `vestige` binary depends on strata-migrate without it.
+# SQLite source reader. Default for this crate's own test and bin builds.
+# Dependents that must not link rusqlite use `default-features = false`.
+# `vestige-upgrade` and an explicit `migrate-to-strata` rebuild turn it on.
 default = ["sqlite-reader"]
 # Importer's read-only v3 reader (`source::open_readonly`). This is the only
 # gate for checking a log against a source SQLite store. Not a store-open
@@ -49,6 +50,9 @@ strata-kernel = { path = "../strata-kernel" }
 # migrator reads sources through its OWN rusqlite connection and declares
 # the portable-format constant locally; vestige-core (ungated) supplies the
 # portable types and the DSSE digest functions.
+# Do not enable `connectors` or `cloud-sync` on this edge either. vestige-mcp
+# pulls this crate through `migrate-to-strata`, and Cargo unifies vestige-core
+# features across that edge — either feature would link reqwest into the binary.
 vestige-core = { path = "../vestige-core", default-features = false }
 
 # `rusqlite` above is also used by tests to plant synthetic fixture rows.
@@ -56,7 +60,10 @@ vestige-core = { path = "../vestige-core", default-features = false }
 [dev-dependencies]
 # Fixture tooling builds synthetic v3 stores through the real migration
 # path; test builds only — never unified into the shipped binary.
-vestige-core = { path = "../vestige-core", features = ["bundled-sqlite", "v3-engine"] }
+# default-features stays off so a future vestige-core default cannot unify
+# `connectors` into this test build. `codebase-git` is the current core default
+# and is named explicitly so the test graph does not depend on that default.
+vestige-core = { path = "../vestige-core", default-features = false, features = ["codebase-git", "bundled-sqlite", "v3-engine"] }
 
 [[bin]]
 name = "make-v3-fixture"

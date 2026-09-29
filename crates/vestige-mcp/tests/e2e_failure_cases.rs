@@ -13,9 +13,13 @@
 //! removed with the embedding machinery.
 
 use std::collections::HashMap;
+#[cfg(feature = "connectors")]
 use std::io::{Read, Write};
+#[cfg(feature = "connectors")]
 use std::net::{TcpListener, TcpStream};
+#[cfg(feature = "connectors")]
 use std::sync::Arc;
+#[cfg(feature = "connectors")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -32,13 +36,16 @@ use common::*;
 // source_sync can be pointed at a Redmine *we* control via REDMINE_URL.
 // ============================================================================
 
+#[cfg(feature = "connectors")]
 type MockHandler = Arc<dyn Fn(&str) -> (u16, String) + Send + Sync>;
 
+#[cfg(feature = "connectors")]
 struct MockHttp {
     base_url: String,
     _stop: Arc<AtomicBool>,
 }
 
+#[cfg(feature = "connectors")]
 impl MockHttp {
     fn spawn(handler: MockHandler) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -71,12 +78,14 @@ impl MockHttp {
     }
 }
 
+#[cfg(feature = "connectors")]
 impl Drop for MockHttp {
     fn drop(&mut self) {
         self._stop.store(true, Ordering::SeqCst);
     }
 }
 
+#[cfg(feature = "connectors")]
 fn read_request_path(stream: &mut TcpStream) -> String {
     let mut buf = [0u8; 4096];
     let mut data = Vec::new();
@@ -100,6 +109,7 @@ fn read_request_path(stream: &mut TcpStream) -> String {
         .to_string()
 }
 
+#[cfg(feature = "connectors")]
 fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) {
     let reason = match status {
         200 => "OK",
@@ -118,6 +128,7 @@ fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) {
     let _ = stream.flush();
 }
 
+#[cfg(feature = "connectors")]
 fn redmine_issues_json(issues: &[(u64, &str)]) -> String {
     let items: Vec<String> = issues
         .iter()
@@ -130,6 +141,7 @@ fn redmine_issues_json(issues: &[(u64, &str)]) -> String {
     )
 }
 
+#[cfg(feature = "connectors")]
 fn redmine_issue_body(id: u64, subject: &str, detail: bool) -> String {
     // Single line on purpose: this is a raw string, so a `\`-newline
     // "continuation" would land in the JSON verbatim as an invalid escape.
@@ -305,7 +317,10 @@ fn unknown_tool_names_are_protocol_errors_with_no_result_body() {
     let mut server = Server::spawn(dir.path());
     server.handshake();
 
-    for name in ["no_such_tool", "", "RECALL", "recall "] {
+    let mut names = vec!["no_such_tool", "", "RECALL", "recall "];
+    #[cfg(not(feature = "connectors"))]
+    names.push("source_sync");
+    for name in names {
         let response = server.request("tools/call", Some(json!({ "name": name, "arguments": {} })));
         assert!(
             response.get("result").is_none(),
@@ -328,18 +343,19 @@ fn missing_required_arguments_error_per_tool() {
     let mut server = Server::spawn(dir.path());
     server.handshake();
 
-    let cases: Vec<(&str, Value)> = vec![
+    let mut cases: Vec<(&str, Value)> = vec![
         ("recall", json!({})),
         ("smart_ingest", json!({ "tags": ["orphan"] })),
         ("suppress", json!({ "reason": "no subject" })),
         ("memory", json!({})),
         ("intention", json!({})),
         ("maintain", json!({})),
-        ("source_sync", json!({})),
         ("receipt", json!({})),
         ("codebase", json!({})),
         ("graph", json!({})),
     ];
+    #[cfg(feature = "connectors")]
+    cases.push(("source_sync", json!({})));
     for (name, args) in cases {
         let value = server.call_tool(name, args);
         assert!(
@@ -373,7 +389,7 @@ fn wrong_typed_arguments_are_rejected_and_the_server_stays_healthy() {
     let mut server = Server::spawn(dir.path());
     server.handshake();
 
-    let cases = vec![
+    let mut cases = vec![
         ("recall", json!({ "query": 42 })),
         ("suppress", json!({ "id": { "deep": 1 } })),
         (
@@ -381,10 +397,11 @@ fn wrong_typed_arguments_are_rejected_and_the_server_stays_healthy() {
             json!({ "content": "ok", "tags": "not-an-array" }),
         ),
         ("memory", json!({ "action": ["get"] })),
-        ("source_sync", json!({ "source": 3 })),
         ("session_start", json!({ "token_budget": "eight hundred" })),
         ("maintain", json!({ "action": true })),
     ];
+    #[cfg(feature = "connectors")]
+    cases.push(("source_sync", json!({ "source": 3 })));
     for (name, args) in &cases {
         let value = server.call_tool(name, args.clone());
         assert!(
@@ -1043,9 +1060,7 @@ fn a_drifted_file_flips_the_anchor_status_to_stale() {
 /// SSRF guard is explicitly disabled via `VESTIGE_ALLOW_PRIVATE_CONNECTOR_
 /// HOSTS` so the loopback mock/dead-host is reachable at all; the guard's own
 /// refusal is tested separately below.)
-/// Re-lands with the strata runtime boot: sync reads `get_connector_cursor`
-/// before the transport, and that cursor is not on the 4.0 log yet.
-#[ignore = "needs a live store: 4.0 creates no SQLite; re-lands with build/wire-strata"]
+#[cfg(feature = "connectors")]
 #[test]
 fn a_dead_upstream_error_names_the_url() {
     let dir = data_dir();
@@ -1085,6 +1100,7 @@ fn a_dead_upstream_error_names_the_url() {
 /// refused at configuration time, before any request — even before the
 /// missing-project check would matter. A misconfigured or hostile base_url
 /// must not turn an authenticated client against localhost.
+#[cfg(feature = "connectors")]
 #[test]
 fn an_internal_address_upstream_is_refused_by_the_ssrf_guard() {
     let dir = data_dir();
@@ -1112,9 +1128,7 @@ fn an_internal_address_upstream_is_refused_by_the_ssrf_guard() {
 /// A 404 from the upstream keeps the connector's documented message shape:
 /// `GET {url} -> {status}: {reason}` — distinguishable from "no results" and
 /// from a transport failure.
-/// Re-lands with the strata runtime boot: sync reads `get_connector_cursor`
-/// before the transport, and that cursor is not on the 4.0 log yet.
-#[ignore = "needs a live store: 4.0 creates no SQLite; re-lands with build/wire-strata"]
+#[cfg(feature = "connectors")]
 #[test]
 fn a_redmine_404_keeps_the_exact_api_message_shape() {
     let dir = data_dir();
@@ -1160,6 +1174,7 @@ fn a_redmine_404_keeps_the_exact_api_message_shape() {
 /// Re-lands with the strata runtime boot: the scenario boots the server on
 /// an EMPTY data dir, and a guard-armed 4.0 binary neither creates a SQLite
 /// store nor can sync without one (audit blocker 1).
+#[cfg(feature = "connectors")]
 #[ignore = "needs a live store: 4.0 creates no SQLite and the strata boot lands with build/wire-strata"]
 #[test]
 fn reconcile_with_an_empty_live_set_is_guarded_against_mass_tombstoning() {
@@ -1260,6 +1275,7 @@ fn reconcile_with_an_empty_live_set_is_guarded_against_mass_tombstoning() {
 /// With no REDMINE_URL configured, redmine sync is a clean configuration
 /// error naming the missing variable — not an attempt to reach a default
 /// host, and not a crash.
+#[cfg(feature = "connectors")]
 #[test]
 fn redmine_without_a_configured_url_is_a_configuration_error() {
     let dir = data_dir();
@@ -1289,6 +1305,7 @@ fn redmine_without_a_configured_url_is_a_configuration_error() {
 
 /// Unknown sources and a missing project identifier are refused with the
 /// supported set / required field named.
+#[cfg(feature = "connectors")]
 #[test]
 fn source_sync_unknown_source_and_missing_project_are_refused_by_name() {
     let dir = data_dir();

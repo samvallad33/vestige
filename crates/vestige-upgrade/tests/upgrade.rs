@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
-use vestige_mcp::auto_upgrade::{
+use vestige_upgrade::{
     self, LOG_DIR_NAME, UPGRADE_LOG_NAME, UpgradeOptions, UpgradeStatus, V311_RELEASE,
     staging_directory,
 };
@@ -173,7 +173,7 @@ fn assert_v3_source_kept(db: &Path, log_dir: &Path) {
 fn v311_upgrade_keeps_source_and_source_updated_at() {
     let dir = tempfile::tempdir().unwrap();
     let db = plant(dir.path());
-    let status = auto_upgrade::upgrade_if_needed(&db).unwrap();
+    let status = vestige_upgrade::upgrade_if_needed(&db).unwrap();
     let UpgradeStatus::StrataReady { log_dir } = status else {
         panic!("expected an installed strata log");
     };
@@ -190,7 +190,7 @@ fn happy_path_on_real_v3_fixture_keeps_the_source_hash() {
     fs::create_dir_all(&staging).unwrap();
     fs::write(staging.join("leftover.seg"), b"not a log").unwrap();
 
-    let status = auto_upgrade::upgrade_if_needed(&db).unwrap();
+    let status = vestige_upgrade::upgrade_if_needed(&db).unwrap();
     let UpgradeStatus::StrataReady { log_dir } = status else {
         panic!("expected an installed strata log");
     };
@@ -211,7 +211,7 @@ fn happy_path_on_real_v3_fixture_keeps_the_source_hash() {
     );
     assert_fixture_landed(&db, &log_dir);
 
-    let again = auto_upgrade::upgrade_if_needed(&db).unwrap();
+    let again = vestige_upgrade::upgrade_if_needed(&db).unwrap();
     assert!(matches!(again, UpgradeStatus::StrataReady { .. }));
     assert_eq!(before, sha256_file(&db));
     let backups_after = fs::read_dir(dir.path())
@@ -230,7 +230,7 @@ fn import_failure_leaves_the_v3_hash_and_names_v311() {
     file.set_len(4096).unwrap();
     drop(file);
     let before = sha256_file(&db);
-    let err = auto_upgrade::upgrade_if_needed(&db).unwrap_err();
+    let err = vestige_upgrade::upgrade_if_needed(&db).unwrap_err();
     let text = err.to_string();
     assert_failure_message(&text, &dir.path().join(UPGRADE_LOG_NAME));
     assert!(text.contains("import failed"), "{text}");
@@ -244,7 +244,7 @@ fn verify_failure_leaves_the_v3_hash_and_names_v311() {
     let dir = tempfile::tempdir().unwrap();
     let db = plant(dir.path());
     let before = sha256_file(&db);
-    let err = auto_upgrade::upgrade_with(
+    let err = vestige_upgrade::upgrade_with(
         &db,
         UpgradeOptions {
             after_import: Some(Box::new(|staging| {
@@ -281,21 +281,16 @@ struct Running {
     stderr: Arc<Mutex<String>>,
 }
 
-fn spawn_mcp(data_dir: &Path) -> Running {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_vestige-mcp"))
+fn spawn_upgrade(data_dir: &Path) -> Running {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_vestige-upgrade"))
         .arg("--data-dir")
         .arg(data_dir)
-        .env("HOME", data_dir)
-        .env("VESTIGE_DASHBOARD_ENABLED", "false")
-        .env("VESTIGE_HTTP_ENABLED", "0")
-        .env("VESTIGE_AUTOPILOT_ENABLED", "0")
-        .env("RUST_LOG", "error")
         .env_remove("VESTIGE_DATA_DIR")
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn vestige-mcp");
+        .expect("spawn vestige-upgrade");
     let stdout = Arc::new(Mutex::new(String::new()));
     let stderr = Arc::new(Mutex::new(String::new()));
     let mut out_pipe = child.stdout.take().expect("stdout");
@@ -335,7 +330,7 @@ fn failed_import_process_exits_on_stderr_and_leaves_stdout_empty() {
     file.set_len(4096).unwrap();
     drop(file);
     let before = sha256_file(&db);
-    let mut running = spawn_mcp(dir.path());
+    let mut running = spawn_upgrade(dir.path());
     let status = running
         .child
         .wait_timeout_ext(Duration::from_secs(60))
@@ -438,7 +433,7 @@ fn sigkill_mid_upgrade_then_relaunch_succeeds() {
         reset_attempt(&data, &db);
         inflate_nodes(&db, extra);
         let before = sha256_file(&db);
-        let mut running = spawn_mcp(&data);
+        let mut running = spawn_upgrade(&data);
         let started = Instant::now();
         let mut saw_segment = false;
         while started.elapsed() < Duration::from_secs(180) {
@@ -468,19 +463,12 @@ fn sigkill_mid_upgrade_then_relaunch_succeeds() {
     };
 
     let before = killed;
-    let mut again = spawn_mcp(&data);
+    let mut again = spawn_upgrade(&data);
     let started = Instant::now();
     let log_dir = data.join(LOG_DIR_NAME);
-    loop {
-        if dir_has_seg(&log_dir) && !staging_directory(&data).exists() {
-            break;
-        }
+    let status = loop {
         if let Some(status) = again.child.try_wait().unwrap() {
-            std::thread::sleep(Duration::from_millis(50));
-            panic!(
-                "relaunch exited {status} before the strata log was installed. stderr: {}",
-                again.stderr.lock().unwrap()
-            );
+            break status;
         }
         if started.elapsed() > Duration::from_secs(180) {
             let _ = again.child.kill();
@@ -491,16 +479,18 @@ fn sigkill_mid_upgrade_then_relaunch_succeeds() {
             );
         }
         std::thread::sleep(Duration::from_millis(20));
-    }
+    };
+    std::thread::sleep(Duration::from_millis(50));
     assert!(
-        again.child.try_wait().unwrap().is_none(),
-        "relaunch exited after installing the log"
+        status.success(),
+        "relaunch exited {status}. stderr: {}",
+        again.stderr.lock().unwrap()
+    );
+    assert!(
+        dir_has_seg(&log_dir) && !staging_directory(&data).exists(),
+        "relaunch did not publish the strata log"
     );
     assert_eq!(before, sha256_file(&db), "relaunch modified the v3 file");
-    // The booted server holds `log/strata.lock`. Stop it, then read the log.
-    let _ = again.child.kill();
-    let _ = again.child.wait();
-    std::thread::sleep(Duration::from_millis(50));
     assert_fixture_landed(&db, &log_dir);
     let ids = knowledge_ids(&db);
     let snap = snapshot(&log_dir);
@@ -517,15 +507,13 @@ fn sigkill_mid_upgrade_then_relaunch_succeeds() {
     );
 }
 
-fn run_cli_stats(data_dir: &Path) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_vestige"))
-        .args([
-            "--data-dir",
-            data_dir.to_str().expect("temp path is utf-8"),
-            "stats",
-        ])
+fn run_upgrade_bin(data_dir: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_vestige-upgrade"))
+        .arg("--data-dir")
+        .arg(data_dir)
+        .env_remove("VESTIGE_DATA_DIR")
         .output()
-        .expect("spawn vestige")
+        .expect("spawn vestige-upgrade")
 }
 
 fn assert_progress_stayed_on_stderr(stdout: &str) {
@@ -545,28 +533,24 @@ fn assert_no_sqlite_sidecars(db: &Path) {
 }
 
 #[test]
-fn cli_first_upgrades_fixture_and_preserves_v3_sha() {
+fn upgrade_bin_imports_fixture_and_preserves_v3_sha() {
     let dir = tempfile::tempdir().unwrap();
     let db = plant(dir.path());
     let before = sha256_file(&db);
-    let output = run_cli_stats(dir.path());
+    let output = run_upgrade_bin(dir.path());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         before,
         sha256_file(&db),
-        "cli upgrade changed the v3 file\n{stderr}"
+        "upgrade changed the v3 file\n{stderr}"
     );
     assert_no_sqlite_sidecars(&db);
     assert_eq!(
         output.status.code(),
         Some(0),
-        "vestige stats exited {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        "vestige-upgrade exited {:?}\nstdout: {stdout}\nstderr: {stderr}",
         output.status.code()
-    );
-    assert!(
-        stdout.contains("Total Memories"),
-        "stats did not read the switched log\n{stdout}"
     );
     assert_progress_stayed_on_stderr(&stdout);
     let record = format!("{stdout}{stderr}");
@@ -575,16 +559,16 @@ fn cli_first_upgrades_fixture_and_preserves_v3_sha() {
         lowered.contains("import")
             && lowered.contains("verif")
             && !lowered.contains("verify failed"),
-        "stats did not record import and verify\n{record}"
+        "upgrade did not record import and verify\n{record}"
     );
     assert!(
         stderr.contains("strata log ready"),
-        "cli did not report the upgrade\n{stderr}"
+        "upgrade did not report the log\n{stderr}"
     );
     assert!(!stderr.contains("upgrade failed"), "{stderr}");
     assert!(
         !stderr.contains("cannot be opened by 4.0"),
-        "cli hit the v3 refusal instead of upgrading\n{stderr}"
+        "upgrade hit the v3 refusal instead of importing\n{stderr}"
     );
     let log_dir = dir.path().join(LOG_DIR_NAME);
     assert!(!staging_directory(dir.path()).exists());
@@ -601,10 +585,10 @@ fn cli_first_corrupt_import_leaves_bytes_and_names_v311() {
     file.set_len(4096).unwrap();
     drop(file);
     let before = sha256_file(&db);
-    let output = run_cli_stats(dir.path());
+    let output = run_upgrade_bin(dir.path());
     assert!(
         !output.status.success(),
-        "corrupt cli import exited 0: {}",
+        "corrupt import exited 0: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(before, sha256_file(&db));
@@ -628,12 +612,13 @@ fn two_cli_processes_upgrade_the_fixture_once() {
     let before = sha256_file(&db);
     let dir_s = dir.path().to_str().expect("temp path is utf-8");
     let spawn = || {
-        Command::new(env!("CARGO_BIN_EXE_vestige"))
-            .args(["--data-dir", dir_s, "stats"])
+        Command::new(env!("CARGO_BIN_EXE_vestige-upgrade"))
+            .args(["--data-dir", dir_s])
+            .env_remove("VESTIGE_DATA_DIR")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn vestige")
+            .expect("spawn vestige-upgrade")
     };
     let mut first = spawn();
     let mut second = spawn();
@@ -645,11 +630,11 @@ fn two_cli_processes_upgrade_the_fixture_once() {
         .expect("second cli upgrade timed out");
     assert!(
         first_status.success(),
-        "first cli stats failed: {first_status}"
+        "first upgrade failed: {first_status}"
     );
     assert!(
         second_status.success(),
-        "second cli stats failed: {second_status}"
+        "second upgrade failed: {second_status}"
     );
     assert_eq!(
         before,

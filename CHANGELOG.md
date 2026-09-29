@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A default `vestige-mcp` boot no longer contacts the npm registry. There is
+  no startup version check and no `newer_version_available` notification.
+- `cloud-sync` is not a default feature of `vestige-mcp` or `vestige` in 4.0.
+  The feature and its code stay; release builds do not pass it.
+  `vestige-core`'s default remains `codebase-git` only.
+- `connectors` is not a default feature of `vestige-mcp` or `vestige` in 4.0.
+  The feature and its code stay. A default `tools/list` does not advertise
+  `source_sync`, and `tools/call` for that name is the unknown-tool protocol
+  error. `strata-migrate` does not enable `connectors` on `vestige-core`, so
+  `migrate-to-strata` cannot unify `reqwest` back into the binary. Release
+  cargo flags do not pass `connectors` or `cloud-sync` on any target. The
+  release workflow rejects a target feature set that links `reqwest`.
+
 - `tools/list` payloads dropped from 56 KB to 19.8 KB (#212): discriminator
   enums and types stay on the wire, deep variant trees and per-field prose
   move one call deeper. `memory_status` `view='tools'` with `tool='<name>'`

@@ -27,7 +27,9 @@ pub mod search_unified;
 pub mod recall;
 pub mod receipt;
 pub mod smart_ingest;
-// #57: external-source connectors (GitHub Issues / Redmine retrieval layer)
+// #57: external-source connectors (GitHub Issues / Redmine retrieval layer).
+// The tool is absent from tools/list and dispatch unless this feature is on.
+#[cfg(feature = "connectors")]
 pub mod source_sync;
 
 // v1.2: Temporal query tools

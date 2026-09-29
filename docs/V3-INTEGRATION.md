@@ -44,8 +44,9 @@ are tested separately. Progressive discovery reduces the definitions a client
 needs to send; clients that always send every tool still pay the full catalog.
 Byte reductions are not a measurement of provider charges.
 
-`purge` is advertised on its own. It requires `confirm=true` and uses the same
-path as `memory` action `purge`. #199's
+`purge` is advertised on its own. It requires `confirm=true`, retires the
+memory so it can't be retrieved, and uses the same path as `memory` action
+`purge`. #199's
 Pro/Operator promotion is separate from the open-source installation flow.
 
 Use `docs/V3-VALIDATION.md` for the local test commands and the task-cost examples

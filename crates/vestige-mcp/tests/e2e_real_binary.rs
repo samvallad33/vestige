@@ -2131,6 +2131,7 @@ fn receipt_get_returns_the_receipt_a_recall_produced_and_an_unknown_id_errors() 
 /// `source_sync` reaches an external system, so it has no offline happy path.
 /// Both of its tests are error paths by design; the connector itself is
 /// covered by the unit tests in `vestige-core`.
+#[cfg(feature = "connectors")]
 #[test]
 fn source_sync_rejects_an_unknown_source_and_a_missing_repo_without_touching_the_network() {
     let dir = data_dir();

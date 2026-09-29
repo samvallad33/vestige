@@ -1,15 +1,13 @@
 //! First-launch v3 → strata upgrade.
 //!
-//! `vestige-mcp` and the `vestige` CLI both call [`upgrade_if_needed`] before
-//! opening a store. The v3 file is only ever read. The import itself is
-//! `strata_migrate::migrate_with_options` into `log/`: that function stages
-//! the log, holds `File::try_lock` until the receipt is sealed, verifies,
+//! The `vestige-upgrade` binary calls [`upgrade_if_needed`]. The v3 file is
+//! only ever read. The import is `strata_migrate::migrate_with_options` into
+//! `log/`: that function stages the log, holds `File::try_lock` until the
+//! receipt is sealed, verifies with the v3 cross-check in `strata-verify`,
 //! and renames. A dead owner's staging directory is wiped there, so SIGKILL
-//! recovery is the same code `migrate-to-strata` runs. This module only
-//! decides that a v3 file needs that import, copies the sqlite family, and
-//! records progress on stderr. [`upgrade_with`] is the only startup decision
-//! that calls `vestige_core::detect_v3`: `vestige-mcp` and the CLI both enter
-//! through [`upgrade_if_needed`].
+//! recovery is the same code. This crate decides that a v3 file needs that
+//! import, copies the sqlite family, and records progress on stderr.
+//! [`upgrade_with`] is the only path that calls `vestige_core::detect_v3`.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};

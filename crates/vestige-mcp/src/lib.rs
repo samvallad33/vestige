@@ -10,12 +10,10 @@
 //! `LegacySqliteDisabled` error at runtime.
 
 pub mod actor_surface;
-#[cfg(feature = "migrate-to-strata")]
-pub mod auto_upgrade;
-
 pub mod autopilot;
 pub mod cognitive;
 pub mod dashboard;
+mod intention_graph_log;
 pub mod protocol;
 #[cfg(all(test, not(feature = "legacy-sqlite")))]
 mod protocol_stdio_store;
@@ -24,6 +22,7 @@ pub mod server;
 pub mod strata_memory;
 pub mod tools;
 pub mod trace_recorder;
+pub mod v3_launch;
 
 /// Whether this binary was compiled with an embedding runtime and a vector
 /// index at all. Builds without them (the Android/Termux profile, #145) are

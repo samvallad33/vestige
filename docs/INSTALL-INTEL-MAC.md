@@ -73,7 +73,8 @@ brew install onnxruntime
 git clone https://github.com/samvallad33/vestige && cd vestige
 cargo build --release -p vestige-mcp \
   --no-default-features \
-  --features ort-dynamic,vector-search,cloud-sync,connectors
+  --features ort-dynamic,vector-search
+cargo build --release -p vestige-upgrade
 export ORT_DYLIB_PATH="$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib"
 ./target/release/vestige-mcp --version
 ```

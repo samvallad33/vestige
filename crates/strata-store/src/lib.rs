@@ -64,8 +64,12 @@ mod tests;
 pub use error::StoreError;
 pub use gate_log::StrataEventLog;
 pub use op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
-pub use store::{default_policy, StrataStore};
+pub use store::{
+    default_policy, effect_receipt_id, permissive_policy, retire_rule_id, AdmissionContext,
+    EffectAction, EffectProof, RecordedOrigin, RetireReceipt, StrataStore, SupersedeHop, RULE_EDIT,
+    RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
+};
 pub use types::{
-    looks_like_failure, ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, NodeRecord,
-    SourceKey, TYPED_EDGE_VOCABULARY, VALID_FOREVER_MS,
+    looks_like_failure, ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, IntentionRecord,
+    NodeRecord, SourceKey, TYPED_EDGE_VOCABULARY, VALID_FOREVER_MS,
 };

@@ -21,8 +21,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 strata-kernel = { path = "../strata-kernel" }
 # Migrated-log verification (PR-0a): frame kinds + receipt wire types.
-# Records and receipt types only. The v3 SQLite comparison stays behind
-# strata-migrate's `sqlite-reader` feature (not enabled here).
+# Records and the migrated-log cross-check. The SQLite reader stays off
+# unless a caller enables `sqlite-reader` (vestige-upgrade does).
 strata-migrate = { path = "../strata-migrate", default-features = false }
 strata = { path = "../strata" }
 strata-gate = { path = "../strata-gate" }
@@ -34,8 +34,7 @@ ed25519-dalek = { version = "3", default-features = false, features = ["fast", "
 ed25519-dalek = { version = "3", default-features = false, features = ["fast", "rand_core"] }
 tempfile = "3"
 strata-store = { path = "../strata-store" }
-# Builds migrated fixtures for the read-only tests. Dev-only: dependents
-# such as the default vestige binary do not inherit this feature.
+# Tests migrate a fixture. Not linked into dependents of this crate.
 strata-migrate = { path = "../strata-migrate", features = ["sqlite-reader"] }
 
 [[bin]]

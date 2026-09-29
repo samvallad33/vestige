@@ -17,8 +17,8 @@ pub enum StoreError {
         /// Gate seq of the rejecting GATE record.
         propose_seq: u64,
     },
-    /// The pinned policy evaluated the proposal to `Hold` (default policy
-    /// holds every destructive `RETIRE` action).
+    /// The pinned policy evaluated the proposal to `Hold` (a RETIRE the
+    /// admission context did not authorize).
     Held {
         /// Gate seq of the holding GATE record.
         propose_seq: u64,

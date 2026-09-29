@@ -73,29 +73,29 @@ download_release_asset() {
 # Download macOS ARM64
 echo "Downloading macOS ARM64 binary..."
 ARCHIVE="$(download_release_asset "vestige-mcp-aarch64-apple-darwin.tar.gz")"
-validate_tar "$ARCHIVE" vestige-mcp vestige vestige-restore
+validate_tar "$ARCHIVE" vestige-mcp vestige vestige-restore vestige-upgrade
 tar -xzf "$ARCHIVE" -C server
 mv server/vestige-mcp server/vestige-mcp-darwin-arm64
 mv server/vestige server/vestige-darwin-arm64
-rm -f server/vestige-restore
+rm -f server/vestige-restore server/vestige-upgrade
 
 # Download Linux x64
 echo "Downloading Linux x64 binary..."
 ARCHIVE="$(download_release_asset "vestige-mcp-x86_64-unknown-linux-gnu.tar.gz")"
-validate_tar "$ARCHIVE" vestige-mcp vestige vestige-restore
+validate_tar "$ARCHIVE" vestige-mcp vestige vestige-restore vestige-upgrade
 tar -xzf "$ARCHIVE" -C server
 mv server/vestige-mcp server/vestige-mcp-linux-x64
 mv server/vestige server/vestige-linux-x64
-rm -f server/vestige-restore
+rm -f server/vestige-restore server/vestige-upgrade
 
 # Download Windows x64
 echo "Downloading Windows x64 binary..."
 ARCHIVE="$(download_release_asset "vestige-mcp-x86_64-pc-windows-msvc.zip")"
-validate_zip "$ARCHIVE" vestige-mcp.exe vestige.exe vestige-restore.exe
+validate_zip "$ARCHIVE" vestige-mcp.exe vestige.exe vestige-restore.exe vestige-upgrade.exe
 unzip -q "$ARCHIVE" -d server
 mv server/vestige-mcp.exe server/vestige-mcp-win32-x64.exe
 mv server/vestige.exe server/vestige-win32-x64.exe
-rm -f server/vestige-restore.exe
+rm -f server/vestige-restore.exe server/vestige-upgrade.exe
 
 # Make executable
 chmod +x server/*

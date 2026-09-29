@@ -169,18 +169,14 @@ and are completely unaffected.
 
 ## Building
 
-The connector HTTP client is behind the `connectors` cargo feature, which is
-**on by default in the MCP server** (`vestige-mcp`). A build without it still
-exposes the `source_sync` tool but returns a clear "rebuild with `--features
-connectors`" message. The core library (`vestige-core`) leaves the feature
-**off** by default, so library consumers that don't need connectors link no HTTP
-client.
+The connector HTTP client is behind the `connectors` cargo feature. It is
+**off by default** in `vestige-mcp`, `vestige`, and `vestige-core`. A default
+build does not advertise `source_sync`, and `tools/call` for that name is the
+normal unknown-tool protocol error (`-32602`). Enable the feature to compile
+the tool and the HTTP client:
 
 ```sh
-# default MCP build already includes connectors
-cargo build -p vestige-mcp --release
-
-# explicit, or for the core lib
+cargo build -p vestige-mcp --release --features connectors
 cargo build -p vestige-core --features connectors
 ```
 

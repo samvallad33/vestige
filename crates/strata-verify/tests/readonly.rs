@@ -160,14 +160,14 @@ fn live_store_root_is_unchanged_and_passes() {
 }
 
 #[test]
-fn unsealed_live_store_verifies() {
+fn fresh_store_without_anchor_passes() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("store");
     {
         let mut store = StrataStore::open(&dir).expect("open store");
         store
             .ingest(IngestInput {
-                content: "stdio leaves the log unsealed".into(),
+                content: "no checkpoint yet".into(),
                 source: None,
                 source_updated_at_ms: None,
                 node_type: String::new(),
@@ -179,8 +179,14 @@ fn unsealed_live_store_verifies() {
             .expect("ingest");
     }
     assert!(!dir.join("store.meta").exists());
+    let before = snapshot(&dir);
     let report = strata_verify::verify_path(&dir);
-    assert!(report.ok, "unsealed live store: {}", report.json);
+    assert!(
+        report.ok,
+        "unsealed live store must verify: {}",
+        report.json
+    );
+    assert_eq!(snapshot(&dir), before, "verify wrote the store root");
 }
 
 #[test]

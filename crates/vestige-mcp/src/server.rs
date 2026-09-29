@@ -804,16 +804,13 @@ description: Some("Inspect a persisted retrieval receipt ('get'), ablate its fro
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (for good; confirm=true). 'delete' aliases purge.".to_string()),
+description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (retired, can't be retrieved; confirm=true). 'delete' aliases purge.".to_string()),
                 input_schema: tools::compact::of(&tools::memory_unified::schema()),
                 ..Default::default()
             },
             // ================================================================
-            // PURGE (#219): the one irreversible call, on its own so a host
-            // can gate it without gating the reads that share `memory`.
-            // Claude Code honours `anthropic/requiresUserInteraction` with a
-            // prompt on every call. Same code path as memory(action='purge');
-            // the alias keeps working.
+            // PURGE (#219): its own tool so a host can prompt without prompting
+            // on the reads that share `memory`. Same path as memory(action='purge').
             // ================================================================
             ToolDescription {
                 name: "purge".to_string(),
@@ -824,7 +821,7 @@ description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / '
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-                description: Some("Remove one memory's content and embeddings for good. Irreversible; confirm=true required, the client prompts. Same path as memory(action='purge').".to_string()),
+                description: Some("Retire one memory so it can't be retrieved. confirm=true required; the client prompts. Same path as memory(action='purge').".to_string()),
                 input_schema: tools::memory_unified::purge_schema(),
                 meta: Some(serde_json::json!({ "anthropic/requiresUserInteraction": true })),
                 ..Default::default()
@@ -898,7 +895,10 @@ description: Some("Save to memory through Prediction Error Gating: 'content' is 
             },
             // ================================================================
             // EXTERNAL-SOURCE CONNECTORS (#57)
+            // Absent unless `--features connectors`. A default build must not
+            // advertise a tool whose dispatch would leave the machine.
             // ================================================================
+            #[cfg(feature = "connectors")]
             ToolDescription {
                 name: "source_sync".to_string(),
                 title: Some("Source Sync".to_string()),
@@ -1616,8 +1616,10 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             }
 
             // ================================================================
-            // External-source connectors (#57)
+            // External-source connectors (#57). Without the feature this name
+            // falls through to the unknown-tool protocol error below.
             // ================================================================
+            #[cfg(feature = "connectors")]
             "source_sync" => tools::source_sync::execute(&self.storage, request.arguments).await,
 
             // ================================================================
@@ -4227,9 +4229,10 @@ mod tests {
     #[test]
     fn full_schema_registry_matches_the_advertised_catalog() {
         let catalog = McpServer::tool_catalog();
+        let expected = if cfg!(feature = "connectors") { 18 } else { 17 };
         assert_eq!(
             catalog.len(),
-            18,
+            expected,
             "catalog size changed; update the registry"
         );
         for tool in &catalog {
@@ -4413,13 +4416,15 @@ mod tests {
         // w3d: +2 with `selftest` + `forgotten_lesson`; v3.2: `causal_walk`
         // replaced `backfill` on the advertised surface (backfill stays
         // dispatchable as a hidden alias).
+        let expected = if cfg!(feature = "connectors") { 18 } else { 17 };
         assert_eq!(
             tools.len(),
-            18,
-            "Expected 18 tools: the v2.3/v3 consolidated set (dedup + memory_status + \
+            expected,
+            "Expected {expected} tools: the v2.3/v3 consolidated set (dedup + memory_status + \
              graph + maintain + recall; session_context renamed) plus `receipt`, \
              `causal_walk`, `project`, the #219 standalone `purge`, and the w3d \
-             `selftest` + `forgotten_lesson`"
+             `selftest` + `forgotten_lesson`. `source_sync` counts only with \
+             the connectors feature"
         );
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -4485,11 +4490,18 @@ mod tests {
                 "purge"
             ]
         );
-        assert_eq!(
-            open_world,
-            ["source_sync"],
-            "only the connector sync leaves the local store"
-        );
+        if cfg!(feature = "connectors") {
+            assert_eq!(
+                open_world,
+                ["source_sync"],
+                "only the connector sync leaves the local store"
+            );
+        } else {
+            assert!(
+                open_world.is_empty(),
+                "connectors is off, so no advertised tool leaves the local store: {open_world:?}"
+            );
+        }
 
         // Unified tools
         // (search folded into `recall` mode='lookup' in v2.2)
@@ -4510,8 +4522,15 @@ mod tests {
         // Core memory (smart_ingest absorbs ingest + checkpoint in v1.7)
         assert!(tool_names.contains(&"smart_ingest"));
 
-        // External-source connectors (#57)
-        assert!(tool_names.contains(&"source_sync"));
+        // External-source connectors (#57): advertised only when compiled in.
+        if cfg!(feature = "connectors") {
+            assert!(tool_names.contains(&"source_sync"));
+        } else {
+            assert!(
+                !tool_names.contains(&"source_sync"),
+                "source_sync must be absent unless --features connectors"
+            );
+        }
         assert!(
             !tool_names.contains(&"ingest"),
             "ingest should be removed in v1.7"
@@ -5132,6 +5151,37 @@ mod tests {
         let response = server.handle_request(request).await.unwrap();
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32602);
+    }
+
+    /// `source_sync` is not a tool in a build without `connectors`. The call
+    /// is the same protocol error as any other unknown name: `-32602`, no
+    /// result body.
+    #[cfg(not(feature = "connectors"))]
+    #[tokio::test]
+    async fn source_sync_is_an_unknown_tool_without_connectors() {
+        let (server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "source_sync",
+                    "arguments": { "source": "gitlab", "repo": "a/b" }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.result.is_none(), "{response:?}");
+        let error = response.error.expect("protocol error");
+        assert_eq!(error.code, -32602);
+        assert!(
+            error.message.contains("Unknown tool") && error.message.contains("source_sync"),
+            "{}",
+            error.message
+        );
     }
 
     // ========================================================================

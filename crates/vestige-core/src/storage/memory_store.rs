@@ -326,6 +326,25 @@ pub trait LocalMemoryStore: Sync + 'static {
     // can never silently succeed.
     // ------------------------------------------------------------------------
 
+    /// Admit `projected_to` edges for a confirmed projection.
+    ///
+    /// Returns `(receipt_id, blake3_hex)` of `region`. The file write happens
+    /// only after this returns `Ok`. Default backends refuse.
+    fn admit_projection(
+        &self,
+        _memory_ids: &[String],
+        _target: &str,
+        _region: &[u8],
+    ) -> StoreResult<(String, String)> {
+        Err(StorageError::Init(
+            concat!(
+                stringify!(admit_projection),
+                " is not implemented by this backend"
+            )
+            .into(),
+        ))
+    }
+
     /// Snapshot of actor policy state.
     fn actor_policy_snapshot(&self) -> StoreResult<ActorPolicySnapshot> {
         Err(StorageError::Init(
@@ -621,6 +640,18 @@ pub trait LocalMemoryStore: Sync + 'static {
         Err(StorageError::Init(
             concat!(
                 stringify!(create_context_ablation_replay),
+                " is not implemented by this backend"
+            )
+            .into(),
+        ))
+    }
+
+    /// Re-derive a Strata log from its frames and compare that fold to one receipt.
+    /// Read-only. SQLite backends do not implement it.
+    fn replay_receipt(&self, _receipt_id: &str) -> StoreResult<Value> {
+        Err(StorageError::Init(
+            concat!(
+                stringify!(replay_receipt),
                 " is not implemented by this backend"
             )
             .into(),
@@ -1445,6 +1476,12 @@ pub trait LocalMemoryStore: Sync + 'static {
             )
             .into(),
         ))
+    }
+
+    /// True only for the Strata log backend. The default is false so a probe
+    /// never calls [`Self::db_path`], whose default panics.
+    fn is_strata_log(&self) -> bool {
+        false
     }
 
     /// Evidence snapshot of one memory inside intention evaluation.
@@ -2694,6 +2731,12 @@ pub trait MemoryStore: Send + Sync + 'static {
     fn vacuum<'a>(&'a self) -> BoxedStoreFuture<'a, ()>;
 
     // --- Phase 4 product seam (sync; dyn-compatible, forwarded from MemoryStoreSend) ---
+    fn admit_projection(
+        &self,
+        memory_ids: &[String],
+        target: &str,
+        region: &[u8],
+    ) -> StoreResult<(String, String)>;
     fn actor_policy_snapshot(&self) -> StoreResult<ActorPolicySnapshot>;
     fn append_mcp_call_outcome(
         &self,
@@ -2773,6 +2816,7 @@ pub trait MemoryStore: Send + Sync + 'static {
         source_receipt_id: &str,
         withheld_slots: &[String],
     ) -> StoreResult<DurableCounterfactualReplay>;
+    fn replay_receipt(&self, receipt_id: &str) -> StoreResult<Value>;
     fn current_code_context_nodes(
         &self,
         node_type: &str,
@@ -2937,6 +2981,7 @@ pub trait MemoryStore: Send + Sync + 'static {
         input: IngestInput,
         policy: SecretPolicy,
     ) -> StoreResult<KnowledgeNode>;
+    fn is_strata_log(&self) -> bool;
     fn intention_memory_snapshot(
         &self,
         scope: &str,
@@ -3316,6 +3361,14 @@ where
         Box::pin(<T as MemoryStoreSend>::vacuum(self))
     }
 
+    fn admit_projection(
+        &self,
+        memory_ids: &[String],
+        target: &str,
+        region: &[u8],
+    ) -> StoreResult<(String, String)> {
+        <T as MemoryStoreSend>::admit_projection(self, memory_ids, target, region)
+    }
     fn actor_policy_snapshot(&self) -> StoreResult<ActorPolicySnapshot> {
         <T as MemoryStoreSend>::actor_policy_snapshot(self)
     }
@@ -3458,6 +3511,9 @@ where
             source_receipt_id,
             withheld_slots,
         )
+    }
+    fn replay_receipt(&self, receipt_id: &str) -> StoreResult<Value> {
+        <T as MemoryStoreSend>::replay_receipt(self, receipt_id)
     }
     fn current_code_context_nodes(
         &self,
@@ -3773,6 +3829,9 @@ where
         policy: SecretPolicy,
     ) -> StoreResult<KnowledgeNode> {
         <T as MemoryStoreSend>::ingest_with_secret_policy(self, input, policy)
+    }
+    fn is_strata_log(&self) -> bool {
+        <T as MemoryStoreSend>::is_strata_log(self)
     }
     fn intention_memory_snapshot(
         &self,

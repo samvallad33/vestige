@@ -56,7 +56,7 @@ one-off logs, speculation, or transient command output.
 
 When the user says a memory was useful, call `memory` with `action="promote"`.
 When the user says a memory was wrong or unhelpful, call `memory` with
-`action="demote"`. When the user explicitly asks to erase a memory permanently,
+`action="demote"`. When the user explicitly asks to retire a memory so it can't be retrieved,
 call `memory` with `action="purge"` and `confirm=true`.
 ```
 
@@ -69,7 +69,7 @@ call `memory` with `action="purge"` and `confirm=true`.
 | Search exact identifiers, paths, env vars or names | `recall(mode="lookup", concrete=true)` |
 | Reason over earlier decisions or inspect disagreements | `recall(mode="reason")` or `recall(mode="contradictions")` |
 | Save durable verified knowledge, singly or in a batch | `smart_ingest` |
-| Fetch, inspect state, reinforce, correct or explicitly erase memories | `memory` |
+| Fetch, inspect state, reinforce, correct or retire memories | `memory` |
 | Remember source-linked patterns/decisions; check or replace reviewed anchors | `codebase` |
 | Index and reconcile supported upstream issue systems | `source_sync` |
 | Set, check, list, complete, snooze or cancel future intentions | `intention` |
