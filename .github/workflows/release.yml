@@ -16,11 +16,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # connectors and cloud-sync are the only features that link reqwest. Every
-  # release target must resolve without it. cargo tree exits 101 with an empty
-  # tree when the package is not in the graph; a non-empty tree fails the run.
-  guard-no-reqwest:
-    name: Release feature sets must not link reqwest
+  # Every shipped feature set must resolve without reqwest. Runs before the
+  # matrix builds so a regression cannot upload an artifact.
+  no-http-client:
+    name: Release feature sets do not link reqwest
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,47 +30,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: cargo tree must not include reqwest
-        run: |
-          set -euo pipefail
-          fail=0
-          check() {
-            local target="$1"
-            shift
-            echo "::group::${target}"
-            local err out status
-            err="$(mktemp)"
-            set +e
-            out="$(cargo tree -e features -i reqwest --locked -p vestige-mcp "$@" 2>"$err")"
-            status=$?
-            set -e
-            printf '%s\n' "$out"
-            cat "$err" >&2
-            if [ -n "$out" ]; then
-              echo "::error::${target} feature set links reqwest"
-              fail=1
-            elif [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' "$err"; then
-              echo "::error::${target}: cargo tree failed"
-              fail=1
-            else
-              echo "(empty)"
-            fi
-            rm -f "$err"
-            echo "::endgroup::"
-          }
-          # Feature flags must match the cargo invocation in each build job.
-          check x86_64-pc-windows-msvc --no-default-features --features embeddings,ort-download,vector-search
-          check x86_64-apple-darwin --no-default-features --features ort-dynamic,vector-search
-          check aarch64-apple-darwin
-          check x86_64-unknown-linux-gnu
-          check aarch64-unknown-linux-gnu
-          check aarch64-linux-android --no-default-features
-          exit "$fail"
+      - name: Reject reqwest in every release feature set
+        run: bash scripts/check-release-no-reqwest.sh
 
   build:
     # Benchmark evidence releases must not build or publish product binaries.
-    needs: [guard-no-reqwest]
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    needs: [no-http-client]
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -248,8 +213,8 @@ jobs:
   # ships no musl prebuilts, so embeddings would not work. The ubuntu-22.04
   # runner label begins deprecation in 2026; a container keeps this floor.
   build-linux:
-    needs: [guard-no-reqwest]
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    needs: [no-http-client]
     name: Build x86_64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-latest
     container: ubuntu:22.04
@@ -453,7 +418,7 @@ jobs:
   # aarch64 Linux asset (#240): the x86_64 job on GitHub's arm64 runner, same
   # Ubuntu 22.04 container for the glibc 2.35 floor, same checks and smokes.
   build-linux-arm64:
-    needs: [guard-no-reqwest]
+    needs: [no-http-client]
     name: Build aarch64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-24.04-arm
     container: ubuntu:22.04
@@ -778,8 +743,8 @@ jobs:
   # libc/libm/libdl/liblog appear as runtime dependencies. No npm installer
   # mapping yet — on-device Termux users build from source or take the asset.
   build-android:
+    needs: [no-http-client]
     name: Build aarch64-linux-android (no embeddings)
-    needs: [guard-no-reqwest]
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
     runs-on: ubuntu-latest
     env:

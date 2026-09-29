@@ -36,8 +36,8 @@ v3-engine = ["legacy-sqlite", "vestige-core/v3-engine"]
 # Mirrors the stub in vestige-core's Cargo.toml. Do not gate new code on them.
 embeddings = []
 vector-search = []
-# Release flags still pass these names. Empty, matching vestige-core: the
-# embedding stack is gone, and cargo rejects an unknown feature name.
+# Same empty stubs. Release cargo flags still name them (`ort-download` on
+# Windows, `ort-dynamic` on Intel Mac). They select no crates.
 ort-download = []
 ort-dynamic = []
 # Git history for the codebase tool (libgit2, OpenSSL, libssh2). On by default;
