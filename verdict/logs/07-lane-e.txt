@@ -1,0 +1,5 @@
+{"frames_after":0,"head_state_existed_before_delete":true,"reopen":"ok","segment_len_after":58,"segment_len_before":468,"truncated":true,"verdict":"SILENT_TRUNCATE"}
+
+{"frames_after":1,"key_changed":true,"key_reappeared":true,"reopen":"ok","verdict":"SILENT_REGEN"}
+
+{"checkpoints":1,"reopen":"ok","verdict":"MISSING_META_ACCEPTED"}

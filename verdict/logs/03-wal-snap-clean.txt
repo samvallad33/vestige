@@ -1,0 +1,10 @@
+accept-wal-snapshot hashes identical (db, wal, shm)
+BEFORE
+675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46  /tmp/wal-snap/source.db
+bfa67918d2a5f908e9247f73022790d5686354c92084fc1a7fa85e0cb661f29d  /tmp/wal-snap/source.db-wal
+98a0cd9d25d7a800b96ea2aade13c7620de924c36bf06d767ee8a5e65b3340c9  /tmp/wal-snap/source.db-shm
+AFTER
+675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46  /tmp/wal-snap/source.db
+bfa67918d2a5f908e9247f73022790d5686354c92084fc1a7fa85e0cb661f29d  /tmp/wal-snap/source.db-wal
+98a0cd9d25d7a800b96ea2aade13c7620de924c36bf06d767ee8a5e65b3340c9  /tmp/wal-snap/source.db-shm
+nodes include WAL_ONLY aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee

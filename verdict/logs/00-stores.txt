@@ -1,0 +1,13 @@
+prepared stores
+2031616 /tmp/verdict-work/stores/v311-real.db
+86016 /tmp/verdict-work/stores/fixture-no-walk.db
+86016 /tmp/verdict-work/stores/fixture.db
+2031616 /tmp/verdict-work/stores/v311-wal.db
+32768 /tmp/verdict-work/stores/v311-wal.db-shm
+180784 /tmp/verdict-work/stores/v311-wal.db-wal
+961f12d1750dbd2f6e6a8fc365c4a4bb42dd1b7e49cbf465985a36b665e10479  fixture.db
+d67bf0a7683722ee48868153e8efd01385975c42369ff7388a753e2835e3680c  fixture-no-walk.db
+675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46  v311-real.db
+675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46  v311-wal.db
+98a0cd9d25d7a800b96ea2aade13c7620de924c36bf06d767ee8a5e65b3340c9  v311-wal.db-shm
+bfa67918d2a5f908e9247f73022790d5686354c92084fc1a7fa85e0cb661f29d  v311-wal.db-wal

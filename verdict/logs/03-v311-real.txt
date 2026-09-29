@@ -1,0 +1,45 @@
+label=v311-real walflag=none
+sha256_before=675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46
+wal_sha_before=
+shm_sha_before=
+sqlite_counts:
+  knowledge_nodes: 3
+  memory_connections: 2
+  fsrs_cards: 1
+  walk_receipts: ABSENT
+  sync_tombstones: 0
+  deletion_tombstones: 0
+  node_embeddings: 3
+  schema 38
+  link_types:
+    semantic 1
+    similarity 1
+migrate_exit=0
+--- migrate stdout ---
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-work/c3-v311-real/source.db (keep this file; it is your pre-migration record)
+Source BLAKE3: 873d1f6d8a1701dafdfe3d1e96dfb5b4a78733b916e15daeb0375315c34129a3
+Destination: /tmp/verdict-work/c3-v311-real/strata
+Migrated: 3 nodes, 2 edges, 7 fsrs events
+Dropped vectors: 3 (vector values were never read)
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, schema_version, vector_journal
+MIGRATION_RECEIPT: bb5f80780792bfbd9975b410ad405749969960c70368536bae6b0ca319bd2e5f (signature verified: true)
+Replay verification: true
+--- migrate stderr ---
+sha256_after=675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46
+wal_sha_after=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+shm_sha_after=fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb
+dest files:
+/tmp/verdict-work/c3-v311-real/mig.err 0
+/tmp/verdict-work/c3-v311-real/mig.out 779
+/tmp/verdict-work/c3-v311-real/receipt-signing.key 32
+/tmp/verdict-work/c3-v311-real/source.db 2031616
+/tmp/verdict-work/c3-v311-real/source.db-shm 32768
+/tmp/verdict-work/c3-v311-real/source.db-wal 0
+/tmp/verdict-work/c3-v311-real/strata/00000000-151caa86d4ff227b378504912edd2bac.seg 8918
+/tmp/verdict-work/c3-v311-real/strata/00000001-a697d79d608b0abbccc67eb0d3c67da5.seg 58
+/tmp/verdict-work/c3-v311-real/strata/head.state 8
+/tmp/verdict-work/c3-v311-real/strata/strata.key 32
+--- dump stderr ---
+--- dump ---
+{"edges":[{"legacy_inferred":true,"legacy_keys":[],"legacy_link_type":"semantic","link_type":"derived_from"},{"legacy_inferred":true,"legacy_keys":[],"legacy_link_type":"similarity","link_type":"derived_from"}],"frames":16,"fsrs_reviews":[{"card_id":1,"event_seq":8,"rating":3},{"card_id":1,"event_seq":9,"rating":3},{"card_id":1,"event_seq":10,"rating":3},{"card_id":1,"event_seq":11,"rating":3},{"card_id":1,"event_seq":12,"rating":3},{"card_id":1,"event_seq":13,"rating":1},{"card_id":1,"event_seq":14,"rating":1}],"kind_counts":{"31":1,"32":3,"33":2,"34":7,"37":1,"38":1,"46":1},"nodes":[{"fsrs_legacy":[{"k":"fsrs_cards.difficulty","v":"6.25"},{"k":"fsrs_cards.stability","v":"18.5"},{"k":"fsrs_cards.state","v":"review"},{"k":"fsrs_cards.last_review","v":"2026-09-01T00:00:00Z"},{"k":"fsrs_cards.due_date","v":"2026-10-01T00:00:00Z"},{"k":"fsrs_cards.elapsed_days","v":"4"},{"k":"fsrs_cards.scheduled_days","v":"21"}],"kernel_id":1,"legacy_id":"ec1b83df-a361-4284-8948-75adf124ea8f","legacy_keys":["knowledge_nodes.stability","knowledge_nodes.difficulty","knowledge_nodes.reps","knowledge_nodes.lapses","knowledge_nodes.learning_state","knowledge_nodes.storage_strength","knowledge_nodes.retrieval_strength","knowledge_nodes.retention_strength","knowledge_nodes.sentiment_score","knowledge_nodes.sentiment_magnitude","knowledge_nodes.next_review","knowledge_nodes.scheduled_days","knowledge_nodes.source","knowledge_nodes.has_embedding","knowledge_nodes.embedding_model","knowledge_nodes.valid_from","knowledge_nodes.valid_until","knowledge_nodes.scope","knowledge_nodes.memory_system","knowledge_nodes.activation","knowledge_nodes.waking_tag","knowledge_nodes.waking_tag_at","knowledge_nodes.utility_score","knowledge_nodes.times_retrieved","knowledge_nodes.times_useful","knowledge_nodes.emotional_valence","knowledge_nodes.flashbulb","knowledge_nodes.temporal_level","knowledge_nodes.summary_parent_id","knowledge_nodes.suppression_count","knowledge_nodes.suppressed_at","knowledge_nodes.protected","knowledge_nodes.domains","knowledge_nodes.domain_scores","knowledge_nodes.source_system","knowledge_nodes.source_id","knowledge_nodes.source_url","knowledge_nodes.source_updated_at","knowledge_nodes.content_hash","knowledge_nodes.synced_at","knowledge_nodes.source_project","knowledge_nodes.source_type","knowledge_nodes.source_author","knowledge_nodes.author_actor_did","fsrs_cards.difficulty","fsrs_cards.stability","fsrs_cards.state","fsrs_cards.last_review","fsrs_cards.due_date","fsrs_cards.elapsed_days","fsrs_cards.scheduled_days"],"node_type":"fact","tags":["verdict","v311"]},{"fsrs_legacy":[],"kernel_id":2,"legacy_id":"3763c12a-e004-4af8-8699-dc6582b5831c","legacy_keys":["knowledge_nodes.stability","knowledge_nodes.difficulty","knowledge_nodes.reps","knowledge_nodes.lapses","knowledge_nodes.learning_state","knowledge_nodes.storage_strength","knowledge_nodes.retrieval_strength","knowledge_nodes.retention_strength","knowledge_nodes.sentiment_score","knowledge_nodes.sentiment_magnitude","knowledge_nodes.next_review","knowledge_nodes.scheduled_days","knowledge_nodes.source","knowledge_nodes.has_embedding","knowledge_nodes.embedding_model","knowledge_nodes.valid_from","knowledge_nodes.valid_until","knowledge_nodes.scope","knowledge_nodes.memory_system","knowledge_nodes.activation","knowledge_nodes.waking_tag","knowledge_nodes.waking_tag_at","knowledge_nodes.utility_score","knowledge_nodes.times_retrieved","knowledge_nodes.times_useful","knowledge_nodes.emotional_valence","knowledge_nodes.flashbulb","knowledge_nodes.temporal_level","knowledge_nodes.summary_parent_id","knowledge_nodes.suppression_count","knowledge_nodes.suppressed_at","knowledge_nodes.protected","knowledge_nodes.domains","knowledge_nodes.domain_scores","knowledge_nodes.source_system","knowledge_nodes.source_id","knowledge_nodes.source_url","knowledge_nodes.source_updated_at","knowledge_nodes.content_hash","knowledge_nodes.synced_at","knowledge_nodes.source_project","knowledge_nodes.source_type","knowledge_nodes.source_author","knowledge_nodes.author_actor_did"],"node_type":"fact","tags":["verdict","v311"]},{"fsrs_legacy":[],"kernel_id":3,"legacy_id":"2693a28b-1c2c-4763-8092-08ad6f55b8f7","legacy_keys":["knowledge_nodes.stability","knowledge_nodes.difficulty","knowledge_nodes.reps","knowledge_nodes.lapses","knowledge_nodes.learning_state","knowledge_nodes.storage_strength","knowledge_nodes.retrieval_strength","knowledge_nodes.retention_strength","knowledge_nodes.sentiment_score","knowledge_nodes.sentiment_magnitude","knowledge_nodes.next_review","knowledge_nodes.scheduled_days","knowledge_nodes.source","knowledge_nodes.has_embedding","knowledge_nodes.embedding_model","knowledge_nodes.valid_from","knowledge_nodes.valid_until","knowledge_nodes.scope","knowledge_nodes.memory_system","knowledge_nodes.activation","knowledge_nodes.waking_tag","knowledge_nodes.waking_tag_at","knowledge_nodes.utility_score","knowledge_nodes.times_retrieved","knowledge_nodes.times_useful","knowledge_nodes.emotional_valence","knowledge_nodes.flashbulb","knowledge_nodes.temporal_level","knowledge_nodes.summary_parent_id","knowledge_nodes.suppression_count","knowledge_nodes.suppressed_at","knowledge_nodes.protected","knowledge_nodes.domains","knowledge_nodes.domain_scores","knowledge_nodes.source_system","knowledge_nodes.source_id","knowledge_nodes.source_url","knowledge_nodes.source_updated_at","knowledge_nodes.content_hash","knowledge_nodes.synced_at","knowledge_nodes.source_project","knowledge_nodes.source_type","knowledge_nodes.source_author","knowledge_nodes.author_actor_did"],"node_type":"fact","tags":["verdict","v311"]}],"receipt":{"checksum_ok":true,"counts":[["composition_events",0],["composition_members",0],["composition_outcomes",0],["consolidation_history",0],["deletion_tombstones",0],["dream_history",0],["fsrs_cards",1],["fsrs_config",1],["insights",0],["intentions",0],["knowledge_nodes",3],["memory_access_log",0],["memory_connections",2],["memory_states",0],["node_embeddings",3],["retention_snapshots",0],["sessions",0],["state_transitions",0],["sync_tombstones",0]],"dropped_columns":["node_embeddings.embedding (H1: vector values are dropped and counted)","schema_version.applied_at","receipt_envelopes.receipt_id/projection_json/issued_at/stored_at"],"dropped_vectors":3,"schema_version":38,"signature_ok":true,"source_blake3_after":"873d1f6d8a1701dafdfe3d1e96dfb5b4a78733b916e15daeb0375315c34129a3","source_blake3_before":"873d1f6d8a1701dafdfe3d1e96dfb5b4a78733b916e15daeb0375315c34129a3","verifying_key_hex":"e7c6cb08c7ebba2c6c88806aa0b34954219dab7033f598c3df2304fb5c08af28"}}

@@ -1,0 +1,1 @@
+Error: refusing non-empty WAL /tmp/wal-repro/source.db-wal; rerun with --accept-wal-snapshot

@@ -1,0 +1,29 @@
+label=v311-wal-nofail walflag=none
+sha256_before=675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46
+wal_sha_before=bfa67918d2a5f908e9247f73022790d5686354c92084fc1a7fa85e0cb661f29d
+shm_sha_before=98a0cd9d25d7a800b96ea2aade13c7620de924c36bf06d767ee8a5e65b3340c9
+sqlite_counts:
+  knowledge_nodes: 4
+  memory_connections: 2
+  fsrs_cards: 1
+  walk_receipts: ABSENT
+  sync_tombstones: 0
+  deletion_tombstones: 0
+  node_embeddings: 3
+  schema 38
+  link_types:
+    semantic 1
+    similarity 1
+migrate_exit=1
+--- migrate stdout ---
+--- migrate stderr ---
+Error: refusing non-empty WAL /tmp/verdict-work/c3-v311-wal-nofail/source.db-wal; rerun with --accept-wal-snapshot
+sha256_after=675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46
+wal_sha_after=bfa67918d2a5f908e9247f73022790d5686354c92084fc1a7fa85e0cb661f29d
+shm_sha_after=7ffe35b2c0b68d5f23ddf73228584d297770ac9bd849ae58d5fb149b3387abc3
+dest files:
+/tmp/verdict-work/c3-v311-wal-nofail/mig.err 115
+/tmp/verdict-work/c3-v311-wal-nofail/mig.out 0
+/tmp/verdict-work/c3-v311-wal-nofail/source.db 2031616
+/tmp/verdict-work/c3-v311-wal-nofail/source.db-shm 32768
+/tmp/verdict-work/c3-v311-wal-nofail/source.db-wal 180784

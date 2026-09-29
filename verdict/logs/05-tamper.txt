@@ -1,0 +1,119 @@
+sealed-byte flip
+flipped 00000000-3de77f4dda1e3a16fe6cf7cf860994a8.seg at 90 size 4662
+flip_verify_exit=1
+--- stdout ---
+{
+  "log_tail_ok": false,
+  "checkpoint_chain_ok": false,
+  "state_root_matches": false,
+  "gate_verdicts_rederived": true,
+  "gaps": [],
+  "duration_ms": 0,
+  "failures": [
+    "kernel.log: read failed: No such file or directory (os error 2)",
+    "kernel.log: malformed: missing framing magic",
+    "kernel.checkpoints: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input",
+    "kernel.head: read failed: No such file or directory (os error 2)",
+    "gate.log: read failed: No such file or directory (os error 2)",
+    "gate.log: malformed: missing framing magic",
+    "gate.policy: read failed: No such file or directory (os error 2)",
+    "gate.policy: malformed: borsh Policy: Unexpected length of input",
+    "gate.head: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)"
+  ]
+}
+FAILED
+--- stderr ---
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
+replaced / recomputed key
+--- forge key ---
+{"blake3_source_derived_key_open":"err strata halt: sealed segment trailer: trailer signature invalid (segment 0, offset 4558, last_acked_seq 20) — damage at/below the acked watermark, refusing to truncate history","derived_refused":true,"random_key_open":"err strata halt: sealed segment trailer: trailer signature invalid (segment 0, offset 4558, last_acked_seq 20) — damage at/below the acked watermark, refusing to truncate history","random_refused":true,"source_blake3":"a4daa641adf63d75241505469e649deb3fec0f449e035c63cdd4e7542ec4670e"}
+
+wrote replacement strata.key
+replaced_key_verify_exit=1
+--- stdout ---
+{
+  "log_tail_ok": false,
+  "checkpoint_chain_ok": false,
+  "state_root_matches": false,
+  "gate_verdicts_rederived": true,
+  "gaps": [],
+  "duration_ms": 0,
+  "failures": [
+    "kernel.log: read failed: No such file or directory (os error 2)",
+    "kernel.log: malformed: missing framing magic",
+    "kernel.checkpoints: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input",
+    "kernel.head: read failed: No such file or directory (os error 2)",
+    "gate.log: read failed: No such file or directory (os error 2)",
+    "gate.log: malformed: missing framing magic",
+    "gate.policy: read failed: No such file or directory (os error 2)",
+    "gate.policy: malformed: borsh Policy: Unexpected length of input",
+    "gate.head: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)"
+  ]
+}
+FAILED
+--- stderr ---
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
+resigned receipt with a new key
+--- resign ---
+{"refused":true,"reopen":"err strata halt: sealed segment damaged: payload blake3 mismatch (segment 0, offset 3744, last_acked_seq 20) — damage at/below the acked watermark, refusing to truncate history","replaced_in_place":true}
+
+resign_verify_exit=1
+--- stdout ---
+{
+  "log_tail_ok": false,
+  "checkpoint_chain_ok": false,
+  "state_root_matches": false,
+  "gate_verdicts_rederived": true,
+  "gaps": [],
+  "duration_ms": 0,
+  "failures": [
+    "kernel.log: read failed: No such file or directory (os error 2)",
+    "kernel.log: malformed: missing framing magic",
+    "kernel.checkpoints: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input",
+    "kernel.head: read failed: No such file or directory (os error 2)",
+    "gate.log: read failed: No such file or directory (os error 2)",
+    "gate.log: malformed: missing framing magic",
+    "gate.policy: read failed: No such file or directory (os error 2)",
+    "gate.policy: malformed: borsh Policy: Unexpected length of input",
+    "gate.head: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)"
+  ]
+}
+FAILED
+--- stderr ---
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)

@@ -1,0 +1,42 @@
+label=fixture-no-walk walflag=none
+sha256_before=d67bf0a7683722ee48868153e8efd01385975c42369ff7388a753e2835e3680c
+wal_sha_before=
+shm_sha_before=
+sqlite_counts:
+  knowledge_nodes: 4
+  memory_connections: 3
+  fsrs_cards: 1
+  walk_receipts: ABSENT
+  sync_tombstones: 1
+  deletion_tombstones: 1
+  node_embeddings: 2
+  schema 38
+  link_types:
+    causal 1
+    semantic 1
+    touched 1
+migrate_exit=0
+--- migrate stdout ---
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-work/c3-fixture-no-walk/source.db (keep this file; it is your pre-migration record)
+Source BLAKE3: 69f95c04cc9dc3b8cde4376d2857d3f3600a58e7c3ad9c55917d5c3c69cb776e
+Destination: /tmp/verdict-work/c3-fixture-no-walk/strata
+Migrated: 4 nodes, 3 edges, 5 fsrs events
+Dropped vectors: 2 (vector values were never read)
+Skipped tables (counted, not mapped): node_embeddings, receipt_envelopes, schema_version
+MIGRATION_RECEIPT: 2c735b66c1efdeb343db7ff0b0cec43b41e71460d5cf42a49dd586a1383db2f3 (signature verified: true)
+Replay verification: true
+--- migrate stderr ---
+sha256_after=d67bf0a7683722ee48868153e8efd01385975c42369ff7388a753e2835e3680c
+dest files:
+/tmp/verdict-work/c3-fixture-no-walk/mig.err 0
+/tmp/verdict-work/c3-fixture-no-walk/mig.out 612
+/tmp/verdict-work/c3-fixture-no-walk/receipt-signing.key 32
+/tmp/verdict-work/c3-fixture-no-walk/source.db 86016
+/tmp/verdict-work/c3-fixture-no-walk/strata/00000000-99fda2d5ae9afa1395481b812acecba5.seg 4414
+/tmp/verdict-work/c3-fixture-no-walk/strata/00000001-923d9dbf075d881d4e3200cb882b6ffd.seg 58
+/tmp/verdict-work/c3-fixture-no-walk/strata/head.state 8
+/tmp/verdict-work/c3-fixture-no-walk/strata/strata.key 32
+--- dump stderr ---
+--- dump ---
+{"edges":[{"legacy_inferred":true,"legacy_keys":[],"legacy_link_type":"causal","link_type":"derived_from"},{"legacy_inferred":true,"legacy_keys":[],"legacy_link_type":"semantic","link_type":"derived_from"},{"legacy_inferred":false,"legacy_keys":[],"legacy_link_type":"touched","link_type":"touched"}],"frames":19,"fsrs_reviews":[{"card_id":1,"event_seq":13,"rating":3},{"card_id":1,"event_seq":14,"rating":3},{"card_id":1,"event_seq":15,"rating":3},{"card_id":1,"event_seq":16,"rating":1},{"card_id":1,"event_seq":17,"rating":1}],"kind_counts":{"31":1,"32":4,"33":3,"34":5,"35":2,"36":1,"37":1,"38":1,"46":1},"nodes":[{"fsrs_legacy":[{"k":"fsrs_cards.difficulty","v":"4.5"},{"k":"fsrs_cards.stability","v":"12.25"},{"k":"fsrs_cards.state","v":"review"},{"k":"fsrs_cards.last_review","v":"2026-03-01T09:00:00+00:00"},{"k":"fsrs_cards.due_date","v":"2026-04-01T09:00:00+00:00"},{"k":"fsrs_cards.elapsed_days","v":"3"},{"k":"fsrs_cards.scheduled_days","v":"14"}],"kernel_id":1,"legacy_id":"11111111-1111-4111-8111-111111111111","legacy_keys":["knowledge_nodes.source","fsrs_cards.difficulty","fsrs_cards.stability","fsrs_cards.state","fsrs_cards.last_review","fsrs_cards.due_date","fsrs_cards.elapsed_days","fsrs_cards.scheduled_days"],"node_type":"fact","tags":["fixture","synthetic"]},{"fsrs_legacy":[],"kernel_id":2,"legacy_id":"22222222-2222-4222-8222-222222222222","legacy_keys":["knowledge_nodes.source"],"node_type":"fact","tags":[]},{"fsrs_legacy":[],"kernel_id":3,"legacy_id":"33333333-3333-4333-8333-333333333333","legacy_keys":["knowledge_nodes.source"],"node_type":"procedure","tags":[]},{"fsrs_legacy":[],"kernel_id":4,"legacy_id":"44444444-4444-4444-8444-444444444444","legacy_keys":["knowledge_nodes.source"],"node_type":"note","tags":[]}],"receipt":{"checksum_ok":true,"counts":[["deletion_tombstones",1],["fsrs_cards",1],["knowledge_nodes",4],["memory_connections",3],["node_embeddings",2],["sync_tombstones",1]],"dropped_columns":["node_embeddings.embedding (H1: vector values are dropped and counted)","schema_version.applied_at","receipt_envelopes.receipt_id/projection_json/issued_at/stored_at"],"dropped_vectors":2,"schema_version":38,"signature_ok":true,"source_blake3_after":"69f95c04cc9dc3b8cde4376d2857d3f3600a58e7c3ad9c55917d5c3c69cb776e","source_blake3_before":"69f95c04cc9dc3b8cde4376d2857d3f3600a58e7c3ad9c55917d5c3c69cb776e","verifying_key_hex":"26d4ff015a5d704e382e693dbbe395292f29ae28cd90278888abe43027ff9fab"}}

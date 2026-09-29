@@ -1,0 +1,16 @@
+label=v311
+sha256_before=675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46
+mode_before=600
+mcp_exit=1
+--- mcp stderr ---
+2026-09-29T13:04:47.128455Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T13:04:47.129637Z ERROR v3 SQLite store at /tmp/verdict-work/c2-v311/data/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-work/c2-v311/data/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+cli_exit=1
+--- cli stderr ---
+Error: v3 SQLite store at /tmp/verdict-work/c2-v311/data/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+--- cli stdout ---
+sha256_after=675f9fdfe0a5110ddc1e537ee31da5a0738f882866d7639643be958abddd1b46
+mode_after=600
+sidecars:
+vestige.db

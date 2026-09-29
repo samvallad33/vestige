@@ -1,0 +1,14 @@
+CMD: timeout 8 /tmp/cargo-target/debug/vestige --data-dir /tmp/verdict-work/c1-cli/data stats
+start1_exit=1
+--- stderr ---
+Error: Initialization error: SQLite store creation is disabled: SQLite is a read-only migration source in 4.0. hint: the Strata backend owns new stores (run: vestige migrate-to-strata --from <path> for existing v3 stores)
+--- stdout ---
+files after start1:
+start2_exit=1
+--- stderr2 ---
+Error: Initialization error: SQLite store creation is disabled: SQLite is a read-only migration source in 4.0. hint: the Strata backend owns new stores (run: vestige migrate-to-strata --from <path> for existing v3 stores)
+files after start2:
+/tmp/verdict-work/c1-cli/err1.txt
+/tmp/verdict-work/c1-cli/err2.txt
+/tmp/verdict-work/c1-cli/out1.txt
+/tmp/verdict-work/c1-cli/out2.txt

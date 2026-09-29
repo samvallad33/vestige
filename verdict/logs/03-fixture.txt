@@ -1,0 +1,42 @@
+label=fixture walflag=none
+sha256_before=961f12d1750dbd2f6e6a8fc365c4a4bb42dd1b7e49cbf465985a36b665e10479
+wal_sha_before=
+shm_sha_before=
+sqlite_counts:
+  knowledge_nodes: 4
+  memory_connections: 3
+  fsrs_cards: 1
+  walk_receipts: 1
+  sync_tombstones: 1
+  deletion_tombstones: 1
+  node_embeddings: 2
+  schema 38
+  link_types:
+    causal 1
+    semantic 1
+    touched 1
+migrate_exit=0
+--- migrate stdout ---
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-work/c3-fixture/source.db (keep this file; it is your pre-migration record)
+Source BLAKE3: a4daa641adf63d75241505469e649deb3fec0f449e035c63cdd4e7542ec4670e
+Destination: /tmp/verdict-work/c3-fixture/strata
+Migrated: 5 nodes, 3 edges, 5 fsrs events
+Dropped vectors: 2 (vector values were never read)
+Skipped tables (counted, not mapped): node_embeddings, receipt_envelopes, schema_version, walk_receipts
+MIGRATION_RECEIPT: 6d9ac2cf34bf97ca63a6ba51484d0f72fa97c5c899cc04070fcbc1c51b0ee08d (signature verified: true)
+Replay verification: true
+--- migrate stderr ---
+sha256_after=961f12d1750dbd2f6e6a8fc365c4a4bb42dd1b7e49cbf465985a36b665e10479
+dest files:
+/tmp/verdict-work/c3-fixture/mig.err 0
+/tmp/verdict-work/c3-fixture/mig.out 611
+/tmp/verdict-work/c3-fixture/receipt-signing.key 32
+/tmp/verdict-work/c3-fixture/source.db 86016
+/tmp/verdict-work/c3-fixture/strata/00000000-3de77f4dda1e3a16fe6cf7cf860994a8.seg 4662
+/tmp/verdict-work/c3-fixture/strata/00000001-88e675a4c1c7b55ef1fd5628ac6e9886.seg 58
+/tmp/verdict-work/c3-fixture/strata/head.state 8
+/tmp/verdict-work/c3-fixture/strata/strata.key 32
+--- dump stderr ---
+--- dump ---
+{"edges":[{"legacy_inferred":true,"legacy_keys":[],"legacy_link_type":"causal","link_type":"derived_from"},{"legacy_inferred":true,"legacy_keys":[],"legacy_link_type":"semantic","link_type":"derived_from"},{"legacy_inferred":false,"legacy_keys":[],"legacy_link_type":"touched","link_type":"touched"}],"frames":20,"fsrs_reviews":[{"card_id":1,"event_seq":14,"rating":3},{"card_id":1,"event_seq":15,"rating":3},{"card_id":1,"event_seq":16,"rating":3},{"card_id":1,"event_seq":17,"rating":1},{"card_id":1,"event_seq":18,"rating":1}],"kind_counts":{"31":1,"32":5,"33":3,"34":5,"35":2,"36":1,"37":1,"38":1,"46":1},"nodes":[{"fsrs_legacy":[{"k":"fsrs_cards.difficulty","v":"4.5"},{"k":"fsrs_cards.stability","v":"12.25"},{"k":"fsrs_cards.state","v":"review"},{"k":"fsrs_cards.last_review","v":"2026-03-01T09:00:00+00:00"},{"k":"fsrs_cards.due_date","v":"2026-04-01T09:00:00+00:00"},{"k":"fsrs_cards.elapsed_days","v":"3"},{"k":"fsrs_cards.scheduled_days","v":"14"}],"kernel_id":1,"legacy_id":"11111111-1111-4111-8111-111111111111","legacy_keys":["knowledge_nodes.source","fsrs_cards.difficulty","fsrs_cards.stability","fsrs_cards.state","fsrs_cards.last_review","fsrs_cards.due_date","fsrs_cards.elapsed_days","fsrs_cards.scheduled_days"],"node_type":"fact","tags":["fixture","synthetic"]},{"fsrs_legacy":[],"kernel_id":2,"legacy_id":"22222222-2222-4222-8222-222222222222","legacy_keys":["knowledge_nodes.source"],"node_type":"fact","tags":[]},{"fsrs_legacy":[],"kernel_id":3,"legacy_id":"33333333-3333-4333-8333-333333333333","legacy_keys":["knowledge_nodes.source"],"node_type":"procedure","tags":[]},{"fsrs_legacy":[],"kernel_id":4,"legacy_id":"44444444-4444-4444-8444-444444444444","legacy_keys":["knowledge_nodes.source"],"node_type":"note","tags":[]},{"fsrs_legacy":[],"kernel_id":5,"legacy_id":"bbbbbbb1-0000-4000-8000-000000000001","legacy_keys":[],"node_type":"walk_receipt","tags":["migrated_from_v4"]}],"receipt":{"checksum_ok":true,"counts":[["deletion_tombstones",1],["fsrs_cards",1],["knowledge_nodes",4],["memory_connections",3],["node_embeddings",2],["sync_tombstones",1],["walk_receipts",1]],"dropped_columns":["node_embeddings.embedding (H1: vector values are dropped and counted)","schema_version.applied_at","receipt_envelopes.receipt_id/projection_json/issued_at/stored_at"],"dropped_vectors":2,"schema_version":38,"signature_ok":true,"source_blake3_after":"a4daa641adf63d75241505469e649deb3fec0f449e035c63cdd4e7542ec4670e","source_blake3_before":"a4daa641adf63d75241505469e649deb3fec0f449e035c63cdd4e7542ec4670e","verifying_key_hex":"f8dfaeaab38f6aad3a45d5e5b987635d40195a50635d42e7f80b06c2e7830f16"}}

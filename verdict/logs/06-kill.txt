@@ -1,0 +1,42 @@
+slow import then SIGKILL
+pid=25444
+seg appeared at iter 4
+sent SIGKILL
+/workspace/verdict/run-all.sh: line 411: 25444 Killed                  LD_PRELOAD="$WORK/slowwrite.so" "$VESTIGE" migrate-to-strata --from "$WORK/c6/source.db" --to "$WORK/c6/partial" > "$WORK/c6/partial.out" 2> "$WORK/c6/partial.err"
+killed_exit=137
+partial tree:
+32 /tmp/verdict-work/c6/partial/strata.key
+406 /tmp/verdict-work/c6/partial/00000000-aac937d49ddc1bdce420f34945df69db.seg
+8 /tmp/verdict-work/c6/partial/strata.lock
+--- partial stdout ---
+--- partial stderr ---
+RERUN into same --to
+rerun_exit=1
+--- rerun stdout ---
+--- rerun stderr ---
+Error: destination /tmp/verdict-work/c6/partial is not empty; a killed run must be removed by hand, never extended
+--- dump ---
+{"edges":[],"frames":2,"fsrs_reviews":[],"kind_counts":{"31":1,"38":1},"nodes":[],"receipt":null}
+
+NON-EMPTY --to
+nonempty_exit=1
+--- nonempty stdout ---
+--- nonempty stderr ---
+Error: destination /tmp/verdict-work/c6/nonempty is not empty; a killed run must be removed by hand, never extended
+nonempty files:
+/tmp/verdict-work/c6/nonempty/00000000-eee99534dbe3710eb587cab37c3c7271.seg
+/tmp/verdict-work/c6/nonempty/keep.txt
+/tmp/verdict-work/c6/nonempty/strata.key
+IDEMPOTENT rerun of a finished import
+idempotent_exit=0
+--- idem stdout ---
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-work/c3-fixture/source.db (keep this file; it is your pre-migration record)
+Source BLAKE3: a4daa641adf63d75241505469e649deb3fec0f449e035c63cdd4e7542ec4670e
+Destination: /tmp/verdict-work/c3-fixture/strata
+Migrated: 4 nodes, 3 edges, 1 fsrs events
+Dropped vectors: 2 (vector values were never read)
+Skipped tables (counted, not mapped): node_embeddings, receipt_envelopes, schema_version, walk_receipts
+MIGRATION_RECEIPT: 6d9ac2cf34bf97ca63a6ba51484d0f72fa97c5c899cc04070fcbc1c51b0ee08d (signature verified: true)
+Replay verification: true
+--- idem stderr ---

@@ -1,0 +1,17 @@
+[package]
+name = "verdict-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone so this harness does not join the vestige workspace.
+[workspace]
+
+[dependencies]
+blake3 = "1"
+borsh = { version = "1", features = ["derive"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "rand_core"] }
+serde_json = "1"
+strata = { path = "../../crates/strata" }
+strata-migrate = { path = "../../crates/strata-migrate" }
+strata-store = { path = "../../crates/strata-store" }
