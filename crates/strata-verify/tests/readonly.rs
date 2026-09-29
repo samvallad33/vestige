@@ -168,6 +168,8 @@ fn unsealed_live_store_verifies() {
         store
             .ingest(IngestInput {
                 content: "stdio leaves the log unsealed".into(),
+                source: None,
+                source_updated_at_ms: None,
                 node_type: String::new(),
                 tags: Vec::new(),
                 created_at_ms: Some(1_700_000_000_000),
