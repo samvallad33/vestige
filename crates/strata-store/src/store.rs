@@ -126,10 +126,25 @@ pub struct StrataStore {
     fsrs: State,
     /// Review events in fold order with their hashes (reused by verification).
     review_events: Vec<(u64, [u8; 32], ReviewEvent)>,
+    /// `event_seq -> created_at_ms` for a review folded on a node upsert.
+    /// An explicit [`StoreOp::ReviewNode`] frame has no timestamp, so it is
+    /// absent here. Not part of [`StrataStore::state_digest`].
+    review_timestamps: BTreeMap<u64, i64>,
     /// Sealed checkpoints in log order.
     checkpoints: Vec<Checkpoint>,
     /// Data frames that had no admitting effect in the log (ignored).
     orphan_writes: u64,
+}
+
+/// Whether the card's last review frame carries a wall-clock timestamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewClock {
+    /// Last review was folded on a node upsert. The value is that record's
+    /// `created_at_ms`.
+    Mapped(i64),
+    /// Last review is an explicit review frame. Those frames store a log
+    /// sequence and no timestamp.
+    Unmapped,
 }
 
 impl StrataStore {
@@ -161,6 +176,7 @@ impl StrataStore {
             reverse: BTreeMap::new(),
             fsrs: State::default(),
             review_events: Vec::new(),
+            review_timestamps: BTreeMap::new(),
             checkpoints: Vec::new(),
             orphan_writes: 0,
         };
@@ -259,8 +275,11 @@ impl StrataStore {
                 self.nodes.insert(record.id.clone(), record.clone());
                 if is_new {
                     // Every ingest folds one ReviewEvent ("Good") into the
-                    // kernel state under the record's kernel version.
+                    // kernel state under the record's kernel version. That
+                    // review's only timestamp is this record's created_at_ms.
                     self.fold_review(handle, INGEST_RATING, record.kernel_id, frame_seq)?;
+                    self.review_timestamps
+                        .insert(frame_seq, record.created_at_ms);
                 }
             }
             StoreOp::SaveEdge { edge } => {
@@ -584,6 +603,21 @@ impl StrataStore {
             context,
         )?;
         Ok(())
+    }
+
+    /// Wall-clock time of the card's last review, when the frame at
+    /// `last_seq` is the node upsert that folded it.
+    ///
+    /// `Some(Mapped)` is that upsert's `created_at_ms`. `Some(Unmapped)`
+    /// means the last review is an explicit review frame, which stores a
+    /// log sequence and no timestamp. `None` means the id has no card.
+    /// A later `set_created_at` does not move this clock.
+    pub fn review_clock(&self, id: &str) -> Option<ReviewClock> {
+        let card = self.card_state(id)?;
+        Some(match self.review_timestamps.get(&card.last_seq) {
+            Some(ms) => ReviewClock::Mapped(*ms),
+            None => ReviewClock::Unmapped,
+        })
     }
 
     /// Current FSRS scheduling card for a node (derived state, cloned).

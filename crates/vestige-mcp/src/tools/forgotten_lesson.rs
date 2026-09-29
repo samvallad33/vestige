@@ -2,24 +2,22 @@
 //!
 //! Given a failure memory, find earlier FIX/LESSON memories that
 //!
-//! 1. are causally relevant: they share an exact code, path, env, or version
-//!    entity with the failure, or the log recorded an edge between them (or
-//!    to the same endpoint), and
+//! 1. the log joined to the failure with a recorded edge of type `touched`,
+//!    `anchored_to`, `derived_from`, `supersedes`, `corrects`, `closed_by`,
+//!    `projected_to`, or `evidence_of`, and
 //! 2. had FSRS-6 retrievability BELOW 0.5 AT FAILURE TIME, computed with
 //!    [`vestige_core::fsrs::retrievability`] from the node's stored stability
-//!    and the elapsed days between `last_accessed` and the failure.
+//!    and the elapsed days since the card's last review.
 //!
-//! Prose-word overlap is not relevance. Read-only: no graph, strength, or
-//! FSRS state is modified.
+//! Name overlap is not relevance. `legacy_inferred` is not a cause. On a
+//! Strata log the decay clock is `created_at_ms` of the upsert frame that
+//! folded the last review. An explicit review frame has a log sequence and
+//! no timestamp; those lessons are counted and not scored. Read-only.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::HashMap;
 
-use vestige_core::advanced::retroactive_backfill::{
-    IdentifierTier, extract_entities, normalized_tier,
-};
 use vestige_core::fsrs::retrievability;
 use vestige_core::{ConnectionRecord, KnowledgeNode, Storage};
 
@@ -88,93 +86,96 @@ pub struct ForgottenLesson {
     pub recorded_at: chrono::DateTime<chrono::Utc>,
     /// FSRS retrievability at failure time (0.0..1.0, below the threshold).
     pub retention: f64,
-    /// The first exact anchor shared with the failure.
+    /// The first recorded link type tying this lesson to the failure.
     pub shared_anchor: String,
-    /// All exact anchors shared with the failure.
+    /// Recorded link types tying this lesson to the failure.
     pub shared_anchors: Vec<String>,
 }
 
-/// Code, path, env, and version entities only. A bare prose word is not a cause.
-fn is_causal_entity(entity: &str) -> bool {
-    normalized_tier(entity) != IdentifierTier::Word
+/// Owner vocabulary, plus an explicit skip. The live edge has no
+/// `legacy_inferred` field; a migrated inferred link is stored as
+/// `derived_from` and cannot be told apart from a declared one.
+fn is_recorded_cause(link_type: &str) -> bool {
+    link_type != "legacy_inferred" && strata_store::TYPED_EDGE_VOCABULARY.contains(&link_type)
 }
 
-/// Recorded edges that tie `lesson_id` to `failure_id`: a direct edge's
-/// `link_type`, or an endpoint both edges already name.
-fn causal_anchors(lesson_id: &str, failure_id: &str, edges: &[ConnectionRecord]) -> Vec<String> {
-    let mut direct = Vec::new();
-    let mut lesson_ends = HashSet::new();
-    let mut failure_ends = HashSet::new();
+fn other_end<'a>(edge: &'a ConnectionRecord, node: &str) -> Option<&'a str> {
+    if edge.source_id == node {
+        Some(edge.target_id.as_str())
+    } else if edge.target_id == node {
+        Some(edge.source_id.as_str())
+    } else {
+        None
+    }
+}
+
+/// Link types of recorded edges that tie `lesson_id` to `failure_id`.
+///
+/// A direct edge contributes its `link_type`. Two allowed edges that name the
+/// same third endpoint contribute their link types. Endpoint ids are not
+/// anchors: a path or symbol stored as an endpoint is causal structure only
+/// when both edges were recorded, and it is not echoed.
+fn causal_link_types(lesson_id: &str, failure_id: &str, edges: &[ConnectionRecord]) -> Vec<String> {
+    let mut types = Vec::new();
+    let mut lesson_ends: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut failure_ends: HashMap<&str, Vec<&str>> = HashMap::new();
     for edge in edges {
-        let direct_hit = (edge.source_id == lesson_id && edge.target_id == failure_id)
-            || (edge.source_id == failure_id && edge.target_id == lesson_id);
-        if direct_hit {
-            direct.push(edge.link_type.clone());
+        if !is_recorded_cause(&edge.link_type) {
+            continue;
         }
-        if edge.source_id == lesson_id {
-            lesson_ends.insert(edge.target_id.clone());
-        } else if edge.target_id == lesson_id {
-            lesson_ends.insert(edge.source_id.clone());
+        let lesson_side = other_end(edge, lesson_id);
+        let failure_side = other_end(edge, failure_id);
+        if lesson_side.is_some() && failure_side.is_some() {
+            types.push(edge.link_type.as_str());
+            continue;
         }
-        if edge.source_id == failure_id {
-            failure_ends.insert(edge.target_id.clone());
-        } else if edge.target_id == failure_id {
-            failure_ends.insert(edge.source_id.clone());
+        if let Some(end) = lesson_side.filter(|end| *end != lesson_id && *end != failure_id) {
+            lesson_ends
+                .entry(end)
+                .or_default()
+                .push(edge.link_type.as_str());
+        }
+        if let Some(end) = failure_side.filter(|end| *end != failure_id && *end != lesson_id) {
+            failure_ends
+                .entry(end)
+                .or_default()
+                .push(edge.link_type.as_str());
         }
     }
-    lesson_ends.remove(failure_id);
-    failure_ends.remove(lesson_id);
-    let mut shared: Vec<String> = lesson_ends.intersection(&failure_ends).cloned().collect();
-    shared.append(&mut direct);
-    shared.sort();
-    shared.dedup();
-    shared
+    for (end, lesson_types) in &lesson_ends {
+        if let Some(failure_types) = failure_ends.get(end) {
+            types.extend(lesson_types.iter().copied());
+            types.extend(failure_types.iter().copied());
+        }
+    }
+    let mut owned: Vec<String> = types.into_iter().map(str::to_string).collect();
+    owned.sort();
+    owned.dedup();
+    owned
 }
 
-/// Pure detection. `links` are recorded-edge anchors (link type or shared
-/// endpoint) and count even when no entity overlaps.
+/// Pure detection. `link_types` are recorded edges. `reviewed_at` is the
+/// wall-clock time of the card's last review. Callers that have no timestamp
+/// for that review must not call this with `created_at` as a stand-in.
 pub fn detect_lesson(
     node: &KnowledgeNode,
-    failure_anchors: &HashSet<String>,
+    link_types: &[String],
     failure_at: chrono::DateTime<chrono::Utc>,
+    reviewed_at: chrono::DateTime<chrono::Utc>,
 ) -> Option<ForgottenLesson> {
-    detect_lesson_with_links(node, failure_anchors, failure_at, &[])
-}
-
-fn detect_lesson_with_links(
-    node: &KnowledgeNode,
-    failure_anchors: &HashSet<String>,
-    failure_at: chrono::DateTime<chrono::Utc>,
-    links: &[String],
-) -> Option<ForgottenLesson> {
-    if !lesson_tagged(&node.tags) && !has_fix_marker(&node.content) {
+    if link_types.is_empty() || (!lesson_tagged(&node.tags) && !has_fix_marker(&node.content)) {
         return None;
     }
-    let node_anchors: HashSet<String> = extract_entities(&node.content, &node.tags)
-        .into_iter()
-        .filter(|entity| is_causal_entity(entity))
-        .collect();
-    let mut shared: Vec<String> = failure_anchors
-        .iter()
-        .filter(|entity| is_causal_entity(entity) && node_anchors.contains(*entity))
-        .cloned()
-        .collect();
-    for link in links {
-        if !shared.iter().any(|anchor| anchor == link) {
-            shared.push(link.clone());
-        }
-    }
-    if shared.is_empty() {
-        return None;
-    }
-    shared.sort();
-    // Stored stability + elapsed days since last_accessed, exact FSRS-6 curve.
-    // Non-positive elapsed returns 1.0 (accessed at or after the failure).
-    let elapsed_days = (failure_at - node.last_accessed).num_seconds() as f64 / 86_400.0;
+    // Stored stability + elapsed days since the last review, exact FSRS-6.
+    // Non-positive elapsed returns 1.0 (reviewed at or after the failure).
+    let elapsed_days = (failure_at - reviewed_at).num_seconds() as f64 / 86_400.0;
     let retention = retrievability(node.stability, elapsed_days);
     if retention >= FORGOTTEN_THRESHOLD {
         return None;
     }
+    let mut shared = link_types.to_vec();
+    shared.sort();
+    shared.dedup();
     Some(ForgottenLesson {
         lesson_id: node.id.clone(),
         recorded_at: node.created_at,
@@ -217,7 +218,21 @@ struct Args {
     scan_limit: Option<i32>,
 }
 
-pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+fn review_instant(
+    storage: &Storage,
+    node: &KnowledgeNode,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    match crate::strata_memory::lesson_review_clock(storage, &node.id) {
+        crate::strata_memory::LessonClock::NotStrata => Some(node.last_accessed),
+        crate::strata_memory::LessonClock::Mapped(at) => Some(at),
+        crate::strata_memory::LessonClock::Unmapped => None,
+    }
+}
+
+pub async fn execute(
+    storage: &std::sync::Arc<Storage>,
+    args: Option<Value>,
+) -> Result<Value, String> {
     let args: Args = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| e.to_string())?,
         None => Args::default(),
@@ -248,15 +263,12 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "failure memory not found in requested scope".to_string())?;
 
-    let failure_anchors: HashSet<String> = extract_entities(&failure.content, &failure.tags)
-        .into_iter()
-        .filter(|entity| is_causal_entity(entity))
-        .collect();
     let edges = storage.get_all_connections().map_err(|e| e.to_string())?;
 
     // Scan the namespace in bounded pages; only records OLDER than the
     // failure can be forgotten lessons for it.
     let mut detected: Vec<ForgottenLesson> = Vec::new();
+    let mut unmapped_reviews = 0usize;
     let mut scanned = 0usize;
     let mut offset = 0;
     'scan: loop {
@@ -269,10 +281,15 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             if node.id == failure.id || node.created_at >= failure.created_at {
                 continue;
             }
-            let links = causal_anchors(&node.id, &failure.id, &edges);
-            if let Some(lesson) =
-                detect_lesson_with_links(node, &failure_anchors, failure.created_at, &links)
-            {
+            let links = causal_link_types(&node.id, &failure.id, &edges);
+            if links.is_empty() || (!lesson_tagged(&node.tags) && !has_fix_marker(&node.content)) {
+                continue;
+            }
+            let Some(reviewed_at) = review_instant(storage.as_ref(), node) else {
+                unmapped_reviews += 1;
+                continue;
+            };
+            if let Some(lesson) = detect_lesson(node, &links, failure.created_at, reviewed_at) {
                 detected.push(lesson);
             }
         }
@@ -314,8 +331,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         "threshold": FORGOTTEN_THRESHOLD,
         "scanned": scanned,
         "count": lessons.len(),
+        "unmapped_reviews": unmapped_reviews,
         "forgotten_lessons": lessons,
-        "note": "Each entry is an older lesson with FSRS-6 retrievability < 0.5 at failure time (stored stability, elapsed since last_accessed) and either an exact code/path/env/version entity or a recorded edge. A decayed corrective memory, not a proven cause.",
+        "note": "Each entry is an older lesson joined by a recorded edge (touched, anchored_to, derived_from, supersedes, corrects, closed_by, projected_to, evidence_of) with FSRS-6 retrievability < 0.5 at failure time. The decay clock is created_at_ms on the upsert frame of the card's last review. An explicit review frame stores a log sequence and no timestamp, so those lessons are counted in unmapped_reviews and are not scored. Name overlap is not a cause. The live edge has no legacy_inferred field; that link type is skipped, and a migrated inferred edge stored as derived_from cannot be told apart.",
     }))
 }
 
@@ -325,7 +343,7 @@ mod tests {
     use tempfile::TempDir;
     use vestige_core::IngestInput;
 
-    fn test_storage() -> (Arc<Storage>, TempDir, std::path::PathBuf) {
+    fn test_storage() -> (std::sync::Arc<Storage>, TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let db = dir.path().join("test.db");
         let storage = vestige_core::open_storage(Some(db.clone())).unwrap();
@@ -353,7 +371,7 @@ mod tests {
         assert_eq!(changed, 1, "fabrication must hit the seeded row");
     }
 
-    fn ingest(storage: &Arc<Storage>, content: &str, tags: &[&str]) -> vestige_core::KnowledgeNode {
+    fn ingest(storage: &std::sync::Arc<Storage>, content: &str, tags: &[&str]) -> KnowledgeNode {
         storage
             .ingest(IngestInput {
                 content: content.to_string(),
@@ -361,6 +379,21 @@ mod tests {
                 ..Default::default()
             })
             .unwrap()
+    }
+
+    fn link(storage: &std::sync::Arc<Storage>, source: &str, target: &str, link_type: &str) {
+        let now = chrono::Utc::now();
+        storage
+            .save_connection(&ConnectionRecord {
+                source_id: source.to_string(),
+                target_id: target.to_string(),
+                strength: 1.0,
+                link_type: link_type.to_string(),
+                created_at: now,
+                last_activated: now,
+                activation_count: 1,
+            })
+            .unwrap();
     }
 
     #[test]
@@ -384,20 +417,20 @@ mod tests {
     }
 
     /// Seeded store with a fabricated DECAYED stability: the lesson is
-    /// detected with the shared env-var anchor and a retention below 50%.
+    /// detected through a recorded `corrects` edge. A decayed lesson that
+    /// only shares a name, with no edge, is not.
     #[tokio::test]
     async fn detects_decayed_lesson_in_seeded_store() {
         let (storage, _dir, db) = test_storage();
 
         let decayed = ingest(
             &storage,
-            "Fixed the API_TIMEOUT overflow in src/auth/login.rs",
+            "Patched the ledger drift during the nightly close",
             &["fix"],
         );
         storage
             .set_created_at(&decayed.id, chrono::Utc::now() - chrono::Duration::days(10))
             .unwrap();
-        // stability 0.5d, last touched 60d before the failure lands.
         fabricate_fsrs(
             &db,
             &decayed.id,
@@ -405,10 +438,26 @@ mod tests {
             chrono::Utc::now() - chrono::Duration::days(60),
         );
 
-        // Fresh, well-reviewed lesson sharing the SAME anchors: must NOT flag.
+        // Shares API_TIMEOUT and the login path with the failure. No edge.
+        let named = ingest(
+            &storage,
+            "Fixed the API_TIMEOUT overflow in src/auth/login.rs",
+            &["fix"],
+        );
+        storage
+            .set_created_at(&named.id, chrono::Utc::now() - chrono::Duration::days(10))
+            .unwrap();
+        fabricate_fsrs(
+            &db,
+            &named.id,
+            0.5,
+            chrono::Utc::now() - chrono::Duration::days(60),
+        );
+
+        // Fresh, well-reviewed lesson on the same edge: must NOT flag.
         let fresh = ingest(
             &storage,
-            "Fixed the API_TIMEOUT overflow in src/auth/login.rs (verified)",
+            "Repaired the journal checksum before dawn",
             &["fix"],
         );
         storage
@@ -416,10 +465,10 @@ mod tests {
             .unwrap();
         fabricate_fsrs(&db, &fresh.id, 100.0, chrono::Utc::now());
 
-        // Decayed but NOT a lesson (no tag, no fix marker): must NOT flag.
+        // Decayed edge, but NOT a lesson (no tag, no fix marker): must NOT flag.
         let noise = ingest(
             &storage,
-            "Noted API_TIMEOUT behaviour in src/auth/login.rs",
+            "Noted the ledger drift during the nightly close",
             &["observation"],
         );
         storage
@@ -437,6 +486,9 @@ mod tests {
             "Outage: crash loop in src/auth/login.rs after API_TIMEOUT change",
             &["incident"],
         );
+        link(&storage, &decayed.id, &failure.id, "corrects");
+        link(&storage, &fresh.id, &failure.id, "corrects");
+        link(&storage, &noise.id, &failure.id, "corrects");
 
         let out = execute(&storage, Some(json!({"failure_id": failure.id})))
             .await
@@ -444,7 +496,7 @@ mod tests {
         assert_eq!(out["count"], json!(1), "exactly the decayed lesson: {out}");
         let entry = &out["forgotten_lessons"][0];
         assert_eq!(entry["lesson_id"], json!(decayed.id));
-        assert_eq!(entry["shared_anchor"], json!("api_timeout"));
+        assert_eq!(entry["shared_anchor"], json!("corrects"));
         let retention = entry["retention_pct"].as_f64().unwrap();
         assert!(
             (0.0..50.0).contains(&retention),
@@ -478,6 +530,7 @@ mod tests {
             0.5,
             chrono::Utc::now() - chrono::Duration::days(120),
         );
+        link(&storage, &later.id, &failure.id, "corrects");
         let out = execute(&storage, Some(json!({"failure_id": failure.id})))
             .await
             .unwrap();
@@ -510,27 +563,31 @@ mod tests {
         // And through the tool's own detection rule: the SAME lesson row
         // flips from not-forgotten (fresh access) to forgotten (long-stale
         // access). Stability 5d: R ~ 1.0 at ~0 elapsed, R ~ 0.44 at 730d.
-        let anchors: HashSet<String> = ["api_timeout".to_string()].into_iter().collect();
+        // The cause is the recorded link type, not the words in the content.
+        let links = vec!["corrects".to_string()];
         let at = chrono::Utc::now();
         let mut node = KnowledgeNode::default();
-        node.content = "Fixed the api_timeout overflow".to_string();
+        node.content = "Patched the ledger drift during the nightly close".to_string();
         node.tags = vec!["fix".to_string()];
         node.stability = 5.0;
         node.created_at = at - chrono::Duration::days(3650);
         let mut fresh = node.clone();
         fresh.last_accessed = at;
-        assert!(detect_lesson(&fresh, &anchors, at).is_none());
+        assert!(detect_lesson(&fresh, &links, at, fresh.last_accessed).is_none());
         let mut stale = node;
         stale.last_accessed = at - chrono::Duration::days(730);
-        let detected = detect_lesson(&stale, &anchors, at).expect("stale lesson detected");
+        assert!(detect_lesson(&stale, &[], at, stale.last_accessed).is_none());
+        let detected =
+            detect_lesson(&stale, &links, at, stale.last_accessed).expect("stale lesson detected");
         assert!(detected.retention < FORGOTTEN_THRESHOLD);
-        assert_eq!(detected.shared_anchor, "api_timeout");
+        assert_eq!(detected.shared_anchor, "corrects");
     }
 }
 
 #[cfg(test)]
 mod strata_tests {
     use super::*;
+    use std::collections::HashSet;
     use strata_store::{ConnectionRecord, EdgeKind, IngestInput, StrataStore};
 
     fn no_sqlite(dir: &std::path::Path) -> bool {
@@ -571,59 +628,176 @@ mod strata_tests {
         StrataStore::open(dir).unwrap().state_digest()
     }
 
-    /// Decayed lesson sharing `API_TIMEOUT` is returned. A decayed lesson on
-    /// another entity is not. A fresh lesson on the same entity is not. A
-    /// decayed lesson with no shared entity but a recorded `corrects` edge is.
+    fn names(text: &str) -> HashSet<String> {
+        text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .filter(|token| !token.is_empty())
+            .map(|token| token.to_ascii_lowercase())
+            .collect()
+    }
+
+    fn vestige_edge(source: &str, target: &str, link_type: &str) -> vestige_core::ConnectionRecord {
+        let now = chrono::Utc::now();
+        vestige_core::ConnectionRecord {
+            source_id: source.to_string(),
+            target_id: target.to_string(),
+            strength: 1.0,
+            link_type: link_type.to_string(),
+            created_at: now,
+            last_activated: now,
+            activation_count: 0,
+        }
+    }
+
+    #[test]
+    fn recorded_edges_ignore_names_and_legacy_inferred() {
+        let direct = causal_link_types(
+            "lesson",
+            "failure",
+            &[vestige_edge("lesson", "failure", "corrects")],
+        );
+        assert_eq!(direct, vec!["corrects".to_string()]);
+
+        let shared_end = causal_link_types(
+            "lesson",
+            "failure",
+            &[
+                vestige_edge("lesson", "sym-1", "touched"),
+                vestige_edge("failure", "sym-1", "anchored_to"),
+            ],
+        );
+        assert_eq!(
+            shared_end,
+            vec!["anchored_to".to_string(), "touched".to_string()]
+        );
+        assert!(shared_end.iter().all(|anchor| anchor != "sym-1"));
+
+        let named = causal_link_types(
+            "lesson",
+            "failure",
+            &[
+                vestige_edge("lesson", "failure", "legacy_inferred"),
+                vestige_edge("lesson", "API_TIMEOUT", "touched"),
+                vestige_edge("failure", "API_TIMEOUT", "legacy_inferred"),
+                vestige_edge("lesson", "failure", "semantic"),
+            ],
+        );
+        assert!(named.is_empty(), "{named:?}");
+    }
+
+    /// Decayed lesson linked by `corrects`, sharing no name with the failure,
+    /// is returned. A decayed lesson that shares `API_TIMEOUT` and the login
+    /// path, with no edge, is not. A fresh lesson on a `corrects` edge is not.
     /// The blake3 state digest is unchanged, and no SQLite file appears.
     #[tokio::test]
-    async fn surfaces_decayed_shared_entity_not_unrelated() {
+    async fn surfaces_decayed_lesson_only_through_a_recorded_edge() {
         let dir = tempfile::TempDir::new().unwrap();
         let failure_ms = 1_750_000_000_000_i64;
         let day_ms = 86_400_000_i64;
-        let decayed_id;
-        let unrelated_id;
-        let linked_id;
+        let lesson = "Patched the ledger drift during the nightly close";
+        let failure_text = "Outage: crash loop in src/auth/login.rs after API_TIMEOUT change";
+        let named = "Fixed the API_TIMEOUT overflow in src/auth/login.rs";
+        assert!(
+            names(lesson).is_disjoint(&names(failure_text)),
+            "the linked lesson and the failure must share no name"
+        );
+        assert!(!names(named).is_disjoint(&names(failure_text)));
+
+        let lesson_id;
+        let named_id;
         let fresh_id;
         let failure_id;
         {
             let mut store = StrataStore::open(dir.path()).unwrap();
-            decayed_id = store
-                .ingest_in_scope(
-                    input(
-                        "Fixed the API_TIMEOUT overflow in src/auth/login.rs",
-                        &["fix"],
-                        failure_ms - 500 * day_ms,
-                    ),
-                    "user",
-                )
+            lesson_id = store
+                .ingest_in_scope(input(lesson, &["fix"], failure_ms - 500 * day_ms), "user")
                 .unwrap();
-            // Shares the prose word "crash" with the failure and nothing else.
-            unrelated_id = store
-                .ingest_in_scope(
-                    input(
-                        "Fixed the crash after the billing close",
-                        &["fix"],
-                        failure_ms - 500 * day_ms,
-                    ),
-                    "user",
-                )
-                .unwrap();
-            linked_id = store
-                .ingest_in_scope(
-                    input(
-                        "Fixed the ledger drift in the nightly close",
-                        &["fix"],
-                        failure_ms - 500 * day_ms,
-                    ),
-                    "user",
-                )
+            named_id = store
+                .ingest_in_scope(input(named, &["fix"], failure_ms - 500 * day_ms), "user")
                 .unwrap();
             fresh_id = store
                 .ingest_in_scope(
                     input(
-                        "Fixed the API_TIMEOUT overflow in src/auth/login.rs again",
+                        "Repaired the journal checksum before dawn",
                         &["fix"],
                         failure_ms - day_ms,
+                    ),
+                    "user",
+                )
+                .unwrap();
+            failure_id = store
+                .ingest_in_scope(input(failure_text, &["incident"], failure_ms), "user")
+                .unwrap();
+            store
+                .save_connection(&ConnectionRecord {
+                    source_id: lesson_id.clone(),
+                    target_id: failure_id.clone(),
+                    link_type: EdgeKind::Corrects.as_str().to_string(),
+                    created_at_ms: failure_ms,
+                    ..ConnectionRecord::default()
+                })
+                .unwrap();
+            store
+                .save_connection(&ConnectionRecord {
+                    source_id: fresh_id.clone(),
+                    target_id: failure_id.clone(),
+                    link_type: EdgeKind::Corrects.as_str().to_string(),
+                    created_at_ms: failure_ms,
+                    ..ConnectionRecord::default()
+                })
+                .unwrap();
+        }
+        let before = digest(dir.path());
+
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let out = execute(&storage, Some(json!({"failure_id": failure_id})))
+            .await
+            .unwrap();
+        drop(storage);
+
+        let after = digest(dir.path());
+        assert_eq!(before, after, "forgotten_lesson must not write the log");
+        assert!(no_sqlite(dir.path()));
+        assert_eq!(out["count"], json!(1), "{out}");
+        assert_eq!(out["unmapped_reviews"], json!(0), "{out}");
+
+        let entry = &out["forgotten_lessons"][0];
+        assert_eq!(entry["lesson_id"], json!(lesson_id));
+        assert_eq!(entry["shared_anchor"], json!("corrects"));
+        assert_eq!(entry["shared_anchors"], json!(["corrects"]));
+        let retention = entry["retention_pct"].as_f64().unwrap();
+        assert!(
+            (0.0..50.0).contains(&retention),
+            "retention must be below 50%, got {retention}"
+        );
+        let ids: Vec<&str> = out["forgotten_lessons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["lesson_id"].as_str().unwrap())
+            .collect();
+        assert!(!ids.contains(&named_id.as_str()), "{out}");
+        assert!(!ids.contains(&fresh_id.as_str()), "{out}");
+        let note = out["note"].as_str().unwrap();
+        assert!(note.contains("no timestamp"), "{note}");
+        assert!(note.contains("Name overlap is not a cause"), "{note}");
+    }
+
+    /// An explicit review frame has no wall-clock time. The lesson stays
+    /// uncounted even though its upsert `created_at_ms` is 500 days old.
+    #[tokio::test]
+    async fn explicit_review_with_no_timestamp_is_not_scored() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let failure_ms = 1_750_000_000_000_i64;
+        let day_ms = 86_400_000_i64;
+        let failure_id;
+        {
+            let mut store = StrataStore::open(dir.path()).unwrap();
+            let lesson_id = store
+                .ingest_in_scope(
+                    input(
+                        "Patched the ledger drift during the nightly close",
+                        &["fix"],
+                        failure_ms - 500 * day_ms,
                     ),
                     "user",
                 )
@@ -640,16 +814,19 @@ mod strata_tests {
                 .unwrap();
             store
                 .save_connection(&ConnectionRecord {
-                    source_id: linked_id.clone(),
+                    source_id: lesson_id.clone(),
                     target_id: failure_id.clone(),
                     link_type: EdgeKind::Corrects.as_str().to_string(),
                     created_at_ms: failure_ms,
                     ..ConnectionRecord::default()
                 })
                 .unwrap();
+            store.review(&lesson_id, 3).unwrap();
+            assert_eq!(
+                store.review_clock(&lesson_id),
+                Some(strata_store::ReviewClock::Unmapped)
+            );
         }
-        // Open once so a later reopen is comparable. state_digest is blake3.
-        drop(crate::strata_memory::open(dir.path()).unwrap());
         let before = digest(dir.path());
 
         let storage = crate::strata_memory::open(dir.path()).unwrap();
@@ -660,53 +837,15 @@ mod strata_tests {
 
         let after = digest(dir.path());
         assert_eq!(before, after, "forgotten_lesson must not write the log");
+        assert_eq!(out["count"], json!(0), "{out}");
+        assert_eq!(out["forgotten_lessons"], json!([]));
+        assert_eq!(out["unmapped_reviews"], json!(1), "{out}");
+        assert!(
+            out["note"].as_str().unwrap().contains("no timestamp"),
+            "{}",
+            out["note"]
+        );
         assert!(no_sqlite(dir.path()));
-
-        let ids: Vec<&str> = out["forgotten_lessons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|entry| entry["lesson_id"].as_str().unwrap())
-            .collect();
-        assert!(ids.contains(&decayed_id.as_str()), "{out}");
-        assert!(ids.contains(&linked_id.as_str()), "{out}");
-        assert!(!ids.contains(&unrelated_id.as_str()), "{out}");
-        assert!(!ids.contains(&fresh_id.as_str()), "{out}");
-        assert_eq!(out["count"], json!(2), "{out}");
-
-        let decayed = out["forgotten_lessons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["lesson_id"] == decayed_id)
-            .unwrap();
-        assert!(
-            decayed["shared_anchors"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|anchor| anchor == "api_timeout"),
-            "{decayed}"
-        );
-        let retention = decayed["retention_pct"].as_f64().unwrap();
-        assert!(
-            (0.0..50.0).contains(&retention),
-            "retention must be below 50%, got {retention}"
-        );
-        let linked = out["forgotten_lessons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["lesson_id"] == linked_id)
-            .unwrap();
-        assert!(
-            linked["shared_anchors"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|anchor| anchor == "corrects"),
-            "{linked}"
-        );
     }
 
     #[tokio::test]

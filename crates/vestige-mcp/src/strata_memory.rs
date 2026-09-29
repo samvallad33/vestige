@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -35,7 +35,50 @@ pub fn is_strata_backend(storage: &Storage) -> bool {
 
 /// Open (or create) a Strata log under `dir`. Creates no SQLite file.
 pub fn open(dir: impl AsRef<Path>) -> Result<Arc<Storage>, StorageError> {
-    Ok(Arc::new(StrataMemory::open(dir)?))
+    let memory = Arc::new(StrataMemory::open(dir)?);
+    let mut slots = open_slots().lock().unwrap_or_else(|err| err.into_inner());
+    slots.retain(|(_, weak)| weak.strong_count() > 0);
+    slots.push((memory.data_dir.clone(), Arc::downgrade(&memory)));
+    Ok(memory)
+}
+
+fn open_slots() -> &'static Mutex<Vec<(PathBuf, Weak<StrataMemory>)>> {
+    static SLOTS: OnceLock<Mutex<Vec<(PathBuf, Weak<StrataMemory>)>>> = OnceLock::new();
+    SLOTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn lookup_open(dir: &Path) -> Option<Arc<StrataMemory>> {
+    let mut slots = open_slots().lock().unwrap_or_else(|err| err.into_inner());
+    slots.retain(|(_, weak)| weak.strong_count() > 0);
+    slots
+        .iter()
+        .rev()
+        .find(|(path, _)| path == dir)
+        .and_then(|(_, weak)| weak.upgrade())
+}
+
+/// Clock of the card's last review on a Strata log.
+pub enum LessonClock {
+    /// This storage is not a Strata log.
+    NotStrata,
+    /// Last review folded on the node upsert. Value is that record's `created_at_ms`.
+    Mapped(DateTime<Utc>),
+    /// Last review frame has no wall-clock timestamp, or the open store is not registered.
+    Unmapped,
+}
+
+/// Read the last-review clock. Does not append.
+pub fn lesson_review_clock(storage: &Storage, id: &str) -> LessonClock {
+    if !is_strata_backend(storage) {
+        return LessonClock::NotStrata;
+    }
+    let Some(memory) = lookup_open(storage.data_dir()) else {
+        return LessonClock::Unmapped;
+    };
+    match memory.lock().review_clock(id) {
+        Some(strata_store::ReviewClock::Mapped(ms)) => LessonClock::Mapped(ms_to_dt(ms)),
+        _ => LessonClock::Unmapped,
+    }
 }
 
 pub struct StrataMemory {

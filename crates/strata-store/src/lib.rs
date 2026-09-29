@@ -62,7 +62,7 @@ mod tests;
 pub use error::StoreError;
 pub use gate_log::StrataEventLog;
 pub use op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
-pub use store::{default_policy, StrataStore};
+pub use store::{default_policy, ReviewClock, StrataStore};
 pub use types::{
     looks_like_failure, ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, NodeRecord,
     TYPED_EDGE_VOCABULARY, VALID_FOREVER_MS,

@@ -47,6 +47,44 @@ fn input(content: &str, tags: &[&str]) -> IngestInput {
 }
 
 #[test]
+fn review_clock_maps_the_ingest_frame_and_not_an_explicit_review() {
+    let dir = temp_dir("clock");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let id = store
+        .ingest(input("a recorded lesson", &["fix"]))
+        .expect("ingest");
+    assert_eq!(
+        store.review_clock(&id),
+        Some(crate::ReviewClock::Mapped(1_700_000_000_000))
+    );
+    let before = store.state_digest();
+    assert_eq!(
+        store.review_clock(&id),
+        Some(crate::ReviewClock::Mapped(1_700_000_000_000))
+    );
+    assert_eq!(
+        store.state_digest(),
+        before,
+        "reading the clock appends nothing"
+    );
+    store.set_created_at(&id, 5).expect("backdate");
+    assert_eq!(
+        store.review_clock(&id),
+        Some(crate::ReviewClock::Mapped(1_700_000_000_000)),
+        "set_created_at is not a review"
+    );
+    store.review(&id, 3).expect("review");
+    assert_eq!(store.review_clock(&id), Some(crate::ReviewClock::Unmapped));
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened.review_clock(&id),
+        Some(crate::ReviewClock::Unmapped)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ingest_read_roundtrip() {
     let dir = temp_dir("roundtrip");
     let mut store = StrataStore::open(&dir).expect("open");
