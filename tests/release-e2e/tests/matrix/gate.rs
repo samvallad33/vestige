@@ -1,148 +1,58 @@
-//! The gate decides with no model and no network.
+//! Whole-session network ban.
+//!
+//! `no_network_whole_session` replaced `gate_decides_without_llm`. It boots
+//! the default-feature `vestige-mcp`, calls every advertised tool once, and
+//! runs `vestige sync --cloud`, all inside a network namespace under
+//! `strace -f`. A pass is zero `connect()` (and zero DNS send/recv) to
+//! anything other than a local `AF_UNIX` socket.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use super::support::*;
 
-/// Roots of the decision path. A hit inside one of these functions is a call
-/// site that can reach Sanhedrin or an LLM client from the gate.
-const DECISION_FNS: &[(&str, &str)] = &[
-    (
-        "crates/vestige-mcp/src/server.rs",
-        "gate_pending_memory_mutation",
-    ),
-    (
-        "crates/vestige-mcp/src/trace_recorder.rs",
-        "gate_pending_memory_mutation",
-    ),
-    ("crates/vestige-mcp/src/trace_recorder.rs", "gate_writes"),
-    (
-        "crates/vestige-mcp/src/trace_recorder.rs",
-        "pending_memory_mutation",
-    ),
-    ("crates/vestige-mcp/src/trace_recorder.rs", "extract_veto"),
-    ("crates/vestige-core/src/trace/review.rs", "classify_write"),
-    ("crates/vestige-core/src/trace/review.rs", "collect_signals"),
-    ("crates/strata-gate/src/policy.rs", "gate_verdict"),
-    ("crates/strata-gate/src/policy.rs", "evaluate_detailed"),
-    ("crates/strata-gate/src/policy.rs", "evaluate"),
-    ("crates/strata-gate/src/runtime.rs", "commit_gate"),
-    ("crates/strata-gate/src/runtime.rs", "commit_propose"),
-    ("crates/strata-store/src/store.rs", "admit_write"),
-    ("crates/strata-store/src/store.rs", "supersede"),
-];
+const HTTP_CRATES: &[&str] = &["reqwest", "hyper", "ureq", "hyper-util"];
+const BINS: &[&str] = &["vestige", "vestige-mcp"];
 
-const LLM_NEEDLES: &[&str] = &[
-    "sanhedrin",
-    "chat/completions",
-    "VESTIGE_SANHEDRIN",
-    "reqwest",
-    "openai",
-    "ollama",
-    "mlx_lm",
-    "vllm",
-    "anthropic.com",
-];
-
-/// Shipped crates. Tests and the dashboard's display of a receipt the hook
-/// already wrote are listed separately from the decision-path hits.
-const SHIPPED: &[&str] = &[
-    "crates/vestige-mcp/src",
-    "crates/vestige-core/src",
-    "crates/strata/src",
-    "crates/strata-store/src",
-    "crates/strata-gate/src",
-    "crates/strata-kernel/src",
-    "crates/strata-migrate/src",
-    "crates/strata-verify/src",
-];
-
-fn is_uuid_at(s: &str, i: usize) -> bool {
-    let rest = &s[i..];
-    if rest.len() < 36 {
-        return false;
-    }
-    let bytes = rest.as_bytes();
-    let dashes = [8usize, 13, 18, 23];
-    bytes.iter().take(36).enumerate().all(|(n, c)| {
-        if dashes.contains(&n) {
-            *c == b'-'
-        } else {
-            c.is_ascii_hexdigit()
-        }
-    })
-}
-
-fn scrub(s: &str) -> String {
-    if s.len() >= 20 {
-        let b = s.as_bytes();
-        if b.len() >= 11
-            && b.get(4) == Some(&b'-')
-            && b.get(7) == Some(&b'-')
-            && b.get(10) == Some(&b'T')
-            && b[..4].iter().all(|c| c.is_ascii_digit())
-        {
-            return "<time>".to_string();
-        }
-    }
-    let mut out = String::new();
-    let mut i = 0;
-    while i < s.len() {
-        if s.is_char_boundary(i) && is_uuid_at(s, i) {
-            out.push_str("<id>");
-            i += 36;
-            continue;
-        }
-        let ch = s[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    out
-}
-
-fn scrub_value(value: &Value) -> Value {
-    match value {
-        Value::String(s) => Value::String(scrub(s)),
-        Value::Array(items) => Value::Array(items.iter().map(scrub_value).collect()),
-        Value::Object(map) => {
-            let mut next = serde_json::Map::new();
-            for (k, v) in map {
-                next.insert(k.clone(), scrub_value(v));
-            }
-            Value::Object(next)
-        }
-        other => other.clone(),
-    }
-}
-
-fn llm_env_names() -> Vec<String> {
-    let mut names = BTreeSet::from([
-        "OPENAI_API_KEY".to_string(),
-        "ANTHROPIC_API_KEY".to_string(),
-        "AZURE_OPENAI_API_KEY".to_string(),
-        "GEMINI_API_KEY".to_string(),
-        "GROQ_API_KEY".to_string(),
-        "MISTRAL_API_KEY".to_string(),
-        "COHERE_API_KEY".to_string(),
-        "TOGETHER_API_KEY".to_string(),
-        "HF_TOKEN".to_string(),
-        "HUGGING_FACE_HUB_TOKEN".to_string(),
-        "OLLAMA_HOST".to_string(),
-        "VESTIGE_SANHEDRIN_ENABLED".to_string(),
-        "VESTIGE_SANHEDRIN_ENDPOINT".to_string(),
-        "VESTIGE_SANHEDRIN_MODEL".to_string(),
-        "VESTIGE_SANHEDRIN_CLAIM_MODE".to_string(),
-        "VESTIGE_SANHEDRIN_OUTPUT".to_string(),
-        "VESTIGE_SANHEDRIN_STATE_DIR".to_string(),
-        "VESTIGE_SANHEDRIN_API_KEY".to_string(),
-    ]);
+fn clear_network_env() -> Vec<String> {
+    let mut names = [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
+        "COHERE_API_KEY",
+        "TOGETHER_API_KEY",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "OLLAMA_HOST",
+        "GITHUB_TOKEN",
+        "VESTIGE_GITHUB_TOKEN",
+        "REDMINE_API_KEY",
+        "VESTIGE_REDMINE_API_KEY",
+        "REDMINE_URL",
+        "VESTIGE_REDMINE_URL",
+        "VESTIGE_CLOUD_ENDPOINT",
+        "VESTIGE_CLOUD_SYNC_KEY",
+        "VESTIGE_CLOUD_ENCRYPTION_KEY",
+        "VESTIGE_SANHEDRIN_ENABLED",
+        "VESTIGE_SANHEDRIN_ENDPOINT",
+        "VESTIGE_SANHEDRIN_MODEL",
+        "VESTIGE_SANHEDRIN_CLAIM_MODE",
+        "VESTIGE_SANHEDRIN_OUTPUT",
+        "VESTIGE_SANHEDRIN_STATE_DIR",
+        "VESTIGE_SANHEDRIN_API_KEY",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
     let root = repo_root();
-    for rel in SHIPPED {
+    for rel in ["crates/vestige-mcp/src", "crates/vestige-core/src"] {
         let mut stack = vec![root.join(rel)];
         while let Some(dir) = stack.pop() {
             let Ok(rd) = fs::read_dir(&dir) else {
@@ -172,14 +82,11 @@ fn llm_env_names() -> Vec<String> {
                             || upper.contains("OPENAI")
                             || upper.contains("ANTHROPIC")
                             || upper.contains("OLLAMA")
-                            || upper.contains("AZURE")
-                            || upper.contains("GEMINI")
-                            || upper.contains("MISTRAL")
-                            || upper.contains("GROQ")
-                            || upper.contains("COHERE")
-                            || upper.contains("HUGGING")
+                            || upper.contains("CLOUD")
+                            || upper.contains("GITHUB")
+                            || upper.contains("REDMINE")
                         {
-                            names.insert(name.to_string());
+                            names.push(name.to_string());
                         }
                         rest = &rest[end..];
                     }
@@ -187,137 +94,168 @@ fn llm_env_names() -> Vec<String> {
             }
         }
     }
-    names.into_iter().collect()
+    names.sort();
+    names.dedup();
+    names
 }
 
-fn fn_at(text: &str, name: &str) -> Option<usize> {
-    let marker = format!("fn {name}");
-    let mut from = 0;
-    while let Some(at) = text[from..].find(&marker) {
-        let abs = from + at;
-        let after = abs + marker.len();
-        let boundary = match text[after..].chars().next() {
-            Some(ch) if ch.is_ascii_alphanumeric() || ch == '_' => false,
-            _ => true,
-        };
-        if boundary {
-            return Some(abs);
-        }
-        from = after;
-    }
-    None
-}
-
-fn fn_body<'a>(text: &'a str, name: &str) -> Option<&'a str> {
-    let start = fn_at(text, name)?;
-    let after = &text[start + format!("fn {name}").len()..];
-    let brace = after.find('{')?;
-    let mut depth = 0i32;
-    let body = &after[brace..];
-    for (i, ch) in body.char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&body[..=i]);
-                }
+/// `cargo tree` in this toolchain has no `--bin`. Both binaries are the
+/// `vestige-mcp` package under default features, so one inverse tree is the
+/// default build of each.
+fn cargo_tree(spec: &str) -> String {
+    let manifest = repo_root().join("Cargo.toml");
+    let out = Command::new("cargo")
+        .current_dir(repo_root())
+        .args([
+            "tree",
+            "--manifest-path",
+            manifest.to_str().unwrap_or("Cargo.toml"),
+            "-p",
+            "vestige-mcp",
+            "-e",
+            "normal",
+            "-i",
+            spec,
+            "--locked",
+            "--offline",
+        ])
+        .output();
+    match out {
+        Ok(out) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let text = text.trim().to_string();
+            if text.is_empty() {
+                "(empty)".to_string()
+            } else {
+                text
             }
-            _ => {}
         }
+        Err(err) => format!("failed to spawn cargo tree: {err}"),
     }
-    None
 }
 
-fn line_of(text: &str, offset: usize) -> usize {
-    text[..offset].bytes().filter(|b| *b == b'\n').count() + 1
+fn feature_lines(path: &Path) -> Vec<String> {
+    let text = fs::read_to_string(path).unwrap_or_default();
+    text.lines()
+        .map(str::trim)
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            (lower.contains("reqwest")
+                || lower.starts_with("connectors ")
+                || lower.starts_with("connectors=")
+                || lower.starts_with("cloud-sync ")
+                || lower.starts_with("cloud-sync="))
+                && !line.starts_with('#')
+        })
+        .map(|line| format!("{}: {line}", path.display()))
+        .collect()
 }
 
-fn decision_path_hits() -> Vec<String> {
+fn http_feature_report(trees: &[(String, String)]) -> String {
+    let pulled = trees.iter().any(|(spec, text)| {
+        *spec != "ureq" && !text.contains("did not match") && !text.contains("failed to spawn")
+    });
+    if !pulled {
+        return "no reqwest, hyper, or hyper-util edge on the default vestige-mcp package graph"
+            .to_string();
+    }
     let root = repo_root();
-    let mut hits = Vec::new();
-    for (rel, name) in DECISION_FNS {
-        let path = root.join(rel);
-        let text = fs::read_to_string(&path).unwrap_or_default();
-        let Some(body) = fn_body(&text, name) else {
-            hits.push(format!("{rel}: fn {name} not found"));
-            continue;
-        };
-        let body_at = text.find(body).unwrap_or(0);
-        for needle in LLM_NEEDLES {
-            let mut rest = body;
-            let mut local = 0usize;
-            while let Some(at) = rest.to_ascii_lowercase().find(&needle.to_ascii_lowercase()) {
-                let abs = body_at + local + at;
-                let line = line_of(&text, abs);
-                let src = text.lines().nth(line - 1).unwrap_or("").trim();
-                hits.push(format!("{rel}:{line} {name} matches `{needle}`: {src}"));
-                let step = at + needle.len();
-                rest = &rest[step..];
-                local += step;
-            }
-        }
-    }
-    hits.sort();
-    hits.dedup();
-    hits
-}
-
-fn adjacent_llm_sites() -> Vec<String> {
-    let root = repo_root();
-    let mut hits = Vec::new();
-    for rel in SHIPPED {
-        let mut stack = vec![root.join(rel)];
-        while let Some(dir) = stack.pop() {
-            let Ok(rd) = fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in rd.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                    continue;
-                }
-                let text = fs::read_to_string(&path).unwrap_or_default();
-                for (n, line) in text.lines().enumerate() {
-                    let lower = line.to_ascii_lowercase();
-                    if lower.contains("sanhedrin")
-                        || lower.contains("chat/completions")
-                        || lower.contains("vestige_sanhedrin")
-                    {
-                        let file = path.strip_prefix(&root).unwrap_or(&path);
-                        hits.push(format!("{}:{} {}", file.display(), n + 1, line.trim()));
-                    }
-                }
-            }
-        }
-    }
-    hits.sort();
-    hits.dedup();
-    hits
-}
-
-fn call_site_report() -> String {
-    let decision = decision_path_hits();
-    let adjacent = adjacent_llm_sites();
+    let mut lines = feature_lines(&root.join("crates/vestige-mcp/Cargo.toml"));
+    lines.extend(feature_lines(&root.join("crates/vestige-core/Cargo.toml")));
     format!(
-        "decision-path LLM/Sanhedrin hits ({}):\n{}\n\n\
-         shipped-crate sanhedrin / chat-completions lines ({}):\n{}",
-        decision.len(),
-        if decision.is_empty() {
+        "HTTP client is on the default build.\n\
+         reqwest is optional on vestige-core and is enabled by two vestige-mcp \
+         default features:\n\
+         - connectors → vestige-core feature connectors = [\"dep:reqwest\"] \
+           (crates/vestige-core/Cargo.toml). Crate path: vestige-mcp → vestige-core → reqwest.\n\
+         - cloud-sync → vestige-core feature cloud-sync = [\"dep:reqwest\", \
+           \"reqwest/blocking\", ...] (crates/vestige-core/Cargo.toml). \
+           Crate path: vestige-mcp → vestige-core → reqwest.\n\
+         hyper and hyper-util also arrive through unconditional axum \
+         (crates/vestige-mcp/Cargo.toml, the dashboard server) and through \
+         reqwest → hyper-rustls.\n\
+         ureq is not in the graph.\n\
+         manifest lines:\n{}",
+        if lines.is_empty() {
             "(none)".to_string()
         } else {
-            decision.join("\n")
-        },
-        adjacent.len(),
-        if adjacent.is_empty() {
-            "(none)".to_string()
-        } else {
-            adjacent.join("\n")
+            lines.join("\n")
         }
+    )
+}
+
+fn symbol_hits(bin: &Path) -> String {
+    let nm = Command::new("nm")
+        .args(["-a"])
+        .arg(bin)
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        .unwrap_or_default();
+    let mut nm_hits = Vec::new();
+    for line in nm.lines() {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("reqwest") || lower.contains("hyper") || lower.contains("getaddrinfo") {
+            nm_hits.push(line.trim().to_string());
+        }
+    }
+    let strings = Command::new("strings")
+        .args(["-a", "-n", "6"])
+        .arg(bin)
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        .unwrap_or_default();
+    let mut string_hits = Vec::new();
+    for line in strings.lines() {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("reqwest") || lower.contains("hyper") || lower.contains("getaddrinfo") {
+            string_hits.push(line.trim().to_string());
+        }
+    }
+    let sample = |hits: &[String]| -> String {
+        if hits.is_empty() {
+            return "(none)".to_string();
+        }
+        let mut shown = hits.iter().take(12).cloned().collect::<Vec<_>>();
+        if hits.len() > shown.len() {
+            shown.push(format!("… {} more", hits.len() - shown.len()));
+        }
+        shown.join("\n")
+    };
+    format!(
+        "{} nm hits {} (getaddrinfo/reqwest/hyper)\n{}\nstrings hits {}\n{}",
+        bin.display(),
+        nm_hits.len(),
+        sample(&nm_hits),
+        string_hits.len(),
+        sample(&string_hits)
+    )
+}
+
+fn link_report() -> String {
+    let mut trees = Vec::new();
+    let mut blocks = Vec::new();
+    for spec in HTTP_CRATES {
+        let text = cargo_tree(spec);
+        blocks.push(format!(
+            "cargo tree -p vestige-mcp -e normal -i {spec}\n\
+             (default features; vestige and vestige-mcp are this package; \
+             this cargo has no --bin on `cargo tree`)\n{text}"
+        ));
+        trees.push(((*spec).to_string(), text));
+    }
+    let mut symbols = Vec::new();
+    for name in BINS {
+        symbols.push(symbol_hits(&product_bin(name)));
+    }
+    format!(
+        "{}\n\n{}\n\n{}",
+        blocks.join("\n\n"),
+        http_feature_report(&trees),
+        symbols.join("\n\n")
     )
 }
 
@@ -336,18 +274,15 @@ fn namespace_prefix(trace: &Path) -> Vec<String> {
     } else {
         panic!(
             "FAIL: no network namespace. `unshare -n` and `unshare -Urn` both failed, \
-             so gate_decides_without_llm cannot prove the offline run."
+             so no_network_whole_session cannot prove the offline run."
         );
     };
-    // strace is the parent. `strace` inside `unshare -Urn` dies with
-    // PTRACE_TRACEME EPERM, which would hide every connect. `-f` follows
-    // the binary into the network namespace, so a connect there is still
-    // in this trace.
+    // strace is the parent. Inside `unshare -Urn`, PTRACE_TRACEME is EPERM.
     [
         "strace".to_string(),
         "-f".into(),
         "-e".into(),
-        "trace=connect,sendto,sendmsg,sendmmsg".into(),
+        "trace=connect,sendto,sendmsg,sendmmsg,recvfrom,recvmsg".into(),
         "-o".into(),
         trace.display().to_string(),
         "-s".into(),
@@ -359,128 +294,231 @@ fn namespace_prefix(trace: &Path) -> Vec<String> {
     .collect()
 }
 
-fn network_connects(trace: &str) -> Vec<String> {
+fn is_syscall(line: &str) -> bool {
+    line.contains("connect(")
+        || line.contains("sendto(")
+        || line.contains("sendmsg(")
+        || line.contains("sendmmsg(")
+        || line.contains("recvfrom(")
+        || line.contains("recvmsg(")
+}
+
+/// `connect()` to anything but `AF_UNIX`, plus DNS send/recv on INET.
+fn non_unix_network(trace: &str) -> Vec<String> {
     trace
         .lines()
         .filter(|line| {
-            (line.contains("connect(")
-                || line.contains("sendto(")
-                || line.contains("sendmsg(")
-                || line.contains("sendmmsg("))
-                && (line.contains("AF_INET") || line.contains("AF_INET6"))
+            if !is_syscall(line) {
+                return false;
+            }
+            if line.contains("AF_INET") || line.contains("AF_INET6") || line.contains("inet_addr(")
+            {
+                return true;
+            }
+            false
         })
-        .take(12)
+        .take(24)
         .map(|line| line.trim().to_string())
         .collect()
 }
 
-struct Decisions {
-    safe: Value,
-    blocked: Value,
-    safe_receipt: bool,
-    blocked_receipt: bool,
-    safe_rejected: bool,
-    blocked_rejected: bool,
+fn tool_names(listed: &Value) -> Vec<String> {
+    listed["result"]["tools"]
+        .as_array()
+        .or_else(|| listed["tools"].as_array())
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-fn drive(server: &mut Server) -> Decisions {
-    let created = server
-        .tool(
-            "smart_ingest",
-            json!({
-                "content": "gate-offline-canary-7c2e",
-                "forceCreate": true
-            }),
-        )
-        .expect("rpc");
-    if created.rejected() {
-        missing(&format!(
-            "gate row needs one memory before the blocked purge. smart_ingest failed: {}",
-            created.blob().chars().take(500).collect::<String>()
-        ));
+fn memory_handle(id: &str) -> String {
+    if id.starts_with("mem-") || id.contains(':') {
+        id.to_string()
+    } else {
+        format!("mem:{id}")
     }
-    let id = created.body["nodeId"].as_str().unwrap_or("").to_string();
-    if id.is_empty() {
-        missing("smart_ingest returned no nodeId for the gate row");
+}
+
+/// Schema-valid arguments. `None` means this advertised name has no call yet.
+fn tool_args(name: &str, id: &str) -> Option<Value> {
+    let handle = memory_handle(id);
+    Some(match name {
+        "smart_ingest" => json!({
+            "content": "no-network-session-canary-7c2e",
+            "forceCreate": true
+        }),
+        "memory" => json!({ "action": "get", "id": id }),
+        "memory_status" => json!({ "view": "health" }),
+        "purge" => json!({ "id": id }),
+        "recall" => json!({ "handle": handle }),
+        "receipt" => json!({ "action": "get", "receipt_id": "wr_no_network_session" }),
+        "codebase" => json!({ "action": "get_context" }),
+        "project" => json!({ "action": "preview" }),
+        "intention" => json!({ "action": "list" }),
+        "source_sync" => json!({
+            "source": "github",
+            "repo": "octocat/Hello-World",
+            "max_pages": 1
+        }),
+        "maintain" => json!({ "action": "gc", "dry_run": true }),
+        "dedup" => json!({ "action": "scan" }),
+        "graph" => json!({ "action": "recent" }),
+        "session_start" => json!({ "queries": ["no-network-session-canary-7c2e"] }),
+        "suppress" => json!({ "id": id, "reason": "no-network-session" }),
+        "causal_walk" => json!({
+            "start_points": [{ "kind": "failing_test", "name": "no_network_whole_session" }]
+        }),
+        "selftest" => json!({}),
+        "forgotten_lesson" => json!({ "failure_id": id }),
+        _ => return None,
+    })
+}
+
+fn trace_vestige_cloud(trace: &Path, data_dir: &Path, clear: &[&str]) {
+    let prefix = namespace_prefix(trace);
+    let bin = product_bin("vestige");
+    let mut command = Command::new(&prefix[0]);
+    command.args(&prefix[1..]);
+    command
+        .arg(&bin)
+        .arg("--data-dir")
+        .arg(data_dir)
+        .arg("sync")
+        .arg("--cloud")
+        .env("VESTIGE_DATA_DIR", data_dir)
+        .env("HOME", data_dir)
+        .env_remove("RUST_LOG");
+    for key in clear {
+        command.env_remove(key);
     }
-    let safe = server
-        .tool("memory_status", json!({ "view": "health" }))
-        .expect("rpc");
-    let blocked = server
-        .tool("memory", json!({ "action": "purge", "id": id }))
-        .expect("rpc");
-    Decisions {
-        safe_rejected: safe.rejected(),
-        blocked_rejected: blocked.rejected(),
-        safe_receipt: has_gate_receipt(&safe),
-        blocked_receipt: has_gate_receipt(&blocked),
-        safe: scrub_value(&safe.body),
-        blocked: scrub_value(&blocked.body),
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|err| panic!("HARNESS: spawn vestige sync --cloud: {err}"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
 #[test]
-fn gate_decides_without_llm() {
-    let report = call_site_report();
+fn no_network_whole_session() {
+    let report = link_report();
     println!("{report}");
 
-    let clear_owned = llm_env_names();
+    let clear_owned = clear_network_env();
     let clear: Vec<&str> = clear_owned.iter().map(String::as_str).collect();
 
-    let net_dir = tempfile::tempdir().unwrap();
-    let mut net = Server::boot_wrapped(net_dir.path(), &[], &clear);
-    let online = drive(&mut net);
-    drop(net);
+    let dir = tempfile::tempdir().unwrap();
+    let mcp_trace =
+        std::env::temp_dir().join(format!("vestige-session-mcp-{}.strace", std::process::id()));
+    let cli_trace =
+        std::env::temp_dir().join(format!("vestige-session-cli-{}.strace", std::process::id()));
+    let _ = fs::remove_file(&mcp_trace);
+    let _ = fs::remove_file(&cli_trace);
 
-    let iso_dir = tempfile::tempdir().unwrap();
-    let trace_path = std::env::temp_dir().join(format!(
-        "vestige-gate-connect-{}.strace",
-        std::process::id()
-    ));
-    let _ = fs::remove_file(&trace_path);
-    let prefix = namespace_prefix(&trace_path);
-    let mut iso = Server::boot_wrapped(iso_dir.path(), &prefix, &clear);
-    let offline = drive(&mut iso);
-    drop(iso);
-
-    let trace = fs::read_to_string(&trace_path).unwrap_or_default();
-    let connects = network_connects(&trace);
-    let _ = fs::remove_file(&trace_path);
-
+    let prefix = namespace_prefix(&mcp_trace);
+    let mut server = Server::boot_wrapped(dir.path(), &prefix, &clear);
     let mut problems = Vec::new();
-    if online.safe_rejected {
-        problems.push("networked memory_status was rejected".to_string());
+
+    let listed = match server.call("tools/list", None) {
+        Ok(value) => value,
+        Err(err) => missing(&format!("tools/list failed: {err}")),
+    };
+    let names = tool_names(&listed);
+    if names.is_empty() {
+        problems.push("tools/list advertised no tools".to_string());
     }
-    if !online.blocked_rejected {
-        problems.push("networked purge without confirm was not rejected".to_string());
-    }
-    if offline.safe_rejected {
-        problems.push("offline memory_status was rejected".to_string());
-    }
-    if !offline.blocked_rejected {
-        problems.push("offline purge without confirm was not rejected".to_string());
-    }
-    if online.safe != offline.safe || online.safe_receipt != offline.safe_receipt {
+
+    let created = server
+        .tool("smart_ingest", tool_args("smart_ingest", "").expect("args"))
+        .expect("rpc");
+    let id = created.body["nodeId"].as_str().unwrap_or("").to_string();
+    if created.rejected() || id.is_empty() {
         problems.push(format!(
-            "safe decision diverged. receipt {} vs {}. online={} offline={}",
-            online.safe_receipt, offline.safe_receipt, online.safe, offline.safe
+            "gated write smart_ingest was not admitted: {}",
+            created.blob().chars().take(500).collect::<String>()
         ));
     }
-    if online.blocked != offline.blocked || online.blocked_receipt != offline.blocked_receipt {
+    let id = if id.is_empty() {
+        "mem:missing-no-network".to_string()
+    } else {
+        id
+    };
+
+    let mut called = vec!["smart_ingest".to_string()];
+    for name in &names {
+        if name == "smart_ingest" {
+            continue;
+        }
+        let Some(args) = tool_args(name, &id) else {
+            problems.push(format!(
+                "tools/list advertised `{name}` and this row has no schema-valid arguments for it"
+            ));
+            continue;
+        };
+        match server.tool(name, args) {
+            Ok(_) => called.push(name.clone()),
+            Err(err) => problems.push(format!("`{name}` rpc failed: {err}")),
+        }
+    }
+    for name in &names {
+        if !called.iter().any(|called| called == name) && tool_args(name, &id).is_some() {
+            problems.push(format!("`{name}` was listed and not called"));
+        }
+    }
+
+    let blocked = server
+        .tool("memory", json!({ "action": "purge", "id": id }))
+        .expect("rpc");
+    if !blocked.rejected() {
         problems.push(format!(
-            "blocked purge diverged. receipt {} vs {}. online={} offline={}",
-            online.blocked_receipt, offline.blocked_receipt, online.blocked, offline.blocked
+            "blocked write (memory purge without confirm) was not rejected: {}",
+            blocked.blob().chars().take(500).collect::<String>()
         ));
     }
-    if !connects.is_empty() {
+    if has_gate_receipt(&blocked) {
+        problems.push(
+            "blocked write returned a gate receipt; purge without confirm must not".to_string(),
+        );
+    }
+
+    drop(server);
+    trace_vestige_cloud(&cli_trace, dir.path(), &clear);
+
+    let mut sockets = Vec::new();
+    for (label, path) in [("vestige-mcp", &mcp_trace), ("vestige", &cli_trace)] {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        let hits = non_unix_network(&text);
+        if text.is_empty() {
+            problems.push(format!("{label} strace is empty ({})", path.display()));
+        }
+        for hit in hits {
+            sockets.push(format!("{label}: {hit}"));
+        }
+        let _ = fs::remove_file(path);
+    }
+    if !sockets.is_empty() {
         problems.push(format!(
-            "a process opened a network socket:\n{}",
-            connects.join("\n")
+            "a process connected to something other than a local unix socket:\n{}",
+            sockets.join("\n")
         ));
     }
+
     if !problems.is_empty() {
         panic!(
-            "FAIL: gate_decides_without_llm\n{}\n\n{}",
+            "FAIL: no_network_whole_session\n{}\n\n{}",
             problems.join("\n"),
             report
         );
