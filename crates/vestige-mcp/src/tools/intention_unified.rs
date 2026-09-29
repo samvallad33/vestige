@@ -1553,10 +1553,7 @@ fn trigger_cue_evidence(
             }
             Some((
                 "time",
-                format!(
-                    "scheduled time reached ({})",
-                    at.format("%Y-%m-%d %H:%M UTC")
-                ),
+                format!("scheduled time reached ({})", at.format("%Y-%m-%d %H:%M UTC")),
                 1.0,
             ))
         }
@@ -1573,11 +1570,7 @@ fn trigger_cue_evidence(
                 return None;
             }
             let confidence = text_cue_confidence(condition)?;
-            Some((
-                "event",
-                format!("query matches event condition '{condition}'"),
-                confidence,
-            ))
+            Some(("event", format!("query matches event condition '{condition}'"), confidence))
         }
         ProspectiveTrigger::ActivityBased {
             activity,
@@ -1606,11 +1599,7 @@ fn trigger_cue_evidence(
                 return None;
             }
             let (_, inner, confidence) = trigger_cue_evidence(base, cue, scope)?;
-            Some((
-                "recurring",
-                format!("recurring schedule due; {inner}"),
-                confidence,
-            ))
+            Some(("recurring", format!("recurring schedule due; {inner}"), confidence))
         }
         ProspectiveTrigger::Compound { all_of, any_of } => {
             let mut cues: Vec<(&'static str, String, f64)> = Vec::new();
@@ -1622,10 +1611,7 @@ fn trigger_cue_evidence(
             if cues.is_empty() {
                 return None;
             }
-            let confidence = cues
-                .iter()
-                .map(|(_, _, c)| *c)
-                .fold(f64::INFINITY, f64::min);
+            let confidence = cues.iter().map(|(_, _, c)| *c).fold(f64::INFINITY, f64::min);
             let explanation = cues
                 .into_iter()
                 .map(|(_, text, _)| text)
@@ -1652,11 +1638,7 @@ fn context_cue_evidence(
                 return None;
             }
             let confidence = text_cue_confidence(name)?;
-            Some((
-                "context",
-                format!("query scope matches codebase '{name}'"),
-                confidence,
-            ))
+            Some(("context", format!("query scope matches codebase '{name}'"), confidence))
         }
         ContextPattern::FilePattern(file_pattern) => {
             let matched = cue
@@ -1667,11 +1649,7 @@ fn context_cue_evidence(
                 return None;
             }
             let confidence = text_cue_confidence(file_pattern)?;
-            Some((
-                "context",
-                format!("query matches file pattern '{file_pattern}'"),
-                confidence,
-            ))
+            Some(("context", format!("query matches file pattern '{file_pattern}'"), confidence))
         }
         ContextPattern::TopicActive(topic) => {
             let matched = cue
@@ -1682,11 +1660,7 @@ fn context_cue_evidence(
                 return None;
             }
             let confidence = text_cue_confidence(topic)?;
-            Some((
-                "context",
-                format!("query mentions topic '{topic}'"),
-                confidence,
-            ))
+            Some(("context", format!("query mentions topic '{topic}'"), confidence))
         }
         // Recall cues carry no user mode; the verdict matcher can never fire
         // this arm against a ProspectiveCue, so it never cites one either.
@@ -1798,9 +1772,7 @@ pub(crate) fn surface_prospective(
         let within_one_shot_limits = intention.reminder_count < MAX_ONE_SHOT_REMINDERS
             && intention
                 .last_reminded_at
-                .map(|last| {
-                    cue.now - last >= Duration::minutes(MIN_ONE_SHOT_REMINDER_INTERVAL_MINUTES)
-                })
+                .map(|last| cue.now - last >= Duration::minutes(MIN_ONE_SHOT_REMINDER_INTERVAL_MINUTES))
                 .unwrap_or(true);
         if !(scheduled_recurrence || within_one_shot_limits) {
             continue;
@@ -3229,11 +3201,7 @@ mod tests {
         }
     }
 
-    async fn set_event_intention(
-        storage: &Arc<Storage>,
-        condition: &str,
-        scope: Option<&str>,
-    ) -> String {
+    async fn set_event_intention(storage: &Arc<Storage>, condition: &str, scope: Option<&str>) -> String {
         let mut args = serde_json::json!({
             "action": "set",
             "description": format!("Act on: {condition}"),
@@ -3264,10 +3232,7 @@ mod tests {
         assert_eq!(items[0]["id"], serde_json::json!(id));
         assert_eq!(items[0]["cueType"], "event");
         assert!(
-            items[0]["why"]
-                .as_str()
-                .unwrap()
-                .contains("payments migration finished"),
+            items[0]["why"].as_str().unwrap().contains("payments migration finished"),
             "the citation must name the matched cue: {:?}",
             items[0]["why"]
         );
@@ -3284,12 +3249,8 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         set_event_intention(&storage, "payments migration finished", None).await;
 
-        let section =
-            surface_prospective(&storage, &cue("favorite hiking trails near oslo"), "user");
-        assert!(
-            section.is_none(),
-            "no-match must produce no section: {section:?}"
-        );
+        let section = surface_prospective(&storage, &cue("favorite hiking trails near oslo"), "user");
+        assert!(section.is_none(), "no-match must produce no section: {section:?}");
     }
 
     #[tokio::test]
@@ -3333,19 +3294,13 @@ mod tests {
         }
         let section = surface_prospective(
             &storage,
-            &cue(
-                "alpha review finished, beta review finished, gamma review finished, \
-                  delta review finished, epsilon review finished",
-            ),
+            &cue("alpha review finished, beta review finished, gamma review finished, \
+                  delta review finished, epsilon review finished"),
             "user",
         )
         .expect("matches exist");
         let items = section["intentions"].as_array().unwrap();
-        assert_eq!(
-            items.len(),
-            3,
-            "never crowd out the actual results: {items:?}"
-        );
+        assert_eq!(items.len(), 3, "never crowd out the actual results: {items:?}");
     }
 
     #[tokio::test]
@@ -3383,9 +3338,7 @@ mod tests {
             "description": "namespaced intention",
             "scope": "  alpha  "
         });
-        let result = execute(&storage, &test_cognitive(), Some(args))
-            .await
-            .unwrap();
+        let result = execute(&storage, &test_cognitive(), Some(args)).await.unwrap();
         assert_eq!(result["scope"], "alpha");
         let id = result["intentionId"].as_str().unwrap().to_string();
         let record = storage.get_intention(&id).unwrap().unwrap();

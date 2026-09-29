@@ -607,8 +607,8 @@ mod tests {
     #[tokio::test]
     async fn empty_store_has_all_zero_buckets_and_default_scope() {
         let directory = tempfile::tempdir().expect("temporary database");
-        let storage = vestige_core::open_storage(Some(directory.path().join("stats.db")))
-            .expect("test storage");
+        let storage =
+            vestige_core::open_storage(Some(directory.path().join("stats.db"))).expect("test storage");
 
         let response = execute(&storage, Some(json!({ "view": "stats" })))
             .await
@@ -631,8 +631,8 @@ mod tests {
     #[tokio::test]
     async fn tag_audit_is_agent_visible_and_scope_filtered() {
         let directory = tempfile::tempdir().expect("temporary database");
-        let storage = vestige_core::open_storage(Some(directory.path().join("audit.db")))
-            .expect("test storage");
+        let storage =
+            vestige_core::open_storage(Some(directory.path().join("audit.db"))).expect("test storage");
         storage
             .ingest_in_scope(
                 IngestInput {
@@ -897,8 +897,8 @@ mod tests {
     #[tokio::test]
     async fn stats_population_stays_inside_the_requested_scope() {
         let directory = tempfile::tempdir().expect("temporary database");
-        let storage = vestige_core::open_storage(Some(directory.path().join("scope.db")))
-            .expect("test storage");
+        let storage =
+            vestige_core::open_storage(Some(directory.path().join("scope.db"))).expect("test storage");
         storage
             .ingest_in_scope(
                 IngestInput {
@@ -1121,7 +1121,8 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap();
         let mut expired_node = summary("exp-1", "fact", now - Duration::days(2), 0.9, &[], 10);
         expired_node.valid_until = Some(now - Duration::seconds(1));
-        let mut superseded_node = summary("sup-1", "fact", now - Duration::days(2), 0.9, &[], 10);
+        let mut superseded_node =
+            summary("sup-1", "fact", now - Duration::days(2), 0.9, &[], 10);
         superseded_node.superseded = true;
         let decayed = summary("low-1", "fact", now - Duration::days(2), 0.1, &[], 10);
         let mut never = summary("nav-1", "fact", now - Duration::days(2), 0.9, &[], 10);
@@ -1129,7 +1130,13 @@ mod tests {
         let clean = summary("clean", "fact", now - Duration::days(2), 0.9, &["ok"], 10);
 
         let response = build_response(
-            snapshot_of(vec![expired_node, superseded_node, decayed, never, clean]),
+            snapshot_of(vec![
+                expired_node,
+                superseded_node,
+                decayed,
+                never,
+                clean,
+            ]),
             Some("user"),
             50,
             now,
@@ -1150,15 +1157,9 @@ mod tests {
             find("expired_memories")["args"]["exampleMemoryIds"],
             json!(["exp-1"])
         );
-        assert_eq!(
-            find("superseded_rows")["args"]["exampleMemoryIds"],
-            json!(["sup-1"])
-        );
+        assert_eq!(find("superseded_rows")["args"]["exampleMemoryIds"], json!(["sup-1"]));
         assert_eq!(find("low_retention")["count"], 1);
-        assert_eq!(
-            find("low_retention")["args"]["exampleMemoryIds"],
-            json!(["low-1"])
-        );
+        assert_eq!(find("low_retention")["args"]["exampleMemoryIds"], json!(["low-1"]));
         assert_eq!(find("low_retention")["tool"], "maintain");
         assert_eq!(find("never_accessed")["count"], 1);
         // Every action names a tool that exists on the advertised catalog.
@@ -1171,14 +1172,7 @@ mod tests {
 
         // A clean store recommends nothing.
         let clean_response = build_response(
-            snapshot_of(vec![summary(
-                "solo",
-                "fact",
-                now - Duration::days(1),
-                0.9,
-                &["ok"],
-                10,
-            )]),
+            snapshot_of(vec![summary("solo", "fact", now - Duration::days(1), 0.9, &["ok"], 10)]),
             Some("user"),
             50,
             now,

@@ -625,7 +625,8 @@ fn check_intention_triggered(
     ctx: &ContextSpec,
     now: DateTime<Utc>,
 ) -> bool {
-    let Ok(Some(trigger)) = crate::tools::intention_unified::stored_prospective_trigger(intention)
+    let Ok(Some(trigger)) =
+        crate::tools::intention_unified::stored_prospective_trigger(intention)
     else {
         return false;
     };
@@ -985,7 +986,8 @@ mod tests {
         .await;
 
         // Noise: non-failure memory anchored to one of the same files.
-        let quiet_id = ingest_test_content(&storage, "Prefer Rust for systems work.", vec![]).await;
+        let quiet_id = ingest_test_content(&storage, "Prefer Rust for systems work.", vec![])
+            .await;
         storage
             .record_code_anchors(&[vestige_core::codebase::CodeAnchor {
                 id: "anchor-quiet".to_string(),
@@ -1026,18 +1028,9 @@ mod tests {
             ctx.contains("**Open failures touching changed files:**"),
             "section header missing: {ctx}"
         );
-        assert!(
-            ctx.contains("Deploy failed"),
-            "anchor-matched failure missing: {ctx}"
-        );
-        assert!(
-            ctx.contains("(src/pool.rs:acquire)"),
-            "anchor detail missing: {ctx}"
-        );
-        assert!(
-            ctx.contains("cleanup after crash"),
-            "files-line failure missing: {ctx}"
-        );
+        assert!(ctx.contains("Deploy failed"), "anchor-matched failure missing: {ctx}");
+        assert!(ctx.contains("(src/pool.rs:acquire)"), "anchor detail missing: {ctx}");
+        assert!(ctx.contains("cleanup after crash"), "files-line failure missing: {ctx}");
         assert!(
             !ctx.contains("Prefer Rust"),
             "a non-failure memory on the same file is noise: {ctx}"
@@ -1105,10 +1098,7 @@ mod tests {
             ctx.contains("**Last session failed calls (run_b):**"),
             "failed-calls header missing: {ctx}"
         );
-        assert!(
-            ctx.contains("- memory: NotFound: abc"),
-            "failed call missing: {ctx}"
-        );
+        assert!(ctx.contains("- memory: NotFound: abc"), "failed call missing: {ctx}");
         assert!(
             !ctx.contains("backfill"),
             "older runs must not leak into the section: {ctx}"

@@ -289,10 +289,7 @@ fn is_fresh_insight(node: &vestige_core::KnowledgeNode, now: DateTime<Utc>) -> b
 /// leader moves to the front. Older insights and below-floor candidates are
 /// untouched; when the leader is already the fresh insight, nothing moves.
 /// Returns whether a promotion happened.
-fn promote_fresh_insight(
-    results: &mut Vec<vestige_core::SearchResult>,
-    now: DateTime<Utc>,
-) -> bool {
+fn promote_fresh_insight(results: &mut Vec<vestige_core::SearchResult>, now: DateTime<Utc>) -> bool {
     const RELEVANCE_FLOOR: f32 = 0.3;
     let Some(leader) = results.first() else {
         return false;
@@ -320,23 +317,14 @@ mod query_rewrite_tests {
 
     #[test]
     fn identifier_queries_split_into_words() {
-        assert_eq!(
-            split_identifier_tokens("compact_tools_list"),
-            "compact tools list"
-        );
-        assert_eq!(
-            split_identifier_tokens("VectorIndexConfig"),
-            "Vector Index Config"
-        );
+        assert_eq!(split_identifier_tokens("compact_tools_list"), "compact tools list");
+        assert_eq!(split_identifier_tokens("VectorIndexConfig"), "Vector Index Config");
         assert_eq!(split_identifier_tokens("aarch64-linux"), "aarch64 linux");
     }
 
     #[test]
     fn prose_queries_pass_through_unchanged() {
-        assert_eq!(
-            split_identifier_tokens("deploy rollback policy"),
-            "deploy rollback policy"
-        );
+        assert_eq!(split_identifier_tokens("deploy rollback policy"), "deploy rollback policy");
     }
 
     #[test]
@@ -356,10 +344,7 @@ mod query_rewrite_tests {
     fn the_original_query_is_always_first() {
         let v = rewrite_queries("compact_tools_list");
         assert_eq!(v[0], "compact_tools_list");
-        assert!(
-            v.len() >= 2,
-            "identifier query gains a split variant: {v:?}"
-        );
+        assert!(v.len() >= 2, "identifier query gains a split variant: {v:?}");
         assert!(v.len() <= 3);
     }
 
@@ -373,8 +358,8 @@ mod query_rewrite_tests {
 #[cfg(test)]
 mod supersession_gate_tests {
     use super::{partition_keeps_noncurrent, partition_superseded};
-    use vestige_core::KnowledgeNode;
     use vestige_core::memory::SearchResult;
+    use vestige_core::KnowledgeNode;
 
     fn result(valid: bool, score: f32) -> SearchResult {
         let mut node = KnowledgeNode::default();
@@ -454,14 +439,8 @@ mod precision_decay_tests {
         let retention = 0.65;
         let precision = precision_of(retention);
         assert!(precision < retention, "precision must decay faster");
-        assert!(
-            precision_is_low(retention),
-            "at retention {retention} precision {precision} is below the floor"
-        );
-        assert!(
-            !precision_is_low(0.95),
-            "fresh high-retention memory keeps full precision"
-        );
+        assert!(precision_is_low(retention), "at retention {retention} precision {precision} is below the floor");
+        assert!(!precision_is_low(0.95), "fresh high-retention memory keeps full precision");
     }
 
     #[test]
@@ -482,18 +461,16 @@ mod precision_decay_tests {
         let long = "First sentence carries the decision. ".repeat(20);
         let gist = gist_of(&long);
         assert!(gist.chars().count() <= 210, "gist stays compact: {gist}");
-        assert!(
-            gist.ends_with('.') || gist.ends_with('…'),
-            "clean boundary: {gist}"
-        );
+        assert!(gist.ends_with('.') || gist.ends_with('…'), "clean boundary: {gist}");
     }
 }
+
 
 #[cfg(test)]
 mod fresh_insight_tests {
     use super::{is_fresh_insight, promote_fresh_insight};
-    use vestige_core::KnowledgeNode;
     use vestige_core::memory::SearchResult;
+    use vestige_core::KnowledgeNode;
 
     fn node(node_type: &str, age_hours: i64, score: f32) -> SearchResult {
         let mut node = KnowledgeNode::default();
@@ -589,21 +566,14 @@ pub(crate) fn abstention_decision(
     let Some(top) = results.first() else {
         // Nothing matched at all: that is the existing empty-response path,
         // not an abstention. Abstaining requires something to withhold.
-        return AbstainVerdict {
-            confidence: 0.0,
-            abstain: false,
-        };
+        return AbstainVerdict { confidence: 0.0, abstain: false };
     };
     let top_score = top.combined_score.max(0.0);
     let match_evidence = (top_score / ABSTAIN_TOP_NORM).clamp(0.0, 1.0) as f64;
     let gap = match results.get(1) {
         Some(second) => {
             let diff = top_score - second.combined_score;
-            if top_score > 0.0 {
-                (diff / top_score).clamp(0.0, 1.0) as f64
-            } else {
-                0.0
-            }
+            if top_score > 0.0 { (diff / top_score).clamp(0.0, 1.0) as f64 } else { 0.0 }
         }
         None => 1.0,
     };
@@ -612,10 +582,7 @@ pub(crate) fn abstention_decision(
     // A floor of 1.0 (or above) disables abstention: the operator asked to
     // always answer, so nothing is withheld.
     let abstain = floor < 1.0 && confidence < floor;
-    AbstainVerdict {
-        confidence,
-        abstain,
-    }
+    AbstainVerdict { confidence, abstain }
 }
 
 /// The abstained response envelope (#224): no results dressed as an answer,
@@ -644,8 +611,8 @@ pub(crate) fn abstain_envelope(
 #[cfg(test)]
 mod abstention_tests {
     use super::{AbstainVerdict, DEFAULT_ABSTAIN_FLOOR, abstain_envelope, abstention_decision};
-    use vestige_core::KnowledgeNode;
     use vestige_core::memory::SearchResult;
+    use vestige_core::KnowledgeNode;
 
     fn result(score: f32, retention: f64, second: Option<f32>) -> Vec<SearchResult> {
         let mk = |score: f32, retention: f64| {
@@ -683,34 +650,20 @@ mod abstention_tests {
     #[test]
     fn empty_results_are_not_an_abstention() {
         let v = abstention_decision(&[], DEFAULT_ABSTAIN_FLOOR);
-        assert_eq!(
-            v,
-            AbstainVerdict {
-                confidence: 0.0,
-                abstain: false
-            }
-        );
+        assert_eq!(v, AbstainVerdict { confidence: 0.0, abstain: false });
     }
 
     #[test]
     fn the_floor_is_configurable_and_one_disables() {
         let weak = result(0.15, 0.15, None);
         assert!(abstention_decision(&weak, 0.9).abstain);
-        assert!(
-            !abstention_decision(&weak, 1.0).abstain,
-            "floor 1.0 never abstains (clamped confidence can equal but not exceed only when <); confidence is < 1.0 here"
-        );
+        assert!(!abstention_decision(&weak, 1.0).abstain, "floor 1.0 never abstains (clamped confidence can equal but not exceed only when <); confidence is < 1.0 here");
     }
 
     #[test]
     fn the_envelope_states_itself_clearly() {
         let v = super::abstention_decision(&result(0.12, 0.1, None), DEFAULT_ABSTAIN_FLOOR);
-        let env = abstain_envelope(
-            "q",
-            v,
-            DEFAULT_ABSTAIN_FLOOR,
-            vec![serde_json::json!({"id": "x"})],
-        );
+        let env = abstain_envelope("q", v, DEFAULT_ABSTAIN_FLOOR, vec![serde_json::json!({"id": "x"})]);
         assert_eq!(env["abstained"], serde_json::json!(true));
         assert_eq!(env["results"], serde_json::json!([]));
         assert!(env["reason"].as_str().unwrap().contains("below the"));
@@ -795,79 +748,79 @@ async fn execute_concrete_lookup(
     valid_at: Option<chrono::DateTime<chrono::Utc>>,
     packet_boundary: &Value,
 ) -> Result<Value, String> {
-    // When a tag_prefix OR a source filter is requested, fetch a larger
-    // pool so the post-filter has enough headroom to still return ~limit
-    // results after thinning. Cap at the same upper bound the underlying
-    // SQL path uses elsewhere (100).
-    let concrete_fetch_limit = if args.tag_prefix.is_some()
-        || source_filter.is_active()
-        || scope_filter.is_restrictive()
-    {
-        (limit * 3).min(100)
-    } else {
-        limit
-    };
-    let concrete_kept = storage
-        .concrete_search_filtered(
-            &args.query,
-            concrete_fetch_limit,
-            args.include_types.as_deref(),
-            args.exclude_types.as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
+// When a tag_prefix OR a source filter is requested, fetch a larger
+// pool so the post-filter has enough headroom to still return ~limit
+// results after thinning. Cap at the same upper bound the underlying
+// SQL path uses elsewhere (100).
+let concrete_fetch_limit = if args.tag_prefix.is_some()
+    || source_filter.is_active()
+    || scope_filter.is_restrictive()
+{
+    (limit * 3).min(100)
+} else {
+    limit
+};
+let concrete_kept = storage
+    .concrete_search_filtered(
+        &args.query,
+        concrete_fetch_limit,
+        args.include_types.as_deref(),
+        args.exclude_types.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
 
-    // Apply post-filters before formatting the response. Retrieval
-    // telemetry is recorded later, after the final budget selection.
-    let concrete_verdict = abstention_decision(&concrete_kept, DEFAULT_ABSTAIN_FLOOR);
-    let scoped = filter_results_to_scope(storage, concrete_kept, scope_filter)?;
-    let (mut results, superseded_withheld) =
-        partition_superseded(scoped, valid_at, args.include_superseded.unwrap_or(false));
-    results.sort_by(|a, b| {
-        b.combined_score
-            .partial_cmp(&a.combined_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let filtered_results: Vec<&vestige_core::SearchResult> = results
-        .iter()
-        .filter(|r| match args.tag_prefix.as_deref() {
-            Some(prefix) => tags_match_prefix(&r.node.tags, prefix),
-            None => true,
-        })
-        .filter(|r| node_matches_source(&r.node, source_filter))
-        .filter(|r| valid_at.is_none_or(|at| r.node.is_valid_at(at)))
-        .take(limit as usize)
-        .collect();
+// Apply post-filters before formatting the response. Retrieval
+// telemetry is recorded later, after the final budget selection.
+let concrete_verdict = abstention_decision(&concrete_kept, DEFAULT_ABSTAIN_FLOOR);
+let scoped = filter_results_to_scope(storage, concrete_kept, scope_filter)?;
+let (mut results, superseded_withheld) =
+    partition_superseded(scoped, valid_at, args.include_superseded.unwrap_or(false));
+results.sort_by(|a, b| {
+    b.combined_score
+        .partial_cmp(&a.combined_score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+});
+let filtered_results: Vec<&vestige_core::SearchResult> = results
+    .iter()
+    .filter(|r| match args.tag_prefix.as_deref() {
+        Some(prefix) => tags_match_prefix(&r.node.tags, prefix),
+        None => true,
+    })
+    .filter(|r| node_matches_source(&r.node, source_filter))
+    .filter(|r| valid_at.is_none_or(|at| r.node.is_valid_at(at)))
+    .take(limit as usize)
+    .collect();
 
-    let mut formatted: Vec<Value> = filtered_results
-        .iter()
-        .filter(|r| r.node.retention_strength >= min_retention)
-        .map(|r| format_search_result(r, detail_level))
-        .collect();
-    apply_output_masks(&mut formatted, output_config);
+let mut formatted: Vec<Value> = filtered_results
+    .iter()
+    .filter(|r| r.node.retention_strength >= min_retention)
+    .map(|r| format_search_result(r, detail_level))
+    .collect();
+apply_output_masks(&mut formatted, output_config);
 
-    let mut budget_expandable: Vec<String> = Vec::new();
-    let mut budget_tokens_used: Option<usize> = None;
-    if let Some(budget) = args.token_budget {
-        let budget = budget.clamp(100, 100000) as usize;
-        let budget_chars = budget * 4;
-        let mut used = 0;
-        let mut budgeted = Vec::new();
+let mut budget_expandable: Vec<String> = Vec::new();
+let mut budget_tokens_used: Option<usize> = None;
+if let Some(budget) = args.token_budget {
+    let budget = budget.clamp(100, 100000) as usize;
+    let budget_chars = budget * 4;
+    let mut used = 0;
+    let mut budgeted = Vec::new();
 
-        for result in &formatted {
-            let size = serde_json::to_string(result).unwrap_or_default().len();
-            if used + size > budget_chars {
-                if let Some(id) = result.get("id").and_then(|v| v.as_str()) {
-                    budget_expandable.push(id.to_string());
-                }
-                continue;
+    for result in &formatted {
+        let size = serde_json::to_string(result).unwrap_or_default().len();
+        if used + size > budget_chars {
+            if let Some(id) = result.get("id").and_then(|v| v.as_str()) {
+                budget_expandable.push(id.to_string());
             }
-            used += size;
-            budgeted.push(result.clone());
+            continue;
         }
-
-        budget_tokens_used = Some(used / 4);
-        formatted = budgeted;
+        used += size;
+        budgeted.push(result.clone());
     }
+
+    budget_tokens_used = Some(used / 4);
+    formatted = budgeted;
+}
 
     // Audit only memories that are actually present in the response, not
     // candidates removed by retention or token-budget filtering.
@@ -916,7 +869,7 @@ async fn execute_concrete_lookup(
     );
     record_shown(storage, &response);
     Ok(response)
-}
+    }
 
 pub async fn execute(
     storage: &Arc<Storage>,
@@ -1131,7 +1084,8 @@ pub async fn execute(
     // ranking always dominates, variants only rescue prose-written memories
     // the telegraphic form missed. RRF-style: rank-based, no score-scale
     // mixing across variants.
-    let mut seen_rank: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut seen_rank: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut fused: Vec<vestige_core::SearchResult> = Vec::new();
     for (variant_index, variant) in query_variants.iter().enumerate() {
         let variant_results = storage
@@ -1221,8 +1175,11 @@ pub async fn execute(
     // ====================================================================
     for keyword_priority in &keyword_priority_results {
         // #252: the Stage 0 re-inject path obeys the same gate.
-        let (mut kept_kp, extra_withheld) =
-            partition_superseded(vec![keyword_priority.clone()], valid_at, noncurrent_ok);
+        let (mut kept_kp, extra_withheld) = partition_superseded(
+            vec![keyword_priority.clone()],
+            valid_at,
+            noncurrent_ok,
+        );
         superseded_withheld += extra_withheld;
         let Some(kp) = kept_kp.pop() else { continue };
         // Respect tag_prefix here too — Stage 0 ran without it and can
@@ -1732,13 +1689,14 @@ pub async fn execute(
     // #224 metamemory: judge answerability before answering. A weak match
     // dressed as an answer is worse than an honest abstention with the
     // nearest-known offered for inspection.
-    let abstain_floor = args
-        .abstain_floor
-        .unwrap_or(DEFAULT_ABSTAIN_FLOOR)
-        .clamp(0.0, 1.0);
+    let abstain_floor = args.abstain_floor.unwrap_or(DEFAULT_ABSTAIN_FLOOR).clamp(0.0, 1.0);
     let verdict = abstention_decision(&filtered_results, abstain_floor);
     if verdict.abstain && !formatted.is_empty() {
-        let nearest: Vec<serde_json::Value> = formatted.iter().take(3).cloned().collect();
+        let nearest: Vec<serde_json::Value> = formatted
+            .iter()
+            .take(3)
+            .cloned()
+            .collect();
         let mut envelope = abstain_envelope(&args.query, verdict, abstain_floor, nearest);
         envelope["method"] = serde_json::json!("hybrid+cognitive");
         envelope["detailLevel"] = serde_json::json!(detail_level);
@@ -2287,11 +2245,7 @@ pub(crate) fn split_identifier_tokens(query: &str) -> String {
     let chars: Vec<char> = query.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
         let prev = if i > 0 { Some(chars[i - 1]) } else { None };
-        let next = if i + 1 < chars.len() {
-            Some(chars[i + 1])
-        } else {
-            None
-        };
+        let next = if i + 1 < chars.len() { Some(chars[i + 1]) } else { None };
         let boundary = match (prev, next) {
             (Some(p), Some(n)) => {
                 (c.is_uppercase() && p.is_lowercase())
@@ -2303,10 +2257,7 @@ pub(crate) fn split_identifier_tokens(query: &str) -> String {
         if boundary && c.is_uppercase() {
             out.push(' ');
         }
-        if (c == '_' || c == '-')
-            && prev.is_some_and(|p| p.is_alphanumeric())
-            && next.is_some_and(|n| n.is_alphanumeric())
-        {
+        if (c == '_' || c == '-') && prev.is_some_and(|p| p.is_alphanumeric()) && next.is_some_and(|n| n.is_alphanumeric()) {
             out.push(' ');
         } else {
             out.push(c);
@@ -2376,6 +2327,7 @@ fn gist_of(content: &str) -> String {
         trimmed[..end].trim_end().to_string()
     }
 }
+
 
 fn format_search_result(r: &vestige_core::SearchResult, detail_level: &str) -> Value {
     match detail_level {
@@ -2656,7 +2608,8 @@ pub fn load_config(path: &str) -> Config {
         let anchor = vestige_core::codebase::capture_anchor(
             &node.id,
             repo.path(),
-            &vestige_core::codebase::AnchorDraft::new("src/state.rs").with_symbol("load_config"),
+            &vestige_core::codebase::AnchorDraft::new("src/state.rs")
+                .with_symbol("load_config"),
         );
         assert!(anchor.is_verifiable(), "symbol anchor must capture a hash");
         storage.record_code_anchors(&[anchor]).unwrap();
@@ -2671,8 +2624,7 @@ pub fn load_config(path: &str) -> Config {
         std::fs::write(repo.path().join("src/state.rs"), RECALL_SOURCE).unwrap();
 
         let code_id = remember_anchored_pattern(&storage, &repo).await;
-        let fact_id =
-            ingest_test_content(&storage, "An unrelated plain fact about the world").await;
+        let fact_id = ingest_test_content(&storage, "An unrelated plain fact about the world").await;
 
         let result = execute(
             &storage,
@@ -2686,16 +2638,16 @@ pub fn load_config(path: &str) -> Config {
         .await
         .unwrap();
         let results = result["results"].as_array().unwrap();
-        let ids: Vec<&str> = results.iter().filter_map(|r| r["id"].as_str()).collect();
+        let ids: Vec<&str> = results
+            .iter()
+            .filter_map(|r| r["id"].as_str())
+            .collect();
         assert!(
             ids.contains(&code_id.as_str()),
             "the pattern must surface in plain recall, got: {ids:?}"
         );
 
-        let code_hit = results
-            .iter()
-            .find(|r| r["id"] == code_id.as_str())
-            .unwrap();
+        let code_hit = results.iter().find(|r| r["id"] == code_id.as_str()).unwrap();
         let evidence = &code_hit["codeEvidence"];
         assert_eq!(evidence["anchors"], 1, "response: {code_hit}");
         assert_eq!(evidence["verifiableAnchors"], 1);
@@ -4385,12 +4337,7 @@ mod prospective_resurfacing_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["id"], serde_json::json!(id));
         assert_eq!(items[0]["cueType"], "event");
-        assert!(
-            items[0]["why"]
-                .as_str()
-                .unwrap()
-                .contains("payments migration finished")
-        );
+        assert!(items[0]["why"].as_str().unwrap().contains("payments migration finished"));
 
         // The section is additive: results/total stay the primary payload.
         assert!(response["results"].is_array());

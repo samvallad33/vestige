@@ -15,12 +15,12 @@
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
-use vestige_core::KnowledgeNode;
-use vestige_core::storage::{ConnectionRecord, Storage};
 use vestige_core::storage::{
-    Domain, HealthStatus, MemoryEdge, MemoryRecord, MemoryStoreError, MemoryStoreResult,
-    MemoryStoreSend, ModelSignature, SchedulingState, SearchQuery, StorageError, StoreStats,
+    Domain, HealthStatus, MemoryEdge, MemoryStoreError, MemoryStoreResult, MemoryStoreSend,
+    MemoryRecord, ModelSignature, SchedulingState, SearchQuery, StorageError, StoreStats,
 };
+use vestige_core::storage::{ConnectionRecord, Storage};
+use vestige_core::KnowledgeNode;
 use vestige_mcp::tools::backfill;
 
 type MockResult<T> = std::result::Result<T, StorageError>;
@@ -77,12 +77,7 @@ impl MemoryStoreSend for WallMockStore {
         Ok(self.nodes.lock().unwrap().iter().any(|n| n.id == id))
     }
 
-    fn get_all_nodes_in_scope(
-        &self,
-        _scope: &str,
-        limit: i32,
-        _offset: i32,
-    ) -> MockResult<Vec<KnowledgeNode>> {
+    fn get_all_nodes_in_scope(&self, _scope: &str, limit: i32, _offset: i32) -> MockResult<Vec<KnowledgeNode>> {
         let mut nodes = self.nodes.lock().unwrap().clone();
         // newest first, mirroring the reference backend's ordering contract
         nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -106,10 +101,10 @@ impl MemoryStoreSend for WallMockStore {
     }
 
     fn save_connection(&self, connection: &ConnectionRecord) -> MockResult<()> {
-        self.saved_edges.lock().unwrap().push(format!(
-            "{}->{}",
-            connection.source_id, connection.target_id
-        ));
+        self.saved_edges
+            .lock()
+            .unwrap()
+            .push(format!("{}->{}", connection.source_id, connection.target_id));
         self.connections.lock().unwrap().push(connection.clone());
         Ok(())
     }
@@ -148,10 +143,7 @@ impl MemoryStoreSend for WallMockStore {
     async fn delete(&self, _id: uuid::Uuid) -> MemoryStoreResult<()> {
         Err(unsup("delete"))
     }
-    async fn search_records(
-        &self,
-        _query: &SearchQuery,
-    ) -> MemoryStoreResult<Vec<vestige_core::storage::SearchResult>> {
+    async fn search_records(&self, _query: &SearchQuery) -> MemoryStoreResult<Vec<vestige_core::storage::SearchResult>> {
         Err(unsup("search_records"))
     }
     async fn fts_search(
@@ -289,10 +281,9 @@ async fn backfill_tool_runs_purely_against_the_trait_wall() {
 
     // The wall held: writes landed in the mock, via trait methods only.
     assert!(mock.promoted.lock().unwrap().contains(&"cause".to_string()));
-    assert!(
-        mock.saved_edges
-            .lock()
-            .unwrap()
-            .contains(&"cause->failure".to_string())
-    );
+    assert!(mock
+        .saved_edges
+        .lock()
+        .unwrap()
+        .contains(&"cause->failure".to_string()));
 }

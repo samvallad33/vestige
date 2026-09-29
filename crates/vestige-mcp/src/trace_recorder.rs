@@ -34,7 +34,7 @@ use vestige_core::storage::{
     },
 };
 use vestige_core::{
-    ActorProvenance, BACKFILL_RECEIPT_CLAIM_BOUNDARY, BACKFILL_RECEIPT_SCHEMA_V1,
+    BACKFILL_RECEIPT_CLAIM_BOUNDARY, BACKFILL_RECEIPT_SCHEMA_V1, ActorProvenance,
     BackfillCandidateEvidence, MemoryTraceEvent, REPLAY_SELECTION_BOUNDARY, Receipt,
     ReceiptEvidence, ReplayDecayRisk, RetrievalReplayCapsuleDraft, RetrievalReplayItemDraft,
     Storage, SuppressReason, SuppressedReceiptEntry, WriteSource, private_evidence_digest,
@@ -129,10 +129,7 @@ pub fn read_review_mode(storage: &Arc<Storage>) -> vestige_core::ReviewMode {
         .ok()
         .and_then(|v| v.get("mode").and_then(|m| m.as_str()).map(str::to_owned));
     // Report malformed settings so the operator can repair their opt-in choice.
-    match label
-        .as_deref()
-        .map(vestige_core::ReviewMode::try_from_label)
-    {
+    match label.as_deref().map(vestige_core::ReviewMode::try_from_label) {
         Some(Some(mode)) => mode,
         Some(None) => {
             tracing::warn!(
@@ -613,10 +610,7 @@ fn pr_kind_phrase(kind: vestige_core::MemoryPrKind) -> &'static str {
 
 /// Tools whose output warrants a retrieval receipt.
 fn is_retrieval_tool(tool: &str) -> bool {
-    matches!(
-        tool,
-        "recall" | "deep_reference" | "cross_reference" | "search"
-    )
+    matches!(tool, "recall" | "deep_reference" | "cross_reference" | "search")
 }
 
 /// Process-private key used to prevent replay item digests from becoming a
@@ -2276,8 +2270,7 @@ mod tests {
         let _lock = receipt_signing_env_lock().lock().unwrap();
         let _reset = ReceiptSigningEnvReset::capture();
         let dir = tempfile::tempdir().unwrap();
-        let storage =
-            vestige_core::open_storage(Some(dir.path().join("signed-receipt.db"))).unwrap();
+        let storage = vestige_core::open_storage(Some(dir.path().join("signed-receipt.db"))).unwrap();
         let provisioned = vestige_core::storage::provision_receipt_signing_key_sidecar(
             &dir.path().join("receipt-keys"),
             "test-receipt-key",

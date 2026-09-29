@@ -7,9 +7,9 @@
 //! claimed role never overrides process identity or self-grants authority.
 
 use serde_json::{Value, json};
-use std::sync::Arc;
 use vestige_core::actor::RoleResolution;
 use vestige_core::storage::{ActorMutationOutcome, EndorsementEventRecord, Storage};
+use std::sync::Arc;
 
 /// The `actor` block from a fresh role resolution. Field-for-field identical
 /// to [`actor_block`] and to the persisted receipt's `actor` provenance.

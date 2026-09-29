@@ -19,10 +19,10 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use vestige_core::KnowledgeNode;
 use vestige_core::Storage;
 use vestige_core::advanced::retroactive_backfill::extract_entities;
 use vestige_core::fsrs::retrievability;
+use vestige_core::KnowledgeNode;
 
 /// Retrievability at failure time below this marks the lesson as forgotten.
 /// 0.5 is the midpoint of the FSRS probability-of-recall scale.
@@ -109,9 +109,8 @@ pub fn detect_lesson(
         return None;
     }
     // Anchor-set intersection: >= 1 EXACT anchor (normalized entity string).
-    let node_anchors: HashSet<String> = extract_entities(&node.content, &node.tags)
-        .into_iter()
-        .collect();
+    let node_anchors: HashSet<String> =
+        extract_entities(&node.content, &node.tags).into_iter().collect();
     let mut shared: Vec<String> = failure_anchors
         .intersection(&node_anchors)
         .cloned()
@@ -202,9 +201,8 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "failure memory not found in requested scope".to_string())?;
 
-    let failure_anchors: HashSet<String> = extract_entities(&failure.content, &failure.tags)
-        .into_iter()
-        .collect();
+    let failure_anchors: HashSet<String> =
+        extract_entities(&failure.content, &failure.tags).into_iter().collect();
 
     // Scan the namespace in bounded pages; only records OLDER than the
     // failure can be forgotten lessons for it.
@@ -286,12 +284,7 @@ mod tests {
     /// and the values this tool reads live in the `knowledge_nodes` row. A
     /// second SQLite connection to the same temp file is the same trick the
     /// upgrade dry-run uses for snapshots, in write mode.
-    fn fabricate_fsrs(
-        db: &std::path::Path,
-        id: &str,
-        stability: f64,
-        last_accessed: chrono::DateTime<chrono::Utc>,
-    ) {
+    fn fabricate_fsrs(db: &std::path::Path, id: &str, stability: f64, last_accessed: chrono::DateTime<chrono::Utc>) {
         let conn = rusqlite::Connection::open(db).unwrap();
         let changed = conn
             .execute(
@@ -347,12 +340,7 @@ mod tests {
             .set_created_at(&decayed.id, chrono::Utc::now() - chrono::Duration::days(10))
             .unwrap();
         // stability 0.5d, last touched 60d before the failure lands.
-        fabricate_fsrs(
-            &db,
-            &decayed.id,
-            0.5,
-            chrono::Utc::now() - chrono::Duration::days(60),
-        );
+        fabricate_fsrs(&db, &decayed.id, 0.5, chrono::Utc::now() - chrono::Duration::days(60));
 
         // Fresh, well-reviewed lesson sharing the SAME anchors: must NOT flag.
         let fresh = ingest(
@@ -374,12 +362,7 @@ mod tests {
         storage
             .set_created_at(&noise.id, chrono::Utc::now() - chrono::Duration::days(10))
             .unwrap();
-        fabricate_fsrs(
-            &db,
-            &noise.id,
-            0.5,
-            chrono::Utc::now() - chrono::Duration::days(60),
-        );
+        fabricate_fsrs(&db, &noise.id, 0.5, chrono::Utc::now() - chrono::Duration::days(60));
 
         let failure = ingest(
             &storage,
@@ -401,14 +384,7 @@ mod tests {
         );
 
         // Scope + validation contract mirrors backfill.
-        assert!(
-            execute(
-                &storage,
-                Some(json!({"failure_id": failure.id, "scope": " "}))
-            )
-            .await
-            .is_err()
-        );
+        assert!(execute(&storage, Some(json!({"failure_id": failure.id, "scope": " "}))).await.is_err());
         assert!(
             execute(&storage, Some(json!({}))).await.is_err(),
             "failure_id is required"
@@ -421,12 +397,7 @@ mod tests {
         let (storage, _dir, db) = test_storage();
         let failure = ingest(&storage, "Outage: crash in billing", &["incident"]);
         let later = ingest(&storage, "Fixed the billing crash for good", &["fix"]);
-        fabricate_fsrs(
-            &db,
-            &later.id,
-            0.5,
-            chrono::Utc::now() - chrono::Duration::days(120),
-        );
+        fabricate_fsrs(&db, &later.id, 0.5, chrono::Utc::now() - chrono::Duration::days(120));
         let out = execute(&storage, Some(json!({"failure_id": failure.id})))
             .await
             .unwrap();

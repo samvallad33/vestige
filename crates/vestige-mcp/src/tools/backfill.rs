@@ -149,11 +149,7 @@ fn resolve_version_range(
             "version range {worked}..{broke} is empty — broke_in must come after worked_in"
         ));
     }
-    Ok(Some((
-        worked,
-        broke,
-        git_records::parse_rev_list(&shas.join("\n")),
-    )))
+    Ok(Some((worked, broke, git_records::parse_rev_list(&shas.join("\n")))))
 }
 
 fn git_lines(repo: &str, git_args: &[&str]) -> Option<Vec<String>> {
@@ -213,14 +209,15 @@ fn build_candidates(
                 _ => break,
             }
         }
-        let (origin, current): (&KnowledgeNode, &KnowledgeNode) = if terminal == node.id {
-            (node, node)
-        } else {
-            match all.iter().find(|n| n.id == terminal) {
-                Some(rep) => (node, rep),
-                None => continue, // replacement outside scope: trail ends here
-            }
-        };
+        let (origin, current): (&KnowledgeNode, &KnowledgeNode) =
+            if terminal == node.id {
+                (node, node)
+            } else {
+                match all.iter().find(|n| n.id == terminal) {
+                    Some(rep) => (node, rep),
+                    None => continue, // replacement outside scope: trail ends here
+                }
+            };
         if current.id == failure.id {
             continue;
         }
@@ -574,15 +571,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
     // why-not-X: one line per named suspect
     let why_not = args.why_not.as_deref().map(|t| {
-        explain_why_not(
-            t,
-            &failure,
-            &result,
-            &candidates,
-            &excluded,
-            lookback,
-            &contents,
-        )
+        explain_why_not(t, &failure, &result, &candidates, &excluded, lookback, &contents)
     });
 
     // gap suggestion: name the concrete missing record kind
@@ -896,29 +885,21 @@ mod tests {
         let (failure, failure_created) = failure_event();
         let all = vec![
             node("fail", "crash in events/local.py", &[], 0),
-            node(
-                "new-belief",
-                "events/local.py uses a ring buffer now",
-                &[],
-                -3,
-            ), // post-failure
-            node(
-                "old-fact",
-                "events/local.py writes via LocalFileStore",
-                &[],
-                10,
-            ),
+            node("new-belief", "events/local.py uses a ring buffer now", &[], -3), // post-failure
+            node("old-fact", "events/local.py writes via LocalFileStore", &[], 10),
         ];
         let mut supersession = std::collections::HashMap::new();
         supersession.insert("old-fact".to_string(), "new-belief".to_string());
 
-        let (candidates, excluded, _) =
-            build_candidates(&failure, failure_created, &all, &supersession, None);
+        let (candidates, excluded, _) = build_candidates(
+            &failure,
+            failure_created,
+            &all,
+            &supersession,
+            None,
+        );
         assert!(excluded.is_empty());
-        let cand = candidates
-            .iter()
-            .find(|c| c.id == "new-belief")
-            .expect("trail must reach the replacement");
+        let cand = candidates.iter().find(|c| c.id == "new-belief").expect("trail must reach the replacement");
         assert_eq!(cand.via_supersession_of.as_deref(), Some("old-fact"));
         // dated by the superseded record: 10 days before the failure, not -3
         assert!((cand.age_days_before_failure - 10.0).abs() < 0.01);
@@ -933,18 +914,8 @@ mod tests {
         let bad = "2222222222222222222222222222222222222222";
         let all = vec![
             node("fail", "crash in events/local.py after upgrade", &[], 0),
-            node(
-                "c-good",
-                &commit_record_content(good),
-                &[git_records::COMMIT_TAG],
-                5,
-            ),
-            node(
-                "c-bad",
-                &commit_record_content(bad),
-                &[git_records::COMMIT_TAG],
-                20,
-            ),
+            node("c-good", &commit_record_content(good), &[git_records::COMMIT_TAG], 5),
+            node("c-bad", &commit_record_content(bad), &[git_records::COMMIT_TAG], 20),
         ];
         let range = (
             "1.41.0".to_string(),
@@ -961,13 +932,7 @@ mod tests {
         assert_eq!(commit_records, 2);
         assert!(candidates.iter().any(|c| c.id == "c-good"));
         // commit records carry the change-record flag the scorer bonuses
-        assert!(
-            candidates
-                .iter()
-                .find(|c| c.id == "c-good")
-                .unwrap()
-                .is_change_record
-        );
+        assert!(candidates.iter().find(|c| c.id == "c-good").unwrap().is_change_record);
         assert!(!candidates.iter().any(|c| c.id == "c-bad"));
         assert_eq!(excluded.len(), 1);
         assert_eq!(excluded[0].candidate.id, "c-bad");
@@ -985,11 +950,7 @@ mod tests {
                 .args(args)
                 .output()
                 .unwrap();
-            assert!(
-                out.status.success(),
-                "git {args:?}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         git(&["init", "-q"]);
         git(&["commit", "--allow-empty", "-q", "-m", "one"]);
@@ -1017,11 +978,9 @@ mod tests {
         assert_eq!(ok.1, "v1.42.1");
         assert_eq!(ok.2.len(), 1);
         // auto-detection with no versions in the text degrades silently
-        assert!(
-            resolve_version_range(&repo, None, None, "no versions here")
-                .unwrap()
-                .is_none()
-        );
+        assert!(resolve_version_range(&repo, None, None, "no versions here")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1030,20 +989,18 @@ mod tests {
         let good = "4444444444444444444444444444444444444444";
         let all = vec![
             node("fail", "crash in events/local.py", &[], 0),
-            node(
-                "c1",
-                &commit_record_content(good),
-                &[git_records::COMMIT_TAG],
-                5,
-            ),
+            node("c1", &commit_record_content(good), &[git_records::COMMIT_TAG], 5),
         ];
-        let (candidates, excluded, _) =
-            build_candidates(&failure, failure_created, &all, &Default::default(), None);
+        let (candidates, excluded, _) = build_candidates(
+            &failure,
+            failure_created,
+            &all,
+            &Default::default(),
+            None,
+        );
         let result = RetroactiveBackfill::new().run_trail(&failure, &candidates, &excluded);
-        let contents: std::collections::HashMap<String, String> = all
-            .iter()
-            .map(|n| (n.id.clone(), n.content.clone()))
-            .collect();
+        let contents: std::collections::HashMap<String, String> =
+            all.iter().map(|n| (n.id.clone(), n.content.clone())).collect();
 
         // a range-excluded commit answers from the excluded list, not "not a candidate"
         let excluded_c = vec![ExcludedCandidate {
@@ -1051,13 +1008,7 @@ mod tests {
             reason: "outside version range 1.41.0..1.42.1".into(),
         }];
         let out = explain_why_not(
-            "4444444",
-            &failure,
-            &result,
-            &[],
-            &excluded_c,
-            30,
-            &contents,
+            "4444444", &failure, &result, &[], &excluded_c, 30, &contents,
         );
         assert_eq!(out["verdict"], "rejected");
         assert_eq!(out["detail"], "outside version range 1.41.0..1.42.1");
@@ -1072,47 +1023,46 @@ mod tests {
         let (failure, failure_created) = failure_event();
         let newer = node("later", "touched local.py yesterday", &[], -1);
         let all = vec![node("fail", "crash in events/local.py", &[], 0), newer];
-        let (candidates, _excluded, _) =
-            build_candidates(&failure, failure_created, &all, &Default::default(), None);
+        let (candidates, _excluded, _) = build_candidates(
+            &failure,
+            failure_created,
+            &all,
+            &Default::default(),
+            None,
+        );
         let result = RetroactiveBackfill::new().run_trail(&failure, &candidates, &[]);
-        let contents: std::collections::HashMap<String, String> = all
-            .iter()
-            .map(|n| (n.id.clone(), n.content.clone()))
-            .collect();
+        let contents: std::collections::HashMap<String, String> =
+            all.iter().map(|n| (n.id.clone(), n.content.clone())).collect();
 
         // a rejected record gets its rule
-        let out = explain_why_not("later", &failure, &result, &candidates, &[], 30, &contents);
+        let out = explain_why_not(
+            "later", &failure, &result, &candidates, &[], 30, &contents,
+        );
         assert_eq!(out["verdict"], "rejected");
         assert_eq!(out["detail"], "record is newer than the failure");
         // an unknown id says so
-        let out = explain_why_not("nope", &failure, &result, &candidates, &[], 30, &contents);
+        let out = explain_why_not(
+            "nope", &failure, &result, &candidates, &[], 30, &contents,
+        );
         assert_eq!(out["verdict"], "not a candidate");
         // a commit sha prefix resolves to its record
         let sha = "9999998888777766665555444433332222221111";
         let all2 = vec![
             node("fail", "crash in events/local.py", &[], 0),
-            node(
-                "c1",
-                &commit_record_content(sha),
-                &[git_records::COMMIT_TAG],
-                4,
-            ),
+            node("c1", &commit_record_content(sha), &[git_records::COMMIT_TAG], 4),
         ];
-        let (candidates2, _, _) =
-            build_candidates(&failure, failure_created, &all2, &Default::default(), None);
-        let result2 = RetroactiveBackfill::new().run_trail(&failure, &candidates2, &[]);
-        let contents2: std::collections::HashMap<String, String> = all2
-            .iter()
-            .map(|n| (n.id.clone(), n.content.clone()))
-            .collect();
-        let out = explain_why_not(
-            "9999998",
+        let (candidates2, _, _) = build_candidates(
             &failure,
-            &result2,
-            &candidates2,
-            &[],
-            30,
-            &contents2,
+            failure_created,
+            &all2,
+            &Default::default(),
+            None,
+        );
+        let result2 = RetroactiveBackfill::new().run_trail(&failure, &candidates2, &[]);
+        let contents2: std::collections::HashMap<String, String> =
+            all2.iter().map(|n| (n.id.clone(), n.content.clone())).collect();
+        let out = explain_why_not(
+            "9999998", &failure, &result2, &candidates2, &[], 30, &contents2,
         );
         assert_eq!(out["verdict"], "surfaced", "{out}");
     }

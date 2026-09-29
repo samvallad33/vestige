@@ -1458,10 +1458,7 @@ pub fn load_config(path: &str) -> Config {
         super::code_context::verify_nodes(&storage, repo.path(), std::slice::from_ref(&id))
             .unwrap();
         let anchors = storage.code_anchors_for_node(&id).unwrap();
-        assert_eq!(
-            anchors[0].last_status,
-            Some(vestige_core::codebase::AnchorStatus::Verified)
-        );
+        assert_eq!(anchors[0].last_status, Some(vestige_core::codebase::AnchorStatus::Verified));
         assert!(anchors[0].last_verified_at.is_some());
 
         // The code changes; the next check persists the accusation.
@@ -1472,10 +1469,7 @@ pub fn load_config(path: &str) -> Config {
         super::code_context::verify_nodes(&storage, repo.path(), std::slice::from_ref(&id))
             .unwrap();
         let anchors = storage.code_anchors_for_node(&id).unwrap();
-        assert_eq!(
-            anchors[0].last_status,
-            Some(vestige_core::codebase::AnchorStatus::Drifted)
-        );
+        assert_eq!(anchors[0].last_status, Some(vestige_core::codebase::AnchorStatus::Drifted));
 
         // Reanchor resets the evidence: a fresh capture has not been checked yet.
         execute(

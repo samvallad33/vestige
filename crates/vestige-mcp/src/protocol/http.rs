@@ -252,7 +252,8 @@ fn validate_accept(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)
         // `*/*` accepts anything; `application/*` / `text/*` accept a whole type.
         // Honoring these lets generic HTTP clients (curl's default Accept: */*)
         // reach /mcp instead of getting a hard 406.
-        accepts_json |= mime == "application/json" || mime == "application/*" || mime == "*/*";
+        accepts_json |=
+            mime == "application/json" || mime == "application/*" || mime == "*/*";
         accepts_sse |= mime == "text/event-stream" || mime == "text/*" || mime == "*/*";
     }
 

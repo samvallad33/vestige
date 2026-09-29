@@ -147,9 +147,7 @@ fn validate_args(args: &ReceiptArgs) -> Result<(), String> {
                 return Err("withheld_slots is only valid for action='replay'".into());
             }
             if args.remove_edge.is_some() {
-                return Err(
-                    "remove_edge is only valid for action='replay' on a walk receipt".into(),
-                );
+                return Err("remove_edge is only valid for action='replay' on a walk receipt".into());
             }
             if args.params.is_some() {
                 return Err("params is only valid for action='save_walk'".into());
@@ -174,9 +172,7 @@ fn validate_args(args: &ReceiptArgs) -> Result<(), String> {
                 return Err("receipt_id is not valid for action='save_walk'".into());
             }
             if args.withheld_slots.is_some() || args.remove_edge.is_some() {
-                return Err(
-                    "withheld_slots and remove_edge are not valid for action='save_walk'".into(),
-                );
+                return Err("withheld_slots and remove_edge are not valid for action='save_walk'".into());
             }
             let Some(params) = &args.params else {
                 return Err("save_walk requires a params object".into());
@@ -477,10 +473,11 @@ fn assemble_walk_candidates(
             continue;
         }
         let age = (failure_created - origin.created_at).num_seconds() as f64 / 86_400.0;
-        let mut entities = vestige_core::advanced::retroactive_backfill::extract_entities(
-            &current.content,
-            &current.tags,
-        );
+        let mut entities =
+            vestige_core::advanced::retroactive_backfill::extract_entities(
+                &current.content,
+                &current.tags,
+            );
         if current.id != origin.id {
             for entity in vestige_core::advanced::retroactive_backfill::extract_entities(
                 &origin.content,
@@ -520,9 +517,7 @@ fn assemble_walk_candidates(
 
 /// Deterministic verdict summary: ids and rounded scores only, so two runs on
 /// an unchanged store serialize to identical bytes.
-fn walk_verdict_summary(
-    result: &vestige_core::advanced::retroactive_backfill::BackfillResult,
-) -> Value {
+fn walk_verdict_summary(result: &vestige_core::advanced::retroactive_backfill::BackfillResult) -> Value {
     json!({
         "triggered": result.triggered,
         "failureId": result.failure_id,
@@ -589,10 +584,11 @@ fn execute_walk_replay(
         }
     };
 
-    let mut failure_entities = vestige_core::advanced::retroactive_backfill::extract_entities(
-        &failure_node.content,
-        &failure_node.tags,
-    );
+    let mut failure_entities =
+        vestige_core::advanced::retroactive_backfill::extract_entities(
+            &failure_node.content,
+            &failure_node.tags,
+        );
     // Entity extraction iterates a hash set, so its order varies call to
     // call. Sorting here keeps replay output byte-stable; matching is by
     // membership, never by order.
@@ -628,7 +624,9 @@ fn execute_walk_replay(
     );
 
     // 3. Apply the remove_edge filter for the counterfactual run.
-    let (edge_source, edge_target) = match remove_edge.map(|edge| edge.split_once("->")) {
+    let (edge_source, edge_target) = match remove_edge
+        .map(|edge| edge.split_once("->"))
+    {
         Some(Some((source, target))) => (
             Some(source.trim().to_string()),
             Some(target.trim().to_string()),
@@ -637,8 +635,12 @@ fn execute_walk_replay(
     };
     let filter_matches = |candidate: &BackfillCandidate| -> bool {
         match (&edge_source, &edge_target) {
-            (Some(source), Some(target)) => &candidate.id == source || &candidate.id == target,
-            _ => candidate.id == remove_edge.unwrap_or_default().trim(),
+            (Some(source), Some(target)) => {
+                &candidate.id == source || &candidate.id == target
+            }
+            _ => {
+                candidate.id == remove_edge.unwrap_or_default().trim()
+            }
         }
     };
     let removed_candidate_ids: Vec<String> = candidates
@@ -953,10 +955,7 @@ mod tests {
             .as_array()
             .unwrap()
             .clone();
-        assert_eq!(
-            actions,
-            vec![json!("get"), json!("replay"), json!("save_walk")]
-        );
+        assert_eq!(actions, vec![json!("get"), json!("replay"), json!("save_walk")]);
         assert!(
             schema()["properties"]["withheld_slots"]["description"]
                 .as_str()
@@ -970,11 +969,7 @@ mod tests {
 
     /// Seed the exact three-memory scenario from the backfill tool's live
     /// test: a quiet env-var cause, a semantic distractor, a failure.
-    fn seeded_walk_store() -> (
-        Arc<Storage>,
-        vestige_core::KnowledgeNode,
-        vestige_core::KnowledgeNode,
-    ) {
+    fn seeded_walk_store() -> (Arc<Storage>, vestige_core::KnowledgeNode, vestige_core::KnowledgeNode) {
         let (storage, _dir) = test_storage();
         let cause = storage
             .ingest(vestige_core::IngestInput {
@@ -989,8 +984,9 @@ mod tests {
             .unwrap();
         let distractor = storage
             .ingest(vestige_core::IngestInput {
-                content: "A 500 Internal Server Error happened in the billing service last month"
-                    .to_string(),
+                content:
+                    "A 500 Internal Server Error happened in the billing service last month"
+                        .to_string(),
                 node_type: "event".to_string(),
                 tags: vec!["billing-service".to_string()],
                 ..Default::default()
@@ -1073,9 +1069,7 @@ mod tests {
 
         // Argument policing.
         assert_eq!(
-            execute(&storage, Some(json!({"action": "save_walk"})))
-                .await
-                .unwrap_err(),
+            execute(&storage, Some(json!({"action": "save_walk"}))).await.unwrap_err(),
             "save_walk requires a params object"
         );
         assert_eq!(
@@ -1115,7 +1109,10 @@ mod tests {
         assert_eq!(first["verdict"]["triggered"], true);
         assert_eq!(first["verdict"]["failureId"], json!(failure.id));
         assert!(
-            !first["verdict"]["causeIds"].as_array().unwrap().is_empty(),
+            !first["verdict"]["causeIds"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
             "the seeded failure must surface candidates: {}",
             first["verdict"]["causeIds"]
         );
@@ -1202,10 +1199,7 @@ mod tests {
         assert_eq!(ablated["filter"]["removedCandidateIds"], json!([top]));
         assert_eq!(ablated["verdictDelta"]["filterApplied"], true);
         assert_eq!(ablated["verdictDelta"]["verdictChanged"], true);
-        assert_eq!(
-            ablated["verdictDelta"]["baseline"]["topCauseId"],
-            json!(top)
-        );
+        assert_eq!(ablated["verdictDelta"]["baseline"]["topCauseId"], json!(top));
         assert!(
             !ablated["verdictDelta"]["ablated"]["causeIds"]
                 .as_array()
