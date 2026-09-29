@@ -1,5 +1,10 @@
 //! Fresh install, v3.1.1 auto-upgrade, failed import, SIGKILL, and the
 //! hidden migrate-to-strata fallback.
+//!
+//! `cli_first_launch_upgrades_v3` is the pass criterion for the CLI path.
+//! PR #310 hooks automatic upgrade from `vestige-mcp` `serve()` only; the
+//! `vestige` binary is a separate row and is expected to fail until that
+//! path backups, imports, verifies, and switches.
 
 use std::fs;
 use std::process::{Command, Stdio};
@@ -69,7 +74,7 @@ fn upgrade_v311_auto_upgrade_preserves_memories_fsrs_and_source_sha() {
         &db,
         "SELECT id, content, stability, difficulty, reps, lapses, next_review FROM knowledge_nodes",
     );
-    assert!(rows.len() >= 1, "fixture has no memories");
+    assert!(!rows.is_empty(), "fixture has no memories");
     let mut child = Command::new(product_bin("vestige-mcp"))
         .arg("--data-dir")
         .arg(&src)
@@ -152,6 +157,153 @@ fn upgrade_v311_auto_upgrade_preserves_memories_fsrs_and_source_sha() {
                 panic!("{id} {col}: log {got:?} != sqlite {want:?}");
             }
         }
+    }
+}
+
+/// Pass criterion for the CLI path of first-launch auto-upgrade.
+///
+/// The first process is `vestige`. Nothing starts `vestige-mcp` before it,
+/// and the user does not pass `migrate-to-strata`. The only command is the
+/// read `stats` against a real v3.1.1 store. A green row means that read
+/// triggered backup, import, verify, and a switch onto the Strata log, the
+/// v3 file's sha256 did not change, and memory count plus FSRS review
+/// columns match the source. PR #310 does not hook this binary, so the row
+/// fails on the current branch.
+#[test]
+fn cli_first_launch_upgrades_v3() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("v3");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let db = src.join("vestige.db");
+    let before = sha256_file(&db);
+    let rows = sqlite_text(
+        &db,
+        "SELECT id, content, stability, difficulty, reps, lapses, next_review FROM knowledge_nodes",
+    );
+    assert!(!rows.is_empty(), "fixture has no memories");
+    let home = tempfile::tempdir().unwrap();
+    // First process: the CLI, on a harmless read. No migrate command.
+    let out = run_vestige(
+        &[
+            "--data-dir".into(),
+            src.display().to_string(),
+            "stats".into(),
+        ],
+        home.path(),
+        Duration::from_secs(180),
+    );
+    let after = sha256_file(&db);
+    assert_eq!(
+        before, after,
+        "CLI first-launch upgrade modified the v3 file"
+    );
+    let record = cli_upgrade_record(&src, &out);
+    if v3_refusal(&record) {
+        missing(&format!(
+            "CLI pass criterion failed: `vestige stats` refused a real v3.1.1 store \
+             (schema 38, {} memories) with the v3 refusal. The first process was the \
+             CLI, not vestige-mcp, and the user issued no migrate command. Automatic \
+             upgrade must run on that read: backup the sqlite family, import, verify, \
+             and switch to Strata, leaving the v3 sha256 unchanged. PR #310 hooks this \
+             only from vestige-mcp serve(). Output: {}",
+            rows.len(),
+            record.chars().take(900).collect::<String>()
+        ));
+    }
+    let backups = v3_backup_files(&src);
+    let backup_matches = backups.iter().any(|path| sha256_file(path) == before);
+    if backups.is_empty() || !backup_matches {
+        missing(&format!(
+            "CLI pass criterion failed: `vestige stats` did not leave a byte-identical \
+             v3 backup (`*.v3-backup-*` matching the source sha256) before switching. \
+             Found {backups:?}. Output: {}",
+            record.chars().take(700).collect::<String>()
+        ));
+    }
+    let Some(log_dir) = installed_strata_log(&src) else {
+        missing(&format!(
+            "CLI pass criterion failed: `vestige stats` did not switch the data dir onto \
+             a Strata log at log/. Staging left in place is not a switch. Output: {}",
+            record.chars().take(700).collect::<String>()
+        ));
+    };
+    let lowered = record.to_lowercase();
+    if !lowered.contains("import")
+        || !lowered.contains("verif")
+        || lowered.contains("verify failed")
+    {
+        missing(&format!(
+            "CLI pass criterion failed: `vestige stats` did not record an import and a \
+             passing verify (upgrade.log or the process output). Output: {}",
+            record.chars().take(700).collect::<String>()
+        ));
+    }
+    let dump = run_driver(&["dump-migration", log_dir.to_str().unwrap()]);
+    if dump.get("ok") != Some(&serde_json::Value::Bool(true)) {
+        missing(&format!(
+            "CLI pass criterion failed: switched log does not reopen after verify: {dump}"
+        ));
+    }
+    let nodes = dump["nodes"].as_array().cloned().unwrap_or_default();
+    if nodes.len() != rows.len() {
+        missing(&format!(
+            "CLI pass criterion failed: import has {} memories, the v3 store has {}",
+            nodes.len(),
+            rows.len()
+        ));
+    }
+    assert_fsrs_review_columns(&nodes, &rows);
+    if out.status != Some(0) {
+        missing(&format!(
+            "CLI pass criterion failed: upgrade artifacts are present but `vestige stats` \
+             exited {:?} instead of reading the switched Strata store. Output: {}",
+            out.status,
+            record.chars().take(700).collect::<String>()
+        ));
+    }
+}
+
+/// Mirror of [`cli_first_launch_upgrades_v3`]. A corrupted v3.1.1 store run
+/// through the same CLI read must leave the v3 file byte-identical and exit
+/// with a message that names the v3.1.1 release. The v3 refusal is not that
+/// message. This is still the CLI path, not `vestige-mcp` `serve()`.
+#[test]
+fn cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("v3");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let db = src.join("vestige.db");
+    let len = file_len(&db);
+    let file = fs::OpenOptions::new().write(true).open(&db).unwrap();
+    file.set_len(4096).unwrap();
+    let before = sha256_file(&db);
+    let home = tempfile::tempdir().unwrap();
+    let out = run_vestige(
+        &[
+            "--data-dir".into(),
+            src.display().to_string(),
+            "stats".into(),
+        ],
+        home.path(),
+        Duration::from_secs(180),
+    );
+    let after = sha256_file(&db);
+    assert_eq!(
+        before, after,
+        "corrupt CLI upgrade modified the v3 file (len was {len})"
+    );
+    let record = cli_upgrade_record(&src, &out);
+    if out.status == Some(0) {
+        panic!("corrupt v3 store through `vestige stats` exited 0: {record}");
+    }
+    if v3_refusal(&record) || !record.contains("v3.1.1") {
+        missing(&format!(
+            "CLI pass criterion (failure mirror) failed: a corrupted v3 store run through \
+             `vestige stats` must exit non-zero with a message naming v3.1.1 and must leave \
+             the v3 file byte-identical. The v3 refusal is not that message. PR #310 emits \
+             the v3.1.1 failure only from vestige-mcp serve(). Output: {}",
+            record.chars().take(900).collect::<String>()
+        ));
     }
 }
 
@@ -642,4 +794,71 @@ fn node_count_if_log(dir: &std::path::Path) -> usize {
     }
     let dump = run_driver(&["dump-migration", dir.to_str().unwrap()]);
     dump["nodes"].as_array().map(|a| a.len()).unwrap_or(0)
+}
+
+fn v3_refusal(blob: &str) -> bool {
+    blob.contains("cannot be opened by 4.0")
+}
+
+fn cli_upgrade_record(data_dir: &std::path::Path, out: &CmdOut) -> String {
+    let log = fs::read_to_string(data_dir.join("upgrade.log")).unwrap_or_default();
+    format!("{}{}{log}", out.stdout, out.stderr)
+}
+
+fn v3_backup_files(data_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Ok(rd) = fs::read_dir(data_dir) else {
+        return out;
+    };
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.contains(".v3-backup-") && !name.ends_with(".partial") {
+            out.push(entry.path());
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The log the upgrade switches into place. A leftover staging directory is
+/// not a switch.
+fn installed_strata_log(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let log = data_dir.join("log");
+    if seg_files(&log).is_empty() {
+        None
+    } else {
+        Some(log)
+    }
+}
+
+fn assert_fsrs_review_columns(nodes: &[Value], rows: &[Vec<String>]) {
+    for row in rows {
+        let id = &row[0];
+        let node = nodes
+            .iter()
+            .find(|n| n["legacy_id"].as_str() == Some(id.as_str()))
+            .unwrap_or_else(|| panic!("CLI upgrade dropped memory {id}"));
+        let legacy = &node["legacy"];
+        for (offset, col) in ["stability", "difficulty", "reps", "lapses", "next_review"]
+            .into_iter()
+            .enumerate()
+        {
+            let key = format!("knowledge_nodes.{col}");
+            let got = legacy[&key].as_str().unwrap_or("");
+            if got.is_empty() {
+                missing(&format!(
+                    "CLI pass criterion failed: FSRS review column {col} was dropped on {id}. \
+                     legacy={legacy}"
+                ));
+            }
+            let want = &row[offset + 2];
+            if col == "stability" || col == "difficulty" {
+                let g: f64 = got.parse().unwrap_or(f64::NAN);
+                let w: f64 = want.parse().unwrap_or(f64::NAN);
+                assert!((g - w).abs() < 1e-9, "{id} {col}: {got} != {want}");
+            } else if got != want {
+                panic!("{id} {col}: log {got:?} != sqlite {want:?}");
+            }
+        }
+    }
 }
