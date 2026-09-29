@@ -54,14 +54,7 @@ fn seed() -> [u8; 32] {
     [7u8; 32]
 }
 
-/// Is the v3 guard ARMED in this test build? The dev-dependency may enable
-/// the v3-engine harness (guard disarmed); cfg cannot see dev-dep feature
-/// unification, so probe at runtime: a FRESH path must be refused-creation
-/// when armed... actually a fresh path CREATES when the engine is available;
-/// the armed signal is a fresh-path creation SUCCEEDING while an existing
-/// sqlite file refuses. Probe: create on a fresh path; the guard does not
-/// block fresh creation in any build, so instead probe an EXISTING magic
-/// file: Err(V3StoreNeedsMigration) = armed; Err(other)/Ok = disarmed.
+/// `true` when opening an existing SQLite file returns `V3StoreNeedsMigration`.
 fn guard_armed() -> bool {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("probe.db");
@@ -87,15 +80,12 @@ fn pin_receipt_key(parent: &Path) {
 
 /// Spec: `v3_open_refuses_and_leaves_file_byte_identical` — BLAKE3, mtime
 /// and mode unchanged; the error is `V3StoreNeedsMigration`.
-/// (Requires the guard ARMED: skipped when this test build carries the
-/// v3-engine harness feature via the dev-dependency, which legitimately
-/// disables the guard for the engine's own round trips.)
 #[test]
 fn v3_open_refuses_and_leaves_file_byte_identical() {
-    if !guard_armed() {
-        println!("guard disarmed (v3-engine harness build); skipping");
-        return;
-    }
+    assert!(
+        guard_armed(),
+        "the v3 guard must be armed in this test build"
+    );
     let (_dir, db) = copy_fixture("refusal");
     let before = fingerprint(&db);
 
@@ -125,13 +115,12 @@ fn v3_open_refuses_and_leaves_file_byte_identical() {
 
 /// Spec: `v3_open_refuses_any_sqlite_file_even_v40` — any SQLite magic is
 /// refused, whatever the schema version, since 4.0 writes no SQLite.
-/// (Guard-armed builds only; see the sibling test's note.)
 #[test]
 fn v3_open_refuses_any_sqlite_file_even_v40() {
-    if !guard_armed() {
-        println!("guard disarmed (v3-engine harness build); skipping");
-        return;
-    }
+    assert!(
+        guard_armed(),
+        "the v3 guard must be armed in this test build"
+    );
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("v40.sqlite");
     {

@@ -1,21 +1,24 @@
-//! End-to-end migration tests: real vestige-core SQLite store -> portable
-//! export -> STRATA log -> reopen and assert.
-//!
-//! Fixture strategy: build a small store through the PUBLIC storage API
-//! (ingest + save_connection), plant `fsrs_cards` rows with direct SQL (the
-//! public API does not create review history), export, then migrate via both
-//! supported source paths and assert against the reopened log.
+//! End-to-end migration tests. The SQLite path uses the committed schema-38
+//! fixture (vestige-core's migration SQL). The portable-archive path is a
+//! hand-built JSON archive, because this crate must not open SQLite
+//! read-write — that would disarm the v3 guard.
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use strata_kernel::event::ReviewEvent;
 use strata_kernel::fsrs::{CardPhase, ALGO_V1};
 use strata_kernel::kernel::Kernel;
-use vestige_core::{ConnectionRecord, IngestInput, SqliteMemoryStore};
+use vestige_core::storage::{PortableTable, PortableValue};
+use vestige_core::PortableArchive;
 
 use strata_migrate::records::EdgeRecord;
 use strata_migrate::{migrate, read_snapshot};
+
+const N0: &str = "11111111-1111-4111-8111-111111111111";
+const N1: &str = "22222222-2222-4222-8222-222222222222";
+const N2: &str = "33333333-3333-4333-8333-333333333333";
 
 fn causal_reaches(edges: &[EdgeRecord], start: u64, target: u64) -> bool {
     let mut seen = std::collections::HashSet::new();
@@ -33,77 +36,114 @@ fn causal_reaches(edges: &[EdgeRecord], start: u64, target: u64) -> bool {
     seen.contains(&target)
 }
 
-/// Build a small populated store at `db`, optionally exporting its portable
-/// archive to `archive_out` while the (single, legitimate) read-write
-/// handle is open — a built store carries the SQLite magic, so 4.0 refuses
-/// any later read-write open by design. Returns the ingested node ids.
-fn build_store(db: &std::path::Path, archive_out: Option<&std::path::Path>) -> Vec<String> {
-    let storage = SqliteMemoryStore::new(Some(db.to_path_buf())).expect("open store");
+fn text(value: &str) -> PortableValue {
+    PortableValue::Text(value.to_string())
+}
 
-    let inputs = [
-        IngestInput {
-            content: "Rust borsh encodes enums as u8 ordinals".to_string(),
-            node_type: "fact".to_string(),
-            tags: vec!["rust".to_string(), "wire".to_string()],
-            ..Default::default()
-        },
-        IngestInput {
-            content: "STRATA seals signed segment trailers".to_string(),
-            node_type: "fact".to_string(),
-            tags: vec!["strata".to_string()],
-            ..Default::default()
-        },
-        IngestInput {
-            content: "Run the migration once, then write new memories to STRATA".to_string(),
-            node_type: "procedure".to_string(),
-            tags: vec![],
-            ..Default::default()
-        },
-    ];
-    let mut ids = Vec::new();
-    for input in inputs {
-        let node = storage.ingest(input).expect("ingest");
-        ids.push(node.id.clone());
+fn table(name: &str, columns: &[&str], rows: Vec<Vec<PortableValue>>) -> PortableTable {
+    PortableTable {
+        name: name.to_string(),
+        columns: columns.iter().map(|c| (*c).to_string()).collect(),
+        rows,
     }
+}
 
-    let now = Utc::now();
-    storage
-        .save_connection(&ConnectionRecord {
-            source_id: ids[0].clone(),
-            target_id: ids[1].clone(),
-            strength: 0.75,
-            link_type: "semantic".to_string(),
-            created_at: now,
-            last_activated: now,
-            activation_count: 3,
-        })
-        .expect("save connection");
-
-    // Plant FSRS review history while the store handle is open: a separate
-    // raw connection commits the rows, and the export below must see them.
-    // (The public API does not create review history.)
-    {
-        let conn = rusqlite::Connection::open(db).expect("open raw sqlite");
-        for (memory_id, reps, lapses) in [(&ids[0], 4i64, 1i64), (&ids[1], 2, 0)] {
-            conn.execute(
-                "INSERT OR REPLACE INTO fsrs_cards (
-                     memory_id, difficulty, stability, state, reps, lapses,
-                     last_review, due_date, elapsed_days, scheduled_days
-                 ) VALUES (?1, 5.0, 3.2, 'review', ?2, ?3, ?4, ?4, 1, 1)",
-                rusqlite::params![memory_id, reps, lapses, now.to_rfc3339(),],
-            )
-            .expect("plant fsrs_cards");
-        }
+fn sample_archive() -> PortableArchive {
+    PortableArchive {
+        archive_format: "vestige.portable.v1".to_string(),
+        vestige_version: "test".to_string(),
+        schema_version: 38,
+        exported_at: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+        mode: "exact".to_string(),
+        tables: vec![
+            table(
+                "knowledge_nodes",
+                &[
+                    "id",
+                    "content",
+                    "node_type",
+                    "tags",
+                    "created_at",
+                    "updated_at",
+                    "last_accessed",
+                ],
+                vec![
+                    vec![
+                        text(N0),
+                        text("Rust borsh encodes enums as u8 ordinals"),
+                        text("fact"),
+                        text(r#"["rust","wire"]"#),
+                        text("2026-01-15T10:00:00+00:00"),
+                        text("2026-02-20T11:30:00+00:00"),
+                        text("2026-03-01T09:15:00+00:00"),
+                    ],
+                    vec![
+                        text(N1),
+                        text("STRATA seals signed segment trailers"),
+                        text("fact"),
+                        text(r#"["strata"]"#),
+                        text("2026-01-15T10:00:00+00:00"),
+                        text("2026-02-20T11:30:00+00:00"),
+                        text("2026-03-01T09:15:00+00:00"),
+                    ],
+                    vec![
+                        text(N2),
+                        text("Run the migration once, then write new memories to STRATA"),
+                        text("procedure"),
+                        text("[]"),
+                        text("2026-01-15T10:00:00+00:00"),
+                        text("2026-02-20T11:30:00+00:00"),
+                        text("2026-03-01T09:15:00+00:00"),
+                    ],
+                ],
+            ),
+            table(
+                "memory_connections",
+                &[
+                    "source_id",
+                    "target_id",
+                    "strength",
+                    "link_type",
+                    "created_at",
+                    "last_activated",
+                    "activation_count",
+                ],
+                vec![vec![
+                    text(N0),
+                    text(N1),
+                    PortableValue::Real(0.75),
+                    text("semantic"),
+                    text("2026-01-16T08:00:00+00:00"),
+                    text("2026-03-02T08:00:00+00:00"),
+                    PortableValue::Integer(3),
+                ]],
+            ),
+            table(
+                "fsrs_cards",
+                &["memory_id", "reps", "lapses"],
+                vec![
+                    vec![
+                        text(N0),
+                        PortableValue::Integer(4),
+                        PortableValue::Integer(1),
+                    ],
+                    vec![
+                        text(N1),
+                        PortableValue::Integer(2),
+                        PortableValue::Integer(0),
+                    ],
+                ],
+            ),
+        ],
     }
+}
 
-    if let Some(archive_path) = archive_out {
-        storage
-            .export_portable_archive_to_path(archive_path)
-            .expect("export archive");
-    }
-    drop(storage);
+fn write_archive(path: &Path, archive: &PortableArchive) {
+    std::fs::write(path, serde_json::to_vec(archive).expect("archive json")).expect("write");
+}
 
-    ids
+fn schema38_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v3.1.1-sample.sqlite")
 }
 
 /// Tables the migration emits as frames (mirror of the crate's EMITTED_TABLES).
@@ -156,12 +196,10 @@ fn expected_skipped(db: &std::path::Path) -> Vec<String> {
 #[test]
 fn path_a_archive_end_to_end() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let db = tmp.path().join("vestige.db");
     let archive_path = tmp.path().join("portable.json");
-    let ids = build_store(&db, Some(&archive_path));
-    let archive: vestige_core::PortableArchive =
-        serde_json::from_slice(&std::fs::read(&archive_path).expect("read archive"))
-            .expect("decode archive");
+    let archive = sample_archive();
+    write_archive(&archive_path, &archive);
+    let ids = [N0.to_string(), N1.to_string(), N2.to_string()];
 
     let strata_dir = tmp.path().join("strata");
     let report = migrate(&archive_path, &strata_dir).expect("migrate");
@@ -285,22 +323,22 @@ fn path_a_archive_end_to_end() {
 fn path_b_direct_sqlite_matches_path_a() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let db = tmp.path().join("vestige.db");
-    build_store(&db, None);
+    std::fs::copy(schema38_fixture(), &db).expect("copy schema 38 fixture");
 
     let strata_dir = tmp.path().join("strata");
     let report = migrate(&db, &strata_dir).expect("migrate direct sqlite");
 
-    assert_eq!(report.nodes, 3);
-    assert_eq!(report.edges, 0);
-    assert_eq!(report.fsrs_events, 6);
+    assert_eq!(report.nodes, 4);
+    assert_eq!(report.edges, 2);
+    assert_eq!(report.fsrs_events, 5);
     assert!(report.verify_passed);
 
     let opened = strata_migrate::open_migrated(&strata_dir).expect("reopen");
     let log = &opened.log;
     let snapshot = read_snapshot(&log).expect("snapshot");
-    assert_eq!(snapshot.nodes.len(), 3);
+    assert_eq!(snapshot.nodes.len(), 4);
     assert_eq!(snapshot.legacy_links.len(), 1);
-    assert!(snapshot.edges.is_empty());
+    assert_eq!(snapshot.edges.len(), 2);
 
     // Direct-SQLite path: skipped_tables is sqlite_master-driven (audit 17/18).
     let expected = expected_skipped(&db);
@@ -336,24 +374,26 @@ fn path_b_direct_sqlite_matches_path_a() {
 #[test]
 fn directory_source_resolves_vestige_db() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    build_store(&tmp.path().join("vestige.db"), None);
+    std::fs::copy(schema38_fixture(), tmp.path().join("vestige.db")).expect("copy");
 
     let report = migrate(tmp.path(), &tmp.path().join("strata")).expect("migrate dir");
-    assert_eq!(report.nodes, 3);
+    assert_eq!(report.nodes, 4);
     assert!(report.verify_passed);
 }
 
 #[test]
 fn empty_store_migrates_to_verifying_log() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let db = tmp.path().join("vestige.db");
     let archive_path = tmp.path().join("empty.json");
-    {
-        let storage = SqliteMemoryStore::new(Some(db)).expect("open");
-        storage
-            .export_portable_archive_to_path(&archive_path)
-            .expect("export");
-    }
+    let archive = PortableArchive {
+        archive_format: "vestige.portable.v1".to_string(),
+        vestige_version: "test".to_string(),
+        schema_version: 38,
+        exported_at: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+        mode: "exact".to_string(),
+        tables: Vec::new(),
+    };
+    write_archive(&archive_path, &archive);
 
     let report = migrate(&archive_path, &tmp.path().join("strata")).expect("migrate empty");
     assert_eq!(report.nodes, 0);
@@ -372,10 +412,7 @@ fn empty_store_migrates_to_verifying_log() {
 fn partial_destination_rolls_back_and_a_completed_one_is_refused() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let archive_path = tmp.path().join("portable.json");
-    {
-        let db = tmp.path().join("vestige.db");
-        build_store(&db, Some(&archive_path));
-    }
+    write_archive(&archive_path, &sample_archive());
 
     let strata_dir = tmp.path().join("strata");
     std::fs::create_dir_all(&strata_dir).expect("dest");
