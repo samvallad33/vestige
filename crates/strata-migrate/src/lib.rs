@@ -132,6 +132,9 @@ pub struct MigrateOptions {
     /// the rename. Only the process holding the staging lock runs it. An
     /// error deletes staging and leaves the destination untouched.
     pub before_publish: Option<BeforePublish>,
+    /// Leave the finished log in the staging directory. The caller holds the
+    /// upgrade lock and does the rename. Default publishes from here.
+    pub defer_publish: bool,
 }
 
 impl std::fmt::Debug for MigrateOptions {
@@ -148,6 +151,7 @@ impl std::fmt::Debug for MigrateOptions {
                 "before_publish",
                 &self.before_publish.as_ref().map(|_| "Some"),
             )
+            .field("defer_publish", &self.defer_publish)
             .finish()
     }
 }
@@ -286,6 +290,7 @@ pub fn migrate_with_options(
             None,
             options.before_import,
             options.before_publish,
+            options.defer_publish,
         );
     }
 
@@ -312,6 +317,7 @@ pub fn migrate_with_options(
         Some(files),
         options.before_import,
         options.before_publish,
+        options.defer_publish,
     )
 }
 
@@ -416,6 +422,7 @@ fn stage_import(
     files: Option<source::SourceFiles>,
     mut before_import: Option<BeforePublish>,
     mut before_publish: Option<BeforePublish>,
+    defer_publish: bool,
 ) -> Result<MigrationReport, MigrationError> {
     let staging = staging_path(dest);
     if let Some(parent) = staging.parent() {
@@ -452,6 +459,7 @@ fn stage_import(
                     files,
                     before_import.take(),
                     before_publish.take(),
+                    defer_publish,
                 );
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -474,6 +482,7 @@ fn import_holding_lock(
     files: Option<source::SourceFiles>,
     before_import: Option<BeforePublish>,
     before_publish: Option<BeforePublish>,
+    defer_publish: bool,
 ) -> Result<MigrationReport, MigrationError> {
     if let Some(hook) = before_import {
         if let Err(detail) = hook(staging) {
@@ -545,6 +554,12 @@ fn import_holding_lock(
                 MigrationError::Strata(detail),
             ));
         }
+    }
+    if defer_publish {
+        // The caller renames. Dropping this fd releases the staging flock;
+        // the directory stays until that rename. A dead caller is reclaimed.
+        drop(lock);
+        return Ok(report);
     }
     if let Err(err) = publish(staging, dest) {
         return Err(discard_staging(lock, staging, err));

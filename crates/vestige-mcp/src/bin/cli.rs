@@ -716,6 +716,11 @@ fn release_asset_for(os: &str, arch: &str) -> anyhow::Result<ReleaseAsset> {
             archive_ext: "tar.gz",
             binary_suffix: "",
         }),
+        ("linux", "aarch64") => Ok(ReleaseAsset {
+            target: "aarch64-unknown-linux-gnu",
+            archive_ext: "tar.gz",
+            binary_suffix: "",
+        }),
         ("windows", "x86_64") => Ok(ReleaseAsset {
             target: "x86_64-pc-windows-msvc",
             archive_ext: "zip",
@@ -1627,7 +1632,7 @@ fn run_update(
     )?;
     verify_release_checksum(&archive_path, &checksum_path)?;
 
-    let binaries = ["vestige", "vestige-mcp", "vestige-restore"];
+    let binaries = ["vestige", "vestige-mcp", "vestige-restore", "vestige-upgrade"];
     let mut expected_members = binaries
         .iter()
         .map(|binary| format!("{}{}", binary, asset.binary_suffix))
@@ -4339,6 +4344,10 @@ mod tests {
         let linux = release_asset_for("linux", "x86_64").unwrap();
         assert_eq!(linux.target, "x86_64-unknown-linux-gnu");
         assert_eq!(linux.archive_ext, "tar.gz");
+
+        let linux_arm = release_asset_for("linux", "aarch64").unwrap();
+        assert_eq!(linux_arm.target, "aarch64-unknown-linux-gnu");
+        assert_eq!(linux_arm.archive_ext, "tar.gz");
 
         let windows = release_asset_for("windows", "x86_64").unwrap();
         assert_eq!(windows.target, "x86_64-pc-windows-msvc");

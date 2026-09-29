@@ -1,16 +1,14 @@
 //! First-launch v3 → strata upgrade, owned by the `vestige-upgrade` binary.
 //!
-//! The v3 file is only ever read. The import itself is
-//! `strata_migrate::migrate_with_options` into `log/`: that function stages
-//! the log, holds `File::try_lock` until the receipt is sealed, verifies,
-//! and renames. A dead owner's staging directory is wiped there. This module
-//! decides that a v3 file needs that import, copies the sqlite family, runs
-//! the receipt cross-check, and records progress on stderr.
+//! The v3 file is only ever read. This process holds `upgrade.lock` across
+//! the import and renames `log.strata-staging` onto `log/`. The kernel drops
+//! that lock on SIGKILL. A rerun reclaims an unpublished staging directory
+//! and leaves an already-renamed log in place. The v3 file is never written.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use strata_migrate::MigrateOptions;
 
@@ -24,6 +22,12 @@ pub const LOG_DIR_NAME: &str = "log";
 pub const UPGRADE_LOG_NAME: &str = "upgrade.log";
 /// Last v3 release operators can keep running when 4.0 cannot upgrade.
 pub const V311_RELEASE: &str = "https://github.com/samvallad33/vestige/releases/tag/v3.1.1";
+/// Exclusive lock in the data directory, outside `log/`, held across the
+/// staging rename. Not inside the log, so a reader does not treat it as a segment.
+const UPGRADE_LOCK_NAME: &str = "upgrade.lock";
+/// How long the after-rename kill window stays open. The test SIGKILLs
+/// this process while the lock is still held and `log/` is already published.
+const AFTER_RENAME_WINDOW: Duration = Duration::from_secs(60);
 
 /// Backup plus staging log, relative to the sqlite family size.
 const SPACE_FACTOR: u64 = 3;
@@ -95,6 +99,14 @@ pub fn upgrade_with(
         return Ok(UpgradeStatus::NoV3);
     };
 
+    // Held until the rename below finishes. SIGKILL drops it; the next
+    // process takes it and either reclaims staging or sees the published log.
+    let upgrade_lock = hold_upgrade_lock(&data_dir)
+        .map_err(|err| fail(&log_path, format!("upgrade lock failed: {err}")))?;
+    if let Some(status) = installed_log(&log_dir, &log_path) {
+        return Ok(status);
+    }
+
     note(
         &log_path,
         &format!(
@@ -151,6 +163,7 @@ pub fn upgrade_with(
                     Err(err) => Err(format!("strata-verify failed: {err}")),
                 }
             })),
+            defer_publish: true,
             ..MigrateOptions::default()
         },
     ) {
@@ -163,6 +176,21 @@ pub fn upgrade_with(
             "import failed: strata-migrate replay verification failed",
         ));
     }
+    if !report.idempotent_reuse {
+        let staging = staging_directory(&data_dir);
+        if !staging.is_dir() {
+            return Err(fail(
+                &log_path,
+                "import failed: staging directory missing before rename",
+            ));
+        }
+        publish_staged(&staging, &log_dir)
+            .map_err(|err| fail(&log_path, format!("import failed: {err}")))?;
+    }
+    if std::env::var_os("VESTIGE_UPGRADE_SIGKILL_AFTER_RENAME").is_some() {
+        std::thread::sleep(AFTER_RENAME_WINDOW);
+    }
+    drop(upgrade_lock);
 
     note(
         &log_path,
@@ -204,14 +232,51 @@ struct Detected {
     schema_version: u32,
 }
 
+/// Exclusive flock on `<data-dir>/upgrade.lock`. Blocks until the holder exits,
+/// including a holder that died by SIGKILL (the kernel releases the lock).
+fn hold_upgrade_lock(data_dir: &Path) -> io::Result<File> {
+    let path = data_dir.join(UPGRADE_LOCK_NAME);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)?;
+    file.lock()?;
+    Ok(file)
+}
+
+/// Publish `log.strata-staging` as `log/`. Same-directory rename is atomic.
+/// Called while [`hold_upgrade_lock`] is still held.
+fn publish_staged(staging: &Path, dest: &Path) -> io::Result<()> {
+    if dest.exists() {
+        for entry in fs::read_dir(dest)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') {
+                fs::rename(entry.path(), staging.join(&name))?;
+            }
+        }
+        fs::remove_dir_all(dest)?;
+    }
+    fs::rename(staging, dest)?;
+    let _ = fs::remove_file(dest.join(".upgrade.lock"));
+    Ok(())
+}
+
 /// SQLite magic plus the `schema_version` table, read through an immutable URI.
-/// A missing file or a non-SQLite header is `Ok(None)`.
+/// A missing file is `Ok(None)`. A file that exists but cannot be read, or is
+/// not SQLite, is an error: the parent already decided it was a v3 candidate.
 fn sqlite_header(path: &Path) -> Result<Option<Detected>, String> {
     const MAGIC: &[u8; 16] = b"SQLite format 3\0";
     let mut header = [0u8; 16];
     let mut file = match File::open(path) {
         Ok(file) => file,
-        Err(_) => return Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) if path_is_file(path) => {
+            return Err(format!("vestige.db exists but cannot be read: {err}"));
+        }
+        Err(err) => return Err(err.to_string()),
     };
     let mut filled = 0usize;
     while filled < header.len() {
@@ -223,7 +288,7 @@ fn sqlite_header(path: &Path) -> Result<Option<Detected>, String> {
         }
     }
     if filled < MAGIC.len() || &header != MAGIC {
-        return Ok(None);
+        return Err("vestige.db exists but is not a v3 SQLite store".into());
     }
     let schema_version = schema_version_readonly(path).unwrap_or(0);
     Ok(Some(Detected {
@@ -242,6 +307,10 @@ fn schema_version_readonly(path: &Path) -> Option<u32> {
         row.get(0)
     })
     .ok()
+}
+
+fn path_is_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_file())
 }
 
 fn uri_encode_path(path: &Path) -> String {

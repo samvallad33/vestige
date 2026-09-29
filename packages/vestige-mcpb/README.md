@@ -32,7 +32,10 @@ vestige-mcpb/
 ├── manifest.json        # Bundle metadata
 ├── server/              # Platform binaries (downloaded)
 │   ├── vestige-mcp-darwin-arm64
+│   ├── vestige-upgrade-darwin-arm64
 │   ├── vestige-mcp-linux-x64
-│   └── vestige-mcp-win32-x64.exe
+│   ├── vestige-upgrade-linux-x64
+│   ├── vestige-mcp-win32-x64.exe
+│   └── vestige-upgrade-win32-x64.exe
 └── vestige-3.1.1.mcpb  # Final bundle (generated)
 ```

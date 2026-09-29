@@ -497,9 +497,8 @@ async fn serve() {
         },
     };
 
-    // A v3 file is detected from its header. The import runs in
-    // `vestige-upgrade` (next to this binary, then PATH). This process
-    // does not open the database.
+    // A v3 file is detected by existence (`metadata`), never by opening it.
+    // The import runs in `vestige-upgrade` (next to this binary, then PATH).
     let _ = vestige_mcp::upgrade_launch::ensure_upgraded_or_exit(&db_path);
 
     // Two servers must not open the same log. `File::lock` dies with this

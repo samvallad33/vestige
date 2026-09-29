@@ -77,7 +77,8 @@ validate_tar "$ARCHIVE" vestige-mcp vestige vestige-restore vestige-upgrade
 tar -xzf "$ARCHIVE" -C server
 mv server/vestige-mcp server/vestige-mcp-darwin-arm64
 mv server/vestige server/vestige-darwin-arm64
-rm -f server/vestige-restore server/vestige-upgrade
+mv server/vestige-upgrade server/vestige-upgrade-darwin-arm64
+rm -f server/vestige-restore
 
 # Download Linux x64
 echo "Downloading Linux x64 binary..."
@@ -86,7 +87,8 @@ validate_tar "$ARCHIVE" vestige-mcp vestige vestige-restore vestige-upgrade
 tar -xzf "$ARCHIVE" -C server
 mv server/vestige-mcp server/vestige-mcp-linux-x64
 mv server/vestige server/vestige-linux-x64
-rm -f server/vestige-restore server/vestige-upgrade
+mv server/vestige-upgrade server/vestige-upgrade-linux-x64
+rm -f server/vestige-restore
 
 # Download Windows x64
 echo "Downloading Windows x64 binary..."
@@ -95,7 +97,8 @@ validate_zip "$ARCHIVE" vestige-mcp.exe vestige.exe vestige-restore.exe vestige-
 unzip -q "$ARCHIVE" -d server
 mv server/vestige-mcp.exe server/vestige-mcp-win32-x64.exe
 mv server/vestige.exe server/vestige-win32-x64.exe
-rm -f server/vestige-restore.exe server/vestige-upgrade.exe
+mv server/vestige-upgrade.exe server/vestige-upgrade-win32-x64.exe
+rm -f server/vestige-restore.exe
 
 # Make executable
 chmod +x server/*

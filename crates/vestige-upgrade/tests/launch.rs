@@ -793,3 +793,428 @@ fn missing_upgrade_refuses_with_hint_and_leaves_db_bytes() {
     );
     assert_no_sqlite_sidecars(&db);
 }
+
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+fn euid() -> u32 {
+    let status = fs::read_to_string("/proc/self/status").unwrap();
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            return rest.split_whitespace().nth(1).unwrap().parse().unwrap();
+        }
+    }
+    panic!("no Uid in /proc/self/status");
+}
+
+fn passwd_ids(name: &str) -> (u32, u32) {
+    let text = fs::read_to_string("/etc/passwd").unwrap();
+    for line in text.lines() {
+        let mut parts = line.split(':');
+        if parts.next() == Some(name) {
+            let _password = parts.next();
+            let uid: u32 = parts.next().unwrap().parse().unwrap();
+            let gid: u32 = parts.next().unwrap().parse().unwrap();
+            return (uid, gid);
+        }
+    }
+    panic!("passwd has no {name}");
+}
+
+/// Root ignores mode 000. Drop to nobody so an open would fail.
+fn drop_privs(cmd: &mut Command) {
+    if euid() != 0 {
+        return;
+    }
+    let (uid, gid) = passwd_ids("nobody");
+    use std::os::unix::process::CommandExt;
+    cmd.uid(uid).gid(gid);
+}
+
+fn expose_owned(path: &Path, mode: u32) {
+    if euid() == 0 {
+        set_mode(path, mode);
+    }
+}
+
+fn finish_within(child: &mut std::process::Child, limit: Duration) -> std::process::ExitStatus {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if started.elapsed() > limit {
+            let _ = child.kill();
+            return child.wait().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn spawn_refusing(bin: &Path, data: &Path, args: &[&str]) -> std::process::Output {
+    let mut cmd = Command::new(bin);
+    cmd.args(args)
+        .env("HOME", data)
+        .env("PATH", "/usr/bin:/bin")
+        .env("VESTIGE_DASHBOARD_ENABLED", "false")
+        .env("VESTIGE_HTTP_ENABLED", "0")
+        .env("VESTIGE_AUTOPILOT_ENABLED", "0")
+        .env("RUST_LOG", "error")
+        .env_remove("VESTIGE_DATA_DIR")
+        .env_remove("STRATA_MIGRATE_SIGKILL_WINDOW")
+        .env_remove("VESTIGE_UPGRADE_SIGKILL_AFTER_RENAME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    drop_privs(&mut cmd);
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|err| panic!("spawn {}: {err}", bin.display()));
+    let mut out_pipe = child.stdout.take().unwrap();
+    let mut err_pipe = child.stderr.take().unwrap();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let stderr = Arc::new(Mutex::new(Vec::new()));
+    let out_buf = Arc::clone(&stdout);
+    let err_buf = Arc::clone(&stderr);
+    let out_thread = std::thread::spawn(move || {
+        let _ = std::io::Read::read_to_end(&mut out_pipe, &mut out_buf.lock().unwrap());
+    });
+    let err_thread = std::thread::spawn(move || {
+        let _ = std::io::Read::read_to_end(&mut err_pipe, &mut err_buf.lock().unwrap());
+    });
+    let status = finish_within(&mut child, Duration::from_secs(30));
+    let _ = out_thread.join();
+    let _ = err_thread.join();
+    std::process::Output {
+        status,
+        stdout: stdout.lock().unwrap().clone(),
+        stderr: stderr.lock().unwrap().clone(),
+    }
+}
+
+/// chmod 000 and junk bytes are both v3 candidates. With no importer, 4.0
+/// refuses. It never opens the file: mode 000 stays 000 and the bytes match.
+#[test]
+fn unreadable_and_junk_db_are_detected_and_refused() {
+    for (label, plant_db) in [
+        (
+            "unreadable",
+            plant_unreadable as fn(&Path) -> (PathBuf, Vec<u8>),
+        ),
+        ("junk", plant_junk),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        expose_owned(dir.path(), 0o755);
+        expose_owned(&data, 0o755);
+        let (db, before) = plant_db(&data);
+        let bin_dir = isolated_bins(dir.path(), &["vestige-mcp", "vestige"]);
+        expose_owned(&bin_dir, 0o755);
+
+        let mcp = spawn_refusing(
+            &bin_dir.join("vestige-mcp"),
+            &data,
+            &["--data-dir", data.to_str().unwrap()],
+        );
+        assert!(
+            !mcp.status.success(),
+            "{label} mcp exited 0: {}",
+            String::from_utf8_lossy(&mcp.stderr)
+        );
+        let mcp_err = String::from_utf8_lossy(&mcp.stderr);
+        assert!(
+            mcp_err.contains(UPGRADE_HINT),
+            "{label} mcp did not refuse with the hint:\n{mcp_err}"
+        );
+        assert!(
+            mcp_err.contains("was not modified"),
+            "{label} mcp did not say the store was untouched:\n{mcp_err}"
+        );
+        assert!(
+            !mcp_err.contains("cannot be read") && !mcp_err.contains("not a v3 SQLite"),
+            "{label} mcp opened the file instead of refusing:\n{mcp_err}"
+        );
+        assert_untouched(&db, &before, label);
+        assert!(
+            !data.join(LOG_DIR_NAME).exists(),
+            "{label} mcp created a log"
+        );
+        assert!(
+            !staging_directory(&data).exists(),
+            "{label} mcp created staging"
+        );
+        assert!(
+            !data.join("upgrade.lock").exists(),
+            "{label} mcp took the upgrade lock"
+        );
+
+        let cli = spawn_refusing(
+            &bin_dir.join("vestige"),
+            &data,
+            &["--data-dir", data.to_str().unwrap(), "stats"],
+        );
+        assert!(!cli.status.success(), "{label} cli exited 0");
+        let cli_err = String::from_utf8_lossy(&cli.stderr);
+        assert!(
+            cli_err.contains(UPGRADE_HINT),
+            "{label} cli did not refuse with the hint:\n{cli_err}"
+        );
+        assert_untouched(&db, &before, label);
+    }
+}
+
+/// The same two files are handed to vestige-upgrade when it sits beside the binary.
+#[test]
+fn unreadable_and_junk_db_are_handed_to_vestige_upgrade() {
+    let cases = [
+        ("unreadable", "cannot be read", true),
+        ("junk", "not a v3 SQLite", false),
+    ];
+    for (label, needle, lock_mode) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        expose_owned(dir.path(), 0o755);
+        expose_owned(&data, if euid() == 0 { 0o777 } else { 0o755 });
+        let (db, before) = if lock_mode {
+            plant_unreadable(&data)
+        } else {
+            plant_junk(&data)
+        };
+        let bin_dir = isolated_bins(dir.path(), &["vestige-mcp", "vestige", "vestige-upgrade"]);
+        expose_owned(&bin_dir, 0o755);
+
+        let mcp = spawn_refusing(
+            &bin_dir.join("vestige-mcp"),
+            &data,
+            &["--data-dir", data.to_str().unwrap()],
+        );
+        assert!(
+            !mcp.status.success(),
+            "{label} handoff exited 0: {}",
+            String::from_utf8_lossy(&mcp.stderr)
+        );
+        let mcp_err = String::from_utf8_lossy(&mcp.stderr);
+        assert!(
+            mcp_err.contains(needle),
+            "{label} was not handed to vestige-upgrade:\n{mcp_err}"
+        );
+        assert!(
+            !mcp_err.contains(UPGRADE_HINT),
+            "{label} refused instead of handing off:\n{mcp_err}"
+        );
+        assert_untouched(&db, &before, label);
+        assert!(
+            !dir_has_seg(&data.join(LOG_DIR_NAME)),
+            "{label} handoff installed a log"
+        );
+
+        let cli = spawn_refusing(
+            &bin_dir.join("vestige"),
+            &data,
+            &["--data-dir", data.to_str().unwrap(), "stats"],
+        );
+        assert!(!cli.status.success(), "{label} cli handoff exited 0");
+        let cli_err = String::from_utf8_lossy(&cli.stderr);
+        assert!(
+            cli_err.contains(needle),
+            "{label} cli was not handed to vestige-upgrade:\n{cli_err}"
+        );
+        assert_untouched(&db, &before, label);
+    }
+}
+
+fn plant_unreadable(data: &Path) -> (PathBuf, Vec<u8>) {
+    let db = plant(data);
+    let before = fs::read(&db).unwrap();
+    set_mode(&db, 0);
+    assert_eq!(mode_of(&db), 0, "chmod 000 did not stick");
+    (db, before)
+}
+
+fn plant_junk(data: &Path) -> (PathBuf, Vec<u8>) {
+    let db = data.join("vestige.db");
+    let before = b"not a sqlite database -- junk bytes\n".to_vec();
+    fs::write(&db, &before).unwrap();
+    (db, before)
+}
+
+fn assert_untouched(db: &Path, before: &[u8], label: &str) {
+    let locked = mode_of(db) == 0;
+    if locked {
+        set_mode(db, 0o644);
+    }
+    assert_eq!(
+        before,
+        fs::read(db).unwrap(),
+        "{label} changed vestige.db bytes"
+    );
+    if locked {
+        set_mode(db, 0);
+        assert_eq!(mode_of(db), 0, "{label} changed the file mode");
+    }
+    assert_no_sqlite_sidecars(db);
+}
+
+fn backup_count(data: &Path) -> usize {
+    fs::read_dir(data)
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.contains(".v3-backup-") && !name.ends_with(".partial")
+        })
+        .count()
+}
+
+fn kill_upgrade(child: &mut std::process::Child) -> std::process::ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    child.kill().expect("SIGKILL vestige-upgrade");
+    let status = child.wait().unwrap();
+    assert_eq!(
+        status.signal(),
+        Some(9),
+        "vestige-upgrade was not SIGKILLed: {status}"
+    );
+    status
+}
+
+/// SIGKILL of vestige-upgrade itself, before the staging rename and after it.
+/// Both reruns finish cleanly and vestige.db is byte-identical.
+#[test]
+fn sigkill_vestige_upgrade_before_and_after_rename() {
+    let upgrade = PathBuf::from(env!("CARGO_BIN_EXE_vestige-upgrade"));
+
+    let before_dir = tempfile::tempdir().unwrap();
+    let before_db = plant(before_dir.path());
+    let before_bytes = fs::read(&before_db).unwrap();
+    let mut early = Command::new(&upgrade)
+        .args(["--db", before_db.to_str().unwrap()])
+        .env("STRATA_MIGRATE_SIGKILL_WINDOW", "1")
+        .env_remove("VESTIGE_UPGRADE_SIGKILL_AFTER_RENAME")
+        .stderr(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("spawn vestige-upgrade");
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(30) {
+        if dir_has_seg(&staging_directory(before_dir.path()))
+            && !dir_has_seg(&before_dir.path().join(LOG_DIR_NAME))
+        {
+            break;
+        }
+        if early.try_wait().unwrap().is_some() {
+            panic!("vestige-upgrade exited before the pre-rename window");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        dir_has_seg(&staging_directory(before_dir.path())),
+        "pre-rename window never opened"
+    );
+    assert!(!dir_has_seg(&before_dir.path().join(LOG_DIR_NAME)));
+    kill_upgrade(&mut early);
+    assert!(
+        !dir_has_seg(&before_dir.path().join(LOG_DIR_NAME)),
+        "SIGKILL before rename published the log"
+    );
+    assert_eq!(before_bytes, fs::read(&before_db).unwrap());
+    assert_no_sqlite_sidecars(&before_db);
+
+    let rerun = Command::new(&upgrade)
+        .args(["--db", before_db.to_str().unwrap()])
+        .env_remove("STRATA_MIGRATE_SIGKILL_WINDOW")
+        .env_remove("VESTIGE_UPGRADE_SIGKILL_AFTER_RENAME")
+        .output()
+        .expect("rerun after pre-rename SIGKILL");
+    let rerun_err = String::from_utf8_lossy(&rerun.stderr);
+    assert!(
+        rerun.status.success(),
+        "rerun after pre-rename SIGKILL failed: {rerun_err}"
+    );
+    assert!(dir_has_seg(&before_dir.path().join(LOG_DIR_NAME)));
+    assert!(!staging_directory(before_dir.path()).exists());
+    assert_eq!(
+        before_bytes,
+        fs::read(&before_db).unwrap(),
+        "rerun after pre-rename SIGKILL changed vestige.db"
+    );
+    assert_no_sqlite_sidecars(&before_db);
+
+    let after_dir = tempfile::tempdir().unwrap();
+    let after_db = plant(after_dir.path());
+    let after_bytes = fs::read(&after_db).unwrap();
+    let mut late = Command::new(&upgrade)
+        .args(["--db", after_db.to_str().unwrap()])
+        .env("VESTIGE_UPGRADE_SIGKILL_AFTER_RENAME", "1")
+        .env_remove("STRATA_MIGRATE_SIGKILL_WINDOW")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("spawn vestige-upgrade after-rename window");
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(60) {
+        if dir_has_seg(&after_dir.path().join(LOG_DIR_NAME))
+            && !staging_directory(after_dir.path()).exists()
+        {
+            break;
+        }
+        if late.try_wait().unwrap().is_some() {
+            panic!("vestige-upgrade exited before the post-rename window");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        dir_has_seg(&after_dir.path().join(LOG_DIR_NAME)),
+        "post-rename window never opened"
+    );
+    assert!(!staging_directory(after_dir.path()).exists());
+    assert!(
+        late.try_wait().unwrap().is_none(),
+        "process left the post-rename window before SIGKILL"
+    );
+    kill_upgrade(&mut late);
+    let backups = backup_count(after_dir.path());
+    assert!(backups >= 1, "upgrade did not back up vestige.db");
+    assert_eq!(after_bytes, fs::read(&after_db).unwrap());
+    assert_no_sqlite_sidecars(&after_db);
+
+    let again = Command::new(&upgrade)
+        .args(["--db", after_db.to_str().unwrap()])
+        .env_remove("STRATA_MIGRATE_SIGKILL_WINDOW")
+        .env_remove("VESTIGE_UPGRADE_SIGKILL_AFTER_RENAME")
+        .output()
+        .expect("rerun after post-rename SIGKILL");
+    let again_err = String::from_utf8_lossy(&again.stderr);
+    assert!(
+        again.status.success(),
+        "rerun after post-rename SIGKILL failed: {again_err}"
+    );
+    assert!(
+        again_err.contains("already present"),
+        "rerun imported again instead of keeping the published log:\n{again_err}"
+    );
+    assert_eq!(
+        backups,
+        backup_count(after_dir.path()),
+        "rerun wrote another v3 backup"
+    );
+    assert!(!staging_directory(after_dir.path()).exists());
+    assert_eq!(
+        after_bytes,
+        fs::read(&after_db).unwrap(),
+        "rerun after post-rename SIGKILL changed vestige.db"
+    );
+    assert_no_sqlite_sidecars(&after_db);
+}

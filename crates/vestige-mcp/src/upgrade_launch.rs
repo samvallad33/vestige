@@ -1,14 +1,13 @@
 //! First launch of the SQLite-free 4.0 binaries.
 //!
-//! A v3 store is recognized from the SQLite header (a read, never a write).
-//! The import runs in `vestige-upgrade`, looked up next to this executable
-//! and then on `PATH`. A missing tool is a one-line refusal. This process
-//! does not open the database and does not create sidecars.
+//! A v3 store is recognized only when `vestige.db` exists. Existence is
+//! `metadata` (`stat`): this process never opens the file. The import runs
+//! in `vestige-upgrade`, looked up next to this executable and then on
+//! `PATH`. A missing tool is a one-line refusal. This process does not
+//! create sidecars.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-use vestige_core::detect_v3;
 
 pub const LOG_DIR_NAME: &str = "log";
 pub const UPGRADE_LOG_NAME: &str = "upgrade.log";
@@ -18,7 +17,7 @@ const STAGING_SUFFIX: &str = ".strata-staging";
 pub const UPGRADE_HINT: &str = "install vestige-upgrade from https://github.com/samvallad33/vestige/releases and place it next to this binary or on PATH";
 
 pub enum UpgradeLaunch {
-    /// The probed file is not a v3 store and no partial upgrade is waiting.
+    /// The probed path is not a file and no partial upgrade is waiting.
     NotV3,
     /// A strata log is already installed, or `vestige-upgrade` just installed one.
     Ready,
@@ -40,24 +39,31 @@ impl std::fmt::Display for LaunchError {
     }
 }
 
-/// Detect a v3 store and run `vestige-upgrade` when one is present.
+/// Detect a v3 store by file existence and run `vestige-upgrade` when one is present.
 pub fn ensure_upgraded(db_path: &Path) -> Result<UpgradeLaunch, LaunchError> {
     let data_dir = data_dir_of(db_path);
     if log_ready(&data_dir.join(LOG_DIR_NAME)) {
         return Ok(UpgradeLaunch::Ready);
     }
-    let detected = detect_v3(db_path)
-        .map_err(|err| LaunchError::Missing(format!("v3 detection failed: {err}")))?;
-    if detected.is_none() && !staging_directory(&data_dir).exists() {
+    // Existence only. `metadata` is `stat`; it does not open the file, so a
+    // mode-000 database and a non-SQLite database are both candidates.
+    let present = match std::fs::metadata(db_path) {
+        Ok(meta) => meta.is_file(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+        Err(err) => {
+            return Err(LaunchError::Missing(format!(
+                "v3 store at {} was not modified ({err}); {UPGRADE_HINT}",
+                db_path.display()
+            )));
+        }
+    };
+    if !present && !staging_directory(&data_dir).exists() {
         return Ok(UpgradeLaunch::NotV3);
     }
     let Some(bin) = locate_upgrade() else {
-        let shown = detected
-            .as_ref()
-            .map(|info| info.path.display().to_string())
-            .unwrap_or_else(|| db_path.display().to_string());
         return Err(LaunchError::Missing(format!(
-            "v3 store at {shown} was not modified; {UPGRADE_HINT}"
+            "v3 store at {} was not modified; {UPGRADE_HINT}",
+            db_path.display()
         )));
     };
     let status = Command::new(&bin)
@@ -111,23 +117,42 @@ fn log_ready(log_dir: &Path) -> bool {
 }
 
 fn locate_upgrade() -> Option<PathBuf> {
-    let name = upgrade_file_name();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let sibling = dir.join(name);
-        if sibling.is_file() {
-            return Some(sibling);
+        for name in sibling_names(&exe) {
+            let sibling = dir.join(&name);
+            if sibling.is_file() {
+                return Some(sibling);
+            }
         }
     }
     let path_var = std::env::var_os("PATH")?;
+    let plain = upgrade_file_name();
     for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(name);
+        let candidate = dir.join(plain);
         if candidate.is_file() {
             return Some(candidate);
         }
     }
     None
+}
+
+/// Literal `vestige-upgrade`, plus the platform-suffixed name MCPB uses
+/// (`vestige-mcp-linux-x64` → `vestige-upgrade-linux-x64`).
+fn sibling_names(exe: &Path) -> Vec<String> {
+    let mut names = vec![upgrade_file_name().to_string()];
+    let Some(file) = exe.file_name().and_then(|name| name.to_str()) else {
+        return names;
+    };
+    let Some(rest) = file.strip_prefix("vestige-mcp") else {
+        return names;
+    };
+    let suffixed = format!("vestige-upgrade{rest}");
+    if suffixed != names[0] {
+        names.push(suffixed);
+    }
+    names
 }
 
 fn upgrade_file_name() -> &'static str {

@@ -396,7 +396,7 @@ See [Storage Modes](STORAGE.md) for more options.
 vestige update
 ```
 
-This updates `vestige`, `vestige-mcp`, and `vestige-restore`. It does not mutate
+This updates `vestige`, `vestige-mcp`, `vestige-restore`, and `vestige-upgrade`. It does not mutate
 Claude Code Cognitive Sandwich companion files unless you explicitly request it.
 
 **Also refresh optional Claude Code companion files:**

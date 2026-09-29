@@ -30,7 +30,7 @@ Agents re-learn the same lessons. They recommend a change you already tested and
 
 ## Install
 
-Download a release archive from [GitHub Releases](https://github.com/samvallad33/vestige/releases/latest). No Docker, no signup, no compile step. The archives are `vestige-mcp-aarch64-apple-darwin.tar.gz` (macOS ARM), `vestige-mcp-x86_64-apple-darwin.tar.gz` (macOS Intel), `vestige-mcp-x86_64-unknown-linux-gnu.tar.gz` (Linux x86_64), `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz` (Linux arm64), and `vestige-mcp-x86_64-pc-windows-msvc.zip` (Windows x86_64). Each one contains three binaries: `vestige` (the CLI), `vestige-mcp` (the MCP server), and `vestige-restore`.
+Download a release archive from [GitHub Releases](https://github.com/samvallad33/vestige/releases/latest). No Docker, no signup, no compile step. The archives are `vestige-mcp-aarch64-apple-darwin.tar.gz` (macOS ARM), `vestige-mcp-x86_64-apple-darwin.tar.gz` (macOS Intel), `vestige-mcp-x86_64-unknown-linux-gnu.tar.gz` (Linux x86_64), `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz` (Linux arm64), and `vestige-mcp-x86_64-pc-windows-msvc.zip` (Windows x86_64). Each one contains `vestige` (the CLI), `vestige-mcp` (the MCP server), `vestige-restore`, and `vestige-upgrade`.
 
 Prefer Homebrew?
 
@@ -201,7 +201,7 @@ The server binds **http://127.0.0.1:3927** and redirects `/` to **/dashboard**. 
 
 | | |
 |---|---|
-| Engine | Rust 2024. Release archives ship `vestige`, `vestige-mcp`, and `vestige-restore` |
+| Engine | Rust 2024. Release archives ship `vestige`, `vestige-mcp`, `vestige-restore`, and `vestige-upgrade` |
 | Retrieval | Nomic Embed Text v1.5, Matryoshka 768d truncated to 256d, USearch HNSW, SQLite FTS5. The background reranker is Jina Reranker v1 Turbo; until it loads, ranking stays BM25 |
 | Storage | SQLite. SQLCipher is the optional `encryption` feature plus `VESTIGE_ENCRYPTION_KEY`, not the default build. See [docs/STORAGE.md](docs/STORAGE.md) |
 | First run | About 130 MB for the embedding model and about 150 MB for the reranker. Keyword search and a `warming` block until the embedding runtime is ready; BM25 until the reranker loads. A release build hints when npm has a newer `vestige-mcp-server`, and does not update itself |

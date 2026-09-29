@@ -172,6 +172,10 @@ jobs:
           cd target/${{ matrix.target }}/release
           Compress-Archive -Path vestige-mcp.exe,vestige.exe,vestige-restore.exe,vestige-upgrade.exe -DestinationPath ../../../vestige-mcp-${{ matrix.target }}.zip
 
+      - name: Require vestige-upgrade in the archive
+        shell: bash
+        run: bash scripts/require-vestige-upgrade-archive.sh vestige-mcp-${{ matrix.target }}.${{ matrix.archive }}
+
       - name: Generate checksum
         shell: bash
         run: |
@@ -332,6 +336,9 @@ jobs:
         run: |
           cd target/x86_64-unknown-linux-gnu/release
           tar -czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
+
+      - name: Require vestige-upgrade in the archive
+        run: bash scripts/require-vestige-upgrade-archive.sh vestige-mcp-x86_64-unknown-linux-gnu.tar.gz
 
       - name: Check glibc ceiling
         run: bash scripts/check-linux-glibc.sh target/x86_64-unknown-linux-gnu/release/vestige-mcp
@@ -535,6 +542,9 @@ jobs:
         run: |
           cd target/aarch64-unknown-linux-gnu/release
           tar -czf ../../../vestige-mcp-aarch64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
+
+      - name: Require vestige-upgrade in the archive
+        run: bash scripts/require-vestige-upgrade-archive.sh vestige-mcp-aarch64-unknown-linux-gnu.tar.gz
 
       - name: Check glibc ceiling
         run: bash scripts/check-linux-glibc.sh target/aarch64-unknown-linux-gnu/release/vestige-mcp
@@ -793,6 +803,9 @@ jobs:
         run: |
           cd target/aarch64-linux-android/release
           tar czf ../../../vestige-mcp-aarch64-linux-android.tar.gz vestige-mcp vestige-upgrade
+
+      - name: Require vestige-upgrade in the archive
+        run: bash scripts/require-vestige-upgrade-archive.sh vestige-mcp-aarch64-linux-android.tar.gz
 
       - name: Upload android artifact
         uses: actions/upload-artifact@v4

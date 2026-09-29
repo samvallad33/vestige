@@ -56,6 +56,8 @@ else
         TARBALL="vestige-mcp-x86_64-apple-darwin.tar.gz"
     elif [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
         TARBALL="vestige-mcp-x86_64-unknown-linux-gnu.tar.gz"
+    elif [ "$OS" = "Linux" ] && [ "$ARCH" = "aarch64" ]; then
+        TARBALL="vestige-mcp-aarch64-unknown-linux-gnu.tar.gz"
     else
         print_err "Unsupported platform: $OS/$ARCH"
         echo "  Install manually: https://github.com/samvallad33/vestige#install"
@@ -86,13 +88,17 @@ else
         print_err "Download appears corrupt — vestige-mcp not found in tarball"
         exit 1
     fi
+    if [ ! -f "$VESTIGE_TMPDIR/vestige-upgrade" ] || [ ! -s "$VESTIGE_TMPDIR/vestige-upgrade" ]; then
+        print_err "Download appears corrupt — vestige-upgrade not found in tarball"
+        exit 1
+    fi
 
     if ! file "$VESTIGE_TMPDIR/vestige-mcp" | grep -q "Mach-O\|ELF"; then
         print_err "Downloaded file is not a valid binary"
         exit 1
     fi
 
-    chmod +x "$VESTIGE_TMPDIR/vestige-mcp"
+    chmod +x "$VESTIGE_TMPDIR/vestige-mcp" "$VESTIGE_TMPDIR/vestige-upgrade"
 
     # Prefer user-local install, fall back to /usr/local/bin with sudo
     INSTALL_DIR="$HOME/.local/bin"
@@ -114,6 +120,7 @@ else
             sudo mv "$VESTIGE_TMPDIR/vestige-mcp" "$INSTALL_DIR/"
             [ -f "$VESTIGE_TMPDIR/vestige" ] && sudo mv "$VESTIGE_TMPDIR/vestige" "$INSTALL_DIR/"
             [ -f "$VESTIGE_TMPDIR/vestige-restore" ] && sudo mv "$VESTIGE_TMPDIR/vestige-restore" "$INSTALL_DIR/"
+            sudo mv "$VESTIGE_TMPDIR/vestige-upgrade" "$INSTALL_DIR/"
         fi
     fi
 
@@ -121,6 +128,7 @@ else
         mv "$VESTIGE_TMPDIR/vestige-mcp" "$INSTALL_DIR/" 2>/dev/null || true
         [ -f "$VESTIGE_TMPDIR/vestige" ] && mv "$VESTIGE_TMPDIR/vestige" "$INSTALL_DIR/" 2>/dev/null || true
         [ -f "$VESTIGE_TMPDIR/vestige-restore" ] && mv "$VESTIGE_TMPDIR/vestige-restore" "$INSTALL_DIR/" 2>/dev/null || true
+        mv "$VESTIGE_TMPDIR/vestige-upgrade" "$INSTALL_DIR/"
     fi
 
     VESTIGE_PATH="$INSTALL_DIR/vestige-mcp"

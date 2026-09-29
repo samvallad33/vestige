@@ -36,13 +36,14 @@ pkg install rust clang cmake make pkg-config git
 git clone https://github.com/samvallad33/vestige.git
 cd vestige
 cargo build --release -p vestige-mcp --no-default-features --features connectors,cloud-sync
+cargo build --release -p vestige-upgrade
 ```
 
-The binaries land in `target/release/`: `vestige-mcp`, `vestige` and
-`vestige-restore`. Put them on your `PATH`:
+The binaries land in `target/release/`: `vestige-mcp`, `vestige`,
+`vestige-restore`, and `vestige-upgrade`. Put them on your `PATH`:
 
 ```bash
-install -m 755 target/release/vestige-mcp target/release/vestige target/release/vestige-restore "$PREFIX/bin/"
+install -m 755 target/release/vestige-mcp target/release/vestige target/release/vestige-restore target/release/vestige-upgrade "$PREFIX/bin/"
 ```
 
 ## Verify
