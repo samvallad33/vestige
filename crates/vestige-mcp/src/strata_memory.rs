@@ -21,12 +21,17 @@ use vestige_core::storage::{
     WalCheckpointMode, WalCheckpointStatus, HANDLE_REQUIRED_DETAIL, MAX_CANDIDATES,
 };
 use vestige_core::{
-    scan_secrets, ConsolidationResult, DecayRisk, IngestInput, KnowledgeNode, MemoryStats, Receipt,
-    SecretPolicy,
+    scan_secrets, ConsolidationResult, DecayRisk, IngestInput, KnowledgeNode, MemoryStats,
+    MergePolicy, Receipt, SecretPolicy,
 };
 
 const Q32_SCALE: f64 = 4294967296.0;
 const RECEIPT_PREFIX: &str = "eff-";
+/// Sidecar next to the segments. Not a frame: `StoreOp` has no config variant,
+/// and segment replay skips every name that does not end in `.seg`. The
+/// existing log backup copies the file because it copies the log directory.
+const MERGE_POLICY_FILE: &str = "merge-policy";
+const MERGE_POLICY_HEADER: &str = "vestige-merge-policy-v1";
 
 /// The durable directory this process opened is a Strata log, not a SQLite file.
 pub fn is_strata_backend(storage: &Storage) -> bool {
@@ -43,6 +48,9 @@ pub struct StrataMemory {
     log_dir: PathBuf,
     store: Mutex<strata_store::StrataStore>,
     actor: Mutex<Option<String>>,
+    /// `None` means unset: env overrides, then the Fellegi-Sunter defaults.
+    /// A stored value wins over the environment, matching `fsrs_config`.
+    merge_policy: Mutex<Option<RawMergePolicy>>,
 }
 
 impl StrataMemory {
@@ -50,11 +58,14 @@ impl StrataMemory {
         let data_dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&data_dir)?;
         let store = strata_store::StrataStore::open(&data_dir).map_err(map_store)?;
+        let log_dir = data_dir.join("log");
+        let merge_policy = Mutex::new(read_merge_policy_file(&log_dir.join(MERGE_POLICY_FILE))?);
         Ok(Self {
-            log_dir: data_dir.join("log"),
+            log_dir,
             data_dir,
             store: Mutex::new(store),
             actor: Mutex::new(None),
+            merge_policy,
         })
     }
 
@@ -238,6 +249,95 @@ fn in_scope<'a>(
         .iter()
         .filter(|node| scope.is_none_or(|scope| node.scope == scope))
         .collect()
+}
+
+/// Raw thresholds as written. `MergePolicy::new` clamps on read, which is what
+/// the SQLite `fsrs_config` path does; the file keeps the bits that were set.
+#[derive(Clone, Copy)]
+struct RawMergePolicy {
+    match_threshold: f32,
+    possible_threshold: f32,
+    auto_apply: bool,
+}
+
+fn read_merge_policy_file(path: &Path) -> Result<Option<RawMergePolicy>, StorageError> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(StorageError::Io(err)),
+    };
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| StorageError::Init("merge policy file is not utf-8".into()))?;
+    Ok(Some(parse_merge_policy(text)?))
+}
+
+fn parse_merge_policy(text: &str) -> Result<RawMergePolicy, StorageError> {
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    if lines.len() != 4 || lines[0] != MERGE_POLICY_HEADER {
+        return Err(StorageError::Init("merge policy file is corrupt".into()));
+    }
+    let auto_apply = match lines[3] {
+        "0" => false,
+        "1" => true,
+        _ => return Err(StorageError::Init("merge policy file is corrupt".into())),
+    };
+    Ok(RawMergePolicy {
+        match_threshold: f32::from_bits(parse_policy_bits(lines[1])?),
+        possible_threshold: f32::from_bits(parse_policy_bits(lines[2])?),
+        auto_apply,
+    })
+}
+
+fn parse_policy_bits(hex: &str) -> Result<u32, StorageError> {
+    if hex.len() != 8 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(StorageError::Init("merge policy file is corrupt".into()));
+    }
+    u32::from_str_radix(hex, 16)
+        .map_err(|_| StorageError::Init("merge policy file is corrupt".into()))
+}
+
+fn encode_merge_policy(raw: &RawMergePolicy) -> String {
+    format!(
+        "{MERGE_POLICY_HEADER}\n{:08x}\n{:08x}\n{}\n",
+        raw.match_threshold.to_bits(),
+        raw.possible_threshold.to_bits(),
+        u8::from(raw.auto_apply)
+    )
+}
+
+fn write_merge_policy_file(path: &Path, raw: &RawMergePolicy) -> Result<(), StorageError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_file_name(".merge-policy.tmp");
+    let mut file = std::fs::File::create(&tmp)?;
+    std::io::Write::write_all(&mut file, encode_merge_policy(raw).as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Unset policy: the same env keys as `SqliteMemoryStore::get_merge_policy`,
+/// then the Fellegi-Sunter defaults. Stored values replace this entirely.
+fn policy_from_env() -> MergePolicy {
+    let default = MergePolicy::default();
+    let env_f32 = |name: &str, fallback: f32| -> f32 {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(fallback)
+    };
+    let match_threshold = env_f32("VESTIGE_MERGE_MATCH_THRESHOLD", default.match_threshold);
+    let possible_threshold = env_f32(
+        "VESTIGE_MERGE_POSSIBLE_THRESHOLD",
+        default.possible_threshold,
+    );
+    let auto_apply = std::env::var("VESTIGE_MERGE_AUTO_APPLY")
+        .ok()
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(default.auto_apply);
+    MergePolicy::new(match_threshold, possible_threshold, auto_apply)
 }
 
 impl MemoryStoreSend for StrataMemory {
@@ -1175,6 +1275,33 @@ impl MemoryStoreSend for StrataMemory {
     fn update_node_content(&self, _id: &str, _new_content: &str) -> Result<(), StorageError> {
         Err(pending("update_node_content"))
     }
+
+    fn get_merge_policy(&self) -> Result<MergePolicy, StorageError> {
+        let stored = *self
+            .merge_policy
+            .lock()
+            .unwrap_or_else(|err| panic!("strata merge policy lock poisoned: {err}"));
+        Ok(match stored {
+            Some(raw) => {
+                MergePolicy::new(raw.match_threshold, raw.possible_threshold, raw.auto_apply)
+            }
+            None => policy_from_env(),
+        })
+    }
+
+    fn set_merge_policy(&self, policy: MergePolicy) -> Result<(), StorageError> {
+        let raw = RawMergePolicy {
+            match_threshold: policy.match_threshold,
+            possible_threshold: policy.possible_threshold,
+            auto_apply: policy.auto_apply,
+        };
+        write_merge_policy_file(&self.log_dir.join(MERGE_POLICY_FILE), &raw)?;
+        *self
+            .merge_policy
+            .lock()
+            .unwrap_or_else(|err| panic!("strata merge policy lock poisoned: {err}")) = Some(raw);
+        Ok(())
+    }
 }
 
 impl StrataMemory {
@@ -1330,5 +1457,103 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("similarity_disabled"), "{err}");
+    }
+
+    fn seg_lengths(dir: &Path) -> Vec<u64> {
+        let mut lengths = Vec::new();
+        let log = dir.join("log");
+        for entry in std::fs::read_dir(&log).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("seg") {
+                lengths.push(std::fs::metadata(&path).unwrap().len());
+            }
+        }
+        lengths.sort_unstable();
+        lengths
+    }
+
+    #[test]
+    fn merge_policy_roundtrip_leaves_the_log_and_survives_reopen_and_backup() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let first = StrataMemory::open(dir.path()).unwrap();
+        let digest = first.lock().state_digest();
+        let nodes = first.lock().node_count();
+        let segments = seg_lengths(dir.path());
+        if std::env::var_os("VESTIGE_MERGE_MATCH_THRESHOLD").is_none()
+            && std::env::var_os("VESTIGE_MERGE_POSSIBLE_THRESHOLD").is_none()
+            && std::env::var_os("VESTIGE_MERGE_AUTO_APPLY").is_none()
+        {
+            let defaults = first.get_merge_policy().unwrap();
+            let expected = MergePolicy::default();
+            assert_eq!(
+                defaults.match_threshold.to_bits(),
+                expected.match_threshold.to_bits()
+            );
+            assert_eq!(
+                defaults.possible_threshold.to_bits(),
+                expected.possible_threshold.to_bits()
+            );
+            assert!(!defaults.auto_apply);
+        }
+
+        let saved = MergePolicy::new(0.91, 0.4, true);
+        first.set_merge_policy(saved).unwrap();
+        assert_eq!(first.lock().state_digest(), digest);
+        assert_eq!(first.lock().node_count(), nodes);
+        assert_eq!(seg_lengths(dir.path()), segments);
+        let got = first.get_merge_policy().unwrap();
+        assert_eq!(got.match_threshold.to_bits(), saved.match_threshold.to_bits());
+        assert_eq!(
+            got.possible_threshold.to_bits(),
+            saved.possible_threshold.to_bits()
+        );
+        assert!(got.auto_apply);
+
+        // Direct store of an inverted pair clamps on read, same as fsrs_config.
+        first
+            .set_merge_policy(MergePolicy {
+                match_threshold: 0.4,
+                possible_threshold: 0.9,
+                auto_apply: false,
+            })
+            .unwrap();
+        let clamped = first.get_merge_policy().unwrap();
+        assert_eq!(clamped.match_threshold.to_bits(), 0.4f32.to_bits());
+        assert_eq!(clamped.possible_threshold.to_bits(), 0.4f32.to_bits());
+        assert!(!clamped.auto_apply);
+        assert_eq!(first.lock().state_digest(), digest);
+        assert_eq!(seg_lengths(dir.path()), segments);
+
+        let backup = tempfile::TempDir::new().unwrap();
+        first.lock().backup_to(backup.path()).unwrap();
+        drop(first);
+
+        let reopened = StrataMemory::open(dir.path()).unwrap();
+        let again = reopened.get_merge_policy().unwrap();
+        assert_eq!(again.match_threshold.to_bits(), 0.4f32.to_bits());
+        assert_eq!(again.possible_threshold.to_bits(), 0.4f32.to_bits());
+        assert!(!again.auto_apply);
+
+        let restored = StrataMemory::open(backup.path()).unwrap();
+        let from_backup = restored.get_merge_policy().unwrap();
+        assert_eq!(from_backup.match_threshold.to_bits(), 0.4f32.to_bits());
+        assert_eq!(from_backup.possible_threshold.to_bits(), 0.4f32.to_bits());
+        assert!(!from_backup.auto_apply);
+        assert!(no_sqlite(dir.path()));
+        assert!(no_sqlite(backup.path()));
+    }
+
+    #[test]
+    fn corrupt_merge_policy_file_is_refused_without_pending_strata() {
+        let dir = tempfile::TempDir::new().unwrap();
+        drop(StrataMemory::open(dir.path()).unwrap());
+        std::fs::write(dir.path().join("log").join(MERGE_POLICY_FILE), b"nope").unwrap();
+        let err = match StrataMemory::open(dir.path()) {
+            Err(err) => err,
+            Ok(_) => panic!("corrupt merge policy must refuse to open"),
+        };
+        let text = err.to_string();
+        assert!(!text.contains("pending_strata"), "{text}");
+        assert!(text.contains("merge policy"), "{text}");
     }
 }

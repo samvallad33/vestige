@@ -176,5 +176,8 @@ name = "stdio_shutdown"
 required-features = ["legacy-sqlite"]
 
 [[test]]
+name = "dedup_policy_stdio"
+
+[[test]]
 name = "views_sized_store"
 required-features = ["legacy-sqlite"]
