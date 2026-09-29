@@ -106,13 +106,14 @@ fn build_store(db: &std::path::Path, archive_out: Option<&std::path::Path>) -> V
     ids
 }
 
-/// Tables the migration maps (mirror of the crate's MAPPED_TABLES).
+/// Tables the migration emits as frames (mirror of the crate's EMITTED_TABLES).
 const MAPPED: &[&str] = &[
     "knowledge_nodes",
     "memory_connections",
     "fsrs_cards",
     "sync_tombstones",
     "deletion_tombstones",
+    "walk_receipts",
 ];
 
 /// The sqlite_master-driven expectation: every nonempty user table without
@@ -310,6 +311,26 @@ fn path_b_direct_sqlite_matches_path_a() {
     let mut got = report.skipped_tables.clone();
     got.sort();
     assert_eq!(got, expected, "skipped tables must be schema-driven");
+
+    let receipt = snapshot.receipt.expect("receipt");
+    let dropped = &receipt.body.dropped_columns;
+    assert!(
+        dropped.iter().any(|c| c == "schema_version.applied_at"),
+        "applied_at is a real dropped column: {dropped:?}"
+    );
+    assert!(
+        !dropped.iter().any(|c| c == "schema_version.version"),
+        "schema version is carried"
+    );
+    assert!(
+        !dropped.iter().any(|c| c.starts_with("knowledge_nodes.")),
+        "knowledge_nodes columns are carried: {dropped:?}"
+    );
+    let mut sorted = dropped.clone();
+    sorted.sort();
+    assert_eq!(sorted, *dropped, "dropped columns are ordered");
+    assert!(report.skipped_tables.iter().any(|t| t == "schema_version"));
+    assert!(!report.skipped_tables.iter().any(|t| t == "knowledge_nodes"));
 }
 
 #[test]

@@ -83,6 +83,9 @@ pub struct SourceSnapshot {
     /// skipped_tables must be driven by the schema, not by a hand list, so
     /// the receipt never claims a fuller copy than it is).
     pub all_nonempty_tables: Vec<(String, u64)>,
+    /// Column names of those nonempty tables, sorted by table then column.
+    /// Portable archives only know the tables present in the JSON.
+    pub nonempty_columns: Vec<(String, Vec<String>)>,
 }
 
 /// One V40 `walk_receipts` row; becomes a reference node in the log.
@@ -219,6 +222,17 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
             .filter(|t| !t.rows.is_empty())
             .map(|t| (t.name.clone(), t.rows.len() as u64))
             .collect::<Vec<_>>();
+        let mut nonempty_columns = archive
+            .tables
+            .iter()
+            .filter(|t| !t.rows.is_empty())
+            .map(|t| {
+                let mut columns = t.columns.clone();
+                columns.sort();
+                (t.name.clone(), columns)
+            })
+            .collect::<Vec<_>>();
+        nonempty_columns.sort();
         return Ok(SourceSnapshot {
             schema_version: archive.schema_version,
             archive,
@@ -227,6 +241,7 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
             walk_receipts: Vec::new(),
             table_counts: table_counts.clone(),
             all_nonempty_tables: table_counts,
+            nonempty_columns,
         });
     }
 
@@ -299,31 +314,51 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
     )
 }
 
-/// Every user table with at least one row, per sqlite_master.
-fn all_nonempty_tables(conn: &rusqlite::Connection) -> Vec<(String, u64)> {
+/// Every user table with at least one row, per sqlite_master, plus its
+/// column names (sorted).
+fn all_nonempty_tables(
+    conn: &rusqlite::Connection,
+) -> (Vec<(String, u64)>, Vec<(String, Vec<String>)>) {
     let Ok(mut stmt) = conn.prepare(
         "SELECT name FROM sqlite_master WHERE type='table'
          AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'knowledge_fts%'
          ORDER BY name",
     ) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let names: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default();
-    names
-        .into_iter()
-        .filter_map(|name| {
-            let quoted = format!("\"{name}\"");
-            conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
-                row.get::<_, i64>(0)
+    let mut counts = Vec::new();
+    let mut columns = Vec::new();
+    for name in names {
+        if name.contains('"') || name.contains('\'') {
+            continue;
+        }
+        let quoted = format!("\"{name}\"");
+        let Ok(n) = conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
+            row.get::<_, i64>(0)
+        }) else {
+            continue;
+        };
+        if n <= 0 {
+            continue;
+        }
+        let escaped = name.replace('\'', "''");
+        let cols = conn
+            .prepare(&format!(
+                "SELECT name FROM pragma_table_info('{escaped}') ORDER BY name"
+            ))
+            .and_then(|mut info| {
+                let rows = info.query_map([], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()
             })
-            .ok()
-            .filter(|n| *n > 0)
-            .map(|n| (name, n as u64))
-        })
-        .collect()
+            .unwrap_or_default();
+        counts.push((name.clone(), n as u64));
+        columns.push((name, cols));
+    }
+    (counts, columns)
 }
 
 /// Build the SourceSnapshot from the already-read scalars: the portable
@@ -335,7 +370,7 @@ fn finish_snapshot(
     dropped_vectors: u64,
     walk_receipts: Vec<WalkReceiptRow>,
 ) -> Result<SourceSnapshot, MigrationError> {
-    let all_nonempty = all_nonempty_tables(conn);
+    let (all_nonempty, nonempty_columns) = all_nonempty_tables(conn);
     let mut tables = Vec::new();
     let mut table_counts = Vec::new();
     for table_name in PORTABLE_TABLES {
@@ -370,6 +405,7 @@ fn finish_snapshot(
         walk_receipts,
         table_counts,
         all_nonempty_tables: all_nonempty,
+        nonempty_columns,
     })
 }
 

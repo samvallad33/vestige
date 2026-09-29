@@ -151,14 +151,15 @@ pub const PARAMS_ID: &str = "v4-migrate/1";
 /// staying far above the log's own 64-frame group-commit cap.
 const BATCH_FRAMES: usize = 1024;
 
-/// Tables this migration maps into STRATA records. Every other source table
-/// that contains rows is reported in `skipped_tables`.
-const MAPPED_TABLES: &[&str] = &[
+/// Tables emitted as their own frames. Every other nonempty table is named
+/// in `skipped_tables`. `walk_receipts` becomes NODE frames.
+const EMITTED_TABLES: &[&str] = &[
     "knowledge_nodes",
     "memory_connections",
     "fsrs_cards",
     "sync_tombstones",
     "deletion_tombstones",
+    "walk_receipts",
 ];
 
 /// The only edge vocabulary STRATA carries (H4). A legacy `link_type`
@@ -503,14 +504,52 @@ fn table_rows(snapshot: &source::SourceSnapshot, table: &str) -> u64 {
 }
 
 fn skipped_tables_for(snapshot: &source::SourceSnapshot) -> Vec<String> {
-    // Driven by sqlite_master (audit finding): every nonempty table without
-    // a STRATA mapping is named, so the receipt never overclaims.
-    snapshot
+    // Nonempty tables that do not become frames. Driven by sqlite_master
+    // (or the archive's own tables), never a hardcoded name list.
+    let mut names: Vec<String> = snapshot
         .all_nonempty_tables
         .iter()
-        .filter(|(name, _)| !MAPPED_TABLES.contains(&name.as_str()))
+        .filter(|(name, _)| !EMITTED_TABLES.contains(&name.as_str()))
         .map(|(name, _)| name.clone())
-        .collect()
+        .collect();
+    names.sort();
+    names
+}
+
+/// Columns present on a nonempty source table whose values are not written
+/// into a frame. Fully captured tables (`knowledge_nodes`,
+/// `memory_connections`, `fsrs_cards`) contribute nothing.
+fn dropped_columns_for(snapshot: &source::SourceSnapshot) -> Vec<String> {
+    let mut out = Vec::new();
+    for (table, columns) in &snapshot.nonempty_columns {
+        for column in columns {
+            if column_carried(table, column) {
+                continue;
+            }
+            out.push(format!("{table}.{column}"));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `true` when this column's value is stored on a migrated record.
+fn column_carried(table: &str, column: &str) -> bool {
+    match table {
+        "knowledge_nodes" | "memory_connections" | "fsrs_cards" => true,
+        "sync_tombstones" => matches!(column, "table_name" | "row_id" | "deleted_at" | "reason"),
+        "deletion_tombstones" => {
+            matches!(
+                column,
+                "memory_id" | "deleted_at" | "reason" | "node_type" | "tags"
+            )
+        }
+        "walk_receipts" => matches!(column, "receipt_id" | "canonical_json" | "created_at"),
+        "schema_version" => column == "version",
+        "receipt_envelopes" => column == "entry_digest",
+        _ => false,
+    }
 }
 
 /// Everything produced during one replay.
@@ -685,11 +724,7 @@ fn finish(
             envelope_head: snapshot.envelope_head.clone().unwrap_or_default(),
             counts: table_counts,
             dropped_vectors: snapshot.dropped_vectors,
-            dropped_columns: vec![
-                "node_embeddings.embedding (H1: vector values are dropped and counted)".to_string(),
-                "schema_version.applied_at".to_string(),
-                "receipt_envelopes.receipt_id/projection_json/issued_at/stored_at".to_string(),
-            ],
+            dropped_columns: dropped_columns_for(&snapshot),
             signing_key_id: RECEIPT_SIGNING_KEY_ID.to_string(),
         },
         &signing,
