@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use serde_json::{Value, json};
-use vestige_core::{ConnectionRecord, IngestInput, MemoryStore};
+use vestige_core::{ConnectionRecord, IngestInput};
 
 struct Server {
     child: Child,
