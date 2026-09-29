@@ -251,12 +251,12 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             cargo_flags: ""
-          # Intel Mac builds against a system ONNX Runtime via ort-dynamic
-          # (ort-sys has no x86_64-apple-darwin prebuilts). Compile-only here;
-          # runtime linking is a user concern documented in INSTALL-INTEL-MAC.md.
+          # ONNX Runtime left with the vector runtime, so the Intel Mac
+          # target uses the same default features as aarch64-apple-darwin.
+          # `ort-dynamic` is not a vestige-mcp feature anymore.
           - os: macos-14
             target: x86_64-apple-darwin
-            cargo_flags: "--no-default-features --features ort-dynamic,vector-search,cloud-sync"
+            cargo_flags: ""
     steps:
       - uses: actions/checkout@v4
 

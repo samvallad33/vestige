@@ -232,7 +232,14 @@ fn fill_random(buf: &mut [u8]) -> io::Result<()> {
     {
         // Weak std-only fallback for non-target platforms.
         let mut seed = blake3::Hasher::new();
-        seed.update(&std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos().to_le_bytes());
+        // SystemTimeError is not an io::Error. A clock before the epoch just
+        // yields a zero seed; this path is a weak fallback, not entropy.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .to_le_bytes();
+        seed.update(&nanos);
         seed.update(&(std::process::id() as u64).to_le_bytes());
         seed.update(&(buf.len() as u64).to_le_bytes());
         let mut block = seed.finalize().as_slice().to_vec();
