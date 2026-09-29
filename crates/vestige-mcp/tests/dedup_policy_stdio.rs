@@ -94,7 +94,7 @@ impl Server {
             "method": method,
             "params": params,
         });
-        let mut stdin = self.stdin.as_mut().expect("stdin open");
+        let stdin = self.stdin.as_mut().expect("stdin open");
         writeln!(stdin, "{message}").expect("write request");
         stdin.flush().expect("flush request");
 
