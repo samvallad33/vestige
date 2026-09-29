@@ -1,9 +1,9 @@
 # Tool contracts and progressive discovery
 
-Vestige advertises sixteen MCP tools. Most are action multiplexers: `recall`
-uses `mode`, `memory_status` uses `view`, and tools such as `memory` and `dedup`
-use `action`. An agent should choose the action needed for its current task.
-There is no requirement to call every tool during every session.
+Vestige advertises eighteen MCP tools. Most are action multiplexers: `recall`
+takes exact handles, `memory_status` uses `view`, and tools such as `memory`
+and `dedup` use `action`. An agent should choose the action needed for its
+current task. There is no requirement to call every tool during every session.
 
 ## Discover the installed contract
 
@@ -19,40 +19,36 @@ annotations as the running server's `tools/list`. Request one complete schema:
 ```
 
 The inventory includes compiled feature flags. They describe the build, not
-runtime readiness: a compiled embedder may still be loading, and an upstream
-connector still needs configuration. Embedding-backed duplicate scan, memory
-merge planning and apply need embeddings plus vector search. Tag maintenance
-and tag undo work without those features. Use health to inspect runtime state.
+runtime readiness: an upstream connector still needs configuration. 4.0 has no
+embedding or vector-search features at all — duplicate scanning is exact
+content identity, and `recall` is exact-handle only (see
+[HANDLES.md](HANDLES.md)). Use health to inspect runtime state.
 
-The MCP annotations cover the whole tool. `recall` reason mode records
-composition evidence; `receipt` replay persists a durable replay artifact.
-Neither mixed tool is read-only. Receipt replay reuses its durable identity on
-retry. `suppress` compounds and is not idempotent. Client-side approval settings
-and the server's Memory PR review mode still determine whether a mutation runs.
-A successful protocol response can report `pendingReview=true` and
-`success=false`; inspect the application result before claiming a change.
+The MCP annotations cover the whole tool. `receipt` replay persists a durable
+replay artifact, so neither mixed tool is read-only. Receipt replay reuses its
+durable identity on retry. `suppress` compounds and is not idempotent.
+Client-side approval settings and the server's review mode still determine
+whether a mutation runs. A successful protocol response can report
+`pendingReview=true` and `success=false`; inspect the application result
+before claiming a change.
 
 ## Investigation before reinforcement
 
-Backfill defaults to `promote=false`. A preview ranks earlier candidates using
-shared entities and chronology without changing their strengths or writing
-candidate edges. Its `causes` field is retained for compatibility, but every
-candidate is a hypothesis. The response explicitly reports
-`causality_verified=false`, scan limits, and whether reinforcement occurred.
-Existing edges may be reported during a preview; they are not created by it.
+`causal_walk` (the successor to the retired `backfill` tool) investigates a
+failure from explicit start points — a failing test, a stack frame, a CI run,
+a logged write, a version range — through exact mechanism edges to suspect
+change records. With no start point it returns `needs_report`; it never
+guesses. The default preview persists nothing; every candidate is a hypothesis
+and `causality_verified` stays false.
 
 ```json
-{"name":"backfill","arguments":{"failure_id":"<memory-id>","scope":"project"}}
+{"name":"causal_walk","arguments":{"scope":"project","start_points":[{"kind":"failing_test","name":"test_rate_limit"}]}}
 ```
 
 Review candidates against current evidence before explicitly requesting
-`promote=true`. Expired or future memories are not reinforced. Suppressed and
-superseded memories are excluded from candidates. Promotion records a
-`backfill_candidate` edge; it does not create a proven causal relationship.
-The tool's default namespace is `user`; both failure and candidate selection
-use the requested namespace before scan limits. Automatic failure-ingestion
-hooks preserve that namespace and explicitly preview candidates without promotion.
-They report candidate count and hypothesis status.
+`promote=true`: promotion records an `evidence_of` trail edge through the
+ordinary typed-edge surface; it does not create a proven causal relationship.
+Suppressed and superseded memories are not treated as live evidence.
 
 `graph(action="never_composed")` also defaults to `user`. Supply `scope` for a
 project or `includeCrossScope=true` to deliberately investigate across projects.
@@ -77,20 +73,16 @@ this patch does not establish multi-tenant authorization across every API.
   rejected before storage. Batch results retain legacy `success` and add
   `batchOutcome` (`applied`, `no_changes`, `partial`, `failed`) and `atomic=false`.
   Earlier successful items remain committed when a later item fails.
-- **Memory edit:** The content update marks embeddings pending in the same SQL
-  transaction, removing stale profile and legacy vectors and journaling invalidation
-  for other processes. The tool reports `embeddingStatus` as `available` or `pending` instead
-  of promising that regeneration succeeded. Direct and bulk vector readers exclude
-  dirty nodes, and regeneration includes dirty nodes even when an old vector has
-  the same model and dimensions. Embedding persistence compares the original content and active profile inside
-  its write transaction and rejects a stale computation before storing it.
-  Tests cover the persistence/index path with supplied vectors; they do not load a model.
+- **Memory edit:** The content update goes through the store write path. 4.0
+  has no embedding state to invalidate; there is no `embeddingStatus`, no
+  vector journal, and no re-embedding step. The edit is durable when the write
+  lands.
 - **Maintenance:** The advertised per-action schemas come from their actual
   handlers. Portable export, `since`, confined export filenames, restore merge
   options, GC age filters, dream controls and scoring context are discoverable.
   Unsupported action fields are rejected. Export supports `since`; it does not
   support `start`/`end`. Advertised snake_case GC and scoring arguments are
-  honored. Lifecycle, embeddings, logs and GC are store-wide; dream accepts an explicit namespace `scope`.
+  honored. Lifecycle, logs and GC are store-wide; dream accepts an explicit namespace `scope`.
 - **Suppression:** Default review mode can hold the operation for review.
   Explicit fast-mode suppression still compounds. New operations have an exact
   per-operation journal, a 24-hour reversal window and atomic conflict checks
@@ -122,66 +114,35 @@ before persistence. Parsed absolute time triggers keep their timestamp. These
 checks do not run a background scheduler or prove that an agent will supply the
 right event context.
 
-## Scoped reasoning and bounded evidence
+## Handle-only recall and bounded evidence
 
-Lookup also budgets the complete response envelope with room for server receipt
-metadata. It omits whole cards and reports `evidenceIncomplete` or `truncated`
-when the budget cannot carry the evidence. Known dissent groups are omitted
-together rather than returning only one side. Lookup and reason share the
-serialized-byte budget unit described below; it is not an exact tokenizer count.
+`recall` is exact-handle only. Free text, a malformed handle, or a handle that
+resolves to nothing returns the fail-closed `handle_required` payload with no
+candidates field — see [HANDLES.md](HANDLES.md) for the grammar and the
+payload shape. Response envelopes stay budgeted: the server omits whole
+records and reports truncation rather than cutting a record away from its
+evidence, and budget accounting uses serialized UTF-8 bytes divided by four,
+rounded up — not an exact model tokenizer count. Expand omitted details
+through memory ids.
 
-Lookup's opt-in `context_packet=true` returns stable evidence cards, sorted by
-ID, with changing scores and diagnostics omitted. Source and temporal metadata
-remain attached when permitted by the output mask. `temporalState` describes
-only the validity interval (`current`, `historical`, `future`, or `unknown`),
-not source authority or factual correctness. A complete packet receives a
-`packetId` bound to its evidence, store, query/filter arguments and output profile.
-Changes to content, selected membership, validity state, or the boundary change
-the ID. Incomplete packets have no reusable ID.
-
-Only send `known_packet_id` while the previously returned complete packet still
-exists in model context. An exact match returns `notModified=true` and no cards.
-After compaction, eviction, a new conversation, or uncertain retention, omit it
-to get a full refresh. The server does not know the client's context state.
-`examples/python/context_packets.py` demonstrates this host-side handshake and
-selection of exact tool schemas for clients that support dynamic catalogs.
-Neither capability automatically modifies Codex, activates provider prompt
-caching, or demonstrates lower billed tokens. Hash identity is not a signature
-or authorization boundary.
-
-`recall(mode="reason")` defaults to the `user` namespace and applies supported
-scope, type, validity, source, retention and tag filters to retrieved and
-activation-expanded evidence. Cross-namespace reasoning requires
-`includeCrossScope=true`. Contradiction inspection also defaults to `user`.
-Topic search uses a bounded global candidate pool before namespace filtering;
-this prevents foreign evidence from being returned but can reduce recall in a
-large mixed-namespace store. Unsupported controls fail with mode-specific errors.
-
-Reason confidence is a heuristic score, not a calibrated truth probability.
-A supplied `token_budget` keeps complete evidence groups or omits them instead
-of cutting claims from their evidence. Budget accounting uses serialized UTF-8
-bytes divided by four, rounded up, for structured content including server
-metadata. This is not an exact model tokenizer count or a budget for the full
-JSON-RPC envelope and its duplicate text representation. Expand omitted details
-through memory IDs. Retrieval exposure records include only returned evidence.
+`session_start` is the bounded start-of-session packet: relevant memories,
+open intentions, status, predictions, and codebase context under one token
+budget. `graph` covers association and contradiction-style inspection over
+recorded edges; what a walk returns is always traceable to frames in the log
+([RECEIPTS.md](RECEIPTS.md)), never to a ranker.
 
 ## Verification and upgrade boundary
 
 The disposable `scripts/test-tool-frontier.py` fixture checks actual stdio
 responses, discovery parity, namespace selection, preview effects, review
-holds, receipt replay, and embedding-state reporting. It uses a temporary store
-and no connector credentials. `scripts/test-context-evidence.py` separately
-checks the source-aware context slice. Unit tests cover mode-specific behavior
-and transaction invariants; a client/model adoption benchmark is still needed
-to measure whether agents select tools more effectively.
+holds, and receipt replay. It uses a temporary store and no connector
+credentials. `scripts/test-context-evidence.py` separately checks the
+source-aware context slice. Unit tests cover tool-specific behavior and
+transaction invariants.
 
-This candidate adds schema 34 (local suppression journal) and schema 35
-(journaled cascade effects). Backfill's
-new preview default, stricter argument validation, namespace defaults and
-corrected annotations are compatibility changes. Update callers that relied on
-implicit promotion, cross-project reasoning, or silently ignored arguments.
-The prior code-anchor change on this branch has its own versioned-hash rollback
-boundary: read `CODE-CONTEXT-EVIDENCE.md` before installing either change.
+`causal_walk`'s preview default, stricter argument validation and namespace
+defaults are compatibility changes. Update callers that relied on implicit
+promotion, cross-project reasoning, or silently ignored arguments.
 
 ### Merge plan and undo consistency
 
@@ -192,8 +153,7 @@ must be distinct and currently active. Confirmation does not bypass these checks
 
 Merge undo checks the post-apply fingerprints before restoring durable state in
 one transaction. Later edits or control changes produce a conflict. Legacy
-operations without fingerprints require manual recovery review. Embedding
-regeneration follows commit; failure leaves the embedding pending. This contract
+operations without fingerprints require manual recovery review. This contract
 does not claim reversal of suppression cascades or external side effects.
 
 ### Suppression reversal
@@ -225,25 +185,11 @@ Before installation, retain a paired database backup for rollback to an older bi
 MCP restore reads at most 64 MiB from a regular file. Legacy JSON batches are
 limited to 10000 memories, validated in a disposable store, then imported into
 the target in one transaction. Empty content rejects the batch before target
-writes. Legacy restore copies only memory rows, leaves embeddings pending and
+writes. Legacy restore copies only memory rows and
 reports `atomic: true`; it does not import staging settings or audit journals.
 Portable archives continue through their transactional importer. An index-refresh
 error after commit requires inspecting the target before retrying. Input limits
 bound file bytes and legacy rows, not a strict process-memory or elapsed-time budget.
-
-### Incremental embedding maintenance
-
-`maintain(action="consolidate", phase="embeddings", batchSize=10)` previews a
-page by default. `dry_run=false` processes at most 100 selected memories per
-call using an already available active runtime; it does not install a model.
-The response exposes selection, success/failure/skip counts, runtime availability,
-elapsed time, `hasMore`, and `nextCursor`. Work runs off the async executor thread.
-Committed embedding rows are the checkpoint. Resume with `after=nextCursor`, then
-start a new sweep without `after` to discover earlier inserts or retry failures.
-The cursor is a live scan position, not a snapshot or a hard inference deadline.
-Suppressed memories are excluded from selection. Embedding batches cap at 100 rows. The default full consolidation behavior
-remains separate and retains its compatibility contract.
-
 
 ### Lifecycle, logs, GC and dream pages
 

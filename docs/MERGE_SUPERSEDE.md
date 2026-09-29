@@ -4,17 +4,18 @@
 > combine/dedupe/supersede on a never-delete (bitemporal) store.
 
 Memory systems accumulate duplicates, near-duplicates, and outdated facts. The
-naive fixes are all bad: dumb hashing under-merges (misses paraphrases),
-aggressive LLM merging over-merges and destroys the audit trail, and
-auto-deleting on contradiction silently loses information. Vestige's Phase 3
-takes the opposite stance:
+naive fixes are all bad: similarity scoring over-merges lookalikes, aggressive
+LLM merging destroys the audit trail, and auto-deleting on contradiction
+silently loses information. 4.0 takes the opposite stance:
 
+- **Identity, not similarity.** Automatic dedup is exact content identity only
+  (Unicode-normalized, trimmed, whitespace-collapsed — a hash). Lookalikes with
+  no recorded causal relation never group, merge, rank, or conflict.
 - **Opt-in, never silent.** The default is preview/review. Nothing mutates your
-  memory unless you explicitly apply a plan.
+  memory unless you explicitly apply a plan; retire holds at the gate by
+  default.
 - **Diff-previewed.** `plan_merge` / `plan_supersede` show exactly what *would*
   change before anything does.
-- **Confidence-gated.** A Fellegi-Sunter two-threshold score classifies each
-  candidate as `match` / `possible` / `non_match`.
 - **Reversible.** Every applied operation is recorded with an undo payload — a
   *git reflog for your agent's memory*.
 - **Self-explaining.** Each candidate carries the signals that explain *why* two
@@ -36,30 +37,27 @@ This reuses the existing `valid_from` / `valid_until` columns on
 V14). Merges work the same way: the survivor absorbs the others' content, and
 each absorbed node is bitemporally invalidated rather than deleted.
 
-## Fellegi-Sunter two-threshold scoring
+## Exact-identity scanning (4.0)
 
-Candidate scoring combines three signals into a weighted score in `[0, 1]`:
+The 3.x Fellegi-Sunter scorer (embedding cosine 0.70 + tag/token Jaccard) is
+gone — no embeddings, no Jaccard, no thresholds. Dedup candidates come from two
+exact scans over live nodes (`crates/strata-store/src/admission.rs`):
 
-| Signal                  | Weight | Source                                     |
-| ----------------------- | -----: | ------------------------------------------ |
-| Embedding cosine sim    |   0.70 | stored embeddings (`node_embeddings`)      |
-| Tag overlap (Jaccard)   |   0.15 | `knowledge_nodes.tags`                     |
-| Content token overlap   |   0.15 | Jaccard over content tokens (len > 2)      |
+- **Identity groups** — `identity = blake3::derive_key("vestige 4
+  content-identity", nfc(trim(collapse_ws(content))))`. Two inputs with the
+  same identity are the same fact; two inputs differing by a single word are
+  NOT. Only exact identity groups are offered.
+- **Source-key version chains** — nodes sharing one `(system, project, id)`
+  source key, ordered by id. The sanctioned automatic supersede path is a
+  re-derivation: same source key with a strictly later `source_updated_at`.
+  Every other lineage proposal follows gate policy, and the default policy
+  holds retire.
 
-The combined score is then classified against **two** thresholds:
-
-```
-score >= match_threshold       => "match"      (auto-merge eligible)
-possible_threshold <= score    => "possible"   (surfaced for review)
-score <  possible_threshold     => "non_match"  (never offered)
-```
-
-Defaults: `match_threshold = 0.86`, `possible_threshold = 0.72`. The two-band
-design means borderline cases are surfaced for review instead of being
-force-decided in either direction.
-
-A cluster's confidence is the **weakest** pairwise score within it (the loosest
-link), so a cluster is only as confident as its least-similar member.
+Every ingest item lands exactly one `ADMISSION_RECEIPT` naming its outcome and
+reason codes — including refusals ([RECEIPTS.md](RECEIPTS.md)). A periodic
+`JOB` receipt (`dedup-scan/1`, every N ingest frames, default 1000) records
+that the identity scan covered a seq range; the scan never decides anything by
+itself.
 
 ## The reversible operation log (the "memory reflog")
 

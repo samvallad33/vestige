@@ -48,12 +48,15 @@ dashboard embedded into the release binary. The core product promise is:
   making claims about behavior.
 - Keep release changes scoped. Do not rewrite unrelated modules during a
   version/tag cleanup unless the release gate requires it.
-- Preserve local-first behavior. Heavy models, Sanhedrin-style verifier hooks,
-  and preflight automation must remain optional.
-- Treat deletion semantics carefully. `purge` must remove content and
-  embeddings, while retaining only content-free audit tombstones.
+- Preserve local-first behavior. No model runs anywhere in the decision path
+  (4.0 has no Sanhedrin-style verifier hooks and no embedding runtime);
+  preflight automation must remain optional.
+- Treat deletion semantics carefully. `purge` must remove content, while
+  retaining only content-free audit tombstones.
 - Treat exact lookup semantics carefully. Env vars, paths, UUIDs, quoted
-  strings, and code identifiers should not be distorted by semantic expansion.
+  strings, and code identifiers must be passed as exact handles — there is no
+  semantic expansion to rescue an approximate one. See
+  [docs/HANDLES.md](docs/HANDLES.md).
 
 ## Common Checks
 

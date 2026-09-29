@@ -1,98 +1,52 @@
-# Sanhedrin Receipt Schema
+# From Sanhedrin receipts to 4.0 claim verdicts
 
-Sanhedrin writes local, inspectable receipts so a Stop-hook veto is appealable
-instead of opaque. The current schema is `vestige.sanhedrin.receipt.v1`.
+> **Removed in 4.0.** Sanhedrin — the model-run verifier that read transcripts
+> and vetoed a turn with `vestige.sanhedrin.receipt.v1` documents — is gone.
+> Hard rule H3: no LLM decides. The state directory
+> `~/.vestige/sanhedrin/` (latest.json, receipts/, appeals.jsonl,
+> fail-open.jsonl) and its env knobs (`VESTIGE_SANHEDRIN_*`, including the
+> staged-evidence overlay and the compatibility flags described here
+> historically) belong to that retired pipeline. The companion schema
+> [`SANHEDRIN_TEST_INTEGRITY_DELTAS.md`](SANHEDRIN_TEST_INTEGRITY_DELTAS.md)
+> is kept as a historical archive. This page describes what replaced it.
 
-## Locations
+## What replaces a model verdict: deterministic claim verdicts
 
-- Latest JSON: `~/.vestige/sanhedrin/latest.json`
-- Latest HTML: `~/.vestige/sanhedrin/latest.html`
-- Receipt archive: `~/.vestige/sanhedrin/receipts/<receipt-id>.json`
-- Command receipt ledger: `~/.vestige/sanhedrin/command-receipts.jsonl`
-- Appeals: `~/.vestige/sanhedrin/appeals.jsonl`
-- Fail-open events: `~/.vestige/sanhedrin/fail-open.jsonl`
+4.0 keeps the *accountability* of Sanhedrin and removes the *judge*. Claims
+about work are decided by the deterministic gate against the log, and the
+decision is a signed frame like everything else:
 
-Optional companion schema: [`SANHEDRIN_TEST_INTEGRITY_DELTAS.md`](SANHEDRIN_TEST_INTEGRITY_DELTAS.md) describes mechanical deltas for cases where a verifier command passed but the test artifact changed after implementation.
+- **`CLAIM` (frame kind 48)** — an agent's declared claim, receipt-cited: it
+  names the receipts that allegedly support it.
+- **`CLAIM_VERDICT` (frame kind 37)** — the deterministic verdict over that
+  claim, computed by replaying the cited receipts at their decision points.
+  No model runs; the same log at the same `as_of` yields the same verdict.
 
-## v1 JSON Shape
+Every receipt payload carries the PARAMS hash that governed it and the
+caller-supplied decision point, so a verdict is replayable bit for bit — see
+[RECEIPTS.md](RECEIPTS.md) for the registry and
+`strata-verify <dir>` for the verifier.
 
-```json
-{
-  "schema": "vestige.sanhedrin.receipt.v1",
-  "id": "receipt_<stable hash>",
-  "draftId": "draft_<stable hash>",
-  "createdAt": "2026-05-25T18:00:00+00:00",
-  "overall": "pass|pass_with_warnings|veto|appealed",
-  "verdictBar": "PASS|NOTE|CAUTION|VETO|APPEALED",
-  "summary": "Human-readable result",
-  "draftPreview": "First 1000 chars of the assistant draft",
-  "claims": [
-    {
-      "id": "c001",
-      "text": "All tests passed.",
-      "fingerprint": "16-char sha256 prefix",
-      "class": "receipt_lock|TECHNICAL|ACHIEVEMENT|...",
-      "subject": "Sam|draft|command receipt",
-      "risk": "normal|hard",
-      "evidence_state": "supported|missing_receipt|contradicted|appealed|...",
-      "decision": "pass|pass_unverified|veto|appealed",
-      "precedent": [
-        {
-          "type": "command|receipt_lock|vestige|appeal",
-          "summary": "Why this claim passed or failed",
-          "command": "cargo test --workspace",
-          "exitCode": 0
-        }
-      ],
-      "fix": "Suggested rewrite",
-      "appeal": {
-        "status": "open|appealed",
-        "actions": ["stale", "wrong", "too_strict"]
-      }
-    }
-  ],
-  "receipts": [
-    {
-      "source": "transcript|codex-transcript",
-      "command": "cargo test --workspace",
-      "exitCode": 0,
-      "success": true,
-      "timestamp": "2026-05-25T18:00:00+00:00"
-    }
-  ],
-  "source": {
-    "stateDir": "~/.vestige/sanhedrin",
-    "transcript": "/path/to/session.jsonl"
-  }
-}
-```
+## The enforcement path that remains
 
-## Compatibility Rules
+Where a 3.x install ran Sanhedrin through a Stop hook, the 4.0 pattern is a
+deterministic claim gate: a hook that fails closed (refuses the stop when
+Vestige is unreachable), checks claims against live receipts and commands, and
+records what it used. Fail-closed replaces fail-open: an unverifiable claim is
+a veto with a receipt trail, never a silent pass.
 
-- Readers should accept `vestige.sanhedrin.receipt.v1` without warning.
-- Readers should keep rendering unknown schemas defensively, but surface a
-  warning instead of silently treating them as v1.
-- New schema versions must keep `id`, `createdAt`, `verdictBar`, `summary`, and
-  `claims` stable or provide a dashboard migration.
+<!-- TODO(comment): the claim-gate hook script itself is not in this tree at
+this HEAD (hooks/ still carries the 3.x Sanhedrin stack). Wire or document the
+claim-gate script before treating its fail-closed contract as shipped
+behavior. -->
 
-## Staged Evidence Boundary
+## Compatibility rules for old artifacts
 
-`VESTIGE_SANHEDRIN_STAGE_FILE` is a non-durable overlay for current-turn context.
-It may help the executioner understand a draft, but code enforces that staged
-evidence cannot satisfy durable evidence requirements for `SUPPORTED`,
-`REFUTED`, or `REFUTED_BY_ABSENCE`. Durable support must come from Vestige memory
-or command receipts.
-
-## Receipt Lock Compatibility Flags
-
-`VESTIGE_SANHEDRIN_ALLOW_COMMAND_LEDGER=1` lets Receipt Lock read
-`command-receipts.jsonl` when no live transcript path is available.
-
-`VESTIGE_SANHEDRIN_ALLOW_LOOSE_LEDGER=1` re-enables the legacy fallback that
-regex-scans transcript JSON blobs for `command` or `cmd` fields. Keep this off
-unless you are migrating old transcripts; structured tool-use receipts are safer
-because loose scanning can mistake quoted text for a real command execution.
-
-Hosted Sanhedrin backends should use `VESTIGE_SANHEDRIN_API_KEY` in
-`~/.claude/hooks/vestige-sanhedrin.env`. The installer keeps that file at mode
-`0600`; do not store shared or unrelated API keys there.
+- Existing `vestige.sanhedrin.receipt.v1` files remain readable as documents;
+  nothing in 4.0 produces, validates, or appeals them.
+- 4.0 keeps rendering unknown receipt schemas defensively wherever it renders
+  receipts at all; treat a Sanhedrin document as historical evidence, not as a
+  live verdict.
+- Durable support for any claim now means: a receipt frame in the STRATA log
+  whose verification passes — not a staged overlay, a transcript regex scan,
+  or a model's opinion.

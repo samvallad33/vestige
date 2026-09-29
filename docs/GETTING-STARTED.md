@@ -47,7 +47,7 @@ already know are down-weighted, so the store doesn't fill with restatements of t
 same fact. What you get is a curated set of durable facts, decisions, and the
 occasional "this didn't work," not a firehose of your chat history.
 
-If you want the deeper model (FSRS-6 decay, spreading activation, the science), see
+If you want the deeper model (FSRS-6 decay, receipts, the science), see
 **[The Science](SCIENCE.md)**. You don't need it to start.
 
 ---
@@ -63,12 +63,15 @@ vestige ingest "We switched the prod cache from Redis to an in-memory LRU to cut
 # ...later...
 vestige ingest "Prod is dropping sessions under load and users are getting logged out."
 
-vestige backfill --contrast
+vestige causal-walk --help
 ```
 
-`--contrast` shows you, side by side, what a plain similarity search returns versus
-the real causal cause. That contrast is the whole pitch — more on the mechanism in
-**[the README](../README.md#why-not-just-rag)**.
+The failure and the decision share no words, so nothing ranks them together —
+and 4.0 does not pretend they rank. A **causal walk** starts from explicit
+evidence (a failing test, a stack frame, a CI run, the logged write) and
+follows recorded typed edges to candidate change records. Candidates are
+hypotheses; `causality_verified` stays false. More on the mechanism in
+**[the README](../README.md#the-40-surface-handles-receipts-admission)**.
 
 You can also just talk to your agent normally; it will write and recall memories for
 you through MCP. The CLI is for when you want to drive it directly.
@@ -81,7 +84,7 @@ Vestige is built to be looked at. Nothing is hidden in an opaque index.
 
 - **Quick counts:** `vestige stats`
 - **Health check** (coverage, warnings): `vestige health`
-- **Recall + reasoning** over your memories: `vestige recall "your question"`
+- **Recall by exact handle**: `vestige recall mem:<id>` (free text returns `handle_required` — see [HANDLES.md](HANDLES.md))
 - **Full export** to JSON/JSONL (grep it, diff it, back it up):
   `vestige export memories.jsonl --format jsonl`
 - **The 3D dashboard** — watch your memory as a living graph:

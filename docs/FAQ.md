@@ -160,7 +160,7 @@ Accessibility is calculated as: `0.5 × retention + 0.3 × retrieval_strength + 
 
 Memories are never deleted automatically. They fade from relevance but can be revived if accessed again (like human memory—"oh, I forgot about that!").
 
-If you explicitly want content gone, use `memory(action="purge", confirm=true)`. Purge permanently removes the memory content and embeddings, scrubs internal references, and keeps only a non-content tombstone so sync/audit can prove the deletion happened.
+If you explicitly want content gone, use `memory(action="purge", confirm=true)`. Purge permanently removes the memory content, scrubs internal references, and keeps only a non-content tombstone so sync/audit can prove the deletion happened.
 
 **To configure decay**: The FSRS-6 algorithm auto-tunes based on your usage patterns. Memories you access stay strong; memories you ignore fade. No manual tuning needed.
 </details>
@@ -168,14 +168,12 @@ If you explicitly want content gone, use `memory(action="purge", confirm=true)`.
 <details>
 <summary><b>"Remember everything but only recall weak memories when there aren't any strong candidates?"</b></summary>
 
-This is exactly how `hybrid_search` works:
-
-1. Combines keyword + semantic search
-2. Results ranked by relevance × retention strength
-3. Strong + relevant memories surface first
-4. Weak memories only appear when they're the best match
-
-The FSRS decay doesn't delete—it just deprioritizes. Your "have cake and eat it too" intuition is already implemented.
+There is no ranked search to deprioritize: 4.0 recall is exact-handle only,
+and free text returns `handle_required`. Weak memories are not ranked away —
+they fade under FSRS-6 and resurface through their handles, their edges, and
+the graph views (`graph`, `never_composed`, `forgotten_lesson`). The FSRS
+decay doesn't delete—it just makes a memory quieter until something exact
+points at it again.
 </details>
 
 <details>
@@ -189,14 +187,12 @@ In Vestige, retrieval is audit-only: a matching result is not automatically trea
 <details>
 <summary><b>"What is 'Spreading Activation'?"</b></summary>
 
-**Spreading Activation** (Collins & Loftus, 1975) is how activating one memory primes related memories.
-
-In Vestige's current implementation:
-- When you search for "React hooks", memories about "useEffect" surface due to **semantic similarity** in hybrid search
-- Semantically related memories are retrieved even without exact keyword matches
-- This effect comes from the embedding vectors capturing conceptual relationships
-
-*Note: A full network-based spreading activation module exists in the codebase (`spreading_activation.rs`) for future enhancements, but the current user experience is powered by embedding similarity.*
+**Spreading Activation** (Collins & Loftus, 1975) is how activating one memory
+primes related memories. 4.0 does not implement it: there is no similarity
+retrieval to spread across, and adjacency comes only from **recorded typed
+edges** (`touched`, `anchored_to`, `derived_from`, `supersedes`, `corrects`,
+`closed_by`, `projected_to`, `evidence_of`). Lookups follow those exact edges
+via `graph` and the causal walk — resemblance is never a link.
 </details>
 
 <details>
@@ -242,16 +238,19 @@ In Vestige: Both strengths are tracked separately and factor into search ranking
 
 The killer feature. When you call `smart_ingest`, Vestige doesn't just blindly add memories:
 
-1. **Compares** new content against all existing memories (via semantic similarity)
-2. **Decides** based on how novel/redundant it is:
+1. **Identifies** the input by exact content identity (Unicode-normalized,
+   trimmed, whitespace-collapsed — a hash, not a similarity score)
+2. **Decides** deterministically:
 
-| Similarity to Existing | Action | Why |
-|------------------------|--------|-----|
-| >92% | **REINFORCE** | "I already know this"—strengthen existing |
-| 75-92% | **UPDATE** | "This adds to what I know"—merge |
-| <75% | **CREATE** | "This is new"—add fresh memory |
+| Situation | Action | Why |
+|-----------|--------|-----|
+| Identity matches a live node in scope | **REINFORCE** | "I already know this"—one review fold, no new node |
+| Declared lineage on an exact target | **SUPERSEDE / CORRECT** | Gate-admitted; retire holds by default |
+| Anything else | **CREATE** | "This is new"—add a fresh node |
 
-This prevents memory bloat and keeps your knowledge base clean automatically.
+Lookalikes with no recorded causal relation never merge, link, or rank —
+preventing memory bloat never happens by guessing two texts mean the same
+thing.
 </details>
 
 <details>
@@ -304,15 +303,12 @@ recall(
 <details>
 <summary><b>"What's the difference between all the search tools?"</b></summary>
 
-They're unified into one `recall` tool that automatically uses hybrid search. But understanding the underlying methods helps:
-
-| Method | How It Works | Best For |
-|--------|--------------|----------|
-| **Keyword (BM25)** | Term frequency matching | Exact terms, names, IDs |
-| **Semantic** | Embedding cosine similarity | Conceptual matching, synonyms |
-| **Hybrid (RRF)** | Combines both with rank fusion | Everything (default) |
-
-The unified `recall` always uses hybrid, which gives you the best of both worlds.
+There is one `recall` tool and it does not rank text at all. 4.0 lookup is
+**exact handle** only (`mem:`, `sha:`, `path:`, `line:`, `sym:`, `test:`,
+`run:`, `call:`, `issue:`, `pr:`, `purl:`, `node:`, `receipt:`, `tag:`,
+`session:`); free text returns `handle_required` and is never searched. See
+[HANDLES.md](HANDLES.md). If you have prose instead of a handle, list your
+session handles or inspect receipts — do not paraphrase into a query.
 </details>
 
 <details>
@@ -337,13 +333,11 @@ Remember: even "forgotten" memories (Unavailable state) still exist in the datab
 Run `vestige consolidate` (CLI) to trigger maintenance:
 
 1. **Decay application**: Updates retention based on time elapsed
-2. **Embedding generation**: Creates vectors for memories missing them
-3. **Node promotion**: Frequently accessed memories get boosted
-4. **Pruning**: Marks extremely low-retention memories as unavailable
+2. **Node promotion**: Frequently accessed memories get boosted
+3. **Pruning**: Marks extremely low-retention memories as unavailable
 
 **When to run it**:
 - After bulk importing memories
-- If semantic search seems off
 - Periodically (weekly) for large knowledge bases
 - After long periods of inactivity
 
@@ -425,7 +419,6 @@ SELECT COUNT(*) FROM knowledge_nodes WHERE retention_strength < 0.1;
 | Parameter | Default | What It Controls |
 |-----------|---------|------------------|
 | `min_retention` in search | 0.0 | Filter out weak memories |
-| `min_similarity` in search | 0.5 | Minimum semantic match |
 | Prediction Error thresholds | 0.75, 0.92 | CREATE/UPDATE/REINFORCE boundaries |
 | Synaptic capture window | 9h back, 2h forward | Retroactive importance range |
 | Memory state thresholds | 0.1, 0.4, 0.7 | Silent/Dormant/Active accessibility boundaries |
@@ -453,7 +446,7 @@ Most of these are hardcoded but based on cognitive science research. Future vers
    # Look at retention_strength
    ```
 
-4. **Run consolidation** (generates missing embeddings):
+4. **Run consolidation**:
    ```bash
    vestige consolidate
    ```
@@ -464,9 +457,9 @@ Most of these are hardcoded but based on cognitive science research. Future vers
    ```
 
 Common issues:
-- Missing embedding (run consolidation)
 - Very low retention (verify it, then explicitly promote it if it remains useful)
 - Tags/content mismatch (check exact content)
+- No exact handle (recall never guesses: resolve the id first, then pass `mem:<id>`)
 </details>
 
 ---
@@ -597,44 +590,21 @@ This matches empirical data better than the exponential model most apps use.
 <details>
 <summary><b>"What embedding model does Vestige use?"</b></summary>
 
-**Nomic Compact** uses Nomic Embed Text v1.5 locally via fastembed, with a
-preserved 256-dimensional legacy profile. It is the default baseline; the
-separate Nomic retrieval profile and Qwen profiles are explicit migration
-choices, never a runtime selector.
-
-Why Nomic:
-- Open source (Apache 2.0)
-- Competitive with OpenAI's ada-002
-- No API costs or rate limits
-- Fast enough for real-time search
-
-Vestige never downloads or switches an embedding profile at startup or on first
-use. Optional artifacts must be supplied locally, hash-verified, evaluated,
-migrated, and explicitly activated. Set `FASTEMBED_CACHE_PATH` only to locate
-an already-provisioned legacy Nomic cache.
+None. 4.0 removed embeddings entirely (H1: no vectors, no cosine similarity).
+Migration counts and drops vector rows — they never enter the STRATA log —
+and `recall` is exact-handle only, so there is no model to download, cache, or
+version. See [MIGRATING-TO-4.0.md](MIGRATING-TO-4.0.md) and
+[HANDLES.md](HANDLES.md).
 </details>
 
 <details>
 <summary><b>"How does hybrid search with RRF work?"</b></summary>
 
-**Reciprocal Rank Fusion (RRF)** combines multiple ranking lists:
-
-```
-RRF_score(d) = Σ 1/(k + rank_i(d))
-```
-
-Where:
-- `d` = document (memory)
-- `k` = constant (typically 60)
-- `rank_i(d)` = rank of d in list i
-
-In Vestige:
-1. BM25 keyword search produces ranking
-2. Semantic search produces ranking
-3. RRF fuses them into final ranking
-4. Retention strength provides additional weighting
-
-This gives you exact keyword matching AND semantic understanding in one search.
+It doesn't — 4.0 removed hybrid search. There is no BM25 list, no semantic
+list, and no rank fusion. A lookup is a byte-exact handle that resolves to
+nodes, or the fail-closed <code>handle_required</code> payload. What replaces
+relevance ranking is the recorded causal structure: typed edges, walks, and
+receipts ([RECEIPTS.md](RECEIPTS.md)).
 </details>
 
 <details>
@@ -649,18 +619,15 @@ Tested benchmarks:
 | 10,000 | <200ms | ~300MB |
 | 100,000 | <1s | ~1GB |
 
-Performance is primarily bounded by:
-- SQLite FTS5 for keyword search (very fast)
-- HNSW index for semantic search (sublinear scaling)
-- Embedding generation (only on ingest, ~100ms each)
-
-For typical personal use (hundreds to low thousands of memories), performance is essentially instant.
+In 4.0 a lookup is an exact-handle resolution against the store — no FTS, no
+HNSW, no embedding generation — so the numbers above are 3.x measurements,
+kept for history. For typical personal use, performance is essentially instant.
 </details>
 
 <details>
 <summary><b>"Is there any network activity after setup?"</b></summary>
 
-**No.** After the first-run model download:
+**No.** 4.0 has no first-run model download at all:
 - Zero network requests
 - Zero telemetry
 - Zero analytics
@@ -828,20 +795,11 @@ If not found:
 claude mcp add vestige /full/path/to/vestige-mcp -s user
 ```
 
-### `.fastembed_cache` folder appearing in project directories
+### Legacy `.fastembed_cache` folders from 3.x
 
-This folder is created by the fastembed library on first run, in whatever directory you're in.
-
-**Solutions:**
-1. **Run first command from home**: `cd ~ && vestige health`
-2. **Set cache path**: `export FASTEMBED_CACHE_PATH="$HOME/.fastembed_cache"`
-3. **Add to `.gitignore`**
-
-### Embedding profile install cannot proceed
-
-Vestige does not download a model in the background. Inspect the profile state
-with `vestige embeddings status`; an optional profile can proceed only after
-its local artifacts and compatible runner have been verified.
+A 3.x install could drop a `.fastembed_cache` folder in whatever directory the
+first command ran from. 4.0 has no embedder: the folder is inert, and you can
+delete it or add it to `.gitignore`.
 
 ### "Tools not showing" in Claude
 
@@ -856,32 +814,19 @@ Vestige uses SQLite with WAL mode. If you see lock errors:
 pkill vestige-mcp
 ```
 
-### Upgrading a 1.x store to 2.x
+### Upgrading an older store
 
-Vestige 1.x stored raw 768-dimension Nomic vectors. 2.x registers an upgraded
-store under the `nomic-v1.5-legacy-raw-256` profile, and from v2.6.1 the
-server repairs those vectors automatically on first open (Matryoshka
-truncation to 256 dimensions, no model download, no data loss); anything it
-cannot repair is regenerated by the background backfill. Memories are never
-touched by this repair.
-
-Rehearse the upgrade before you trust it:
+The 1.x→2.x vector-repair history is exactly that — history. 4.0 carries no
+embedding machinery at all: there is no vector repair, no embedder, no
+`Embedding Service`, and no `VESTIGE_DISABLE_VECTOR_SEARCH` knob. A v3 SQLite
+store is not upgraded in place — it is migrated read-only into a STRATA log:
 
 ```bash
-vestige upgrade --dry-run
+vestige migrate-to-strata --from <path>
 ```
 
-This copies your store to a temp directory, runs every migration and strict
-check against the copy, prints what would be repaired or rejected, and leaves
-the original untouched. Add `--data-dir <dir>` to target a specific store.
-
-If a store still refuses to open, `VESTIGE_DISABLE_VECTOR_SEARCH=1` starts the
-server in keyword-only mode so nothing is blocked while you sort it out.
-
-Note that `vestige health` and `vestige consolidate` run without an
-embedding runtime. "Embedding Service: not started by the CLI" is a statement
-about that process, not about your store; the MCP server owns the embedder and
-fills missing vectors in the background.
+The original file is never modified (BLAKE3-verified before and after) and
+stays as your backup. See [MIGRATING-TO-4.0.md](MIGRATING-TO-4.0.md).
 
 ### Windows notes
 

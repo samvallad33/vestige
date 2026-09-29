@@ -2,11 +2,19 @@
 
 > Global, per-project, and multi-agent setups
 
+> **4.0 storage model.** The durable 4.0 store is the STRATA signed
+> append-only log (`strata-store`), not SQLite. A v3 SQLite store is a
+> **read-only migration source**: 4.0 refuses to open or create one, and
+> `vestige migrate-to-strata` carries it over without modifying it — see
+> [MIGRATING-TO-4.0.md](MIGRATING-TO-4.0.md). The SQLite-specific sections
+> below describe that v3 engine, kept for existing stores and the migration
+> path.
+
 ---
 
 ## Database Location
 
-All memories are stored in a **single local SQLite file**:
+A v3 store lived in a **single local SQLite file**:
 
 | Platform | Database Location |
 |----------|------------------|
@@ -36,7 +44,7 @@ vestige portable-export ~/Desktop/vestige-portable.json
 vestige portable-import ~/Desktop/vestige-portable.json
 ```
 
-Portable archives preserve raw Vestige storage rows: memory IDs, FSRS state, graph connections, suppression state, timestamps, audit history, and embedding blobs.
+Portable archives preserve raw Vestige storage rows: memory IDs, FSRS state, graph connections, suppression state, timestamps, and audit history. (Archives produced by 3.x could also carry embedding blobs; 4.0 has no embeddings and migrates none — vector rows are counted and dropped, never copied.)
 
 For one-time migration, keep the conservative empty-database import:
 
@@ -54,7 +62,7 @@ vestige portable-import ~/Dropbox/vestige/portable.json --merge
 vestige sync ~/Dropbox/vestige/portable.json
 ```
 
-`vestige sync` uses the same pluggable portable-sync backend interface as the core library. v2.1.1 ships a file backend, which works with Dropbox, iCloud Drive, Syncthing, Git, network shares, or any folder-sync system. The merge algorithm applies delete tombstones, keeps newer local memories on timestamp conflicts, preserves stable IDs, rebuilds FTS after import, and writes the pushed archive atomically when the filesystem supports rename. v2.1.2 also carries non-content purge tombstones so a hard purge can sync without retaining the deleted memory text.
+`vestige sync` uses the same pluggable portable-sync backend interface as the core library. v2.1.1 ships a file backend, which works with Dropbox, iCloud Drive, Syncthing, Git, network shares, or any folder-sync system. The merge algorithm applies delete tombstones, keeps newer local memories on timestamp conflicts, preserves stable IDs, and writes the pushed archive atomically when the filesystem supports rename. v2.1.2 also carries non-content purge tombstones so a hard purge can sync without retaining the deleted memory text.
 
 When using the MCP `export` tool with `format: "portable"`, Vestige writes the archive under the active data directory's `exports/` folder. The MCP `restore` tool only reads from that `exports/` or `backups/` folder by default; pass `allowAnyPath: true` only for a trusted local file you selected manually.
 
@@ -218,7 +226,8 @@ Just use **Time Machine** (macOS) / **Windows Backup** / **rsync** — they'll c
 
 ## Direct SQL Access
 
-The database is just SQLite. You can query it directly:
+A v3 store is just SQLite, and read-only inspection of that migration source
+still works:
 
 ```bash
 sqlite3 ~/Library/Application\ Support/com.vestige.core/vestige.db
@@ -229,7 +238,10 @@ SELECT content FROM knowledge_nodes WHERE tags LIKE '%identity%';
 SELECT COUNT(*) FROM knowledge_nodes WHERE retention_strength < 0.1;
 ```
 
-**Caution**: Don't modify the database while Vestige is running.
+**Caution**: Don't modify the database while Vestige is running — and in 4.0,
+never open a v3 store read-write at all: the guard refuses it, and the
+supported path is `vestige migrate-to-strata --from <path>`, which leaves the
+file byte-identical.
 
 ---
 
@@ -258,21 +270,6 @@ Internally the `Storage` type holds **separate reader and writer connections**, 
 - Any number of concurrent readers share the read connection lock.
 - Writers serialize on the writer connection lock.
 - WAL lets readers continue while a writer commits — they don't block each other at the SQLite level.
-
-### The vector index follows peer writes
-
-Each process holds its own in-memory HNSW index, rebuilt from
-`embedding_profile_vectors` at startup. Before every semantic search it reads
-`PRAGMA data_version`, which SQLite bumps when another connection commits, so
-the check costs one pragma when nothing changed. Since schema V32 it also learns
-*what* changed: every insert, update and delete on the vector table is journaled
-by trigger into `vector_journal` (ids only, keyed by an AUTOINCREMENT sequence
-that is monotonic in commit order and never reused), and the index applies
-exactly the journaled rows past its watermark. A sibling process's new memory,
-re-embedding or purge is therefore visible on the next query without a restart.
-The consolidation cycle prunes the journal to the newest 10,000 rows plus the
-last seven days; a process whose watermark has fallen behind that horizon
-reconciles its index against the table instead of trusting the journal.
 
 ### What works today
 

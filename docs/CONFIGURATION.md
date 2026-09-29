@@ -4,28 +4,12 @@
 
 ---
 
-## First-Run Network Requirement
+## First run
 
-Vestige downloads the **Nomic Embed Text v1.5** model (~130MB) from Hugging Face on first use. Qwen3 embeddings are opt-in and download their own Hugging Face model when selected.
-
-**All subsequent runs are fully offline.**
-
-### Model Cache Location
-
-The embedding model is cached in platform-specific directories:
-
-| Platform | Cache Location |
-|----------|----------------|
-| macOS | `~/Library/Caches/vestige/fastembed` |
-| Linux | `~/.cache/vestige/fastembed` |
-| Windows | `%LOCALAPPDATA%\vestige\cache\fastembed` |
-
-Override with environment variable:
-```bash
-export FASTEMBED_CACHE_PATH="/custom/path"
-```
-
-Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the standard Hugging Face cache environment such as `HF_HOME` if you need to relocate that larger model cache.
+4.0 downloads nothing. There is no embedding model, no reranker, and no
+network fetch on first use — the store is the STRATA log on your machine.
+A v3 SQLite store is refused at startup with the migration hint; see
+[MIGRATING-TO-4.0.md](MIGRATING-TO-4.0.md).
 
 ---
 
@@ -33,9 +17,8 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VESTIGE_DATA_DIR` | OS per-user data directory | Storage directory fallback; overridden by `--data-dir`; database lives at `<dir>/vestige.db` |
+| `VESTIGE_DATA_DIR` | OS per-user data directory | Storage directory fallback; overridden by `--data-dir`; a migrated STRATA directory defaults to `<dir>/strata` |
 | `RUST_LOG` | `info` (via tracing-subscriber) | Log verbosity + per-module filtering |
-| `FASTEMBED_CACHE_PATH` | Platform cache directory; `./.fastembed_cache` fallback | Embedding model cache location |
 | `VESTIGE_DASHBOARD_PORT` | `3927` | Dashboard HTTP + WebSocket port |
 | `VESTIGE_HTTP_ENABLED` | `false` | Set `true` or `1` to enable optional MCP-over-HTTP |
 | `VESTIGE_HTTP_PORT` | `3928` | Optional MCP-over-HTTP port; `--http-port` also enables HTTP |
@@ -44,15 +27,12 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | `VESTIGE_AUTH_TOKEN` | auto-generated | Dashboard + MCP HTTP bearer auth |
 | `VESTIGE_DASHBOARD_ENABLED` | `false` | Set `true` or `1` to enable the web dashboard |
 | `VESTIGE_CONSOLIDATION_INTERVAL_HOURS` | `6` | FSRS-6 decay cycle cadence |
-| `VESTIGE_BACKFILL_AUTOFIRE` | `on` | Retroactive Salience Backfill auto-fire during consolidation and, since 2.8.0, live the moment a failure-shaped memory is ingested (same pipeline and receipts as the `backfill` tool). On by default; set `0`/`false`/`off`/`no` to disable both. The manual `backfill` tool + CLI stay available either way. When on, promotion is bounded (`stability = MIN(stability * 1.5, stability + 365)`) |
 | `VESTIGE_FAILURE_FEEDBACK` | `off` | Post-retrieval failure feedback (2.8.0): when a failure-shaped memory is ingested, the memories retrieved in the previous thirty minutes of receipts lose retrieval strength by rank (at most 0.10 each, floor 0.05, same scope, once per failure). Opt in with `1`/`true`/`on`/`yes`. Every delta is written to the `failure_feedback` ledger and `revert_failure_feedback` undoes it exactly. |
 | `VESTIGE_AUTO_CONSOLIDATE_MERGE` | `off` | Auto concat-merge of near-duplicate memories during consolidation (keeps the strongest, folds the rest in as `[MERGED]` blocks, deletes the originals). **Off by default since v2.6.0** — unattended destruction is opt-in: set `1`/`true`/`on`/`yes` to enable; anything else (including typos) stays off. Protected (`dedup protect`) memories are never absorbed or deleted by this pass. The `dedup` tool remains the previewable, reversible path. |
 | `VESTIGE_TRACE` | `on` | Agent Black Box trace recording. **On by default**: every MCP tool call writes rows to `agent_traces`/`agent_runs` in your local database. Set `0`/`false`/`off`/`no` to turn the recorder off. Read once per process, so changing it mid-process has no effect |
 | `VESTIGE_TRACE_RETENTION_DAYS` | `30` | How long Black Box traces are kept. The consolidation cycle deletes trace events older than this and drops any `agent_runs` roll-up left with no events. `0` keeps traces forever (sweep disabled); unset, empty, negative, or malformed values fall back to `30` |
-| `VESTIGE_DISABLE_VECTOR_SEARCH` | unset (vector search on) | Kill switch for the HNSW vector index. Set to `1`/`true`/`yes`/`on`/`enable`/`enabled` to force semantic/vector search off and fall back to keyword search. Useful on older x86 CPUs — the index also disables itself automatically when AVX2+FMA are missing |
-| `ORT_DYLIB_PATH` | unset | Intel Mac (`x86_64-apple-darwin`) only: absolute path to Homebrew `libonnxruntime.dylib`. Resolve with `brew --prefix onnxruntime` (do not hardcode `/opt/homebrew` vs `/usr/local`). GUI clients (Cursor, Claude Desktop) do not inherit `.zshrc` — set this in the MCP JSON `env` block. See [Intel Mac install](INSTALL-INTEL-MAC.md) |
 
-> **Storage location precedence:** `--data-dir <path>` wins over `VESTIGE_DATA_DIR`; if neither is set, Vestige uses your OS's per-user data directory: `~/Library/Application Support/com.vestige.core/` on macOS, `~/.local/share/vestige/core/` on Linux, `%APPDATA%\vestige\core\` on Windows. Custom paths are directories, are created if missing, expand a leading `~`, and store the database at `<dir>/vestige.db`.
+> **Storage location precedence:** `--data-dir <path>` wins over `VESTIGE_DATA_DIR`; if neither is set, Vestige uses your OS's per-user data directory: `~/Library/Application Support/com.vestige.core/` on macOS, `~/.local/share/vestige/core/` on Linux, `%APPDATA%\vestige\core\` on Windows. Custom paths are directories, are created if missing, and expand a leading `~`. 4.0 never creates a SQLite store and refuses to open one; a migrated STRATA directory defaults to `<dir>/strata`.
 
 ### Vestige Pro (hosted cloud sync)
 
@@ -413,7 +393,6 @@ vestige update --version v3.1.1
 ```bash
 vestige sandwich install
 vestige sandwich install --enable-preflight
-vestige sandwich install --enable-sanhedrin --sanhedrin-endpoint=http://127.0.0.1:11434/v1/chat/completions
 ```
 
 **Check your version:**
@@ -425,19 +404,19 @@ vestige-mcp --version
 
 ## Development
 
-### Building without embeddings
+### Building without the legacy engine
 
-Some targets cannot carry ONNX Runtime yet (Android/Termux, #145). The
-`no-embeddings-build` CI job keeps this configuration compiling:
+Android/Termux targets drop `codebase-git` (libgit2, OpenSSL, libssh2) so the
+build does not need those C libraries; the `codebase` tool reports git history
+as unavailable. 4.0 has no embedding features to drop — `embeddings` and
+`vector-search` are declared always-off stubs kept only so legacy
+`#[cfg(feature = ...)]` sites compile.
 
 ```bash
 cargo build --release -p vestige-mcp --no-default-features --features connectors,cloud-sync
 ```
 
-It drops `embeddings`, `vector-search` and `codebase-git` (libgit2, OpenSSL,
-libssh2). Recall is keyword only, `smart_ingest` stores without the
-prediction-error gate and says so in its response, and the `codebase` tool
-reports git history as unavailable. See [INSTALL-TERMUX.md](INSTALL-TERMUX.md).
+`recall` is exact-handle only in every build. See [INSTALL-TERMUX.md](INSTALL-TERMUX.md).
 
 ```bash
 # Run tests

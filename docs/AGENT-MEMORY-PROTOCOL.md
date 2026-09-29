@@ -44,11 +44,11 @@ from the server's own tools/list, including every advertised action, mode and
 view. Select calls for the task; using every tool in every session wastes context
 and can cause unwanted mutations.
 
-Use `recall` mode="lookup" for search (concrete=true for literal identifiers),
-mode="reason" for prior decisions, and mode="contradictions" to inspect conflicts.
-Check current source evidence before treating memory as fact. Retention is a
-retrieval signal, not truth. Graph connections and backfill candidates are
-hypotheses; a retrieval receipt records evidence use, not proof of causality.
+`recall` is exact-handle only: pass `mem:<id>` (or another exact handle) and
+treat free text as an error (`handle_required`) rather than a query. Check
+current source evidence before treating memory as fact. Retention is a
+retrieval signal, not truth. Graph connections and causal-walk candidates are
+hypotheses; a receipt records evidence use, not proof of causality.
 
 Save durable preferences, project decisions, recurring corrections, stable facts,
 and reusable code patterns with `smart_ingest`. Do not store secrets, credentials,
@@ -66,8 +66,8 @@ call `memory` with `action="purge"` and `confirm=true`.
 |-----------|--------------------|
 | Discover all installed tools/actions or inspect exact arguments | `memory_status(view="tools")`; add `tool` for a full schema |
 | Start a session with a bounded context packet | `session_start` |
-| Search exact identifiers, paths, env vars or names | `recall(mode="lookup", concrete=true)` |
-| Reason over earlier decisions or inspect disagreements | `recall(mode="reason")` or `recall(mode="contradictions")` |
+| Look up an exact identifier, path, env var or name | `recall(handle="mem:<id>")` — handles only, never text |
+| Reason over earlier decisions or inspect disagreements | `graph` (chains, associations) and `session_start` over exact handles |
 | Save durable verified knowledge, singly or in a batch | `smart_ingest` |
 | Fetch, inspect state, reinforce, correct or explicitly erase memories | `memory` |
 | Remember source-linked patterns/decisions; check or replace reviewed anchors | `codebase` |
@@ -78,13 +78,13 @@ call `memory` with `action="purge"` and `confirm=true`.
 | Inspect connections, predictions, recorded compositions and uncombined candidates | `graph` |
 | Inspect a retrieval receipt or ablate its frozen evidence | `receipt` |
 | Temporarily inhibit a memory or reverse within its supported window | `suppress` |
-| Investigate earlier candidates related to a recorded failure | `backfill(promote=false)` first; investigate before promotion |
+| Investigate a recorded failure | `causal_walk` with explicit start points; candidates are hypotheses — investigate before any promotion |
 | Run requested consolidation, dreaming, garbage collection, scoring, backup, export or restore | `maintain` |
 
 Tool annotations apply to the entire tool, including tools mixing read and write
 actions. Inspect the specific action's schema and required confirmation. A guide
 entry is neither an execution request nor permission. Prefer previews for merge,
-tag, garbage-collection and backfill investigations; review before applying.
+tag and garbage-collection work, and for causal walks; review before applying.
 Never interpret `never_composed` as worldwide novelty or a causal result.
 
 The old `search`, `deep_reference`, `session_context` and `system_status` names

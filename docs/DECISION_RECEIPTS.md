@@ -35,8 +35,8 @@ There are two different receipt types:
 - `get` reads one persisted receipt, its replay-capsule summary, and its local
   signature state.
 - `replay` removes named receipt-local slots from an active retrieval capsule.
-  It never reruns search, backfills a removed candidate, expands the graph,
-  calls a model, or changes memory state.
+  It never reruns a retrieval, rewrites the withheld evidence back in, expands
+  the graph, calls a model, or changes memory state.
 
 ## Copyable, sanitized incident workflow
 
@@ -169,7 +169,7 @@ If a source memory is suppressed or purged, its replay capsule becomes
 non-replayable under its privacy state. Do not infer that a replay remains
 available after a lifecycle operation.
 
-`memory` action `purge` removes canonical content and embeddings after an
+`memory` action `purge` removes canonical content after an
 explicit `confirm: true`. The current public purge response is a
 `legacy_audited_purge` with `unlearning.verdict: "incomplete"`: it retains only
 opaque audit/sync markers and limited metadata. It does **not** establish
