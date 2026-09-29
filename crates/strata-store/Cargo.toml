@@ -18,6 +18,8 @@ strata-kernel = { path = "../strata-kernel" }
 strata-gate = { path = "../strata-gate" }
 borsh.workspace = true
 blake3.workspace = true
+# NFC normalization for content identity (PR 2).
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

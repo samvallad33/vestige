@@ -37,6 +37,8 @@ fn permissive_policy() -> Policy {
 
 fn input(content: &str, tags: &[&str]) -> IngestInput {
     IngestInput {
+        source: None,
+        source_updated_at_ms: None,
         content: content.to_string(),
         node_type: String::new(),
         tags: tags.iter().map(|t| t.to_string()).collect(),

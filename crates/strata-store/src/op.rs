@@ -46,4 +46,17 @@ pub enum StoreOp {
         /// Rating 1..=4 (clamped by the kernel fold if outside).
         rating: u8,
     },
+    /// One sanctioned source re-derivation transaction (PR 2): land the new
+    /// node, the lineage edge (supersedes/corrects), and the retire mark in
+    /// a single admitted batch. The gate admits it as a WRITE because the
+    /// source-key contract (same key, strictly later source_updated_at) is
+    /// the sanctioned supersede path; a plain RETIRE still holds.
+    ReplaceBySource {
+        /// The new node record.
+        new_record: crate::types::NodeRecord,
+        /// The old node id.
+        old_id: String,
+        /// The lineage edge (new -> old).
+        edge: crate::types::ConnectionRecord,
+    },
 }

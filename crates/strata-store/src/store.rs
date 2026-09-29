@@ -113,7 +113,7 @@ pub struct StrataStore {
     gate_log: StrataEventLog,
     policy: Policy,
     /// Node registry (derived).
-    nodes: BTreeMap<String, NodeRecord>,
+    pub(crate) nodes: BTreeMap<String, NodeRecord>,
     /// node id -> gate-space effect seq of the WRITE that created it (gate
     /// context ids; keeps the gate's `ReadNoReceipt` duty clean).
     origins: BTreeMap<String, u64>,
@@ -291,6 +291,35 @@ impl StrataStore {
             StoreOp::ReviewNode { card_id, rating } => {
                 self.fold_review(*card_id, *rating, ALGO_V2, frame_seq)?;
             }
+            StoreOp::ReplaceBySource {
+                new_record,
+                old_id,
+                edge,
+            } => {
+                // Land the three parts in one transaction: node, edge, retire
+                // mark (same order as the non-transactional path, so digests
+                // match either way).
+                let handle = handle_of(&new_record.id);
+                let is_new = !self.fsrs.cards.contains_key(&handle);
+                self.origins.insert(new_record.id.clone(), gate_effect_seq);
+                self.nodes.insert(new_record.id.clone(), new_record.clone());
+                if is_new {
+                    self.fold_review(handle, INGEST_RATING, new_record.kernel_id, frame_seq)?;
+                }
+                let idx = self.edges.len();
+                self.edges.push(edge.clone());
+                self.forward
+                    .entry(edge.source_id.clone())
+                    .or_default()
+                    .push(idx);
+                self.reverse
+                    .entry(edge.target_id.clone())
+                    .or_default()
+                    .push(idx);
+                if let Some(record) = self.nodes.get_mut(old_id) {
+                    record.superseded_by = Some(new_record.id.clone());
+                }
+            }
         }
         Ok(())
     }
@@ -319,7 +348,7 @@ impl StrataStore {
     // Admission: every mutation passes PROPOSE -> GATE -> EFFECT -> data
     // ------------------------------------------------------------------
 
-    fn admit_write(
+    pub(crate) fn admit_write(
         &mut self,
         op: StoreOp,
         action_kind_code: u8,
@@ -549,6 +578,8 @@ impl StrataStore {
             valid_from_ms: input.valid_from_ms.unwrap_or(created_at_ms),
             valid_until_ms: input.valid_until_ms.unwrap_or(VALID_FOREVER_MS),
             superseded_by: None,
+            source: input.source.clone(),
+            source_updated_at_ms: input.source_updated_at_ms,
         };
         // A brand-new fact references nothing yet: empty context.
         self.admit_write(

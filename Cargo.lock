@@ -2349,6 +2349,7 @@ dependencies = [
  "strata-gate",
  "strata-kernel",
  "tempfile",
+ "unicode-normalization",
 ]
 
 [[package]]
