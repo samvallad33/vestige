@@ -93,12 +93,14 @@ def run(binary, output):
 
             tool("smart_ingest", {"content": "Must not silently disappear", "items": [{"content":"Batch fixture"}]}, error=True)
             tool("maintain", {"action":"export", "start":"2026-01-01"}, error=True)
-            maintenance_page = tool("maintain", {"action":"consolidate", "phase":"embeddings", "batchSize":2})
+            # w1b: embeddings phase is gone; lifecycle is the bounded preview.
+            maintenance_page = tool("maintain", {"action":"consolidate", "phase":"lifecycle", "batchSize":2})
             assert maintenance_page["dryRun"] is True and maintenance_page["selected"] == 0
             assert maintenance_page["hasMore"] is False
             tool("maintain", {"action":"consolidate", "batchSize":2}, error=True)
-            tool("maintain", {"action":"consolidate", "phase":"embeddings", "batchSize":101}, error=True)
-            passed("embedding maintenance previews bounded pages and rejects misplaced controls")
+            # Legal batch size: the phase itself is rejected, not the page bound.
+            tool("maintain", {"action":"consolidate", "phase":"embeddings", "batchSize":2}, error=True)
+            passed("lifecycle maintenance previews bounded pages and rejects the removed embeddings phase")
             for phase in ("lifecycle", "logs"):
                 page = tool("maintain", {"action":"consolidate", "phase":phase, "batchSize":2})
                 assert page["dryRun"] is True and page["hasMore"] is False
