@@ -1,17 +1,16 @@
 # v4.0.0 tag gate.
 #
-# This job is not a merge requirement for earlier PRs. It runs only when this
-# file is on the branch being pushed or opened against `v4`. A red row blocks
-# the v4.0.0 tag; it must not be silenced with continue-on-error, skip, or
+# Runs on push to `v4` and on manual dispatch. Lane PRs into v4 do not run
+# this job, so they stay green unless something else breaks. A red row on the
+# v4 head blocks the tag. Do not silence it with continue-on-error, skip, or
 # #[ignore]. The crate is outside the root workspace so `cargo test --workspace`
 # stays the merge CI.
 
 name: release-e2e
 
 on:
+  workflow_dispatch:
   push:
-    branches: [v4]
-  pull_request:
     branches: [v4]
 
 env:
