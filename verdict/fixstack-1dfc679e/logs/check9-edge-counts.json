@@ -1,0 +1,379 @@
+{
+  "check": 9,
+  "score": "INCONCLUSIVE",
+  "stores": [
+    "backfill-v31",
+    "demo-v38",
+    "fresh-v38-ckpt",
+    "fresh-v38-wal",
+    "probe-v38-ckpt",
+    "vnc-v36"
+  ],
+  "note": "Imported kind is derived_from for every non-vocabulary source link. That kind is also a recorded edge type, so walk and purge results cannot separate inferred links from recorded edges. Check 9 will be rerun on these six stores once the importer fix that writes legacy_inferred lands.",
+  "results": [
+    {
+      "store": "backfill-v31",
+      "schema": 31,
+      "read": "copy of vestige.db* opened in a temp dir; original directory not opened for write",
+      "files_copied": [
+        "vestige.db",
+        "vestige.db-shm",
+        "vestige.db-wal"
+      ],
+      "source_bytes_unchanged": true,
+      "memory_connections_columns": [
+        "source_id",
+        "target_id",
+        "strength",
+        "link_type",
+        "created_at",
+        "last_activated",
+        "activation_count"
+      ],
+      "inferred_definition": "memory_connections rows whose link_type is outside STRATA_EDGE_VOCABULARY. The table has no inferred column.",
+      "vocabulary": [
+        "touched",
+        "anchored_to",
+        "derived_from",
+        "supersedes",
+        "corrects",
+        "closed_by",
+        "projected_to",
+        "evidence_of"
+      ],
+      "source_connections": 1,
+      "source_by_link_type": {
+        "backfill_candidate": 1
+      },
+      "source_inferred": 1,
+      "source_vocab": 0,
+      "after_import_stack_a": {
+        "dump": "a-check3-backfill-v31.dump.json",
+        "edges": 1,
+        "by_kind": {
+          "derived_from": 1
+        },
+        "records": [
+          {
+            "link_type": "derived_from",
+            "legacy_inferred": true,
+            "legacy_link_type": "backfill_candidate",
+            "count": 1
+          }
+        ]
+      },
+      "after_import_stack_b": {
+        "dump": "b-check3-backfill-v31.dump.json",
+        "edges": 1,
+        "by_kind": {
+          "derived_from": 1
+        },
+        "records": [
+          {
+            "link_type": "derived_from",
+            "legacy_inferred": true,
+            "legacy_link_type": "backfill_candidate",
+            "count": 1
+          }
+        ]
+      },
+      "stacks_match": true
+    },
+    {
+      "store": "demo-v38",
+      "schema": 38,
+      "read": "copy of vestige.db* opened in a temp dir; original directory not opened for write",
+      "files_copied": [
+        "vestige.db",
+        "vestige.db-shm",
+        "vestige.db-wal"
+      ],
+      "source_bytes_unchanged": true,
+      "memory_connections_columns": [
+        "source_id",
+        "target_id",
+        "strength",
+        "link_type",
+        "created_at",
+        "last_activated",
+        "activation_count"
+      ],
+      "inferred_definition": "memory_connections rows whose link_type is outside STRATA_EDGE_VOCABULARY. The table has no inferred column.",
+      "vocabulary": [
+        "touched",
+        "anchored_to",
+        "derived_from",
+        "supersedes",
+        "corrects",
+        "closed_by",
+        "projected_to",
+        "evidence_of"
+      ],
+      "source_connections": 0,
+      "source_by_link_type": {},
+      "source_inferred": 0,
+      "source_vocab": 0,
+      "after_import_stack_a": {
+        "dump": "a-check3-demo-v38.dump.json",
+        "edges": 0,
+        "by_kind": {},
+        "records": []
+      },
+      "after_import_stack_b": {
+        "dump": "b-check3-demo-v38.dump.json",
+        "edges": 0,
+        "by_kind": {},
+        "records": []
+      },
+      "stacks_match": true
+    },
+    {
+      "store": "fresh-v38-ckpt",
+      "schema": 38,
+      "read": "copy of vestige.db* opened in a temp dir; original directory not opened for write",
+      "files_copied": [
+        "vestige.db"
+      ],
+      "source_bytes_unchanged": true,
+      "memory_connections_columns": [
+        "source_id",
+        "target_id",
+        "strength",
+        "link_type",
+        "created_at",
+        "last_activated",
+        "activation_count"
+      ],
+      "inferred_definition": "memory_connections rows whose link_type is outside STRATA_EDGE_VOCABULARY. The table has no inferred column.",
+      "vocabulary": [
+        "touched",
+        "anchored_to",
+        "derived_from",
+        "supersedes",
+        "corrects",
+        "closed_by",
+        "projected_to",
+        "evidence_of"
+      ],
+      "source_connections": 1,
+      "source_by_link_type": {
+        "narrative": 1
+      },
+      "source_inferred": 1,
+      "source_vocab": 0,
+      "after_import_stack_a": {
+        "dump": "a-check3-fresh-v38-ckpt.dump.json",
+        "edges": 1,
+        "by_kind": {
+          "derived_from": 1
+        },
+        "records": [
+          {
+            "link_type": "derived_from",
+            "legacy_inferred": true,
+            "legacy_link_type": "narrative",
+            "count": 1
+          }
+        ]
+      },
+      "after_import_stack_b": {
+        "dump": "b-check3-fresh-v38-ckpt.dump.json",
+        "edges": 1,
+        "by_kind": {
+          "derived_from": 1
+        },
+        "records": [
+          {
+            "link_type": "derived_from",
+            "legacy_inferred": true,
+            "legacy_link_type": "narrative",
+            "count": 1
+          }
+        ]
+      },
+      "stacks_match": true
+    },
+    {
+      "store": "fresh-v38-wal",
+      "schema": 38,
+      "read": "copy of vestige.db* opened in a temp dir; original directory not opened for write",
+      "files_copied": [
+        "vestige.db",
+        "vestige.db-shm",
+        "vestige.db-wal"
+      ],
+      "source_bytes_unchanged": true,
+      "memory_connections_columns": [
+        "source_id",
+        "target_id",
+        "strength",
+        "link_type",
+        "created_at",
+        "last_activated",
+        "activation_count"
+      ],
+      "inferred_definition": "memory_connections rows whose link_type is outside STRATA_EDGE_VOCABULARY. The table has no inferred column.",
+      "vocabulary": [
+        "touched",
+        "anchored_to",
+        "derived_from",
+        "supersedes",
+        "corrects",
+        "closed_by",
+        "projected_to",
+        "evidence_of"
+      ],
+      "source_connections": 1,
+      "source_by_link_type": {
+        "narrative": 1
+      },
+      "source_inferred": 1,
+      "source_vocab": 0,
+      "after_import_stack_a": {
+        "dump": "a-check3-fresh-v38-wal.dump.json",
+        "edges": 1,
+        "by_kind": {
+          "derived_from": 1
+        },
+        "records": [
+          {
+            "link_type": "derived_from",
+            "legacy_inferred": true,
+            "legacy_link_type": "narrative",
+            "count": 1
+          }
+        ]
+      },
+      "after_import_stack_b": {
+        "dump": "b-check3-fresh-v38-wal.dump.json",
+        "edges": 1,
+        "by_kind": {
+          "derived_from": 1
+        },
+        "records": [
+          {
+            "link_type": "derived_from",
+            "legacy_inferred": true,
+            "legacy_link_type": "narrative",
+            "count": 1
+          }
+        ]
+      },
+      "stacks_match": true
+    },
+    {
+      "store": "probe-v38-ckpt",
+      "schema": 38,
+      "read": "copy of vestige.db* opened in a temp dir; original directory not opened for write",
+      "files_copied": [
+        "vestige.db"
+      ],
+      "source_bytes_unchanged": true,
+      "memory_connections_columns": [
+        "source_id",
+        "target_id",
+        "strength",
+        "link_type",
+        "created_at",
+        "last_activated",
+        "activation_count"
+      ],
+      "inferred_definition": "memory_connections rows whose link_type is outside STRATA_EDGE_VOCABULARY. The table has no inferred column.",
+      "vocabulary": [
+        "touched",
+        "anchored_to",
+        "derived_from",
+        "supersedes",
+        "corrects",
+        "closed_by",
+        "projected_to",
+        "evidence_of"
+      ],
+      "source_connections": 0,
+      "source_by_link_type": {},
+      "source_inferred": 0,
+      "source_vocab": 0,
+      "after_import_stack_a": {
+        "dump": "a-check3-probe-v38-ckpt.dump.json",
+        "edges": 0,
+        "by_kind": {},
+        "records": []
+      },
+      "after_import_stack_b": {
+        "dump": "b-check3-probe-v38-ckpt.dump.json",
+        "edges": 0,
+        "by_kind": {},
+        "records": []
+      },
+      "stacks_match": true
+    },
+    {
+      "store": "vnc-v36",
+      "schema": 36,
+      "read": "copy of vestige.db* opened in a temp dir; original directory not opened for write",
+      "files_copied": [
+        "vestige.db",
+        "vestige.db-shm",
+        "vestige.db-wal"
+      ],
+      "source_bytes_unchanged": true,
+      "memory_connections_columns": [
+        "source_id",
+        "target_id",
+        "strength",
+        "link_type",
+        "created_at",
+        "last_activated",
+        "activation_count"
+      ],
+      "inferred_definition": "memory_connections rows whose link_type is outside STRATA_EDGE_VOCABULARY. The table has no inferred column.",
+      "vocabulary": [
+        "touched",
+        "anchored_to",
+        "derived_from",
+        "supersedes",
+        "corrects",
+        "closed_by",
+        "projected_to",
+        "evidence_of"
+      ],
+      "source_connections": 2,
+      "source_by_link_type": {
+        "semantic": 2
+      },
+      "source_inferred": 2,
+      "source_vocab": 0,
+      "after_import_stack_a": {
+        "dump": "a-check3-vnc-v36.dump.json",
+        "edges": 2,
+        "by_kind": {
+          "derived_from": 2
+        },
+        "records": [
+          {
+            "link_type": "derived_from",
+            "legacy_inferred": true,
+            "legacy_link_type": "semantic",
+            "count": 2
+          }
+        ]
+      },
+      "after_import_stack_b": {
+        "dump": "b-check3-vnc-v36.dump.json",
+        "edges": 2,
+        "by_kind": {
+          "derived_from": 2
+        },
+        "records": [
+          {
+            "link_type": "derived_from",
+            "legacy_inferred": true,
+            "legacy_link_type": "semantic",
+            "count": 2
+          }
+        ]
+      },
+      "stacks_match": true
+    }
+  ]
+}

@@ -27,7 +27,7 @@ Date: 2026-09-29. Rust 1.98.1. Release builds used `CARGO_PROFILE_RELEASE_LTO=fa
 | 6. SIGKILL mid-import; refuse non-empty `--to` | PASS. SIGKILL in staging, code -9, size 4491, dest absent. Rerun exit 0, 10 unique nodes, 1 receipt. `note.txt` dest exit 1, bytes unchanged, no `strata.key`. Foreign store exit 1. Same source idempotent exit 0. | PASS. Same. |
 | 7. Lane E open guards | FAIL. Missing key regenerated. Missing `store.meta` opened (8 nodes). Unsealed+deleted head truncated. Nometa truncated 12788→6257 and opened 9 of 20 nodes. Sealed+deleted head refused and was not truncated. | PASS. Missing key refused, key stayed absent. Missing `store.meta` refused. Unsealed and sealed damage refused, not truncated. Nometa stayed 12788 bytes and open failed. |
 | 8. test, clippy -D warnings, fmt --check | FAIL. `cargo test --workspace` exit 101, 0 tests: `install_open_storage_hook` configured out (`E0425`) once `tests/e2e`'s default `legacy-sqlite` is unified. Clippy exit 101: `redundant_closure` in `vestige-core` `sqlite/actors.rs:592`. `cargo fmt --all -- --check` exit 1, 72 files. Excluded crates' own tests passed (strata 10, gate 14, kernel 19+22, migrate 11, store 11, verify 7; 1 doc ignored). Their clippy passed. | FAIL. Same workspace compile error, same clippy error, same 72 fmt files. Excluded tests passed (strata 12, store 12; the rest match A). |
-| 9. No walk follows `legacy_inferred` | PASS. 10/10 stores, including the six real v3.1.1 stores. Opens succeeded. No response named the other end of a `legacy_inferred` edge unless that id was in the request. Replay loaded 0 of N legacy nodes (`memory get` → `found: false`). | PASS. Same 10/10, same empty replay. |
+| 9. No walk follows `legacy_inferred` | INCONCLUSIVE. The importer writes inferred v3 links as `derived_from`, the same kind as a recorded edge, so walk and purge results cannot decide this check. Counts for the six stores are below. | INCONCLUSIVE. Same edge kinds as STACK-A. |
 
 ### Check 2 message (both stacks, CLI stderr and MCP stderr)
 
@@ -39,7 +39,22 @@ MCP also logs that sentence at ERROR and prints it again. The hint contains the 
 
 ### Check 9 detail
 
-On every imported log, `causal_walk` and `backfill` return `pending_strata: … entity overlap is not a recorded edge`. `memory` purge with `confirm: true` returns `pending_strata: purge_node is not admitted on the Strata log yet`. `maintain gc` (dry run and real) reports `deleted: 0`. `graph associations` is empty. `graph chain` between the two ends of a narrative or semantic edge returns `No chain found` and `steps: []`. `StrataStore` replay ignores migration `NODE`/`EDGE` frames, so the runtime graph does not contain those links. The tools ran; they did not follow them.
+INCONCLUSIVE on both stacks. The importer writes inferred v3 links as `derived_from`. That is also a recorded edge kind, so an imported inferred link is not distinguishable from a recorded edge by kind. Walk and purge output does not change the score.
+
+`memory_connections` has no inferred column. An inferred source link is a row whose `link_type` is outside the eight-type vocabulary (`touched`, `anchored_to`, `derived_from`, `supersedes`, `corrects`, `closed_by`, `projected_to`, `evidence_of`). Source counts were read from a copy of `vestige.db*` in a temp directory. The original store directories were not modified. Post-import kinds are from the check 3 dumps. STACK-A and STACK-B match. Full rows: `logs/check9-edge-counts.json`.
+
+| Store | Source inferred links | Source `link_type` | Edges after import, by kind |
+|---|---|---|---|
+| backfill-v31 | 1 | `backfill_candidate` 1 | `derived_from` 1 |
+| demo-v38 | 0 | none | none |
+| fresh-v38-ckpt | 1 | `narrative` 1 | `derived_from` 1 |
+| fresh-v38-wal | 1 | `narrative` 1 | `derived_from` 1 |
+| probe-v38-ckpt | 0 | none | none |
+| vnc-v36 | 2 | `semantic` 2 | `derived_from` 2 |
+
+The decoded records also carry `legacy_inferred: true` and `legacy_link_type` equal to the source type. The written kind is still `derived_from`. Check 9 will be rerun on these same six stores once the importer fix that writes `legacy_inferred` lands.
+
+The tools did run. On every imported log, `causal_walk` and `backfill` return `pending_strata: … entity overlap is not a recorded edge`. `memory` purge with `confirm: true` returns `pending_strata: purge_node is not admitted on the Strata log yet`. `maintain gc` (dry run and real) reports `deleted: 0`. `graph associations` is empty. `graph chain` between the two ends of a narrative or semantic edge returns `No chain found` and `steps: []`. `StrataStore` replay ignores migration `NODE`/`EDGE` frames, so the runtime graph does not contain those links. That is recorded evidence. It is not a pass.
 
 ## SQLite facts
 
