@@ -148,6 +148,19 @@ def run(binary, output):
             assert marker in json.dumps(handle) and handle["exact"] is True
             passed("ingest, exact get, write receipt, and handle recall; query recall is refused")
 
+            created_intention = tool("intention", {
+                "action": "set",
+                "description": "Synthetic reminder",
+                "trigger": {"type": "time", "at": "2020-01-01T00:00:00Z"},
+            })
+            intention_id = created_intention["intentionId"]
+            assert created_intention["success"] is True
+            assert created_intention["receiptId"].startswith("eff-")
+            assert intention_id in created_intention["receipt"]["retrieved"]
+            listed = tool("intention", {"action": "list"})
+            assert any(row["id"] == intention_id for row in listed["intentions"])
+            passed("intention set admits a receipt and lists the row")
+
             proc.terminate()
             proc.wait(timeout=10)
             assert_no_sqlite()
@@ -155,6 +168,9 @@ def run(binary, output):
             handshake()
             again = tool("memory", {"action": "get", "id": node_id})
             assert marker in json.dumps(again)
+            restarted = tool("intention", {"action": "list"})
+            assert any(row["id"] == intention_id and row["description"] == "Synthetic reminder"
+                       for row in restarted["intentions"])
             assert_no_sqlite()
             passed("empty-dir restart keeps the node and creates no sqlite file")
 
@@ -167,8 +183,15 @@ def run(binary, output):
             context = tool("codebase", {"action": "get_context", "codebase": "fixture"})
             assert marker not in json.dumps(context)
             typed("project", {"action": "preview"}, "pending_strata")
-            typed("intention", {"action": "set", "description": "Synthetic reminder",
-                                "trigger": {"type": "time", "at": "2020-01-01T00:00:00Z"}}, "pending_strata")
+            checked = tool("intention", {"action": "check", "context": {
+                "current_time": "2020-01-02T00:00:00Z"}})
+            assert any(row["id"] == intention_id for row in checked["triggered"])
+            assert checked["receiptId"].startswith("eff-")
+            updated = tool("intention", {"action": "update", "id": intention_id, "status": "complete"})
+            assert updated["success"] is True and updated["receiptId"].startswith("eff-")
+            fulfilled = tool("intention", {"action": "list", "filter_status": "fulfilled"})
+            assert any(row["id"] == intention_id for row in fulfilled["intentions"])
+            typed("intention", {"action": "set", "description": "  "}, "empty")
             tool("source_sync", {"source": "gitlab", "repo": "a/b"}, error=True)
             for view in ("health", "retention", "timeline", "changelog", "stats", "coverage"):
                 tool("memory_status", {"view": view})

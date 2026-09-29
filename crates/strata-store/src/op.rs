@@ -3,7 +3,7 @@
 //! frame whose payload is `borsh(StoreOp)` and whose blake3 digest equals the
 //! admitting `EFFECT.payload_digest`.
 
-use crate::types::{ConnectionRecord, NodeRecord};
+use crate::types::{ConnectionRecord, IntentionRecord, NodeRecord};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Frame kind: a store data frame (payload = `borsh(StoreOp)`).
@@ -45,5 +45,12 @@ pub enum StoreOp {
         card_id: u64,
         /// Rating 1..=4 (clamped by the kernel fold if outside).
         rating: u8,
+    },
+    /// Insert or replace intention rows. One admitted effect covers the
+    /// whole batch so a check claim is all-or-nothing. Intentions are not
+    /// memory cards: applying this op does not fold a review.
+    UpsertIntentions {
+        /// Records keyed by `id`.
+        records: Vec<IntentionRecord>,
     },
 }

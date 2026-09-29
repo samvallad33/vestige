@@ -103,6 +103,77 @@ fn pending_async(op: &str) -> MemoryStoreError {
     MemoryStoreError::Init(pending(op).to_string())
 }
 
+fn dt_ms(ms: i64) -> Result<DateTime<Utc>, StorageError> {
+    DateTime::from_timestamp_millis(ms)
+        .ok_or_else(|| StorageError::Init(format!("intention timestamp {ms} is out of range")))
+}
+
+fn dt_ms_opt(ms: Option<i64>) -> Result<Option<DateTime<Utc>>, StorageError> {
+    ms.map(dt_ms).transpose()
+}
+
+fn stored_intention(
+    intention: &vestige_core::storage::IntentionRecord,
+) -> strata_store::IntentionRecord {
+    strata_store::IntentionRecord {
+        id: intention.id.clone(),
+        content: intention.content.clone(),
+        trigger_type: intention.trigger_type.clone(),
+        trigger_data: intention.trigger_data.clone(),
+        priority: intention.priority,
+        status: intention.status.clone(),
+        created_at_ms: intention.created_at.timestamp_millis(),
+        deadline_ms: intention.deadline.map(|t| t.timestamp_millis()),
+        fulfilled_at_ms: intention.fulfilled_at.map(|t| t.timestamp_millis()),
+        reminder_count: intention.reminder_count,
+        last_reminded_at_ms: intention.last_reminded_at.map(|t| t.timestamp_millis()),
+        notes: intention.notes.clone(),
+        tags: intention.tags.clone(),
+        related_memories: intention.related_memories.clone(),
+        snoozed_until_ms: intention.snoozed_until.map(|t| t.timestamp_millis()),
+        source_type: intention.source_type.clone(),
+        source_data: intention.source_data.clone(),
+        scope: intention.scope.clone(),
+    }
+}
+
+fn core_intention(
+    record: &strata_store::IntentionRecord,
+) -> Result<vestige_core::storage::IntentionRecord, StorageError> {
+    Ok(vestige_core::storage::IntentionRecord {
+        id: record.id.clone(),
+        content: record.content.clone(),
+        trigger_type: record.trigger_type.clone(),
+        trigger_data: record.trigger_data.clone(),
+        priority: record.priority,
+        status: record.status.clone(),
+        created_at: dt_ms(record.created_at_ms)?,
+        deadline: dt_ms_opt(record.deadline_ms)?,
+        fulfilled_at: dt_ms_opt(record.fulfilled_at_ms)?,
+        reminder_count: record.reminder_count,
+        last_reminded_at: dt_ms_opt(record.last_reminded_at_ms)?,
+        notes: record.notes.clone(),
+        tags: record.tags.clone(),
+        related_memories: record.related_memories.clone(),
+        snoozed_until: dt_ms_opt(record.snoozed_until_ms)?,
+        source_type: record.source_type.clone(),
+        source_data: record.source_data.clone(),
+        scope: record.scope.clone(),
+    })
+}
+
+fn sort_intentions(
+    mut rows: Vec<vestige_core::storage::IntentionRecord>,
+) -> Vec<vestige_core::storage::IntentionRecord> {
+    rows.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then(a.created_at.cmp(&b.created_at))
+            .then(a.id.cmp(&b.id))
+    });
+    rows
+}
+
 fn is_mem_id(id: &str) -> bool {
     let Some(rest) = id.strip_prefix("mem-") else {
         return false;
@@ -1151,21 +1222,133 @@ impl MemoryStoreSend for StrataMemory {
     fn get_active_intentions(
         &self,
     ) -> Result<Vec<vestige_core::storage::IntentionRecord>, StorageError> {
-        Ok(Vec::new())
+        let rows = self.intentions()?;
+        Ok(sort_intentions(
+            rows.into_iter().filter(|row| row.status == "active").collect(),
+        ))
     }
 
     fn get_active_intentions_in_scope(
         &self,
-        _scope: &str,
+        scope: &str,
     ) -> Result<Vec<vestige_core::storage::IntentionRecord>, StorageError> {
-        Ok(Vec::new())
+        let scope = scope.trim();
+        let rows = self.intentions()?;
+        Ok(sort_intentions(
+            rows.into_iter()
+                .filter(|row| row.status == "active" && row.effective_scope() == scope)
+                .collect(),
+        ))
+    }
+
+    fn get_intention(
+        &self,
+        id: &str,
+    ) -> Result<Option<vestige_core::storage::IntentionRecord>, StorageError> {
+        match self.lock().get_intention(id) {
+            Some(record) => core_intention(&record).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn get_intentions_by_status(
+        &self,
+        status: &str,
+    ) -> Result<Vec<vestige_core::storage::IntentionRecord>, StorageError> {
+        let rows = self.intentions()?;
+        Ok(sort_intentions(
+            rows.into_iter().filter(|row| row.status == status).collect(),
+        ))
+    }
+
+    fn get_overdue_intentions(
+        &self,
+    ) -> Result<Vec<vestige_core::storage::IntentionRecord>, StorageError> {
+        let now = Utc::now();
+        let mut rows = self.intentions()?;
+        rows.retain(|row| {
+            row.status == "active" && row.deadline.is_some_and(|deadline| deadline < now)
+        });
+        rows.sort_by(|a, b| a.deadline.cmp(&b.deadline).then(a.id.cmp(&b.id)));
+        Ok(rows)
     }
 
     fn save_intention(
         &self,
-        _intention: &vestige_core::storage::IntentionRecord,
+        intention: &vestige_core::storage::IntentionRecord,
     ) -> Result<(), StorageError> {
-        Err(pending("save_intention"))
+        self.lock()
+            .upsert_intentions(vec![stored_intention(intention)])
+            .map_err(map_store)
+            .map(|_| ())
+    }
+
+    fn snooze_intention(&self, id: &str, until: DateTime<Utc>) -> Result<bool, StorageError> {
+        let mut store = self.lock();
+        let Some(current) = store.get_intention(id) else {
+            return Ok(false);
+        };
+        let mut record = core_intention(&current)?;
+        record.status = "snoozed".to_string();
+        record.snoozed_until = Some(until);
+        store
+            .upsert_intentions(vec![stored_intention(&record)])
+            .map_err(map_store)?;
+        Ok(true)
+    }
+
+    fn update_intention_status(&self, id: &str, status: &str) -> Result<bool, StorageError> {
+        let mut store = self.lock();
+        let Some(current) = store.get_intention(id) else {
+            return Ok(false);
+        };
+        let mut record = core_intention(&current)?;
+        record.status = status.to_string();
+        record.fulfilled_at = if status == "fulfilled" {
+            Some(Utc::now())
+        } else {
+            None
+        };
+        store
+            .upsert_intentions(vec![stored_intention(&record)])
+            .map_err(map_store)?;
+        Ok(true)
+    }
+
+    fn commit_intention_check(
+        &self,
+        changes: &[(
+            vestige_core::storage::IntentionRecord,
+            vestige_core::storage::IntentionRecord,
+        )],
+    ) -> Result<(), String> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let mut store = self.lock();
+        let mut next = Vec::with_capacity(changes.len());
+        for (old, new) in changes {
+            if old.id != new.id {
+                return Err("intention check cannot change record identity".into());
+            }
+            let Some(current) = store.get_intention(&old.id) else {
+                let id = &old.id;
+                return Err(format!(
+                    "Intention '{id}' changed during check; retry the check"
+                ));
+            };
+            if !current.same_claim(&stored_intention(old)) {
+                let id = &old.id;
+                return Err(format!(
+                    "Intention '{id}' changed during check; retry the check"
+                ));
+            }
+            next.push(stored_intention(new));
+        }
+        store
+            .upsert_intentions(next)
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 
     fn suppress_memory(&self, _id: &str) -> Result<KnowledgeNode, StorageError> {
@@ -1178,6 +1361,14 @@ impl MemoryStoreSend for StrataMemory {
 }
 
 impl StrataMemory {
+    fn intentions(&self) -> Result<Vec<vestige_core::storage::IntentionRecord>, StorageError> {
+        self.lock()
+            .intentions()
+            .iter()
+            .map(core_intention)
+            .collect()
+    }
+
     fn page_nodes(
         &self,
         scope: Option<&str>,
@@ -1330,5 +1521,49 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("similarity_disabled"), "{err}");
+    }
+
+    #[test]
+    fn intention_check_commit_rejects_a_stale_snapshot() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = StrataMemory::open(dir.path()).unwrap();
+        let created_at = "2026-01-01T00:00:00Z".parse().unwrap();
+        let record = vestige_core::storage::IntentionRecord {
+            id: "int-stale".into(),
+            content: "Synthetic reminder".into(),
+            trigger_type: "time".into(),
+            trigger_data: "{}".into(),
+            priority: 2,
+            status: "active".into(),
+            created_at,
+            deadline: None,
+            fulfilled_at: None,
+            reminder_count: 0,
+            last_reminded_at: None,
+            notes: None,
+            tags: Vec::new(),
+            related_memories: Vec::new(),
+            snoozed_until: None,
+            source_type: "mcp".into(),
+            source_data: None,
+            scope: Some("user".into()),
+        };
+        store.save_intention(&record).unwrap();
+        let mut delivered = record.clone();
+        delivered.reminder_count = 1;
+        delivered.last_reminded_at = Some(created_at);
+        store
+            .commit_intention_check(&[(record.clone(), delivered.clone())])
+            .unwrap();
+        let err = store
+            .commit_intention_check(&[(record.clone(), delivered)])
+            .unwrap_err();
+        assert!(err.contains("changed during check"), "{err}");
+        let kept = store.get_intention(&record.id).unwrap().unwrap();
+        assert_eq!(kept.reminder_count, 1);
+        let receipt = store.get_receipt(&record.id).unwrap().unwrap();
+        assert_eq!(receipt.retrieved, vec![record.id]);
+        assert!(receipt.receipt_id.starts_with("eff-"));
+        assert!(no_sqlite(dir.path()));
     }
 }

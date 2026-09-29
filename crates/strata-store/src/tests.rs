@@ -497,3 +497,51 @@ fn node_ids_are_log_derived_and_handle_is_stable() {
     assert_eq!(store.card_state(&a).map(|c| c.review_count), Some(1));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+fn intention(id: &str, content: &str) -> crate::IntentionRecord {
+    crate::IntentionRecord {
+        id: id.to_string(),
+        content: content.to_string(),
+        trigger_type: "time".into(),
+        trigger_data: r#"{"type":"time","at":"2020-01-01T00:00:00Z"}"#.into(),
+        priority: 2,
+        status: "active".into(),
+        created_at_ms: 1_700_000_000_000,
+        deadline_ms: None,
+        fulfilled_at_ms: None,
+        reminder_count: 0,
+        last_reminded_at_ms: None,
+        notes: None,
+        tags: vec!["fixture".into()],
+        related_memories: Vec::new(),
+        snoozed_until_ms: None,
+        source_type: "mcp".into(),
+        source_data: None,
+        scope: Some("user".into()),
+    }
+}
+
+#[test]
+fn intention_upsert_replays_and_rejects_an_empty_id() {
+    let dir = temp_dir("intention");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let effect = store
+        .upsert_intentions(vec![intention("int-1", "Synthetic reminder")])
+        .expect("admit");
+    assert!(effect > 0);
+    assert_eq!(store.origin_seq("int-1"), Some(effect));
+    let err = store
+        .upsert_intentions(vec![intention("", "no id")])
+        .expect_err("empty id");
+    assert!(err.to_string().contains("id must not be empty"), "{err}");
+    let digest = store.state_digest();
+    drop(store);
+
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    let row = reopened.get_intention("int-1").expect("replayed");
+    assert_eq!(row.content, "Synthetic reminder");
+    assert_eq!(row.trigger_type, "time");
+    assert_eq!(reopened.state_digest(), digest);
+    assert_eq!(reopened.intentions().len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
