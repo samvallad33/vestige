@@ -88,6 +88,10 @@ strata-verify = { path = "../strata-verify" }
 # One-shot SQLite -> STRATA migration (standalone crate; `migrate-to-strata` CLI).
 strata-migrate = { path = "../strata-migrate" }
 
+# Receipt-bound claims (PR 4): `record-tool` / `claim-check` CLI over the
+# gate-admitted STRATA store (TOOL_CALL/TOOL_RESULT/CLAIM/CLAIM_VERDICT).
+strata-store = { path = "../strata-store" }
+
 # ============================================================================
 # MCP Server Dependencies
 # ============================================================================

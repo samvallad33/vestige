@@ -2922,6 +2922,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "strata-migrate",
+ "strata-store",
  "strata-verify",
  "subtle",
  "tempfile",

@@ -490,6 +490,50 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Post a structured tool receipt into the STRATA claim log (PR 4):
+    /// TOOL_CALL (kind 38) before dispatch with --phase call, TOOL_RESULT
+    /// (kind 39) after dispatch with --phase result. The claim gate can
+    /// only cite receipts posted here.
+    RecordTool {
+        /// Phase: "call" (TOOL_CALL, pre-dispatch) or "result" (TOOL_RESULT,
+        /// post-dispatch)
+        #[arg(long)]
+        phase: String,
+        /// Structured JSON record file, or "-" for stdin:
+        /// {session, call_id, tool, target_handle, args_hash, exit_status,
+        ///  test_outcomes: [{test, outcome}]} (exit fields: result only)
+        #[arg(default_value = "-")]
+        input: String,
+        /// STRATA log directory (defaults to <data-dir>/strata)
+        #[arg(long)]
+        strata_dir: Option<PathBuf>,
+        /// Machine-readable compact JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Check a receipt-cited claim through the deterministic claim checker
+    /// (PR 4): appends the CLAIM frame (kind 48) and the signed
+    /// CLAIM_VERDICT receipt (kind 37), then exits 0 on Allow and 1 on
+    /// Deny — consumers fail closed on any nonzero exit.
+    ClaimCheck {
+        /// Structured claim JSON file, or "-" for stdin:
+        /// {session, claim_kind, target_handle, cited_record_ids: [seqs],
+        ///  as_of_seq?, valid_time_us?} (as_of_seq defaults to the log head)
+        #[arg(default_value = "-")]
+        input: String,
+        /// Exact family-table entry "<claim_kind>:<tool>"; repeatable.
+        /// Omit for the built-in default table.
+        #[arg(long = "family", value_name = "KIND:TOOL")]
+        families: Vec<String>,
+        /// STRATA log directory (defaults to <data-dir>/strata)
+        #[arg(long)]
+        strata_dir: Option<PathBuf>,
+        /// Machine-readable compact JSON output (the verdict receipt)
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -654,6 +698,18 @@ fn main() -> anyhow::Result<()> {
             scope,
             json,
         } => run_forgotten_lesson(failure_id, scope, json),
+        Commands::RecordTool {
+            phase,
+            input,
+            strata_dir,
+            json,
+        } => run_record_tool(phase, input, strata_dir, json),
+        Commands::ClaimCheck {
+            input,
+            families,
+            strata_dir,
+            json,
+        } => run_claim_check(input, families, strata_dir, json),
     }
 }
 
@@ -2610,6 +2666,313 @@ fn run_forgotten_lesson(
             "{}",
             "Recorded fixes the store can no longer retrieve — review before relearning.".dimmed()
         );
+    }
+    Ok(())
+}
+
+// ==========================================================================
+// PR 4 claim gate: receipt-bound tool records and claims (engine:
+// strata-store::claims; hook client: hooks/claim-gate.sh)
+// ==========================================================================
+
+/// Resolve the STRATA log directory for the claim-gate commands (defaults to
+/// <data-dir>/strata, matching migrate-to-strata's destination convention).
+fn claim_gate_store_dir(strata_dir: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    match strata_dir {
+        Some(dir) => Ok(dir),
+        None => Ok(cli_db_path()?.with_file_name("strata")),
+    }
+}
+
+/// Read a JSON document from a path, or stdin for "-".
+fn read_json_input(path: &str) -> anyhow::Result<String> {
+    if path == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("failed to read JSON from stdin")?;
+        Ok(buf)
+    } else {
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path))
+    }
+}
+
+fn json_string_field(value: &serde_json::Value, key: &str) -> anyhow::Result<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .with_context(|| format!("field '{key}' must be a JSON string"))
+}
+
+fn json_string_or_empty(value: &serde_json::Value, key: &str) -> anyhow::Result<String> {
+    match value.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(String::new()),
+        Some(v) => v
+            .as_str()
+            .map(str::to_string)
+            .with_context(|| format!("field '{key}' must be a JSON string")),
+    }
+}
+
+/// Decode a 64-hex-char string into a 32-byte hash.
+fn parse_hash32(text: &str) -> anyhow::Result<[u8; 32]> {
+    let hex = text.trim().trim_start_matches("0x");
+    anyhow::ensure!(hex.len() == 64, "expected 64 hex chars, got {}", hex.len());
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16)
+            .with_context(|| format!("hash is not hex at byte {i}"))?;
+    }
+    Ok(out)
+}
+
+fn hash32_to_hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `vestige record-tool` — post one gate-admitted TOOL_CALL/TOOL_RESULT
+/// receipt built from the structured JSON document.
+fn run_record_tool(
+    phase: String,
+    input: String,
+    strata_dir: Option<PathBuf>,
+    json: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        phase == "call" || phase == "result",
+        "--phase must be 'call' or 'result', got '{phase}'"
+    );
+    let raw = read_json_input(&input)?;
+    let doc: serde_json::Value =
+        serde_json::from_str(raw.trim()).context("tool record JSON did not parse")?;
+
+    let mut store = strata_store::StrataStore::open(claim_gate_store_dir(strata_dir)?)?;
+    let as_of = strata_store::kinds::AsOf {
+        seq: store.log().head().next_seq,
+        valid_time_us: 0,
+    };
+    let session = json_string_field(&doc, "session")?;
+    let call_id = json_string_field(&doc, "call_id")?;
+    let tool = json_string_field(&doc, "tool")?;
+    let target_handle = json_string_or_empty(&doc, "target_handle")?;
+
+    let (frame_seq, kind) = if phase == "call" {
+        let args_hash = match doc.get("args_hash") {
+            None | Some(serde_json::Value::Null) => [0u8; 32],
+            Some(serde_json::Value::String(text)) => parse_hash32(text)?,
+            Some(_) => anyhow::bail!("args_hash must be a 64-hex-char string"),
+        };
+        let record = strata_store::claims::ToolCallRecord {
+            header: strata_store::kinds::ReceiptHeader {
+                params_hash: [0; 32],
+                as_of,
+            },
+            session,
+            call_id,
+            tool,
+            target_handle,
+            args_hash,
+        };
+        let seq = store.record_tool_call(&record)?;
+        (seq, strata_store::kinds::KIND_TOOL_CALL)
+    } else {
+        let exit_status = match doc.get("exit_status") {
+            None | Some(serde_json::Value::Null) => 0i32,
+            Some(v) => i32::try_from(v.as_i64().context("exit_status must be an integer")?)
+                .context("exit_status out of i32 range")?,
+        };
+        let test_outcomes = match doc.get("test_outcomes") {
+            None | Some(serde_json::Value::Null) => Vec::new(),
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .map(|item| {
+                    let test = json_string_field(item, "test")?;
+                    let outcome = json_string_field(item, "outcome")?;
+                    Ok((test, outcome))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            Some(_) => anyhow::bail!("test_outcomes must be an array of {{test, outcome}}"),
+        };
+        let record = strata_store::claims::ToolResultRecord {
+            header: strata_store::kinds::ReceiptHeader {
+                params_hash: [0; 32],
+                as_of,
+            },
+            session,
+            call_id,
+            tool,
+            target_handle,
+            exit_status,
+            test_outcomes,
+        };
+        let seq = store.record_tool_result(&record)?;
+        (seq, strata_store::kinds::KIND_TOOL_RESULT)
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "phase": phase,
+                "kind": kind,
+                "frame_seq": frame_seq,
+            }))?
+        );
+    } else {
+        println!(
+            "{}: {} receipt landed at frame seq {}",
+            "Recorded".green().bold(),
+            if phase == "call" {
+                "TOOL_CALL"
+            } else {
+                "TOOL_RESULT"
+            },
+            frame_seq
+        );
+    }
+    Ok(())
+}
+
+/// `vestige claim-check` — append the CLAIM frame and its signed
+/// CLAIM_VERDICT receipt, print the verdict, exit 0 on Allow / 1 on Deny.
+fn run_claim_check(
+    input: String,
+    families: Vec<String>,
+    strata_dir: Option<PathBuf>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let raw = read_json_input(&input)?;
+    let doc: serde_json::Value =
+        serde_json::from_str(raw.trim()).context("claim JSON did not parse")?;
+
+    let mut store = strata_store::StrataStore::open(claim_gate_store_dir(strata_dir)?)?;
+    let as_of_seq = match doc.get("as_of_seq") {
+        None | Some(serde_json::Value::Null) => store.log().head().next_seq,
+        Some(v) => v.as_u64().context("as_of_seq must be a u64 frame seq")?,
+    };
+    let valid_time_us = match doc.get("valid_time_us") {
+        None | Some(serde_json::Value::Null) => 0i64,
+        Some(v) => v.as_i64().context("valid_time_us must be an integer")?,
+    };
+    let cited_record_ids = match doc.get("cited_record_ids") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .map(|v| {
+                v.as_u64()
+                    .context("cited_record_ids entries must be u64 frame seqs")
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?,
+        Some(_) => anyhow::bail!("cited_record_ids must be an array of frame seqs"),
+    };
+    let claim = strata_store::claims::ClaimRecord {
+        header: strata_store::kinds::ReceiptHeader {
+            params_hash: [0; 32],
+            as_of: strata_store::kinds::AsOf {
+                seq: as_of_seq,
+                valid_time_us,
+            },
+        },
+        session: json_string_field(&doc, "session")?,
+        claim_kind: json_string_field(&doc, "claim_kind")?,
+        target_handle: json_string_or_empty(&doc, "target_handle")?,
+        cited_record_ids,
+    };
+
+    let family_table: Vec<(String, String)> = if families.is_empty() {
+        strata_store::claims::DEFAULT_FAMILY_TABLE
+            .iter()
+            .map(|(kind, tool)| (kind.to_string(), tool.to_string()))
+            .collect()
+    } else {
+        families
+            .iter()
+            .map(|entry| {
+                let (kind, tool) = entry
+                    .split_once(':')
+                    .context("--family must be <claim_kind>:<tool>")?;
+                Ok((kind.to_string(), tool.to_string()))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+    };
+
+    let outcome = store.check_claim(&claim, &family_table)?;
+    let verdict = &outcome.verdict;
+    let gap_json = verdict
+        .gap_summary()
+        .map(|(duty, reader_seq, dangling_id)| {
+            serde_json::json!({
+                "duty": duty,
+                "reader_seq": reader_seq,
+                "dangling_id": dangling_id,
+            })
+        });
+
+    if json {
+        // Compact on purpose: hooks match the exact token `"allow":false`.
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "allow": verdict.allow,
+                "rule_ids": verdict.rule_ids,
+                "rules": verdict
+                    .rule_ids
+                    .iter()
+                    .map(|r| strata_store::claims::rule_name(*r))
+                    .collect::<Vec<_>>(),
+                "claim_frame_seq": outcome.claim_frame_seq,
+                "verdict_frame_seq": outcome.verdict_frame_seq,
+                "claim_digest": hash32_to_hex(&verdict.claim_digest),
+                "family_table_hash": hash32_to_hex(&verdict.family_table_hash),
+                "gap": gap_json,
+            }))?
+        );
+    } else {
+        println!("{}", "=== Vestige Claim Check ===".cyan().bold());
+        println!();
+        println!("{}: {}", "Claim kind".white().bold(), claim.claim_kind);
+        println!("{}: {}", "Session".white().bold(), claim.session);
+        println!(
+            "{}: {:?}",
+            "Cited receipts".white().bold(),
+            claim.cited_record_ids
+        );
+        let (text, color) = if verdict.allow {
+            ("ALLOW", "green")
+        } else {
+            ("DENY", "red")
+        };
+        let verdict_line = match color {
+            "green" => text.green().bold(),
+            _ => text.red().bold(),
+        };
+        println!("{}: {}", "Verdict".white().bold(), verdict_line);
+        println!(
+            "{}: {}",
+            "Rules".white().bold(),
+            verdict
+                .rule_ids
+                .iter()
+                .map(|r| strata_store::claims::rule_name(*r))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if let Some(gap) = &gap_json {
+            println!("{}: {}", "Gap".white().bold(), gap);
+        }
+        println!(
+            "{}: verdict frame seq {}, claim frame seq {}",
+            "Receipt".white().bold(),
+            outcome.verdict_frame_seq,
+            outcome.claim_frame_seq
+        );
+    }
+
+    // Fail-closed exit contract: 0 = Allow, nonzero = Deny (or error).
+    if !verdict.allow {
+        std::process::exit(1);
     }
     Ok(())
 }
