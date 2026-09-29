@@ -1,0 +1,1 @@
+Error: migrate-to-strata is not linked into this binary; rebuild with --features migrate-to-strata

@@ -1,0 +1,2 @@
+error: package ID specification `rusqlite` did not match any packages
+TREE_EXIT:101

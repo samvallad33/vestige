@@ -1,0 +1,18 @@
+STATS_EXIT:0
+--- files ---
+4096 /tmp/verdict-fix/pr314-work/empty
+4096 /tmp/verdict-fix/pr314-work/empty/log
+58 /tmp/verdict-fix/pr314-work/empty/log/00000000-5a22b30730678cc3c61a8059664d9e4e.seg
+32 /tmp/verdict-fix/pr314-work/empty/log/strata.key
+VERIFY_EXIT:0
+HASH_IDENTICAL
+--- stdout ---
+{
+  "ok": true,
+  "frames_total": 0,
+  "segments": 1,
+  "failures": []
+}
+OK
+--- stderr ---
+--- stats stderr ---

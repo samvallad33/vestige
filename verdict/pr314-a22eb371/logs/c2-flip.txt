@@ -1,0 +1,11 @@
+FLIP_VERIFY_EXIT:1
+--- stdout exact ---
+{$
+  "failures": [$
+    "segment 0: damaged at offset 10750: payload blake3 mismatch"$
+  ],$
+  "ok": false$
+}$
+FAILED$
+--- stderr exact ---
+  segment 0: damaged at offset 10750: payload blake3 mismatch$

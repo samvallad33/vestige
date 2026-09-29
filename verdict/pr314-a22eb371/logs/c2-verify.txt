@@ -1,0 +1,16 @@
+TO_TREE_BEFORE deb8e550e3f36ede7f50a46c6e20ae0b3d6bf1018c9b91d9f27fdcb492b6c617
+VERIFY_EXIT:0
+TO_TREE_AFTER deb8e550e3f36ede7f50a46c6e20ae0b3d6bf1018c9b91d9f27fdcb492b6c617
+CONTENT_HASH IDENTICAL
+MTIME IDENTICAL
+--- stdout ---
+{
+  "frames_total": 18,
+  "checksum_ok": true,
+  "signature_ok": true,
+  "counts_match": true,
+  "failures": [],
+  "ok": true
+}
+OK
+--- stderr ---

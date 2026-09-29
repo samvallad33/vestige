@@ -1,0 +1,11 @@
+Migrate a v3 SQLite store into a STRATA log (read-only over the source)
+
+Usage: vestige migrate-to-strata [OPTIONS] --from <FROM>
+
+Options:
+      --data-dir <DIR>       Use a specific Vestige data directory for this command
+      --from <FROM>          Path to the v3 SQLite database (or its data directory)
+      --to <TO>              Destination STRATA directory (defaults to <data-dir>/strata)
+      --dry-run              Verify the source and report counts without writing anything
+      --accept-wal-snapshot  Migrate a source with a non-empty WAL from a consistent snapshot copy (the original is still never modified)
+  -h, --help                 Print help

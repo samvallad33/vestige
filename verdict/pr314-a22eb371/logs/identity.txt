@@ -1,0 +1,14 @@
+IDENTITY 2026-09-29T17:18:38+00:00
+HEAD a22eb37105c693820a323f4302d044933bb91c1c
+PARENT 1dfc679e944dfb89d58ae21de5fa47e649a08dd5
+DEFAULT_BIN /tmp/verdict-fix/bins/pr314-default/vestige
+MIGRATE_BIN /tmp/verdict-fix/bins/pr314-migrate/vestige
+6ddbc21703a704b6ee97dcc343828ed8303716b82687f205bcd0c4247c9e4afa  /tmp/verdict-fix/bins/pr314-default/vestige
+a2eff407411a3fad5c07a12e0ce90f3bd10c63e6b3643d6d85eb90528b249a9d  /tmp/verdict-fix/bins/pr314-migrate/vestige
+DEFAULT_SIZE 25865672
+MIGRATE_SIZE 27691576
+DEFAULT built: cargo build --locked --release -p vestige-mcp --bin vestige (no --features, no profile overrides)
+IMPORTER built: cargo build --locked --release -p vestige-mcp --bin vestige --features migrate-to-strata
+--- default migrate probe ---
+DEFAULT_MIGRATE_HELP_EXIT:0
+--- migrate help stderr ---
