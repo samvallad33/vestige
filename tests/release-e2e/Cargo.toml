@@ -1,0 +1,35 @@
+[package]
+name = "vestige-release-e2e"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "v4.0.0 Strata release gate. Real processes, real stdio, real v3 stores."
+license = "AGPL-3.0-only"
+
+# Own workspace on purpose. The root workspace excludes this crate so
+# `cargo test --workspace` (the merge CI for earlier PRs) does not run the
+# tag gate. `.github/workflows/release-e2e.yml` is the only runner.
+[workspace]
+
+[[bin]]
+name = "strata-driver"
+path = "src/bin/strata_driver.rs"
+
+[dependencies]
+blake3 = "1"
+borsh = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+strata = { path = "../../crates/strata" }
+strata-gate = { path = "../../crates/strata-gate" }
+strata-migrate = { path = "../../crates/strata-migrate" }
+strata-store = { path = "../../crates/strata-store" }
+rusqlite = { version = "0.40", features = ["bundled"] }
+tempfile = "3"
+
+[dev-dependencies]
+# Integration tests are a separate crate. They do not see [dependencies].
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"

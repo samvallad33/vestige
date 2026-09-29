@@ -1,0 +1,562 @@
+//! Every advertised MCP tool, over real stdio: valid input, invalid input,
+//! and an exact-handle miss that must return `handle_required`.
+
+use serde_json::{json, Value};
+
+use super::support::*;
+
+fn exercise(tool: &str, invalid: Value, valid: Value, miss: Value, write: bool) {
+    with_server(|server| {
+        let listed = server
+            .call("tools/list", None)
+            .unwrap_or_else(|e| missing(&format!("tools/list failed: {e}")));
+        let names: Vec<String> = listed["result"]["tools"]
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .collect();
+        if !names.iter().any(|n| n == tool) {
+            missing(&format!(
+                "server tool list does not advertise `{tool}`. Live list: {names:?}"
+            ));
+        }
+        let bad = server.tool(tool, invalid).expect("rpc");
+        assert!(
+            bad.rejected(),
+            "{tool} accepted invalid input: {}",
+            bad.blob()
+        );
+        let good = server.tool(tool, valid).expect("rpc");
+        if good.rejected() {
+            missing(&format!(
+                "`{tool}` rejected a schema-valid call. The strata tool dispatch is incomplete \
+                 on this head. Got: {}",
+                good.blob().chars().take(800).collect::<String>()
+            ));
+        }
+        if write {
+            assert_receipt(tool, &good);
+        }
+        let missed = server.tool(tool, miss).expect("rpc");
+        assert_handle_required(tool, &missed);
+    });
+}
+
+#[test]
+fn mcp_catalog_matches_server_tool_list() {
+    with_server(|server| {
+        let listed = server.call("tools/list", None).expect("tools/list");
+        let mut names: Vec<String> = listed["result"]["tools"]
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .collect();
+        names.sort();
+        let expected: Vec<String> = EXPECTED_TOOLS.iter().map(|s| (*s).to_string()).collect();
+        if names != expected {
+            missing(&format!(
+                "tools/list is not the 18-tool 4.0 surface. live={names:?} expected={expected:?}"
+            ));
+        }
+    });
+}
+
+#[test]
+fn mcp_recall_valid_invalid_handle_miss() {
+    with_server(|server| {
+        let bad = server.tool("recall", json!({ "handle": 1 })).expect("rpc");
+        assert!(bad.rejected() || bad.handle_required(), "{}", bad.blob());
+        let created = server
+            .tool(
+                "smart_ingest",
+                json!({ "content": "release matrix recall anchor", "forceCreate": true }),
+            )
+            .expect("rpc");
+        if created.rejected() {
+            missing(&format!(
+                "recall's valid path needs a stored memory, and smart_ingest failed: {}",
+                created.blob().chars().take(600).collect::<String>()
+            ));
+        }
+        let id = created.body["nodeId"]
+            .as_str()
+            .or_else(|| created.body["id"].as_str())
+            .unwrap_or("");
+        if id.is_empty() {
+            missing(&format!(
+                "smart_ingest returned no node id, so recall has no exact handle to resolve: {}",
+                created.blob().chars().take(600).collect::<String>()
+            ));
+        }
+        let handle = if id.starts_with("mem-") || id.contains(':') {
+            id.to_string()
+        } else {
+            format!("mem:{id}")
+        };
+        let good = server
+            .tool("recall", json!({ "handle": handle }))
+            .expect("rpc");
+        if good.rejected() || good.handle_required() {
+            missing(&format!(
+                "recall of a handle this process just wrote failed: {}",
+                good.blob().chars().take(800).collect::<String>()
+            ));
+        }
+        assert_receipt("recall", &good);
+        let missed = server
+            .tool("recall", json!({ "handle": MISSING_HANDLE }))
+            .expect("rpc");
+        assert_handle_required("recall", &missed);
+    });
+}
+
+#[test]
+fn mcp_recall_free_text_is_not_a_search() {
+    with_server(|server| {
+        let _ = server.tool(
+            "smart_ingest",
+            json!({
+                "content": "payments api timeout is thirty seconds",
+                "forceCreate": true
+            }),
+        );
+        let reply = server
+            .tool("recall", json!({ "query": "payments api timeout" }))
+            .expect("rpc");
+        assert_handle_required("recall", &reply);
+        let blob = reply.blob();
+        assert!(
+            !blob.contains("thirty seconds"),
+            "free-text recall returned memory content (keyword/semantic match is forbidden): {blob}"
+        );
+    });
+}
+
+#[test]
+fn mcp_receipt_valid_invalid_handle_miss() {
+    with_server(|server| {
+        let bad = server
+            .tool("receipt", json!({ "action": "not-an-action" }))
+            .expect("rpc");
+        assert!(bad.rejected(), "{}", bad.blob());
+        let missed = server
+            .tool(
+                "receipt",
+                json!({ "action": "get", "receipt_id": MISSING_HANDLE }),
+            )
+            .expect("rpc");
+        assert_handle_required("receipt", &missed);
+        // A valid get needs a receipt this server just signed. Recall of a
+        // freshly written handle is the writer. If that path has no receipt
+        // id yet, the test names the gap instead of pretending a fake id worked.
+        let created = server
+            .tool(
+                "smart_ingest",
+                json!({ "content": "receipt source memory", "forceCreate": true }),
+            )
+            .expect("rpc");
+        if created.rejected() {
+            missing(&format!(
+                "receipt get needs a live memory to recall. smart_ingest failed: {}",
+                created.blob().chars().take(500).collect::<String>()
+            ));
+        }
+        let id = created.body["nodeId"].as_str().unwrap_or("");
+        let handle = if id.starts_with("mem-") || id.contains(':') {
+            id.to_string()
+        } else {
+            format!("mem:{id}")
+        };
+        let recall = server
+            .tool("recall", json!({ "handle": handle }))
+            .expect("rpc");
+        if !has_gate_receipt(&recall) {
+            missing(&format!(
+                "recall did not return a signed receipt, so receipt(action=get) has nothing real to fetch: {}",
+                recall.blob().chars().take(600).collect::<String>()
+            ));
+        }
+        let receipt_id = recall.body["receiptId"]
+            .as_str()
+            .or_else(|| recall.body["receipt_id"].as_str())
+            .or_else(|| recall.body["receipt"]["id"].as_str())
+            .unwrap_or("");
+        if receipt_id.is_empty() {
+            missing(&format!(
+                "recall receipt payload has no id field: {}",
+                recall.blob().chars().take(600).collect::<String>()
+            ));
+        }
+        let good = server
+            .tool(
+                "receipt",
+                json!({ "action": "get", "receipt_id": receipt_id }),
+            )
+            .expect("rpc");
+        if good.rejected() {
+            missing(&format!(
+                "receipt get of the id recall just returned failed: {}",
+                good.blob().chars().take(600).collect::<String>()
+            ));
+        }
+    });
+}
+
+#[test]
+fn mcp_memory_valid_invalid_handle_miss() {
+    with_server(|server| {
+        let bad = server.tool("memory", json!({ "action": 1 })).expect("rpc");
+        assert!(bad.rejected(), "{}", bad.blob());
+        let created = server
+            .tool(
+                "smart_ingest",
+                json!({ "content": "memory get target", "forceCreate": true }),
+            )
+            .expect("rpc");
+        if created.rejected() {
+            missing(&format!(
+                "memory get needs a stored node. smart_ingest failed: {}",
+                created.blob().chars().take(500).collect::<String>()
+            ));
+        }
+        let id = created.body["nodeId"].as_str().unwrap_or("").to_string();
+        if id.is_empty() {
+            missing("smart_ingest returned no nodeId");
+        }
+        let good = server
+            .tool("memory", json!({ "action": "get", "id": id }))
+            .expect("rpc");
+        if good.rejected() || good.handle_required() {
+            missing(&format!(
+                "memory get of a node just written failed: {}",
+                good.blob().chars().take(600).collect::<String>()
+            ));
+        }
+        let missed = server
+            .tool("memory", json!({ "action": "get", "id": MISSING_HANDLE }))
+            .expect("rpc");
+        assert_handle_required("memory", &missed);
+    });
+}
+
+#[test]
+fn mcp_purge_valid_invalid_handle_miss() {
+    with_server(|server| {
+        let bad = server
+            .tool("purge", json!({ "id": MISSING_HANDLE }))
+            .expect("rpc");
+        assert!(
+            bad.rejected(),
+            "purge without confirm must be refused: {}",
+            bad.blob()
+        );
+        let created = server
+            .tool(
+                "smart_ingest",
+                json!({ "content": "purge target", "forceCreate": true }),
+            )
+            .expect("rpc");
+        if created.rejected() {
+            missing(&format!(
+                "purge needs a stored node. smart_ingest failed: {}",
+                created.blob().chars().take(500).collect::<String>()
+            ));
+        }
+        let id = created.body["nodeId"].as_str().unwrap_or("").to_string();
+        let good = server
+            .tool(
+                "purge",
+                json!({ "id": id, "confirm": true, "reason": "release-matrix" }),
+            )
+            .expect("rpc");
+        if good.handle_required() {
+            missing(&format!(
+                "purge of a node just written returned handle_required: {}",
+                good.blob().chars().take(500).collect::<String>()
+            ));
+        }
+        assert_receipt("purge", &good);
+        let missed = server
+            .tool("purge", json!({ "id": MISSING_HANDLE, "confirm": true }))
+            .expect("rpc");
+        assert_handle_required("purge", &missed);
+    });
+}
+
+#[test]
+fn mcp_codebase_valid_invalid_handle_miss() {
+    exercise(
+        "codebase",
+        json!({ "action": "nope" }),
+        json!({
+            "action": "remember_decision",
+            "decision": "Strata is the only store",
+            "rationale": "signed append-only log",
+            "codebase": "vestige"
+        }),
+        json!({ "action": "reanchor", "memoryId": MISSING_HANDLE }),
+        true,
+    );
+}
+
+#[test]
+fn mcp_project_valid_invalid_handle_miss() {
+    exercise(
+        "project",
+        json!({ "action": 7 }),
+        json!({ "action": "preview", "scope": "user" }),
+        json!({ "action": "preview", "handle": MISSING_HANDLE }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_intention_valid_invalid_handle_miss() {
+    exercise(
+        "intention",
+        json!({ "action": "nope" }),
+        json!({ "action": "list" }),
+        json!({ "action": "check", "id": MISSING_HANDLE }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_smart_ingest_valid_invalid_handle_miss() {
+    exercise(
+        "smart_ingest",
+        json!({ "content": 1 }),
+        json!({ "content": "release matrix ingest", "forceCreate": true }),
+        json!({ "content": "release matrix ingest", "handle": MISSING_HANDLE }),
+        true,
+    );
+}
+
+#[test]
+fn mcp_source_sync_valid_invalid_handle_miss() {
+    with_server(|server| {
+        let bad = server
+            .tool("source_sync", json!({ "source": 1 }))
+            .expect("rpc");
+        assert!(bad.rejected(), "{}", bad.blob());
+        // No token is a completed call: the tool must refuse with a
+        // configuration error, not by searching or crashing.
+        let good = server
+            .tool(
+                "source_sync",
+                json!({ "source": "github", "repo": "example/none" }),
+            )
+            .expect("rpc");
+        let blob = good.blob();
+        if blob.contains("sqlite") {
+            missing(&format!("source_sync touched sqlite: {blob}"));
+        }
+        let missed = server
+            .tool(
+                "source_sync",
+                json!({ "source": "github", "repo": "example/none", "handle": MISSING_HANDLE }),
+            )
+            .expect("rpc");
+        assert_handle_required("source_sync", &missed);
+    });
+}
+
+#[test]
+fn mcp_memory_status_valid_invalid_handle_miss() {
+    exercise(
+        "memory_status",
+        json!({ "view": 1 }),
+        json!({ "view": "health" }),
+        json!({ "view": "health", "handle": MISSING_HANDLE }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_maintain_valid_invalid_handle_miss() {
+    exercise(
+        "maintain",
+        json!({ "action": "nope" }),
+        json!({ "action": "gc", "dry_run": true }),
+        json!({ "action": "gc", "dry_run": true, "handle": MISSING_HANDLE }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_dedup_valid_invalid_handle_miss() {
+    exercise(
+        "dedup",
+        json!({ "action": "nope" }),
+        json!({ "action": "scan" }),
+        json!({ "action": "protect", "id": MISSING_HANDLE }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_graph_valid_invalid_handle_miss() {
+    exercise(
+        "graph",
+        json!({ "action": "nope" }),
+        json!({ "action": "recent", "limit": 5 }),
+        json!({ "action": "memory", "id": MISSING_HANDLE }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_session_start_valid_invalid_handle_miss() {
+    exercise(
+        "session_start",
+        json!({ "budget_tokens": "lots" }),
+        json!({}),
+        json!({ "handle": MISSING_HANDLE }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_suppress_valid_invalid_handle_miss() {
+    with_server(|server| {
+        let bad = server.tool("suppress", json!({ "id": 1 })).expect("rpc");
+        assert!(bad.rejected(), "{}", bad.blob());
+        let created = server
+            .tool(
+                "smart_ingest",
+                json!({ "content": "suppress target", "forceCreate": true }),
+            )
+            .expect("rpc");
+        if created.rejected() {
+            missing(&format!(
+                "suppress needs a stored node. smart_ingest failed: {}",
+                created.blob().chars().take(500).collect::<String>()
+            ));
+        }
+        let id = created.body["nodeId"].as_str().unwrap_or("").to_string();
+        let good = server
+            .tool("suppress", json!({ "id": id, "reason": "release-matrix" }))
+            .expect("rpc");
+        if good.rejected() && !has_gate_receipt(&good) {
+            missing(&format!(
+                "suppress of a node just written failed without a gate receipt: {}",
+                good.blob().chars().take(600).collect::<String>()
+            ));
+        }
+        assert_receipt("suppress", &good);
+        let missed = server
+            .tool("suppress", json!({ "id": MISSING_HANDLE }))
+            .expect("rpc");
+        assert_handle_required("suppress", &missed);
+    });
+}
+
+#[test]
+fn mcp_causal_walk_valid_invalid_handle_miss() {
+    exercise(
+        "causal_walk",
+        json!({ "start_points": "nope" }),
+        json!({
+            "start_points": [{ "kind": "failing_test", "name": "release_matrix_absent" }],
+            "promote": false
+        }),
+        json!({
+            "start_points": [{ "kind": "logged_write", "node_id": MISSING_HANDLE }]
+        }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_selftest_valid_invalid_handle_miss() {
+    exercise(
+        "selftest",
+        json!({ "rounds": "many" }),
+        json!({}),
+        json!({ "handle": MISSING_HANDLE }),
+        false,
+    );
+}
+
+#[test]
+fn mcp_forgotten_lesson_valid_invalid_handle_miss() {
+    with_server(|server| {
+        let bad = server
+            .tool("forgotten_lesson", json!({ "failure_id": 1 }))
+            .expect("rpc");
+        assert!(bad.rejected(), "{}", bad.blob());
+        let created = server
+            .tool(
+                "smart_ingest",
+                json!({
+                    "content": "error: release matrix failure fixture",
+                    "forceCreate": true,
+                    "tags": ["failure"]
+                }),
+            )
+            .expect("rpc");
+        if created.rejected() {
+            missing(&format!(
+                "forgotten_lesson needs a failure memory. smart_ingest failed: {}",
+                created.blob().chars().take(500).collect::<String>()
+            ));
+        }
+        let id = created.body["nodeId"].as_str().unwrap_or("").to_string();
+        let good = server
+            .tool("forgotten_lesson", json!({ "failure_id": id }))
+            .expect("rpc");
+        if good.rejected() && !good.handle_required() {
+            missing(&format!(
+                "forgotten_lesson rejected the failure id just written: {}",
+                good.blob().chars().take(600).collect::<String>()
+            ));
+        }
+        let missed = server
+            .tool("forgotten_lesson", json!({ "failure_id": MISSING_HANDLE }))
+            .expect("rpc");
+        assert_handle_required("forgotten_lesson", &missed);
+    });
+}
+
+#[test]
+fn mcp_writes_and_destructive_actions_carry_gate_receipts() {
+    with_server(|server| {
+        let ingest = server
+            .tool(
+                "smart_ingest",
+                json!({ "content": "receipt anchor for purge", "forceCreate": true }),
+            )
+            .expect("rpc");
+        if ingest.rejected() {
+            missing(&format!(
+                "smart_ingest (write) failed before a receipt could be checked: {}",
+                ingest.blob().chars().take(600).collect::<String>()
+            ));
+        }
+        assert_receipt("smart_ingest", &ingest);
+        let id = ingest.body["nodeId"].as_str().unwrap_or("").to_string();
+        if id.is_empty() {
+            missing("smart_ingest succeeded without a node id");
+        }
+        let purge = server
+            .tool(
+                "purge",
+                json!({ "id": id, "confirm": true, "reason": "release-matrix" }),
+            )
+            .expect("rpc");
+        if purge.rejected() && !purge.handle_required() {
+            // A rejection that is itself a hold/deny is a receipt if it
+            // carries the verdict. Otherwise the destructive path is missing.
+            if !has_gate_receipt(&purge) {
+                missing(&format!(
+                    "purge did not return a gate verdict/receipt: {}",
+                    purge.blob().chars().take(800).collect::<String>()
+                ));
+            }
+        } else if !purge.rejected() {
+            assert_receipt("purge", &purge);
+        }
+    });
+}

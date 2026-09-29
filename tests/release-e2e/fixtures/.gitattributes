@@ -1,0 +1,3 @@
+v3/**/*.db binary
+v3/**/*.db-wal binary
+v3/**/*.db-shm binary

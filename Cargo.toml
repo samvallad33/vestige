@@ -14,6 +14,10 @@ members = [
 ]
 exclude = [
     "fastembed-rs",
+    # The v4.0.0 tag gate. It is a separate workspace so `cargo test --workspace`
+    # does not run it: failing rows block the tag via the release-e2e workflow,
+    # not merges of earlier PRs whose CI is the workspace suite.
+    "tests/release-e2e",
     # strata-migrate stays OUT of the workspace on purpose: its acceptance
     # tests verify the v3 guard through its OWN vestige-core build. Joining
     # it would let cargo feature unification (tests/e2e requests v3-engine)
