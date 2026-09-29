@@ -157,7 +157,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "Memory suppressed"
         );
 
-        Ok(json!({
+        let mut response = json!({
             "success": true,
             "action": "suppress",
             "id": args.id,
@@ -177,7 +177,17 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                 node.suppression_count, estimated_cascade, DEFAULT_LABILE_HOURS
             ),
             "citation": "Anderson et al. 2025, Nat Rev Neurosci, DOI: 10.1038/s41583-025-00929-y"
-        }))
+        });
+        if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+            let receipt_id = node
+                .source
+                .as_deref()
+                .filter(|id| id.starts_with("eff-"))
+                .ok_or_else(|| "suppress admitted but the write receipt is missing".to_string())?;
+            response["receiptId"] = json!(receipt_id);
+            response["rule"] = json!("suppress");
+        }
+        Ok(response)
     }
 }
 
@@ -192,11 +202,7 @@ async fn derive_and_gate_cascade(
     let report = storage
         .blast_radius_with_link_types(id, false, &["derived_from"])
         .map_err(|e| format!("cascade traversal failed: {}", e))?;
-    let targets: Vec<_> = report
-        .affected
-        .into_iter()
-        .filter(|a| a.id != id)
-        .collect();
+    let targets: Vec<_> = report.affected.into_iter().filter(|a| a.id != id).collect();
 
     let mode = crate::trace_recorder::read_review_mode(storage);
     let mut entries = Vec::with_capacity(targets.len());
@@ -495,7 +501,10 @@ mod tests {
             assert_eq!(node.suppression_count, 1, "{id} must be suppressed");
         }
         let stranger = storage.get_node(&unrelated).unwrap().unwrap();
-        assert_eq!(stranger.suppression_count, 0, "non-derived edges must not cascade");
+        assert_eq!(
+            stranger.suppression_count, 0,
+            "non-derived edges must not cascade"
+        );
     }
 
     #[tokio::test]
@@ -523,7 +532,8 @@ mod tests {
         // Cascade targets were NOT suppressed; each has a pending PR.
         for id in [&child, &grandchild] {
             assert_eq!(
-                storage.get_node(id).unwrap().unwrap().suppression_count, 0,
+                storage.get_node(id).unwrap().unwrap().suppression_count,
+                0,
                 "cascade target must wait for review"
             );
         }
@@ -531,7 +541,10 @@ mod tests {
             .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
             .unwrap();
         assert_eq!(prs.len(), 2, "one PR per derived target");
-        assert!(prs.iter().all(|pr| pr.diff["pendingAction"] == json!("suppress")));
+        assert!(
+            prs.iter()
+                .all(|pr| pr.diff["pendingAction"] == json!("suppress"))
+        );
     }
 
     #[tokio::test]
@@ -545,7 +558,8 @@ mod tests {
             .unwrap();
         assert!(r["cascadeDerivedFrom"].is_null(), "no cascade unless asked");
         assert_eq!(
-            storage.get_node(&child).unwrap().unwrap().suppression_count, 0,
+            storage.get_node(&child).unwrap().unwrap().suppression_count,
+            0,
             "default suppress must not touch derived targets"
         );
     }
