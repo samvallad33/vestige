@@ -903,34 +903,29 @@ fn upgrade_wal_without_flag_refuses_and_source_unchanged() {
     );
 }
 
+/// SIGKILL while staging segments are still growing, before `publish`
+/// renames staging onto `<dest>`. `<dest>` must be absent. A rerun exits 0,
+/// leaves the v3 sha unchanged, and rebuilds a log whose node, edge, FSRS,
+/// and receipt frame counts match a clean run of the same source. The
+/// migrate stdout line is not the count: an idempotent report prints source
+/// table rows.
 #[test]
 fn upgrade_sigkill_mid_import_then_rerun_does_not_duplicate() {
-    let killed = kill_migrate_during_segment_write();
-    assert_killed_import_left_no_dest(&killed);
-    let home = tempfile::tempdir().unwrap();
-    let again = run_vestige(
-        &[
-            "migrate-to-strata".into(),
-            "--from".into(),
-            killed.src.display().to_string(),
-            "--to".into(),
-            killed.dest.display().to_string(),
-        ],
-        home.path(),
-        Duration::from_secs(180),
-    );
-    let blob = format!("{}{}", again.stdout, again.stderr);
+    let killed = kill_migrate(KillPoint::BeforePublish);
+    assert_killed_before_publish(&killed);
+    let clean = killed.dest.with_file_name("clean-run");
+    let clean_out = migrate_to(&killed.src, &clean);
     assert_eq!(
-        killed.before_sha,
-        sha256_file(&killed.db),
-        "rerun modified the v3 file"
-    );
-    assert_eq!(
-        again.status,
+        clean_out.status,
         Some(0),
-        "rerun after a mid-write SIGKILL must finish the import. output: {}",
-        blob.chars().take(800).collect::<String>()
+        "clean migrate failed, so the pre-rename rerun has no log oracle: {}",
+        format!("{}{}", clean_out.stdout, clean_out.stderr)
+            .chars()
+            .take(600)
+            .collect::<String>()
     );
+    let again = migrate_to(&killed.src, &killed.dest);
+    assert_rerun_keeps_v3(&killed, &again);
     assert!(
         !killed.staging.exists(),
         "staging directory survived a successful rerun: {}",
@@ -938,35 +933,155 @@ fn upgrade_sigkill_mid_import_then_rerun_does_not_duplicate() {
     );
     assert!(
         killed.dest.is_dir(),
-        "rerun exited 0 without publishing {}",
+        "rerun did not publish {}",
         killed.dest.display()
     );
-    let got = node_count_if_log(&killed.dest);
-    assert_eq!(
-        got, killed.source_nodes,
-        "published node count {got} != source memory count {}. A second copy was written.",
-        killed.source_nodes
-    );
-    let verify = run_cmd(
-        &product_bin("strata-verify"),
-        &[killed.dest.display().to_string()],
-        &[],
-        &[],
-        Duration::from_secs(60),
-    );
-    let verify_blob = format!("{}{}", verify.stdout, verify.stderr);
-    assert!(
-        verify.status == Some(0) && verify_blob.contains("OK"),
-        "strata-verify did not accept the republished log (exit {:?}): {}",
-        verify.status,
-        verify_blob.chars().take(800).collect::<String>()
-    );
+    // Frame counts come from the log. Stdout `Migrated: N nodes, … M fsrs
+    // events` is source row counts on the idempotent path.
+    assert_same_frames(&frame_counts(&killed.dest), &frame_counts(&clean));
+    assert_strata_verify_ok(&killed.dest);
+    assert_strata_verify_ok(&clean);
 }
 
 #[test]
 fn upgrade_killed_import_leaves_no_dest() {
-    let killed = kill_migrate_during_segment_write();
-    assert_killed_import_left_no_dest(&killed);
+    let killed = kill_migrate(KillPoint::BeforePublish);
+    assert_killed_before_publish(&killed);
+}
+
+/// SIGKILL after the publish rename. `<dest>` is the finished log. The rerun
+/// exits 0 without rewriting it: the log bytes and the v3 sha stay identical.
+#[test]
+fn upgrade_sigkill_after_publish_rerun_is_idempotent() {
+    let killed = kill_migrate(KillPoint::AfterPublish);
+    assert_eq!(
+        killed.before_sha,
+        sha256_file(&killed.db),
+        "post-rename SIGKILL modified the v3 file"
+    );
+    assert!(
+        killed.dest_exists && killed.dest.is_dir(),
+        "post-rename SIGKILL left no finished log at {}",
+        killed.dest.display()
+    );
+    assert!(
+        !killed.staging_exists,
+        "post-rename SIGKILL left staging at {}",
+        killed.staging.display()
+    );
+    // `receipt-signing.key` in the parent is written before the rename. Its
+    // presence after the kill is the expected layout, not a leaked secret.
+    assert_receipt_key_allowed(&killed.dest);
+    let log_before = tree_hashes(&killed.dest);
+    let key = receipt_key_path(&killed.dest);
+    let key_before = key.is_file().then(|| sha256_file(&key));
+    let frames_before = frame_counts(&killed.dest);
+    assert!(
+        frames_before.receipts >= 1,
+        "finished log has no receipt frame before the rerun"
+    );
+    let again = migrate_to(&killed.src, &killed.dest);
+    assert_rerun_keeps_v3(&killed, &again);
+    assert_eq!(
+        log_before,
+        tree_hashes(&killed.dest),
+        "idempotent rerun rewrote the published log"
+    );
+    let key_after = key.is_file().then(|| sha256_file(&key));
+    assert_eq!(
+        key_before,
+        key_after,
+        "idempotent rerun rewrote {}",
+        strata_migrate::records::RECEIPT_KEY_FILE
+    );
+    assert_same_frames(&frame_counts(&killed.dest), &frames_before);
+    assert_strata_verify_ok(&killed.dest);
+}
+
+/// An import into a sibling `--to`, including one killed mid-write and rerun,
+/// must not replace a receipt key that already signs another store in the
+/// same parent. The key is written by `load_or_create_receipt_key`
+/// (`crates/strata-migrate/src/records.rs:295`) into the parent chosen by
+/// `receipt_key_dir_of` (`crates/strata-migrate/src/lib.rs:983`), called from
+/// `finish` (`crates/strata-migrate/src/lib.rs:929`).
+#[test]
+fn import_never_overwrites_existing_receipt_key() {
+    let work = tempfile::tempdir().unwrap();
+    let parent = work.path().join("parent");
+    fs::create_dir_all(&parent).unwrap();
+    let src = work.path().join("src");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let existing = parent.join("existing");
+    let first = migrate_to(&src, &existing);
+    assert_eq!(
+        first.status,
+        Some(0),
+        "could not build the pre-existing store: {}",
+        format!("{}{}", first.stdout, first.stderr)
+            .chars()
+            .take(600)
+            .collect::<String>()
+    );
+    let key = parent.join(strata_migrate::records::RECEIPT_KEY_FILE);
+    assert!(
+        key.is_file(),
+        "pre-existing store left no {} in {}",
+        strata_migrate::records::RECEIPT_KEY_FILE,
+        parent.display()
+    );
+    let key_sha = sha256_file(&key);
+    assert_strata_verify_ok(&existing);
+
+    let sibling = parent.join("sibling");
+    let second = migrate_to(&src, &sibling);
+    assert_eq!(
+        second.status,
+        Some(0),
+        "sibling import failed: {}",
+        format!("{}{}", second.stdout, second.stderr)
+            .chars()
+            .take(600)
+            .collect::<String>()
+    );
+    assert_eq!(
+        key_sha,
+        sha256_file(&key),
+        "sibling import rewrote the pre-existing receipt key (written at \
+         crates/strata-migrate/src/records.rs:295)"
+    );
+    assert_strata_verify_ok(&existing);
+
+    let kill_src = work.path().join("kill-src");
+    copy_tree(&src, &kill_src);
+    inflate_nodes(&kill_src.join("vestige.db"), 8000);
+    let killed_dest = parent.join("killed");
+    let killed = kill_into(&kill_src, &killed_dest, KillPoint::BeforePublish);
+    assert_killed_before_publish(&killed);
+    assert_eq!(
+        key_sha,
+        sha256_file(&key),
+        "mid-import SIGKILL rewrote the pre-existing receipt key (written at \
+         crates/strata-migrate/src/records.rs:295)"
+    );
+    let rerun = migrate_to(&kill_src, &killed.dest);
+    assert_eq!(
+        rerun.status,
+        Some(0),
+        "rerun after the mid-import SIGKILL failed: {}",
+        format!("{}{}", rerun.stdout, rerun.stderr)
+            .chars()
+            .take(600)
+            .collect::<String>()
+    );
+    assert_eq!(
+        key_sha,
+        sha256_file(&key),
+        "rerun rewrote the pre-existing receipt key (written at \
+         crates/strata-migrate/src/records.rs:295, parent from \
+         crates/strata-migrate/src/lib.rs:983, called from finish at \
+         crates/strata-migrate/src/lib.rs:929)"
+    );
+    assert_strata_verify_ok(&existing);
 }
 
 #[test]
@@ -1080,16 +1195,20 @@ fn find_strata_dir(root: &std::path::Path) -> Option<std::path::PathBuf> {
 }
 
 struct KilledImport {
-    _work: tempfile::TempDir,
+    _work: Option<tempfile::TempDir>,
     src: std::path::PathBuf,
     db: std::path::PathBuf,
     dest: std::path::PathBuf,
     staging: std::path::PathBuf,
     before_sha: String,
-    source_nodes: usize,
-    partial_nodes: usize,
     dest_exists: bool,
     staging_exists: bool,
+}
+
+#[derive(Clone, Copy)]
+enum KillPoint {
+    BeforePublish,
+    AfterPublish,
 }
 
 /// `migrate-to-strata --to <dest>` stages at `<dest>` plus
@@ -1110,85 +1229,141 @@ fn segment_bytes(dir: &std::path::Path) -> u64 {
         .sum()
 }
 
-/// SIGKILL `vestige migrate-to-strata --to <dest>` while a staging segment is
-/// growing. The sleep-window env var is not set: the kill lands on a write
-/// whose size increased between two polls.
-fn kill_migrate_during_segment_write() -> KilledImport {
+fn kill_migrate(point: KillPoint) -> KilledImport {
     let work = tempfile::tempdir().unwrap();
     let src = work.path().join("src");
     copy_tree(&fixture("fresh-v38-ckpt"), &src);
     let db = src.join("vestige.db");
     inflate_nodes(&db, 8000);
-    let source_nodes = sqlite_text(&db, "SELECT COUNT(*) FROM knowledge_nodes")[0][0]
-        .parse::<usize>()
-        .unwrap();
-    let before_sha = sha256_file(&db);
-    let dest = work.path().join("strata");
-    let staging = migrate_staging(&dest);
-    let home = tempfile::tempdir().unwrap();
-    let mut child = Command::new(product_bin("vestige"))
-        .args([
-            "migrate-to-strata",
-            "--from",
-            src.to_str().unwrap(),
-            "--to",
-            dest.to_str().unwrap(),
-        ])
-        .env("HOME", home.path())
-        .env_remove("VESTIGE_DATA_DIR")
-        .env_remove("STRATA_MIGRATE_SIGKILL_WINDOW")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn migrate");
-    let started = Instant::now();
-    let mut previous = 0u64;
-    let mut killed = false;
-    while started.elapsed() < Duration::from_secs(180) {
-        if child.try_wait().expect("poll").is_some() {
-            break;
-        }
-        let bytes = segment_bytes(&staging);
-        if previous > 0 && bytes > previous {
-            let _ = child.kill();
-            killed = true;
-            break;
-        }
-        if bytes > 0 {
-            previous = bytes;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    let _ = child.wait();
-    if !killed {
-        missing(
-            "could not SIGKILL vestige migrate-to-strata during a staging segment \
-             write. The process finished before a segment grew, even after the \
-             source was inflated. The gate needs a kill on an actual write.",
-        );
-    }
-    let dest_exists = dest.exists();
-    let staging_exists = staging.exists();
-    let partial_nodes = node_count_if_log(&dest);
-    eprintln!(
-        "post-kill partial_nodes={partial_nodes} dest_exists={dest_exists} staging_exists={staging_exists} staging={}",
-        staging.display()
-    );
+    let killed = kill_into(&src, &work.path().join(dest_name(point)), point);
     KilledImport {
-        _work: work,
-        src,
-        db,
-        dest,
-        staging,
-        before_sha,
-        source_nodes,
-        partial_nodes,
-        dest_exists,
-        staging_exists,
+        _work: Some(work),
+        ..killed
     }
 }
 
-fn assert_killed_import_left_no_dest(killed: &KilledImport) {
+fn dest_name(point: KillPoint) -> &'static str {
+    match point {
+        KillPoint::BeforePublish => "before-publish",
+        KillPoint::AfterPublish => "after-publish",
+    }
+}
+
+/// SIGKILL `vestige migrate-to-strata --to <dest>`. Before the publish rename
+/// the kill lands on a staging segment whose size grew between two polls.
+/// After the rename it lands once `<dest>` exists and the process is still
+/// alive. The sleep-window env var is not set. A parent
+/// `receipt-signing.key` is recorded, not treated as a leak.
+fn kill_into(src: &std::path::Path, dest: &std::path::Path, point: KillPoint) -> KilledImport {
+    let db = src.join("vestige.db");
+    let before_sha = sha256_file(&db);
+    let attempts = match point {
+        KillPoint::BeforePublish => 1,
+        KillPoint::AfterPublish => 4,
+    };
+    for attempt in 0..attempts {
+        let dest = if attempt == 0 {
+            dest.to_path_buf()
+        } else {
+            dest.with_file_name(format!(
+                "{}-retry-{attempt}",
+                dest.file_name()
+                    .unwrap_or(OsStr::new("dest"))
+                    .to_string_lossy()
+            ))
+        };
+        let staging = migrate_staging(&dest);
+        let home = tempfile::tempdir().unwrap();
+        let mut child = Command::new(product_bin("vestige"))
+            .args([
+                "migrate-to-strata",
+                "--from",
+                src.to_str().unwrap(),
+                "--to",
+                dest.to_str().unwrap(),
+            ])
+            .env("HOME", home.path())
+            .env_remove("VESTIGE_DATA_DIR")
+            .env_remove("STRATA_MIGRATE_SIGKILL_WINDOW")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn migrate");
+        let caught = watch_and_kill(&mut child, &dest, &staging, point);
+        let _ = child.wait();
+        if !caught {
+            continue;
+        }
+        let dest_exists = dest.exists();
+        let staging_exists = staging.exists();
+        let key_exists = receipt_key_path(&dest).is_file();
+        eprintln!(
+            "post-kill point={} dest_exists={dest_exists} staging_exists={staging_exists} receipt_key_exists={key_exists} dest={}",
+            dest_name(point),
+            dest.display()
+        );
+        return KilledImport {
+            _work: None,
+            src: src.to_path_buf(),
+            db,
+            dest,
+            staging,
+            before_sha,
+            dest_exists,
+            staging_exists,
+        };
+    }
+    missing(&format!(
+        "could not SIGKILL vestige migrate-to-strata at {}. Before the publish \
+         rename the process must be killed while a staging segment is growing. \
+         After the rename it must be killed once <dest> exists and the process \
+         is still alive.",
+        dest_name(point)
+    ));
+}
+
+fn watch_and_kill(
+    child: &mut Child,
+    dest: &std::path::Path,
+    staging: &std::path::Path,
+    point: KillPoint,
+) -> bool {
+    let started = Instant::now();
+    let mut previous = 0u64;
+    while started.elapsed() < Duration::from_secs(180) {
+        let exited = child.try_wait().expect("poll").is_some();
+        match point {
+            KillPoint::BeforePublish => {
+                if exited || dest.exists() {
+                    return false;
+                }
+                let bytes = segment_bytes(staging);
+                if previous > 0 && bytes > previous {
+                    let _ = child.kill();
+                    return true;
+                }
+                if bytes > 0 {
+                    previous = bytes;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            KillPoint::AfterPublish => {
+                if dest.exists() && !exited {
+                    let _ = child.kill();
+                    return true;
+                }
+                if exited {
+                    return false;
+                }
+                std::thread::yield_now();
+            }
+        }
+    }
+    let _ = child.kill();
+    false
+}
+
+fn assert_killed_before_publish(killed: &KilledImport) {
     assert_eq!(
         killed.before_sha,
         sha256_file(&killed.db),
@@ -1196,10 +1371,11 @@ fn assert_killed_import_left_no_dest(killed: &KilledImport) {
     );
     assert!(
         !killed.dest_exists,
-        "mid-write SIGKILL left <dest> at {} (partial_nodes={}). Only <dest>{} may exist.",
+        "pre-rename SIGKILL left <dest> at {}. Only <dest>{} may hold the partial log. \
+         A parent {} is expected and is not a leak.",
         killed.dest.display(),
-        killed.partial_nodes,
-        strata_migrate::STAGING_SUFFIX
+        strata_migrate::STAGING_SUFFIX,
+        strata_migrate::records::RECEIPT_KEY_FILE
     );
     if killed.staging_exists {
         assert!(
@@ -1208,6 +1384,126 @@ fn assert_killed_import_left_no_dest(killed: &KilledImport) {
             killed.staging.display()
         );
     }
+    assert_receipt_key_allowed(&killed.dest);
+}
+
+fn receipt_key_path(dest: &std::path::Path) -> std::path::PathBuf {
+    dest.parent()
+        .unwrap_or(dest)
+        .join(strata_migrate::records::RECEIPT_KEY_FILE)
+}
+
+fn assert_receipt_key_allowed(dest: &std::path::Path) {
+    let key = receipt_key_path(dest);
+    if key.exists() {
+        assert!(
+            key.is_file(),
+            "parent {} is not a file",
+            strata_migrate::records::RECEIPT_KEY_FILE
+        );
+    }
+}
+
+fn migrate_to(src: &std::path::Path, dest: &std::path::Path) -> CmdOut {
+    let home = tempfile::tempdir().unwrap();
+    run_vestige(
+        &[
+            "migrate-to-strata".into(),
+            "--from".into(),
+            src.display().to_string(),
+            "--to".into(),
+            dest.display().to_string(),
+        ],
+        home.path(),
+        Duration::from_secs(180),
+    )
+}
+
+fn assert_rerun_keeps_v3(killed: &KilledImport, again: &CmdOut) {
+    let blob = format!("{}{}", again.stdout, again.stderr);
+    assert_eq!(
+        killed.before_sha,
+        sha256_file(&killed.db),
+        "rerun modified the v3 file"
+    );
+    assert_eq!(
+        again.status,
+        Some(0),
+        "rerun after SIGKILL must exit 0. output: {}",
+        blob.chars().take(800).collect::<String>()
+    );
+}
+
+struct FrameCounts {
+    nodes: usize,
+    edges: usize,
+    fsrs: usize,
+    receipts: usize,
+    kinds: Vec<u64>,
+    nodes_body: Value,
+    edges_body: Value,
+}
+
+/// Node, edge, FSRS, and receipt counts from log frames. Not the migrate
+/// stdout line.
+fn frame_counts(dir: &std::path::Path) -> FrameCounts {
+    let dump = run_driver(&["dump-migration", dir.to_str().unwrap()]);
+    if dump.get("ok") != Some(&Value::Bool(true)) {
+        panic!("frame read failed for {}: {dump}", dir.display());
+    }
+    let kinds = dump["kinds"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|kind| kind.as_u64().unwrap_or(0))
+        .collect::<Vec<_>>();
+    let tally = |kind: u8| kinds.iter().filter(|got| **got == u64::from(kind)).count();
+    FrameCounts {
+        nodes: tally(strata_migrate::records::KIND_NODE),
+        edges: tally(strata_migrate::records::KIND_EDGE),
+        fsrs: tally(strata_migrate::records::KIND_FSRS_REVIEW),
+        receipts: tally(strata_migrate::records::KIND_MIGRATION_RECEIPT),
+        kinds,
+        nodes_body: dump.get("nodes").cloned().unwrap_or(Value::Null),
+        edges_body: dump.get("edges").cloned().unwrap_or(Value::Null),
+    }
+}
+
+fn assert_same_frames(got: &FrameCounts, want: &FrameCounts) {
+    assert_eq!(
+        (got.nodes, got.edges, got.fsrs, got.receipts),
+        (want.nodes, want.edges, want.fsrs, want.receipts),
+        "log frame counts diverged (nodes, edges, fsrs, receipts)"
+    );
+    assert!(got.receipts >= 1, "published log has no receipt frame");
+    assert_eq!(got.kinds, want.kinds, "frame kind sequence diverged");
+    assert_eq!(
+        got.nodes_body, want.nodes_body,
+        "node frame payloads diverged"
+    );
+    assert_eq!(
+        got.edges_body, want.edges_body,
+        "edge frame payloads diverged"
+    );
+}
+
+fn assert_strata_verify_ok(dir: &std::path::Path) {
+    let verify = run_cmd(
+        &product_bin("strata-verify"),
+        &[dir.display().to_string()],
+        &[],
+        &[],
+        Duration::from_secs(60),
+    );
+    let blob = format!("{}{}", verify.stdout, verify.stderr);
+    assert!(
+        verify.status == Some(0) && blob.contains("OK"),
+        "strata-verify did not accept {} (exit {:?}): {}",
+        dir.display(),
+        verify.status,
+        blob.chars().take(800).collect::<String>()
+    );
 }
 
 struct V311Asset {
@@ -1419,14 +1715,6 @@ fn inflate_nodes(db: &std::path::Path, extra: usize) {
             .unwrap();
     }
     tx.commit().unwrap();
-}
-
-fn node_count_if_log(dir: &std::path::Path) -> usize {
-    if !dir.exists() {
-        return 0;
-    }
-    let dump = run_driver(&["dump-migration", dir.to_str().unwrap()]);
-    dump["nodes"].as_array().map(|a| a.len()).unwrap_or(0)
 }
 
 fn v3_refusal(blob: &str) -> bool {
