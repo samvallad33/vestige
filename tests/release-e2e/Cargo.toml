@@ -29,6 +29,7 @@ tempfile = "3"
 
 [dev-dependencies]
 # Integration tests are a separate crate. They do not see [dependencies].
+blake3 = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1"
 sha2 = "0.10"

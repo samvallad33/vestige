@@ -185,20 +185,12 @@ fn cli_help_lists_every_command_and_flag() {
 }
 
 #[test]
-fn cli_migrate_to_strata_advertises_dry_run_and_rollback() {
+fn cli_migrate_to_strata_advertises_dry_run() {
     let text = help(&["migrate-to-strata", "--help"]);
     assert!(
         text.contains("--dry-run"),
         "migrate-to-strata help has no --dry-run: {text}"
     );
-    if !text.contains("--rollback") {
-        missing(
-            "`vestige migrate-to-strata --rollback` is not on this head. \
-             The hidden fallback must support --dry-run (present) and --rollback \
-             (absent from help). A partial import has to be reversible without \
-             appending a second copy.",
-        );
-    }
 }
 
 fn fresh(args: &[&str], timeout: Duration) -> (tempfile::TempDir, super::support::CmdOut) {

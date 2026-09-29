@@ -1,7 +1,11 @@
 //! Every advertised MCP tool, over real stdio: valid input, invalid input,
 //! and an exact-handle miss that must return `handle_required`.
 
+use std::fs;
+use std::path::Path;
+
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use super::support::*;
 
@@ -559,4 +563,170 @@ fn mcp_writes_and_destructive_actions_carry_gate_receipts() {
             assert_receipt("purge", &purge);
         }
     });
+}
+
+/// `confirm: true` may change the target only when a gated receipt for a
+/// `projected_to` edge records blake3 or sha256 of the bytes now in the file.
+/// `confirm: false` leaves the file byte-identical. A write that lands without
+/// that receipt is a real failure. It is not pending_strata.
+#[test]
+fn project_write_requires_matching_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("CLAUDE.md");
+    let preamble = b"# human\n\nKeep this line.\n";
+    fs::write(&target, preamble).unwrap();
+    let before = fs::read(&target).unwrap();
+
+    with_server(|server| {
+        let _ = server.tool(
+            "smart_ingest",
+            json!({
+                "content": "Deploys use blue-green behind the ALB; cutover is a target-group swap.",
+                "nodeType": "decision",
+                "tags": ["rule"],
+                "forceCreate": true
+            }),
+        );
+        let refused = server
+            .tool(
+                "project",
+                json!({
+                    "action": "write",
+                    "path": "CLAUDE.md",
+                    "root": root.path(),
+                    "confirm": false
+                }),
+            )
+            .expect("rpc");
+        let after_refuse = fs::read(&target).unwrap();
+        assert_eq!(
+            after_refuse,
+            before,
+            "confirm:false changed the target file. reply: {}",
+            refused.blob().chars().take(800).collect::<String>()
+        );
+
+        let wrote = server
+            .tool(
+                "project",
+                json!({
+                    "action": "write",
+                    "path": "CLAUDE.md",
+                    "root": root.path(),
+                    "confirm": true
+                }),
+            )
+            .expect("rpc");
+        let after = fs::read(&target).unwrap();
+        let changed = after != before;
+        let matched = projected_receipt_matches(&server.data_dir, &wrote, &after);
+        if !(changed && matched) {
+            panic!(
+                "FAIL: project confirm:true is a real gate failure, not pending_strata. The file must change and a gated receipt for a projected_to edge must record blake3 or sha256 of those bytes. An ungated write is not a pass. file_changed={changed} receipt_match={matched} reply={}",
+                wrote.blob().chars().take(1200).collect::<String>()
+            );
+        }
+    });
+}
+
+fn projected_receipt_matches(data_dir: &Path, reply: &ToolReply, file: &[u8]) -> bool {
+    let blake = *blake3::hash(file).as_bytes();
+    let sha = Sha256::digest(file);
+    let blake_hex = hex_encode(&blake);
+    let sha_hex = hex_encode(&sha);
+    if json_has_projected_receipt(&reply.body, &blake_hex, &sha_hex)
+        || json_has_projected_receipt(&reply.raw, &blake_hex, &sha_hex)
+    {
+        return true;
+    }
+    let mut blobs = Vec::new();
+    collect_log_blobs(data_dir, &mut blobs);
+    blobs.iter().any(|blob| {
+        window_has_projected_receipt(blob, &blake, sha.as_slice(), &blake_hex, &sha_hex)
+    })
+}
+
+fn json_has_projected_receipt(value: &Value, blake_hex: &str, sha_hex: &str) -> bool {
+    match value {
+        Value::Object(map) => {
+            let rendered = value.to_string();
+            let edge = rendered.contains("projected_to");
+            let hash = rendered.contains(blake_hex) || rendered.contains(sha_hex);
+            let gated = rendered.contains("receipt")
+                || rendered.contains("verdict")
+                || rendered.contains("admission");
+            if edge && hash && gated {
+                return true;
+            }
+            map.values()
+                .any(|child| json_has_projected_receipt(child, blake_hex, sha_hex))
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|child| json_has_projected_receipt(child, blake_hex, sha_hex)),
+        _ => false,
+    }
+}
+
+fn collect_log_blobs(dir: &Path, out: &mut Vec<Vec<u8>>) {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_log_blobs(&path, out);
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.len() > 32 * 1024 * 1024 {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(&path) {
+            out.push(bytes);
+        }
+    }
+}
+
+fn window_has_projected_receipt(
+    bytes: &[u8],
+    blake: &[u8; 32],
+    sha: &[u8],
+    blake_hex: &str,
+    sha_hex: &str,
+) -> bool {
+    let needle = b"projected_to";
+    let mut from = 0;
+    while let Some(rel) = find_bytes(&bytes[from..], needle) {
+        let at = from + rel;
+        let start = at.saturating_sub(8192);
+        let end = (at + needle.len() + 8192).min(bytes.len());
+        let window = &bytes[start..end];
+        let hash = window.windows(32).any(|w| w == blake)
+            || window.windows(sha.len()).any(|w| w == sha)
+            || String::from_utf8_lossy(window).contains(blake_hex)
+            || String::from_utf8_lossy(window).contains(sha_hex);
+        let gated = [
+            b"receipt".as_slice(),
+            b"verdict",
+            b"admission",
+            b"Allow",
+            b"Hold",
+        ]
+        .iter()
+        .any(|token| find_bytes(window, token).is_some());
+        if hash && gated {
+            return true;
+        }
+        from = at + needle.len();
+    }
+    false
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }

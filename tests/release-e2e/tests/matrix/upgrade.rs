@@ -6,6 +6,7 @@
 //! `vestige` binary is a separate row and is expected to fail until that
 //! path backups, imports, verifies, and switches.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
@@ -775,111 +776,68 @@ fn upgrade_wal_without_flag_refuses_and_source_unchanged() {
 
 #[test]
 fn upgrade_sigkill_mid_import_then_rerun_does_not_duplicate() {
-    let work = tempfile::tempdir().unwrap();
-    let src = work.path().join("src");
-    copy_tree(&fixture("fresh-v38-ckpt"), &src);
-    let db = src.join("vestige.db");
-    inflate_nodes(&db, 4000);
-    let before = sha256_file(&db);
-    let dest = work.path().join("strata");
+    let killed = kill_migrate_during_segment_write();
+    assert_killed_import_left_no_dest(&killed);
     let home = tempfile::tempdir().unwrap();
-    let mut child = Command::new(product_bin("vestige"))
-        .args([
-            "migrate-to-strata",
-            "--from",
-            src.to_str().unwrap(),
-            "--to",
-            dest.to_str().unwrap(),
-        ])
-        .env("HOME", home.path())
-        .env_remove("VESTIGE_DATA_DIR")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn migrate");
-    let started = Instant::now();
-    let mut killed = false;
-    while started.elapsed() < Duration::from_secs(180) {
-        if dest.exists() && fs::read_dir(&dest).unwrap().next().is_some() {
-            let _ = child.kill();
-            killed = true;
-            break;
-        }
-        if child.try_wait().expect("poll").is_some() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let _ = child.wait();
-    assert_eq!(
-        before,
-        sha256_file(&db),
-        "SIGKILL path modified the v3 file"
-    );
-    if !killed {
-        missing(
-            "could not SIGKILL vestige migrate-to-strata mid-import: the process \
-             finished before any destination file appeared, even after the source \
-             was inflated. The gate needs a real mid-import kill.",
-        );
-    }
-    let partial_nodes = node_count_if_log(&dest);
     let again = run_vestige(
         &[
             "migrate-to-strata".into(),
             "--from".into(),
-            src.display().to_string(),
+            killed.src.display().to_string(),
             "--to".into(),
-            dest.display().to_string(),
+            killed.dest.display().to_string(),
         ],
         home.path(),
         Duration::from_secs(180),
     );
-    assert_eq!(before, sha256_file(&db));
     let blob = format!("{}{}", again.stdout, again.stderr);
-    if again.status == Some(0)
-        && !blob.to_lowercase().contains("not empty")
-        && !blob.contains("idempotent")
-    {
-        let after = node_count_if_log(&dest);
-        if after > partial_nodes.saturating_add(0) && partial_nodes > 0 && after > partial_nodes {
-            panic!("rerun after SIGKILL duplicated nodes ({partial_nodes} -> {after}): {blob}");
-        }
-    }
-    // A partial destination must be refused (or rolled back). Appending is the bug.
-    if again.status == Some(0) {
-        let after = node_count_if_log(&dest);
-        if partial_nodes > 0 && after != partial_nodes {
-            panic!("rerun changed the partial log from {partial_nodes} to {after} nodes: {blob}");
-        }
-        missing(&format!(
-            "rerun after SIGKILL exited 0 on a partial --to. It must refuse and point at \
-             --rollback. Output: {}",
-            blob.chars().take(800).collect::<String>()
-        ));
-    }
-    let after = node_count_if_log(&dest);
-    if partial_nodes > 0 && after != partial_nodes {
-        panic!("refused rerun still changed node count {partial_nodes} -> {after}");
-    }
+    assert_eq!(
+        killed.before_sha,
+        sha256_file(&killed.db),
+        "rerun modified the v3 file"
+    );
+    assert_eq!(
+        again.status,
+        Some(0),
+        "rerun after a mid-write SIGKILL must finish the import. output: {}",
+        blob.chars().take(800).collect::<String>()
+    );
+    assert!(
+        !killed.staging.exists(),
+        "staging directory survived a successful rerun: {}",
+        killed.staging.display()
+    );
+    assert!(
+        killed.dest.is_dir(),
+        "rerun exited 0 without publishing {}",
+        killed.dest.display()
+    );
+    let got = node_count_if_log(&killed.dest);
+    assert_eq!(
+        got, killed.source_nodes,
+        "published node count {got} != source memory count {}. A second copy was written.",
+        killed.source_nodes
+    );
+    let verify = run_cmd(
+        &product_bin("strata-verify"),
+        &[killed.dest.display().to_string()],
+        &[],
+        &[],
+        Duration::from_secs(60),
+    );
+    let verify_blob = format!("{}{}", verify.stdout, verify.stderr);
+    assert!(
+        verify.status == Some(0) && verify_blob.contains("OK"),
+        "strata-verify did not accept the republished log (exit {:?}): {}",
+        verify.status,
+        verify_blob.chars().take(800).collect::<String>()
+    );
 }
 
 #[test]
-fn upgrade_rollback_undoes_a_partial_import() {
-    let help_home = tempfile::tempdir().unwrap();
-    let help = run_vestige(
-        &["migrate-to-strata".into(), "--help".into()],
-        help_home.path(),
-        Duration::from_secs(20),
-    );
-    let text = format!("{}{}", help.stdout, help.stderr);
-    if !text.contains("--rollback") {
-        missing(
-            "`vestige migrate-to-strata --rollback` is not implemented. A SIGKILL \
-             mid-import must be undoable with --rollback, leaving --to empty and the \
-             v3 file untouched.",
-        );
-    }
+fn upgrade_killed_import_leaves_no_dest() {
+    let killed = kill_migrate_during_segment_write();
+    assert_killed_import_left_no_dest(&killed);
 }
 
 #[test]
@@ -990,6 +948,137 @@ fn find_strata_dir(root: &std::path::Path) -> Option<std::path::PathBuf> {
     }
     walk(root, &mut found);
     found
+}
+
+struct KilledImport {
+    _work: tempfile::TempDir,
+    src: std::path::PathBuf,
+    db: std::path::PathBuf,
+    dest: std::path::PathBuf,
+    staging: std::path::PathBuf,
+    before_sha: String,
+    source_nodes: usize,
+    partial_nodes: usize,
+    dest_exists: bool,
+    staging_exists: bool,
+}
+
+/// `migrate-to-strata --to <dest>` stages at `<dest>` plus
+/// [`strata_migrate::STAGING_SUFFIX`].
+fn migrate_staging(dest: &std::path::Path) -> std::path::PathBuf {
+    let mut name = dest
+        .file_name()
+        .unwrap_or(OsStr::new("strata"))
+        .to_os_string();
+    name.push(strata_migrate::STAGING_SUFFIX);
+    dest.with_file_name(name)
+}
+
+fn segment_bytes(dir: &std::path::Path) -> u64 {
+    seg_files(dir)
+        .iter()
+        .map(|path| fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
+        .sum()
+}
+
+/// SIGKILL `vestige migrate-to-strata --to <dest>` while a staging segment is
+/// growing. The sleep-window env var is not set: the kill lands on a write
+/// whose size increased between two polls.
+fn kill_migrate_during_segment_write() -> KilledImport {
+    let work = tempfile::tempdir().unwrap();
+    let src = work.path().join("src");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let db = src.join("vestige.db");
+    inflate_nodes(&db, 8000);
+    let source_nodes = sqlite_text(&db, "SELECT COUNT(*) FROM knowledge_nodes")[0][0]
+        .parse::<usize>()
+        .unwrap();
+    let before_sha = sha256_file(&db);
+    let dest = work.path().join("strata");
+    let staging = migrate_staging(&dest);
+    let home = tempfile::tempdir().unwrap();
+    let mut child = Command::new(product_bin("vestige"))
+        .args([
+            "migrate-to-strata",
+            "--from",
+            src.to_str().unwrap(),
+            "--to",
+            dest.to_str().unwrap(),
+        ])
+        .env("HOME", home.path())
+        .env_remove("VESTIGE_DATA_DIR")
+        .env_remove("STRATA_MIGRATE_SIGKILL_WINDOW")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn migrate");
+    let started = Instant::now();
+    let mut previous = 0u64;
+    let mut killed = false;
+    while started.elapsed() < Duration::from_secs(180) {
+        if child.try_wait().expect("poll").is_some() {
+            break;
+        }
+        let bytes = segment_bytes(&staging);
+        if previous > 0 && bytes > previous {
+            let _ = child.kill();
+            killed = true;
+            break;
+        }
+        if bytes > 0 {
+            previous = bytes;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let _ = child.wait();
+    if !killed {
+        missing(
+            "could not SIGKILL vestige migrate-to-strata during a staging segment \
+             write. The process finished before a segment grew, even after the \
+             source was inflated. The gate needs a kill on an actual write.",
+        );
+    }
+    let dest_exists = dest.exists();
+    let staging_exists = staging.exists();
+    let partial_nodes = node_count_if_log(&dest);
+    eprintln!(
+        "post-kill partial_nodes={partial_nodes} dest_exists={dest_exists} staging_exists={staging_exists} staging={}",
+        staging.display()
+    );
+    KilledImport {
+        _work: work,
+        src,
+        db,
+        dest,
+        staging,
+        before_sha,
+        source_nodes,
+        partial_nodes,
+        dest_exists,
+        staging_exists,
+    }
+}
+
+fn assert_killed_import_left_no_dest(killed: &KilledImport) {
+    assert_eq!(
+        killed.before_sha,
+        sha256_file(&killed.db),
+        "SIGKILL path modified the v3 file"
+    );
+    assert!(
+        !killed.dest_exists,
+        "mid-write SIGKILL left <dest> at {} (partial_nodes={}). Only <dest>{} may exist.",
+        killed.dest.display(),
+        killed.partial_nodes,
+        strata_migrate::STAGING_SUFFIX
+    );
+    if killed.staging_exists {
+        assert!(
+            killed.staging.is_dir(),
+            "staging path is not a directory: {}",
+            killed.staging.display()
+        );
+    }
 }
 
 fn inflate_nodes(db: &std::path::Path, extra: usize) {
