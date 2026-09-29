@@ -1611,4 +1611,356 @@ mod tests {
         assert_eq!(first["params"]["data"]["n"], 1);
         assert_eq!(second["params"]["data"]["n"], 2);
     }
+
+    /// `graph` advertises `memory_graph`. Over the real stdio loop that action
+    /// must complete with the planted recorded edges: live nodes in id order,
+    /// recorded edges in (source, target, type) order, superseded and
+    /// out-of-reach nodes absent. A content query is refused rather than searched.
+    #[cfg(not(feature = "legacy-sqlite"))]
+    #[tokio::test]
+    async fn memory_graph_over_stdio_returns_planted_recorded_edges() {
+        let dir = TempDir::new().unwrap();
+        let planted = plant_recorded_graph(dir.path());
+        let storage = vestige_core::open_storage(Some(dir.path().join("test.db"))).unwrap();
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let server = McpServer::new(storage, cognitive);
+
+        let (mut client_w, server_r) = tokio::io::duplex(1 << 16);
+        let (server_w, client_r) = tokio::io::duplex(1 << 20);
+        let handle =
+            tokio::spawn(
+                async move { run_io(server, None, BufReader::new(server_r), server_w).await },
+            );
+        let mut reader = BufReader::new(client_r);
+        client_w.write_all(init_line().as_bytes()).await.unwrap();
+        let init = read_one(&mut reader).await;
+        assert_eq!(init["id"], json!(0), "initialize answered: {init}");
+
+        let list_line = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/list"
+        })
+        .to_string()
+            + "\n";
+        client_w.write_all(list_line.as_bytes()).await.unwrap();
+        let listed = read_one(&mut reader).await;
+        let tools = listed["result"]["tools"]
+            .as_array()
+            .expect("tools/list returns tools");
+        let advertised = tools
+            .iter()
+            .find(|tool| tool.to_string().contains("memory_graph"))
+            .unwrap_or_else(|| panic!("no advertised tool mentions memory_graph: {listed}"));
+        let tool_name = advertised["name"]
+            .as_str()
+            .expect("advertised tool has a name")
+            .to_string();
+
+        let call = |id: i64, arguments: Value| {
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": arguments}
+            })
+            .to_string()
+                + "\n"
+        };
+        client_w
+            .write_all(
+                call(
+                    2,
+                    json!({
+                        "action": "memory_graph",
+                        "center_id": planted.center,
+                        "depth": 2
+                    }),
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        client_w
+            .write_all(
+                call(
+                    3,
+                    json!({
+                        "action": "memory_graph",
+                        "center_id": planted.center,
+                        "depth": 2
+                    }),
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        client_w
+            .write_all(
+                call(
+                    4,
+                    json!({
+                        "action": "memory_graph",
+                        "center_id": planted.center,
+                        "depth": 1
+                    }),
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        client_w
+            .write_all(
+                call(
+                    5,
+                    json!({
+                        "action": "memory_graph",
+                        "query": planted.center,
+                        "depth": 2
+                    }),
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        client_w
+            .write_all(
+                call(
+                    6,
+                    json!({
+                        "action": "memory_graph",
+                        "query": "far hop recorded"
+                    }),
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+
+        let depth2 = read_one(&mut reader).await;
+        let depth2_again = read_one(&mut reader).await;
+        let depth1 = read_one(&mut reader).await;
+        let by_exact_id = read_one(&mut reader).await;
+        let by_keywords = read_one(&mut reader).await;
+
+        let first = completed_graph(&depth2);
+        let second = completed_graph(&depth2_again);
+        assert_eq!(first, second, "recorded subgraph order is deterministic");
+        assert_eq!(
+            completed_graph(&by_exact_id),
+            first,
+            "exact id is a handle, not a search"
+        );
+
+        let node_ids: Vec<&str> = first["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["id"].as_str().unwrap())
+            .collect();
+        let mut expected_nodes = vec![
+            planted.center.as_str(),
+            planted.neighbor.as_str(),
+            planted.far.as_str(),
+        ];
+        expected_nodes.sort_unstable();
+        assert_eq!(
+            node_ids, expected_nodes,
+            "live recorded neighborhood only: {first}"
+        );
+        assert!(
+            !node_ids.contains(&planted.superseded.as_str()),
+            "superseded node is excluded: {first}"
+        );
+        assert!(
+            !node_ids.contains(&planted.beyond.as_str()),
+            "depth stops before the third hop: {first}"
+        );
+        assert!(
+            !node_ids.contains(&planted.isolated.as_str()),
+            "unlinked node is not inferred in: {first}"
+        );
+        assert_eq!(first["nodeCount"], json!(node_ids.len()));
+        assert_eq!(
+            first["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|node| node["isCenter"] == json!(true))
+                .count(),
+            1
+        );
+
+        let edges = edge_keys(&first);
+        let mut expected_edges = vec![
+            (
+                planted.center.clone(),
+                planted.neighbor.clone(),
+                "derived_from".into(),
+            ),
+            (
+                planted.neighbor.clone(),
+                planted.far.clone(),
+                "derived_from".into(),
+            ),
+            (
+                planted.far.clone(),
+                planted.neighbor.clone(),
+                "corrects".into(),
+            ),
+        ];
+        expected_edges.sort();
+        assert_eq!(
+            edges, expected_edges,
+            "only planted recorded edges: {first}"
+        );
+        assert_eq!(first["edgeCount"], json!(edges.len()));
+        assert!(
+            edges.iter().all(|(source, target, _)| {
+                source != &planted.superseded && target != &planted.superseded
+            }),
+            "no edge touches the superseded node"
+        );
+
+        let near = completed_graph(&depth1);
+        let near_ids: Vec<&str> = near["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["id"].as_str().unwrap())
+            .collect();
+        let mut expected_near = vec![planted.center.as_str(), planted.neighbor.as_str()];
+        expected_near.sort_unstable();
+        assert_eq!(
+            near_ids, expected_near,
+            "depth 1 stays on the first hop: {near}"
+        );
+        assert_eq!(
+            edge_keys(&near),
+            vec![(planted.center, planted.neighbor, "derived_from".into())]
+        );
+
+        assert_eq!(by_keywords["id"], json!(6), "{by_keywords}");
+        assert!(by_keywords.get("error").is_none(), "{by_keywords}");
+        assert_eq!(
+            by_keywords["result"]["isError"],
+            json!(true),
+            "{by_keywords}"
+        );
+        let refusal = by_keywords["result"].to_string();
+        assert!(
+            refusal.contains("similarity_disabled"),
+            "keyword query must not search: {refusal}"
+        );
+        assert!(
+            !refusal.contains("pending_strata") && !refusal.contains("not implemented"),
+            "{refusal}"
+        );
+
+        drop(client_w);
+        drop(reader);
+        let _ = tokio::time::timeout(Duration::from_secs(60), handle).await;
+    }
+
+    #[cfg(not(feature = "legacy-sqlite"))]
+    struct PlantedGraph {
+        center: String,
+        neighbor: String,
+        far: String,
+        beyond: String,
+        superseded: String,
+        isolated: String,
+    }
+
+    #[cfg(not(feature = "legacy-sqlite"))]
+    fn plant_recorded_graph(dir: &std::path::Path) -> PlantedGraph {
+        let mut store = strata_store::StrataStore::open_with_policy(
+            dir,
+            strata_store::policy_admitting_retire(),
+        )
+        .expect("open plant store");
+        let ingest = |store: &mut strata_store::StrataStore, content: &str| {
+            store
+                .ingest(strata_store::IngestInput {
+                    content: content.to_string(),
+                    node_type: "fact".to_string(),
+                    ..strata_store::IngestInput::default()
+                })
+                .expect("ingest")
+        };
+        let center = ingest(&mut store, "center anchor recorded");
+        let neighbor = ingest(&mut store, "neighbor hop recorded");
+        let far = ingest(&mut store, "far hop recorded");
+        let beyond = ingest(&mut store, "beyond depth recorded");
+        let superseded = ingest(&mut store, "superseded lineage recorded");
+        let isolated = ingest(&mut store, "isolated unlinked recorded");
+        let link =
+            |store: &mut strata_store::StrataStore, source: &str, target: &str, kind: &str| {
+                store
+                    .save_connection(&strata_store::ConnectionRecord {
+                        source_id: source.to_string(),
+                        target_id: target.to_string(),
+                        strength_milli: 1000,
+                        link_type: kind.to_string(),
+                        meta_sha: None,
+                        created_at_ms: 0,
+                        activation_count: 0,
+                    })
+                    .expect("record edge");
+            };
+        link(&mut store, &center, &neighbor, "derived_from");
+        link(&mut store, &neighbor, &far, "derived_from");
+        link(&mut store, &far, &neighbor, "corrects");
+        link(&mut store, &far, &beyond, "derived_from");
+        link(&mut store, &center, &superseded, "derived_from");
+        store
+            .supersede(&superseded, &neighbor)
+            .expect("supersession lands under the admitting policy");
+        drop(store);
+        PlantedGraph {
+            center,
+            neighbor,
+            far,
+            beyond,
+            superseded,
+            isolated,
+        }
+    }
+
+    #[cfg(not(feature = "legacy-sqlite"))]
+    fn completed_graph(response: &Value) -> Value {
+        assert!(
+            response.get("error").is_none(),
+            "stdio call completed without a protocol error: {response}"
+        );
+        let result = &response["result"];
+        assert_eq!(
+            result["isError"],
+            json!(false),
+            "tool result completed: {result}"
+        );
+        let body = result["structuredContent"].clone();
+        let rendered = result.to_string();
+        assert!(
+            !rendered.contains("pending_strata") && !rendered.contains("not implemented"),
+            "{rendered}"
+        );
+        assert!(body["nodes"].is_array(), "{body}");
+        assert!(body["edges"].is_array(), "{body}");
+        body
+    }
+
+    #[cfg(not(feature = "legacy-sqlite"))]
+    fn edge_keys(body: &Value) -> Vec<(String, String, String)> {
+        body["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|edge| {
+                (
+                    edge["source"].as_str().unwrap().to_string(),
+                    edge["target"].as_str().unwrap().to_string(),
+                    edge["type"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
 }

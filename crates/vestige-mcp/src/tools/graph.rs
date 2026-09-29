@@ -1,8 +1,10 @@
 //! memory_graph tool — Subgraph export with force-directed layout for visualization.
 //! v1.9.0: Computes Fruchterman-Reingold layout server-side.
 
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
-use vestige_core::Storage;
+
+use vestige_core::{ConnectionRecord, KnowledgeNode, Storage};
 
 pub fn schema() -> serde_json::Value {
     serde_json::json!({
@@ -139,6 +141,13 @@ pub async fn execute(
         .unwrap_or(50)
         .min(200) as usize;
 
+    // Strata has no FTS, embeddings, or inferred links. The subgraph is the
+    // center plus nodes reached by recorded edges, with superseded nodes left
+    // out when the log actually has that lineage.
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        return recorded_memory_graph(storage.as_ref(), args.as_ref(), depth, max_nodes);
+    }
+
     // Determine center node
     let center_id = if let Some(id) = args
         .as_ref()
@@ -182,7 +191,189 @@ pub async fn execute(
         ));
     }
 
-    // Build index map for FR layout
+    Ok(render_subgraph(&center_id, depth, &nodes, &edges))
+}
+
+/// Nodes reachable from `center_id` by recorded edges only.
+///
+/// Neighbor expansion is sorted by id, and the returned nodes and edges are
+/// sorted, so the same log always yields the same subgraph. Superseded ids
+/// are dropped when the backend can name them. Missing lineage data is an
+/// empty exclusion set, not a failure. Nothing here searches text, embeddings,
+/// or entity overlap, and no edge is invented for a pair the log did not record.
+fn recorded_memory_graph(
+    storage: &Storage,
+    args: Option<&serde_json::Value>,
+    depth: u32,
+    max_nodes: usize,
+) -> Result<serde_json::Value, String> {
+    let superseded = match storage.superseded_node_ids() {
+        Ok(ids) => ids,
+        Err(err) => {
+            let text = err.to_string();
+            if text.contains("not implemented") {
+                HashSet::new()
+            } else {
+                return Err(text);
+            }
+        }
+    };
+    let center_id = resolve_recorded_center(storage, args, &superseded)?;
+    let (nodes, edges) = recorded_subgraph(storage, &center_id, depth, max_nodes, &superseded)?;
+    Ok(render_subgraph(&center_id, depth, &nodes, &edges))
+}
+
+fn resolve_recorded_center(
+    storage: &Storage,
+    args: Option<&serde_json::Value>,
+    superseded: &HashSet<String>,
+) -> Result<String, String> {
+    if let Some(id) = args
+        .and_then(|value| value.get("center_id"))
+        .and_then(|value| value.as_str())
+        .filter(|id| !id.is_empty())
+    {
+        return Ok(id.to_string());
+    }
+    if let Some(query) = args
+        .and_then(|value| value.get("query"))
+        .and_then(|value| value.as_str())
+        .filter(|query| !query.is_empty())
+    {
+        let exact = storage
+            .get_node(query)
+            .map_err(|err| err.to_string())?
+            .filter(|node| !superseded.contains(&node.id));
+        if exact.is_some() {
+            return Ok(query.to_string());
+        }
+        return Err(
+            "similarity_disabled: memory_graph query is not an exact node id; embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass center_id"
+                .into(),
+        );
+    }
+
+    let mut offset = 0i32;
+    loop {
+        let page = storage
+            .get_all_nodes(64, offset)
+            .map_err(|err| format!("Failed to get recent node: {err}"))?;
+        if page.is_empty() {
+            break;
+        }
+        let count = i32::try_from(page.len()).unwrap_or(i32::MAX);
+        if let Some(node) = page.into_iter().find(|node| !superseded.contains(&node.id)) {
+            return Ok(node.id);
+        }
+        offset = offset.saturating_add(count);
+    }
+    Err("No memories in database".into())
+}
+
+fn recorded_subgraph(
+    storage: &Storage,
+    center_id: &str,
+    depth: u32,
+    max_nodes: usize,
+    superseded: &HashSet<String>,
+) -> Result<(Vec<KnowledgeNode>, Vec<ConnectionRecord>), String> {
+    let hidden = |id: &str| superseded.contains(id);
+    if hidden(center_id)
+        || storage
+            .get_node(center_id)
+            .map_err(|err| err.to_string())?
+            .is_none()
+    {
+        return Err(format!(
+            "Memory '{center_id}' not found or has no accessible data"
+        ));
+    }
+
+    let limit = max_nodes.max(1);
+    let mut ids = vec![center_id.to_string()];
+    let mut id_set = BTreeSet::from([center_id.to_string()]);
+    let mut frontier = vec![center_id.to_string()];
+
+    for _ in 0..depth {
+        if ids.len() >= limit {
+            break;
+        }
+        let mut next = BTreeSet::new();
+        for id in &frontier {
+            let connections = storage
+                .get_connections_for_memory(id)
+                .map_err(|err| err.to_string())?;
+            for conn in connections {
+                let other = if conn.source_id == *id {
+                    conn.target_id
+                } else {
+                    conn.source_id
+                };
+                if id_set.contains(&other) || next.contains(&other) || hidden(&other) {
+                    continue;
+                }
+                let is_node = storage
+                    .get_node(&other)
+                    .map_err(|err| err.to_string())?
+                    .is_some();
+                if is_node {
+                    next.insert(other);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        let mut advanced = Vec::new();
+        for id in next {
+            if ids.len() >= limit {
+                break;
+            }
+            id_set.insert(id.clone());
+            ids.push(id.clone());
+            advanced.push(id);
+        }
+        frontier = advanced;
+    }
+
+    let mut nodes = Vec::with_capacity(ids.len());
+    for id in &ids {
+        if hidden(id) {
+            continue;
+        }
+        if let Some(node) = storage.get_node(id).map_err(|err| err.to_string())? {
+            nodes.push(node);
+        }
+    }
+    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let included: BTreeSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
+    let mut edges = storage
+        .get_all_connections()
+        .map_err(|err| err.to_string())?;
+    edges.retain(|edge| {
+        included.contains(edge.source_id.as_str())
+            && included.contains(edge.target_id.as_str())
+            && !hidden(&edge.source_id)
+            && !hidden(&edge.target_id)
+    });
+    edges.sort_by(|a, b| {
+        a.source_id
+            .cmp(&b.source_id)
+            .then(a.target_id.cmp(&b.target_id))
+            .then(a.link_type.cmp(&b.link_type))
+            .then(a.created_at.cmp(&b.created_at))
+            .then(a.activation_count.cmp(&b.activation_count))
+    });
+    Ok((nodes, edges))
+}
+
+fn render_subgraph(
+    center_id: &str,
+    depth: u32,
+    nodes: &[KnowledgeNode],
+    edges: &[ConnectionRecord],
+) -> serde_json::Value {
     let id_to_idx: std::collections::HashMap<&str, usize> = nodes
         .iter()
         .enumerate()
@@ -198,10 +389,8 @@ pub async fn execute(
         })
         .collect();
 
-    // Compute force-directed layout
     let positions = fruchterman_reingold(nodes.len(), &layout_edges, 800.0, 600.0, 50);
 
-    // Build response
     let nodes_json: Vec<serde_json::Value> = nodes
         .iter()
         .enumerate()
@@ -239,14 +428,14 @@ pub async fn execute(
         })
         .collect();
 
-    Ok(serde_json::json!({
+    serde_json::json!({
         "nodes": nodes_json,
         "edges": edges_json,
         "center_id": center_id,
         "depth": depth,
         "nodeCount": nodes.len(),
         "edgeCount": edges.len(),
-    }))
+    })
 }
 
 #[cfg(all(test, feature = "legacy-sqlite"))]

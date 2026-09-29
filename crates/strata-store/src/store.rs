@@ -44,6 +44,25 @@ struct StoreMeta {
     head_log_seq: u64,
 }
 
+/// Pinned policy that admits every action, including `RETIRE` (supersession).
+///
+/// The default policy holds supersession. A caller that must record one opens
+/// with this policy, admits the retire, and drops the store. Replay under the
+/// default policy still applies that admitted effect. No new op kind and no
+/// log-format change.
+pub fn policy_admitting_retire() -> Policy {
+    Policy {
+        rules: vec![Rule {
+            match_kind: ANY_KIND,
+            match_params_hash_prefix: WILDCARD_PREFIX,
+            max_blast_radius: u32::MAX,
+            forbid_forgotten_lessons: false,
+            require_human: false,
+            verdict: Verdict::Allow,
+        }],
+    }
+}
+
 /// The default pinned policy: allow writes, hold destructive actions.
 ///
 /// Rule 1 holds every `RETIRE` action (supersession); rule 2 allows anything
