@@ -13,6 +13,7 @@
 	import MemoryAuditTrail from '$lib/components/MemoryAuditTrail.svelte';
 	import MemoryStateChip from '$lib/components/MemoryStateChip.svelte';
 	import MemoryStateLegend from '$lib/components/MemoryStateLegend.svelte';
+	import { HANDLE_SEARCH_HINT, handleSearchView, type HandleSearchView } from '$lib/memory-search';
 
 	type MemoryTextItem = TextLayerItem & { memoryId?: string };
 
@@ -47,13 +48,46 @@
 	// whose affordances are mirrored by the on-canvas hint line.
 	let selectedMemoryId: string | null = $state(null);
 	let search = $state('');
+	// The search box resolves an exact handle (id, id prefix or tag) across the
+	// whole store on the server; the list below it shows that result, or the
+	// newest page when the box is empty. It never filters by content.
+	let searchView = $state<HandleSearchView | null>(null);
+	let searching = $state(false);
+	let searchSeq = 0;
 	let stopReducedMotion: (() => void) | null = null;
-	const filteredMemories = $derived(
-		memories.filter((memory) =>
-			`${memory.content} ${memory.tags.join(' ')}`.toLowerCase().includes(search.trim().toLowerCase())
-		)
+	const listedMemories = $derived(searchView ? searchView.memories : memories);
+	const selectedMemory = $derived(
+		memories.find((memory) => memory.id === selectedMemoryId) ??
+			searchView?.memories.find((memory) => memory.id === selectedMemoryId) ??
+			null
 	);
-	const selectedMemory = $derived(memories.find((memory) => memory.id === selectedMemoryId) ?? null);
+
+	$effect(() => {
+		const query = search.trim();
+		const seq = ++searchSeq;
+		if (!query) {
+			searchView = null;
+			searching = false;
+			return;
+		}
+		searching = true;
+		const timer = setTimeout(async () => {
+			try {
+				const found = await api.memories.find(query);
+				if (seq === searchSeq) searchView = handleSearchView(query, found);
+			} catch (cause) {
+				if (seq === searchSeq) {
+					searchView = {
+						memories: [],
+						note: cause instanceof Error ? cause.message : 'Search failed'
+					};
+				}
+			} finally {
+				if (seq === searchSeq) searching = false;
+			}
+		}, 200);
+		return () => clearTimeout(timer);
+	});
 
 	onMount(() => {
 		void loadMemories().then(async () => {
@@ -426,18 +460,29 @@
 	<section class="library-grid">
 		<div class="memory-list glass-panel">
 			<div class="list-tools">
-				<label for="memory-search">Search your memory</label>
-				<input id="memory-search" bind:value={search} placeholder="Try refund, policy, project…" />
+				<label for="memory-search">Find a memory</label>
+				<input id="memory-search" bind:value={search} placeholder="Memory id, the start of one, or an exact tag" title={HANDLE_SEARCH_HINT} />
+				<p class="search-note" aria-live="polite">
+					{#if search.trim() && searching}
+						Looking up "{search.trim()}" across all {total} memories…
+					{:else if searchView}
+						{searchView.note}
+					{:else if !loading && !error}
+						Showing the newest {memories.length} of {total}. Search finds any memory by id, id prefix or tag.
+					{/if}
+				</p>
 			</div>
 			{#if loading}
 				<div class="state-line">Loading your local memory…</div>
 			{:else if error}
 				<div class="state-line error">{error}</div>
-			{:else if filteredMemories.length === 0}
-				<div class="state-line">No memory matches that search.</div>
+			{:else if searchView && listedMemories.length === 0}
+				<div class="state-line">No memory has that handle.</div>
+			{:else if listedMemories.length === 0}
+				<div class="state-line">No memories yet.</div>
 			{:else}
 				<div class="memory-rows">
-					{#each filteredMemories as memory (memory.id)}
+					{#each listedMemories as memory (memory.id)}
 						<button
 							type="button"
 							class:active={memory.id === selectedMemoryId}
@@ -485,7 +530,7 @@
 	.memory-library { position: relative; z-index: 2; max-width: 1180px; margin: 0 auto; min-height: 100%; padding: 2rem clamp(1rem,3vw,2.5rem) 5rem; color:#eaf9f6; pointer-events:none; }
 	.library-head,.library-grid,.glass-panel,.memory-rows,.action-row { display:flex; } .library-head { justify-content:space-between; gap:2rem; align-items:flex-end; margin-bottom:1.25rem; } .eyebrow { margin:0; color:#66e6d3; font:700 .68rem/1.2 ui-monospace,monospace; letter-spacing:.14em; } h1 { max-width:23ch; margin:.55rem 0; font-size:clamp(1.65rem,3.3vw,2.7rem); line-height:1.06; letter-spacing:-.045em; } .library-head p:not(.eyebrow),.empty-inspector p { max-width:58ch; color:#a9c4c0; line-height:1.5; } .library-stat { min-width:9rem; border-left:1px solid rgba(99,230,211,.35); padding-left:1rem; } .library-stat strong { display:block; color:#62ebd5; font-size:2rem; } .library-stat span { color:#9ab6b1; font-size:.75rem; }
 	.library-grid { display:grid; grid-template-columns:minmax(0,1.28fr) minmax(300px,.72fr); gap:1rem; pointer-events:auto; } .glass-panel { flex-direction:column; border:1px solid rgba(124,198,187,.2); border-radius:1rem; background:linear-gradient(135deg,rgba(9,26,29,.9),rgba(5,14,16,.82)); backdrop-filter:blur(12px); box-shadow:0 18px 70px rgba(0,0,0,.24); }
-	.memory-list { min-height:38rem; padding:1rem; } .list-tools label { display:block; color:#b8d0cc; font-size:.75rem; font-weight:700; } .list-tools input { width:100%; box-sizing:border-box; margin-top:.45rem; border:1px solid rgba(110,204,191,.28); border-radius:.65rem; background:rgba(0,0,0,.22); padding:.75rem .8rem; color:#effefb; outline:none; } .list-tools input:focus { border-color:#61e4d0; box-shadow:0 0 0 3px rgba(80,228,208,.12); }
+	.memory-list { min-height:38rem; padding:1rem; } .list-tools label { display:block; color:#b8d0cc; font-size:.75rem; font-weight:700; } .list-tools input { width:100%; box-sizing:border-box; margin-top:.45rem; border:1px solid rgba(110,204,191,.28); border-radius:.65rem; background:rgba(0,0,0,.22); padding:.75rem .8rem; color:#effefb; outline:none; } .list-tools input:focus { border-color:#61e4d0; box-shadow:0 0 0 3px rgba(80,228,208,.12); } .search-note { min-height:1.1rem; margin:.45rem 0 0; color:#8fb3ad; font-size:.72rem; line-height:1.45; }
 	.memory-rows { flex-direction:column; gap:.45rem; margin-top:.9rem; overflow:auto; max-height:34rem; } .memory-rows button { display:flex; gap:.7rem; width:100%; border:1px solid transparent; border-radius:.7rem; background:rgba(255,255,255,.02); padding:.8rem; color:inherit; text-align:left; cursor:pointer; } .memory-rows button:hover,.memory-rows button.active { border-color:rgba(83,231,209,.48); background:rgba(0,223,195,.09); } .memory-dot { flex:0 0 .55rem; height:.55rem; margin-top:.25rem; border-radius:50%; background:#4ee3cd; box-shadow:0 0 calc(var(--strength) / 6) #4ee3cd; } .memory-copy { min-width:0; } .memory-copy strong { display:block; overflow:hidden; color:#ddf2ee; font-size:.86rem; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; } .memory-copy small { display:block; margin-top:.25rem; color:#82a39e; font: .66rem ui-monospace,monospace; } .state-line { padding:2rem .6rem; color:#94b8b1; }.state-line.error{color:#ff9b91}
 	.inspector { min-height:25rem; padding:1.35rem; align-self:start; } .inspector h2,.empty-inspector h2 { margin:.75rem 0 1rem; color:#f1fffc; font-size:1.15rem; line-height:1.45; } .metric-row { display:flex; justify-content:space-between; border-top:1px solid rgba(137,190,183,.15); padding:.7rem 0; color:#92b3ae; font-size:.8rem; } .metric-row strong { color:#77e7d6; }.tags { display:flex; flex-wrap:wrap; gap:.35rem; margin:.75rem 0; }.tags span { border:1px solid rgba(108,182,171,.24); border-radius:99px; padding:.25rem .45rem; color:#accbc6; font-size:.67rem;}.inspector code{display:block;color:#73938e;font-size:.66rem;overflow-wrap:anywhere}.action-row{margin-top:1.2rem}.action-row button{border:0;border-radius:.6rem;padding:.65rem .8rem;color:#effffd;font-weight:700;cursor:pointer}.danger{background:rgba(217,74,63,.78)}.secondary{background:rgba(0,205,177,.75)}.inspector-note{margin-top:.8rem;color:#8aa9a5;font-size:.74rem;line-height:1.45}.empty-inspector{margin:auto 0}.empty-inspector p:last-child{font-size:.83rem}.sources{margin-top:1.2rem}.legend-slot{margin-top:1rem}
 	@media(max-width:760px){.library-head,.library-grid{grid-template-columns:1fr;display:grid}.library-stat{border-left:0;border-top:1px solid rgba(99,230,211,.35);padding:1rem 0 0}.memory-list{min-height:20rem}.memory-rows{max-height:22rem}}

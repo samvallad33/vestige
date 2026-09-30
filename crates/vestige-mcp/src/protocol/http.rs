@@ -167,8 +167,12 @@ pub async fn start_http_transport(
 // ---------------------------------------------------------------------------
 
 /// Validate the `Authorization: Bearer <token>` header using constant-time
-/// comparison to prevent timing side-channel attacks.
-fn validate_auth(headers: &HeaderMap, expected: &str) -> Result<(), (StatusCode, &'static str)> {
+/// comparison to prevent timing side-channel attacks. The dashboard's write
+/// guard uses the same check, so one token means the same thing on both.
+pub(crate) fn validate_auth(
+    headers: &HeaderMap,
+    expected: &str,
+) -> Result<(), (StatusCode, &'static str)> {
     let header = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())

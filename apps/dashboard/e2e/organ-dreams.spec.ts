@@ -43,7 +43,8 @@ const SETTLE_MS = 2500;
 test('dreams organ mounts a canvas and renders the REAL dream cycle', async ({ page, request }) => {
 	// 2 (real data) — run the real dream FIRST and assert the exact shape the
 	// +page.svelte consumes. The organ POSTs the same endpoint on mount.
-	const apiRes = await request.post(`${API}/api/dream`, { data: {} });
+	// A write needs the dashboard's own Origin (or a bearer token), as the page sends.
+	const apiRes = await request.post(`${API}/api/dream`, { data: {}, headers: { origin: API } });
 	expect(apiRes.ok(), 'POST /api/dream must be 200').toBe(true);
 	const dream = (await apiRes.json()) as {
 		status: string;

@@ -45,6 +45,9 @@
 	let engineHandle: ObservatoryEngine | null = null;
 	let historyEvents = $state<VestigeEvent[]>([]);
 	let historyLoading = $state(true);
+	// Why the recorded history could not be read (a 4.0 Strata log does not
+	// record dream or link history); the live stream still works.
+	let historyError = $state<string | null>(null);
 
 	// The WebSocket only knows what happened after this page opened. Hydrate the
 	// same renderer from the durable changelog so a quiet agent still has a real
@@ -54,9 +57,11 @@
 			.then((response) => {
 				historyEvents = (response.events ?? []).map((event: ChangelogEvent) => changelogEventToVestigeEvent(event));
 			})
-			.catch(() => {
-				// A live feed remains useful if the optional historical read fails.
+			.catch((cause: unknown) => {
+				// A live feed remains useful if the optional historical read fails,
+				// but say that the history is missing rather than implying none.
 				historyEvents = [];
+				historyError = cause instanceof Error ? cause.message : 'Recorded history could not be read.';
 			})
 			.finally(() => {
 				historyLoading = false;
@@ -703,13 +708,13 @@
 			<div class="text-2xl text-bright font-bold tabular-nums">
 				<AnimatedNumber value={totalEvents} />
 			</div>
-			<div class="text-xs text-dim mt-1">recorded + live events</div>
+			<div class="text-xs text-dim mt-1">{historyError ? 'live events (history not recorded)' : 'recorded + live events'}</div>
 		</div>
 		<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
 			<div class="text-2xl font-bold tabular-nums" style="color: #29F2A9">
 				<AnimatedNumber value={memoryEvents} />
 			</div>
-			<div class="text-xs text-dim mt-1">memory changes</div>
+			<div class="text-xs text-dim mt-1">{historyError ? 'memory changes since this page opened' : 'memory changes'}</div>
 		</div>
 		<div use:reveal={{ delay: 120, y: 12 }} class="p-4 glass rounded-xl lift">
 			<div class="text-2xl text-bright font-bold tabular-nums">
@@ -785,6 +790,11 @@
 					{#if historyLoading}
 						<div class="text-sm font-medium text-bright">Recovering recorded activity…</div>
 						<div class="max-w-sm text-xs text-muted">Loading the durable cognitive changelog while the live stream stays connected.</div>
+					{:else if historyError && $isConnected}
+						<div class="text-sm font-medium text-bright">Connected — past activity is not listed</div>
+						<div class="max-w-sm text-xs text-muted">
+							{historyError}. What your agents do from now on streams in here as it happens.
+						</div>
 					{:else if $isConnected}
 						<div class="text-sm font-medium text-bright">Connected — waiting for agent activity</div>
 						<div class="max-w-sm text-xs text-muted">

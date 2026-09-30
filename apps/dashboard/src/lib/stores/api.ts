@@ -69,12 +69,21 @@ export const api = {
 			const qs = params ? '?' + new URLSearchParams(params).toString() : '';
 			return fetcher<MemoryListResponse>(`/memories${qs}`);
 		},
+		/**
+		 * Find memories by exact handle across the whole store: a memory id,
+		 * a unique id prefix, or an exact tag. Free text never matches.
+		 */
+		find: (handle: string, limit = 200) =>
+			fetcher<MemoryListResponse>(
+				`/memories?${new URLSearchParams({ handle, limit: String(limit) }).toString()}`
+			),
 		get: (id: string) => fetcher<Memory>(`/memories/${encodeURIComponent(id)}`),
 		delete: (id: string) => fetcher<{ deleted: boolean }>(`/memories/${id}`, { method: 'DELETE' }),
 		promote: (id: string) => fetcher<MemoryPromotion>(`/memories/${id}/promote`, { method: 'POST' }),
 		demote: (id: string) => fetcher<MemoryDemotion>(`/memories/${id}/demote`, { method: 'POST' }),
 		// v2.0.7: suppress + unsuppress. Anderson 2025 top-down inhibitory
-		// control. Each suppress call compounds; reversible within 24h. The
+		// control. On a 4.0 Strata log a suppression cannot be undone
+		// (`reversible: false`) and unsuppress answers unavailable_in_4_0. The
 		// backend emits MemorySuppressed / MemoryUnsuppressed so the 3D graph
 		// plays the violet implosion / rainbow reversal.
 		suppress: (id: string, reason?: string) =>

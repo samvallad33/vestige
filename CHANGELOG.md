@@ -5,6 +5,76 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1] - Unreleased
+
+### Security
+
+- The dashboard API now checks who is calling. Before, any web page open in
+  your browser could POST to it while it ran: one request could suppress a
+  memory for good (a 4.0 suppression cannot be undone), demote a memory, or
+  start a dream or consolidation. A DNS-rebound hostname could also read
+  every memory. Now every request must name the dashboard in `Host`
+  (`127.0.0.1:<port>` or `localhost:<port>`), must carry no `Origin` but the
+  dashboard's own, and must not be a load from another site. A request that
+  changes anything (any method but GET, HEAD and OPTIONS) must come from the
+  dashboard's own page or carry `Authorization: Bearer <token>`. That is the
+  token the HTTP MCP transport takes: `VESTIGE_AUTH_TOKEN`, or else the
+  `auth_token` file in the default per-user data directory. The dashboard only reads
+  that file and never creates it. A script that POSTs to the dashboard
+  without that header now gets `401 auth_required`, and a foreign page or
+  Host gets `403`.
+
+### Fixed
+
+- `vestige dashboard` run against a store that an agent's `vestige-mcp`
+  holds now stops the dashboard when you press Ctrl+C. Before, that server
+  kept serving the dashboard, unauthenticated, until the agent exited. The
+  dashboard now stops when the last `vestige dashboard` using it exits. A
+  dashboard that the server started for itself (`VESTIGE_DASHBOARD_ENABLED`)
+  keeps running. When the server already serves the dashboard on another
+  port, a second `vestige dashboard --port N` now says that `--port N` was
+  not used. Before, it ignored the flag without a word.
+- The Observatory, the Witness cinema panel and the observatory's mp4 loop
+  export work on a 4.0 store. `/api/graph?sort=connected` returned 500
+  because the Strata store could not name its most-linked memory. It now
+  counts the links recorded on the log. When no memory has a link, it falls
+  back to the newest memory.
+- Memories page: search now finds a memory anywhere in the store by exact
+  handle, the way `recall` does: a memory id, a unique id prefix, or an
+  exact tag. Before, it filtered only the 40 memories on screen by their
+  text, and it could not match an id, not even one it was showing. Free
+  text still matches nothing, and the page now says so. `GET
+  /api/memories?handle=` is the new server lookup.
+- Totals are totals. `/api/memories` reports `total` as the number of
+  matching memories in the whole store, plus `returned` for the page. It
+  used to report the page size, so Importance read "36 ranked of 36 total".
+  A `tag`, `node_type` or `min_retention` filter now applies to the whole
+  store before the page is cut. `/api/retention-distribution` measures
+  every memory instead of the first 1,000, so the Stats bands are right.
+  `/api/timeline` serves the full 365-day window it is asked for (it was
+  capped at 90 days). It reports the window's real `totalMemories`, the
+  number `returned` and whether the result is `truncated`, and it includes
+  each memory's `updatedAt`. Timeline's Rewritten count now uses the same
+  test as its REWRITTEN filter, so the count and the filtered list agree.
+- Dashboard features that 4.0 withholds now say why. Before, they returned a
+  bare 500. These now answer `501` with a JSON `error` of
+  `unavailable_in_4_0`, `similarity_disabled` or `pending_strata`, the same
+  words an MCP caller sees:
+  - dream and link history (`/api/changelog`)
+  - Black Box traces and receipts
+  - search, `explore` associations, `deep_reference` and `backfill`
+  - per-memory audit
+  - `unsuppress`
+
+  Pages show that reason. They no longer say no history exists: Dreams no
+  longer shows "0 sleep cycles" and "never" right after a dream, Live Feed
+  no longer shows "0 memory changes", and Black Box no longer says "every
+  call is recorded here". A memory's audit failure no longer blanks the
+  whole Timeline.
+- `POST /api/memories/{id}/suppress` on a Strata log now answers `reversible:
+  false` and no `reversibleUntil`. A 4.0 suppression cannot be undone, and
+  the old answer offered a 24-hour undo window.
+
 ## [4.0.0] - Unreleased
 
 Vestige 4.0 moves your memory onto Strata, an append-only signed log on your

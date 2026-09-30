@@ -23,6 +23,9 @@
 	let events: AuditEvent[] = $state([]);
 	let loading = $state(true);
 	let errored = $state(false);
+	// The server's reason (4.0 answers unavailable_in_4_0: a Strata log does
+	// not record per-memory transitions), shown instead of a generic failure.
+	let errorMessage = $state<string | null>(null);
 	let showAllOlder = $state(false);
 	let gen = 0;
 
@@ -36,6 +39,7 @@
 		const token = ++gen;
 		loading = true;
 		errored = false;
+		errorMessage = null;
 		showAllOlder = false;
 		void (async () => {
 			if (!id) {
@@ -48,10 +52,11 @@
 				const next = await fetchAuditTrail(id);
 				if (token !== gen) return;
 				events = next;
-			} catch {
+			} catch (cause) {
 				if (token !== gen) return;
 				events = [];
 				errored = true;
+				errorMessage = cause instanceof Error ? cause.message : null;
 			} finally {
 				if (token === gen) loading = false;
 			}
@@ -75,7 +80,9 @@
 			{/each}
 		</div>
 	{:else if errored}
-		<p class="text-xs text-decay italic">Audit trail failed to load.</p>
+		<p class="text-xs text-decay italic">
+			{errorMessage ? `Audit trail unavailable: ${errorMessage}` : 'Audit trail failed to load.'}
+		</p>
 	{:else if !memoryId}
 		<p class="text-xs text-muted italic">No memory selected.</p>
 	{:else if events.length === 0}

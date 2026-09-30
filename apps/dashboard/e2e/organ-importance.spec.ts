@@ -34,8 +34,11 @@ test('importance organ mounts a canvas and renders the REAL scored field', async
 
 	// 2 (real data, part B) — the organ's own data source: POST /api/importance
 	// must return a REAL ImportanceScore for real content (not a mock/fake shape).
+	// The dashboard accepts a write only from its own page (or a bearer token),
+	// so this call says it comes from that page, as the browser would.
 	const impRes = await request.post(`${API}/api/importance`, {
-		data: { content: first.content }
+		data: { content: first.content },
+		headers: { origin: API }
 	});
 	expect(impRes.ok(), 'POST /api/importance must be 200').toBe(true);
 	const score = (await impRes.json()) as {

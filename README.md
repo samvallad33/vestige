@@ -211,7 +211,7 @@ Full contracts: [docs/TOOL-CONTRACTS.md](docs/TOOL-CONTRACTS.md) · Hygiene and 
 vestige dashboard
 ```
 
-The server binds **http://127.0.0.1:3927** and redirects `/` to **/dashboard**. It works while your agents are running: the Vestige server they share serves the dashboard until you press Ctrl+C. The observatory steps a fixed 60fps clock, 720 frames, 12 seconds, and can export that loop as an mp4. Share artifacts are structure-only: the shape of the store, not the memory text.
+The server binds **http://127.0.0.1:3927** and redirects `/` to **/dashboard**. It works while your agents are running: the Vestige server they share serves the dashboard until you press Ctrl+C. It answers only to `127.0.0.1` and `localhost` on its port. Only its own page can change memory; a script needs `Authorization: Bearer $VESTIGE_AUTH_TOKEN` ([Dashboard access](docs/CONFIGURATION.md#dashboard-access)). The observatory steps a fixed 60fps clock, 720 frames, 12 seconds, and can export that loop as an mp4. Share artifacts are structure-only: the shape of the store, not the memory text.
 
 ## Under the hood
 

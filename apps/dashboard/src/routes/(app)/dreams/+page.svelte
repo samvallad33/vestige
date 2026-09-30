@@ -56,6 +56,9 @@
 	};
 	let history = $state<DreamPast[]>([]);
 	let historyLoading = $state(true);
+	// Why the sleep history could not be read (a 4.0 Strata log does not
+	// record dream history). Never shown as "0 cycles" or "never".
+	let historyError = $state<string | null>(null);
 
 	const totalCycles = $derived(history.length);
 	const lastCycle = $derived<DreamPast | null>(history[0] ?? null);
@@ -85,9 +88,11 @@
 					}))
 					.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 				history = dreams;
+				historyError = null;
 			})
-			.catch(() => {
+			.catch((cause: unknown) => {
 				history = [];
+				historyError = cause instanceof Error ? cause.message : 'Sleep history could not be read.';
 			})
 			.finally(() => {
 				historyLoading = false;
@@ -509,19 +514,21 @@
 			</div>
 			<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
 				<div class="text-2xl font-bold tabular-nums" style="color: #a855f7">
-					<AnimatedNumber value={totalCycles} />
+					{#if historyError}—{:else}<AnimatedNumber value={totalCycles} />{/if}
 				</div>
-				<div class="text-xs text-dim mt-1">sleep cycles recorded</div>
+				<div class="text-xs text-dim mt-1">{historyError ? 'sleep cycles: history not recorded' : 'sleep cycles recorded'}</div>
 			</div>
 			<div use:reveal={{ delay: 120, y: 12 }} class="p-4 glass rounded-xl lift">
 				<div class="text-2xl font-bold tabular-nums" style="color: #10b981">
-					<AnimatedNumber value={cumulativeConnections} />
+					{#if historyError}—{:else}<AnimatedNumber value={cumulativeConnections} />{/if}
 				</div>
 				<div class="text-xs text-dim mt-1">connections found across all cycles</div>
 			</div>
 			<div use:reveal={{ delay: 180, y: 12 }} class="p-4 glass rounded-xl lift">
 				<div class="text-2xl text-bright font-bold tabular-nums">
-					{#if lastCycle}
+					{#if historyError}
+						not recorded
+					{:else if lastCycle}
 						{timeAgo(lastCycle.timestamp)}
 					{:else}
 						never
@@ -530,6 +537,11 @@
 				<div class="text-xs text-dim mt-1">last time the mind slept</div>
 			</div>
 		</div>
+		{#if historyError}
+			<p class="pointer-events-auto text-xs text-dim">
+				Past dream cycles are not listed here: {historyError}. A cycle you run now still shows its result.
+			</p>
+		{/if}
 	{:else}
 		<!-- After a run: the cycle's real result, human-labelled (kills the number salad). -->
 		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">

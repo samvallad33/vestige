@@ -104,18 +104,22 @@ async function searchMemory(query: string) {
 	return res.json();
 }
 
+// The dashboard accepts a write only from its own page (or a bearer token);
+// these calls say they come from that page, as the browser would.
+const OWN_PAGE = { origin: API };
+
 async function promoteMemory(id: string) {
-	const res = await fetch(`${API}/api/memories/${id}/promote`, { method: 'POST' });
+	const res = await fetch(`${API}/api/memories/${id}/promote`, { method: 'POST', headers: OWN_PAGE });
 	return res.json();
 }
 
 async function deleteMemory(id: string) {
-	const res = await fetch(`${API}/api/memories/${id}`, { method: 'DELETE' });
+	const res = await fetch(`${API}/api/memories/${id}`, { method: 'DELETE', headers: OWN_PAGE });
 	return res.ok;
 }
 
 async function triggerDream() {
-	const res = await fetch(`${API}/api/dream`, { method: 'POST' });
+	const res = await fetch(`${API}/api/dream`, { method: 'POST', headers: OWN_PAGE });
 	return res.json();
 }
 

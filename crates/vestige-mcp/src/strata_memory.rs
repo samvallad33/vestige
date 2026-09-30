@@ -1394,6 +1394,59 @@ impl MemoryStoreSend for StrataMemory {
     /// that trail exists, so a retired record cannot stay in the picture or
     /// bridge two live ones. Node order is BFS by hop, each hop sorted by id;
     /// edges are sorted by source, target, link type, then creation time.
+    /// The live memory with the most recorded links: a count of link records
+    /// on the log, never a similarity. Only links whose two ends are both
+    /// live count, the same test the subgraph walk applies, so the answer is
+    /// always a center that walk can open. `None` when no memory has a link.
+    /// Ties go to the newest memory, then to the smallest id.
+    fn get_most_connected_memory(&self) -> Result<Option<String>, StorageError> {
+        let store = self.lock();
+        let superseded: HashSet<String> = store
+            .supersession_pairs()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        // id -> (links, created_at_ms); `None` marks an end that is not live.
+        let mut seen: BTreeMap<String, Option<(usize, i64)>> = BTreeMap::new();
+        let mut live = |id: &str| -> bool {
+            if let Some(entry) = seen.get(id) {
+                return entry.is_some();
+            }
+            let entry = store
+                .get_node(id)
+                .filter(|record| record.is_live() && !superseded.contains(id))
+                .map(|record| (0, record.created_at_ms));
+            let is_live = entry.is_some();
+            seen.insert(id.to_string(), entry);
+            is_live
+        };
+        let mut linked = Vec::new();
+        for edge in store.edges().iter() {
+            if edge.source_id != edge.target_id && live(&edge.source_id) && live(&edge.target_id) {
+                linked.push((edge.source_id.clone(), edge.target_id.clone()));
+            }
+        }
+        for (source, target) in linked {
+            for id in [source, target] {
+                if let Some(Some((links, _))) = seen.get_mut(&id) {
+                    *links += 1;
+                }
+            }
+        }
+        Ok(seen
+            .into_iter()
+            .filter_map(|(id, entry)| entry.filter(|(links, _)| *links > 0).map(|e| (id, e)))
+            .max_by(
+                |(a_id, (a_links, a_created)), (b_id, (b_links, b_created))| {
+                    a_links
+                        .cmp(b_links)
+                        .then(a_created.cmp(b_created))
+                        .then_with(|| b_id.cmp(a_id))
+                },
+            )
+            .map(|(id, _)| id))
+    }
+
     fn get_memory_subgraph(
         &self,
         center_id: &str,

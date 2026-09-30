@@ -43,8 +43,8 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | `VESTIGE_HTTP_PORT` | `3928` | Optional MCP-over-HTTP port; `--http-port` also enables HTTP |
 | `VESTIGE_HTTP_BIND` | `127.0.0.1` | HTTP bind address |
 | `VESTIGE_HTTP_ALLOWED_ORIGINS` | localhost origins for the HTTP port | Comma-separated browser origins allowed to call MCP-over-HTTP |
-| `VESTIGE_AUTH_TOKEN` | auto-generated | Dashboard + MCP HTTP bearer auth |
-| `VESTIGE_DASHBOARD_ENABLED` | `false` | Set `true` or `1` to enable the web dashboard |
+| `VESTIGE_AUTH_TOKEN` | auto-generated | Dashboard + MCP HTTP bearer auth. MCP-over-HTTP requires it on every call. The dashboard requires it on a write that does not come from the dashboard's own page (a script's POST or DELETE). When unset, both read the `auth_token` file in the default per-user data directory (the OS one below, even with `--data-dir`). The HTTP transport creates that file; the dashboard never does. See [Dashboard access](#dashboard-access) |
+| `VESTIGE_DASHBOARD_ENABLED` | `false` | Set `true` or `1` to have `vestige-mcp` serve the web dashboard for as long as it runs. Without it, `vestige dashboard` asks the running server for a dashboard, and that dashboard stops when the last `vestige dashboard` exits |
 | `VESTIGE_CONSOLIDATION_INTERVAL_HOURS` | `6` | FSRS-6 decay cycle cadence |
 | `VESTIGE_BACKFILL_AUTOFIRE` | `on` | Retroactive Salience Backfill auto-fire during consolidation and, since 2.8.0, live the moment a failure-shaped memory is ingested (same pipeline and receipts as the `backfill` tool). On by default; set `0`/`false`/`off`/`no` to disable both. The manual `backfill` tool + CLI stay available either way. When on, promotion is bounded (`stability = MIN(stability * 1.5, stability + 365)`) |
 | `VESTIGE_FAILURE_FEEDBACK` | `off` | Post-retrieval failure feedback (2.8.0): when a failure-shaped memory is ingested, the memories retrieved in the previous thirty minutes of receipts lose retrieval strength by rank (at most 0.10 each, floor 0.05, same scope, once per failure). Opt in with `1`/`true`/`on`/`yes`. Every delta is written to the `failure_feedback` ledger and `revert_failure_feedback` undoes it exactly. |
@@ -53,6 +53,29 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | `VESTIGE_TRACE_RETENTION_DAYS` | `30` | How long Black Box traces are kept. The consolidation cycle deletes trace events older than this and drops any `agent_runs` roll-up left with no events. `0` keeps traces forever (sweep disabled); unset, empty, negative, or malformed values fall back to `30` |
 | `VESTIGE_DISABLE_VECTOR_SEARCH` | unset (vector search on) | Kill switch for the HNSW vector index. Set to `1`/`true`/`yes`/`on`/`enable`/`enabled` to force semantic/vector search off and fall back to keyword search. Useful on older x86 CPUs — the index also disables itself automatically when AVX2+FMA are missing |
 | `ORT_DYLIB_PATH` | unset | Intel Mac (`x86_64-apple-darwin`) only: absolute path to Homebrew `libonnxruntime.dylib`. Resolve with `brew --prefix onnxruntime` (do not hardcode `/opt/homebrew` vs `/usr/local`). GUI clients (Cursor, Claude Desktop) do not inherit `.zshrc` — set this in the MCP JSON `env` block. See [Intel Mac install](INSTALL-INTEL-MAC.md) |
+
+### Dashboard access
+
+The dashboard binds `127.0.0.1` only. Any web page open in your browser can
+still send it requests, and CORS only decides whether that page may read the
+answer. So the dashboard also checks each request itself:
+
+- `Host` must be `127.0.0.1:<port>` or `localhost:<port>`. A DNS-rebound
+  hostname is refused, so it cannot read your memories through the dashboard.
+  If you forward the dashboard over SSH, use the same port number on both
+  ends.
+- A request that carries an `Origin` must carry the dashboard's own
+  (`http://127.0.0.1:<port>` or `http://localhost:<port>`). A load from
+  another site (`Sec-Fetch-Site: cross-site`/`same-site`) is refused, except
+  a link that opens a dashboard page.
+- A request that changes anything (any method but GET, HEAD and OPTIONS)
+  must come from the dashboard's own page or carry
+  `Authorization: Bearer <token>`. The token comes from `VESTIGE_AUTH_TOKEN`,
+  or else from the `auth_token` file in the default per-user data directory.
+
+A refused request gets `401 auth_required` or `403` with a JSON `error` that
+says why. Reading the API from a local script (`curl http://127.0.0.1:3927/api/health`)
+needs no token.
 
 > **Storage location precedence:** `--data-dir <path>` wins over `VESTIGE_DATA_DIR`; if neither is set, Vestige uses your OS's per-user data directory: `~/Library/Application Support/com.vestige.core/` on macOS, `~/.local/share/vestige/core/` on Linux, `%APPDATA%\vestige\core\` on Windows. Custom paths are directories, are created if missing, expand a leading `~`, and store the database at `<dir>/vestige.db`.
 

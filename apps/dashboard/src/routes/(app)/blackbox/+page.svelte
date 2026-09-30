@@ -61,6 +61,9 @@
 	let detail = $state<TraceDetail | null>(null);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+	// Why the run list could not be read (a 4.0 Strata log does not record
+	// agent-run traces). Never presented as "no runs yet".
+	let runsError = $state<string | null>(null);
 	let scrubIndex = $state(0); // index into detail.events
 	let proofMode = $state(false);
 	let receipts = $state<Receipt[]>([]);
@@ -113,6 +116,7 @@
 		try {
 			const res = await api.traces.list(100);
 			runs = res.runs;
+			runsError = null;
 			// A Replay handoff carries an exact run id. Honor it instead of relying on
 			// recency, so a live event cannot silently switch the proof being shown.
 			const requestedRunId = $page.url.searchParams.get('run');
@@ -123,7 +127,8 @@
 				selectRun(runs[0].runId);
 			}
 		} catch (e) {
-			error = String(e);
+			runsError = e instanceof Error ? e.message : String(e);
+			error = runsError;
 		}
 	}
 
@@ -439,7 +444,9 @@
 			<!-- ░░ RUN PICKER ░░ -->
 			<aside class="runs glass" use:reveal>
 				<h2 class="panel-title">Runs</h2>
-				{#if runs.length === 0}
+				{#if runsError}
+					<p class="empty">Agent runs are not listed: {runsError}</p>
+				{:else if runs.length === 0}
 					<p class="empty">
 						No agent runs recorded yet. Make an MCP tool call — every call is
 						recorded here.

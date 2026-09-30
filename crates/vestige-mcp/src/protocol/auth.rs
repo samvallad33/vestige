@@ -25,6 +25,36 @@ pub fn token_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(dirs.data_dir().join("auth_token"))
 }
 
+/// The `VESTIGE_AUTH_TOKEN` override, when set and not blank.
+fn env_auth_token() -> Option<String> {
+    let token = std::env::var("VESTIGE_AUTH_TOKEN").ok()?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return None;
+    }
+    if token.len() < MIN_TOKEN_LENGTH {
+        warn!(
+            "VESTIGE_AUTH_TOKEN is only {} chars (recommended >= {}). \
+             Short tokens are vulnerable to brute-force attacks.",
+            token.len(),
+            MIN_TOKEN_LENGTH
+        );
+    }
+    Some(token)
+}
+
+/// The bearer token if one exists: `VESTIGE_AUTH_TOKEN`, else the
+/// `auth_token` file. Never creates one. The dashboard checks a script's
+/// token with this, so a request can never cause a file to be written.
+pub fn read_auth_token() -> Option<String> {
+    if let Some(token) = env_auth_token() {
+        return Some(token);
+    }
+    let token = fs::read_to_string(token_path().ok()?).ok()?;
+    let token = token.trim().to_string();
+    (!token.is_empty()).then_some(token)
+}
+
 /// Get (or create) the bearer token used for HTTP transport authentication.
 ///
 /// Priority:
@@ -33,20 +63,9 @@ pub fn token_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
 /// 3. Newly generated UUID v4, persisted to file
 pub fn get_or_create_auth_token() -> Result<String, Box<dyn std::error::Error>> {
     // 1. Env var override
-    if let Ok(token) = std::env::var("VESTIGE_AUTH_TOKEN") {
-        let token = token.trim().to_string();
-        if !token.is_empty() {
-            if token.len() < MIN_TOKEN_LENGTH {
-                warn!(
-                    "VESTIGE_AUTH_TOKEN is only {} chars (recommended >= {}). \
-                     Short tokens are vulnerable to brute-force attacks.",
-                    token.len(),
-                    MIN_TOKEN_LENGTH
-                );
-            }
-            info!("Using auth token from VESTIGE_AUTH_TOKEN env var");
-            return Ok(token);
-        }
+    if let Some(token) = env_auth_token() {
+        info!("Using auth token from VESTIGE_AUTH_TOKEN env var");
+        return Ok(token);
     }
 
     let path = token_path()?;

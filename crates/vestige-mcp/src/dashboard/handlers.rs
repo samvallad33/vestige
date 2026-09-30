@@ -10,13 +10,184 @@ use std::path::{Path as FsPath, PathBuf};
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::{Json, Redirect};
+use axum::response::{IntoResponse, Json, Redirect, Response};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::Value;
+use vestige_core::{KnowledgeNode, StorageError};
 
 use super::events::VestigeEvent;
 use super::state::AppState;
+
+// ============================================================================
+// ERRORS
+// ============================================================================
+
+/// A dashboard API failure: a status, plus a JSON `{error, code}` body when
+/// there is something to say. A feature Vestige 4.0 withholds answers with
+/// its reason (`similarity_disabled`, `unavailable_in_4_0`, `pending_strata`),
+/// in the words an MCP caller sees, never with a bare 500 a page would have to
+/// guess at. The dashboard's fetcher shows `error` as it is.
+#[derive(Debug)]
+pub struct ApiError {
+    status: StatusCode,
+    body: Option<Value>,
+}
+
+impl From<StatusCode> for ApiError {
+    fn from(status: StatusCode) -> Self {
+        Self { status, body: None }
+    }
+}
+
+impl ApiError {
+    /// The HTTP status this failure answers with.
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+}
+
+/// Compares the status alone, so a caller can still ask "was it a 404?".
+impl PartialEq<StatusCode> for ApiError {
+    fn eq(&self, other: &StatusCode) -> bool {
+        self.status == *other
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        match self.body {
+            Some(body) => (self.status, Json(body)).into_response(),
+            None => self.status.into_response(),
+        }
+    }
+}
+
+/// The refusals Vestige 4.0 gives for what it withholds on a Strata log.
+const WITHHELD_CODES: [&str; 3] = [
+    "similarity_disabled",
+    "unavailable_in_4_0",
+    "pending_strata",
+];
+
+/// What a store's trait default says when that store lacks the method.
+const NOT_IMPLEMENTED_SUFFIX: &str = " is not implemented by this backend";
+
+impl ApiError {
+    fn reason(status: StatusCode, code: &str, error: String) -> Self {
+        Self {
+            status,
+            body: Some(serde_json::json!({ "error": error, "code": code })),
+        }
+    }
+
+    /// A withheld feature, recognised by the refusal's own words: a 4.0
+    /// refusal code (kept from where it starts, so a wrapped message still
+    /// reads cleanly) or a store method this store does not implement.
+    fn withheld(message: &str) -> Option<Self> {
+        for code in WITHHELD_CODES {
+            if let Some(at) = message.find(code) {
+                return Some(Self::reason(
+                    StatusCode::NOT_IMPLEMENTED,
+                    code,
+                    message[at..].to_string(),
+                ));
+            }
+        }
+        let method = message.strip_suffix(NOT_IMPLEMENTED_SUFFIX)?;
+        let method = method.rsplit(": ").next().unwrap_or(method);
+        let what = withheld_what(method)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{method} is not available on a Strata log"));
+        Some(Self::reason(
+            StatusCode::NOT_IMPLEMENTED,
+            "unavailable_in_4_0",
+            format!("unavailable_in_4_0: {what} in Vestige 4.0"),
+        ))
+    }
+
+    fn internal(detail: &dyn std::fmt::Display) -> Self {
+        // The detail can name paths; it goes to the log, not the page.
+        tracing::warn!(error = %detail, "dashboard request failed");
+        Self::reason(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "internal: the request failed; the Vestige log has the detail".to_string(),
+        )
+    }
+}
+
+/// What a store method that a Strata log lacks would have given, in words.
+fn withheld_what(method: &str) -> Option<&'static str> {
+    Some(match method {
+        "get_dream_history" => "past dream cycles are not recorded on a Strata log",
+        "get_recent_connections" => "link history is not recorded on a Strata log",
+        "list_agent_runs" | "get_trace" | "get_agent_run" => {
+            "agent-run traces are not recorded on a Strata log"
+        }
+        "list_receipts" | "list_receipts_for_run" => {
+            "retrieval receipts are not listed from a Strata log"
+        }
+        "get_state_transitions" => "per-memory state transitions are not recorded on a Strata log",
+        "reverse_suppression" => {
+            "a Strata suppression cannot be undone (the memory's bytes stay on the log, hidden from every read)"
+        }
+        _ => return None,
+    })
+}
+
+/// Map a store error to the answer the page shows.
+fn storage_error(err: StorageError) -> ApiError {
+    match &err {
+        StorageError::NotFound(what) => ApiError::reason(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("not_found: {what}"),
+        ),
+        StorageError::SecretDetected { .. }
+        | StorageError::InvalidScope(_)
+        | StorageError::InvalidEdge(_) => ApiError::reason(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_input",
+            err.to_string(),
+        ),
+        StorageError::Init(message) => {
+            if let Some(withheld) = ApiError::withheld(message) {
+                withheld
+            } else if message.starts_with("gate_denied") || message.starts_with("gate_held") {
+                let code = if message.starts_with("gate_denied") {
+                    "gate_denied"
+                } else {
+                    "gate_held"
+                };
+                ApiError::reason(StatusCode::CONFLICT, code, message.clone())
+            } else {
+                ApiError::internal(&err)
+            }
+        }
+        _ => ApiError::internal(&err),
+    }
+}
+
+/// Map an MCP tool's refusal (the text an MCP caller would see).
+fn tool_error(message: String) -> ApiError {
+    ApiError::withheld(&message).unwrap_or_else(|| {
+        ApiError::reason(StatusCode::INTERNAL_SERVER_ERROR, "tool_error", message)
+    })
+}
+
+/// Every retrievable memory in the store, newest first. The dashboard's
+/// totals and distributions are over the whole store, never over a page.
+fn all_memories(
+    storage: &std::sync::Arc<vestige_core::Storage>,
+) -> Result<Vec<KnowledgeNode>, ApiError> {
+    storage.get_all_nodes(i32::MAX, 0).map_err(storage_error)
+}
+
+/// How many memories the store holds, for a list's `total`.
+fn memory_count(storage: &std::sync::Arc<vestige_core::Storage>) -> Result<i64, ApiError> {
+    Ok(storage.get_stats().map_err(storage_error)?.total_nodes)
+}
 
 /// Redirect root to the SvelteKit dashboard
 pub async fn serve_dashboard() -> Redirect {
@@ -26,6 +197,10 @@ pub async fn serve_dashboard() -> Redirect {
 #[derive(Debug, Deserialize)]
 pub struct MemoryListParams {
     pub q: Option<String>,
+    /// An exact handle: a memory id, a unique id prefix, or an exact tag,
+    /// resolved across the whole store the way `recall` resolves it. Free
+    /// text never matches.
+    pub handle: Option<String>,
     pub node_type: Option<String>,
     pub tag: Option<String>,
     pub min_retention: Option<f64>,
@@ -34,20 +209,43 @@ pub struct MemoryListParams {
     pub offset: Option<i32>,
 }
 
-/// List memories with optional search
+fn memory_list_row(n: &KnowledgeNode) -> Value {
+    serde_json::json!({
+        "id": n.id,
+        "content": n.content,
+        "nodeType": n.node_type,
+        "tags": n.tags,
+        "retentionStrength": n.retention_strength,
+        "storageStrength": n.storage_strength,
+        "retrievalStrength": n.retrieval_strength,
+        "createdAt": n.created_at.to_rfc3339(),
+        "updatedAt": n.updated_at.to_rfc3339(),
+        "source": n.source,
+        "reviewCount": n.reps,
+    })
+}
+
+/// List memories with optional search.
+///
+/// `total` is every memory the request matches across the whole store;
+/// `returned` is the length of this page.
 pub async fn list_memories(
     State(state): State<AppState>,
     Query(params): Query<MemoryListParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
+
+    if let Some(handle) = params.handle.as_ref() {
+        return Ok(Json(resolve_memory_handle(&state, handle, limit, offset)?));
+    }
 
     if let Some(query) = params.q.as_ref().filter(|q| !q.trim().is_empty()) {
         // Use hybrid search
         let results = state
             .storage
             .hybrid_search(query, limit, 0.3, 0.7)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(storage_error)?;
 
         let formatted: Vec<Value> = results
             .into_iter()
@@ -75,80 +273,128 @@ pub async fn list_memories(
                     .is_none_or(|tag| r.node.tags.iter().any(|t| t == tag))
             })
             .map(|r| {
-                serde_json::json!({
-                    "id": r.node.id,
-                    "content": r.node.content,
-                    "nodeType": r.node.node_type,
-                    "tags": r.node.tags,
-                    "retentionStrength": r.node.retention_strength,
-                    "storageStrength": r.node.storage_strength,
-                    "retrievalStrength": r.node.retrieval_strength,
-                    "createdAt": r.node.created_at.to_rfc3339(),
-                    "updatedAt": r.node.updated_at.to_rfc3339(),
-                    "combinedScore": r.combined_score,
-                    "source": r.node.source,
-                    "reviewCount": r.node.reps,
-                })
+                let mut row = memory_list_row(&r.node);
+                row["combinedScore"] = serde_json::json!(r.combined_score);
+                row
             })
             .collect();
 
         return Ok(Json(serde_json::json!({
             "total": formatted.len(),
+            "returned": formatted.len(),
             "memories": formatted,
         })));
     }
 
-    // No search query — list all memories
-    let mut nodes = state
-        .storage
-        .get_all_nodes(limit, offset)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let filtered =
+        params.node_type.is_some() || params.tag.is_some() || params.min_retention.is_some();
+    let (nodes, total) = if filtered {
+        // A filter applies to the whole store, then the page is cut, so a
+        // tag or type that only older memories carry is still found and
+        // `total` counts every match.
+        let mut nodes = all_memories(&state.storage)?;
+        if let Some(ref node_type) = params.node_type {
+            nodes.retain(|n| n.node_type == *node_type);
+        }
+        if let Some(ref tag) = params.tag {
+            nodes.retain(|n| n.tags.iter().any(|t| t == tag));
+        }
+        if let Some(min_ret) = params.min_retention {
+            nodes.retain(|n| n.retention_strength >= min_ret);
+        }
+        let total = nodes.len() as i64;
+        let page = nodes
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect::<Vec<_>>();
+        (page, total)
+    } else {
+        let page = state
+            .storage
+            .get_all_nodes(limit, offset)
+            .map_err(storage_error)?;
+        (page, memory_count(&state.storage)?)
+    };
 
-    // Apply filters
-    if let Some(ref node_type) = params.node_type {
-        nodes.retain(|n| n.node_type == *node_type);
-    }
-    if let Some(ref tag) = params.tag {
-        nodes.retain(|n| n.tags.iter().any(|t| t == tag));
-    }
-    if let Some(min_ret) = params.min_retention {
-        nodes.retain(|n| n.retention_strength >= min_ret);
-    }
-
-    let formatted: Vec<Value> = nodes
-        .iter()
-        .map(|n| {
-            serde_json::json!({
-                "id": n.id,
-                "content": n.content,
-                "nodeType": n.node_type,
-                "tags": n.tags,
-                "retentionStrength": n.retention_strength,
-                "storageStrength": n.storage_strength,
-                "retrievalStrength": n.retrieval_strength,
-                "createdAt": n.created_at.to_rfc3339(),
-                "updatedAt": n.updated_at.to_rfc3339(),
-                "source": n.source,
-                "reviewCount": n.reps,
-            })
-        })
-        .collect();
+    let formatted: Vec<Value> = nodes.iter().map(memory_list_row).collect();
 
     Ok(Json(serde_json::json!({
-        "total": formatted.len(),
+        "total": total,
+        "returned": formatted.len(),
         "memories": formatted,
     })))
+}
+
+/// Resolve a search handle the way `recall` does: an exact memory id, a
+/// unique id prefix (8 characters or more), or an exact tag, across the
+/// whole store. An ambiguous prefix returns its candidates. Anything else
+/// resolves to nothing: Vestige 4.0 has no free-text or similarity search.
+fn resolve_memory_handle(
+    state: &AppState,
+    handle: &str,
+    limit: i32,
+    offset: i32,
+) -> Result<Value, ApiError> {
+    use vestige_core::storage::{HANDLE_REQUIRED_DETAIL, HandleKind};
+
+    let resolution = state.storage.resolve_handle(handle);
+    let ambiguous = resolution.ids.is_empty() && !resolution.candidates.is_empty();
+    let ids: Vec<String> = if ambiguous {
+        resolution
+            .candidates
+            .iter()
+            .filter(|(_, kind)| *kind == HandleKind::Memory)
+            .map(|(id, _)| id.clone())
+            .collect()
+    } else if matches!(resolution.kind, HandleKind::Memory | HandleKind::Tag) {
+        resolution.ids.clone()
+    } else {
+        Vec::new()
+    };
+    let mut memories = Vec::new();
+    for id in ids.iter().skip(offset as usize).take(limit as usize) {
+        if let Some(node) = state.storage.get_node(id).map_err(storage_error)? {
+            memories.push(memory_list_row(&node));
+        }
+    }
+    let kind = if ids.is_empty() {
+        HandleKind::Unknown
+    } else {
+        resolution.kind
+    };
+    let handle_required = if ids.is_empty() {
+        Some(
+            resolution
+                .handle_required
+                .unwrap_or_else(|| HANDLE_REQUIRED_DETAIL.to_string()),
+        )
+    } else {
+        None
+    };
+    Ok(serde_json::json!({
+        "total": ids.len(),
+        "returned": memories.len(),
+        "memories": memories,
+        "resolution": {
+            "handle": handle.trim(),
+            "kind": kind.as_str(),
+            "exact": resolution.exact && !ambiguous,
+            "ambiguous": ambiguous,
+            "handleRequired": handle_required,
+        },
+    }))
 }
 
 /// Get a single memory by ID
 pub async fn get_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let node = state
         .storage
         .get_node(&id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(storage_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(serde_json::json!({
@@ -176,11 +422,8 @@ pub async fn get_memory(
 pub async fn delete_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    let deleted = state
-        .storage
-        .delete_node(&id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<Json<Value>, ApiError> {
+    let deleted = state.storage.delete_node(&id).map_err(storage_error)?;
 
     if deleted {
         state.emit(VestigeEvent::MemoryDeleted {
@@ -189,7 +432,7 @@ pub async fn delete_memory(
         });
         Ok(Json(serde_json::json!({ "deleted": true, "id": id })))
     } else {
-        Err(StatusCode::NOT_FOUND)
+        Err(StatusCode::NOT_FOUND.into())
     }
 }
 
@@ -197,11 +440,8 @@ pub async fn delete_memory(
 pub async fn promote_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    let node = state
-        .storage
-        .promote_memory(&id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<Json<Value>, ApiError> {
+    let node = state.storage.promote_memory(&id).map_err(storage_error)?;
 
     state.emit(VestigeEvent::MemoryPromoted {
         id: node.id.clone(),
@@ -220,11 +460,8 @@ pub async fn promote_memory(
 pub async fn demote_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    let node = state
-        .storage
-        .demote_memory(&id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<Json<Value>, ApiError> {
+    let node = state.storage.demote_memory(&id).map_err(storage_error)?;
 
     state.emit(VestigeEvent::MemoryDemoted {
         id: node.id.clone(),
@@ -247,7 +484,10 @@ pub async fn demote_memory(
 /// next 72 hours. Emits a `MemorySuppressed` event so the 3D graph plays
 /// the violet implosion animation.
 ///
-/// Reversible within the 24-hour labile window via `unsuppress_memory`.
+/// Reversible within the 24-hour labile window via `unsuppress_memory` on a
+/// v3 SQLite store. On a 4.0 Strata log a suppression retires the memory and
+/// cannot be undone: the answer says `reversible: false` and carries no
+/// reversal deadline.
 ///
 /// Fixes the v2.0.5 UI gap: `suppress` had full graph event handlers and
 /// MCP tool exposure, but zero HTTP endpoint and no dashboard trigger.
@@ -255,7 +495,7 @@ pub async fn suppress_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
     body: Option<Json<Value>>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     use vestige_core::neuroscience::active_forgetting::{
         ActiveForgettingSystem, DEFAULT_LABILE_HOURS,
     };
@@ -272,14 +512,11 @@ pub async fn suppress_memory(
     let before_count = state
         .storage
         .get_node(&id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(storage_error)?
         .map(|n| n.suppression_count)
         .unwrap_or(0);
 
-    let node = state
-        .storage
-        .suppress_memory(&id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let node = state.storage.suppress_memory(&id).map_err(storage_error)?;
 
     // Estimate cascade size for the UX; capped at 100 so the number is
     // stable even on highly-connected nodes.
@@ -289,6 +526,8 @@ pub async fn suppress_memory(
         .map(|edges| edges.len().min(100))
         .unwrap_or(0);
 
+    // A Strata suppression is a retirement: no labile window to undo it in.
+    let reversible = !crate::strata_memory::is_strata_backend(state.storage.as_ref());
     let reversible_until = node
         .suppressed_at
         .map(|t| sys.reversible_until(t))
@@ -320,8 +559,9 @@ pub async fn suppress_memory(
         "retrievalStrength": node.retrieval_strength,
         "stability": node.stability,
         "estimatedCascadeNeighbors": estimated_cascade,
-        "reversibleUntil": reversible_until.to_rfc3339(),
-        "labileWindowHours": DEFAULT_LABILE_HOURS,
+        "reversible": reversible,
+        "reversibleUntil": reversible.then(|| reversible_until.to_rfc3339()),
+        "labileWindowHours": if reversible { DEFAULT_LABILE_HOURS } else { 0 },
         "reason": reason,
     })))
 }
@@ -334,14 +574,14 @@ pub async fn suppress_memory(
 pub async fn unsuppress_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     use vestige_core::neuroscience::active_forgetting::ActiveForgettingSystem;
 
     let sys = ActiveForgettingSystem::new();
     let node = state
         .storage
         .reverse_suppression(&id, sys.labile_hours)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
 
     let still_suppressed = node.suppression_count > 0;
 
@@ -378,7 +618,7 @@ pub struct SanhedrinTelemetryParams {
 }
 
 /// Return the latest Sanhedrin receipt written by the Stop-hook bridge.
-pub async fn get_sanhedrin_latest() -> Result<Json<Value>, StatusCode> {
+pub async fn get_sanhedrin_latest() -> Result<Json<Value>, ApiError> {
     let state_dir = sanhedrin_state_dir();
     let latest_path = state_dir.join("latest.json");
     if !latest_path.exists() {
@@ -405,7 +645,7 @@ pub async fn get_sanhedrin_latest() -> Result<Json<Value>, StatusCode> {
 /// Return rolling Sanhedrin receipts, appeals, and fail-open counters.
 pub async fn get_sanhedrin_telemetry(
     Query(params): Query<SanhedrinTelemetryParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let state_dir = sanhedrin_state_dir();
     let days = params.days.unwrap_or(7).clamp(1, 90);
     let telemetry = tokio::task::spawn_blocking(move || build_sanhedrin_telemetry(state_dir, days))
@@ -517,10 +757,10 @@ fn build_sanhedrin_telemetry(state_dir: PathBuf, days: i64) -> Result<Value, Sta
 pub async fn appeal_sanhedrin(
     State(state): State<AppState>,
     Json(req): Json<SanhedrinAppealRequest>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let reason = req.reason.trim().to_ascii_lowercase();
     if !matches!(reason.as_str(), "stale" | "wrong" | "too_strict") {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into());
     }
 
     let state_dir = sanhedrin_state_dir();
@@ -528,9 +768,9 @@ pub async fn appeal_sanhedrin(
     let raw = match fs::read_to_string(&latest_path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(StatusCode::NOT_FOUND);
+            return Err(StatusCode::NOT_FOUND.into());
         }
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into()),
     };
     let mut receipt: Value = serde_json::from_str(&raw).map_err(|_| StatusCode::BAD_REQUEST)?;
     let original_receipt = receipt.clone();
@@ -543,7 +783,7 @@ pub async fn appeal_sanhedrin(
     let _ = sanitize_receipt_id(receipt_id_ref)?;
     let expected_receipt_id = req.receipt_id.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
     if expected_receipt_id != receipt_id_ref {
-        return Err(StatusCode::CONFLICT);
+        return Err(StatusCode::CONFLICT.into());
     }
     if receipt
         .get("verdictBar")
@@ -551,7 +791,7 @@ pub async fn appeal_sanhedrin(
         .map(|v| v != "VETO")
         .unwrap_or(true)
     {
-        return Err(StatusCode::CONFLICT);
+        return Err(StatusCode::CONFLICT.into());
     }
     let claim = mark_sanhedrin_claim(&mut receipt, &reason, &note, req.claim_id.as_deref())?;
 
@@ -572,7 +812,7 @@ pub async fn appeal_sanhedrin(
     save_sanhedrin_receipt(&state_dir, &receipt)?;
     if let Err(err) = append_sanhedrin_appeal(&state_dir, &appeal) {
         let _ = save_sanhedrin_receipt(&state_dir, &original_receipt);
-        return Err(err);
+        return Err(err.into());
     }
 
     state.emit(VestigeEvent::HookVerdictRecorded {
@@ -918,11 +1158,8 @@ fn escape_html(value: &str) -> String {
 }
 
 /// Get system stats
-pub async fn get_stats(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
-    let stats = state
-        .storage
-        .get_stats()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+pub async fn get_stats(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let stats = state.storage.get_stats().map_err(storage_error)?;
 
     Ok(Json(dashboard_stats_response(&stats)))
 }
@@ -969,19 +1206,28 @@ pub struct ChangelogParams {
     pub limit: Option<i32>,
 }
 
-/// Get timeline data
+/// Get timeline data.
+///
+/// `totalMemories` counts every memory created in the window; `timeline`
+/// holds the newest `limit` of them (`returned`, with `truncated` when the
+/// window holds more). `days` is the window actually served.
 pub async fn get_timeline(
     State(state): State<AppState>,
     Query(params): Query<TimelineParams>,
-) -> Result<Json<Value>, StatusCode> {
-    let days = params.days.unwrap_or(7).clamp(1, 90);
+) -> Result<Json<Value>, ApiError> {
+    // The dashboard offers a 365-day window; serve it rather than cut it.
+    let days = params.days.unwrap_or(7).clamp(1, 365);
     let limit = params.limit.unwrap_or(200).clamp(1, 500);
 
-    let start = Utc::now() - Duration::days(days);
-    let nodes = state
+    let now = Utc::now();
+    let start = now - Duration::days(days);
+    // Newest first, the whole window: its size is the total.
+    let mut nodes = state
         .storage
-        .query_time_range(Some(start), Some(Utc::now()), limit, None, None)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .query_time_range(Some(start), Some(now), i32::MAX, None, None)
+        .map_err(storage_error)?;
+    let window_total = nodes.len();
+    nodes.truncate(limit as usize);
 
     // Group by day
     let mut by_day: std::collections::BTreeMap<String, Vec<Value>> =
@@ -1002,6 +1248,7 @@ pub async fn get_timeline(
             "nodeType": node.node_type,
             "retentionStrength": node.retention_strength,
             "createdAt": node.created_at.to_rfc3339(),
+            "updatedAt": node.updated_at.to_rfc3339(),
         }));
     }
 
@@ -1019,7 +1266,10 @@ pub async fn get_timeline(
 
     Ok(Json(serde_json::json!({
         "days": days,
-        "totalMemories": nodes.len(),
+        "totalMemories": window_total,
+        "returned": nodes.len(),
+        "truncated": window_total > nodes.len(),
+        "limit": limit,
         "timeline": timeline,
     })))
 }
@@ -1030,7 +1280,7 @@ pub async fn get_timeline(
 pub async fn get_changelog(
     State(state): State<AppState>,
     Query(params): Query<ChangelogParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let limit = params.limit.unwrap_or(50).clamp(1, 100);
     let start = parse_changelog_bound(params.start.as_deref())?;
     let end = parse_changelog_bound(params.end.as_deref())?;
@@ -1045,7 +1295,7 @@ pub async fn get_changelog(
     let dreams = state
         .storage
         .get_dream_history(fetch_limit)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
     for dream in dreams {
         if changelog_window_contains(dream.dreamed_at, start.as_ref(), end.as_ref()) {
             events.push((dream.dreamed_at, dream_changelog_event(&dream)));
@@ -1059,7 +1309,7 @@ pub async fn get_changelog(
     let connections = state
         .storage
         .get_recent_connections(fetch_limit as usize)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
     for conn in connections {
         if changelog_window_contains(conn.created_at, start.as_ref(), end.as_ref()) {
             events.push((conn.created_at, connection_changelog_event(&conn)));
@@ -1129,11 +1379,8 @@ fn connection_changelog_event(conn: &vestige_core::ConnectionRecord) -> Value {
 }
 
 /// Health check
-pub async fn health_check(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
-    let stats = state
-        .storage
-        .get_stats()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+pub async fn health_check(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let stats = state.storage.get_stats().map_err(storage_error)?;
 
     let status = if stats.total_nodes == 0 {
         "empty"
@@ -1199,7 +1446,7 @@ impl GraphSort {
 pub async fn get_graph(
     State(state): State<AppState>,
     Query(params): Query<GraphParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let depth = params.depth.unwrap_or(2).clamp(1, 3);
     let max_nodes = params.max_nodes.unwrap_or(50).clamp(1, 200);
     let sort = GraphSort::parse(params.sort.as_deref());
@@ -1209,10 +1456,7 @@ pub async fn get_graph(
     let center_id = if let Some(ref id) = params.center_id {
         id.clone()
     } else if let Some(ref query) = params.query {
-        let results = state
-            .storage
-            .search(query, 1)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let results = state.storage.search(query, 1).map_err(storage_error)?;
         results
             .first()
             .map(|n| n.id.clone())
@@ -1225,7 +1469,7 @@ pub async fn get_graph(
     let (mut nodes, mut edges) = state
         .storage
         .get_memory_subgraph(&center_id, depth, max_nodes)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
 
     // Default-load fallback: if the newest memory is isolated (1 node, 0 edges),
     // silently re-resolve via Connected so the user sees the densest cluster
@@ -1249,7 +1493,7 @@ pub async fn get_graph(
     }
 
     if nodes.is_empty() {
-        return Err(StatusCode::NOT_FOUND);
+        return Err(StatusCode::NOT_FOUND.into());
     }
 
     // Build nodes JSON with timestamps for recency calculation
@@ -1303,34 +1547,28 @@ pub async fn get_graph(
 fn default_center_id(
     storage: &std::sync::Arc<vestige_core::Storage>,
     sort: GraphSort,
-) -> Result<String, StatusCode> {
+) -> Result<String, ApiError> {
     match sort {
         GraphSort::Recent => {
-            let recent = storage
-                .get_all_nodes(1, 0)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let recent = storage.get_all_nodes(1, 0).map_err(storage_error)?;
             recent
                 .first()
                 .map(|n| n.id.clone())
-                .ok_or(StatusCode::NOT_FOUND)
+                .ok_or(StatusCode::NOT_FOUND.into())
         }
         GraphSort::Connected => {
-            let most_connected = storage
-                .get_most_connected_memory()
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let most_connected = storage.get_most_connected_memory().map_err(storage_error)?;
             if let Some(id) = most_connected {
                 Ok(id)
             } else {
                 // Nothing connected yet (fresh DB, or every node is isolated) —
                 // fall through to the newest memory so the user still sees
                 // SOMETHING rather than a 404.
-                let recent = storage
-                    .get_all_nodes(1, 0)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let recent = storage.get_all_nodes(1, 0).map_err(storage_error)?;
                 recent
                     .first()
                     .map(|n| n.id.clone())
-                    .ok_or(StatusCode::NOT_FOUND)
+                    .ok_or(StatusCode::NOT_FOUND.into())
             }
         }
     }
@@ -1351,14 +1589,14 @@ pub struct SearchParams {
 pub async fn search_memories(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let start = std::time::Instant::now();
 
     let results = state
         .storage
         .hybrid_search(&params.q, limit, 0.3, 0.7)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -1406,7 +1644,7 @@ pub async fn search_memories(
 // ============================================================================
 
 /// Trigger a dream cycle via CognitiveEngine
-pub async fn trigger_dream(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
+pub async fn trigger_dream(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let cognitive = state
         .cognitive
         .as_ref()
@@ -1418,7 +1656,7 @@ pub async fn trigger_dream(State(state): State<AppState>) -> Result<Json<Value>,
     let all_nodes = state
         .storage
         .get_all_nodes(memory_count as i32, 0)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
 
     if all_nodes.len() < 5 {
         return Ok(Json(serde_json::json!({
@@ -1463,7 +1701,7 @@ pub async fn trigger_dream(State(state): State<AppState>) -> Result<Json<Value>,
             (dream_result, new_connections, insights, dream_memories)
         })
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|err| ApiError::internal(&err))?;
 
     // Persist new connections
     let mut connections_persisted = 0u64;
@@ -1568,7 +1806,7 @@ pub struct ExploreRequest {
 pub async fn explore_connections(
     State(state): State<AppState>,
     Json(req): Json<ExploreRequest>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let action = req.action.as_deref().unwrap_or("associations");
     let limit = req.limit.unwrap_or(10).clamp(1, 50);
 
@@ -1578,14 +1816,14 @@ pub async fn explore_connections(
             let source_node = state
                 .storage
                 .get_node(&req.from_id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .map_err(storage_error)?
                 .ok_or(StatusCode::NOT_FOUND)?;
 
             // Use hybrid search with source content to find associated memories
             let results = state
                 .storage
                 .hybrid_search(&source_node.content, limit as i32, 0.3, 0.7)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .map_err(storage_error)?;
 
             let formatted: Vec<Value> = results
                 .iter()
@@ -1613,7 +1851,7 @@ pub async fn explore_connections(
             let (nodes, edges) = state
                 .storage
                 .get_memory_subgraph(&req.from_id, 2, limit)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .map_err(storage_error)?;
 
             let nodes_json: Vec<Value> = nodes
                 .iter()
@@ -1647,17 +1885,14 @@ pub async fn explore_connections(
                 "edges": edges_json,
             })))
         }
-        _ => Err(StatusCode::BAD_REQUEST),
+        _ => Err(StatusCode::BAD_REQUEST.into()),
     }
 }
 
 /// Predict which memories will be needed
-pub async fn predict_memories(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
+pub async fn predict_memories(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     // Get recent memories as predictions based on activity
-    let recent = state
-        .storage
-        .get_all_nodes(10, 0)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let recent = state.storage.get_all_nodes(10, 0).map_err(storage_error)?;
 
     let predictions: Vec<Value> = recent
         .iter()
@@ -1687,7 +1922,7 @@ pub struct ImportanceRequest {
 pub async fn score_importance(
     State(state): State<AppState>,
     Json(req): Json<ImportanceRequest>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     if let Some(ref cognitive) = state.cognitive {
         let context = vestige_core::ImportanceContext::current();
         let cog = cognitive.lock().await;
@@ -1747,19 +1982,14 @@ pub async fn score_importance(
 }
 
 /// Trigger consolidation
-pub async fn trigger_consolidation(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
+pub async fn trigger_consolidation(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     state.emit(VestigeEvent::ConsolidationStarted {
         timestamp: Utc::now(),
     });
 
     let start = std::time::Instant::now();
 
-    let result = state
-        .storage
-        .run_consolidation()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = state.storage.run_consolidation().map_err(storage_error)?;
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -1784,12 +2014,10 @@ pub async fn trigger_consolidation(
 /// Get retention distribution (for histogram visualization)
 pub async fn retention_distribution(
     State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
-    // Cap at 1000 to prevent excessive memory usage on large databases
-    let nodes = state
-        .storage
-        .get_all_nodes(1000, 0)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<Json<Value>, ApiError> {
+    // Every memory, not a sample: the Stats page calls these bands the
+    // whole store, and the first N rows of a store are not a fair sample.
+    let nodes = all_memories(&state.storage)?;
 
     // Build distribution buckets
     let mut buckets = [0u32; 10]; // 0-10%, 10-20%, ..., 90-100%
@@ -1844,7 +2072,7 @@ pub struct IntentionListParams {
 pub async fn list_intentions(
     State(state): State<AppState>,
     Query(params): Query<IntentionListParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let status_filter = params.status.unwrap_or_else(|| "active".to_string());
 
     let intentions = if status_filter == "all" {
@@ -1873,12 +2101,12 @@ pub async fn list_intentions(
         state
             .storage
             .get_active_intentions()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(storage_error)?
     } else {
         state
             .storage
             .get_intentions_by_status(&status_filter)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(storage_error)?
     };
 
     let count = intentions.len();
@@ -1911,20 +2139,20 @@ pub struct DeepReferenceBody {
 pub async fn deep_reference_query(
     State(state): State<AppState>,
     Json(body): Json<DeepReferenceBody>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let cognitive = state
         .cognitive
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     if body.query.trim().is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into());
     }
 
     if body.run_id.as_ref().is_some_and(|id| {
         id.trim().is_empty() || id.len() > 200 || id.chars().any(char::is_control)
     }) {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into());
     }
 
     let args = serde_json::json!({
@@ -1945,7 +2173,7 @@ pub async fn deep_reference_query(
     let mut response =
         crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(tool_error)?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // Pull evidence IDs out for the WebSocket event so Graph3D can glide,
@@ -2061,7 +2289,7 @@ pub async fn deep_reference_query(
         .and_then(|value| value.get("receipt_id"))
         .and_then(Value::as_str);
     if receipt.is_some() && receipt_id.is_none() {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR.into());
     }
     // The shared recorder is best-effort. Never advertise a receipt that failed
     // to persist; callers must be able to open the exact identity we return.
@@ -2069,16 +2297,16 @@ pub async fn deep_reference_query(
         state
             .storage
             .get_receipt(id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(storage_error)?
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     if state
         .storage
         .get_trace(&run_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(storage_error)?
         .is_empty()
     {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR.into());
     }
     if let Some(object) = response.as_object_mut() {
         object.insert("runId".to_string(), serde_json::json!(run_id));
@@ -2110,7 +2338,7 @@ pub struct BackfillBody {
 pub async fn backfill_query(
     State(state): State<AppState>,
     Json(body): Json<BackfillBody>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let lookback_days = body.lookback_days.unwrap_or(30).clamp(1, 365);
     let promote = body.promote.unwrap_or(false);
     let call_args = serde_json::json!({
@@ -2131,7 +2359,7 @@ pub async fn backfill_query(
 
     let mut response = crate::tools::backfill::execute(&state.storage, Some(call_args))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(tool_error)?;
     crate::trace_recorder::record_result(
         &state.storage,
         Some(&state.event_tx),
@@ -2248,12 +2476,12 @@ pub struct TraceListParams {
 pub async fn list_traces(
     State(state): State<AppState>,
     Query(params): Query<TraceListParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let limit = params.limit.unwrap_or(50).clamp(1, 500);
     let runs = state
         .storage
         .list_agent_runs(limit)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
     let runs_json: Vec<Value> = runs
         .into_iter()
         .map(|r| {
@@ -2280,13 +2508,10 @@ pub async fn list_traces(
 pub async fn get_trace(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    let events = state
-        .storage
-        .get_trace(&run_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<Json<Value>, ApiError> {
+    let events = state.storage.get_trace(&run_id).map_err(storage_error)?;
     if events.is_empty() {
-        return Err(StatusCode::NOT_FOUND);
+        return Err(StatusCode::NOT_FOUND.into());
     }
     let summary = state.storage.get_agent_run(&run_id).ok().flatten();
     Ok(Json(serde_json::json!({
@@ -2309,13 +2534,10 @@ pub async fn get_trace(
 pub async fn export_trace(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
-) -> Result<([(axum::http::HeaderName, String); 2], Json<Value>), StatusCode> {
-    let events = state
-        .storage
-        .get_trace(&run_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<([(axum::http::HeaderName, String); 2], Json<Value>), ApiError> {
+    let events = state.storage.get_trace(&run_id).map_err(storage_error)?;
     if events.is_empty() {
-        return Err(StatusCode::NOT_FOUND);
+        return Err(StatusCode::NOT_FOUND.into());
     }
     let summary = state.storage.get_agent_run(&run_id).ok().flatten();
     let body = serde_json::json!({
@@ -2374,7 +2596,7 @@ pub async fn export_trace(
 pub async fn list_receipts(
     State(state): State<AppState>,
     Query(params): Query<TraceListParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let limit = params.limit.unwrap_or(50).clamp(1, 500);
     // B5: when a run is given, scope to that run's receipts so the Black Box
     // panel shows only receipts that actually belong to the selected run.
@@ -2382,7 +2604,7 @@ pub async fn list_receipts(
         Some(run_id) => state.storage.list_receipts_for_run(run_id, limit),
         None => state.storage.list_receipts(limit),
     }
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(storage_error)?;
     Ok(Json(serde_json::json!({
         "total": receipts.len(),
         "receipts": receipts,
@@ -2393,11 +2615,11 @@ pub async fn list_receipts(
 pub async fn get_receipt(
     State(state): State<AppState>,
     Path(receipt_id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let receipt = state
         .storage
         .get_receipt(&receipt_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(storage_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(serde_json::to_value(receipt).unwrap_or_default()))
 }
@@ -2416,7 +2638,7 @@ pub struct MemoryPrListParams {
 pub async fn list_memory_prs(
     State(state): State<AppState>,
     Query(params): Query<MemoryPrListParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     if crate::strata_memory::is_strata_backend(state.storage.as_ref()) {
         return Ok(Json(serde_json::json!({
             "total": 0,
@@ -2437,7 +2659,7 @@ pub async fn list_memory_prs(
     let prs = state
         .storage
         .list_memory_prs(status, limit)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
     let pending = state.storage.count_pending_memory_prs().unwrap_or(0);
     Ok(Json(serde_json::json!({
         "total": prs.len(),
@@ -2451,11 +2673,11 @@ pub async fn list_memory_prs(
 pub async fn get_memory_pr(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let pr = state
         .storage
         .get_memory_pr(&id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(storage_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(serde_json::to_value(pr).unwrap_or_default()))
 }
@@ -2465,7 +2687,7 @@ pub async fn get_memory_pr(
 pub async fn act_on_memory_pr(
     State(state): State<AppState>,
     Path((id, action)): Path<(String, String)>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let action =
         vestige_core::MemoryPrAction::from_label(&action).ok_or(StatusCode::BAD_REQUEST)?;
 
@@ -2474,7 +2696,7 @@ pub async fn act_on_memory_pr(
         let pr = state
             .storage
             .get_memory_pr(&id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(storage_error)?
             .ok_or(StatusCode::NOT_FOUND)?;
         return Ok(Json(serde_json::json!({
             "id": pr.id,
@@ -2626,7 +2848,7 @@ pub async fn get_review_mode(State(state): State<AppState>) -> Json<Value> {
 pub async fn set_review_mode(
     State(state): State<AppState>,
     Json(body): Json<ReviewModeBody>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let mode =
         vestige_core::ReviewMode::try_from_label(&body.mode).ok_or(StatusCode::BAD_REQUEST)?;
     // No Memory PR store on Strata in 4.0: a gated mode would hide writes it
@@ -2634,7 +2856,7 @@ pub async fn set_review_mode(
     if !matches!(mode, vestige_core::ReviewMode::Fast)
         && crate::strata_memory::is_strata_backend(state.storage.as_ref())
     {
-        return Err(StatusCode::CONFLICT);
+        return Err(StatusCode::CONFLICT.into());
     }
     let path = review_mode_path(&state);
     let payload = serde_json::json!({ "mode": mode.as_str() });
@@ -2750,7 +2972,7 @@ pub struct DuplicatesParams {
 pub async fn list_duplicates(
     State(state): State<AppState>,
     Query(params): Query<DuplicatesParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let threshold = params.threshold.unwrap_or(0.80).clamp(0.5, 0.99);
     let limit = params.limit.unwrap_or(20).clamp(1, 50);
 
@@ -2760,7 +2982,7 @@ pub async fn list_duplicates(
     });
     let raw = crate::tools::dedup::execute(&state.storage, Some(args))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(tool_error)?;
 
     let mut clusters: Vec<Value> = Vec::new();
     if let Some(raw_clusters) = raw.get("clusters").and_then(|v| v.as_array()) {
@@ -2833,7 +3055,7 @@ pub struct ContradictionsParams {
 pub async fn list_contradictions(
     State(state): State<AppState>,
     Query(params): Query<ContradictionsParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     use crate::tools::cross_reference::{appears_contradictory, compute_trust, topic_overlap};
 
     let limit = params.limit.unwrap_or(50).clamp(2, 200);
@@ -2849,7 +3071,7 @@ pub async fn list_contradictions(
         state
             .storage
             .hybrid_search(topic, limit, 0.3, 0.7)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(storage_error)?
             .into_iter()
             .map(|result| result.node)
             .collect::<Vec<_>>()
@@ -2857,7 +3079,7 @@ pub async fn list_contradictions(
         state
             .storage
             .get_all_nodes(limit, 0)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(storage_error)?
     };
 
     let mut pairs: Vec<(f32, Value)> = Vec::new();
@@ -2951,16 +3173,13 @@ fn shared_keywords(a: &str, b: &str) -> String {
 /// are emitted; sparse or empty results are expected on small stores.
 pub async fn get_cross_project_patterns(
     State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     use std::collections::HashMap;
     use vestige_core::advanced::cross_project::{
         CrossProjectLearner, MemoryForLearning, PatternCategory,
     };
 
-    let nodes = state
-        .storage
-        .get_all_nodes(500, 0)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let nodes = state.storage.get_all_nodes(500, 0).map_err(storage_error)?;
 
     let mut projects: Vec<String> = Vec::new();
     // Earliest memory creation per project — used to order projects_seen_in
@@ -3144,19 +3363,19 @@ pub async fn get_memory_audit(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(params): Query<AuditParams>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, ApiError> {
     let limit = params.limit.unwrap_or(100).clamp(1, 500);
 
     let node = state
         .storage
         .get_node(&id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(storage_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let transitions = state
         .storage
         .get_state_transitions(&id, limit)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(storage_error)?;
 
     let mut events: Vec<(DateTime<Utc>, Value)> = Vec::new();
     for t in &transitions {

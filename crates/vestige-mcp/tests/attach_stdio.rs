@@ -532,6 +532,118 @@ fn dashboard_command_is_served_by_the_running_server() {
     assert!(server.wait_exit(Duration::from_secs(30)).success());
 }
 
+/// `vestige dashboard --port <port>` against a store `vestige-mcp` holds, read
+/// up to the line naming the process that serves it. Returns the child and
+/// every stdout line seen so far.
+fn leased_dashboard(dir: &Path, port: u16) -> (Child, Vec<String>) {
+    let mut dashboard = Command::new(env!("CARGO_BIN_EXE_vestige"))
+        .arg("--data-dir")
+        .arg(dir)
+        .args(["dashboard", "--port", &port.to_string(), "--no-open"])
+        .env_remove("VESTIGE_DATA_DIR")
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run vestige dashboard");
+    let (tx, lines) = channel();
+    let stdout = dashboard.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let deadline = Instant::now() + RPC_TIMEOUT;
+    let mut seen = Vec::new();
+    loop {
+        let Ok(line) = lines.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        else {
+            let _ = dashboard.kill();
+            let _ = dashboard.wait();
+            panic!("vestige dashboard printed no URL:\n{}", seen.join("\n"));
+        };
+        seen.push(line.clone());
+        if line.contains("Press Ctrl+C") {
+            return (dashboard, seen);
+        }
+    }
+}
+
+/// Wait until nothing answers on `port`, or panic after `within`.
+fn wait_until_closed(port: u16, within: Duration) {
+    let deadline = Instant::now() + within;
+    while http_status(port, "/api/health").is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "the dashboard still answers on {port} {within:?} after its last lease closed"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// README: the shared server serves the dashboard "until you press Ctrl+C".
+/// The agent's own session keeps the server running, so the dashboard must
+/// stop with the last `vestige dashboard` rather than with the agent. A later
+/// `--port` that the running dashboard cannot honour is reported.
+#[test]
+fn the_dashboard_stops_when_the_last_vestige_dashboard_exits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = Client::spawn("server", dir.path());
+    server.initialize();
+    let id = server.remember("attach test: the agent outlives the dashboard");
+
+    let port = free_port();
+    let (mut first, seen) = leased_dashboard(dir.path(), port);
+    assert!(
+        seen.iter()
+            .any(|line| line.contains("served by vestige-mcp")),
+        "{}",
+        seen.join("\n")
+    );
+    let status = http_status(port, "/api/health").expect("the dashboard answers");
+    assert!(status.contains(" 200"), "GET /api/health: {status}");
+
+    // A second `vestige dashboard` asking for another port shares the
+    // running one and says so.
+    let other = free_port();
+    let (mut second, seen) = leased_dashboard(dir.path(), other);
+    let said = seen.join("\n");
+    assert!(said.contains(&format!("127.0.0.1:{port}")), "{said}");
+    assert!(
+        said.contains(&format!("--port {other}")),
+        "a second dashboard's --port was ignored silently:\n{said}"
+    );
+    assert!(http_status(other, "/api/health").is_none());
+
+    // One lease left: still served.
+    second.kill().unwrap();
+    second.wait().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let status = http_status(port, "/api/health").expect("one lease still holds it");
+    assert!(status.contains(" 200"), "GET /api/health: {status}");
+
+    // The last lease closes: the listener goes away, the agent stays.
+    first.kill().unwrap();
+    first.wait().unwrap();
+    wait_until_closed(port, Duration::from_secs(10));
+    assert!(
+        server.running(),
+        "closing the dashboard ended the agent's server"
+    );
+    assert!(server.sees(&id));
+
+    // The same port serves again on the next request.
+    let (mut again, _) = leased_dashboard(dir.path(), port);
+    let status = http_status(port, "/api/health").expect("the dashboard answers again");
+    assert!(status.contains(" 200"), "GET /api/health: {status}");
+    again.kill().unwrap();
+    again.wait().unwrap();
+    wait_until_closed(port, Duration::from_secs(10));
+
+    server.close_stdin();
+    assert!(server.wait_exit(Duration::from_secs(30)).success());
+}
+
 #[test]
 fn a_data_dir_too_long_for_a_socket_attaches_over_loopback_tcp() {
     let root = tempfile::tempdir().unwrap();

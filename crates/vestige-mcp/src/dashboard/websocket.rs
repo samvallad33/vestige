@@ -104,8 +104,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     });
 
     // Main loop: forward events + heartbeats to client, handle incoming messages
+    let stopped = state.stopped();
+    tokio::pin!(stopped);
     loop {
         tokio::select! {
+            // The dashboard stopped serving (its last `vestige dashboard`
+            // lease closed): end the socket with the listener.
+            _ = &mut stopped => {
+                let _ = sender.send(Message::Close(None)).await;
+                break;
+            }
             // Broadcast event from cognitive engine
             received = event_rx.recv() => {
                 match received {

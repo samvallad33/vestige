@@ -11,11 +11,20 @@ pub mod state;
 pub mod static_files;
 pub mod websocket;
 
+#[cfg(test)]
+mod http_tests;
+
 use axum::Router;
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+use tokio::sync::{Mutex, oneshot};
 use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -47,30 +56,16 @@ pub fn build_router_with_event_tx(
 }
 
 fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
-    #[allow(unused_mut)]
-    let mut origins = vec![
-        format!("http://127.0.0.1:{}", port)
-            .parse::<axum::http::HeaderValue>()
-            .expect("valid origin"),
-        format!("http://localhost:{}", port)
-            .parse::<axum::http::HeaderValue>()
-            .expect("valid origin"),
-    ];
+    build_guarded_router(state, AccessGuard::new(port))
+}
 
-    // SvelteKit dev server — only in debug builds
-    #[cfg(debug_assertions)]
-    {
-        origins.push(
-            "http://localhost:5173"
-                .parse::<axum::http::HeaderValue>()
-                .expect("valid origin"),
-        );
-        origins.push(
-            "http://127.0.0.1:5173"
-                .parse::<axum::http::HeaderValue>()
-                .expect("valid origin"),
-        );
-    }
+fn build_guarded_router(state: AppState, guard: AccessGuard) -> (Router, AppState) {
+    let port = guard.port;
+    let origins: Vec<axum::http::HeaderValue> = guard
+        .origins
+        .iter()
+        .map(|origin| origin.parse().expect("valid origin"))
+        .collect();
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
@@ -234,16 +229,220 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         .layer(
             ServiceBuilder::new()
                 .concurrency_limit(50)
-                .layer(cors)
                 .layer(csp)
                 .layer(x_frame_options)
                 .layer(x_content_type_options)
                 .layer(referrer_policy)
-                .layer(permissions_policy),
+                .layer(permissions_policy)
+                // Before CORS and every handler: CORS only decides whether a
+                // page may read a response, never whether the request runs.
+                .layer(axum::middleware::from_fn_with_state(guard, guard_access))
+                .layer(cors),
         )
         .with_state(state.clone());
 
     (router, state)
+}
+
+// ============================================================================
+// ACCESS GUARD
+// ============================================================================
+
+/// Who may talk to the dashboard.
+///
+/// The listener binds 127.0.0.1 only, yet any web page open in the user's
+/// browser can still send it requests, and a DNS-rebound hostname can read
+/// the answers. CORS does not stop either: it only decides whether a page may
+/// read a response, and a POST with no body or a form body runs without
+/// asking. So every request must:
+///
+/// - name this dashboard in `Host` (127.0.0.1 or localhost, on its port),
+///   which a rebound hostname cannot;
+/// - carry no `Origin` but the dashboard's own;
+/// - not be a load from another site (`Sec-Fetch-Site`), except a top-level
+///   navigation to a page;
+/// - when it changes anything (any method but GET, HEAD and OPTIONS), come
+///   from the dashboard's own page (browsers always send `Origin` on those)
+///   or carry `Authorization: Bearer <token>`, the token the HTTP MCP
+///   transport takes (`VESTIGE_AUTH_TOKEN`, else the `auth_token` file).
+#[derive(Clone)]
+struct AccessGuard {
+    port: u16,
+    /// Accepted `Host` values, lowercase.
+    hosts: Arc<[String]>,
+    /// Accepted `Origin` values, lowercase.
+    origins: Arc<[String]>,
+    /// The bearer token for callers that are not the dashboard's page.
+    /// Read (never created) the first time a request presents one, so a
+    /// request without `Authorization` never touches the token file.
+    token: Arc<OnceLock<Option<String>>>,
+}
+
+impl AccessGuard {
+    fn new(port: u16) -> Self {
+        let mut names = vec![("127.0.0.1", port), ("localhost", port)];
+        // SvelteKit dev server (`vite dev` proxies /api and /ws here) — only
+        // in debug builds, like the CORS list before it.
+        if cfg!(debug_assertions) {
+            names.extend([("127.0.0.1", 5173), ("localhost", 5173)]);
+        }
+        let mut hosts: Vec<String> = names
+            .iter()
+            .map(|(name, port)| format!("{name}:{port}"))
+            .collect();
+        if port == 80 {
+            // A browser leaves the default port out of `Host`.
+            hosts.extend(["127.0.0.1".to_string(), "localhost".to_string()]);
+        }
+        let origins = names
+            .iter()
+            .map(|(name, port)| format!("http://{name}:{port}"))
+            .collect::<Vec<_>>();
+        Self {
+            port,
+            hosts: hosts.into(),
+            origins: origins.into(),
+            token: Arc::new(OnceLock::new()),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_token(port: u16, token: &str) -> Self {
+        let guard = Self::new(port);
+        let _ = guard.token.set(Some(token.to_string()));
+        guard
+    }
+
+    fn token(&self) -> Option<&str> {
+        self.token
+            .get_or_init(crate::protocol::auth::read_auth_token)
+            .as_deref()
+    }
+
+    fn check(&self, method: &Method, headers: &HeaderMap) -> Result<(), Refusal> {
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_ascii_lowercase);
+        if !host.is_some_and(|host| self.hosts.contains(&host)) {
+            return Err(Refusal::forbidden(
+                "forbidden_host",
+                format!(
+                    "this dashboard answers only to 127.0.0.1:{port} and localhost:{port}",
+                    port = self.port
+                ),
+            ));
+        }
+
+        let origin = match headers.get(header::ORIGIN) {
+            None => None,
+            Some(value) => {
+                let origin = value.to_str().map(str::to_ascii_lowercase);
+                if !origin
+                    .as_ref()
+                    .is_ok_and(|origin| self.origins.contains(origin))
+                {
+                    return Err(Refusal::forbidden(
+                        "forbidden_origin",
+                        "only the dashboard's own page may call this API".to_string(),
+                    ));
+                }
+                origin.ok()
+            }
+        };
+
+        let safe = matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
+        let fetch_site = headers
+            .get("sec-fetch-site")
+            .and_then(|value| value.to_str().ok());
+        if matches!(fetch_site, Some("cross-site" | "same-site")) && origin.is_none() {
+            let navigation = safe
+                && headers
+                    .get("sec-fetch-mode")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("navigate");
+            if !navigation {
+                return Err(Refusal::forbidden(
+                    "forbidden_cross_site",
+                    "a page on another site cannot load this dashboard's data".to_string(),
+                ));
+            }
+        }
+
+        if safe || origin.is_some() {
+            return Ok(());
+        }
+        // No Origin on a write: not the dashboard's page (a browser always
+        // sends one), so a script, which needs the token.
+        const HOW: &str = "a request that changes memory must come from the dashboard's own page or carry Authorization: Bearer <token> (VESTIGE_AUTH_TOKEN, else the auth_token file in the default Vestige data directory)";
+        if !headers.contains_key(header::AUTHORIZATION) {
+            return Err(Refusal {
+                status: StatusCode::UNAUTHORIZED,
+                code: "auth_required",
+                message: HOW.to_string(),
+            });
+        }
+        let Some(expected) = self.token() else {
+            return Err(Refusal {
+                status: StatusCode::UNAUTHORIZED,
+                code: "auth_required",
+                message: format!("no token is configured: {HOW}"),
+            });
+        };
+        crate::protocol::http::validate_auth(headers, expected).map_err(|(status, why)| Refusal {
+            status,
+            code: if status == StatusCode::UNAUTHORIZED {
+                "auth_required"
+            } else {
+                "auth_invalid"
+            },
+            message: format!("{why}: {HOW}"),
+        })
+    }
+}
+
+/// Why the guard turned a request away, as the JSON `{error, code}` body the
+/// dashboard's fetcher shows.
+struct Refusal {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl Refusal {
+    fn forbidden(code: &'static str, message: String) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+            message,
+        }
+    }
+}
+
+impl IntoResponse for Refusal {
+    fn into_response(self) -> Response {
+        let body = serde_json::json!({
+            "error": format!("{}: {}", self.code, self.message),
+            "code": self.code,
+        });
+        (self.status, axum::Json(body)).into_response()
+    }
+}
+
+async fn guard_access(State(guard): State<AccessGuard>, request: Request, next: Next) -> Response {
+    match guard.check(request.method(), request.headers()) {
+        Ok(()) => next.run(request).await,
+        Err(refusal) => {
+            // debug, not warn: a hostile page can send these in a loop.
+            tracing::debug!(
+                method = %request.method(),
+                path = request.uri().path(),
+                code = refusal.code,
+                "dashboard refused a request"
+            );
+            refusal.into_response()
+        }
+    }
 }
 
 /// Start the dashboard HTTP server (blocking — use in CLI mode)
@@ -281,15 +480,38 @@ pub async fn start_background(
     start_background_inner(app, state, port).await
 }
 
-/// This process's dashboard, started at most once and on demand: by
-/// `VESTIGE_DASHBOARD_ENABLED` at startup, by `vestige dashboard`, or by a
-/// `vestige dashboard` run elsewhere that asks through the attach endpoint.
+/// This process's dashboard, started on demand: by `VESTIGE_DASHBOARD_ENABLED`
+/// at startup, by `vestige dashboard` or `vestige serve --dashboard` in this
+/// process, or by a `vestige dashboard` run elsewhere that asks through the
+/// attach endpoint.
+///
+/// A dashboard this process asked for itself ([`DashboardOnDemand::ensure`])
+/// serves until the process exits. One that only `vestige dashboard` runs
+/// asked for ([`DashboardOnDemand::lease`]) serves while one of them still
+/// runs: when the last one exits, the listener closes. An agent's server can
+/// run for days, and the dashboard must not outlive the command that the
+/// user believes they closed.
 #[derive(Clone)]
 pub struct DashboardOnDemand {
-    running: Arc<Mutex<Option<u16>>>,
+    running: Arc<Mutex<Option<Serving>>>,
+    generations: Arc<AtomicU64>,
     storage: Arc<Storage>,
     cognitive: Arc<Mutex<CognitiveEngine>>,
     event_tx: tokio::sync::broadcast::Sender<events::VestigeEvent>,
+}
+
+/// The dashboard this process serves right now.
+struct Serving {
+    port: u16,
+    state: AppState,
+    /// Resolves once the listener has closed after `state.stop()`.
+    closed: oneshot::Receiver<()>,
+    /// This process asked for it itself: served until the process exits.
+    pinned: bool,
+    /// `vestige dashboard` runs holding it open.
+    leases: usize,
+    /// Tells a late lease release from one that belongs to this server.
+    generation: u64,
 }
 
 impl DashboardOnDemand {
@@ -300,42 +522,144 @@ impl DashboardOnDemand {
     ) -> Self {
         Self {
             running: Arc::new(Mutex::new(None)),
+            generations: Arc::new(AtomicU64::new(0)),
             storage,
             cognitive,
             event_tx,
         }
     }
 
-    /// Serve the dashboard on `port`. When it already runs, that port.
+    /// Serve the dashboard on `port` until this process exits. When it
+    /// already runs, its port (which may differ from `port`).
     pub async fn ensure(&self, port: u16) -> Result<u16, String> {
         let mut running = self.running.lock().await;
-        if let Some(port) = *running {
-            return Ok(port);
+        if let Some(serving) = running.as_mut() {
+            serving.pinned = true;
+            return Ok(serving.port);
         }
-        let started = start_background_with_event_tx(
+        let serving = self.start(port, true).await?;
+        let port = serving.port;
+        *running = Some(serving);
+        Ok(port)
+    }
+
+    /// Serve the dashboard for as long as the returned lease lives. When it
+    /// already runs, the lease names its port, which may differ from `port`.
+    pub async fn lease(&self, port: u16) -> Result<DashboardLease, String> {
+        let mut running = self.running.lock().await;
+        if running.is_none() {
+            *running = Some(self.start(port, false).await?);
+        }
+        let serving = running.as_mut().expect("started above");
+        serving.leases += 1;
+        Ok(DashboardLease {
+            owner: self.clone(),
+            generation: serving.generation,
+            port: serving.port,
+            released: false,
+        })
+    }
+
+    async fn release(&self, generation: u64) {
+        let mut running = self.running.lock().await;
+        let Some(serving) = running.as_mut() else {
+            return;
+        };
+        if serving.generation != generation {
+            return;
+        }
+        serving.leases = serving.leases.saturating_sub(1);
+        if serving.leases > 0 || serving.pinned {
+            return;
+        }
+        let Some(serving) = running.take() else {
+            return;
+        };
+        serving.state.stop();
+        // Hold the lock until the port is free, so a lease that arrives now
+        // binds it again instead of finding it still taken.
+        if tokio::time::timeout(Duration::from_secs(5), serving.closed)
+            .await
+            .is_err()
+        {
+            warn!(
+                port = serving.port,
+                "the dashboard listener did not close within 5s"
+            );
+        }
+        info!(
+            port = serving.port,
+            "dashboard stopped: the last `vestige dashboard` using it exited"
+        );
+    }
+
+    async fn start(&self, port: u16, pinned: bool) -> Result<Serving, String> {
+        let (app, state) = build_router_with_event_tx(
             Arc::clone(&self.storage),
             Some(Arc::clone(&self.cognitive)),
             self.event_tx.clone(),
             port,
-        )
-        .await
-        .map_err(|err| format!("the dashboard could not bind 127.0.0.1:{port}: {err}"));
-        started?;
-        *running = Some(port);
-        Ok(port)
+        );
+        let closed = serve_until_stopped(app, state.clone(), port)
+            .await
+            .map_err(|err| format!("the dashboard could not bind 127.0.0.1:{port}: {err}"))?;
+        Ok(Serving {
+            port,
+            state,
+            closed,
+            pinned,
+            leases: 0,
+            generation: self.generations.fetch_add(1, Ordering::Relaxed),
+        })
     }
 
-    /// For the attach endpoint: start (or find) the dashboard, as a URL.
+    /// For the attach endpoint: start (or find) the dashboard for one
+    /// `vestige dashboard` run, as a URL plus the lease that keeps it serving.
     pub fn starter(&self) -> crate::attach::DashboardStarter {
         let this = self.clone();
         Arc::new(move |port| {
             let this = this.clone();
             Box::pin(async move {
-                this.ensure(port)
-                    .await
-                    .map(|port| format!("http://127.0.0.1:{port}"))
+                let lease = this.lease(port).await?;
+                Ok(crate::attach::DashboardGrant {
+                    url: format!("http://127.0.0.1:{}", lease.port),
+                    hold: Box::new(lease),
+                })
             })
         })
+    }
+}
+
+/// Keeps a dashboard that [`DashboardOnDemand::lease`] started serving.
+/// Dropping it (or [`DashboardLease::release`]) gives the claim back; after
+/// the last one the dashboard stops, unless this process pinned it.
+pub struct DashboardLease {
+    owner: DashboardOnDemand,
+    generation: u64,
+    /// Where the dashboard answers.
+    pub port: u16,
+    released: bool,
+}
+
+impl DashboardLease {
+    /// Give the claim back and wait until the dashboard has stopped, when
+    /// this was the last one.
+    pub async fn release(mut self) {
+        self.released = true;
+        self.owner.release(self.generation).await;
+    }
+}
+
+impl Drop for DashboardLease {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let owner = self.owner.clone();
+        let generation = self.generation;
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move { owner.release(generation).await });
+        }
     }
 }
 
@@ -355,6 +679,19 @@ async fn start_background_inner(
     state: AppState,
     port: u16,
 ) -> Result<AppState, Box<dyn std::error::Error>> {
+    serve_until_stopped(app, state.clone(), port)
+        .await
+        .map_err(|err| Box::new(err) as Box<dyn std::error::Error>)?;
+    Ok(state)
+}
+
+/// Bind 127.0.0.1:`port` and serve `app` in the background until
+/// `state.stop()`. The receiver resolves once the listener has closed.
+async fn serve_until_stopped(
+    app: Router,
+    state: AppState,
+    port: u16,
+) -> std::io::Result<oneshot::Receiver<()>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -364,7 +701,7 @@ async fn start_background_inner(
                 "Dashboard could not bind to port {}: {} (MCP server continues without dashboard)",
                 port, e
             );
-            return Err(Box::new(e));
+            return Err(e);
         }
     };
 
@@ -373,13 +710,62 @@ async fn start_background_inner(
         port, port
     );
 
-    let serve_state = state.clone();
+    let (closed_tx, closed_rx) = oneshot::channel();
+    let listener = ClosingListener {
+        inner: Some(listener),
+        closed: Some(closed_tx),
+    };
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+        let stop = state.clone();
+        let served = axum::serve(listener, app)
+            .with_graceful_shutdown(async move { stop.stopped().await })
+            .await;
+        if let Err(e) = served {
             warn!("Dashboard server error: {}", e);
         }
-        drop(serve_state);
+        drop(state);
     });
 
-    Ok(state)
+    Ok(closed_rx)
+}
+
+/// A TCP listener that reports when it has closed, so a stopped dashboard's
+/// port is known to be free before anything binds it again.
+struct ClosingListener {
+    inner: Option<tokio::net::TcpListener>,
+    closed: Option<oneshot::Sender<()>>,
+}
+
+impl ClosingListener {
+    fn listener(&mut self) -> &mut tokio::net::TcpListener {
+        self.inner
+            .as_mut()
+            .unwrap_or_else(|| unreachable!("only Drop takes the listener"))
+    }
+}
+
+impl axum::serve::Listener for ClosingListener {
+    type Io = tokio::net::TcpStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        axum::serve::Listener::accept(self.listener()).await
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        match &self.inner {
+            Some(listener) => listener.local_addr(),
+            None => Err(std::io::Error::other("the dashboard listener is closed")),
+        }
+    }
+}
+
+impl Drop for ClosingListener {
+    fn drop(&mut self) {
+        // Close the socket first, then report it closed.
+        drop(self.inner.take());
+        if let Some(closed) = self.closed.take() {
+            let _ = closed.send(());
+        }
+    }
 }

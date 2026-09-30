@@ -29,8 +29,28 @@ export interface SearchResult {
 }
 
 export interface MemoryListResponse {
+	/** Every memory the request matches across the whole store, not the page. */
 	total: number;
+	/** Rows in this response (at most the requested limit). */
+	returned?: number;
 	memories: Memory[];
+	/** Present when the request carried `handle`: how that handle resolved. */
+	resolution?: HandleResolution;
+}
+
+/**
+ * How a search handle resolved. Vestige 4.0 finds memories by exact handle
+ * only: a memory id, a unique id prefix, or an exact tag. Free text never
+ * matches.
+ */
+export interface HandleResolution {
+	handle: string;
+	kind: 'memory' | 'tag' | 'unknown' | string;
+	exact: boolean;
+	/** A prefix matched more than one id; `memories` holds those candidates. */
+	ambiguous: boolean;
+	/** Set when nothing resolved: what a handle has to be. */
+	handleRequired: string | null;
 }
 
 export interface SystemStats {
@@ -130,8 +150,15 @@ export interface TimelineDay {
 }
 
 export interface TimelineResponse {
+	/** The window actually served (the request is clamped to 1-365 days). */
 	days: number;
+	/** Every memory created in the window, not only the ones returned. */
 	totalMemories: number;
+	/** Memories in `timeline` (the newest `limit` of the window). */
+	returned?: number;
+	/** True when the window holds more memories than were returned. */
+	truncated?: boolean;
+	limit?: number;
 	timeline: TimelineDay[];
 }
 
@@ -275,7 +302,10 @@ export interface SuppressResult {
 	retrievalStrength: number;
 	stability: number;
 	estimatedCascadeNeighbors: number;
-	reversibleUntil: string;
+	/** False on a Strata log: a 4.0 suppression cannot be undone. */
+	reversible?: boolean;
+	/** Null when the suppression cannot be reversed. */
+	reversibleUntil: string | null;
 	labileWindowHours: number;
 	reason: string | null;
 }

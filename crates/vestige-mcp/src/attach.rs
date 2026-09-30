@@ -462,10 +462,21 @@ impl Gate {
     }
 }
 
-/// Starts (or finds) the owner's dashboard on the asked-for port and returns
-/// its URL, or says why it cannot.
+/// Starts (or finds) the owner's dashboard on the asked-for port for one
+/// `vestige dashboard` run, or says why it cannot.
 pub type DashboardStarter =
-    Arc<dyn Fn(u16) -> BoxFuture<'static, Result<String, String>> + Send + Sync>;
+    Arc<dyn Fn(u16) -> BoxFuture<'static, Result<DashboardGrant, String>> + Send + Sync>;
+
+/// The owner's dashboard as one `vestige dashboard` run holds it.
+pub struct DashboardGrant {
+    /// Where the dashboard answers. Its port is the running dashboard's,
+    /// which may not be the one that run asked for.
+    pub url: String,
+    /// Keeps the dashboard serving while that run lasts. Dropping it gives
+    /// the claim back; the owner stops a dashboard no run holds any more
+    /// (unless it started the dashboard for itself).
+    pub hold: Box<dyn std::any::Any + Send + Sync>,
+}
 
 /// What an owner offers attached connections.
 struct Services {
@@ -628,7 +639,7 @@ async fn accept_loop(
                         None => Err("this Vestige process does not serve a dashboard".to_string()),
                     };
                     let answer = match &started {
-                        Ok(url) => format!("{WELCOME} {pid} {url}\n"),
+                        Ok(grant) => format!("{WELCOME} {pid} {}\n", grant.url),
                         Err(reason) => format!("{REFUSED} {}\n", reason.replace('\n', " ")),
                     };
                     if writer.write_all(answer.as_bytes()).await.is_err()
@@ -639,9 +650,12 @@ async fn accept_loop(
                     }
                     // The lease stays open until `vestige dashboard` exits. It
                     // counts as an attached session, so this owner keeps
-                    // serving the dashboard even after its own client leaves.
+                    // running even after its own client leaves, and the
+                    // grant keeps the dashboard serving. Dropping the grant
+                    // at EOF lets the owner stop a dashboard nobody holds.
                     let mut sink = [0u8; 256];
                     while matches!(reader.read(&mut sink).await, Ok(n) if n > 0) {}
+                    drop(started);
                 }
             }
             drop(guard);

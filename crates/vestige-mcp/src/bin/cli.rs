@@ -5043,8 +5043,9 @@ fn run_dashboard(port: u16, open_browser: bool) -> anyhow::Result<()> {
     let mut open_browser = open_browser;
 
     // Usually an agent's vestige-mcp holds the store. That process serves the
-    // dashboard on request, for as long as this command runs; if it exits,
-    // this process takes the store and serves the dashboard itself.
+    // dashboard on request, for as long as this command runs (it stops the
+    // dashboard when the last `vestige dashboard` using it exits); if it
+    // exits, this process takes the store and serves the dashboard itself.
     let wait = vestige_mcp::attach::election_wait();
     let mut deadline = std::time::Instant::now() + wait;
     while !take_cli_lock(&dir)? {
@@ -5056,6 +5057,16 @@ fn run_dashboard(port: u16, open_browser: bool) -> anyhow::Result<()> {
                     ">".cyan(),
                     lease.owner_pid
                 );
+                // That server runs one dashboard. When it already serves one
+                // on another port, say so rather than drop --port silently.
+                if let Some(serving) = url_port(&lease.url)
+                    && serving != port
+                {
+                    println!(
+                        "  {} --port {port} was not used: that server already serves the dashboard on port {serving}",
+                        "!".yellow()
+                    );
+                }
                 if open_browser {
                     let _ = open::that(&lease.url);
                     open_browser = false;
@@ -5122,6 +5133,11 @@ fn run_dashboard(port: u16, open_browser: bool) -> anyhow::Result<()> {
         tokio::signal::ctrl_c().await.ok();
         Ok(())
     })
+}
+
+/// The port in a `http://host:port` URL.
+fn url_port(url: &str) -> Option<u16> {
+    url.rsplit_once(':')?.1.trim_end_matches('/').parse().ok()
 }
 
 /// Start standalone HTTP MCP server (no stdio transport)

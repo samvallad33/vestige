@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, watch};
 use vestige_core::Storage;
 
 use super::events::VestigeEvent;
@@ -25,18 +25,16 @@ pub struct AppState {
     pub cognitive: Option<Arc<Mutex<CognitiveEngine>>>,
     pub event_tx: broadcast::Sender<VestigeEvent>,
     pub start_time: Instant,
+    /// Flips to `true` once when this dashboard stops serving: the listener
+    /// closes and every open WebSocket ends.
+    stopped: Arc<watch::Sender<bool>>,
 }
 
 impl AppState {
     /// Create a new AppState with event broadcasting.
     pub fn new(storage: Arc<Storage>, cognitive: Option<Arc<Mutex<CognitiveEngine>>>) -> Self {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        Self {
-            storage,
-            cognitive,
-            event_tx,
-            start_time: Instant::now(),
-        }
+        Self::with_event_tx(storage, cognitive, event_tx)
     }
 
     /// Get a new event receiver (for WebSocket connections).
@@ -55,7 +53,20 @@ impl AppState {
             cognitive,
             event_tx,
             start_time: Instant::now(),
+            stopped: Arc::new(watch::channel(false).0),
         }
+    }
+
+    /// Stop serving: the listener closes and open WebSockets end.
+    pub fn stop(&self) {
+        self.stopped.send_replace(true);
+    }
+
+    /// Resolves once [`AppState::stop`] has been called (at once if it was).
+    pub async fn stopped(&self) {
+        let mut stopped = self.stopped.subscribe();
+        // `wait_for` only errs when the sender is gone, and `self` holds it.
+        let _ = stopped.wait_for(|stopped| *stopped).await;
     }
 
     /// Emit an event to all connected clients.
