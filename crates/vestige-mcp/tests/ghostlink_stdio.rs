@@ -553,3 +553,138 @@ fn chain_lists_every_memory_origin_first_and_keeps_the_no_chain_contract() {
     assert_eq!(row["link_type"], json!("derived_from"), "{assoc}");
     server.shutdown();
 }
+
+/// Links declared at save time are typed edges with receipts, and they are
+/// what the bridge lens walks: two memories that each derive from the same
+/// memory become a never-composed bridge pair through it.
+#[test]
+fn links_declared_at_save_time_feed_the_bridge_lens() {
+    let dir = data_dir();
+    let home = data_dir();
+    let mut server = spawn(dir.path(), home.path());
+    let hub = save(&mut server, "The auth timeout is 30 seconds.", "fact");
+    let lone = save(&mut server, "The deploy runs at noon.", "fact");
+
+    let before = server.call_tool_ok(
+        "ghostlink",
+        json!({ "mode": "propose", "lens": "bridge", "limit": 10 }),
+    );
+    assert!(
+        pairs(&before).is_empty(),
+        "no typed edge exists yet: {before}"
+    );
+
+    let first = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "Login retries fail after 30s.", "node_type": "event",
+                "links": [{ "kind": "derived_from", "to": hub }] }),
+    );
+    let first_id = first["nodeId"].as_str().unwrap().to_string();
+    let link = &first["links"][0];
+    assert_eq!(link["edge"], json!("derived_from"), "{first}");
+    assert_eq!(link["source"], json!(first_id), "{first}");
+    assert_eq!(link["target"], json!(hub), "{first}");
+    let receipt = server.call_tool_ok(
+        "receipt",
+        json!({ "action": "get", "receipt_id": link["receiptId"] }),
+    );
+    assert_eq!(
+        receipt["attestation"]["verification"]["locallyVerified"],
+        json!(true),
+        "{receipt}"
+    );
+
+    // The batch form carries links per item.
+    let batch = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "items": [{ "content": "Session refresh also waits 30s.", "node_type": "event",
+                            "links": [{ "kind": "derived_from", "to": hub }] }] }),
+    );
+    let second_id = batch["results"][0]["nodeId"].as_str().unwrap().to_string();
+    assert!(
+        batch["results"][0]["links"][0]["receiptId"]
+            .as_str()
+            .is_some(),
+        "{batch}"
+    );
+
+    let after = server.call_tool_ok(
+        "ghostlink",
+        json!({ "mode": "propose", "lens": "bridge", "limit": 10 }),
+    );
+    let found = pairs(&after);
+    assert!(
+        found.contains(&(first_id.clone(), second_id.clone()))
+            || found.contains(&(second_id.clone(), first_id.clone())),
+        "the two memories that derive from {hub} must bridge: {after}"
+    );
+    assert!(
+        !found.iter().any(|(a, b)| a == &lone || b == &lone),
+        "a memory with no link must not bridge: {after}"
+    );
+    server.shutdown();
+}
+
+/// `closes` is recorded from the closed memory's side, and bad links are
+/// refused before anything is written.
+#[test]
+fn links_are_checked_before_anything_is_written() {
+    let dir = data_dir();
+    let home = data_dir();
+    let mut server = spawn(dir.path(), home.path());
+    let issue = save(&mut server, "Uploads over 2 GB fail.", "event");
+
+    let fix = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "Chunked uploads fix the 2 GB failure.", "node_type": "decision",
+                "links": [{ "kind": "closes", "to": issue }] }),
+    );
+    let fix_id = fix["nodeId"].as_str().unwrap();
+    assert_eq!(fix["links"][0]["edge"], json!("closed_by"), "{fix}");
+    assert_eq!(fix["links"][0]["source"], json!(issue), "{fix}");
+    assert_eq!(fix["links"][0]["target"], json!(fix_id), "{fix}");
+
+    for (links, needle) in [
+        (
+            json!([{ "kind": "supersedes", "to": issue }]),
+            "not declarable",
+        ),
+        (
+            json!([{ "kind": "derived_from", "to": "mem-ffffffffffffffff" }]),
+            "not a memory",
+        ),
+        (
+            json!([{ "kind": "derived_from", "to": issue }, { "kind": "derived_from", "to": issue }]),
+            "twice",
+        ),
+        (json!([{ "kind": "derived_from" }]), "needs `to`"),
+    ] {
+        let refused = server.call_tool(
+            "smart_ingest",
+            json!({ "content": "This must not be saved.", "tags": ["never-written"], "links": links }),
+        );
+        assert_eq!(refused["isError"], json!(true), "{refused}");
+        assert!(
+            refused["text"].as_str().unwrap().contains(needle),
+            "{refused}"
+        );
+    }
+    let other_scope = server.call_tool(
+        "smart_ingest",
+        json!({ "content": "This must not be saved either.", "tags": ["never-written"],
+                "scope": "elsewhere", "links": [{ "kind": "derived_from", "to": issue }] }),
+    );
+    assert!(
+        other_scope["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("links stay within one scope"),
+        "{other_scope}"
+    );
+    let nothing = server.call_tool("recall", json!({ "handle": "never-written" }));
+    assert!(
+        nothing.get("nodes").is_none() || nothing["nodes"].as_array().unwrap().is_empty(),
+        "a refused save wrote a memory: {nothing}"
+    );
+    server.shutdown();
+}

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `smart_ingest` takes `links`: typed edges from the new memory to existing
+  memories in the same scope, declared when it is saved. `derived_from` (this
+  memory derives from it), `evidence_of` (this memory is evidence about it)
+  and `closes` (this memory closes it, recorded as `closed_by`). Each link is
+  written through the gate with its own receipt, and batch `items` carry
+  their own. Every link is checked before anything is written: the kind,
+  that the target is a live memory, that it is in the same scope, and that
+  no link repeats. A refused link refuses the whole save. `supersedes` and
+  `corrects` are not declarable, because they can retire a memory. Links are
+  what GhostLink's bridge lens walks: two memories that each derive from the
+  same memory become a bridge pair through it.
+
 ## [4.1.0] - 2026-10-01
 
 ### Added

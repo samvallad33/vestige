@@ -264,7 +264,7 @@ Write-up: [docs/SCIENCE.md](docs/SCIENCE.md).
 | `receipt` | `get` a receipt, or `replay` it against the log |
 | `selftest` | Plant a known cause in a throwaway copy and check the walk finds it |
 | `session_start` | Status, open intentions for the scope (with id, due date and an overdue mark), backup and dream needs, and codebase context under one budget. It writes nothing. Queries are answered with a notice: memories are found by handle |
-| `smart_ingest` | Store one memory, or up to 20 with `items`. Secrets are refused unless you say otherwise |
+| `smart_ingest` | Store one memory, or up to 20 with `items`. `links` declares typed edges to existing memories (`derived_from`, `evidence_of`, `closes`), each with its own receipt, which is what GhostLink's bridge lens walks. Secrets are refused unless you say otherwise |
 | `suppress` | Take a memory out of every read. The log keeps its bytes, and on Strata it cannot be undone. `destructiveHint` is true |
 
 **Withheld since 4.0.** `purge` is the one tool 4.x does not ship. On an append-only signed log a purge could hide a memory but not erase its bytes, and a tool called purge must not pretend otherwise. `purge`, `memory` action `purge` or `delete`, and `delete_knowledge` return `unavailable_in_4_0`. Real erasure is planned as crypto-erasure ([#402](https://github.com/samvallad33/vestige/issues/402)).
