@@ -101,7 +101,7 @@ pub fn schema() -> Value {
             "links": {
                 "type": "array",
                 "maxItems": 16,
-                "description": "Typed links from this memory to existing memories in the same scope, each written through the gate with its own receipt. derived_from: this memory derives from it. evidence_of: this memory is evidence about it. closes: this memory closes it (an issue, a failure). Strata only.",
+                "description": "Typed links to existing memories in the same scope, each gated with its own receipt: derived_from (this derives from it), evidence_of (this is evidence about it), closes (this closes it). Strata only.",
                 "items": {
                     "type": "object",
                     "properties": {

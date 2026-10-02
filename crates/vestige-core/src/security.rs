@@ -300,13 +300,15 @@ fn exact_prefixed_runs<'a>(
         .match_indices(prefix)
         .filter_map(|(start, _)| {
             let end = start + prefix.len() + suffix_len;
+            // `then`, not `then_some`: the slice must not be built before the
+            // bounds check, or a prefix near the end of the text panics.
             (end <= bytes.len()
                 && (start == 0 || !allowed(bytes[start - 1]))
                 && bytes[start + prefix.len()..end]
                     .iter()
                     .all(|byte| allowed(*byte))
                 && (end == bytes.len() || !allowed(bytes[end])))
-            .then_some(&content[start..end])
+            .then(|| &content[start..end])
         })
         .collect()
 }
@@ -661,6 +663,33 @@ mod tests {
             findings.iter().all(|finding| !finding.blocks_ingestion()),
             "{findings:?}"
         );
+    }
+
+    #[test]
+    fn a_prefix_near_the_end_of_the_text_never_panics() {
+        // Every exact-length prefix, with fewer bytes after it than the shape
+        // needs. Before the fix the slice was built before the bounds check.
+        for tail in [
+            "sk-",
+            "ghp_",
+            "AIza",
+            "AKIA",
+            "github_pat_",
+            "sk-abc",
+            "task sk-",
+            "desk-",
+        ] {
+            let findings = scan_secrets(&format!("note ends with {tail}"));
+            assert!(
+                findings.iter().all(|f| !f.blocks_ingestion()),
+                "{tail}: {findings:?}"
+            );
+            let findings = scan_secrets(tail);
+            assert!(
+                findings.iter().all(|f| !f.blocks_ingestion()),
+                "{tail}: {findings:?}"
+            );
+        }
     }
 
     #[test]

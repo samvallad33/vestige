@@ -55,7 +55,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["get", "get_batch", "delete", "purge", "state", "promote", "demote", "edit"],
-                "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (retrieval strength; demote never deletes), 'edit' (admit a successor under rule edit, then retire the previous node), 'purge' (retired, can't be retrieved; confirm=true). 'delete' aliases purge"
+                "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node), 'purge' (confirm=true; retired, not retrievable). 'delete' aliases purge"
             },
             "id": {
                 "type": "string",

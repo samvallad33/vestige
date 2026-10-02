@@ -210,7 +210,7 @@ fn stdio_allows_one_retire_and_holds_another_then_strata_verify() {
             demoted["note"]
                 .as_str()
                 .unwrap_or("")
-                .contains("NOT deleted"),
+                .contains("not deleted"),
             "{demoted}"
         );
         assert_ne!(demoted["receiptId"], promote_receipt);
