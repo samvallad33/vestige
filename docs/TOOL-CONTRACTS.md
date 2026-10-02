@@ -174,7 +174,11 @@ through memory IDs. Retrieval exposure records include only returned evidence.
 of the memory that records the symptom; it is required only for `logged_write`.
 The walk takes every distinct in-scope `node_id` and walks each backward over
 recorded `closed_by`, `derived_from`, `evidence_of` and `touched` edges, then merges
-the results: a node appears once at its shallowest depth, lists the starts that
+the results. Backward follows each edge toward its earlier end, and an edge is
+stored the way its writer names it: from a memory the walk goes to what it is
+`derived_from` (the edge's target), and to the records that are `evidence_of` it,
+that it closed, or that `touched` it (the edge's source). A memory derived from the
+start is downstream and is never reported as a cause. In the merged result: a node appears once at its shallowest depth, lists the starts that
 reached it in `from`, and a start that is also a recorded cause of another start
 stays in `causes` with the edge that says so. `start_points` reports each one as
 `walked`, `unresolved` (no `node_id`), `not_in_scope` or `duplicate`, with a reason.
@@ -183,9 +187,10 @@ piece (`node_id`, or `node` when no start node is in the scope). A misspelled
 field is still an error that names the real one. The camelCase spellings
 `startPoints`, `nodeId`, `loggedWrite`, `scanLimit` and `lookbackDays` are read like
 their snake_case names. A walk that ran from real start nodes and found no cause
-carries `emptyBecause` and `incomingEdges`: the causal edges that come in from another
-scope (the walk does not cross scopes) and the incoming edges that are not causal, by
-link type, as the log records them. A recorded walk has no inferred trail, so
+carries `emptyBecause` and `incomingEdges`: the causal edges whose upstream end is in
+another scope (`causalFromOtherScopes`; the walk does not cross scopes), the causal
+edges that lead downstream from a start (`causalDownstream`), and the incoming edges
+that are not causal, by link type (`nonCausal`), as the log records them. A recorded walk has no inferred trail, so
 `promote=true` writes nothing and says so in `promote` (`requested`,
 `edges_persisted: 0`, `note`); trail edges are recorded on the legacy engine only.
 

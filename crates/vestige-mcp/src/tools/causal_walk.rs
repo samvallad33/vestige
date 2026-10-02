@@ -347,18 +347,18 @@ fn walk_from(
             }
             continue;
         }
-        for edge in incoming_causal(storage, &current)? {
-            if visited.contains(edge.source_id.as_str()) {
+        for (upstream, edge) in upstream_causal(storage, &current)? {
+            if visited.contains(upstream.as_str()) {
                 continue;
             }
-            if !in_scope(storage, &edge.source_id, scope)? {
+            if !in_scope(storage, &upstream, scope)? {
                 continue;
             }
             if reached.len() >= node_cap {
                 truncated = true;
                 break;
             }
-            visited.insert(edge.source_id.clone());
+            visited.insert(upstream.clone());
             let mut next_path = path.clone();
             next_path.push(Hop {
                 source_id: edge.source_id.clone(),
@@ -366,9 +366,9 @@ fn walk_from(
                 link_type: edge.link_type.clone(),
             });
             let next_depth = depth + 1;
-            queue.push_back((edge.source_id.clone(), next_depth, next_path.clone()));
+            queue.push_back((upstream.clone(), next_depth, next_path.clone()));
             reached.push(Reached {
-                id: edge.source_id,
+                id: upstream,
                 depth: next_depth,
                 path: next_path,
                 from: Vec::new(),
@@ -588,31 +588,66 @@ fn has_admissible_cause(
     scope: &str,
     visited: &HashSet<String>,
 ) -> Result<bool, String> {
-    for edge in incoming_causal(storage, node_id)? {
-        if visited.contains(edge.source_id.as_str()) {
+    for (upstream, _) in upstream_causal(storage, node_id)? {
+        if visited.contains(upstream.as_str()) {
             continue;
         }
-        if in_scope(storage, &edge.source_id, scope)? {
+        if in_scope(storage, &upstream, scope)? {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn incoming_causal(
+/// Which end of a recorded causal edge is upstream of `node_id`, if the edge
+/// leads upstream from it at all.
+///
+/// An edge is stored the way its writer names it, so the earlier record is
+/// not always the source:
+///
+/// - `A derived_from B` (a link declared at save, a GhostLink weave): A came
+///   from B, so from A the walk goes to B. The same edge seen from B leads
+///   downstream, to something built on B, and is not followed.
+/// - `E evidence_of S`, `I closed_by F`, `C touched S`: the source is the
+///   earlier record, so from the target the walk goes to the source.
+///
+/// 4.1.0 followed every kind from target to source. For `derived_from` that
+/// reported the memories derived from a symptom as its causes and never
+/// reached what the symptom itself derives from.
+pub(crate) fn upstream_end<'a>(
+    edge: &'a vestige_core::ConnectionRecord,
+    node_id: &str,
+) -> Option<&'a str> {
+    if edge.source_id == edge.target_id {
+        return None;
+    }
+    match edge.link_type.as_str() {
+        "derived_from" if edge.source_id == node_id => Some(edge.target_id.as_str()),
+        "closed_by" | "evidence_of" | "touched" if edge.target_id == node_id => {
+            Some(edge.source_id.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// The recorded causal edges that lead upstream from `node_id`, each with the
+/// id of the memory at the upstream end. Ordered by kind, then id.
+fn upstream_causal(
     storage: &Arc<Storage>,
     node_id: &str,
-) -> Result<Vec<vestige_core::ConnectionRecord>, String> {
-    let mut edges = storage
+) -> Result<Vec<(String, vestige_core::ConnectionRecord)>, String> {
+    let edges = storage
         .get_connections_for_memory(node_id)
         .map_err(|err| err.to_string())?;
-    edges.retain(|edge| {
-        edge.target_id == node_id
-            && edge.source_id != node_id
-            && CAUSAL_LINKS.contains(&edge.link_type.as_str())
-    });
-    edges.sort_by(|a, b| (&a.link_type, &a.source_id).cmp(&(&b.link_type, &b.source_id)));
-    Ok(edges)
+    let mut out: Vec<(String, vestige_core::ConnectionRecord)> = edges
+        .into_iter()
+        .filter_map(|edge| {
+            let upstream = upstream_end(&edge, node_id)?.to_string();
+            Some((upstream, edge))
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.1.link_type, &a.0).cmp(&(&b.1.link_type, &b.0)));
+    Ok(out)
 }
 
 fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
@@ -651,40 +686,51 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "nodes": walk.nodes.iter().map(&node_json).collect::<Vec<_>>(),
         "causes": walk.causes.iter().map(&node_json).collect::<Vec<_>>(),
         "needs_report": walk.needs_report,
-        "note": "Backward BFS over recorded causal edges only (closed_by, derived_from, evidence_of, touched), from every start node. A node_id on any start point names the recorded symptom the walk begins at; start_points reports what happened to each one.",
+        "note": "Backward BFS over recorded causal edges only, from every start node: from a memory to what it is derived_from, and to the records that are evidence_of it, that it closed, or that touched it. A node_id on any start point names the recorded symptom the walk begins at; start_points reports what happened to each one.",
     })
 }
 
 /// Why a walk from real start nodes found no cause, from what the log holds:
-/// causal edges that come in from another scope, and edges that come in but
-/// are not causal. Facts only; nothing is inferred.
+/// causal edges whose upstream end is in another scope, causal edges that
+/// lead downstream from a start, and edges that touch a start but are not
+/// causal. Facts only; nothing is inferred.
 fn why_empty(storage: &Arc<Storage>, scope: &str, starts: &[String]) -> (String, Value) {
     let mut other_scope = 0usize;
+    let mut downstream = 0usize;
     let mut non_causal: BTreeMap<String, usize> = BTreeMap::new();
     for start in starts {
         let Ok(edges) = storage.get_connections_for_memory(start) else {
             continue;
         };
         for edge in edges {
-            if edge.target_id != *start || edge.source_id == *start {
+            if edge.source_id == edge.target_id {
                 continue;
             }
-            if CAUSAL_LINKS.contains(&edge.link_type.as_str()) {
-                if !in_scope(storage, &edge.source_id, scope).unwrap_or(false) {
+            if let Some(upstream) = upstream_end(&edge, start) {
+                if !in_scope(storage, upstream, scope).unwrap_or(false) {
                     other_scope += 1;
                 }
-            } else {
+            } else if CAUSAL_LINKS.contains(&edge.link_type.as_str()) {
+                // A causal edge seen from its upstream end: something that
+                // derives from, is evidenced by, or closed this memory.
+                downstream += 1;
+            } else if edge.target_id == *start {
                 *non_causal.entry(edge.link_type).or_default() += 1;
             }
         }
     }
     let mut why = format!(
-        "no recorded causal edge (closed_by, derived_from, evidence_of, touched) leads into the start node{} in scope '{scope}'",
+        "no recorded causal edge (closed_by, derived_from, evidence_of, touched) leads upstream from the start node{} in scope '{scope}'",
         if starts.len() == 1 { "" } else { "s" }
     );
     if other_scope > 0 {
         why.push_str(&format!(
-            "; {other_scope} causal edge(s) come in from another scope, which this walk does not cross"
+            "; {other_scope} causal edge(s) lead upstream into another scope, which this walk does not cross"
+        ));
+    }
+    if downstream > 0 {
+        why.push_str(&format!(
+            "; {downstream} causal edge(s) lead downstream from here (to memories that came after), which a backward walk does not follow"
         ));
     }
     if !non_causal.is_empty() {
@@ -697,11 +743,12 @@ fn why_empty(storage: &Arc<Storage>, scope: &str, starts: &[String]) -> (String,
             kinds.join(", ")
         ));
     }
-    why.push_str(". A cause becomes walkable once an edge from it into the symptom is recorded.");
+    why.push_str(". A cause becomes walkable once the symptom records a link to it: save the symptom with links [{kind: 'derived_from', to: <cause id>}], or save the evidence with links [{kind: 'evidence_of', to: <symptom id>}].");
     (
         why,
         json!({
             "causalFromOtherScopes": other_scope,
+            "causalDownstream": downstream,
             "nonCausal": non_causal,
         }),
     )
@@ -724,9 +771,9 @@ pub fn seed_recorded_cause(dir: &std::path::Path) -> Result<(String, String, Str
     let cause = ingest_id(&storage, "user", "commit flipped the auth timeout")?;
     let decoy = ingest_id(&storage, "user", "commit flipped the auth timeout")?;
     let downstream = ingest_id(&storage, "user", "pager incident after the failure")?;
-    save_link(&storage, &cause, &effect, "derived_from")?;
+    save_link(&storage, &effect, &cause, "derived_from")?;
     save_link(&storage, &decoy, &effect, "projected_to")?;
-    save_link(&storage, &effect, &downstream, "derived_from")?;
+    save_link(&storage, &downstream, &effect, "derived_from")?;
     Ok((effect, cause, decoy))
 }
 
@@ -1000,11 +1047,11 @@ mod strata_walk {
         let same_words = put(&storage, "user", "commit flipped the auth timeout");
         let downstream = put(&storage, "user", "pager incident after the failure");
         let other = put(&storage, "other", "commit flipped the auth timeout");
-        link(&storage, &cause, &effect, "derived_from");
+        link(&storage, &effect, &cause, "derived_from");
         link(&storage, &origin, &cause, "evidence_of");
         link(&storage, &same_words, &effect, "projected_to");
-        link(&storage, &effect, &downstream, "derived_from");
-        link(&storage, &other, &effect, "derived_from");
+        link(&storage, &downstream, &effect, "derived_from");
+        link(&storage, &effect, &other, "derived_from");
         let edges_before = storage.get_all_connections().unwrap().len();
 
         let args = json!({
@@ -1032,8 +1079,9 @@ mod strata_walk {
             .unwrap_or_else(|| panic!("missing cause: {out}"));
         assert_eq!(cause_row["depth"], 1);
         assert_eq!(cause_row["content"], "commit flipped the auth timeout");
-        assert_eq!(cause_row["path"][0]["source_id"], cause);
-        assert_eq!(cause_row["path"][0]["target_id"], effect);
+        // The hop is the recorded edge: `effect derived_from cause`.
+        assert_eq!(cause_row["path"][0]["source_id"], effect);
+        assert_eq!(cause_row["path"][0]["target_id"], cause);
         assert_eq!(cause_row["path"][0]["link_type"], "derived_from");
 
         let origin_row = out["causes"]
@@ -1085,7 +1133,7 @@ mod strata_walk {
         let larger = put(&storage, "user", "larger-id cause");
         assert!(smaller < larger, "ingest order is id order");
         link(&storage, &larger, &effect, "closed_by");
-        link(&storage, &smaller, &effect, "derived_from");
+        link(&storage, &effect, &smaller, "derived_from");
         let out = execute(&storage, Some(json!({"node_id": effect})))
             .await
             .unwrap();
@@ -1120,7 +1168,7 @@ mod strata_walk {
             causes.push(put(&storage, "user", &format!("cause {index}")));
         }
         for cause in &causes {
-            link(&storage, cause, &effect, "derived_from");
+            link(&storage, &effect, cause, "derived_from");
         }
         let out = execute(&storage, Some(json!({"node_id": effect, "scan_limit": 10})))
             .await
@@ -1159,7 +1207,7 @@ mod strata_walk {
         let (storage, _dir) = open();
         let effect = put(&storage, "user", "login handler failed");
         let cause = put(&storage, "user", "commit flipped the auth timeout");
-        link(&storage, &cause, &effect, "derived_from");
+        link(&storage, &effect, &cause, "derived_from");
 
         let baseline = execute(
             &storage,
@@ -1234,7 +1282,7 @@ mod strata_walk {
         let cause_a = put(&storage, "user", "cause of A");
         let cause_b = put(&storage, "user", "cause of B");
         let root = put(&storage, "user", "root behind both");
-        link(&storage, &cause_a, &a, "derived_from");
+        link(&storage, &a, &cause_a, "derived_from");
         link(&storage, &cause_b, &b, "closed_by");
         link(&storage, &root, &cause_a, "evidence_of");
         link(&storage, &root, &cause_b, "evidence_of");
@@ -1276,7 +1324,7 @@ mod strata_walk {
             "reached from both starts"
         );
         assert_eq!(
-            by_id(&root)["path"][0]["target_id"],
+            by_id(&root)["path"][0]["source_id"],
             a,
             "equal depth keeps the earlier start's route"
         );
@@ -1292,7 +1340,7 @@ mod strata_walk {
         let (storage, _dir) = open();
         let a = put(&storage, "user", "failing test A");
         let b = put(&storage, "user", "stack frame B");
-        link(&storage, &b, &a, "derived_from");
+        link(&storage, &a, &b, "derived_from");
         let out = execute(
             &storage,
             Some(json!({"start_points": [
@@ -1304,8 +1352,9 @@ mod strata_walk {
         .unwrap();
         // B is a start (depth 0) AND a recorded cause of A: the edge survives
         assert_eq!(causes_of(&out), vec![(b.clone(), 1)], "{out}");
-        assert_eq!(out["causes"][0]["path"][0]["source_id"], b);
-        assert_eq!(out["causes"][0]["path"][0]["target_id"], a);
+        // recorded as `a derived_from b`
+        assert_eq!(out["causes"][0]["path"][0]["source_id"], a);
+        assert_eq!(out["causes"][0]["path"][0]["target_id"], b);
         assert_eq!(out["causes"][0]["from"], json!([a]));
         let nodes = out["nodes"].as_array().unwrap();
         let b_row = nodes.iter().find(|row| row["id"] == b).unwrap();
@@ -1319,7 +1368,7 @@ mod strata_walk {
         let symptom = put(&storage, "user", "good symptom");
         let cause = put(&storage, "user", "its cause");
         let elsewhere = put(&storage, "other", "symptom in another scope");
-        link(&storage, &cause, &symptom, "derived_from");
+        link(&storage, &symptom, &cause, "derived_from");
 
         let out = execute(
             &storage,
@@ -1453,7 +1502,7 @@ mod strata_walk {
         let (storage, _dir) = open();
         let effect = put(&storage, "user", "symptom");
         let cause = put(&storage, "user", "cause");
-        link(&storage, &cause, &effect, "derived_from");
+        link(&storage, &effect, &cause, "derived_from");
         for args in [
             json!({"startPoints": [{"kind": "logged_write", "node_id": effect}]}),
             json!({"nodeId": effect}),
@@ -1470,7 +1519,7 @@ mod strata_walk {
         let (storage, _dir) = open();
         let effect = put(&storage, "user", "symptom");
         let cause = put(&storage, "user", "cause");
-        link(&storage, &cause, &effect, "derived_from");
+        link(&storage, &effect, &cause, "derived_from");
         let before = storage.get_all_connections().unwrap().len();
         let out = execute(&storage, Some(json!({"node_id": effect, "promote": true})))
             .await
@@ -1486,13 +1535,62 @@ mod strata_walk {
     }
 
     #[tokio::test]
+    async fn a_walk_goes_to_what_the_symptom_derives_from_not_to_what_derives_from_it() {
+        // The shape `smart_ingest` links record: `new derived_from existing`.
+        let (storage, _dir) = open();
+        let decision = put(
+            &storage,
+            "user",
+            "decision: cache moved to an in-memory LRU",
+        );
+        let failure = put(&storage, "user", "failure: sessions dropped under load");
+        let postmortem = put(&storage, "user", "postmortem written after the failure");
+        let evidence = put(
+            &storage,
+            "user",
+            "log line showing evictions before the drop",
+        );
+        link(&storage, &failure, &decision, "derived_from");
+        link(&storage, &postmortem, &failure, "derived_from");
+        link(&storage, &evidence, &failure, "evidence_of");
+
+        let out = execute(&storage, Some(json!({"node_id": failure})))
+            .await
+            .unwrap();
+        let mut found: Vec<String> = causes_of(&out).into_iter().map(|(id, _)| id).collect();
+        found.sort();
+        let mut expected = vec![decision.clone(), evidence.clone()];
+        expected.sort();
+        assert_eq!(found, expected, "upstream only: {out}");
+        assert!(
+            !out.to_string().contains(&postmortem),
+            "a memory derived from the failure is downstream, not a cause: {out}"
+        );
+
+        // From the decision nothing is upstream, and the reason names the
+        // downstream edge instead of calling it a cause.
+        let out = execute(&storage, Some(json!({"node_id": decision})))
+            .await
+            .unwrap();
+        assert!(causes_of(&out).is_empty(), "{out}");
+        assert_eq!(out["incomingEdges"]["causalDownstream"], 1, "{out}");
+        assert!(
+            out["emptyBecause"]
+                .as_str()
+                .unwrap()
+                .contains("lead downstream from here"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
     async fn an_empty_walk_says_why_from_the_edges_it_saw() {
         let (storage, _dir) = open();
         let symptom = put(&storage, "user", "symptom with no recorded cause");
         let lookalike = put(&storage, "user", "shares words, not causal");
         let elsewhere = put(&storage, "other", "a cause recorded in another scope");
         link(&storage, &lookalike, &symptom, "projected_to");
-        link(&storage, &elsewhere, &symptom, "derived_from");
+        link(&storage, &symptom, &elsewhere, "derived_from");
 
         let out = execute(&storage, Some(json!({"node_id": symptom})))
             .await
@@ -1504,7 +1602,7 @@ mod strata_walk {
             .expect("an empty walk explains itself");
         assert!(why.contains("no recorded causal edge"), "{why}");
         assert!(
-            why.contains("1 causal edge(s) come in from another scope"),
+            why.contains("1 causal edge(s) lead upstream into another scope"),
             "{why}"
         );
         assert!(why.contains("1 projected_to"), "{why}");

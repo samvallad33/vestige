@@ -4566,7 +4566,7 @@ fn run_causal_walk_strata(
     if causes.is_empty() {
         println!(
             "{}",
-            "No recorded causal edge leads into this memory.".dimmed()
+            "No recorded causal edge leads upstream from this memory.".dimmed()
         );
     }
     for (rank, cause) in causes.iter().enumerate() {

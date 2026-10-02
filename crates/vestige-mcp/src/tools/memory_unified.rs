@@ -1549,7 +1549,7 @@ mod strata_tests {
             .await
             .unwrap();
             assert_eq!(demoted["action"], "demoted");
-            assert!(demoted["note"].as_str().unwrap().contains("NOT deleted"));
+            assert!(demoted["note"].as_str().unwrap().contains("not deleted"));
             let demote_receipt = demoted["receiptId"].as_str().unwrap().to_string();
             assert_ne!(demote_receipt, promote_receipt);
             proved(&storage, &demote_receipt, &id, "demoted").await;

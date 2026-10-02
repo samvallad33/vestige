@@ -103,9 +103,11 @@ backward over edges the log recorded. It never guesses:
 vestige causal-walk --logged-write mem-0000000000000005
 ```
 
-On a new store this reports that no recorded causal edge leads into the memory.
-That is the correct answer: nothing has linked the two yet. The walk only follows
-edges that were written, such as the `derived_from` edges a GhostLink weave records.
+On a new store this reports that no recorded causal edge leads upstream from the
+memory. That is the correct answer: nothing has linked the two yet. The walk only
+follows edges that were written. Your agent writes one when it saves a memory with
+`links`, for example the failure with `{"kind": "derived_from", "to": "<decision id>"}`.
+After that, the walk from the failure reaches the decision.
 
 `vestige selftest` plants a known cause in a throwaway copy and checks that the walk
 finds it. Your live store is only read.

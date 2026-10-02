@@ -174,8 +174,9 @@ fn causal_walk_stdio_returns_the_recorded_cause() {
         .iter()
         .find(|row| row["id"] == cause)
         .unwrap_or_else(|| panic!("missing recorded cause: {first}"));
-    assert_eq!(cause_row["path"][0]["source_id"], cause);
-    assert_eq!(cause_row["path"][0]["target_id"], effect);
+    // The hop is the recorded edge: `effect derived_from cause`.
+    assert_eq!(cause_row["path"][0]["source_id"], effect);
+    assert_eq!(cause_row["path"][0]["target_id"], cause);
     assert_eq!(cause_row["path"][0]["link_type"], "derived_from");
     let ids: Vec<&str> = first["nodes"]
         .as_array()

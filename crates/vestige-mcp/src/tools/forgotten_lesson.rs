@@ -216,29 +216,33 @@ fn walk_recorded_causes(
             continue;
         }
 
-        let mut edges = storage
+        // Each causal edge with the memory at its earlier end. An edge is
+        // stored the way its writer names it: `A derived_from B` runs from
+        // the derivative to its origin, so the earlier record is the target;
+        // every other causal kind runs from the earlier record to the later.
+        let mut edges: Vec<(String, vestige_core::ConnectionRecord)> = storage
             .get_connections_for_memory(&frame.id)
-            .map_err(|e| e.to_string())?;
-        edges.retain(|edge| {
-            edge.target_id == frame.id
-                && edge.source_id != frame.id
-                && is_causal_edge(&edge.link_type)
-        });
-        edges.sort_by(|a, b| {
-            a.link_type
-                .cmp(&b.link_type)
-                .then(a.source_id.cmp(&b.source_id))
-                .then(a.target_id.cmp(&b.target_id))
-        });
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter_map(|edge| {
+                if edge.source_id == edge.target_id || !is_causal_edge(&edge.link_type) {
+                    return None;
+                }
+                let earlier = if edge.link_type == "derived_from" {
+                    (edge.source_id == frame.id).then(|| edge.target_id.clone())?
+                } else {
+                    (edge.target_id == frame.id).then(|| edge.source_id.clone())?
+                };
+                Some((earlier, edge))
+            })
+            .collect();
+        edges.sort_by(|a, b| a.1.link_type.cmp(&b.1.link_type).then(a.0.cmp(&b.0)));
 
-        for edge in edges {
-            if !seen.insert(edge.source_id.clone()) {
+        for (earlier, edge) in edges {
+            if !seen.insert(earlier.clone()) {
                 continue;
             }
-            let Some(node) = storage
-                .get_node(&edge.source_id)
-                .map_err(|e| e.to_string())?
-            else {
+            let Some(node) = storage.get_node(&earlier).map_err(|e| e.to_string())? else {
                 continue;
             };
             if !storage
@@ -739,13 +743,13 @@ mod strata_walk_tests {
         let cause = ingest(&storage, "Prior adjustment of the pool ceiling");
         let failure = ingest(&storage, "Outage crash loop after the pool ceiling change");
         let forward_only = ingest(&storage, "Later note that the failure points at");
-        link(&storage, &cause.id, &failure.id, "derived_from");
+        link(&storage, &failure.id, &cause.id, "derived_from");
         link(&storage, &lesson.id, &cause.id, "evidence_of");
         link(&storage, &corrected.id, &failure.id, "corrects");
         link(&storage, &touched.id, &failure.id, "touched");
         link(&storage, &decoy.id, &failure.id, "anchored_to");
         // Forward edge: failure is the source. The walk must not follow it.
-        link(&storage, &failure.id, &forward_only.id, "derived_from");
+        link(&storage, &forward_only.id, &failure.id, "derived_from");
         drop(storage);
 
         {
@@ -822,8 +826,9 @@ mod strata_walk_tests {
         let cause_path = &lessons.iter().find(|e| e["lesson_id"] == cause.id).unwrap()["edge_path"];
         assert_eq!(cause_path.as_array().unwrap().len(), 1, "{cause_path}");
         assert_eq!(cause_path[0]["link_type"], "derived_from");
-        assert_eq!(cause_path[0]["source_id"], json!(cause.id));
-        assert_eq!(cause_path[0]["target_id"], json!(failure.id));
+        // recorded as `failure derived_from cause`
+        assert_eq!(cause_path[0]["source_id"], json!(failure.id));
+        assert_eq!(cause_path[0]["target_id"], json!(cause.id));
 
         let lesson_path = &lessons
             .iter()
@@ -833,7 +838,7 @@ mod strata_walk_tests {
         assert_eq!(lesson_path[0]["source_id"], json!(lesson.id));
         assert_eq!(lesson_path[0]["target_id"], json!(cause.id));
         assert_eq!(lesson_path[0]["link_type"], "evidence_of");
-        assert_eq!(lesson_path[1]["target_id"], json!(failure.id));
+        assert_eq!(lesson_path[1]["source_id"], json!(failure.id));
 
         assert!(
             execute(
@@ -894,7 +899,7 @@ mod strata_walk_tests {
         }
         let failure = ingest(&storage, "wide failure");
         for id in &causes {
-            link(&storage, id, &failure.id, "derived_from");
+            link(&storage, &failure.id, id, "derived_from");
         }
         let out = execute(
             &storage,
