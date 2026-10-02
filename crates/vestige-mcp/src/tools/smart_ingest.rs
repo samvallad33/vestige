@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::cognitive::CognitiveEngine;
+use crate::strata_memory;
 use vestige_core::{
     DEFAULT_MEMORY_SCOPE, ImportanceContext, IngestInput, SecretPolicy, Storage, StorageError,
     SynapticCapturePolicy, SynapticImportanceEvent, SynapticIngestRequest, SynapticSignalSnapshot,
@@ -97,6 +98,19 @@ pub fn schema() -> Value {
                 "type": "string",
                 "description": "CLAIMED role for provenance (e.g. 'qa', 'architect'). Claims never override the process identity and never self-grant authority: the operator-controlled policy resolves the effective role, and unregistered claims stay neutral at 1.0. The response 'actor' block reports the resolution."
             },
+            "links": {
+                "type": "array",
+                "maxItems": 16,
+                "description": "Typed links from this memory to existing memories in the same scope, each written through the gate with its own receipt. derived_from: this memory derives from it. evidence_of: this memory is evidence about it. closes: this memory closes it (an issue, a failure). Strata only.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["derived_from", "evidence_of", "closes"]},
+                        "to": {"type": "string", "description": "Exact id of an existing memory"}
+                    },
+                    "required": ["kind", "to"]
+                }
+            },
             "items": {
                 "type": "array",
                 "description": "Batch: up to 20 items with the same fields as single mode, each force-created unless batchMergePolicy='smart'. For session end or before compaction.",
@@ -106,6 +120,12 @@ pub fn schema() -> Value {
                     "properties": {
                         "content": {
                             "type": "string"
+                        },
+                        "links": {
+                            "type": "array",
+                            "maxItems": 16,
+                            "description": "Typed links from this item, as in single mode",
+                            "items": {"type": "object"}
                         },
                         "tags": {
                             "type": "array",
@@ -672,7 +692,9 @@ pub async fn execute(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
+    let (args, links) = take_links(storage, args)?;
     let mut value = execute_verbose(storage, cognitive, args).await?;
+    write_links(storage, &mut value, &links);
     lean_response(&mut value);
     if let Some(results) = value.get_mut("results").and_then(Value::as_array_mut) {
         for item in results {
@@ -681,6 +703,114 @@ pub async fn execute(
     }
     Ok(value)
 }
+
+/// Declared links per saved memory: `None` for the single form, `Some(i)` for
+/// batch item `i`.
+type PendingLinks = Vec<(Option<usize>, Vec<(strata_memory::DeclaredLink, String)>)>;
+
+/// Parse and check `links` (top-level and per batch item) before anything is
+/// written, and strip them from the arguments the ingest path sees.
+fn take_links(
+    storage: &Arc<Storage>,
+    args: Option<Value>,
+) -> Result<(Option<Value>, PendingLinks), String> {
+    let Some(mut args) = args else {
+        return Ok((None, Vec::new()));
+    };
+    let default_scope = args
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or(vestige_core::DEFAULT_MEMORY_SCOPE)
+        .to_string();
+    let mut pending: PendingLinks = Vec::new();
+    if let Some(raw) = args.as_object_mut().and_then(|map| map.remove("links")) {
+        pending.push((None, parse_links(&raw)?));
+    }
+    if let Some(items) = args.get_mut("items").and_then(Value::as_array_mut) {
+        for (index, item) in items.iter_mut().enumerate() {
+            if let Some(raw) = item.as_object_mut().and_then(|map| map.remove("links")) {
+                pending.push((Some(index), parse_links(&raw)?));
+            }
+        }
+    }
+    pending.retain(|(_, links)| !links.is_empty());
+    if pending.is_empty() {
+        return Ok((Some(args), pending));
+    }
+    if !strata_memory::is_strata_backend(storage.as_ref()) {
+        return Err("links need a Strata log; this store has none".into());
+    }
+    for (index, links) in &pending {
+        let scope = index
+            .and_then(|i| args["items"][i].get("scope").and_then(Value::as_str))
+            .unwrap_or(&default_scope);
+        strata_memory::check_links(storage.as_ref(), scope, links)?;
+    }
+    Ok((Some(args), pending))
+}
+
+fn parse_links(raw: &Value) -> Result<Vec<(strata_memory::DeclaredLink, String)>, String> {
+    let Some(entries) = raw.as_array() else {
+        return Err("links must be an array of {kind, to}".into());
+    };
+    if entries.len() > MAX_DECLARED_LINKS {
+        return Err(format!("at most {MAX_DECLARED_LINKS} links per memory"));
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let kind = entry.get("kind").and_then(Value::as_str).unwrap_or("");
+            let kind = strata_memory::DeclaredLink::parse(kind).ok_or_else(|| {
+                format!(
+                    "link kind '{kind}' is not declarable; use one of {}",
+                    strata_memory::DeclaredLink::NAMES.join(", ")
+                )
+            })?;
+            let to = entry
+                .get("to")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|to| !to.is_empty())
+                .ok_or("each link needs `to`: the id of an existing memory")?;
+            Ok((kind, to.to_string()))
+        })
+        .collect()
+}
+
+/// Write the declared links onto the memories the ingest just saved. The
+/// memory is already admitted, so a refused link is reported on the response
+/// (`linkError`) instead of failing the call.
+fn write_links(storage: &Arc<Storage>, value: &mut Value, pending: &PendingLinks) {
+    for (index, links) in pending {
+        let slot = match index {
+            None => Some(&mut *value),
+            Some(i) => value
+                .get_mut("results")
+                .and_then(Value::as_array_mut)
+                .and_then(|results| {
+                    results.iter_mut().find(|result| {
+                        result.get("index").and_then(Value::as_u64) == Some(*i as u64)
+                    })
+                }),
+        };
+        let Some(slot) = slot else { continue };
+        let Some(node_id) = slot
+            .get("nodeId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            slot["linkError"] = serde_json::json!("nothing was saved, so no link was written");
+            continue;
+        };
+        match strata_memory::save_links(storage.as_ref(), &node_id, links) {
+            Ok(written) => slot["links"] = serde_json::json!(written),
+            Err(err) => slot["linkError"] = serde_json::json!(err),
+        }
+    }
+}
+
+/// Most declared links one memory may carry.
+const MAX_DECLARED_LINKS: usize = 16;
 
 /// Trim one ingest response object to what the caller can act on.
 ///
