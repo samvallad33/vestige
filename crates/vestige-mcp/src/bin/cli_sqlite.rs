@@ -378,6 +378,11 @@ enum Commands {
         /// Memory / tool-call record id (its edges are walked)
         #[arg(long)]
         logged_write: Option<String>,
+        /// The memory that records this symptom: attached to every start
+        /// point given (also walked as a logged_write); alone, walks that
+        /// memory
+        #[arg(long)]
+        node_id: Option<String>,
         /// Git repository for --worked-in/--broke-in (single repo per call)
         #[arg(long)]
         git_repo: Option<PathBuf>,
@@ -606,6 +611,7 @@ pub fn main() -> anyhow::Result<()> {
             stack_frame,
             ci_run,
             logged_write,
+            node_id,
             git_repo,
             worked_in,
             broke_in,
@@ -618,6 +624,7 @@ pub fn main() -> anyhow::Result<()> {
             stack_frame,
             ci_run,
             logged_write,
+            node_id,
             git_repo,
             worked_in,
             broke_in,
@@ -3553,6 +3560,7 @@ fn run_causal_walk(
     stack_frame: Option<String>,
     ci_run: Option<String>,
     logged_write: Option<String>,
+    node_id: Option<String>,
     git_repo: Option<PathBuf>,
     worked_in: Option<String>,
     broke_in: Option<String>,
@@ -3565,15 +3573,27 @@ fn run_causal_walk(
 
     // Assemble start points; the walk refuses (needs_report) rather than
     // guessing when none resolve.
+    let node_id = node_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
     let mut start_points: Vec<cw::StartPoint> = Vec::new();
     if let Some(name) = failing_test {
-        start_points.push(cw::StartPoint::FailingTest { name });
+        start_points.push(cw::StartPoint::FailingTest {
+            name,
+            node_id: node_id.clone(),
+        });
     }
     if let Some(frame) = stack_frame {
-        start_points.push(cw::StartPoint::StackFrame { frame });
+        start_points.push(cw::StartPoint::StackFrame {
+            frame,
+            node_id: node_id.clone(),
+        });
     }
     if let Some(run_id) = ci_run {
-        start_points.push(cw::StartPoint::CiRun { run_id });
+        start_points.push(cw::StartPoint::CiRun {
+            run_id,
+            node_id: node_id.clone(),
+        });
     }
     if let Some(node_id) = logged_write {
         start_points.push(cw::StartPoint::LoggedWrite { node_id });
@@ -3583,7 +3603,13 @@ fn run_causal_walk(
             worked_in: worked,
             broke_in: broke,
             repo: repo.display().to_string(),
+            node_id: node_id.clone(),
         });
+    }
+    if start_points.is_empty()
+        && let Some(id) = node_id
+    {
+        start_points.push(cw::StartPoint::LoggedWrite { node_id: id });
     }
 
     let storage = open_storage()?;

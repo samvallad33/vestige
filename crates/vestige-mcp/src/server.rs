@@ -296,6 +296,11 @@ const STRATA_WITHHELD_ACTIONS: &[(&str, &str, Option<&str>)] = &[
     ),
     (
         "maintain",
+        "consolidate",
+        Some(tools::unavailable::CONSOLIDATE_NOOP),
+    ),
+    (
+        "maintain",
         "restore",
         Some(
             "Strata backups are directory copies; stop Vestige and copy a backup's log/ into the data directory",
@@ -338,9 +343,7 @@ fn withheld_call_in(
             .find(|(name, withheld, _)| *name == "graph" && *withheld == action)?;
         return Some(match why {
             None => crate::strata_memory::withheld_message(&format!("{tool} '{action}'")),
-            Some(why) => format!(
-                "unavailable_in_4_0: {tool} '{action}' is not available on Strata in Vestige 4.0: {why}."
-            ),
+            Some(why) => tools::unavailable::withheld_in_4_0(&format!("{tool} '{action}'"), why),
         });
     }
     if STRATA_WITHHELD_TOOLS.contains(&tool) {
@@ -365,9 +368,7 @@ fn withheld_call_in(
         .find(|(name, withheld, _)| *name == tool && *withheld == action)?;
     Some(match why {
         None => crate::strata_memory::withheld_message(&format!("{tool} action '{action}'")),
-        Some(why) => format!(
-            "unavailable_in_4_0: {tool} action '{action}' is not available on Strata in Vestige 4.0: {why}."
-        ),
+        Some(why) => tools::unavailable::withheld_in_4_0(&format!("{tool} action '{action}'"), why),
     })
 }
 
@@ -1072,7 +1073,7 @@ description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / '
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (check a bounded set of anchors), 'reanchor' (replace reviewed source evidence for an existing memory).".to_string()),
+description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale; names every scope that holds matches), 'verify' (check a bounded set of anchors; with a codebase, its change records too), 'reanchor' (replace reviewed source evidence for an existing memory), 'ingest_repo' (turn a local checkout's commits into anchored change records in their own scope; previews unless dryRun=false).".to_string()),
                 input_schema: tools::compact::of(&tools::codebase_unified::schema()),
                 ..Default::default()
             },
@@ -1299,7 +1300,7 @@ description: Some("Inhibit a memory without deleting it: out of retrieval, faste
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Investigate a failure from explicit start points (failing_test, stack_frame, ci_run, logged_write, version_range) through exact mechanism edges to suspect change records. Results are hypotheses, not proven causes. Default promote=false previews without graph changes; explicit promote=true records evidence_of trail edges after review. Never guesses a start point: missing anchors return needs_report.".to_string()),
+description: Some("Investigate a failure from explicit start points (failing_test, stack_frame, ci_run, logged_write, version_range). Any start point may carry node_id, the memory that records the symptom; a Strata log walks recorded causal edges back from there, and says why when none lead in. Results are hypotheses, not proven causes. promote=true records evidence_of trail edges on the legacy engine only. Never guesses: missing start points return needs_report.".to_string()),
                 input_schema: tools::compact::of(&tools::causal_walk::schema()),
                 ..Default::default()
             },
@@ -1403,7 +1404,13 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
                 _ => None,
             };
             if let Some(n) = max_chars {
-                let mut meta = serde_json::Map::new();
+                // Merge into the tool's existing `_meta` instead of replacing
+                // it: `recall` already carries `ui.resourceUri` (MCP Apps), and
+                // overwriting the map dropped that key from tools/list.
+                let mut meta = match tool.meta.take() {
+                    Some(serde_json::Value::Object(existing)) => existing,
+                    _ => serde_json::Map::new(),
+                };
                 meta.insert(
                     "anthropic/maxResultSizeChars".to_string(),
                     serde_json::Value::from(n),

@@ -324,12 +324,19 @@ pub async fn execute_unified(
             // Pending reconsolidation verdicts — expired plans are swept by
             // the listing itself, so only live windows are surfaced.
             let reconsolidation_plans = reconsolidation_plan_entries(storage);
+            // Merge planning is withheld on this build when its candidate
+            // scoring is unavailable; do not point the caller at it.
+            let next_step = if super::unavailable::is_unavailable(&candidates) {
+                "Exact duplicates are listed under duplicateClusters. Merge planning (plan_merge, plan_supersede, apply, verdict) is withheld in this build, so there is nothing to apply; use action='tag_rename' or 'tag_merge' (preview first) for tag cleanup, or action='undo' to list recent reversible operations."
+            } else {
+                "Use action='plan_merge' (member_ids) or action='plan_supersede' (old_id,new_id) to preview a reversible plan, then action='apply' (plan_id). Reconsolidation plans take action='verdict' (verdict=approve|reject|quarantine)."
+            };
             Ok(serde_json::json!({
                 "action": "scan",
                 "duplicateClusters": clusters,
                 "mergeCandidates": candidates,
                 "reconsolidationPlans": reconsolidation_plans,
-                "nextStep": "Use action='plan_merge' (member_ids) or action='plan_supersede' (old_id,new_id) to preview a reversible plan, then action='apply' (plan_id). Reconsolidation plans take action='verdict' (verdict=approve|reject|quarantine)."
+                "nextStep": next_step
             }))
         }
         "plan_merge" => super::merge::execute(storage, "plan_merge", args).await,

@@ -1998,6 +1998,26 @@ impl MemoryStoreSend for StrataMemory {
         Ok(out)
     }
 
+    fn current_code_context_scope_counts(
+        &self,
+        node_type: &str,
+        tag: Option<&str>,
+    ) -> Result<Vec<(String, usize)>, StorageError> {
+        let store = self.lock();
+        let mut counts: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for record in store.nodes() {
+            if !retrievable(&record) || record.node_type != node_type {
+                continue;
+            }
+            if tag.is_some_and(|wanted| !record.tags.iter().any(|stored| stored == wanted)) {
+                continue;
+            }
+            *counts.entry(record.scope.clone()).or_default() += 1;
+        }
+        Ok(counts.into_iter().collect())
+    }
+
     fn code_anchors_for_node(&self, node_id: &str) -> Result<Vec<CodeAnchor>, StorageError> {
         Ok(self
             .lock()

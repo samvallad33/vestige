@@ -58,8 +58,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
     // Synchronous store work goes to the blocking pool, matching consolidate.
     let storage = Arc::clone(storage);
+    let strata = crate::strata_memory::is_strata_backend(storage.as_ref());
     let report = tokio::task::spawn_blocking(move || {
-        if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        if strata {
             run_strata_dream_compile(storage.as_ref(), &config)
         } else {
             run_dream_compile(storage.as_ref(), &config)
@@ -68,7 +69,27 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     .await
     .map_err(|e| format!("dream compile task failed: {e}"))??;
 
-    serde_json::to_value(report).map_err(|e| e.to_string())
+    let touched_edges = report.edges_strengthened
+        + report.edges_downscaled
+        + report.insights_generated
+        + report.contradictions_found;
+    let compiled = report.status == "compiled";
+    let mut value = serde_json::to_value(report).map_err(|e| e.to_string())?;
+    if strata {
+        // contradictionsFound and insightsGenerated count RECORDED edges
+        // (corrects; derived_from / evidence_of). Nothing is detected from
+        // content, so a zero is "no such edge", never "checked and clean".
+        value["discovery"] = super::unavailable::part(
+            super::unavailable::EMBEDDINGS_UNAVAILABLE,
+            "Contradictions and insights are counted from recorded edges only. Detecting them from memory content needs embeddings, which this build does not ship.",
+        );
+        if compiled && touched_edges == 0 {
+            value["emptyBecause"] = serde_json::json!(
+                "no recorded edge joins the replayed memories, so there was nothing to strengthen, downscale or count; record typed edges first"
+            );
+        }
+    }
+    Ok(value)
 }
 
 /// Rank live memories by FSRS retrievability and replay recorded edges.

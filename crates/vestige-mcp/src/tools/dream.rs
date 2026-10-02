@@ -26,7 +26,7 @@ pub fn schema() -> serde_json::Value {
             },
             "min_similarity": {
                 "type": "number",
-                "description": "Minimum similarity for connection discovery (0.0-1.0, default: 0.5)",
+                "description": "Legacy engine: minimum similarity for connection discovery. Strata (no similarity is computed): the minimum strength a RECORDED edge needs to be replayed, echoed back as edgeStrengthFloor. 0.0-1.0, default 0.5.",
                 "minimum": 0.0,
                 "maximum": 1.0,
                 "default": 0.5
@@ -407,6 +407,20 @@ async fn execute_strata(
         "memoriesReviewed": reviews.len(),
         "memoriesStrengthened": memories_strengthened,
         "connectionsFound": pairs.len(),
+        // `connectionsFound` counts recorded edges replayed, not connections
+        // discovered: discovery is the half of a dream this build cannot do.
+        "discovery": super::unavailable::part(
+            super::unavailable::EMBEDDINGS_UNAVAILABLE,
+            "Finding new connections between memories needs embeddings, which this build does not ship. A dream here replays and re-weights edges the log already recorded.",
+        ),
+        "emptyBecause": if qualifying.is_empty() {
+            Some(format!(
+                "no recorded edge with strength >= {} joins two memories on this page, so there was nothing to replay; record typed edges, or lower min_similarity (the edge-strength floor)",
+                args.edge_strength_floor
+            ))
+        } else {
+            None
+        },
         "insights": [],
         "connectionsPersisted": 0,
         "insightsPersisted": 0,

@@ -490,13 +490,22 @@ fn similar_tag_suggestions(
     let (vocabulary, ignored_overlong_vocabulary_tags) = match storage.tag_vocabulary(Some(scope)) {
         Ok(vocabulary) => (vocabulary.tags, vocabulary.skipped_overlong),
         Err(error) => {
+            // A Strata log does not compare tag names. That is a property of
+            // the store, not a failure of this save, so it is reported as a
+            // typed part instead of the storage layer's error text.
+            let text = error.to_string();
+            let status = if text.contains(crate::tools::unavailable::SIMILARITY_DISABLED) {
+                crate::tools::unavailable::tag_suggestions_on_strata(scope)
+            } else {
+                serde_json::json!({
+                    "status": "unavailable",
+                    "reason": text,
+                    "scope": scope,
+                })
+            };
             return TagSuggestionReport {
                 suggestions: Vec::new(),
-                status: serde_json::json!({
-                    "status": "unavailable",
-                    "reason": error.to_string(),
-                    "scope": scope,
-                }),
+                status,
             };
         }
     };
@@ -1869,6 +1878,12 @@ fn run_post_ingest_with_snapshot(
                     capture.insert("reusedExisting".into(), Value::Bool(root.reused_existing));
                 }
                 synaptic_capture = Some(Value::Object(capture));
+            }
+            Err(_) if crate::strata_memory::is_strata_backend(storage.as_ref()) => {
+                // A Strata log has no synaptic tag store in 4.x, so there was
+                // no transaction to fail. Every save used to report this as an
+                // error beside `success: true`.
+                synaptic_capture = Some(crate::tools::unavailable::synaptic_capture_on_strata());
             }
             Err(error) => {
                 tracing::warn!(%error, "atomic synaptic ingest transaction failed");

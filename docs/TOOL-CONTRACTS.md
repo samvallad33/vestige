@@ -167,6 +167,91 @@ metadata. This is not an exact model tokenizer count or a budget for the full
 JSON-RPC envelope and its duplicate text representation. Expand omitted details
 through memory IDs. Retrieval exposure records include only returned evidence.
 
+## Start points, scopes and capabilities this build lacks (Strata)
+
+`causal_walk` begins at recorded memories. Every start point (`failing_test`,
+`stack_frame`, `ci_run`, `version_range`, `logged_write`) accepts `node_id`, the id
+of the memory that records the symptom; it is required only for `logged_write`.
+The walk takes every distinct in-scope `node_id` and walks each backward over
+recorded `closed_by`, `derived_from`, `evidence_of` and `touched` edges, then merges
+the results: a node appears once at its shallowest depth, lists the starts that
+reached it in `from`, and a start that is also a recorded cause of another start
+stays in `causes` with the edge that says so. `start_points` reports each one as
+`walked`, `unresolved` (no `node_id`), `not_in_scope` or `duplicate`, with a reason.
+With nothing to walk the response is `needs_report` naming the single missing
+piece (`node_id`, or `node` when no start node is in the scope). A misspelled
+field is still an error that names the real one. The camelCase spellings
+`startPoints`, `nodeId`, `loggedWrite`, `scanLimit` and `lookbackDays` are read like
+their snake_case names. A walk that ran from real start nodes and found no cause
+carries `emptyBecause` and `incomingEdges`: the causal edges that come in from another
+scope (the walk does not cross scopes) and the incoming edges that are not causal, by
+link type, as the log records them. A recorded walk has no inferred trail, so
+`promote=true` writes nothing and says so in `promote` (`requested`,
+`edges_persisted: 0`, `note`); trail edges are recorded on the legacy engine only.
+
+`codebase(action="get_context")` reads one scope (`scope`, default `user`), or every
+scope with `allScopes=true`; the two together are refused. The response always
+lists the scopes that hold matching code memories with exact counts (`scopes`): each
+row has `patterns`, `decisions` and `events`, where `events` counts the `event`
+memories tagged `codebase:<name>` (such as `ingest_repo` change records) and is only
+counted when a codebase is named. `get_context` lists patterns and decisions only. When
+the requested scope has none, `note` names the scopes that do, and when change records
+exist it names the scopes that hold them with their counts and the `verify` call that
+checks them; it says "in any scope" only when no scope holds any of the three. `total`
+beside `count` shows what `limit` cut.
+
+`codebase(action="verify", repoPath=...)` checks at most `limit` (default 200, max 1000)
+memories of each type in the scope: patterns and decisions, and with a `codebase` its
+change records too. `checkedByType` counts what was checked, `totalByType` what the
+scope holds of each type read, `uncheckedByType` the types with memories left out, and
+`truncated` whether any were; the message then says how many more were not checked.
+
+`session_start` with `context.codebase` lists that codebase's patterns and decisions
+from the requested scope. When it finds none there but other scopes hold the codebase's
+patterns, decisions or change records, `codeContext.elsewhere` lists those scopes with
+their counts and a notice says how to read them.
+
+`codebase(action="ingest_repo", repoPath=...)` records the commits of a local checkout
+as change records. It previews unless `dryRun=false`, because the log is append-only.
+`repoPath` must be the top of a working tree: git names history paths from there while
+anchors resolve against `repoPath`, so a subdirectory is refused with the directory to
+pass, and a bare repository or a `.git` directory is refused because it has no files to
+anchor. Each non-merge commit is an `event` in scope `scope` (default: the codebase name,
+which defaults to the checkout's directory name), tagged `git-commit`, `codebase:<name>`
+and `commit:<sha>`, with provenance `(git, <codebase>, <sha>)` and `valid_from` equal to
+the author time, clamped to now so a future date cannot hide the record. Find one commit
+with `recall(handle="commit:<sha>")`. Touched symbols and files that exist in the
+checkout are anchored; a commit with any verifiable anchor keeps only the verifiable
+ones, because a record is fresh only when all its anchors are, and `codebase(action="verify",
+codebase=...)` then checks the records against the working tree. Paths that resolve
+outside the checkout (a symlink, `..`) are never read. Git runs with lazy fetching off:
+a partial clone's missing objects are not downloaded, and if git stops partway the whole
+commits before the stop are recorded and `gitStoppedEarly` names the cause. The checkout
+may be untrusted, so git runs with `-c log.showSignature=false -c core.fsmonitor=false`
+and `--no-show-signature`, `--no-ext-diff`, `--no-textconv` and no pager: nothing its own
+config names is run. A rerun skips recorded commits, repairs commits that lack anchors,
+and stops at a 45 s write budget with `remaining` set; `limit` is capped at 500 and
+`pageBackWith` gives the `rev` that reads the next older page. A write is refused while
+another write of the same codebase into the same scope runs in the server process (both
+would read the recorded set before either wrote); previews are never refused. `partial`
+and `error` report a failed write. `nextStep` tells a commit the log refused (the run
+stopped there) apart from an anchor write that failed (every commit was recorded, and the
+same call again adds the anchors), and after a complete write it gives the `verify` call
+with the canonical checkout path.
+
+The dashboard's `POST /api/consolidate` (the Stats page's Consolidate button) answers
+`501` with code `unavailable_in_4_0` on a Strata log, for the reason `maintain`
+withholds `consolidate`, and announces no consolidation.
+
+An action, or one part of a report, that needs a capability this build does not
+have never returns an empty-looking success. A whole action the log cannot honor
+is withheld: it is absent from the advertised schema and refused with
+`unavailable_in_4_0`. A part of an otherwise working report is
+`{"status": "unavailable", "reason": "embeddings_unavailable", "detail": ...}` with
+no `count` or list. A zero from a tool that did run means it looked and found
+none, for example `dream` replaying recorded edges; its `discovery` field says
+that finding new connections is the half this build cannot do.
+
 ## Verification and upgrade boundary
 
 The disposable `scripts/test-tool-frontier.py` fixture checks actual stdio
@@ -248,6 +333,9 @@ remains separate and retains its compatibility contract.
 
 
 ### Lifecycle, logs, GC and dream pages
+
+On a Strata log `maintain(action="consolidate")` is withheld in every phase
+(see above); the contracts below for `consolidate` describe the legacy engine.
 
 `maintain(action="consolidate", phase="lifecycle", batchSize=100, budgetMs=1000)`
 previews a transactional ID page. Apply with `dry_run=false`. It updates decay,

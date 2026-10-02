@@ -247,7 +247,11 @@ fn merge_candidates(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value
     #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, args);
-        Ok(json!({ "error": "Embeddings feature not enabled.", "candidates": [] }))
+        // Not `{"candidates": []}`: an empty list reads as "looked and found none".
+        Ok(super::unavailable::part(
+            super::unavailable::EMBEDDINGS_UNAVAILABLE,
+            "merge candidates are scored by similarity, which this build does not ship; exact duplicates are listed under duplicateClusters",
+        ))
     }
 }
 
@@ -281,7 +285,7 @@ fn plan_merge(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
     #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, args);
-        Err("Embeddings feature not enabled.".into())
+        Err("embeddings_unavailable: merge planning needs the embedding runtime, which this build does not ship. dedup action='scan' lists exact duplicates (duplicateClusters).".into())
     }
 }
 
@@ -310,7 +314,7 @@ fn plan_supersede(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, 
     #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, args);
-        Err("Embeddings feature not enabled.".into())
+        Err("embeddings_unavailable: merge planning needs the embedding runtime, which this build does not ship. dedup action='scan' lists exact duplicates (duplicateClusters).".into())
     }
 }
 
@@ -379,7 +383,7 @@ fn apply_plan(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
     #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, args);
-        Err("Embeddings feature not enabled.".into())
+        Err("embeddings_unavailable: merge planning needs the embedding runtime, which this build does not ship. dedup action='scan' lists exact duplicates (duplicateClusters).".into())
     }
 }
 

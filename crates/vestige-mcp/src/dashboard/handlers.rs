@@ -1983,6 +1983,19 @@ pub async fn score_importance(
 
 /// Trigger consolidation
 pub async fn trigger_consolidation(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    // Every consolidation phase is a no-op on a Strata log, and its all-zero
+    // counters would show as a completed pass ("0 nodes processed"). Refuse
+    // the way `maintain action='consolidate'` does, before announcing a start.
+    if crate::strata_memory::is_strata_backend(state.storage.as_ref()) {
+        return Err(ApiError::reason(
+            StatusCode::NOT_IMPLEMENTED,
+            "unavailable_in_4_0",
+            crate::tools::unavailable::withheld_in_4_0(
+                "consolidation",
+                crate::tools::unavailable::CONSOLIDATE_NOOP,
+            ),
+        ));
+    }
     state.emit(VestigeEvent::ConsolidationStarted {
         timestamp: Utc::now(),
     });
