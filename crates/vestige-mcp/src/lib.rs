@@ -11,6 +11,7 @@
 
 pub mod actor_surface;
 pub mod attach;
+pub mod auto_connect;
 pub mod autopilot;
 pub mod cognitive;
 pub mod dashboard;

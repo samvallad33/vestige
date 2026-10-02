@@ -704,6 +704,7 @@ pub async fn execute(
     let (args, links) = take_links(storage, args)?;
     let mut value = execute_verbose(storage, cognitive, args).await?;
     write_links(storage, &mut value, &links);
+    auto_connect_saved(storage, &mut value);
     lean_response(&mut value);
     if let Some(results) = value.get_mut("results").and_then(Value::as_array_mut) {
         for item in results {
@@ -820,6 +821,79 @@ fn write_links(storage: &Arc<Storage>, value: &mut Value, pending: &PendingLinks
 
 /// Most declared links one memory may carry.
 const MAX_DECLARED_LINKS: usize = 16;
+
+/// Auto-connect every memory this ingest saved: the ingest-time share of
+/// `vestige connect`, joined onto the saved nodes through the shared
+/// `crate::auto_connect` module. Walks the same response slots `write_links`
+/// does — the single form's `nodeId`, then every batch result — so one hook
+/// covers every save path. Like declared links, a refused edge is reported on
+/// the slot (`autoConnectError`) instead of failing an ingest that already
+/// succeeded; `autoConnect` itself ships only when edges were written.
+fn auto_connect_saved(storage: &Arc<Storage>, value: &mut Value) {
+    if let Some(node_id) = value
+        .get("nodeId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
+        let scope = value
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or(DEFAULT_MEMORY_SCOPE)
+            .to_string();
+        auto_connect_slot(storage, value, &node_id, &scope);
+    }
+    if let Some(results) = value.get_mut("results").and_then(Value::as_array_mut) {
+        for slot in results {
+            let Some(node_id) = slot
+                .get("nodeId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let scope = slot
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or(DEFAULT_MEMORY_SCOPE)
+                .to_string();
+            auto_connect_slot(storage, slot, &node_id, &scope);
+        }
+    }
+}
+
+/// Auto-connect one saved memory and attach the report to its response slot.
+/// The node is read back from the store so the memory's own (post-gate)
+/// content and tags drive the entity extraction.
+fn auto_connect_slot(storage: &Arc<Storage>, slot: &mut Value, node_id: &str, scope: &str) {
+    let node = match storage.get_node(node_id) {
+        Ok(node) => node,
+        Err(err) => {
+            slot["autoConnectError"] =
+                serde_json::json!(format!("auto-connect could not read {node_id} back: {err}"));
+            return;
+        }
+    };
+    let Some(node) = node else {
+        return;
+    };
+    match crate::auto_connect::auto_connect_new_memory(
+        storage.as_ref(),
+        node_id,
+        scope,
+        &node.content,
+        &node.tags,
+    ) {
+        Ok(report) if report.edges > 0 => {
+            slot["autoConnect"] = serde_json::json!({
+                "edges": report.edges,
+                "sharedEntities": report.shared_entities,
+                "edge": "touched",
+            });
+        }
+        Ok(_) => {}
+        Err(err) => slot["autoConnectError"] = serde_json::json!(err),
+    }
+}
 
 /// Trim one ingest response object to what the caller can act on.
 ///

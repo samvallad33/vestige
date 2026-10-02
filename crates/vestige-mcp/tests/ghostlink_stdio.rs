@@ -187,10 +187,19 @@ fn spawn(dir: &Path, home: &Path) -> Server {
     Server::spawn(dir, home)
 }
 
+/// Seed one memory. Each seed carries its own tag: a shared tag would
+/// auto-connect every pair at save time, and these tests assert a cold log
+/// until they write their own edges (auto-connect's own coverage lives in
+/// cli_strata.rs).
 fn save(server: &mut Server, content: &str, node_type: &str) -> String {
+    static SEED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let tag = format!(
+        "ghostlink-seed-{}",
+        SEED.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     let saved = server.call_tool_ok(
         "smart_ingest",
-        json!({ "content": content, "node_type": node_type, "tags": ["ghostlink-test"] }),
+        json!({ "content": content, "node_type": node_type, "tags": [tag] }),
     );
     saved["nodeId"]
         .as_str()

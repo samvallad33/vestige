@@ -840,11 +840,12 @@ fn scan_secrets_reaches_retired_memories_scopes_and_intentions() {
     );
 }
 
-/// `vestige connect` bridges ingest-isolation: two memories that share an
-/// entity but no recorded edge get one `touched` edge, earlier -> later, so
-/// a backward causal-walk from the later memory reaches the earlier one.
+/// Ingest auto-connects: the first memory lands alone, and the second —
+/// sharing the `euler` tag/entity with it — is joined by one `touched` edge
+/// written by the ingest itself, earlier -> later, so a backward causal-walk
+/// from the second reaches the first with no `vestige connect` in between.
 #[test]
-fn connect_edges_shared_entities_then_causal_walk_finds_the_cause() {
+fn ingest_auto_connects_shared_entities_then_causal_walk_finds_the_cause() {
     let dir = TempDir::new().expect("temp dir");
 
     let ingest = |content: &str, source: &str, tags: &str| {
@@ -865,41 +866,101 @@ fn connect_edges_shared_entities_then_causal_walk_finds_the_cause() {
         "git-log",
         "euler,path.py",
     );
-    let effect = ingest(
-        "Issue 4557: strange paths in euler bends, geometry deformed",
-        "github-issue",
-        "bug,euler",
+    // Nothing shares an entity with the first memory yet.
+    assert_eq!(edge_count(dir.path()), 0, "the first ingest has no peer");
+
+    let effect_run = vestige(
+        dir.path(),
+        &[
+            "ingest",
+            "Issue 4557: strange paths in euler bends, geometry deformed",
+            "--source",
+            "github-issue",
+            "--tags",
+            "bug,euler",
+        ],
     );
+    assert!(effect_run.ok, "{}", effect_run.text());
+    assert!(
+        effect_run
+            .stdout
+            .contains("Auto-connected: 1 edge(s) created via shared entities: euler"),
+        "{}",
+        effect_run.text()
+    );
+    let effect = effect_run
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Node ID: "))
+        .expect("ingest prints the node id")
+        .trim()
+        .to_string();
+    assert_eq!(edge_count(dir.path()), 1, "{}", effect_run.text());
 
-    // Before: no recorded edge, so the walk has nothing upstream.
-    let bare = vestige(dir.path(), &["causal-walk", "--logged-write", &effect, "--json"]);
-    assert!(bare.ok, "{}", bare.text());
-    let before: Value = serde_json::from_str(&bare.stdout).unwrap();
-    assert!(before["causes"].as_array().unwrap().is_empty(), "{before}");
-
-    // Dry run shows the edge and writes nothing.
-    let dry = vestige(dir.path(), &["connect", "--dry-run"]);
-    assert!(dry.ok, "{}", dry.text());
-    assert!(dry.stdout.contains("would be created"), "{}", dry.text());
-    assert!(dry.stdout.contains("shared: euler"), "{}", dry.text());
-    assert_eq!(edge_count(dir.path()), 0, "a dry run wrote an edge");
-
-    let run = vestige(dir.path(), &["connect"]);
-    assert!(run.ok, "{}", run.text());
-    assert_eq!(edge_count(dir.path()), 1, "{}", run.text());
-
-    // Re-running is free: the pair is already joined.
-    let again = vestige(dir.path(), &["connect"]);
-    assert!(again.ok, "{}", again.text());
-    assert!(again.stdout.contains("No new edges"), "{}", again.text());
-    assert_eq!(edge_count(dir.path()), 1);
-
-    // After: the walk follows the touched edge back to the PR.
+    // The walk follows the auto-written touched edge back to the PR without
+    // `vestige connect` ever running.
     let walk = vestige(dir.path(), &["causal-walk", "--logged-write", &effect]);
     assert!(walk.ok, "{}", walk.text());
     assert!(walk.stdout.contains(&cause), "{}", walk.text());
     assert!(walk.stdout.contains("touched"), "{}", walk.text());
     assert!(walk.stdout.contains("PR 4337"), "{}", walk.text());
+
+    // The connect command stays the full-scan catch-up, and it sees nothing
+    // left to do: the pair is already joined by the auto-written edge.
+    let again = vestige(dir.path(), &["connect"]);
+    assert!(again.ok, "{}", again.text());
+    assert!(again.stdout.contains("No new edges"), "{}", again.text());
+    assert_eq!(edge_count(dir.path()), 1);
+}
+
+/// Auto-connect speaks only when it writes: a memory with no peer ingests
+/// with the plain output, a later memory sharing a tag says so, and a third
+/// joining two earlier memories adds exactly two edges — the edge between
+/// the first two is never duplicated.
+#[test]
+fn ingest_auto_connect_is_quiet_without_peers_and_idempotent() {
+    let dir = TempDir::new().expect("temp dir");
+
+    let ingest = |content: &str, tags: &str| {
+        let run = vestige(dir.path(), &["ingest", content, "--tags", tags]);
+        assert!(run.ok, "{}", run.text());
+        let id = run
+            .stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("Node ID: "))
+            .expect("ingest prints the node id")
+            .trim()
+            .to_string();
+        (run, id)
+    };
+
+    let (first_run, _first) = ingest("Changed redis timeout to 5s in config", "redis,timeout");
+    assert!(
+        !first_run.stdout.contains("Auto-connected"),
+        "the first memory has no peer: {}",
+        first_run.text()
+    );
+    assert_eq!(edge_count(dir.path()), 0);
+
+    let (second_run, _second) = ingest("Redis dropping connections, timeout errors", "bug,redis");
+    assert!(
+        second_run
+            .stdout
+            .contains("Auto-connected: 1 edge(s) created via shared entities: redis, timeout"),
+        "{}",
+        second_run.text()
+    );
+    assert_eq!(edge_count(dir.path()), 1);
+
+    // The third memory shares `redis` with both earlier ones. The first two
+    // are already joined, so this ingest writes its own two edges only.
+    let (third_run, _third) = ingest("redis OOM killed the worker", "redis");
+    assert!(
+        third_run.stdout.contains("Auto-connected: 2 edge(s)"),
+        "{}",
+        third_run.text()
+    );
+    assert_eq!(edge_count(dir.path()), 3);
 }
 
 /// --min-shared gates pairs on entity overlap: two memories sharing two

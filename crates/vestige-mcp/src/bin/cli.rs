@@ -324,7 +324,9 @@ enum Commands {
     /// Ingest a memory as a new record
     ///
     /// Nothing is merged by similarity. On a Strata log the write passes the
-    /// log's gate before it is admitted.
+    /// log's gate before it is admitted, then auto-connects to earlier
+    /// memories that share an entity (the ingest-time share of
+    /// `vestige connect`).
     Ingest {
         /// Content to remember
         content: String,
@@ -381,7 +383,9 @@ enum Commands {
     /// Scans all memories, extracts deterministic entities (file paths,
     /// identifiers, shared tags), and creates `touched` edges between
     /// pairs that share at least one entity. This is the bridge that
-    /// makes causal-walk work on manually-ingested memories.
+    /// makes causal-walk work on manually-ingested memories; ingest
+    /// auto-connects tag-sharing pairs as they land, and this full scan
+    /// also catches pairs that share only content entities.
     Connect {
         /// Show what edges would be created without writing them
         #[arg(long)]
@@ -3906,6 +3910,31 @@ fn run_ingest(
             format!("Memory created ({})", truncate(&content, 60))
         };
         println!("{}", confirmation.green().bold());
+
+        // Auto-connect: the ingest-time share of `vestige connect`, run on
+        // just this memory (the write goes to the default scope, like the
+        // ingest above). The memory is already saved, so a failure here is
+        // reported, never fatal — the same rule the post-ingest hooks keep.
+        match vestige_mcp::auto_connect::auto_connect_new_memory(
+            storage.as_ref(),
+            &node.id,
+            vestige_core::DEFAULT_MEMORY_SCOPE,
+            &node.content,
+            &node.tags,
+        ) {
+            Ok(report) if report.edges > 0 => println!(
+                "{}",
+                format!(
+                    "Auto-connected: {} edge(s) created via shared entities: {}",
+                    report.edges,
+                    report.shared_entities.join(", ")
+                )
+                .green()
+                .bold()
+            ),
+            Ok(_) => {}
+            Err(err) => eprintln!("{} auto-connect skipped: {err}", "WARN".yellow()),
+        }
     }
 
     Ok(())
@@ -4793,13 +4822,16 @@ struct ConnectPair {
 
 /// Create typed edges between memories that share entities.
 ///
-/// Memories ingested one by one land as isolated nodes: tags, no edges, so
-/// `causal-walk --logged-write` says no recorded causal edge leads upstream
-/// even when two memories plainly talk about the same `euler` or `path.py`.
-/// This command extracts deterministic entities from every memory in the
-/// scope (file paths, identifiers, tags — no ML, no similarity) and writes a
-/// `touched` edge for each pair sharing at least `--min-shared` of them,
-/// through `Storage::save_connection`, which on a Strata log is
+/// Memories ingested one by one used to land as isolated nodes: tags, no
+/// edges, so `causal-walk --logged-write` said no recorded causal edge leads
+/// upstream even when two memories plainly talked about the same `euler` or
+/// `path.py`. The ingest path now runs its share of this automatically
+/// (`vestige_mcp::auto_connect`, on the memories a save just wrote); this
+/// command remains the full-scan catch-up, joining pairs the ingest-time tag
+/// handles cannot see. It extracts deterministic entities from every memory
+/// in the scope (file paths, identifiers, tags — no ML, no similarity) and
+/// writes a `touched` edge for each pair sharing at least `--min-shared` of
+/// them, through `Storage::save_connection`, which on a Strata log is
 /// `StrataStore::save_connection` behind the gate.
 ///
 /// Direction follows the walk's rule for `touched` (causal_walk.rs: the
@@ -4835,7 +4867,11 @@ fn run_connect(
 
     let entity_sets: Vec<HashSet<String>> = nodes
         .iter()
-        .map(|node| extract_entities(&node.content, &node.tags).into_iter().collect())
+        .map(|node| {
+            vestige_mcp::auto_connect::extract_entities(&node.content, &node.tags)
+                .into_iter()
+                .collect()
+        })
         .collect();
 
     // Pairs already joined by any recorded edge (either direction) are left
@@ -5003,73 +5039,6 @@ fn fetch_nodes_in_scope(
     }
 
     Ok(all_nodes)
-}
-
-/// Deterministic entities for `vestige connect`: dotted file-path tokens,
-/// snake_case / camelCase identifier words, and the memory's own tags. No
-/// ML, no similarity — the same text always yields the same entities.
-///
-/// Identifiers are lowercased so `Euler` and `euler` join; file paths and
-/// tags keep their case (a path is its exact bytes). Sharing is decided by
-/// set intersection downstream, which is also where the "identifier must
-/// appear in >= 2 memories" rule lives: an identifier shared by a pair
-/// appears in 2 memories by definition, so no separate document-frequency
-/// pass is needed.
-fn extract_entities(content: &str, tags: &[String]) -> Vec<String> {
-    let mut entities = Vec::new();
-
-    // File paths (anything with a dot and an extension): split on
-    // whitespace, strip surrounding punctuation, keep dotted tokens
-    // (`path.py`, `db.config.yaml`). Pure numbers like `1.2.3` are not
-    // entities.
-    for word in content.split_whitespace() {
-        let cleaned = word
-            .trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '-');
-        if cleaned.contains('.') && cleaned.len() > 3 && !is_pure_number(cleaned) {
-            entities.push(cleaned.to_string());
-        }
-    }
-
-    // Identifiers (camelCase, snake_case, >= 4 chars): split on everything
-    // that is not alphanumeric or `_`, keep tokens long enough to mean
-    // something, minus stopwords and pure numbers.
-    for word in content.split(|c: char| !c.is_alphanumeric() && c != '_') {
-        if word.len() >= 4 && !is_pure_number(word) && !is_stopword(word) {
-            entities.push(word.to_lowercase());
-        }
-    }
-
-    // Tags are entities exactly as recorded.
-    for tag in tags {
-        entities.push(tag.clone());
-    }
-
-    entities.sort();
-    entities.dedup();
-    entities
-}
-
-/// `true` when the token is digits only (plus the dots of a dotted token):
-/// line numbers, ids and versions are not entities.
-fn is_pure_number(word: &str) -> bool {
-    word.chars().all(|c| c.is_ascii_digit() || c == '.')
-}
-
-/// Small embedded stop-word list: common English words that would otherwise
-/// join any two memories written in English.
-fn is_stopword(word: &str) -> bool {
-    const STOPWORDS: &[&str] = &[
-        "that", "this", "with", "from", "have", "been", "were", "will", "would",
-        "could", "should", "there", "their", "about", "which", "when", "what",
-        "while", "these", "those", "then", "than", "they", "them", "into",
-        "over", "after", "before", "under", "above", "below", "between",
-        "because", "since", "until", "against", "without", "within", "across",
-        "the", "and", "but", "for", "not", "you", "all", "can", "her", "was",
-        "one", "our", "out", "day", "get", "has", "him", "his", "how", "man",
-        "new", "now", "old", "see", "two", "way", "who", "boy", "did", "its",
-        "let", "put", "say", "she", "too", "use", "dad", "mom", "try", "ask",
-    ];
-    STOPWORDS.contains(&word.to_lowercase().as_str())
 }
 
 /// Recall by exact handle (both stores), or by free text through the real
