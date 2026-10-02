@@ -1,6 +1,6 @@
 # VS Code (GitHub Copilot)
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../../README.md) and the [4.0.0 changelog](../../CHANGELOG.md).
+> Written for Vestige 4.x.
 
 > Give Copilot a brain that remembers between sessions.
 
@@ -44,7 +44,7 @@ Note: VS Code uses `"servers"` (not `"mcpServers"`).
 {
   "servers": {
     "vestige": {
-      "command": "/usr/local/bin/vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": [],
       "env": {}
     }
@@ -52,14 +52,14 @@ Note: VS Code uses `"servers"` (not `"mcpServers"`).
 }
 ```
 
-> **Use absolute paths.** Run `which vestige-mcp` to find your binary.
+> **Use absolute paths.** Run `which vestige-mcp` and paste what it prints. The README install puts the binary in `~/.local/bin`.
 
 **Windows:**
 ```json
 {
   "servers": {
     "vestige": {
-      "command": "C:\\Users\\you\\.cargo\\bin\\vestige-mcp.exe",
+      "command": "<absolute path from where vestige-mcp>",
       "args": [],
       "env": {}
     }
@@ -83,19 +83,19 @@ Vestige's tools (recall, smart_ingest, memory, etc.) should appear.
 
 In Copilot Chat:
 
-> "Remember that this project uses Express.js with PostgreSQL and follows REST conventions"
+> "Remember that this project uses Express.js with PostgreSQL and follows REST conventions. Tag it `stack`."
 
 Start a **new chat**, then:
 
-> "What's the tech stack for this project?"
+> "Recall the `stack` tag from Vestige."
 
-It remembers.
+It comes back, with its memory id. Vestige 4.x finds a memory by an exact handle (its id or an exact tag), not by resemblance, so name the tag when you save and when you ask. See [Getting Started](../GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
 
 ---
 
-## Secure API Keys (Optional)
+## Prompt for the data directory (optional)
 
-VS Code supports input variables to avoid hardcoding secrets:
+VS Code supports input variables, so a value such as the data directory is asked for instead of hardcoded:
 
 ```json
 {
@@ -108,7 +108,7 @@ VS Code supports input variables to avoid hardcoding secrets:
   ],
   "servers": {
     "vestige": {
-      "command": "/usr/local/bin/vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": ["--data-dir", "${input:vestige-data-dir}"],
       "env": {}
     }

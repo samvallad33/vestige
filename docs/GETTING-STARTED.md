@@ -1,128 +1,184 @@
 # Getting Started with Vestige
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+Your first 15 minutes on Vestige 4.x, start to finish. Every command on this page
+was run against the published 4.1.0 release.
 
-Your first 30 minutes, start to finish. By the end you'll have Vestige installed,
-connected to your agent, storing memories, and you'll know how to look at exactly
-what it kept.
-
-Vestige is local-first: one binary, your data on your disk, no account, no cloud.
+Vestige is local-first: four small binaries, your data on your disk, no account, no
+cloud, and nothing downloads on first start.
 
 ---
 
 ## 1. Install and connect (5 minutes)
 
-Install is one command and connecting is one JSON block. The canonical, always-current
+Install is two commands and connecting is one line or one JSON block. The canonical
 steps live in the README so this guide never drifts from them:
 
 - **[Install + connect →](../README.md#install)**
-- Using a specific editor? Pick your per-agent guide —
-  [Cursor](integrations/cursor.md), [VS Code](integrations/vscode.md),
-  [Windsurf](integrations/windsurf.md), [JetBrains](integrations/jetbrains.md),
-  [Xcode](integrations/xcode.md), [OpenCode](integrations/opencode.md),
-  [Codex](integrations/codex.md) — or the
-  **[Claude Desktop 2-minute setup](CONFIGURATION.md#claude-desktop-macos)**.
+- Using an editor? [Cursor](integrations/cursor.md), [VS Code](integrations/vscode.md),
+  [Windsurf](integrations/windsurf.md).
 
-Confirm it's alive:
+Confirm it is alive:
 
 ```bash
-vestige-mcp --version     # prints the installed version
-vestige stats             # 0 memories on a fresh install
+vestige-mcp --version     # vestige-mcp 4.1.0
+vestige stats             # Total Memories: 0 on a fresh install
 ```
 
----
-
-## 2. What Vestige saves (and what it doesn't)
-
-This is the thing most people get wrong on day one, so it's worth 60 seconds.
-
-**Vestige does not record everything you type.** It is not a transcript logger. A
-memory is written when:
-
-- **You ask your agent to remember something** ("remember: we disable SimSIMD on
-  release builds"), or
-- **Your agent decides a fact is worth keeping** and calls the memory tool, or
-- **You ingest deliberately** from the CLI: `vestige ingest "..."`.
-
-Every write goes through **prediction-error gating** — near-duplicates of what you
-already know are down-weighted, so the store doesn't fill with restatements of the
-same fact. What you get is a curated set of durable facts, decisions, and the
-occasional "this didn't work," not a firehose of your chat history.
-
-If you want the deeper model (FSRS-6 decay, spreading activation, the science), see
-**[The Science](SCIENCE.md)**. You don't need it to start.
+If `vestige-mcp --version` prints an older number, an older install comes first on
+your PATH. `which -a vestige-mcp` lists every copy in the order the shell finds them.
+Do not install 4.x with npm: the npm package still serves 3.0.0.
 
 ---
 
-## 3. Try the one thing nothing else does
+## 2. The one rule: you find a memory by its handle
 
-The headline feature is a backward reach through time. Store a decision, then later
-store a failure, and Vestige can surface the earlier decision as the *cause* — even
-though the two share no words.
+This is what most people get wrong on day one, so it is worth 60 seconds.
+
+Vestige 4.x does not search by resemblance. There are no embeddings and no keyword
+search. A memory is found by an **exact handle**:
+
+- its id, such as `mem-0000000000000001`
+- an exact tag, such as `incident`
+
+So **tag every memory on purpose**. The tag is how you, or your agent, get it back.
+Tags are case-sensitive.
+
+Vestige also does not record everything you type. A memory is written when you ask
+your agent to remember something, when your agent decides a fact is worth keeping, or
+when you ingest from the terminal. Nothing is merged or dropped as a "near duplicate"
+in 4.x: saving the same text twice makes two memories.
+
+---
+
+## 3. Save, find, and prove it (5 minutes)
+
+Save two memories. The second one carries tags:
 
 ```bash
-vestige ingest "We switched the prod cache from Redis to an in-memory LRU to cut costs."
-# ...later...
-vestige ingest "Prod is dropping sessions under load and users are getting logged out."
-
-vestige backfill --contrast
+vestige ingest "We switched the prod cache from Redis to an in-memory LRU to cut costs." --tags cache,decision
+vestige ingest "Prod is dropping sessions under load." --tags cache,incident
 ```
 
-`--contrast` shows you, side by side, what a plain similarity search returns versus
-the real causal cause. That contrast is the whole pitch — more on the mechanism in
-**[the README](../README.md#why-not-just-rag)**.
+Each prints a `Node ID`. Find a memory by tag or by id:
 
-You can also just talk to your agent normally; it will write and recall memories for
-you through MCP. The CLI is for when you want to drive it directly.
+```bash
+vestige recall --handle incident
+vestige recall --handle mem-0000000000000001
+```
 
----
+Free text is refused, and the refusal tells you which handles it found in your words:
 
-## 4. Inspect what's stored
+```bash
+vestige recall "why are sessions dropping"
+# Error: similarity_disabled: ... Recall by exact handle instead
+```
 
-Vestige is built to be looked at. Nothing is hidden in an opaque index.
+Check the log itself. This reads every frame and verifies the hash chain:
 
-- **Quick counts:** `vestige stats`
-- **Health check** (coverage, warnings): `vestige health`
-- **Recall + reasoning** over your memories: `vestige recall "your question"`
-- **Full export** to JSON/JSONL (grep it, diff it, back it up):
-  `vestige export memories.jsonl --format jsonl`
-- **The 3D dashboard** — watch your memory as a living graph:
+```bash
+vestige strata-verify "<your data directory>"
+```
 
-  ```bash
-  vestige dashboard          # opens http://localhost:3927
-  ```
-
-  (When running as the MCP server, enable it with `VESTIGE_DASHBOARD_ENABLED=1`.)
-
-Because the store is a single SQLite database, you can also open it with any SQLite
-browser if you want the raw truth.
+The data directory is printed in the server's startup log. On macOS it is
+`~/Library/Application Support/com.vestige.core`.
 
 ---
 
-## 5. Scope it: global vs per-project
+## 4. Two things to try next
 
-By default Vestige uses one global memory in your OS data directory. For a
-project-local memory that lives with the repo, point it at a directory:
+**Pairs nobody has connected yet.** GhostLink lists memories that no recorded edge
+joins and asks a question about each pair. These are leads, not findings:
+
+```bash
+vestige compose --lens divergent
+```
+
+With the two memories above, it pairs the cache decision with the session incident
+and asks you to name the mechanism that would connect them.
+
+**Walking back from a failure.** `causal-walk` starts at a memory you name and walks
+backward over edges the log recorded. It never guesses:
+
+```bash
+vestige causal-walk --logged-write mem-0000000000000005
+```
+
+On a new store this reports that no recorded causal edge leads into the memory.
+That is the correct answer: nothing has linked the two yet. The walk only follows
+edges that were written, such as the `derived_from` edges a GhostLink weave records.
+
+`vestige selftest` plants a known cause in a throwaway copy and checks that the walk
+finds it. Your live store is only read.
+
+> The v3 command `vestige backfill --contrast` is not available on a 4.x store. It
+> joined memories by shared names, which 4.x does not treat as evidence. `causal-walk`
+> is its successor.
+
+---
+
+## 5. Use it from your agent
+
+Once an agent is connected, talk to it normally and name the tag:
+
+> "Remember that this project uses React with TypeScript. Tag it `stack`."
+
+In a new session:
+
+> "Recall the `stack` tag from Vestige."
+
+Every save your agent makes goes through the log's gate and gets a receipt. Ask the
+agent to call `receipt` with `action: "get"` and the memory's id to see it, or
+`action: "replay"` to rebuild the state from the log and compare.
+
+Several agents can run Vestige at once on one machine. The first one to start serves
+the store and the others connect to it.
+
+---
+
+## 6. Inspect, back up, export
+
+- **Counts:** `vestige stats`
+- **Health:** `vestige health`
+- **Backup**, which works while your agents are running: `vestige backup <new-folder>`
+- **Export** to JSON or JSONL: `vestige export memories.jsonl --format jsonl`
+- **Credential audit** of what is already stored: `vestige scan-secrets`
+- **Dashboard:** `vestige dashboard`
+
+While an agent's server holds the store, `backup`, `strata-verify` and `dashboard`
+work from the terminal. The other commands open the log directly, so run them when no
+agent is running, or use the same tools through your agent.
+
+The store is a signed, append-only log in `log/` inside the data directory. It is not
+a SQLite file.
+
+---
+
+## 7. One memory for everything, or one per project
+
+By default Vestige keeps one memory in your OS data directory. For a memory that
+lives with a repo, point it at a directory:
 
 ```bash
 vestige stats --data-dir ./.vestige          # this project's memory
 VESTIGE_DATA_DIR=./.vestige vestige-mcp       # run the server against it
 ```
 
-Precedence is `--data-dir` > `VESTIGE_DATA_DIR` > OS per-user default. Full details,
-including multi-instance setups, are in **[Storage Modes](STORAGE.md)** and
-**[Configuration](CONFIGURATION.md)**.
+Precedence is `--data-dir`, then `VESTIGE_DATA_DIR`, then the OS per-user default.
 
 ---
+
+## Coming from v3
+
+Point 4.x at your existing data directory and start it. The first launch imports
+`vestige.db` into a new log and leaves the v3 file untouched. Read
+**[Upgrading from v3](../README.md#upgrading-from-v3)** first: every v3 process must be
+stopped before the switch.
 
 ## Where to go next
 
 | Want to… | Read |
 |---|---|
-| Understand a specific feature or the research | [The Science](SCIENCE.md) |
-| Tune knobs, env vars, ports | [Configuration](CONFIGURATION.md) |
-| Global vs per-project vs multi-instance | [Storage Modes](STORAGE.md) |
-| Make your agent use memory automatically | [README → automatic memory](../README.md#the-tools) |
-| Ask a real question | [FAQ](FAQ.md) |
-
-Welcome. Vestige gets more useful the longer you use it — that's the point.
+| Every tool and what it returns | [Tool contracts](TOOL-CONTRACTS.md) |
+| Why recall takes a handle | [README → Recall by handle](../README.md#recall-by-handle-not-resemblance) |
+| GhostLink lenses and weaving | [README → GhostLink](../README.md#ghostlink-the-negative-space) |
+| Backups and restore | [README → Backups and export](../README.md#backups-and-export) |
