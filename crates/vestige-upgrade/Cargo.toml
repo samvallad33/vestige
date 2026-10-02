@@ -1,6 +1,6 @@
 [package]
 name = "vestige-upgrade"
-version = "4.1.0"
+version = "4.1.1"
 edition = "2024"
 description = "One-shot v3 SQLite to Strata upgrade. The only Vestige binary that links SQLite."
 authors = ["samvallad33"]

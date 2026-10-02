@@ -14,7 +14,7 @@ It keeps the decisions a project already made, and it can walk a failure backwar
   </a>
 </p>
 
-**New in 4.1.0:** [GhostLink](#ghostlink-the-negative-space) proposes pairs of memories nobody has combined yet, each with its proof, and 19 hardening fixes cover data safety, upgrades from v3, the tools and the dashboard ([changelog](CHANGELOG.md)).
+**New in 4.1.1:** `smart_ingest` takes typed `links` to existing memories, `codebase` can `ingest_repo` a checkout's commits as anchored change records, `causal_walk` takes `node_id` on every start point, a successful save no longer carries fields that read as errors, and the credential gate blocks Anthropic, OpenAI and Stripe live keys ([changelog](CHANGELOG.md)). 4.1.0 brought [GhostLink](#ghostlink-the-negative-space), which proposes pairs of memories nobody has combined yet, each with its proof.
 
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige?color=06b6d4)](https://github.com/samvallad33/vestige/releases/latest)
 [![Tests](https://img.shields.io/github/actions/workflow/status/samvallad33/vestige/ci.yml?branch=main&label=CI)](https://github.com/samvallad33/vestige/actions)
@@ -106,7 +106,7 @@ Then check it:
 vestige-mcp --version
 ```
 
-It should print `vestige-mcp 4.1.0`. If the shell says command not found, `~/.local/bin` is not on your PATH yet: add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (or `~/.bashrc`) and open a new terminal. If it prints an older version, an older install comes first on your PATH; `which -a vestige-mcp` lists them.
+It should print `vestige-mcp 4.1.1`. If the shell says command not found, `~/.local/bin` is not on your PATH yet: add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (or `~/.bashrc`) and open a new terminal. If it prints an older version, an older install comes first on your PATH; `which -a vestige-mcp` lists them.
 
 On a Mac, download with `curl` as above rather than a browser. A browser marks the files as quarantined and macOS then refuses to run them. If you already used a browser, clear the flag with `xattr -d com.apple.quarantine ~/.local/bin/vestige*`.
 
@@ -166,7 +166,7 @@ On a real 297 MB store with 8,902 memories in 34 scopes, the first launch took a
 
 If the upgrade fails, the v3 data is untouched and the message says so. A `vestige.db` that is unreadable, empty or not plain SQLite is refused by name, never treated as an empty store, and a symlinked `vestige.db` is followed to the real file so memories that live only in its WAL come across. You can keep using v3.1.1 meanwhile. `vestige strata-verify <data-dir>` checks the log and its migration receipt at any time.
 
-If you installed v3 with npm, make sure your agents now run the 4.x binary: `vestige-mcp --version` should print 4.1.0, and `which -a vestige-mcp` shows every copy on your PATH in the order they are found.
+If you installed v3 with npm, make sure your agents now run the 4.x binary: `vestige-mcp --version` should print 4.1.1, and `which -a vestige-mcp` shows every copy on your PATH in the order they are found.
 
 <a id="recall-by-handle-not-resemblance"></a>
 ## Recall by handle, not resemblance

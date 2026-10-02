@@ -1,6 +1,6 @@
 {
   "name": "vestige-strata",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "description": "Vestige Strata memory for OpenClaw — signed append-only causal log, gated writes with replayable receipts, FSRS retention, exact-handle recall, causal root-cause walks. Local-first.",
   "type": "module",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@vestige/init",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "description": "Configure Vestige local memory for MCP-compatible AI agents",
   "bin": {
     "vestige-init": "bin/init.js"

@@ -1,6 +1,6 @@
 [package]
 name = "vestige-mcp"
-version = "4.1.0"
+version = "4.1.1"
 edition = "2024"
 description = "Cognitive memory MCP server for AI agents - FSRS-6, spreading activation, synaptic tagging, 3D dashboard, and 130 years of memory research"
 authors = ["samvallad33"]
@@ -91,7 +91,7 @@ path = "src/bin/cli.rs"
 # `legacy-sqlite` feature so `--no-default-features` builds a sqlite-free
 # crate (build/t5-legacy-isolation). `embeddings` and `vector-search` are
 # always-off stubs (w1b).
-vestige-core = { version = "4.1.0", path = "../vestige-core", default-features = false }
+vestige-core = { version = "4.1.1", path = "../vestige-core", default-features = false }
 
 # One-shot SQLite -> STRATA migration. Optional, and not in the default
 # feature set. `default-features = false` keeps `sqlite-reader` off until

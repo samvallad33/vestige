@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-10-02
+
 ### Added
 
 - `smart_ingest` takes `links`: typed edges from the new memory to existing

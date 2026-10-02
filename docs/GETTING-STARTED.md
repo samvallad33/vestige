@@ -1,7 +1,7 @@
 # Getting Started with Vestige
 
 Your first 15 minutes on Vestige 4.x, start to finish. Every command on this page
-was run against the published 4.1.0 release.
+was run against the 4.1.1 release binaries.
 
 Vestige is local-first: four small binaries, your data on your disk, no account, no
 cloud, and nothing downloads on first start.
@@ -20,7 +20,7 @@ steps live in the README so this guide never drifts from them:
 Confirm it is alive:
 
 ```bash
-vestige-mcp --version     # vestige-mcp 4.1.0
+vestige-mcp --version     # vestige-mcp 4.1.1
 vestige stats             # Total Memories: 0 on a fresh install
 ```
 
