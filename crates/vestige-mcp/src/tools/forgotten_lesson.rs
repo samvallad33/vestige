@@ -345,7 +345,7 @@ fn recorded_causes(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value,
         "scanned": scanned,
         "count": lessons.len(),
         "forgotten_lessons": lessons,
-        "note": "Backward walk over recorded causal edges only (corrects, derived_from, evidence_of, closed_by; cause→effect reversed). Ranked by existing FSRS retrievability, lowest first. No entity overlap, keyword or FTS search, embeddings, or inferred edges.",
+        "note": "Backward walk over recorded causal edges only: from a memory to what it is derived_from, and to the records that are evidence_of it, that correct it, or that it closed. Ranked by existing FSRS retrievability, lowest first. No entity overlap, keyword or FTS search, embeddings, or inferred edges.",
     }))
 }
 
