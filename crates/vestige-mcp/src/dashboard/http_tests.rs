@@ -493,6 +493,36 @@ async fn withheld_features_answer_with_a_structured_reason() {
     }
 }
 
+/// The Stats page's "Consolidate memory" button. On a Strata log every phase
+/// is a no-op, so an all-zero reply would show as a completed pass. It is
+/// refused with the reason, and no consolidation is announced.
+#[tokio::test]
+async fn consolidate_on_a_strata_log_is_refused_not_reported_as_a_zero_pass() {
+    let (_dir, storage) = strata();
+    remember(&storage, "a memory consolidation would not touch", &[]);
+    let (app, state) = super::build_router(Arc::clone(&storage), None, PORT);
+    let mut events = state.subscribe();
+
+    let reply = own(&app, "POST", "/api/consolidate", None).await;
+    assert_eq!(reply.status, StatusCode::NOT_IMPLEMENTED, "{}", reply.body);
+    let answer = reply.json();
+    assert_eq!(answer["code"], "unavailable_in_4_0", "{answer}");
+    let error = answer["error"].as_str().unwrap_or_default();
+    assert!(error.starts_with("unavailable_in_4_0"), "{error}");
+    assert!(error.contains("no-op on a Strata log"), "{error}");
+    assert!(answer.get("nodesProcessed").is_none(), "{answer}");
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(
+                event,
+                super::events::VestigeEvent::ConsolidationStarted { .. }
+                    | super::events::VestigeEvent::ConsolidationCompleted { .. }
+            ),
+            "a refused consolidation was announced"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_script_with_the_bearer_token_can_write() {
     let (_dir, storage) = strata();

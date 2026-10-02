@@ -675,6 +675,25 @@ pub trait LocalMemoryStore: Sync + 'static {
         ))
     }
 
+    /// Every scope that holds current code advice of `node_type` (optionally
+    /// carrying one exact tag), with how many items it holds, ordered by scope
+    /// name. Same eligibility as `current_code_context_nodes`, but across
+    /// scopes, so a caller can say where advice lives instead of reporting an
+    /// empty namespace as an empty store.
+    fn current_code_context_scope_counts(
+        &self,
+        _node_type: &str,
+        _tag: Option<&str>,
+    ) -> StoreResult<Vec<(String, usize)>> {
+        Err(StorageError::Init(
+            concat!(
+                stringify!(current_code_context_scope_counts),
+                " is not implemented by this backend"
+            )
+            .into(),
+        ))
+    }
+
     /// Root data directory backing this store.
     fn data_dir(&self) -> &Path {
         unimplemented!(concat!(
@@ -2824,6 +2843,11 @@ pub trait MemoryStore: Send + Sync + 'static {
         scope: &str,
         limit: i32,
     ) -> StoreResult<Vec<KnowledgeNode>>;
+    fn current_code_context_scope_counts(
+        &self,
+        node_type: &str,
+        tag: Option<&str>,
+    ) -> StoreResult<Vec<(String, usize)>>;
     fn data_dir(&self) -> &Path;
     fn db_path(&self) -> &Path;
     /// True when this store is the Strata log. Default backends are not.
@@ -3523,6 +3547,13 @@ where
         limit: i32,
     ) -> StoreResult<Vec<KnowledgeNode>> {
         <T as MemoryStoreSend>::current_code_context_nodes(self, node_type, tag, scope, limit)
+    }
+    fn current_code_context_scope_counts(
+        &self,
+        node_type: &str,
+        tag: Option<&str>,
+    ) -> StoreResult<Vec<(String, usize)>> {
+        <T as MemoryStoreSend>::current_code_context_scope_counts(self, node_type, tag)
     }
     fn data_dir(&self) -> &Path {
         <T as MemoryStoreSend>::data_dir(self)

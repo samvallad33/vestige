@@ -626,7 +626,14 @@ async fn execute_demote(
                 before.retrieval_strength, node.retrieval_strength
             )
         },
-        "note": "Memory is NOT deleted - it remains searchable but ranks lower."
+        // A Strata log has no ranking for a demote to lower, and
+        // retrievability reads 1.0 right after any review, so "after: 1.0"
+        // beside a demote needs saying out loud.
+        "note": if strata {
+            "The memory is not deleted and is still found by its id and tags. Retrievability reads 1.0 right after any review; the lower stability makes it fade faster from here."
+        } else {
+            "Memory is NOT deleted - it remains searchable but ranks lower."
+        }
     });
     if strata {
         let receipt_id = match &endorsement {

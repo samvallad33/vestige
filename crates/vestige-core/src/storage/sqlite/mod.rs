@@ -785,6 +785,40 @@ impl SqliteMemoryStore {
             .map_err(Into::into)
     }
 
+    /// Scopes holding current code advice, with how many items each holds.
+    /// Same eligibility as [`Self::current_code_context_nodes`] (exact tag,
+    /// not superseded, inside its validity window), grouped by namespace.
+    ///
+    /// `scope` is nullable on legacy rows. A NULL or blank scope is never
+    /// matched by the `scope = ?` read, so it is not listed either; a NULL
+    /// group would also fail to decode and take the whole listing down.
+    pub fn current_code_context_scope_counts(
+        &self,
+        node_type: &str,
+        tag: Option<&str>,
+    ) -> Result<Vec<(String, usize)>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut stmt = reader.prepare(
+            "SELECT n.scope, COUNT(*) FROM knowledge_nodes n
+             WHERE n.node_type = ?1
+               AND n.scope IS NOT NULL AND trim(n.scope) <> ''
+               AND (?2 IS NULL OR EXISTS (
+                   SELECT 1 FROM json_each(n.tags) t WHERE t.type = 'text' AND t.value = ?2))
+               AND n.superseded_by IS NULL
+               AND (n.valid_from IS NULL OR julianday(n.valid_from) <= julianday(?3))
+               AND (n.valid_until IS NULL OR julianday(n.valid_until) > julianday(?3))
+             GROUP BY n.scope ORDER BY n.scope ASC",
+        )?;
+        let rows = stmt.query_map(params![node_type, tag, Utc::now().to_rfc3339()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Get nodes by type and optional tag filter
     ///
     /// This is used for codebase context retrieval where we need to query
@@ -2253,6 +2287,13 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         limit: i32,
     ) -> Result<Vec<KnowledgeNode>> {
         SqliteMemoryStore::current_code_context_nodes(self, node_type, tag, scope, limit)
+    }
+    fn current_code_context_scope_counts(
+        &self,
+        node_type: &str,
+        tag: Option<&str>,
+    ) -> Result<Vec<(String, usize)>> {
+        SqliteMemoryStore::current_code_context_scope_counts(self, node_type, tag)
     }
     fn data_dir(&self) -> &Path {
         SqliteMemoryStore::data_dir(self)

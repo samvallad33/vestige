@@ -48,6 +48,12 @@ pub mod maintain;
 pub mod hygiene_stats;
 pub mod memory_status;
 
+// One shape for capabilities this build does not have (never zero-success).
+pub mod unavailable;
+
+// `codebase action=ingest_repo`: the repo connector (commits -> change records).
+pub mod repo_ingest;
+
 // v1.3: Auto-save and dedup tools
 pub mod dedup;
 pub mod importance;

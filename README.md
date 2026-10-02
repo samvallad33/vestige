@@ -177,12 +177,12 @@ Since 4.0, Vestige does not rank text that resembles your query. There are no em
 |---|---|---|
 | How a memory is found | Similarity to the query | An exact handle |
 | What counts as a link | Anything that scores close | Only an edge the log recorded. Imported v3 links are marked `legacy_inferred` |
-| Walking back from a failure | Nearest lookalikes | `causal_walk` from an explicit logged write (a memory id), backward over recorded edges, at most 8 hops and 500 nodes by default. Failing-test, stack-frame, CI-run and version-range starts walk on a v3 store |
+| Walking back from a failure | Nearest lookalikes | `causal_walk` from the memory that records the symptom, backward over recorded edges, at most 8 hops and 500 nodes by default. Any start point (failing test, stack frame, CI run, version range, or a plain `logged_write`) carries that memory's id as `node_id` |
 | Proof of a write | None | A receipt per write. `receipt replay` re-derives the state from the log |
 | Unused memories | Persist at full weight | Fade under FSRS scheduling |
 | Your data | Often a hosted index | A signed, append-only log in the data directory |
 
-`causal_walk` never guesses. With no start point it returns `needs_report` and names what is missing. `forgotten_lesson` walks backward from a failure the same way and ranks fix or lesson memories by how far they have faded.
+`causal_walk` never guesses. With no start point it returns `needs_report` and names what is missing. A start point with no `node_id` is not walked: `start_points` in the response says so, with the reason, for each one. A walk that finds no cause says why in `emptyBecause`, from the edges the log holds. `forgotten_lesson` walks backward from a failure the same way and ranks fix or lesson memories by how far they have faded.
 
 <a id="ghostlink-the-negative-space"></a>
 ## GhostLink: the negative space
@@ -251,19 +251,19 @@ Write-up: [docs/SCIENCE.md](docs/SCIENCE.md).
 | Tool | Purpose |
 |---|---|
 | `causal_walk` | Walk a failure backward from explicit start points over recorded edges |
-| `codebase` | Remember a pattern or decision with code anchors, fetch context marked current or stale, `verify` anchors against source, `reanchor` |
+| `codebase` | Remember a pattern or decision with code anchors, fetch context marked current or stale (with every scope that holds the codebase's patterns, decisions and change records), `verify` anchors against source (saying what `limit` left unchecked), `reanchor`, and `ingest_repo`: the commits of a checkout, read from the top of its working tree, as anchored change records in their own scope (previews first) |
 | `dedup` | `scan` for duplicates, `undo` a recorded operation, `tag_rename` and `tag_merge` with a preview, `policy` |
 | `forgotten_lesson` | Faded fix or lesson memories behind a failure, over recorded edges |
 | `ghostlink` | Never-composed memory pairs, each with its proof from recorded edges only. `propose` with lens `bridge` (within three typed-edge hops, never woven) or `divergent` (no recorded edge at all; a forced juxtaposition when nothing can be measured), `weave` an outcome (a write with receipts), `inspect` woven compositions, `explore` typed paths, `map`, `bounty`, `predict`, and `harden` to seed invariant laws once. `graph` still answers as a hidden alias |
 | `intention` | `set`, `check`, `update`, `list`. `graph` runs the evidence-aware plan |
-| `maintain` | `consolidate`, `dream`, `dream_compile`, `gc` (dry run unless you turn it off), `importance_score`, `backup`, `export` |
+| `maintain` | `dream`, `dream_compile`, `gc` (dry run unless you turn it off), `importance_score`, `backup`, `export`. `consolidate` is refused on a Strata log, where every phase is a no-op |
 | `memory` | `get`, `get_batch`, `state`, `promote`, `demote`, `edit`. Demote does not delete. An edit admits a successor and keeps its code anchors |
 | `memory_status` | `health`, `retention`, `timeline`, `changelog`, `provenance`, `coverage`, `stats`, `tools` |
 | `project` | Preview a fenced region of `CLAUDE.md` or `MEMORY.md`. `write` needs `confirm=true` and replaces only the fence |
 | `recall` | Find memories by exact handle: id, unique prefix, or exact tag |
 | `receipt` | `get` a receipt, or `replay` it against the log |
 | `selftest` | Plant a known cause in a throwaway copy and check the walk finds it |
-| `session_start` | Status, open intentions for the scope (with id, due date and an overdue mark), backup and dream needs, and codebase context under one budget. It writes nothing. Queries are answered with a notice: memories are found by handle |
+| `session_start` | Status, open intentions for the scope (with id, due date and an overdue mark), backup and dream needs, and codebase context under one budget; when the scope holds none of a codebase's code memories, it names the scopes that do. It writes nothing. Queries are answered with a notice: memories are found by handle |
 | `smart_ingest` | Store one memory, or up to 20 with `items`. `links` declares typed edges to existing memories (`derived_from`, `evidence_of`, `closes`), each with its own receipt, which is what GhostLink's bridge lens walks. Secrets are refused unless you say otherwise |
 | `suppress` | Take a memory out of every read. The log keeps its bytes, and on Strata it cannot be undone. `destructiveHint` is true |
 
