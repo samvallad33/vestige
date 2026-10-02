@@ -839,3 +839,107 @@ fn scan_secrets_reaches_retired_memories_scopes_and_intentions() {
         "an intention must be reported: {report}"
     );
 }
+
+/// `vestige connect` bridges ingest-isolation: two memories that share an
+/// entity but no recorded edge get one `touched` edge, earlier -> later, so
+/// a backward causal-walk from the later memory reaches the earlier one.
+#[test]
+fn connect_edges_shared_entities_then_causal_walk_finds_the_cause() {
+    let dir = TempDir::new().expect("temp dir");
+
+    let ingest = |content: &str, source: &str, tags: &str| {
+        let run = vestige(
+            dir.path(),
+            &["ingest", content, "--source", source, "--tags", tags],
+        );
+        assert!(run.ok, "{}", run.text());
+        run.stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("Node ID: "))
+            .expect("ingest prints the node id")
+            .trim()
+            .to_string()
+    };
+    let cause = ingest(
+        "PR 4337 removed npoints floor from euler() in path.py",
+        "git-log",
+        "euler,path.py",
+    );
+    let effect = ingest(
+        "Issue 4557: strange paths in euler bends, geometry deformed",
+        "github-issue",
+        "bug,euler",
+    );
+
+    // Before: no recorded edge, so the walk has nothing upstream.
+    let bare = vestige(dir.path(), &["causal-walk", "--logged-write", &effect, "--json"]);
+    assert!(bare.ok, "{}", bare.text());
+    let before: Value = serde_json::from_str(&bare.stdout).unwrap();
+    assert!(before["causes"].as_array().unwrap().is_empty(), "{before}");
+
+    // Dry run shows the edge and writes nothing.
+    let dry = vestige(dir.path(), &["connect", "--dry-run"]);
+    assert!(dry.ok, "{}", dry.text());
+    assert!(dry.stdout.contains("would be created"), "{}", dry.text());
+    assert!(dry.stdout.contains("shared: euler"), "{}", dry.text());
+    assert_eq!(edge_count(dir.path()), 0, "a dry run wrote an edge");
+
+    let run = vestige(dir.path(), &["connect"]);
+    assert!(run.ok, "{}", run.text());
+    assert_eq!(edge_count(dir.path()), 1, "{}", run.text());
+
+    // Re-running is free: the pair is already joined.
+    let again = vestige(dir.path(), &["connect"]);
+    assert!(again.ok, "{}", again.text());
+    assert!(again.stdout.contains("No new edges"), "{}", again.text());
+    assert_eq!(edge_count(dir.path()), 1);
+
+    // After: the walk follows the touched edge back to the PR.
+    let walk = vestige(dir.path(), &["causal-walk", "--logged-write", &effect]);
+    assert!(walk.ok, "{}", walk.text());
+    assert!(walk.stdout.contains(&cause), "{}", walk.text());
+    assert!(walk.stdout.contains("touched"), "{}", walk.text());
+    assert!(walk.stdout.contains("PR 4337"), "{}", walk.text());
+}
+
+/// --min-shared gates pairs on entity overlap: two memories sharing two
+/// entities connect, two sharing none never do.
+#[test]
+fn connect_min_shared_gates_the_pairs() {
+    let dir = TempDir::new().expect("temp dir");
+    let storage = open(dir.path());
+    let near = put(
+        &storage,
+        "euler refactor touched connection_pool in db.py",
+        &["euler"],
+    );
+    let far = put(&storage, "euler bends deform under load", &[]);
+    let lone = put(&storage, "release notes for the dashboard", &[]);
+    drop(storage);
+
+    let strict = vestige(dir.path(), &["connect", "--min-shared", "2", "--dry-run"]);
+    assert!(strict.ok, "{}", strict.text());
+    // near/far share exactly one entity (euler); with --min-shared 2 no
+    // pair qualifies.
+    assert!(
+        strict.stdout.contains("Candidate pairs: 0"),
+        "{}",
+        strict.text()
+    );
+
+    let loose = vestige(dir.path(), &["connect", "--min-shared", "1"]);
+    assert!(loose.ok, "{}", loose.text());
+    assert_eq!(edge_count(dir.path()), 1, "only near/euler pairs connect");
+
+    let walk = vestige(dir.path(), &["causal-walk", "--logged-write", &far, "--json"]);
+    assert!(walk.ok, "{}", walk.text());
+    let value: Value = serde_json::from_str(&walk.stdout).unwrap();
+    let causes: Vec<&str> = value["causes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["id"].as_str())
+        .collect();
+    assert_eq!(causes, vec![near.as_str()], "{value}");
+    assert!(!causes.contains(&lone.as_str()), "{value}");
+}

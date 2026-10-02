@@ -25,8 +25,8 @@ use chrono::{NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 use colored::Colorize;
 use vestige_core::{
-    IngestInput, PortableImportMode, SecretConfidence, SecretPolicy, SourceEnvelope,
-    SourceUpsertOutcome, Storage, scan_secrets,
+    ConnectionRecord, IngestInput, PortableImportMode, SecretConfidence, SecretPolicy,
+    SourceEnvelope, SourceUpsertOutcome, Storage, scan_secrets,
 };
 
 /// Vestige - Cognitive Memory System CLI
@@ -376,6 +376,27 @@ enum Commands {
         json: bool,
     },
 
+    /// Create typed edges between memories that share entities
+    ///
+    /// Scans all memories, extracts deterministic entities (file paths,
+    /// identifiers, shared tags), and creates `touched` edges between
+    /// pairs that share at least one entity. This is the bridge that
+    /// makes causal-walk work on manually-ingested memories.
+    Connect {
+        /// Show what edges would be created without writing them
+        #[arg(long)]
+        dry_run: bool,
+        /// Minimum shared entities required (default 1)
+        #[arg(long, default_value = "1")]
+        min_shared: usize,
+        /// Maximum edges to create (safety cap)
+        #[arg(long, default_value = "100")]
+        max_edges: usize,
+        /// Project namespace to connect (default: user)
+        #[arg(long, default_value = "user")]
+        scope: String,
+    },
+
     /// Read-only audit for credential-shaped values already in the local store.
     ScanSecrets {
         /// Include high-entropy review candidates as well as blocking matches.
@@ -706,6 +727,12 @@ fn main() -> anyhow::Result<()> {
             max_commits,
             json,
         } => run_ingest_git(path, since, until, max_commits, json),
+        Commands::Connect {
+            dry_run,
+            min_shared,
+            max_edges,
+            scope,
+        } => run_connect(dry_run, min_shared, max_edges, scope),
         Commands::ScanSecrets {
             include_suspected,
             json,
@@ -4751,6 +4778,298 @@ fn run_ingest_git(
         println!("{}: {}", "Unchanged".white().bold(), unchanged);
     }
     Ok(())
+}
+
+/// One candidate `touched` edge: the earlier memory as the source (the
+/// cause side), the later one as the target (the symptom side), with the
+/// entities they share.
+struct ConnectPair {
+    source_id: String,
+    target_id: String,
+    source_content: String,
+    target_content: String,
+    shared: Vec<String>,
+}
+
+/// Create typed edges between memories that share entities.
+///
+/// Memories ingested one by one land as isolated nodes: tags, no edges, so
+/// `causal-walk --logged-write` says no recorded causal edge leads upstream
+/// even when two memories plainly talk about the same `euler` or `path.py`.
+/// This command extracts deterministic entities from every memory in the
+/// scope (file paths, identifiers, tags — no ML, no similarity) and writes a
+/// `touched` edge for each pair sharing at least `--min-shared` of them,
+/// through `Storage::save_connection`, which on a Strata log is
+/// `StrataStore::save_connection` behind the gate.
+///
+/// Direction follows the walk's rule for `touched` (causal_walk.rs: the
+/// source is the earlier record, so from the target the walk goes to the
+/// source): the older memory of a pair is the source. Pairs already joined
+/// by a recorded edge — either direction — are skipped, so re-running is
+/// free.
+fn run_connect(
+    dry_run: bool,
+    min_shared: usize,
+    max_edges: usize,
+    scope: String,
+) -> anyhow::Result<()> {
+    println!("{}", "=== Vestige Connect ===".cyan().bold());
+    println!();
+
+    let storage = open_storage()?;
+    let mut nodes = fetch_nodes_in_scope(&storage, &scope)?;
+    // Oldest first, so a pair's source is its earlier memory.
+    nodes.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+
+    println!("{}: {}", "Scope".white().bold(), scope);
+    println!("{}: {}", "Memories scanned".white().bold(), nodes.len());
+
+    if nodes.len() < 2 {
+        println!();
+        println!(
+            "{}",
+            "Nothing to connect: fewer than two memories in this scope.".green()
+        );
+        return Ok(());
+    }
+
+    let entity_sets: Vec<HashSet<String>> = nodes
+        .iter()
+        .map(|node| extract_entities(&node.content, &node.tags).into_iter().collect())
+        .collect();
+
+    // Pairs already joined by any recorded edge (either direction) are left
+    // alone: re-running connect must not stack parallel edges.
+    let joined: HashSet<(String, String)> = storage
+        .get_all_connections()?
+        .into_iter()
+        .filter_map(|edge| {
+            (edge.source_id != edge.target_id).then(|| {
+                if edge.source_id < edge.target_id {
+                    (edge.source_id, edge.target_id)
+                } else {
+                    (edge.target_id, edge.source_id)
+                }
+            })
+        })
+        .collect();
+
+    // An edge needs at least one shared entity; --min-shared 0 is read as 1.
+    let min_shared = min_shared.max(1);
+    let mut pairs: Vec<ConnectPair> = Vec::new();
+    for (i, node) in nodes.iter().enumerate() {
+        for (later, set) in nodes.iter().zip(&entity_sets).skip(i + 1) {
+            let mut shared: Vec<String> = entity_sets[i].intersection(set).cloned().collect();
+            shared.sort();
+            if shared.len() < min_shared {
+                continue;
+            }
+            let key = if node.id < later.id {
+                (node.id.clone(), later.id.clone())
+            } else {
+                (later.id.clone(), node.id.clone())
+            };
+            if joined.contains(&key) {
+                continue;
+            }
+            pairs.push(ConnectPair {
+                source_id: node.id.clone(),
+                target_id: later.id.clone(),
+                source_content: node.content.clone(),
+                target_content: later.content.clone(),
+                shared,
+            });
+        }
+    }
+
+    println!(
+        "{}: {}",
+        "Candidate pairs".white().bold(),
+        pairs.len()
+    );
+    println!();
+
+    let capped = pairs.len() > max_edges;
+    pairs.truncate(max_edges);
+
+    if pairs.is_empty() {
+        println!(
+            "{}",
+            "No new edges: no memory pair shares an entity that is not already joined by a recorded edge."
+                .green()
+        );
+        return Ok(());
+    }
+
+    for pair in &pairs {
+        println!(
+            "  {} -[touched]-> {}  {}",
+            pair.source_id.dimmed(),
+            pair.target_id.dimmed(),
+            format!("shared: {}", pair.shared.join(", ")).dimmed()
+        );
+        println!("      {}", truncate(&pair.source_content, 72).dimmed());
+        println!("      {}", truncate(&pair.target_content, 72).dimmed());
+    }
+
+    if dry_run {
+        println!();
+        println!(
+            "{}",
+            format!(
+                "Dry run: {} touched edge(s) would be created. Re-run without --dry-run to write them.",
+                pairs.len()
+            )
+            .yellow()
+            .bold()
+        );
+        return Ok(());
+    }
+
+    let now = Utc::now();
+    let mut created = 0usize;
+    let mut errors = 0usize;
+    for pair in &pairs {
+        // strength 0.5 -> strength_milli 500: a co-touch is a moderate link.
+        let edge = ConnectionRecord {
+            source_id: pair.source_id.clone(),
+            target_id: pair.target_id.clone(),
+            strength: 0.5,
+            link_type: "touched".to_string(),
+            created_at: now,
+            last_activated: now,
+            activation_count: 0,
+        };
+        match storage.save_connection(&edge) {
+            Ok(()) => created += 1,
+            Err(err) => {
+                eprintln!(
+                    "  {} Failed to connect {} -> {}: {}",
+                    "ERR".red(),
+                    pair.source_id,
+                    pair.target_id,
+                    err
+                );
+                errors += 1;
+            }
+        }
+    }
+
+    println!();
+    if capped {
+        println!(
+            "{} stopped at the --max-edges cap ({max_edges}); more candidate pairs remain.",
+            "truncated:".yellow()
+        );
+    }
+    println!(
+        "{}",
+        format!(
+            "Connect complete: {}/{} touched edge(s) created{}",
+            created,
+            pairs.len(),
+            if errors > 0 {
+                format!(" ({} errors)", errors)
+            } else {
+                String::new()
+            }
+        )
+        .green()
+        .bold()
+    );
+
+    Ok(())
+}
+
+/// Fetch every node in one scope using pagination (the scoped sibling of
+/// [`fetch_all_nodes`]; connect keeps its edges within one scope, the same
+/// invariant `check_links` enforces for declared links).
+fn fetch_nodes_in_scope(
+    storage: &Arc<Storage>,
+    scope: &str,
+) -> anyhow::Result<Vec<vestige_core::KnowledgeNode>> {
+    let mut all_nodes = Vec::new();
+    let page_size = 500;
+    let mut offset = 0;
+
+    loop {
+        let batch = storage.get_all_nodes_in_scope(scope, page_size, offset)?;
+        let batch_len = batch.len();
+        all_nodes.extend(batch);
+        if batch_len < page_size as usize {
+            break;
+        }
+        offset += page_size;
+    }
+
+    Ok(all_nodes)
+}
+
+/// Deterministic entities for `vestige connect`: dotted file-path tokens,
+/// snake_case / camelCase identifier words, and the memory's own tags. No
+/// ML, no similarity — the same text always yields the same entities.
+///
+/// Identifiers are lowercased so `Euler` and `euler` join; file paths and
+/// tags keep their case (a path is its exact bytes). Sharing is decided by
+/// set intersection downstream, which is also where the "identifier must
+/// appear in >= 2 memories" rule lives: an identifier shared by a pair
+/// appears in 2 memories by definition, so no separate document-frequency
+/// pass is needed.
+fn extract_entities(content: &str, tags: &[String]) -> Vec<String> {
+    let mut entities = Vec::new();
+
+    // File paths (anything with a dot and an extension): split on
+    // whitespace, strip surrounding punctuation, keep dotted tokens
+    // (`path.py`, `db.config.yaml`). Pure numbers like `1.2.3` are not
+    // entities.
+    for word in content.split_whitespace() {
+        let cleaned = word
+            .trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '-');
+        if cleaned.contains('.') && cleaned.len() > 3 && !is_pure_number(cleaned) {
+            entities.push(cleaned.to_string());
+        }
+    }
+
+    // Identifiers (camelCase, snake_case, >= 4 chars): split on everything
+    // that is not alphanumeric or `_`, keep tokens long enough to mean
+    // something, minus stopwords and pure numbers.
+    for word in content.split(|c: char| !c.is_alphanumeric() && c != '_') {
+        if word.len() >= 4 && !is_pure_number(word) && !is_stopword(word) {
+            entities.push(word.to_lowercase());
+        }
+    }
+
+    // Tags are entities exactly as recorded.
+    for tag in tags {
+        entities.push(tag.clone());
+    }
+
+    entities.sort();
+    entities.dedup();
+    entities
+}
+
+/// `true` when the token is digits only (plus the dots of a dotted token):
+/// line numbers, ids and versions are not entities.
+fn is_pure_number(word: &str) -> bool {
+    word.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+/// Small embedded stop-word list: common English words that would otherwise
+/// join any two memories written in English.
+fn is_stopword(word: &str) -> bool {
+    const STOPWORDS: &[&str] = &[
+        "that", "this", "with", "from", "have", "been", "were", "will", "would",
+        "could", "should", "there", "their", "about", "which", "when", "what",
+        "while", "these", "those", "then", "than", "they", "them", "into",
+        "over", "after", "before", "under", "above", "below", "between",
+        "because", "since", "until", "against", "without", "within", "across",
+        "the", "and", "but", "for", "not", "you", "all", "can", "her", "was",
+        "one", "our", "out", "day", "get", "has", "him", "his", "how", "man",
+        "new", "now", "old", "see", "two", "way", "who", "boy", "did", "its",
+        "let", "put", "say", "she", "too", "use", "dad", "mom", "try", "ask",
+    ];
+    STOPWORDS.contains(&word.to_lowercase().as_str())
 }
 
 /// Recall by exact handle (both stores), or by free text through the real
