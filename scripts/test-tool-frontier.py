@@ -654,16 +654,21 @@ def run(binary, output):
             assert annotations["recall"]["idempotentHint"] is False
             passed("all installed tool and action definitions match progressive discovery")
 
-            typed("maintain", {"action": "consolidate", "phase": "embeddings", "batchSize": 2},
-                  "phase must be all, lifecycle or logs")
-            tool("maintain", {"action": "consolidate", "batchSize": 2}, error=True)
-            tool("maintain", {"action": "consolidate", "phase": "embeddings", "batchSize": 101}, error=True)
-            passed("embedding maintenance is refused; it is not a Strata operation")
-            for phase in ("lifecycle", "logs"):
-                page = tool("maintain", {"action": "consolidate", "phase": phase, "batchSize": 2})
-                assert page["dryRun"] is True and page["hasMore"] is False and page["selected"] == 0
-            tool("maintain", {"action": "consolidate", "phase": "logs", "after": "invalid"}, error=True)
-            passed("lifecycle/log maintenance previews empty pages and rejects invalid controls")
+            # Every consolidate phase is a no-op on a Strata log, and the zeros a
+            # no-op returns read as a completed pass. It is withheld: off the
+            # advertised list and refused with the stable code, whatever the phase.
+            maintain_actions = next(x for x in catalog if x["name"] == "maintain")[
+                "inputSchema"]["properties"]["action"]["enum"]
+            assert "consolidate" not in maintain_actions, maintain_actions
+            for args in (
+                {"action": "consolidate", "batchSize": 2},
+                {"action": "consolidate", "phase": "embeddings", "batchSize": 2},
+                {"action": "consolidate", "phase": "lifecycle", "batchSize": 2},
+                {"action": "consolidate", "phase": "logs", "after": "invalid"},
+            ):
+                refused = typed("maintain", args, "unavailable_in_4_0")
+                assert "selected" not in refused and "nodesProcessed" not in refused, refused
+            passed("consolidate is withheld on a Strata log; no phase returns a zero-count success")
 
             marker = "STRATA_FIXTURE_EXACT_HANDLE"
             created = tool("smart_ingest", {"content": marker, "forceCreate": True, "tags": ["fixture-old"]})
@@ -726,7 +731,7 @@ def run(binary, output):
             assert proved["receipt"]["mutations"][0]["kind"] == "promoted"
             assert node_id in proved["receipt"]["retrieved"]
             demoted = tool("memory", {"action": "demote", "id": node_id, "reason": "fixture"})
-            assert demoted["action"] == "demoted" and "NOT deleted" in demoted["note"]
+            assert demoted["action"] == "demoted" and "not deleted" in demoted["note"]
             assert demoted["receiptId"].startswith("eff-") and demoted["receiptId"] != promote_receipt
             edited = tool("memory", {"action": "edit", "id": node_id, "content": "edited fixture"})
             successor = edited["nodeId"]
