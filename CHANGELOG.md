@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is written. Vestige never fetches the URL, and the release binary stays
   offline.
 
+### Fixed
+
+- **A non-product release no longer gets product binaries, and a broken `releases/latest` fails the release run.** The release workflow skipped tags by a prefix list that did not include `operator-lite-`, so the Operator Lite v0.3.4 release built and uploaded an Android archive; that release also took GitHub's "latest" flag, and the README install URL (`releases/latest/download/...`) returned 404 until the flag was moved back. Binaries are now built only for `vX.Y.Z` tags, and a `verify-latest` job runs `scripts/check-latest-release.sh` after every release event: it fails, with the repair command, when the release marked latest is not a product tag or lacks any of the five platform archives or their `.sha256` files.
+
 ## [4.1.0] - 2026-10-01
 
 ### Added
