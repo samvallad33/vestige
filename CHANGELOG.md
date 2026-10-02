@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `corrects` are not declarable, because they can retire a memory. Links are
   what GhostLink's bridge lens walks: two memories that each derive from the
   same memory become a bridge pair through it.
+- `ghostlink` `weave` takes `evidence`: up to 8 external findings for the
+  pair, for example from a web search on its composition question. Each one
+  has a `url` (http or https), the `sha256` of the fetched content, a
+  `retrievedAt` time and an optional note. Findings are recorded on the
+  composition record and tagged `evidence:<sha256>`, so `recall` finds the
+  record by the content hash alone. Every entry is checked before anything
+  is written. Vestige never fetches the URL, and the release binary stays
+  offline.
 
 ## [4.1.0] - 2026-10-01
 

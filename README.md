@@ -191,7 +191,7 @@ Since 4.0, Vestige does not rank text that resembles your query. There are no em
 
 - **Bridge lens** (the default): two memories within three hops over recorded `touched`, `derived_from` or `closed_by` edges that were never woven together. The shortest path is the proof. Pairs rank by hop proximity, how rarely each memory has been composed, retention, and the outcomes earlier pairs recorded.
 - **Divergent lens**: two memories joined by no recorded edge at all, scored `min(path length, 7) × divergence`, where divergence is how few typed neighbors they share. When a memory has no typed neighbors there is nothing to measure, so the pair is a *forced juxtaposition* picked by a deterministic sampler, with no invented score. Links imported from v3 can only lower a score, never raise one.
-- **Weave** records what came of a pair (`helpful`, `dead_end`, `accepted`, …): a composition memory plus a `derived_from` edge to each member, each with a receipt. Later proposals learn from it.
+- **Weave** records what came of a pair (`helpful`, `dead_end`, `accepted`, …): a composition memory plus a `derived_from` edge to each member, each with a receipt. Later proposals learn from it. A weave can carry `evidence` from outside: the URL, the sha256 of what was fetched, and when. Each finding is tagged `evidence:<sha256>`, and Vestige never fetches the URL itself.
 
 ```json
 {"mode": "propose", "lens": "divergent", "limit": 5}

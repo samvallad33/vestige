@@ -97,6 +97,21 @@ pub fn schema() -> Value {
                 "enum": OUTCOME_TYPES,
                 "description": "[weave] Outcome to record."
             },
+            "evidence": {
+                "type": "array",
+                "maxItems": 8,
+                "description": "[weave] External findings for this pair, e.g. from a web search on its composition question: url, sha256 of the fetched content, retrievedAt (RFC 3339), optional note. Recorded on the composition record and tagged evidence:<sha256>. Vestige never fetches the URL.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string" },
+                        "sha256": { "type": "string" },
+                        "retrievedAt": { "type": "string" },
+                        "note": { "type": "string" }
+                    },
+                    "required": ["url", "sha256", "retrievedAt"]
+                }
+            },
             "scope": { "type": "string", "default": "user", "description": "[propose/bounty] Exact project namespace." },
             "includeCrossScope": { "type": "boolean", "default": false, "description": "[propose/bounty] Consider every namespace." },
             "limit": { "type": "integer", "description": "Max results (per-mode defaults, clamped).", "minimum": 1, "maximum": 100 }
@@ -594,13 +609,17 @@ async fn execute_strata(storage: &Arc<Storage>, mode: &str, args: &Value) -> Res
             let outcome =
                 str_arg(args, "outcome_type").ok_or("outcome_type is required for weave")?;
             match (str_arg(args, "first_id"), str_arg(args, "second_id")) {
-                (Some(first), Some(second)) => engine::weave(
-                    storage.as_ref(),
-                    first,
-                    second,
-                    outcome,
-                    args.get("lens").and_then(Value::as_str),
-                ),
+                (Some(first), Some(second)) => {
+                    let evidence = engine::parse_evidence(args.get("evidence"))?;
+                    engine::weave_with_evidence(
+                        storage.as_ref(),
+                        first,
+                        second,
+                        outcome,
+                        args.get("lens").and_then(Value::as_str),
+                        &evidence,
+                    )
+                }
                 _ => Err("weave on a Strata log takes first_id and second_id (the two composed memories) and outcome_type; event_id names a legacy SQLite composition event".into()),
             }
         }
