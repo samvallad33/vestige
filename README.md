@@ -48,6 +48,21 @@ echo shadow > ~/.operator/mode        # shadow-first: log everything, block noth
 - **Every verdict gets a hash-chained receipt** — and `verify` walks the chain
 - **Shadow-first**: install logs everything and blocks nothing until you flip
 
+<a id="vestige-operator"></a>
+## Vestige Operator, the paid tier
+
+Operator Lite is free and stays free. **Vestige Operator** is the owner's version of the same gate, $149 a month:
+
+- **Your own laws.** Sentences you write ("never publish without a dry run", "recall before grep") become rules the gate enforces on every host, with a compliant rewrite or a stop, and a one-time permit only you can grant from your own terminal.
+- **The board.** A daily set of cards built from the receipts: stops, law violations, canary bites, ranked by urgency, only what changed since yesterday.
+- **The night letter.** One weekly message with at most three things and one number, sent only when something new crossed the wire.
+- **Almost-forgot.** The memories your agents keep citing that are about to fade, before they do.
+- **A five-minute onboarding wizard** that writes your first laws and proves the gate stops a violation before you rely on it.
+
+Buy it at the account page: [vestige-pro-production.fly.dev](https://vestige-pro-production.fly.dev). This week the gate is delivered by invitation to its private repository within one business day of checkout; the self-serve download follows.
+
+What it is not: Operator blocks what is routed through it. It cannot block a call that bypasses the hooked tools, and receipts are hash-chained digests, not signatures.
+
 ```bash
 python3 ~/.operator/gate/operator-gate.py corpus guardfall   # 43/43 bypass cases
 python3 ~/.operator/gate/operator-gate.py verify             # receipt chain check
