@@ -51,6 +51,9 @@ pub enum SecretKind {
     SlackToken,
     PemPrivateKey,
     AzureClientSecret,
+    AnthropicApiKey,
+    OpenAiApiKey,
+    StripeLiveKey,
     HighEntropyCandidate,
 }
 
@@ -64,6 +67,9 @@ impl SecretKind {
             Self::SlackToken => "Slack token",
             Self::PemPrivateKey => "PEM private key",
             Self::AzureClientSecret => "Azure client secret",
+            Self::AnthropicApiKey => "Anthropic API key",
+            Self::OpenAiApiKey => "OpenAI API key",
+            Self::StripeLiveKey => "Stripe live key",
             Self::HighEntropyCandidate => "high-entropy credential candidate",
         }
     }
@@ -201,6 +207,54 @@ pub fn scan_secrets(content: &str) -> Vec<SecretFinding> {
         );
     }
 
+    // Anthropic keys are `sk-ant-` plus a long URL-safe run. A real key mixes
+    // lower case, upper case and digits, which a kebab-case slug that happens
+    // to start with `sk-ant-` does not.
+    for value in min_prefixed_runs(content, "sk-ant-", 40, is_urlsafe_key_char) {
+        push_finding(
+            &mut findings,
+            SecretKind::AnthropicApiKey,
+            SecretConfidence::Blocking,
+            value,
+        );
+    }
+
+    // OpenAI project and service-account keys carry a named prefix. The
+    // legacy form is `sk-` plus exactly 48 alphanumerics.
+    for prefix in ["sk-proj-", "sk-svcacct-", "sk-admin-"] {
+        for value in min_prefixed_runs(content, prefix, 40, is_urlsafe_key_char) {
+            push_finding(
+                &mut findings,
+                SecretKind::OpenAiApiKey,
+                SecretConfidence::Blocking,
+                value,
+            );
+        }
+    }
+    for value in exact_prefixed_runs(content, "sk-", 48, is_alphanumeric) {
+        if has_mixed_classes(value) {
+            push_finding(
+                &mut findings,
+                SecretKind::OpenAiApiKey,
+                SecretConfidence::Blocking,
+                value,
+            );
+        }
+    }
+
+    // Stripe live secret and restricted keys. Test-mode keys (`sk_test_`) are
+    // meant to be shared in fixtures and are not blocked.
+    for prefix in ["sk_live_", "rk_live_"] {
+        for value in min_prefixed_runs(content, prefix, 24, is_alphanumeric) {
+            push_finding(
+                &mut findings,
+                SecretKind::StripeLiveKey,
+                SecretConfidence::Blocking,
+                value,
+            );
+        }
+    }
+
     scan_labelled_secret_values(content, &mut findings);
     findings
 }
@@ -246,13 +300,43 @@ fn exact_prefixed_runs<'a>(
         .match_indices(prefix)
         .filter_map(|(start, _)| {
             let end = start + prefix.len() + suffix_len;
+            // `then`, not `then_some`: the slice must not be built before the
+            // bounds check, or a prefix near the end of the text panics.
             (end <= bytes.len()
                 && (start == 0 || !allowed(bytes[start - 1]))
                 && bytes[start + prefix.len()..end]
                     .iter()
                     .all(|byte| allowed(*byte))
                 && (end == bytes.len() || !allowed(bytes[end])))
-            .then_some(&content[start..end])
+            .then(|| &content[start..end])
+        })
+        .collect()
+}
+
+/// `prefix` followed by a run of at least `min_len` allowed characters that
+/// mixes lower case, upper case and digits. The run is taken to its end, so
+/// the fingerprint covers the whole token. A prefix that continues an
+/// identifier (`risk-ant-...`, `task_live_...`) is not a token start.
+fn min_prefixed_runs<'a>(
+    content: &'a str,
+    prefix: &str,
+    min_len: usize,
+    allowed: fn(u8) -> bool,
+) -> Vec<&'a str> {
+    let bytes = content.as_bytes();
+    content
+        .match_indices(prefix)
+        .filter_map(|(start, _)| {
+            if start > 0 && is_urlsafe_key_char(bytes[start - 1]) {
+                return None;
+            }
+            let body = start + prefix.len();
+            let mut end = body;
+            while end < bytes.len() && allowed(bytes[end]) {
+                end += 1;
+            }
+            let run = &content[body..end];
+            (run.len() >= min_len && has_mixed_classes(run)).then_some(&content[start..end])
         })
         .collect()
 }
@@ -535,6 +619,77 @@ mod tests {
                 .iter()
                 .any(|finding| finding.kind == SecretKind::SlackToken)
         );
+    }
+
+    #[test]
+    fn finds_model_provider_and_stripe_live_keys() {
+        // Obviously fake bodies: a repeated three-character pattern.
+        let body = "aB3".repeat(32);
+        let anthropic = format!("sk-ant-api03-{body}");
+        let openai_project = format!("sk-proj-{body}");
+        let openai_legacy = format!("sk-{}", "aB3".repeat(16));
+        let stripe = format!("sk_live_{}", "aB3".repeat(10));
+        let content = format!(
+            "ANTHROPIC_API_KEY={anthropic}\nOPENAI_API_KEY={openai_project}\nold: {openai_legacy}\nstripe: \"{stripe}\""
+        );
+
+        let findings = scan_secrets(&content);
+        let count = |kind| findings.iter().filter(|f| f.kind == kind).count();
+        assert_eq!(count(SecretKind::AnthropicApiKey), 1, "{findings:?}");
+        assert_eq!(count(SecretKind::OpenAiApiKey), 2, "{findings:?}");
+        assert_eq!(count(SecretKind::StripeLiveKey), 1, "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .filter(|f| f.kind != SecretKind::HighEntropyCandidate)
+                .all(SecretFinding::blocks_ingestion)
+        );
+        for token in [&anthropic, &openai_project, &openai_legacy, &stripe] {
+            assert!(!format!("{findings:?}").contains(token.as_str()));
+        }
+    }
+
+    #[test]
+    fn model_provider_lookalikes_are_not_blocked() {
+        let findings = scan_secrets(concat!(
+            "slug: sk-ant-colony-optimization-for-vehicle-routing-problems-in-large-graphs\n",
+            "word: risk-ant-aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3\n",
+            "short: sk-ant-aB3 and sk-proj-aB3aB3\n",
+            "test mode: sk_test_aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3\n",
+            "prose: set sk-proj- keys in the vault, never in a memory\n",
+            "flat: sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        ));
+        assert!(
+            findings.iter().all(|finding| !finding.blocks_ingestion()),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_prefix_near_the_end_of_the_text_never_panics() {
+        // Every exact-length prefix, with fewer bytes after it than the shape
+        // needs. Before the fix the slice was built before the bounds check.
+        for tail in [
+            "sk-",
+            "ghp_",
+            "AIza",
+            "AKIA",
+            "github_pat_",
+            "sk-abc",
+            "task sk-",
+            "desk-",
+        ] {
+            let findings = scan_secrets(&format!("note ends with {tail}"));
+            assert!(
+                findings.iter().all(|f| !f.blocks_ingestion()),
+                "{tail}: {findings:?}"
+            );
+            let findings = scan_secrets(tail);
+            assert!(
+                findings.iter().all(|f| !f.blocks_ingestion()),
+                "{tail}: {findings:?}"
+            );
+        }
     }
 
     #[test]

@@ -296,6 +296,11 @@ const STRATA_WITHHELD_ACTIONS: &[(&str, &str, Option<&str>)] = &[
     ),
     (
         "maintain",
+        "consolidate",
+        Some(tools::unavailable::CONSOLIDATE_NOOP),
+    ),
+    (
+        "maintain",
         "restore",
         Some(
             "Strata backups are directory copies; stop Vestige and copy a backup's log/ into the data directory",
@@ -338,9 +343,7 @@ fn withheld_call_in(
             .find(|(name, withheld, _)| *name == "graph" && *withheld == action)?;
         return Some(match why {
             None => crate::strata_memory::withheld_message(&format!("{tool} '{action}'")),
-            Some(why) => format!(
-                "unavailable_in_4_0: {tool} '{action}' is not available on Strata in Vestige 4.0: {why}."
-            ),
+            Some(why) => tools::unavailable::withheld_in_4_0(&format!("{tool} '{action}'"), why),
         });
     }
     if STRATA_WITHHELD_TOOLS.contains(&tool) {
@@ -365,9 +368,7 @@ fn withheld_call_in(
         .find(|(name, withheld, _)| *name == tool && *withheld == action)?;
     Some(match why {
         None => crate::strata_memory::withheld_message(&format!("{tool} action '{action}'")),
-        Some(why) => format!(
-            "unavailable_in_4_0: {tool} action '{action}' is not available on Strata in Vestige 4.0: {why}."
-        ),
+        Some(why) => tools::unavailable::withheld_in_4_0(&format!("{tool} action '{action}'"), why),
     })
 }
 
@@ -383,15 +384,15 @@ fn withhold_on_strata(tools: &mut Vec<ToolDescription>) {
             if let Some(annotations) = tool.annotations.as_mut() {
                 annotations.destructive_hint = true;
             }
-            tool.description = Some("Hide a memory from every read without deleting it: the Strata log keeps its bytes. On Strata in 4.0 this cannot be undone (reverse=true is refused). It is not erasure.".to_string());
+            tool.description = Some("Hide a memory from every read; the log keeps its bytes. On Strata in 4.0 it cannot be undone (reverse=true is refused) and is not erasure.".to_string());
         } else if tool.name == "memory" {
             tool.description = Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node). Erasure is withheld on Strata in 4.0.".to_string());
         } else if tool.name == "recall" {
             // The v3 text sold keyword search and similarity modes, which a
             // Strata log answers with similarity_disabled.
-            tool.description = Some("Find memories by exact handle: pass 'handle' as a memory id, a unique id prefix of 8+ characters, or an exact tag. In 4.0 a free-text 'query' and the 'reason' and 'contradictions' modes return similarity_disabled.".to_string());
+            tool.description = Some("Find memories by exact handle: a memory id, a unique id prefix of 8+ characters, or an exact tag. In 4.0 free text and the 'reason' / 'contradictions' modes return similarity_disabled.".to_string());
         } else if tool.name == "smart_ingest" {
-            tool.description = Some("Save one memory ('content') or up to 20 ('items'). Each write passes the log's gate and returns a receipt. Content that looks like a secret is refused unless allowSecrets is set.".to_string());
+            tool.description = Some("Save one memory ('content') or up to 20 ('items'); each write passes the gate and returns a receipt. Secret-shaped content is refused unless allowSecrets is set.".to_string());
         } else if tool.name == "receipt" {
             tool.description = Some("'get' shows what a write did from its receipt id; 'replay' re-derives that state from the log and reports any mismatch.".to_string());
         } else if !removed.is_empty() {
@@ -469,7 +470,7 @@ fn strip_withheld_in(
         && let Some(description) = schema.pointer_mut("/properties/action/description")
     {
         *description = serde_json::json!(
-            "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (retrieval strength; demote never deletes), 'edit' (admit a successor under rule edit, then retire the previous node). Erasure is withheld on Strata in 4.0."
+            "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node). Erasure is withheld on Strata in 4.0."
         );
     }
     if tool == "recall"
@@ -1041,7 +1042,7 @@ description: Some("Inspect a persisted retrieval receipt ('get'), ablate its fro
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (retired, can't be retrieved; confirm=true). 'delete' aliases purge.".to_string()),
+description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (confirm=true; retired, not retrievable). 'delete' aliases purge.".to_string()),
                 input_schema: tools::compact::of(&tools::memory_unified::schema()),
                 ..Default::default()
             },
@@ -1072,7 +1073,7 @@ description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / '
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (check a bounded set of anchors), 'reanchor' (replace reviewed source evidence for an existing memory).".to_string()),
+description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions marked current or stale, and the scopes holding them), 'verify' (re-check anchors and, with a codebase, change records), 'reanchor' (replace reviewed evidence), 'ingest_repo' (a checkout's commits as anchored change records; previews unless dryRun=false).".to_string()),
                 input_schema: tools::compact::of(&tools::codebase_unified::schema()),
                 ..Default::default()
             },
@@ -1090,7 +1091,7 @@ description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision'
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-                description: Some("Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, a memory id on every line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence, never the rest of the file.".to_string()),
+                description: Some("Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, one memory id per line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence.".to_string()),
                 input_schema: tools::compact::of(&tools::project::schema()),
                 ..Default::default()
             },
@@ -1103,7 +1104,7 @@ description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision'
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans, premises, attention, completion and replay through a nested command.".to_string()),
+description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans through a nested command.".to_string()),
                 input_schema: tools::compact::of(&tools::intention_graph::schema()),
                 ..Default::default()
             },
@@ -1164,7 +1165,7 @@ description: Some("Index an external system into local memories that cite the so
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle), 'tools' (all advertised tools and actions; pass tool for its full input schema).".to_string()),
+description: Some("Store status. Views: 'health' (default), 'retention', 'timeline' (memories by day), 'changelog' (state-change audit trail), 'provenance' (memoryId), 'coverage', 'stats' (counts by type, tag, age, retention), 'tools' (advertised tools and actions; pass tool for one schema).".to_string()),
                 input_schema: tools::compact::of(&tools::memory_status::schema()),
                 output_schema: Some(serde_json::json!({
                     "type": "object",
@@ -1207,7 +1208,7 @@ description: Some("Lifecycle: 'consolidate', 'dream', 'gc' (dry_run default true
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Duplicates, merges, supersession, exact tag maintenance. Actions: scan (default, read-only), plan_merge, plan_supersede, apply (confirm=true or policy-allowed), undo, tag_rename, tag_merge (preview-token gated), protect, policy. Merged memories are invalidated, never deleted.".to_string()),
+description: Some("Duplicates and exact tag maintenance. Actions: scan (default, read-only), plan_merge, plan_supersede, apply (confirm=true), undo, tag_rename, tag_merge (preview-token gated), protect, policy. Merges invalidate, never delete.".to_string()),
                 input_schema: tools::compact::of(&tools::dedup::unified_schema()),
                 ..Default::default()
             },
@@ -1232,7 +1233,7 @@ description: Some("Duplicates, merges, supersession, exact tag maintenance. Acti
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Never-composed memory pairs with proofs from recorded edges only (no text or vector similarity). Modes: propose (lens bridge|divergent), bounty, weave (write), map, inspect, explore, predict, harden (write).".to_string()),
+description: Some("Never-composed memory pairs, each with its proof from recorded edges only. Modes: propose (lens bridge|divergent), bounty, weave (write), map, inspect, explore, predict, harden (write).".to_string()),
                 input_schema: tools::compact::of(&tools::ghostlink::schema()),
                 ..Default::default()
             },
@@ -1252,7 +1253,7 @@ description: Some("Never-composed memory pairs with proofs from recorded edges o
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Start-of-session context in one call: relevant memories, open intentions, status, predictions, codebase context, under one token budget.".to_string()),
+description: Some("Start-of-session context in one call: open intentions, status, predictions and codebase context under one token budget.".to_string()),
                 input_schema: tools::compact::of(&tools::session_context::schema()),
                 ..Default::default()
             },
@@ -1299,7 +1300,7 @@ description: Some("Inhibit a memory without deleting it: out of retrieval, faste
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Investigate a failure from explicit start points (failing_test, stack_frame, ci_run, logged_write, version_range) through exact mechanism edges to suspect change records. Results are hypotheses, not proven causes. Default promote=false previews without graph changes; explicit promote=true records evidence_of trail edges after review. Never guesses a start point: missing anchors return needs_report.".to_string()),
+description: Some("Walk a failure backward from explicit start points (failing_test, stack_frame, ci_run, logged_write, version_range); any kind carries node_id, the memory recording the symptom. A Strata log follows recorded causal edges only and says why when none lead upstream. Results are hypotheses, not proven causes. promote=true records trail edges on the legacy engine only.".to_string()),
                 input_schema: tools::compact::of(&tools::causal_walk::schema()),
                 ..Default::default()
             },
@@ -1403,7 +1404,13 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
                 _ => None,
             };
             if let Some(n) = max_chars {
-                let mut meta = serde_json::Map::new();
+                // Merge into the tool's existing `_meta` instead of replacing
+                // it: `recall` already carries `ui.resourceUri` (MCP Apps), and
+                // overwriting the map dropped that key from tools/list.
+                let mut meta = match tool.meta.take() {
+                    Some(serde_json::Value::Object(existing)) => existing,
+                    _ => serde_json::Map::new(),
+                };
                 meta.insert(
                     "anthropic/maxResultSizeChars".to_string(),
                     serde_json::Value::from(n),

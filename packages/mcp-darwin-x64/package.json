@@ -1,6 +1,6 @@
 {
   "name": "@vestige/mcp-darwin-x64",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "description": "Platform binary for vestige-mcp-server (do not install directly).",
   "license": "AGPL-3.0-only",
   "repository": {

@@ -182,7 +182,7 @@ fn forgotten_lesson_completes_over_stdio_from_recorded_causal_edges() {
     {
         let mut store = strata_store::StrataStore::open(dir.path()).expect("reopen log");
         store
-            .save_connection(&edge(&cause, &failure, "derived_from"))
+            .save_connection(&edge(&failure, &cause, "derived_from"))
             .expect("cause edge");
         store
             .save_connection(&edge(&lesson, &cause, "evidence_of"))
@@ -244,8 +244,9 @@ fn forgotten_lesson_completes_over_stdio_from_recorded_causal_edges() {
         .find(|entry| entry["lesson_id"] == cause)
         .unwrap();
     assert_eq!(cause_entry["edge_path"][0]["link_type"], "derived_from");
-    assert_eq!(cause_entry["edge_path"][0]["source_id"], json!(cause));
-    assert_eq!(cause_entry["edge_path"][0]["target_id"], json!(failure));
+    // recorded as `failure derived_from cause`
+    assert_eq!(cause_entry["edge_path"][0]["source_id"], json!(failure));
+    assert_eq!(cause_entry["edge_path"][0]["target_id"], json!(cause));
 
     let lesson_entry = lessons
         .iter()

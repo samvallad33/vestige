@@ -1,6 +1,6 @@
 # Windsurf
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../../README.md) and the [4.0.0 changelog](../../CHANGELOG.md).
+> Written for Vestige 4.x.
 
 > Give Cascade a brain that remembers between sessions.
 
@@ -32,11 +32,13 @@ open -e ~/.codeium/windsurf/mcp_config.json
 
 ### 2. Add Vestige
 
+Install Vestige first: [README → Install](../../README.md#install). Run `which vestige-mcp` and paste what it prints; the README install puts the binary in `~/.local/bin`.
+
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "/usr/local/bin/vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": [],
       "env": {}
     }
@@ -50,7 +52,7 @@ open -e ~/.codeium/windsurf/mcp_config.json
 {
   "mcpServers": {
     "vestige": {
-      "command": "${env:HOME}/.cargo/bin/vestige-mcp",
+      "command": "${env:HOME}/.local/bin/vestige-mcp",
       "args": [],
       "env": {}
     }
@@ -63,7 +65,7 @@ open -e ~/.codeium/windsurf/mcp_config.json
 {
   "mcpServers": {
     "vestige": {
-      "command": "C:\\Users\\you\\.cargo\\bin\\vestige-mcp.exe",
+      "command": "<absolute path from where vestige-mcp>",
       "args": [],
       "env": {}
     }
@@ -89,13 +91,13 @@ You should see Vestige's tools listed.
 
 In Cascade:
 
-> "Remember that this project uses Next.js 15 with the App Router and Drizzle ORM"
+> "Remember that this project uses Next.js 15 with the App Router and Drizzle ORM. Tag it `stack`."
 
 Start a **new Cascade session**, then:
 
-> "What framework does this project use?"
+> "Recall the `stack` tag from Vestige."
 
-It remembers.
+It comes back, with its memory id. Vestige 4.x finds a memory by an exact handle (its id or an exact tag), not by resemblance, so name the tag when you save and when you ask. See [Getting Started](../GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
 
 ---
 
@@ -105,7 +107,7 @@ It remembers.
 {
   "mcpServers": {
     "vestige": {
-      "command": "/usr/local/bin/vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": ["--data-dir", "${env:HOME}/projects/my-app/.vestige"],
       "env": {}
     }

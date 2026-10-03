@@ -526,6 +526,7 @@ pub async fn execute(
 
     // Code advice uses the same current selection and live evidence evaluator
     // as codebase.get_context, including items discovered by search.
+    let mut code_elsewhere: Option<Value> = None;
     if let Some(ctx) = &args.context
         && let Some(codebase) = &ctx.codebase
     {
@@ -535,6 +536,19 @@ pub async fn execute(
                     code_items.push(serde_json::json!({"id":node.id, "kind":kind,
                         "summary":code_context::summary(&node.content)}));
                 }
+            }
+        }
+        // Nothing for this codebase here is not nothing anywhere: name the
+        // other scopes that hold its code memories instead of staying silent.
+        // A backend that cannot list scopes leaves the section as it was.
+        if code_items.is_empty()
+            && let Ok(rows) = code_context::code_scopes(storage, Some(codebase))
+        {
+            let others: Vec<&code_context::ScopeCounts> =
+                rows.iter().filter(|row| row.scope != scope).collect();
+            if !others.is_empty() {
+                notices.push(code_elsewhere_notice(codebase, scope, &others));
+                code_elsewhere = Some(Value::Array(others.iter().map(|row| row.json()).collect()));
             }
         }
     }
@@ -555,6 +569,9 @@ pub async fn execute(
         "codeContext": {"scope":scope,"codebase":args.context.as_ref().and_then(|c| c.codebase.as_deref()),"verification":verification,"items":code_items},
         "automationTriggers": {"needsDream":needs_dream,"needsBackup":needs_backup,"needsGc":needs_gc},
     });
+    if let Some(elsewhere) = code_elsewhere {
+        result["codeContext"]["elsewhere"] = elsewhere;
+    }
     if !notices.is_empty() {
         result["notices"] = serde_json::json!(notices);
     }
@@ -639,6 +656,36 @@ pub async fn execute(
         .collect();
     let _ = storage.record_batch_retrieval(&visible);
     Ok(result)
+}
+
+/// Scopes a notice names before it summarizes the rest; `codeContext.elsewhere`
+/// lists them all.
+const ELSEWHERE_NAMED: usize = 5;
+
+/// The notice for a codebase whose code memories are all in other scopes.
+/// Bounded, since notices stay in the response whatever the token budget.
+fn code_elsewhere_notice(
+    codebase: &str,
+    scope: &str,
+    others: &[&code_context::ScopeCounts],
+) -> String {
+    let mut named: Vec<String> = others
+        .iter()
+        .take(ELSEWHERE_NAMED)
+        .map(|row| {
+            format!(
+                "'{}' ({} patterns, {} decisions, {} events)",
+                row.scope, row.patterns, row.decisions, row.events
+            )
+        })
+        .collect();
+    if others.len() > ELSEWHERE_NAMED {
+        named.push(format!("{} more", others.len() - ELSEWHERE_NAMED));
+    }
+    format!(
+        "codeContext: nothing for codebase '{codebase}' in scope '{scope}', but other scopes hold its code memories: {}. Read patterns and decisions with codebase action='get_context' codebase='{codebase}' scope=<name>; check change records (events) with codebase action='verify' and the same scope.",
+        named.join(", ")
+    )
 }
 
 fn fits_budget(result: &mut Value, bytes: usize) -> bool {
@@ -1546,5 +1593,85 @@ mod strata_tests {
             before,
             "a read-only session_start persisted a verdict"
         );
+    }
+
+    /// A codebase whose code memories all live in other scopes is named, not
+    /// met with an empty, silent codeContext.
+    #[tokio::test]
+    async fn code_context_names_the_other_scopes_that_hold_the_codebase() {
+        let (storage, _dir) = strata();
+        crate::tools::codebase_unified::execute(
+            &storage,
+            &cognitive(),
+            &OutputConfig::default(),
+            Some(
+                json!({"action": "remember_decision", "codebase": "demo", "scope": "demo-repo",
+                        "decision": "Walk only recorded edges", "rationale": "elsewhere test"}),
+            ),
+        )
+        .await
+        .unwrap();
+        storage
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: "commit 0123 touched src/lib.rs".to_string(),
+                    node_type: "event".to_string(),
+                    tags: vec!["git-commit".to_string(), "codebase:demo".to_string()],
+                    ..Default::default()
+                },
+                "demo",
+            )
+            .unwrap();
+
+        let out = start(&storage, json!({"context": {"codebase": "demo"}})).await;
+        assert_eq!(out["codeContext"]["items"], json!([]), "{out}");
+        assert_eq!(
+            out["codeContext"]["elsewhere"],
+            json!([
+                {"scope": "demo", "patterns": 0, "decisions": 0, "events": 1},
+                {"scope": "demo-repo", "patterns": 0, "decisions": 1, "events": 0},
+            ]),
+            "{out}"
+        );
+        let notice = out["notices"]
+            .as_array()
+            .expect("a notice names the scopes")
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|notice| notice.starts_with("codeContext:"))
+            .unwrap_or_else(|| panic!("no codeContext notice: {out}"))
+            .to_string();
+        assert!(notice.contains("in scope 'user'"), "{notice}");
+        assert!(
+            notice.contains("'demo-repo' (0 patterns, 1 decisions, 0 events)"),
+            "{notice}"
+        );
+        assert!(
+            notice.contains("'demo' (0 patterns, 0 decisions, 1 events)"),
+            "{notice}"
+        );
+        assert!(
+            notice.contains("codebase action='get_context' codebase='demo'"),
+            "{notice}"
+        );
+
+        // the scope that holds the advice: its items, and no pointer elsewhere
+        let out = start(
+            &storage,
+            json!({"scope": "demo-repo", "context": {"codebase": "demo"}}),
+        )
+        .await;
+        assert_eq!(
+            out["codeContext"]["items"].as_array().unwrap().len(),
+            1,
+            "{out}"
+        );
+        assert!(out["codeContext"].get("elsewhere").is_none(), "{out}");
+        assert!(out.get("notices").is_none(), "{out}");
+
+        // a codebase no scope holds: nothing to point at, so nothing is said
+        let out = start(&storage, json!({"context": {"codebase": "nowhere"}})).await;
+        assert!(out["codeContext"].get("elsewhere").is_none(), "{out}");
+        assert!(out.get("notices").is_none(), "{out}");
     }
 }

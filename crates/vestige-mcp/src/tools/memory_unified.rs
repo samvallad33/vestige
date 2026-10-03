@@ -55,7 +55,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["get", "get_batch", "delete", "purge", "state", "promote", "demote", "edit"],
-                "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (retrieval strength; demote never deletes), 'edit' (admit a successor under rule edit, then retire the previous node), 'purge' (retired, can't be retrieved; confirm=true). 'delete' aliases purge"
+                "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node), 'purge' (confirm=true; retired, not retrievable). 'delete' aliases purge"
             },
             "id": {
                 "type": "string",
@@ -626,7 +626,14 @@ async fn execute_demote(
                 before.retrieval_strength, node.retrieval_strength
             )
         },
-        "note": "Memory is NOT deleted - it remains searchable but ranks lower."
+        // A Strata log has no ranking for a demote to lower, and
+        // retrievability reads 1.0 right after any review, so "after: 1.0"
+        // beside a demote needs saying out loud.
+        "note": if strata {
+            "The memory is not deleted and is still found by its id and tags. Retrievability reads 1.0 right after any review; the lower stability makes it fade faster from here."
+        } else {
+            "Memory is NOT deleted - it remains searchable but ranks lower."
+        }
     });
     if strata {
         let receipt_id = match &endorsement {
@@ -1542,7 +1549,7 @@ mod strata_tests {
             .await
             .unwrap();
             assert_eq!(demoted["action"], "demoted");
-            assert!(demoted["note"].as_str().unwrap().contains("NOT deleted"));
+            assert!(demoted["note"].as_str().unwrap().contains("not deleted"));
             let demote_receipt = demoted["receiptId"].as_str().unwrap().to_string();
             assert_ne!(demote_receipt, promote_receipt);
             proved(&storage, &demote_receipt, &id, "demoted").await;

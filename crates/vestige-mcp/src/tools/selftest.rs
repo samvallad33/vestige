@@ -5,7 +5,7 @@
 //! directory that is deleted before the tool returns:
 //!
 //! cause → intermediate → symptom, as memories plus recorded `derived_from`
-//! edges, with distractors that a keyword, entity, or non-causal edge walk
+//! edges (each stored as `later derived_from earlier`), with distractors that a keyword, entity, or non-causal edge walk
 //! would pick up. A local backward walk follows recorded causal edges only,
 //! bounded, from the symptom. Each check is a deterministic pass/fail.
 
@@ -131,13 +131,26 @@ fn plant_memory(storage: &Storage, content: &str) -> Result<String, String> {
     Ok(node.id)
 }
 
+/// The stored endpoints of an edge from an `earlier` record to a `later` one.
+/// `later derived_from earlier` is stored from the derivative to its origin,
+/// the way a link declared at save and a GhostLink weave record it. Other
+/// kinds are stored from the earlier record to the later one.
+fn stored_ends<'a>(earlier: &'a str, later: &'a str, link_type: &str) -> (&'a str, &'a str) {
+    if link_type == CAUSAL_LINK {
+        (later, earlier)
+    } else {
+        (earlier, later)
+    }
+}
+
 fn record_edge(
     storage: &Storage,
-    source: &str,
-    target: &str,
+    earlier: &str,
+    later: &str,
     link_type: &str,
 ) -> Result<(), String> {
     let at = chrono::DateTime::UNIX_EPOCH;
+    let (source, target) = stored_ends(earlier, later, link_type);
     storage
         .save_connection(&ConnectionRecord {
             source_id: source.to_string(),
@@ -153,10 +166,11 @@ fn record_edge(
 
 fn edge_present(
     storage: &Storage,
-    source: &str,
-    target: &str,
+    earlier: &str,
+    later: &str,
     link_type: &str,
 ) -> Result<bool, String> {
+    let (source, target) = stored_ends(earlier, later, link_type);
     let edges = storage
         .get_connections_for_memory(target)
         .map_err(|e| format!("reading recorded edges failed: {e}"))?;
@@ -167,8 +181,9 @@ fn edge_present(
 
 /// Plant cause → intermediate → symptom plus distractors.
 ///
-/// Edges point from the earlier record to the later one (`derived_from`).
-/// The backward walk reads the reverse direction of that recorded edge.
+/// Each chain edge is recorded as `later derived_from earlier`, the direction
+/// a declared link has. The backward walk goes from a record to what it is
+/// derived from.
 fn plant(storage: &Storage) -> Result<Planted, String> {
     let symptom_text =
         "Selftest symptom record: observed failure at the end of the recorded chain.";
@@ -242,9 +257,10 @@ fn role_of(planted: &Planted, id: &str) -> &'static str {
 
 /// Bounded backward walk over recorded `derived_from` edges.
 ///
-/// From the current node, a predecessor is the source of a recorded causal
-/// edge whose target is the current node. Other link types, outgoing edges,
-/// and nodes past `hop_bound` are not followed. Predecessor ids are sorted
+/// From the current node, a predecessor is the target of a recorded
+/// `derived_from` edge whose source is the current node: what this record is
+/// derived from. Other link types, edges that point at the current node (the
+/// records derived from it), and nodes past `hop_bound` are not followed. Predecessor ids are sorted
 /// before enqueue so the BFS order is deterministic. Visited nodes are not
 /// expanded twice, so a cycle ends.
 fn backward_walk(
@@ -266,10 +282,10 @@ fn backward_walk(
             .map_err(|e| format!("walking recorded edges failed: {e}"))?;
         let mut predecessors = Vec::new();
         for edge in edges {
-            if edge.link_type != CAUSAL_LINK || edge.target_id != id || edge.source_id == id {
+            if edge.link_type != CAUSAL_LINK || edge.source_id != id || edge.target_id == id {
                 continue;
             }
-            predecessors.push(edge.source_id);
+            predecessors.push(edge.target_id);
         }
         predecessors.sort();
         predecessors.dedup();

@@ -13,8 +13,13 @@ use crate::cognitive::CognitiveEngine;
 use vestige_core::codebase::{AnchorDraft, CodeAnchor, capture_anchor};
 use vestige_core::{IngestInput, OutputConfig, Storage};
 
-use super::code_context::{self, verification_json, verify_nodes};
+use super::code_context::{self, ScopeCounts, code_scopes, verification_json, verify_nodes};
 use super::search_unified::apply_output_masks;
+
+/// Memories `verify` checks per node type unless the caller says otherwise.
+const DEFAULT_VERIFY_LIMIT: i32 = 200;
+/// Most memories `verify` checks per node type in one call.
+const MAX_VERIFY_LIMIT: i32 = 1000;
 
 /// Input schema for the unified codebase tool
 pub fn schema() -> Value {
@@ -23,8 +28,8 @@ pub fn schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["remember_pattern", "remember_decision", "get_context", "verify", "reanchor"],
-                "description": "Save, list, and re-check code knowledge. 'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' checks a bounded set of anchored memories, 'reanchor' explicitly replaces reviewed source anchors for memoryId"
+                "enum": ["remember_pattern", "remember_decision", "get_context", "verify", "reanchor", "ingest_repo"],
+                "description": "Save, list, and re-check code knowledge. 'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' checks a bounded set of anchored memories (with a codebase, its change records too), 'reanchor' explicitly replaces reviewed source anchors for memoryId, 'ingest_repo' turns the commits of a local checkout (repoPath) into anchored change records in their own scope; it previews unless dryRun=false"
             },
             // remember_pattern fields
             "name": {
@@ -71,7 +76,12 @@ pub fn schema() -> Value {
                 }
             },
             "memoryId": {"type":"string", "description":"Existing code memory to reanchor after reviewing its advice against source"},
-            "scope": {"type":"string", "description":"Memory namespace (default: user)"},
+            "scope": {"type":"string", "description":"Memory namespace (default: user; for ingest_repo, the codebase name). get_context reads exactly this scope; its response lists every other scope that holds matching code memories."},
+            "allScopes": {
+                "type": "boolean",
+                "default": false,
+                "description": "get_context only: read code memories from every scope, each item tagged with its scope. Pass this or scope, not both."
+            },
             "repoPath": {
                 "type": "string",
                 "description": "Checkout for code evidence. Required for verify and reanchor; get_context uses it for evidence; remember actions fall back to the server working directory when it is omitted."
@@ -83,13 +93,31 @@ pub fn schema() -> Value {
             },
             "codebase": {
                 "type": "string",
-                "description": "Codebase or project identifier."
+                "description": "Codebase or project identifier (ingest_repo default: the checkout's directory name)."
             },
-            // get_context fields
+            // get_context, verify and ingest_repo fields
             "limit": {
                 "type": "integer",
-                "description": "Max items per category (default 10, get_context).",
+                "description": "get_context: max items per category (default 10). verify: max memories checked per type (default 200, max 1000). ingest_repo: max commits read (default 100, max 500).",
                 "default": 10
+            },
+            // ingest_repo fields
+            "dryRun": {
+                "type": "boolean",
+                "default": true,
+                "description": "ingest_repo: preview only (default true). The log is append-only, so a bulk write cannot be undone; pass false to write."
+            },
+            "rev": {
+                "type": "string",
+                "description": "ingest_repo: git revision or range to read (default HEAD), e.g. 'v1.2..v1.3' or '<sha>~1' to page further back."
+            },
+            "since": {
+                "type": "string",
+                "description": "ingest_repo: only commits after this date (git date syntax)."
+            },
+            "until": {
+                "type": "string",
+                "description": "ingest_repo: only commits before this date (git date syntax)."
             }
         },
         "required": ["action"]
@@ -117,6 +145,16 @@ struct CodebaseArgs {
     // Context fields
     limit: Option<i32>,
     verify: Option<bool>,
+    /// get_context: read every scope instead of one. Rejected together with
+    /// an explicit `scope`.
+    #[serde(alias = "all_scopes")]
+    all_scopes: Option<bool>,
+    // ingest_repo fields
+    #[serde(alias = "dry_run")]
+    dry_run: Option<bool>,
+    rev: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
 }
 
 /// Structured anchor as it arrives over MCP.
@@ -148,8 +186,9 @@ pub async fn execute(
         "get_context" => execute_get_context(storage, cognitive, output_config, &args).await,
         "verify" => execute_verify(storage, &args).await,
         "reanchor" => execute_reanchor(storage, &args),
+        "ingest_repo" => execute_ingest_repo(storage, &args).await,
         _ => Err(format!(
-            "Invalid action '{}'. Must be one of: remember_pattern, remember_decision, get_context, verify, reanchor",
+            "Invalid action '{}'. Must be one of: remember_pattern, remember_decision, get_context, verify, reanchor, ingest_repo",
             args.action
         )),
     }
@@ -362,6 +401,34 @@ async fn execute_remember_decision(
 // delete rotted memories - the user values that memories are preserved - it is
 // to make rot *visible* at retrieval time.
 
+/// Turn the commits of a local checkout into anchored change records. Previews
+/// unless `dryRun=false`: the log is append-only, so a bulk write is opt-in.
+async fn execute_ingest_repo(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<Value, String> {
+    let repo_path = explicit_repo_root(args).ok_or(
+        "ingest_repo requires an explicit `repoPath` pointing at the checkout to read; it does not fall back to the server working directory.",
+    )?;
+    let limit = match args.limit {
+        None => None,
+        Some(limit) if limit >= 1 => Some(limit as usize),
+        Some(_) => return Err("limit must be at least 1".into()),
+    };
+    super::repo_ingest::execute(
+        storage,
+        super::repo_ingest::Request {
+            repo_path,
+            codebase: args.codebase.clone(),
+            scope: args.scope.clone(),
+            rev: args.rev.clone(),
+            since: args.since.clone(),
+            until: args.until.clone(),
+            limit,
+            dry_run: args.dry_run.unwrap_or(true),
+            budget: None,
+        },
+    )
+    .await
+}
+
 /// Explicit opt-in only: changed source is not automatically accepted as evidence.
 fn execute_reanchor(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<Value, String> {
     let id = args
@@ -533,7 +600,95 @@ fn capture_and_record(storage: &Arc<Storage>, node_id: &str, args: &CodebaseArgs
     result
 }
 
+/// Up to `limit` current items of `kind`, read scope by scope in the order
+/// given, each paired with the scope it came from.
+fn fetch_code_nodes(
+    storage: &Arc<Storage>,
+    kind: &str,
+    codebase: Option<&str>,
+    scopes: &[String],
+    limit: i32,
+) -> Result<Vec<(String, vestige_core::KnowledgeNode)>, String> {
+    let cap = usize::try_from(limit).unwrap_or(0);
+    let mut out = Vec::new();
+    for scope in scopes {
+        for node in code_context::current_nodes(storage, kind, codebase, scope, limit)? {
+            if out.len() >= cap {
+                return Ok(out);
+            }
+            out.push((scope.clone(), node));
+        }
+    }
+    Ok(out)
+}
+
+/// The note on an empty `get_context` answer, built from the scope listing.
+/// It says either that no scope holds any code memory for the codebase, or
+/// where its patterns and decisions are instead, and where its change records
+/// are: those are `event` memories, which `get_context` does not list, so
+/// without this an ingested repository reads as an empty one. `None` when
+/// there is nothing to point at.
+fn empty_answer_note(
+    rows: &[ScopeCounts],
+    scope: &str,
+    all_scopes: bool,
+    codebase: Option<&str>,
+) -> Option<String> {
+    let of_codebase = codebase
+        .map(|c| format!(" for codebase '{c}'"))
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return Some(format!("No code memories{of_codebase} in any scope."));
+    }
+    let mut note: Vec<String> = Vec::new();
+    let advice_elsewhere: Vec<String> = rows
+        .iter()
+        .filter(|row| !all_scopes && row.scope != scope && row.has_advice())
+        .map(|row| {
+            format!(
+                "'{}' ({} patterns, {} decisions)",
+                row.scope, row.patterns, row.decisions
+            )
+        })
+        .collect();
+    if !advice_elsewhere.is_empty() {
+        note.push(format!(
+            "No code memories{of_codebase} in scope '{scope}', but other scopes hold some: {}. Pass scope=<name> to read one, or allScopes=true to read them all.",
+            advice_elsewhere.join(", ")
+        ));
+    }
+    // Events are only counted for a named codebase, so `codebase` is set here.
+    let with_events: Vec<&ScopeCounts> = rows.iter().filter(|row| row.events > 0).collect();
+    if let Some(codebase) = codebase
+        && !with_events.is_empty()
+    {
+        if advice_elsewhere.is_empty() {
+            note.push(format!(
+                "No patterns or decisions{of_codebase} are recorded."
+            ));
+        }
+        let listed = with_events
+            .iter()
+            .map(|row| format!("'{}' ({})", row.scope, row.events))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (scopes_word, verify_scope) = match with_events.as_slice() {
+            [only] => ("scope", only.scope.as_str()),
+            _ => ("scopes", "<scope>"),
+        };
+        note.push(format!(
+            "get_context lists patterns and decisions only; the change records (event memories) for codebase '{codebase}' are in {scopes_word} {listed}. Check them with codebase action='verify' codebase='{codebase}' scope='{verify_scope}' repoPath=<checkout>, or find one with recall handle='commit:<sha>'."
+        ));
+    }
+    (!note.is_empty()).then(|| note.join(" "))
+}
+
 /// Get codebase context (patterns and decisions)
+///
+/// Reads one scope (`scope`, default `user`) or, with `allScopes`, every scope.
+/// It never goes quietly empty: the response always lists the scopes that hold
+/// matching code memories with their exact totals, and an empty answer for the
+/// requested scope says where the memories are instead.
 async fn execute_get_context(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
@@ -543,38 +698,61 @@ async fn execute_get_context(
     // Precedence: explicit MCP param > config limit > built-in default (10).
     let limit = output_config.resolve_limit(args.limit, 10).clamp(1, 50);
 
-    let scope = args.scope.as_deref().unwrap_or("user");
-    let patterns =
-        code_context::current_nodes(storage, "pattern", args.codebase.as_deref(), scope, limit)?;
-    let decisions =
-        code_context::current_nodes(storage, "decision", args.codebase.as_deref(), scope, limit)?;
+    let all_scopes = args.all_scopes.unwrap_or(false);
+    let requested = args
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty());
+    if all_scopes && requested.is_some() {
+        return Err("pass either scope or allScopes=true, not both".into());
+    }
+    let scope = requested.unwrap_or("user");
 
-    let mut formatted_patterns: Vec<Value> = patterns
-        .iter()
-        .map(|n| {
-            serde_json::json!({
-                "id": n.id,
-                "content": n.content,
-                "tags": n.tags,
-                "retentionStrength": n.retention_strength,
-                "createdAt": n.created_at.to_rfc3339(),
+    let known = code_scopes(storage, args.codebase.as_deref());
+    let read_scopes: Vec<String> = if all_scopes {
+        known
+            .as_ref()
+            .map_err(|e| format!("allScopes needs a scope listing: {e}"))?
+            .iter()
+            .map(|row| row.scope.clone())
+            .collect()
+    } else {
+        vec![scope.to_string()]
+    };
+
+    let patterns = fetch_code_nodes(
+        storage,
+        "pattern",
+        args.codebase.as_deref(),
+        &read_scopes,
+        limit,
+    )?;
+    let decisions = fetch_code_nodes(
+        storage,
+        "decision",
+        args.codebase.as_deref(),
+        &read_scopes,
+        limit,
+    )?;
+
+    let format_items = |rows: &[(String, vestige_core::KnowledgeNode)]| -> Vec<Value> {
+        rows.iter()
+            .map(|(item_scope, n)| {
+                serde_json::json!({
+                    "id": n.id,
+                    "scope": item_scope,
+                    "content": n.content,
+                    "tags": n.tags,
+                    "retentionStrength": n.retention_strength,
+                    "createdAt": n.created_at.to_rfc3339(),
+                })
             })
-        })
-        .collect();
+            .collect()
+    };
+    let mut formatted_patterns = format_items(&patterns);
     apply_output_masks(&mut formatted_patterns, output_config);
-
-    let mut formatted_decisions: Vec<Value> = decisions
-        .iter()
-        .map(|n| {
-            serde_json::json!({
-                "id": n.id,
-                "content": n.content,
-                "tags": n.tags,
-                "retentionStrength": n.retention_strength,
-                "createdAt": n.created_at.to_rfc3339(),
-            })
-        })
-        .collect();
+    let mut formatted_decisions = format_items(&decisions);
     apply_output_masks(&mut formatted_decisions, output_config);
 
     // ====================================================================
@@ -582,7 +760,7 @@ async fn execute_get_context(
     // ====================================================================
     let mut universal_patterns = Vec::new();
     if let Some(codebase_name) = &args.codebase
-        && scope == "user"
+        && (all_scopes || scope == "user")
         && let Ok(cog) = cognitive.try_lock()
     {
         let context = vestige_core::advanced::cross_project::ProjectContext {
@@ -625,19 +803,63 @@ async fn execute_get_context(
     let formatted_decisions = items.split_off(pattern_count);
     let formatted_patterns = items;
 
+    // Where code memories live, and an honest account of an empty answer.
+    let in_view = |row: &ScopeCounts| all_scopes || row.scope == scope;
+    let (scopes_json, total_patterns, total_decisions, note) = match &known {
+        Ok(rows) => {
+            let listed: Vec<Value> = rows
+                .iter()
+                .map(|row| {
+                    let mut listed = row.json();
+                    listed["requested"] = serde_json::json!(!all_scopes && row.scope == scope);
+                    listed
+                })
+                .collect();
+            let total_patterns: usize = rows.iter().filter(|r| in_view(r)).map(|r| r.patterns).sum();
+            let total_decisions: usize =
+                rows.iter().filter(|r| in_view(r)).map(|r| r.decisions).sum();
+            let note = if formatted_patterns.is_empty() && formatted_decisions.is_empty() {
+                empty_answer_note(rows, scope, all_scopes, args.codebase.as_deref())
+            } else {
+                None
+            };
+            (
+                Value::Array(listed),
+                Some(total_patterns),
+                Some(total_decisions),
+                note,
+            )
+        }
+        Err(reason) => (
+            serde_json::json!({"status": "unavailable", "reason": reason}),
+            None,
+            None,
+            (formatted_patterns.is_empty() && formatted_decisions.is_empty()).then(|| {
+                format!(
+                    "No code memories found in scope '{scope}'; other scopes could not be listed on this backend."
+                )
+            }),
+        ),
+    };
+
     Ok(serde_json::json!({
         "action": "get_context",
-        "scope": scope,
+        "scope": if all_scopes { Value::Null } else { serde_json::json!(scope) },
+        "allScopes": all_scopes,
         "codebase": args.codebase,
         "profile": output_config.profile.as_str(),
+        "scopes": scopes_json,
+        "note": note,
         "verification": verification,
         "staleMemories": stale_ids,
         "patterns": {
             "count": formatted_patterns.len(),
+            "total": total_patterns,
             "items": formatted_patterns,
         },
         "decisions": {
             "count": formatted_decisions.len(),
+            "total": total_decisions,
             "items": formatted_decisions,
         },
         "crossProjectInsights": universal_patterns,
@@ -655,20 +877,59 @@ async fn execute_verify(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<V
         "verify requires an explicit `repoPath` pointing at the checkout to verify against; it does not fall back to the server working directory.",
     )?;
 
-    let limit = args.limit.unwrap_or(200).clamp(1, 1000);
-    let scope = args.scope.as_deref().unwrap_or("user");
-    let mut nodes =
-        code_context::current_nodes(storage, "pattern", args.codebase.as_deref(), scope, limit)?;
-    nodes.extend(code_context::current_nodes(
-        storage,
-        "decision",
-        args.codebase.as_deref(),
-        scope,
-        limit,
-    )?);
+    let limit = args
+        .limit
+        .unwrap_or(DEFAULT_VERIFY_LIMIT)
+        .clamp(1, MAX_VERIFY_LIMIT);
+    // Scopes are stored trimmed, so the reads and the totals below agree on
+    // every backend.
+    let scope = args.scope.as_deref().unwrap_or("user").trim();
+    let codebase = args.codebase.as_deref();
+    // Naming a codebase also checks its change records (ingest_repo) and any
+    // other event recorded for it. Without one, `event` would mean every event
+    // in the scope, so it is not read.
+    let kinds: &[&str] = if codebase.is_some() {
+        &["pattern", "decision", "event"]
+    } else {
+        &["pattern", "decision"]
+    };
+    let mut nodes: Vec<vestige_core::KnowledgeNode> = Vec::new();
+    for kind in kinds {
+        nodes.extend(code_context::current_nodes(
+            storage, kind, codebase, scope, limit,
+        )?);
+    }
 
     let node_ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
     let verified = verify_nodes(storage, &repo_root, &node_ids)?;
+
+    let mut checked_by_type: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    for node in &nodes {
+        *checked_by_type.entry(node.node_type.clone()).or_default() += 1;
+    }
+
+    // `limit` applies per type, so a sweep that stopped short must say how
+    // many it left out instead of reading as the whole scope.
+    let held = code_scopes(storage, codebase)?;
+    let in_scope = held.iter().find(|row| row.scope == scope);
+    let mut total_by_type: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut unchecked_by_type: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    for kind in kinds {
+        let total = in_scope.map_or(0, |row| match *kind {
+            "pattern" => row.patterns,
+            "decision" => row.decisions,
+            _ => row.events,
+        });
+        let checked = checked_by_type.get(*kind).copied().unwrap_or(0);
+        if total > checked {
+            unchecked_by_type.insert(kind.to_string(), total - checked);
+        }
+        total_by_type.insert(kind.to_string(), total);
+    }
+    let unchecked: usize = unchecked_by_type.values().sum();
 
     let mut stale = Vec::new();
     let mut fresh = 0usize;
@@ -692,6 +953,7 @@ async fn execute_verify(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<V
                 );
                 stale.push(serde_json::json!({
                     "id": node.id,
+                    "nodeType": node.node_type,
                     "status": status.as_str(),
                     "content": node.content,
                     "anchors": verdicts.iter().map(verification_json).collect::<Vec<_>>(),
@@ -739,26 +1001,40 @@ async fn execute_verify(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<V
         }),
     };
 
+    let mut message = if stale.is_empty() {
+        format!(
+            "{fresh} of {} code memories still match their source. Nothing was modified or deleted.",
+            nodes.len()
+        )
+    } else {
+        format!(
+            "{} of {} code memories no longer match the code they describe. They are listed in full and left untouched - review them, do not assume they are correct.",
+            stale.len(),
+            nodes.len()
+        )
+    };
+    if unchecked > 0 {
+        message.push_str(&format!(
+            " {unchecked} more were not checked; raise limit (max {MAX_VERIFY_LIMIT})."
+        ));
+    }
+
     Ok(serde_json::json!({
         "action": "verify",
         "codebase": args.codebase,
         "repoPath": repo_root.display().to_string(),
         "checked": nodes.len(),
+        "checkedByType": checked_by_type,
+        "totalByType": total_by_type,
+        "uncheckedByType": unchecked_by_type,
+        "truncated": unchecked > 0,
         "fresh": fresh,
         "stale": stale.len(),
         "unverifiable": unanchored.len(),
         "staleMemories": stale,
         "unverifiableMemories": unverifiable_memories,
         "stalenessPrediction": staleness_prediction,
-        "message": if stale.is_empty() {
-            format!("{fresh} of {} code memories still match their source. Nothing was modified or deleted.", nodes.len())
-        } else {
-            format!(
-                "{} of {} code memories no longer match the code they describe. They are listed in full and left untouched - review them, do not assume they are correct.",
-                stale.len(),
-                nodes.len()
-            )
-        },
+        "message": message,
     }))
 }
 
@@ -1546,9 +1822,71 @@ pub fn load_config(path: &str) -> Config {
             desc.ends_with("code knowledge."),
             "compact truncation must keep the whole first sentence, got: {desc}"
         );
-        // The five actions themselves survive as the enum.
+        // Every action itself survives as the enum, ingest_repo included.
         let actions = compact["properties"]["action"]["enum"].as_array().unwrap();
-        assert_eq!(actions.len(), 5);
+        assert_eq!(actions.len(), 6);
+        assert!(actions.contains(&serde_json::json!("ingest_repo")));
+    }
+
+    /// A NULL or blank `scope` on a legacy row can never be read (reads match
+    /// `scope = ?`), so it must not be listed either, and above all it must
+    /// not turn the whole scope listing into "unavailable".
+    #[tokio::test]
+    async fn a_null_or_blank_legacy_scope_does_not_break_the_scope_listing() {
+        let (storage, dir) = test_storage().await;
+        let cog = test_cognitive();
+        let mut ids = Vec::new();
+        for (scope, decision) in [
+            ("user", "kept in user"),
+            ("user", "nulled out"),
+            ("proj", "kept in proj"),
+            ("proj", "blanked out"),
+        ] {
+            let saved = execute(
+                &storage,
+                &cog,
+                &OutputConfig::default(),
+                Some(serde_json::json!({
+                    "action": "remember_decision", "codebase": "legacy",
+                    "decision": decision, "rationale": "scope listing test",
+                    "scope": scope,
+                })),
+            )
+            .await
+            .unwrap();
+            ids.push(saved["nodeId"].as_str().unwrap().to_string());
+        }
+        let db = rusqlite::Connection::open(dir.path().join("test.db")).unwrap();
+        db.execute(
+            "UPDATE knowledge_nodes SET scope = NULL WHERE id = ?1",
+            rusqlite::params![ids[1]],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE knowledge_nodes SET scope = '  ' WHERE id = ?1",
+            rusqlite::params![ids[3]],
+        )
+        .unwrap();
+        drop(db);
+
+        let ctx = execute(
+            &storage,
+            &cog,
+            &OutputConfig::default(),
+            Some(serde_json::json!({"action": "get_context", "codebase": "legacy"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            ctx["scopes"],
+            serde_json::json!([
+                {"scope": "proj", "patterns": 0, "decisions": 1, "events": 0, "requested": false},
+                {"scope": "user", "patterns": 0, "decisions": 1, "events": 0, "requested": true},
+            ]),
+            "{ctx}"
+        );
+        assert_eq!(ctx["decisions"]["count"], 1, "{ctx}");
+        assert_eq!(ctx["decisions"]["total"], 1, "{ctx}");
     }
 }
 
@@ -2040,5 +2378,242 @@ pub fn load_config(path: &str) -> Config {
         assert_eq!(moved[0].id, before[0].id);
         assert_eq!(moved[0].content_hash, before[0].content_hash);
         assert!(storage.code_anchors_for_node(&old_id).unwrap().is_empty());
+    }
+    // =====================================================================
+    // SCOPES: get_context must never go quietly empty
+    // =====================================================================
+
+    async fn remember_decision_in(
+        storage: &Arc<Storage>,
+        cog: &Arc<Mutex<CognitiveEngine>>,
+        scope: Option<&str>,
+        decision: &str,
+    ) {
+        let mut args = serde_json::json!({
+            "action": "remember_decision",
+            "codebase": "demo",
+            "decision": decision,
+            "rationale": "scope visibility test",
+        });
+        if let Some(scope) = scope {
+            args["scope"] = serde_json::json!(scope);
+        }
+        call(storage, cog, args).await;
+    }
+
+    #[tokio::test]
+    async fn get_context_in_the_default_scope_says_where_the_memories_are() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = strata(dir.path());
+        let cog = cognitive();
+        remember_decision_in(
+            &storage,
+            &cog,
+            Some("demo-repo"),
+            "Walk only recorded edges",
+        )
+        .await;
+
+        // the failing scenario: no scope asked, so `user` is read and is empty
+        let ctx = call(
+            &storage,
+            &cog,
+            serde_json::json!({"action": "get_context", "codebase": "demo"}),
+        )
+        .await;
+        assert_eq!(ctx["scope"], "user");
+        assert_eq!(ctx["decisions"]["count"], 0);
+        // ...but it is no longer silent: it names the scope that holds the memory
+        assert_eq!(
+            ctx["scopes"],
+            serde_json::json!([
+                {"scope": "demo-repo", "patterns": 0, "decisions": 1, "events": 0, "requested": false}
+            ]),
+            "{ctx}"
+        );
+        let note = ctx["note"]
+            .as_str()
+            .expect("an empty answer carries a note");
+        assert!(note.contains("scope 'user'"), "{note}");
+        assert!(
+            note.contains("'demo-repo' (0 patterns, 1 decisions)"),
+            "{note}"
+        );
+        assert!(note.contains("allScopes=true"), "{note}");
+
+        // asking for that scope returns it, and no longer calls it empty
+        let ctx = call(
+            &storage,
+            &cog,
+            serde_json::json!({"action": "get_context", "codebase": "demo", "scope": "demo-repo"}),
+        )
+        .await;
+        assert_eq!(ctx["scope"], "demo-repo");
+        assert_eq!(ctx["decisions"]["count"], 1);
+        assert_eq!(ctx["decisions"]["total"], 1);
+        assert_eq!(ctx["decisions"]["items"][0]["scope"], "demo-repo");
+        assert!(ctx["note"].is_null(), "{ctx}");
+        assert_eq!(ctx["scopes"][0]["requested"], true);
+    }
+
+    #[tokio::test]
+    async fn all_scopes_reads_every_scope_and_tags_each_item() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = strata(dir.path());
+        let cog = cognitive();
+        remember_decision_in(&storage, &cog, None, "decision in user").await;
+        remember_decision_in(&storage, &cog, Some("demo-repo"), "decision in demo-repo").await;
+        remember_decision_in(&storage, &cog, Some("other"), "decision in other").await;
+
+        for key in ["allScopes", "all_scopes"] {
+            let mut args = serde_json::json!({"action": "get_context", "codebase": "demo"});
+            args[key] = serde_json::json!(true);
+            let ctx = call(&storage, &cog, args).await;
+            assert_eq!(ctx["allScopes"], true, "{key}");
+            assert!(ctx["scope"].is_null(), "{key}: no single scope was read");
+            assert_eq!(ctx["decisions"]["count"], 3, "{key}: {ctx}");
+            assert_eq!(ctx["decisions"]["total"], 3, "{key}");
+            let mut seen: Vec<&str> = ctx["decisions"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["scope"].as_str().unwrap())
+                .collect();
+            seen.sort_unstable();
+            assert_eq!(seen, vec!["demo-repo", "other", "user"], "{key}");
+            assert!(ctx["note"].is_null(), "{key}: {ctx}");
+            let listed: Vec<&str> = ctx["scopes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["scope"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                listed,
+                vec!["demo-repo", "other", "user"],
+                "{key}: ordered by name"
+            );
+        }
+
+        // one scope, asked for exactly: the others are still listed, not read
+        let ctx = call(
+            &storage,
+            &cog,
+            serde_json::json!({"action": "get_context", "codebase": "demo"}),
+        )
+        .await;
+        assert_eq!(ctx["decisions"]["count"], 1);
+        assert_eq!(ctx["scopes"].as_array().unwrap().len(), 3);
+        assert!(ctx["note"].is_null());
+    }
+
+    #[tokio::test]
+    async fn scope_and_all_scopes_together_are_refused_not_guessed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = strata(dir.path());
+        let err = execute(
+            &storage,
+            &cognitive(),
+            &OutputConfig::default(),
+            Some(serde_json::json!({
+                "action": "get_context", "codebase": "demo",
+                "scope": "demo-repo", "allScopes": true
+            })),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("not both"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_store_says_no_scope_holds_anything() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = strata(dir.path());
+        let ctx = call(
+            &storage,
+            &cognitive(),
+            serde_json::json!({"action": "get_context", "codebase": "nowhere"}),
+        )
+        .await;
+        assert_eq!(ctx["scopes"], serde_json::json!([]));
+        assert_eq!(
+            ctx["note"],
+            "No code memories for codebase 'nowhere' in any scope."
+        );
+        assert_eq!(ctx["patterns"]["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn totals_show_what_the_limit_cut() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = strata(dir.path());
+        let cog = cognitive();
+        for i in 0..3 {
+            call(
+                &storage,
+                &cog,
+                serde_json::json!({
+                    "action": "remember_pattern", "codebase": "demo",
+                    "name": format!("pattern {i}"), "description": format!("description {i}"),
+                }),
+            )
+            .await;
+        }
+        let ctx = call(
+            &storage,
+            &cog,
+            serde_json::json!({"action": "get_context", "codebase": "demo", "limit": 2}),
+        )
+        .await;
+        assert_eq!(ctx["patterns"]["count"], 2, "{ctx}");
+        assert_eq!(
+            ctx["patterns"]["total"], 3,
+            "the cut is visible, not silent"
+        );
+        assert_eq!(ctx["scopes"][0]["patterns"], 3);
+    }
+}
+
+/// The schema states each action's defaults and caps. Checked against the
+/// constants that enforce them, on every feature set.
+#[cfg(test)]
+mod schema_text {
+    use super::*;
+    use crate::tools::repo_ingest;
+
+    fn description(field: &str) -> String {
+        schema()["properties"][field]["description"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{field} has a description"))
+            .to_string()
+    }
+
+    #[test]
+    fn limit_scope_and_codebase_state_the_defaults_each_action_applies() {
+        let limit = description("limit");
+        assert!(
+            limit.contains(&format!(
+                "ingest_repo: max commits read (default {}, max {})",
+                repo_ingest::DEFAULT_LIMIT,
+                repo_ingest::MAX_LIMIT
+            )),
+            "{limit}"
+        );
+        assert!(
+            limit.contains(&format!(
+                "verify: max memories checked per type (default {DEFAULT_VERIFY_LIMIT}, max {MAX_VERIFY_LIMIT})"
+            )),
+            "{limit}"
+        );
+        let scope = description("scope");
+        assert!(
+            scope.contains("for ingest_repo, the codebase name"),
+            "{scope}"
+        );
+        let codebase = description("codebase");
+        assert!(
+            codebase.contains("ingest_repo default: the checkout's directory name"),
+            "{codebase}"
+        );
     }
 }

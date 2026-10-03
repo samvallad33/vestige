@@ -553,3 +553,221 @@ fn chain_lists_every_memory_origin_first_and_keeps_the_no_chain_contract() {
     assert_eq!(row["link_type"], json!("derived_from"), "{assoc}");
     server.shutdown();
 }
+
+/// Links declared at save time are typed edges with receipts, and they are
+/// what the bridge lens walks: two memories that each derive from the same
+/// memory become a never-composed bridge pair through it.
+#[test]
+fn links_declared_at_save_time_feed_the_bridge_lens() {
+    let dir = data_dir();
+    let home = data_dir();
+    let mut server = spawn(dir.path(), home.path());
+    let hub = save(&mut server, "The auth timeout is 30 seconds.", "fact");
+    let lone = save(&mut server, "The deploy runs at noon.", "fact");
+
+    let before = server.call_tool_ok(
+        "ghostlink",
+        json!({ "mode": "propose", "lens": "bridge", "limit": 10 }),
+    );
+    assert!(
+        pairs(&before).is_empty(),
+        "no typed edge exists yet: {before}"
+    );
+
+    let first = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "Login retries fail after 30s.", "node_type": "event",
+                "links": [{ "kind": "derived_from", "to": hub }] }),
+    );
+    let first_id = first["nodeId"].as_str().unwrap().to_string();
+    let link = &first["links"][0];
+    assert_eq!(link["edge"], json!("derived_from"), "{first}");
+    assert_eq!(link["source"], json!(first_id), "{first}");
+    assert_eq!(link["target"], json!(hub), "{first}");
+    let receipt = server.call_tool_ok(
+        "receipt",
+        json!({ "action": "get", "receipt_id": link["receiptId"] }),
+    );
+    assert_eq!(
+        receipt["attestation"]["verification"]["locallyVerified"],
+        json!(true),
+        "{receipt}"
+    );
+
+    // The batch form carries links per item.
+    let batch = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "items": [{ "content": "Session refresh also waits 30s.", "node_type": "event",
+                            "links": [{ "kind": "derived_from", "to": hub }] }] }),
+    );
+    let second_id = batch["results"][0]["nodeId"].as_str().unwrap().to_string();
+    assert!(
+        batch["results"][0]["links"][0]["receiptId"]
+            .as_str()
+            .is_some(),
+        "{batch}"
+    );
+
+    let after = server.call_tool_ok(
+        "ghostlink",
+        json!({ "mode": "propose", "lens": "bridge", "limit": 10 }),
+    );
+    let found = pairs(&after);
+    assert!(
+        found.contains(&(first_id.clone(), second_id.clone()))
+            || found.contains(&(second_id.clone(), first_id.clone())),
+        "the two memories that derive from {hub} must bridge: {after}"
+    );
+    assert!(
+        !found.iter().any(|(a, b)| a == &lone || b == &lone),
+        "a memory with no link must not bridge: {after}"
+    );
+    server.shutdown();
+}
+
+/// `closes` is recorded from the closed memory's side, and bad links are
+/// refused before anything is written.
+#[test]
+fn links_are_checked_before_anything_is_written() {
+    let dir = data_dir();
+    let home = data_dir();
+    let mut server = spawn(dir.path(), home.path());
+    let issue = save(&mut server, "Uploads over 2 GB fail.", "event");
+
+    let fix = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "Chunked uploads fix the 2 GB failure.", "node_type": "decision",
+                "links": [{ "kind": "closes", "to": issue }] }),
+    );
+    let fix_id = fix["nodeId"].as_str().unwrap();
+    assert_eq!(fix["links"][0]["edge"], json!("closed_by"), "{fix}");
+    assert_eq!(fix["links"][0]["source"], json!(issue), "{fix}");
+    assert_eq!(fix["links"][0]["target"], json!(fix_id), "{fix}");
+
+    for (links, needle) in [
+        (
+            json!([{ "kind": "supersedes", "to": issue }]),
+            "not declarable",
+        ),
+        (
+            json!([{ "kind": "derived_from", "to": "mem-ffffffffffffffff" }]),
+            "not a memory",
+        ),
+        (
+            json!([{ "kind": "derived_from", "to": issue }, { "kind": "derived_from", "to": issue }]),
+            "twice",
+        ),
+        (json!([{ "kind": "derived_from" }]), "needs `to`"),
+    ] {
+        let refused = server.call_tool(
+            "smart_ingest",
+            json!({ "content": "This must not be saved.", "tags": ["never-written"], "links": links }),
+        );
+        assert_eq!(refused["isError"], json!(true), "{refused}");
+        assert!(
+            refused["text"].as_str().unwrap().contains(needle),
+            "{refused}"
+        );
+    }
+    let other_scope = server.call_tool(
+        "smart_ingest",
+        json!({ "content": "This must not be saved either.", "tags": ["never-written"],
+                "scope": "elsewhere", "links": [{ "kind": "derived_from", "to": issue }] }),
+    );
+    assert!(
+        other_scope["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("links stay within one scope"),
+        "{other_scope}"
+    );
+    let nothing = server.call_tool("recall", json!({ "handle": "never-written" }));
+    assert!(
+        nothing.get("nodes").is_none() || nothing["nodes"].as_array().unwrap().is_empty(),
+        "a refused save wrote a memory: {nothing}"
+    );
+    server.shutdown();
+}
+
+/// A weave can carry external findings for its pair: each is recorded on the
+/// composition record, tagged `evidence:<sha256>`, and found again by that tag.
+#[test]
+fn weave_records_external_evidence_found_again_by_its_hash() {
+    let dir = data_dir();
+    let home = data_dir();
+    let mut server = spawn(dir.path(), home.path());
+    let a = save(
+        &mut server,
+        "The importer drops rows with a null owner.",
+        "fact",
+    );
+    let b = save(
+        &mut server,
+        "Ownership moved to a join table in v2.",
+        "decision",
+    );
+    let sha = "a".repeat(63) + "b";
+    let woven = server.call_tool_ok(
+        "ghostlink",
+        json!({ "mode": "weave", "first_id": a, "second_id": b, "outcome_type": "helpful",
+                "evidence": [{ "url": "https://example.com/postmortem", "sha256": sha.to_uppercase(),
+                               "retrievedAt": "2026-09-30T12:00:00Z", "note": "matches the v2 schema change" }] }),
+    );
+    let record = woven["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        woven["evidence"][0]["sha256"],
+        json!(sha),
+        "hashes are stored lowercase: {woven}"
+    );
+    assert_eq!(
+        woven["evidence"][0]["tag"],
+        json!(format!("evidence:{sha}")),
+        "{woven}"
+    );
+
+    let found = server.call_tool_ok("recall", json!({ "handle": format!("evidence:{sha}") }));
+    let text = found.to_string();
+    assert!(
+        text.contains(&record),
+        "recall by the evidence tag finds the record: {found}"
+    );
+    assert!(text.contains("https://example.com/postmortem"), "{found}");
+
+    for (evidence, needle) in [
+        (
+            json!([{ "url": "ftp://example.com/x", "sha256": sha, "retrievedAt": "2026-09-30T12:00:00Z" }]),
+            "http(s)",
+        ),
+        (
+            json!([{ "url": "https://example.com/x", "sha256": "abc", "retrievedAt": "2026-09-30T12:00:00Z" }]),
+            "64 hex",
+        ),
+        (
+            json!([{ "url": "https://example.com/x", "sha256": sha, "retrievedAt": "2999-01-01T00:00:00Z" }]),
+            "future",
+        ),
+        (
+            json!([{ "url": "https://example.com/x", "sha256": sha, "retrievedAt": "yesterday" }]),
+            "RFC 3339",
+        ),
+    ] {
+        let refused = server.call_tool(
+            "ghostlink",
+            json!({ "mode": "weave", "first_id": a, "second_id": b, "outcome_type": "dead_end", "evidence": evidence }),
+        );
+        assert_eq!(refused["isError"], json!(true), "{refused}");
+        assert!(
+            refused["text"].as_str().unwrap().contains(needle),
+            "{refused}"
+        );
+    }
+    let records = server.call_tool_ok(
+        "ghostlink",
+        json!({ "mode": "inspect", "view": "memory", "memory_id": a }),
+    );
+    assert!(
+        !records.to_string().contains("dead_end"),
+        "a refused weave recorded an outcome: {records}"
+    );
+    server.shutdown();
+}

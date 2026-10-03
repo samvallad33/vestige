@@ -634,8 +634,157 @@ pub fn weave(
     outcome_type: &str,
     lens: Option<&str>,
 ) -> Result<Value, String> {
+    weave_with_evidence(storage, first_id, second_id, outcome_type, lens, &[])
+}
+
+/// One external finding woven into a pair: where it came from, the sha256 of
+/// the content that was fetched, and when. Vestige never fetches the URL; the
+/// hash lets anyone who fetches it later prove it is the same content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalEvidence {
+    pub url: String,
+    pub sha256: String,
+    pub retrieved_at_ms: i64,
+    pub note: Option<String>,
+}
+
+/// Most external findings one weave may carry.
+pub const MAX_WEAVE_EVIDENCE: usize = 8;
+
+/// Parse `evidence` from a weave call. Everything is checked before anything
+/// is written: http(s) URLs only, a 64-hex sha256, an RFC 3339 `retrievedAt`
+/// that is not in the future, and a short optional note.
+pub fn parse_evidence(raw: Option<&Value>) -> Result<Vec<ExternalEvidence>, String> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let entries = raw
+        .as_array()
+        .ok_or("evidence must be an array of {url, sha256, retrievedAt, note}")?;
+    if entries.len() > MAX_WEAVE_EVIDENCE {
+        return Err(format!(
+            "at most {MAX_WEAVE_EVIDENCE} evidence entries per weave"
+        ));
+    }
+    let now_ms = Utc::now().timestamp_millis();
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let url = entry
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let scheme_ok = url.starts_with("https://") || url.starts_with("http://");
+        if !scheme_ok || url.len() > 2048 || url.chars().any(char::is_whitespace) {
+            return Err(format!(
+                "evidence url must be an http(s) URL of at most 2048 characters: {url:?}"
+            ));
+        }
+        let sha256 = entry
+            .get("sha256")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(format!(
+                "evidence sha256 must be 64 hex characters (the hash of the fetched content) for {url}"
+            ));
+        }
+        let retrieved = entry
+            .get("retrievedAt")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let retrieved_at_ms = chrono::DateTime::parse_from_rfc3339(retrieved)
+            .map_err(|_| format!("evidence retrievedAt must be an RFC 3339 time for {url}"))?
+            .timestamp_millis();
+        if retrieved_at_ms > now_ms + 300_000 {
+            return Err(format!("evidence retrievedAt is in the future for {url}"));
+        }
+        let note = entry
+            .get("note")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|n| !n.is_empty());
+        if note.is_some_and(|n| n.chars().count() > 500) {
+            return Err(format!(
+                "evidence note must be at most 500 characters for {url}"
+            ));
+        }
+        if out.iter().any(|e: &ExternalEvidence| e.sha256 == sha256) {
+            return Err(format!("evidence sha256 {sha256} is listed twice"));
+        }
+        out.push(ExternalEvidence {
+            url: url.to_string(),
+            sha256,
+            retrieved_at_ms,
+            note: note.map(str::to_owned),
+        });
+    }
+    Ok(out)
+}
+
+/// [`weave`] carrying external evidence for the pair.
+pub fn weave_with_evidence(
+    storage: &Storage,
+    first_id: &str,
+    second_id: &str,
+    outcome_type: &str,
+    lens: Option<&str>,
+    evidence: &[ExternalEvidence],
+) -> Result<Value, String> {
     let memory = memory(storage)?;
-    weave_with(&memory, first_id, second_id, outcome_type, lens)
+    weave_with(&memory, first_id, second_id, outcome_type, lens, evidence)
+}
+
+/// Exact tag prefix for a woven finding: `evidence:<sha256>`, so `recall`
+/// finds the composition record by the content hash alone.
+pub const EVIDENCE_TAG_PREFIX: &str = "evidence:";
+
+/// The composition record's text: the pair, the outcome, and one line per
+/// external finding.
+fn composition_content(
+    a: &str,
+    b: &str,
+    outcome_type: &str,
+    lens: &str,
+    evidence: &[ExternalEvidence],
+) -> String {
+    let mut content =
+        format!("GhostLink composition of {a} and {b}. Outcome: {outcome_type}. Lens: {lens}.");
+    if !evidence.is_empty() {
+        content.push_str("\nEvidence:");
+        for e in evidence {
+            let when = chrono::DateTime::from_timestamp_millis(e.retrieved_at_ms)
+                .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                .unwrap_or_default();
+            content.push_str(&format!(
+                "\n- {} sha256:{} retrieved {when}",
+                e.url, e.sha256
+            ));
+            if let Some(note) = &e.note {
+                content.push_str(&format!(" ({note})"));
+            }
+        }
+    }
+    content
+}
+
+fn evidence_json(evidence: &[ExternalEvidence]) -> Value {
+    Value::Array(
+        evidence
+            .iter()
+            .map(|e| {
+                json!({
+                    "url": e.url,
+                    "sha256": e.sha256,
+                    "retrievedAtMs": e.retrieved_at_ms,
+                    "note": e.note,
+                    "tag": format!("{EVIDENCE_TAG_PREFIX}{}", e.sha256),
+                })
+            })
+            .collect(),
+    )
 }
 
 /// [`weave`] against an open [`StrataMemory`].
@@ -645,6 +794,7 @@ pub fn weave_with(
     second_id: &str,
     outcome_type: &str,
     lens: Option<&str>,
+    evidence: &[ExternalEvidence],
 ) -> Result<Value, String> {
     if !OUTCOME_TYPES.contains(&outcome_type) {
         return Err(format!("unsupported outcome_type: {outcome_type}"));
@@ -691,9 +841,7 @@ pub fn weave_with(
     let (record_id, record_effect) = store
         .ingest_in_scope_with_receipt(
             strata_store::IngestInput {
-                content: format!(
-                    "GhostLink composition of {a} and {b}. Outcome: {outcome_type}. Lens: {lens}."
-                ),
+                content: composition_content(a, b, outcome_type, lens, evidence),
                 source: Some(strata_store::SourceKey {
                     system: strata_store::weave_source(a, b),
                     project: String::new(),
@@ -701,12 +849,19 @@ pub fn weave_with(
                 }),
                 source_updated_at_ms: None,
                 node_type: strata_store::COMPOSITION_NODE_TYPE.to_string(),
-                tags: vec![
+                tags: [
                     strata_store::GHOSTLINK_TAG.to_string(),
                     strata_store::WEAVE_TAG.to_string(),
                     format!("{}{outcome_type}", strata_store::OUTCOME_TAG_PREFIX),
                     format!("{}{lens}", strata_store::LENS_TAG_PREFIX),
-                ],
+                ]
+                .into_iter()
+                .chain(
+                    evidence
+                        .iter()
+                        .map(|e| format!("{EVIDENCE_TAG_PREFIX}{}", e.sha256)),
+                )
+                .collect(),
                 created_at_ms: Some(now),
                 valid_from_ms: None,
                 valid_until_ms: None,
@@ -765,6 +920,7 @@ pub fn weave_with(
     Ok(json!({
         "mode": "weave",
         "decision": "woven",
+        "evidence": evidence_json(evidence),
         "nodeId": record_id,
         "recordId": record_id,
         "firstId": a,

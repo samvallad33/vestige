@@ -14,7 +14,7 @@ It keeps the decisions a project already made, and it can walk a failure backwar
   </a>
 </p>
 
-**New in 4.1.0:** [GhostLink](#ghostlink-the-negative-space) proposes pairs of memories nobody has combined yet, each with its proof, and 19 hardening fixes cover data safety, upgrades from v3, the tools and the dashboard ([changelog](CHANGELOG.md)).
+**New in 4.1.1:** `smart_ingest` takes typed `links` to existing memories, `codebase` can `ingest_repo` a checkout's commits as anchored change records, `causal_walk` takes `node_id` on every start point, a successful save no longer carries fields that read as errors, and the credential gate blocks Anthropic, OpenAI and Stripe live keys ([changelog](CHANGELOG.md)). 4.1.0 brought [GhostLink](#ghostlink-the-negative-space), which proposes pairs of memories nobody has combined yet, each with its proof.
 
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige?color=06b6d4)](https://github.com/samvallad33/vestige/releases/latest)
 [![Tests](https://img.shields.io/github/actions/workflow/status/samvallad33/vestige/ci.yml?branch=main&label=CI)](https://github.com/samvallad33/vestige/actions)
@@ -106,7 +106,7 @@ Then check it:
 vestige-mcp --version
 ```
 
-It should print `vestige-mcp 4.1.0`. If the shell says command not found, `~/.local/bin` is not on your PATH yet: add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (or `~/.bashrc`) and open a new terminal. If it prints an older version, an older install comes first on your PATH; `which -a vestige-mcp` lists them.
+It should print `vestige-mcp 4.1.1`. If the shell says command not found, `~/.local/bin` is not on your PATH yet: add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (or `~/.bashrc`) and open a new terminal. If it prints an older version, an older install comes first on your PATH; `which -a vestige-mcp` lists them.
 
 On a Mac, download with `curl` as above rather than a browser. A browser marks the files as quarantined and macOS then refuses to run them. If you already used a browser, clear the flag with `xattr -d com.apple.quarantine ~/.local/bin/vestige*`.
 
@@ -166,7 +166,7 @@ On a real 297 MB store with 8,902 memories in 34 scopes, the first launch took a
 
 If the upgrade fails, the v3 data is untouched and the message says so. A `vestige.db` that is unreadable, empty or not plain SQLite is refused by name, never treated as an empty store, and a symlinked `vestige.db` is followed to the real file so memories that live only in its WAL come across. You can keep using v3.1.1 meanwhile. `vestige strata-verify <data-dir>` checks the log and its migration receipt at any time.
 
-If you installed v3 with npm, make sure your agents now run the 4.x binary: `vestige-mcp --version` should print 4.1.0, and `which -a vestige-mcp` shows every copy on your PATH in the order they are found.
+If you installed v3 with npm, make sure your agents now run the 4.x binary: `vestige-mcp --version` should print 4.1.1, and `which -a vestige-mcp` shows every copy on your PATH in the order they are found.
 
 <a id="recall-by-handle-not-resemblance"></a>
 ## Recall by handle, not resemblance
@@ -177,12 +177,12 @@ Since 4.0, Vestige does not rank text that resembles your query. There are no em
 |---|---|---|
 | How a memory is found | Similarity to the query | An exact handle |
 | What counts as a link | Anything that scores close | Only an edge the log recorded. Imported v3 links are marked `legacy_inferred` |
-| Walking back from a failure | Nearest lookalikes | `causal_walk` from an explicit logged write (a memory id), backward over recorded edges, at most 8 hops and 500 nodes by default. Failing-test, stack-frame, CI-run and version-range starts walk on a v3 store |
+| Walking back from a failure | Nearest lookalikes | `causal_walk` from the memory that records the symptom, backward over recorded edges, at most 8 hops and 500 nodes by default. Any start point (failing test, stack frame, CI run, version range, or a plain `logged_write`) carries that memory's id as `node_id` |
 | Proof of a write | None | A receipt per write. `receipt replay` re-derives the state from the log |
 | Unused memories | Persist at full weight | Fade under FSRS scheduling |
 | Your data | Often a hosted index | A signed, append-only log in the data directory |
 
-`causal_walk` never guesses. With no start point it returns `needs_report` and names what is missing. `forgotten_lesson` walks backward from a failure the same way and ranks fix or lesson memories by how far they have faded.
+`causal_walk` never guesses. With no start point it returns `needs_report` and names what is missing. A start point with no `node_id` is not walked: `start_points` in the response says so, with the reason, for each one. A walk that finds no cause says why in `emptyBecause`, from the edges the log holds. `forgotten_lesson` walks backward from a failure the same way and ranks fix or lesson memories by how far they have faded.
 
 <a id="ghostlink-the-negative-space"></a>
 ## GhostLink: the negative space
@@ -191,7 +191,7 @@ Since 4.0, Vestige does not rank text that resembles your query. There are no em
 
 - **Bridge lens** (the default): two memories within three hops over recorded `touched`, `derived_from` or `closed_by` edges that were never woven together. The shortest path is the proof. Pairs rank by hop proximity, how rarely each memory has been composed, retention, and the outcomes earlier pairs recorded.
 - **Divergent lens**: two memories joined by no recorded edge at all, scored `min(path length, 7) × divergence`, where divergence is how few typed neighbors they share. When a memory has no typed neighbors there is nothing to measure, so the pair is a *forced juxtaposition* picked by a deterministic sampler, with no invented score. Links imported from v3 can only lower a score, never raise one.
-- **Weave** records what came of a pair (`helpful`, `dead_end`, `accepted`, …): a composition memory plus a `derived_from` edge to each member, each with a receipt. Later proposals learn from it.
+- **Weave** records what came of a pair (`helpful`, `dead_end`, `accepted`, …): a composition memory plus a `derived_from` edge to each member, each with a receipt. Later proposals learn from it. A weave can carry `evidence` from outside: the URL, the sha256 of what was fetched, and when. Each finding is tagged `evidence:<sha256>`, and Vestige never fetches the URL itself.
 
 ```json
 {"mode": "propose", "lens": "divergent", "limit": 5}
@@ -251,20 +251,20 @@ Write-up: [docs/SCIENCE.md](docs/SCIENCE.md).
 | Tool | Purpose |
 |---|---|
 | `causal_walk` | Walk a failure backward from explicit start points over recorded edges |
-| `codebase` | Remember a pattern or decision with code anchors, fetch context marked current or stale, `verify` anchors against source, `reanchor` |
+| `codebase` | Remember a pattern or decision with code anchors, fetch context marked current or stale (with every scope that holds the codebase's patterns, decisions and change records), `verify` anchors against source (saying what `limit` left unchecked), `reanchor`, and `ingest_repo`: the commits of a checkout, read from the top of its working tree, as anchored change records in their own scope (previews first) |
 | `dedup` | `scan` for duplicates, `undo` a recorded operation, `tag_rename` and `tag_merge` with a preview, `policy` |
 | `forgotten_lesson` | Faded fix or lesson memories behind a failure, over recorded edges |
 | `ghostlink` | Never-composed memory pairs, each with its proof from recorded edges only. `propose` with lens `bridge` (within three typed-edge hops, never woven) or `divergent` (no recorded edge at all; a forced juxtaposition when nothing can be measured), `weave` an outcome (a write with receipts), `inspect` woven compositions, `explore` typed paths, `map`, `bounty`, `predict`, and `harden` to seed invariant laws once. `graph` still answers as a hidden alias |
 | `intention` | `set`, `check`, `update`, `list`. `graph` runs the evidence-aware plan |
-| `maintain` | `consolidate`, `dream`, `dream_compile`, `gc` (dry run unless you turn it off), `importance_score`, `backup`, `export` |
+| `maintain` | `dream`, `dream_compile`, `gc` (dry run unless you turn it off), `importance_score`, `backup`, `export`. `consolidate` is refused on a Strata log, where every phase is a no-op |
 | `memory` | `get`, `get_batch`, `state`, `promote`, `demote`, `edit`. Demote does not delete. An edit admits a successor and keeps its code anchors |
 | `memory_status` | `health`, `retention`, `timeline`, `changelog`, `provenance`, `coverage`, `stats`, `tools` |
 | `project` | Preview a fenced region of `CLAUDE.md` or `MEMORY.md`. `write` needs `confirm=true` and replaces only the fence |
 | `recall` | Find memories by exact handle: id, unique prefix, or exact tag |
 | `receipt` | `get` a receipt, or `replay` it against the log |
 | `selftest` | Plant a known cause in a throwaway copy and check the walk finds it |
-| `session_start` | Status, open intentions for the scope (with id, due date and an overdue mark), backup and dream needs, and codebase context under one budget. It writes nothing. Queries are answered with a notice: memories are found by handle |
-| `smart_ingest` | Store one memory, or up to 20 with `items`. Secrets are refused unless you say otherwise |
+| `session_start` | Status, open intentions for the scope (with id, due date and an overdue mark), backup and dream needs, and codebase context under one budget; when the scope holds none of a codebase's code memories, it names the scopes that do. It writes nothing. Queries are answered with a notice: memories are found by handle |
+| `smart_ingest` | Store one memory, or up to 20 with `items`. `links` declares typed edges to existing memories (`derived_from`, `evidence_of`, `closes`), each with its own receipt, which is what GhostLink's bridge lens walks. Secrets are refused unless you say otherwise |
 | `suppress` | Take a memory out of every read. The log keeps its bytes, and on Strata it cannot be undone. `destructiveHint` is true |
 
 **Withheld since 4.0.** `purge` is the one tool 4.x does not ship. On an append-only signed log a purge could hide a memory but not erase its bytes, and a tool called purge must not pretend otherwise. `purge`, `memory` action `purge` or `delete`, and `delete_knowledge` return `unavailable_in_4_0`. Real erasure is planned as crypto-erasure ([#402](https://github.com/samvallad33/vestige/issues/402)).

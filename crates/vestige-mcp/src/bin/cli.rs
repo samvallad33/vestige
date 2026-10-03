@@ -438,11 +438,13 @@ enum Commands {
     /// Successor to `backfill`. It refuses with a needs_report instead of
     /// guessing when no start point is given.
     ///
-    /// On a Strata log (4.0) only --logged-write is walked: a bounded backward
-    /// walk from that memory over recorded causal edges (closed_by,
-    /// derived_from, evidence_of, touched). It writes nothing. --failing-test,
-    /// --stack-frame, --ci-run and version ranges resolve through shared
-    /// names, which are not recorded edges, so a Strata log refuses them.
+    /// On a Strata log (4.0) the walk starts at a recorded memory: a bounded
+    /// backward walk over recorded causal edges (closed_by, derived_from,
+    /// evidence_of, touched). It writes nothing. --logged-write names that
+    /// memory directly; --node-id attaches it to a --failing-test,
+    /// --stack-frame, --ci-run or version range. Those start points resolve
+    /// through shared names, which are not recorded edges, so a Strata log
+    /// refuses them unless --node-id says which recorded memory they are.
     ///
     /// A legacy SQLite store walks every start point through shared exact
     /// anchors to change records and, unless --no-promote, records
@@ -463,8 +465,13 @@ enum Commands {
         /// Memory / tool-call record id whose recorded edges are walked
         #[arg(long)]
         logged_write: Option<String>,
+        /// The memory that records this symptom. Attached to every start
+        /// point given, which lets a Strata log walk it; alone it walks that
+        /// memory, like --logged-write
+        #[arg(long)]
+        node_id: Option<String>,
         /// Git repository for --worked-in/--broke-in, single repo per call
-        /// (legacy SQLite stores)
+        /// (legacy SQLite stores, or a Strata log with --node-id)
         #[arg(long)]
         git_repo: Option<PathBuf>,
         /// Last-known-good tag (with --git-repo)
@@ -732,6 +739,7 @@ fn main() -> anyhow::Result<()> {
             stack_frame,
             ci_run,
             logged_write,
+            node_id,
             git_repo,
             worked_in,
             broke_in,
@@ -744,6 +752,7 @@ fn main() -> anyhow::Result<()> {
             stack_frame,
             ci_run,
             logged_write,
+            node_id,
             git_repo,
             worked_in,
             broke_in,
@@ -4286,6 +4295,7 @@ fn run_causal_walk(
     stack_frame: Option<String>,
     ci_run: Option<String>,
     logged_write: Option<String>,
+    node_id: Option<String>,
     git_repo: Option<PathBuf>,
     worked_in: Option<String>,
     broke_in: Option<String>,
@@ -4297,10 +4307,14 @@ fn run_causal_walk(
     use vestige_core::advanced::causal_walk as cw;
 
     let storage = open_storage()?;
+    let node_id = node_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
     if is_strata(&storage) {
         // These start points resolve through shared names (a test's file, a
         // frame's path, a run's anchors, a tag range's commits), which are not
-        // recorded edges. Refuse them rather than silently dropping them.
+        // recorded edges. On their own they are refused; with --node-id naming
+        // the recorded memory they describe, the walk starts at that memory.
         let name_based: Vec<&str> = [
             ("--failing-test", failing_test.is_some()),
             ("--stack-frame", stack_frame.is_some()),
@@ -4312,26 +4326,76 @@ fn run_causal_walk(
         .into_iter()
         .filter_map(|(flag, given)| given.then_some(flag))
         .collect();
-        if !name_based.is_empty() {
+        if !name_based.is_empty() && node_id.is_none() {
             anyhow::bail!(
-                "unavailable_in_4_0: causal-walk {} is not available on Strata in Vestige 4.0: that start point resolves through shared names, which are not recorded edges. Pass --logged-write <memory-id> to walk the recorded causal edges into that memory.",
+                "unavailable_in_4_0: causal-walk {} resolves through shared names, which are not recorded edges, so a Strata log cannot walk it by itself. Add --node-id <memory-id> (the memory that records this symptom) to walk from that memory, or pass --logged-write <memory-id> to walk a memory directly.",
                 name_based.join(", ")
             );
         }
-        return run_causal_walk_strata(&storage, logged_write, scope, json);
+        let version_flags = [git_repo.is_some(), worked_in.is_some(), broke_in.is_some()];
+        if version_flags.iter().any(|given| *given) && !version_flags.iter().all(|given| *given) {
+            anyhow::bail!(
+                "causal-walk: a version range needs --git-repo, --worked-in and --broke-in together"
+            );
+        }
+        let mut start_points: Vec<serde_json::Value> = Vec::new();
+        if let Some(name) = &failing_test {
+            start_points.push(
+                serde_json::json!({"kind": "failing_test", "name": name, "node_id": node_id}),
+            );
+        }
+        if let Some(frame) = &stack_frame {
+            start_points.push(
+                serde_json::json!({"kind": "stack_frame", "frame": frame, "node_id": node_id}),
+            );
+        }
+        if let Some(run_id) = &ci_run {
+            start_points
+                .push(serde_json::json!({"kind": "ci_run", "run_id": run_id, "node_id": node_id}));
+        }
+        if let (Some(worked), Some(broke), Some(repo)) = (&worked_in, &broke_in, &git_repo) {
+            start_points.push(serde_json::json!({
+                "kind": "version_range",
+                "worked_in": worked,
+                "broke_in": broke,
+                "repo": repo.display().to_string(),
+                "node_id": node_id,
+            }));
+        }
+        // --node-id with no descriptive start point, or an explicit
+        // --logged-write, is a plain walk from that memory.
+        if start_points.is_empty()
+            && let Some(id) = &node_id
+        {
+            start_points.push(serde_json::json!({"kind": "logged_write", "node_id": id}));
+        }
+        if let Some(id) = &logged_write {
+            start_points.push(serde_json::json!({"kind": "logged_write", "node_id": id}));
+        }
+        return run_causal_walk_strata(&storage, start_points, scope, json);
     }
 
     // Assemble start points; the walk refuses (needs_report) rather than
-    // guessing when none resolve.
+    // guessing when none resolve. A --node-id rides on every start point given
+    // and stands alone as a logged_write when there is none.
     let mut start_points: Vec<cw::StartPoint> = Vec::new();
     if let Some(name) = failing_test {
-        start_points.push(cw::StartPoint::FailingTest { name });
+        start_points.push(cw::StartPoint::FailingTest {
+            name,
+            node_id: node_id.clone(),
+        });
     }
     if let Some(frame) = stack_frame {
-        start_points.push(cw::StartPoint::StackFrame { frame });
+        start_points.push(cw::StartPoint::StackFrame {
+            frame,
+            node_id: node_id.clone(),
+        });
     }
     if let Some(run_id) = ci_run {
-        start_points.push(cw::StartPoint::CiRun { run_id });
+        start_points.push(cw::StartPoint::CiRun {
+            run_id,
+            node_id: node_id.clone(),
+        });
     }
     if let Some(node_id) = logged_write {
         start_points.push(cw::StartPoint::LoggedWrite { node_id });
@@ -4341,7 +4405,13 @@ fn run_causal_walk(
             worked_in: worked,
             broke_in: broke,
             repo: repo.display().to_string(),
+            node_id: node_id.clone(),
         });
+    }
+    if start_points.is_empty()
+        && let Some(id) = node_id
+    {
+        start_points.push(cw::StartPoint::LoggedWrite { node_id: id });
     }
 
     #[cfg(vestige_embeddings_removed)]
@@ -4436,11 +4506,11 @@ fn run_causal_walk(
 /// Read-only: nothing is persisted, whatever --no-promote says.
 fn run_causal_walk_strata(
     storage: &Arc<Storage>,
-    logged_write: Option<String>,
+    start_points: Vec<serde_json::Value>,
     scope: String,
     json: bool,
 ) -> anyhow::Result<()> {
-    let args = serde_json::json!({ "scope": scope, "logged_write": logged_write });
+    let args = serde_json::json!({ "scope": scope, "start_points": start_points });
     let rt = tokio::runtime::Runtime::new()?;
     let result = rt
         .block_on(vestige_mcp::tools::causal_walk::execute(
@@ -4477,7 +4547,7 @@ fn run_causal_walk_strata(
         println!(
             "{} {}",
             "Provide:".white(),
-            "--logged-write <memory-id>".cyan()
+            "--node-id <memory-id> (or --logged-write <memory-id>)".cyan()
         );
         return Ok(());
     }
@@ -4496,7 +4566,7 @@ fn run_causal_walk_strata(
     if causes.is_empty() {
         println!(
             "{}",
-            "No recorded causal edge leads into this memory.".dimmed()
+            "No recorded causal edge leads upstream from this memory.".dimmed()
         );
     }
     for (rank, cause) in causes.iter().enumerate() {

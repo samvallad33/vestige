@@ -702,6 +702,147 @@ fn q32(q: i64) -> f64 {
     q as f64 / Q32_SCALE
 }
 
+/// A link a caller declares when it saves a memory, named from the new
+/// memory's side. Only provenance-style kinds are offered: `supersedes` and
+/// `corrects` are review-gated and can retire a memory, and `touched` /
+/// `anchored_to` / `projected_to` are recorded by the code and projection
+/// paths themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredLink {
+    /// The new memory derives from the target: `new -derived_from-> target`.
+    DerivedFrom,
+    /// The new memory is evidence about the target: `new -evidence_of-> target`.
+    EvidenceOf,
+    /// The new memory closes the target: `target -closed_by-> new`.
+    Closes,
+}
+
+impl DeclaredLink {
+    pub const NAMES: [&'static str; 3] = ["derived_from", "evidence_of", "closes"];
+
+    pub fn parse(kind: &str) -> Option<Self> {
+        match kind {
+            "derived_from" => Some(Self::DerivedFrom),
+            "evidence_of" => Some(Self::EvidenceOf),
+            "closes" => Some(Self::Closes),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DerivedFrom => "derived_from",
+            Self::EvidenceOf => "evidence_of",
+            Self::Closes => "closes",
+        }
+    }
+
+    /// The recorded edge kind and its direction for a link from `new_id`.
+    fn edge(self, new_id: &str, target: &str) -> (strata_store::EdgeKind, String, String) {
+        match self {
+            Self::DerivedFrom => (
+                strata_store::EdgeKind::DerivedFrom,
+                new_id.to_string(),
+                target.to_string(),
+            ),
+            Self::EvidenceOf => (
+                strata_store::EdgeKind::EvidenceOf,
+                new_id.to_string(),
+                target.to_string(),
+            ),
+            Self::Closes => (
+                strata_store::EdgeKind::ClosedBy,
+                target.to_string(),
+                new_id.to_string(),
+            ),
+        }
+    }
+}
+
+/// Check declared links before anything is written: each target is a live
+/// memory of this Strata log, in `scope`, and no link is repeated.
+pub fn check_links(
+    storage: &Storage,
+    scope: &str,
+    links: &[(DeclaredLink, String)],
+) -> Result<(), String> {
+    let memory = live_memory(storage)
+        .ok_or_else(|| "links need a Strata log open in this process".to_string())?;
+    let store = memory.lock();
+    let mut seen = BTreeSet::new();
+    for (kind, target) in links {
+        if !seen.insert((kind.as_str(), target.as_str())) {
+            return Err(format!(
+                "link {} -> {target} is listed twice",
+                kind.as_str()
+            ));
+        }
+        let Some(record) = store.get_node(target) else {
+            return Err(format!(
+                "link target {target} is not a memory in this store"
+            ));
+        };
+        if !retrievable(&record) {
+            return Err(format!("link target {target} is retired"));
+        }
+        if record.scope != scope {
+            return Err(format!(
+                "link target {target} is in scope '{}', not '{scope}'; links stay within one scope",
+                record.scope
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Write declared links from the memory `new_id`, each through the gate with
+/// its own receipt. Call [`check_links`] first; a link that is refused here is
+/// reported with the receipts of the links already written.
+pub fn save_links(
+    storage: &Storage,
+    new_id: &str,
+    links: &[(DeclaredLink, String)],
+) -> Result<Vec<Value>, String> {
+    let memory = live_memory(storage)
+        .ok_or_else(|| "links need a Strata log open in this process".to_string())?;
+    let mut store = memory.lock();
+    let now = Utc::now().timestamp_millis();
+    let mut written = Vec::with_capacity(links.len());
+    for (kind, target) in links {
+        if target == new_id {
+            return Err(format!("{new_id} cannot link to itself"));
+        }
+        let (edge_kind, source_id, target_id) = kind.edge(new_id, target);
+        let edge = strata_store::ConnectionRecord {
+            source_id: source_id.clone(),
+            target_id: target_id.clone(),
+            strength_milli: 1000,
+            link_type: edge_kind.as_str().to_string(),
+            meta_sha: None,
+            created_at_ms: now,
+            activation_count: 0,
+        };
+        match store.save_connection(&edge) {
+            Ok(effect) => written.push(json!({
+                "kind": kind.as_str(),
+                "edge": edge_kind.as_str(),
+                "source": source_id,
+                "target": target_id,
+                "receiptId": receipt_id_for(effect),
+            })),
+            Err(err) => {
+                return Err(format!(
+                    "{new_id} was saved, but its {} link to {target} was not admitted: {}; links written before it: {}",
+                    kind.as_str(),
+                    map_store(err),
+                    Value::Array(written)
+                ));
+            }
+        }
+    }
+    Ok(written)
+}
+
 fn receipt_id_for(seq: u64) -> String {
     format!("{RECEIPT_PREFIX}{seq:016x}")
 }
@@ -1996,6 +2137,26 @@ impl MemoryStoreSend for StrataMemory {
             }
         }
         Ok(out)
+    }
+
+    fn current_code_context_scope_counts(
+        &self,
+        node_type: &str,
+        tag: Option<&str>,
+    ) -> Result<Vec<(String, usize)>, StorageError> {
+        let store = self.lock();
+        let mut counts: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for record in store.nodes() {
+            if !retrievable(&record) || record.node_type != node_type {
+                continue;
+            }
+            if tag.is_some_and(|wanted| !record.tags.iter().any(|stored| stored == wanted)) {
+                continue;
+            }
+            *counts.entry(record.scope.clone()).or_default() += 1;
+        }
+        Ok(counts.into_iter().collect())
     }
 
     fn code_anchors_for_node(&self, node_id: &str) -> Result<Vec<CodeAnchor>, StorageError> {

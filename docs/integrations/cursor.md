@@ -1,6 +1,6 @@
 # Cursor
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../../README.md) and the [4.0.0 changelog](../../CHANGELOG.md).
+> Written for Vestige 4.x.
 
 > Give Cursor a brain that remembers between sessions.
 
@@ -10,7 +10,7 @@ Cursor has native MCP support. Add Vestige and your AI assistant remembers your 
 
 ## Setup
 
-Unpack the GitHub Release archive and put `vestige-mcp` on your PATH. Cursor's GUI does not reliably inherit that PATH and does not expand `~`. Paste the absolute path; do not guess `/usr/local/bin`.
+Install Vestige first: [README → Install](../../README.md#install). Cursor's GUI does not reliably inherit that PATH and does not expand `~`. Paste the absolute path; do not guess `/usr/local/bin`.
 
 ### 1. Create or edit the config file
 
@@ -34,7 +34,7 @@ which vestige-mcp          # macOS / Linux
 where vestige-mcp          # Windows
 ```
 
-nvm, fnm, and Homebrew npm almost never install into `/usr/local/bin`. Paste whatever the command above prints.
+The README install puts the binaries in `~/.local/bin`, and Homebrew puts them under its own prefix. Paste whatever the command above prints.
 
 ```json
 {
@@ -47,7 +47,7 @@ nvm, fnm, and Homebrew npm almost never install into `/usr/local/bin`. Paste wha
 }
 ```
 
-**Windows:** same shape. Official install is npm, not cargo — paste the absolute path from `where vestige-mcp`. A `.cargo\bin` path is only correct if you built from source.
+**Windows:** same shape. Install from the release zip (see the README), then paste the absolute path from `where vestige-mcp`. Do not install 4.x with npm: the npm package still serves 3.0.0.
 
 ```json
 {
@@ -60,21 +60,7 @@ nvm, fnm, and Homebrew npm almost never install into `/usr/local/bin`. Paste wha
 }
 ```
 
-**Intel Mac:** Cursor does not inherit `.zshrc`. Put `ORT_DYLIB_PATH` in this same `env` block. Run `brew --prefix onnxruntime` and paste the result — do not hardcode `/opt/homebrew` vs `/usr/local`. See [Intel Mac install](../INSTALL-INTEL-MAC.md).
-
-```json
-{
-  "mcpServers": {
-    "vestige": {
-      "command": "<absolute path from which vestige-mcp>",
-      "args": [],
-      "env": {
-        "ORT_DYLIB_PATH": "<brew --prefix onnxruntime>/lib/libonnxruntime.dylib"
-      }
-    }
-  }
-}
-```
+**Intel Mac:** nothing extra. Vestige 4.x has no ONNX runtime, so no `ORT_DYLIB_PATH` is needed.
 
 ### 3. Restart Cursor
 
@@ -86,7 +72,7 @@ Open Cursor's AI chat and ask:
 
 > "What MCP tools do you have access to?"
 
-You should see Vestige's tools listed (`smart_ingest`, `recall`, `backfill`).
+You should see Vestige's 16 tools listed, including `smart_ingest`, `recall` and `receipt`.
 
 ---
 
@@ -94,13 +80,13 @@ You should see Vestige's tools listed (`smart_ingest`, `recall`, `backfill`).
 
 Ask Cursor's AI:
 
-> "Remember that this project uses React with TypeScript and Tailwind CSS"
+> "Remember that this project uses React with TypeScript and Tailwind CSS. Tag it `stack`."
 
 Start a **new chat session**, then:
 
-> "What tech stack does this project use?"
+> "Recall the `stack` tag from Vestige."
 
-It remembers.
+It comes back, with its memory id. Vestige 4.x finds a memory by an exact handle (its id or an exact tag), not by resemblance, so name the tag when you save and when you ask. See [Getting Started](../GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
 
 ---
 
@@ -133,9 +119,9 @@ Or place a `.cursor/mcp.json` in the project root for project-level config.
    which vestige-mcp          # macOS / Linux
    where vestige-mcp          # Windows
    ```
-2. Test the binary manually:
+2. Test the binary manually. It should print `vestige-mcp 4.1.0` or newer:
    ```bash
-   echo '{}' | vestige-mcp
+   vestige-mcp --version
    ```
 3. Check the config is valid JSON:
    ```bash

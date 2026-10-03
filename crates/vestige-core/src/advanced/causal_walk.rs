@@ -81,17 +81,36 @@ pub const REQUIRED_START_POINTS: &[&str] = &[
 // ============================================================================
 
 /// One explicit start point. At least one is required; the walk never guesses.
+///
+/// Every variant may carry `node_id`: the id of the memory that RECORDS this
+/// symptom (the id its write returned). A start point is a description
+/// of the failure; `node_id` is the handle the log can walk from. On a Strata
+/// log the walk begins at recorded nodes only, so `node_id` is what makes a
+/// `failing_test`, `stack_frame`, `ci_run` or `version_range` start walkable.
+/// `logged_write` is the variant whose only content is that handle.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StartPoint {
     /// A failing test name. Walked to the records naming it, then to the
     /// commits touching its file (co-touch).
-    FailingTest { name: String },
+    FailingTest {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+    },
     /// `file:line` or `file` from a failure stack. The last pre-failure
     /// toucher of that file is the prime suspect (SZZ-lite).
-    StackFrame { frame: String },
+    StackFrame {
+        frame: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+    },
     /// An agent-trace run id. Its failure channel seeds the anchor entities.
-    CiRun { run_id: String },
+    CiRun {
+        run_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+    },
     /// A memory / tool-call record id. Its edges and shared entities are
     /// walked.
     LoggedWrite { node_id: String },
@@ -101,26 +120,95 @@ pub enum StartPoint {
         worked_in: String,
         broke_in: String,
         repo: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
     },
 }
 
 impl StartPoint {
+    /// The `kind` string this start point serializes with.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            StartPoint::FailingTest { .. } => "failing_test",
+            StartPoint::StackFrame { .. } => "stack_frame",
+            StartPoint::CiRun { .. } => "ci_run",
+            StartPoint::LoggedWrite { .. } => "logged_write",
+            StartPoint::VersionRange { .. } => "version_range",
+        }
+    }
+
+    /// The recorded node this start point names, whatever its kind: the
+    /// trimmed, non-empty `node_id`, or `None`.
+    pub fn record_id(&self) -> Option<&str> {
+        let raw = match self {
+            StartPoint::FailingTest { node_id, .. }
+            | StartPoint::StackFrame { node_id, .. }
+            | StartPoint::CiRun { node_id, .. }
+            | StartPoint::VersionRange { node_id, .. } => node_id.as_deref(),
+            StartPoint::LoggedWrite { node_id } => Some(node_id.as_str()),
+        };
+        raw.map(str::trim).filter(|id| !id.is_empty())
+    }
+
     /// Short human label for reports ("why not X" style output).
     pub fn label(&self) -> String {
         match self {
-            StartPoint::FailingTest { name } => format!("failing_test {name}"),
-            StartPoint::StackFrame { frame } => format!("stack_frame {frame}"),
-            StartPoint::CiRun { run_id } => format!("ci_run {run_id}"),
+            StartPoint::FailingTest { name, .. } => format!("failing_test {name}"),
+            StartPoint::StackFrame { frame, .. } => format!("stack_frame {frame}"),
+            StartPoint::CiRun { run_id, .. } => format!("ci_run {run_id}"),
             StartPoint::LoggedWrite { node_id } => format!("logged_write {node_id}"),
             StartPoint::VersionRange {
                 worked_in,
                 broke_in,
                 repo,
+                ..
             } => {
                 format!("version_range {worked_in}..{broke_in} in {repo}")
             }
         }
     }
+}
+
+/// Expand every `node_id` carried by a non-`logged_write` start point into an
+/// explicit `logged_write` start, so the walk engine only ever sees the five
+/// canonical shapes.
+///
+/// The original start points keep their positions (with `node_id` cleared), so
+/// index-keyed evidence such as resolved version ranges stays aligned. The
+/// synthesized `logged_write` starts are appended in first-seen order and a
+/// node already named by an explicit `logged_write` is not repeated. The
+/// function is idempotent: normalizing its own output changes nothing.
+pub fn normalize_start_points(starts: &[StartPoint]) -> Vec<StartPoint> {
+    // A node an explicit logged_write already names is never repeated, even
+    // when the logged_write comes after the start point that carries it.
+    let mut seen: HashSet<String> = starts
+        .iter()
+        .filter(|start| matches!(start, StartPoint::LoggedWrite { .. }))
+        .filter_map(|start| start.record_id().map(str::to_string))
+        .collect();
+    let mut out: Vec<StartPoint> = Vec::with_capacity(starts.len());
+    let mut appended: Vec<StartPoint> = Vec::new();
+    for start in starts {
+        let mut kept = start.clone();
+        match &mut kept {
+            StartPoint::FailingTest { node_id, .. }
+            | StartPoint::StackFrame { node_id, .. }
+            | StartPoint::CiRun { node_id, .. }
+            | StartPoint::VersionRange { node_id, .. } => *node_id = None,
+            StartPoint::LoggedWrite { node_id } => *node_id = node_id.trim().to_string(),
+        }
+        if !matches!(start, StartPoint::LoggedWrite { .. })
+            && let Some(id) = start.record_id()
+            && seen.insert(id.to_string())
+        {
+            appended.push(StartPoint::LoggedWrite {
+                node_id: id.to_string(),
+            });
+        }
+        out.push(kept);
+    }
+    out.extend(appended);
+    out
 }
 
 /// One resolved `git rev-list worked_in..broke_in` commit set.
@@ -380,6 +468,11 @@ impl CausalWalkOptions {
         records: &[WalkRecord],
         ctx: &WalkContext,
     ) -> CausalWalkResult {
+        // Idempotent: `walk_storage` already normalized, so for its callers
+        // this is the same list. Direct callers may pass start points that
+        // carry a node_id.
+        let normalized = normalize_start_points(starts);
+        let starts = normalized.as_slice();
         let now = if ctx.now.timestamp() == 0 {
             Utc::now()
         } else {
@@ -430,7 +523,7 @@ impl CausalWalkOptions {
                 time: None,
             };
             match start {
-                StartPoint::FailingTest { name } => {
+                StartPoint::FailingTest { name, .. } => {
                     // test-file records: records naming the test
                     let name_anchors = normalized_anchors(name);
                     if name_anchors.is_empty() {
@@ -456,7 +549,7 @@ impl CausalWalkOptions {
                         ));
                     }
                 }
-                StartPoint::StackFrame { frame } => {
+                StartPoint::StackFrame { frame, .. } => {
                     let file = frame.split(':').next().unwrap_or(frame).trim();
                     let file_anchors = normalized_anchors(file);
                     if file_anchors.is_empty() {
@@ -474,7 +567,7 @@ impl CausalWalkOptions {
                         }
                     }
                 }
-                StartPoint::CiRun { run_id } => match ctx.runs.get(run_id) {
+                StartPoint::CiRun { run_id, .. } => match ctx.runs.get(run_id) {
                     None => missing.push(format!(
                         "no agent trace for run '{run_id}' — the run recorded no events"
                     )),
@@ -542,7 +635,7 @@ impl CausalWalkOptions {
 
         for (idx, start) in starts.iter().enumerate() {
             match start {
-                StartPoint::FailingTest { name } => {
+                StartPoint::FailingTest { name, .. } => {
                     let Some(a) = &anchors[idx] else { continue };
                     if a.record_ids.is_empty() {
                         continue; // pass A already reported the dead handle
@@ -612,7 +705,7 @@ impl CausalWalkOptions {
                         }
                     }
                 }
-                StartPoint::StackFrame { frame } => {
+                StartPoint::StackFrame { frame, .. } => {
                     let Some(a) = &anchors[idx] else { continue };
                     let file = frame.split(':').next().unwrap_or(frame).trim();
                     let file_anchor = &a.entities.iter().next().cloned().unwrap_or_default();
@@ -671,7 +764,7 @@ impl CausalWalkOptions {
                         }
                     }
                 }
-                StartPoint::CiRun { run_id } => {
+                StartPoint::CiRun { run_id, .. } => {
                     let Some(a) = &anchors[idx] else { continue };
                     for r in records {
                         if anchor_record_ids.contains(r.id.as_str()) {
@@ -1056,9 +1149,13 @@ pub fn walk_storage(
         ..WalkContext::default()
     };
 
+    // A node_id carried by any start point becomes an explicit logged_write
+    // start; every index-keyed step below uses this list.
+    let starts = normalize_start_points(&req.start_points);
+
     // ci_run evidence: the run's failure channel
-    for start in &req.start_points {
-        if let StartPoint::CiRun { run_id } = start {
+    for start in &starts {
+        if let StartPoint::CiRun { run_id, .. } = start {
             let events = storage.get_trace(run_id).map_err(|e| e.to_string())?;
             let mut ev = RunEvidence::default();
             for event in &events {
@@ -1087,7 +1184,7 @@ pub fn walk_storage(
     }
 
     // logged_write edges: neighbours across persisted connections
-    for start in &req.start_points {
+    for start in &starts {
         if let StartPoint::LoggedWrite { node_id } = start {
             let conns = storage
                 .get_connections_for_memory(node_id)
@@ -1108,8 +1205,7 @@ pub fn walk_storage(
     }
 
     // version ranges: rev-list resolution per start point (index-keyed)
-    let repos: HashSet<&str> = req
-        .start_points
+    let repos: HashSet<&str> = starts
         .iter()
         .filter_map(|s| match s {
             StartPoint::VersionRange { repo, .. } => Some(repo.as_str()),
@@ -1117,11 +1213,12 @@ pub fn walk_storage(
         })
         .collect();
     ctx.multiple_repos = repos.len() > 1;
-    for (idx, start) in req.start_points.iter().enumerate() {
+    for (idx, start) in starts.iter().enumerate() {
         if let StartPoint::VersionRange {
             worked_in,
             broke_in,
             repo,
+            ..
         } = start
         {
             let resolved = match git_lines(repo, &["rev-list", &format!("{worked_in}..{broke_in}")])
@@ -1146,7 +1243,7 @@ pub fn walk_storage(
         lookback_days: lookback,
         ..CausalWalkOptions::default()
     }
-    .walk(&req.start_points, &records, &ctx))
+    .walk(&starts, &records, &ctx))
 }
 
 /// Persist the trail as `evidence_of` edges (cause → evidence records).
@@ -1307,6 +1404,7 @@ mod tests {
             &storage,
             &req(vec![StartPoint::FailingTest {
                 name: "test_login_flow".into(),
+                node_id: None,
             }]),
         )
         .unwrap();
@@ -1379,6 +1477,7 @@ mod tests {
             &storage,
             &req(vec![StartPoint::StackFrame {
                 frame: "src/auth.rs:88".into(),
+                node_id: None,
             }]),
         )
         .unwrap();
@@ -1461,11 +1560,13 @@ mod tests {
             &req(vec![
                 StartPoint::FailingTest {
                     name: "test_login_flow".into(),
+                    node_id: None,
                 },
                 StartPoint::VersionRange {
                     worked_in: "w1".into(),
                     broke_in: "b1".into(),
                     repo: repo.path().display().to_string(),
+                    node_id: None,
                 },
             ]),
         )
@@ -1515,6 +1616,7 @@ mod tests {
             &storage,
             &req(vec![StartPoint::FailingTest {
                 name: "test_ghost".into(),
+                node_id: None,
             }]),
         )
         .unwrap();
@@ -1585,6 +1687,7 @@ mod tests {
             &storage,
             &req(vec![StartPoint::CiRun {
                 run_id: "run-1".into(),
+                node_id: None,
             }]),
         )
         .unwrap();
@@ -1595,6 +1698,78 @@ mod tests {
         assert_eq!(top.id, change.id);
         assert_eq!(top.path[0].via, "ci_run/failed_calls");
         assert!(top.shared_anchors.contains(&"api_timeout".to_string()));
+    }
+
+    #[test]
+    fn a_start_points_node_id_walks_as_an_extra_logged_write() {
+        let (storage, _dir) = store();
+        let note = seed(&storage, "crash at src/auth.rs:88 during login", vec![], 0);
+        commit_record(
+            &storage,
+            &sha_of('c'),
+            "introduce auth",
+            &["src/auth.rs"],
+            &[],
+            &[],
+            10,
+        );
+        commit_record(
+            &storage,
+            &sha_of('d'),
+            "tweak timeout",
+            &["src/auth.rs"],
+            &[],
+            &[],
+            3,
+        );
+
+        let carried = walk_storage(
+            &storage,
+            &req(vec![StartPoint::StackFrame {
+                frame: "src/auth.rs:88".into(),
+                node_id: Some(note.id.clone()),
+            }]),
+        )
+        .unwrap();
+        let spelled_out = walk_storage(
+            &storage,
+            &req(vec![
+                StartPoint::StackFrame {
+                    frame: "src/auth.rs:88".into(),
+                    node_id: None,
+                },
+                StartPoint::LoggedWrite {
+                    node_id: note.id.clone(),
+                },
+            ]),
+        )
+        .unwrap();
+
+        assert!(carried.needs_report.is_none(), "{:?}", carried.needs_report);
+        assert_eq!(carried.causes[0].path[0].via, "stack_frame/last_toucher");
+        assert_eq!(
+            carried, spelled_out,
+            "a node_id on a start point is exactly an extra logged_write start"
+        );
+
+        // and a node_id that is not in this scope is reported, not guessed around
+        let unknown = walk_storage(
+            &storage,
+            &req(vec![StartPoint::FailingTest {
+                name: "test_login_flow".into(),
+                node_id: Some("mem-does-not-exist".into()),
+            }]),
+        )
+        .unwrap();
+        let report = unknown.needs_report.expect("unknown node must refuse");
+        assert!(
+            report
+                .missing
+                .iter()
+                .any(|m| m.contains("mem-does-not-exist")),
+            "{:?}",
+            report.missing
+        );
     }
 
     #[test]
@@ -1668,6 +1843,7 @@ mod tests {
 
         let request = req(vec![StartPoint::FailingTest {
             name: "test_login_flow".into(),
+            node_id: None,
         }]);
         // preview: nothing written
         let preview = walk_storage(&storage, &request).unwrap();
@@ -1709,11 +1885,13 @@ mod tests {
             &req(vec![
                 StartPoint::FailingTest {
                     name: "test_login_flow".into(),
+                    node_id: None,
                 },
                 StartPoint::VersionRange {
                     worked_in: "w9".into(),
                     broke_in: "b9".into(),
                     repo: "/nonexistent/repo".into(),
+                    node_id: None,
                 },
             ]),
         )
@@ -1757,5 +1935,169 @@ mod tests {
             parse_prefixed_line(&content, "symbols: "),
             vec!["src/f0.rs/handler_0".to_string()]
         );
+    }
+}
+
+// ============================================================================
+// START POINT node_id — pure tests, no store, run on every feature set
+// ============================================================================
+
+#[cfg(test)]
+mod start_point_node_id_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn logged_write(id: &str) -> StartPoint {
+        StartPoint::LoggedWrite {
+            node_id: id.to_string(),
+        }
+    }
+
+    fn stack_frame(frame: &str, node_id: Option<&str>) -> StartPoint {
+        StartPoint::StackFrame {
+            frame: frame.to_string(),
+            node_id: node_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn every_variant_accepts_node_id_and_round_trips() {
+        let cases = [
+            (
+                json!({"kind": "failing_test", "name": "t", "node_id": "mem-1"}),
+                "failing_test",
+            ),
+            (
+                json!({"kind": "stack_frame", "frame": "src/a.rs:1", "node_id": "mem-1"}),
+                "stack_frame",
+            ),
+            (
+                json!({"kind": "ci_run", "run_id": "r1", "node_id": "mem-1"}),
+                "ci_run",
+            ),
+            (
+                json!({"kind": "logged_write", "node_id": "mem-1"}),
+                "logged_write",
+            ),
+            (
+                json!({"kind": "version_range", "worked_in": "a", "broke_in": "b", "repo": "/r", "node_id": "mem-1"}),
+                "version_range",
+            ),
+        ];
+        for (wire, kind) in cases {
+            let point: StartPoint =
+                serde_json::from_value(wire.clone()).unwrap_or_else(|err| panic!("{kind}: {err}"));
+            assert_eq!(point.kind(), kind);
+            assert_eq!(point.record_id(), Some("mem-1"), "{kind}");
+            assert_eq!(
+                serde_json::to_value(&point).unwrap(),
+                wire,
+                "{kind} must round-trip with its node_id"
+            );
+        }
+    }
+
+    #[test]
+    fn node_id_is_optional_off_logged_write_and_omitted_when_absent() {
+        let point: StartPoint =
+            serde_json::from_value(json!({"kind": "stack_frame", "frame": "src/a.rs:1"})).unwrap();
+        assert_eq!(point.record_id(), None);
+        assert_eq!(
+            serde_json::to_value(&point).unwrap(),
+            json!({"kind": "stack_frame", "frame": "src/a.rs:1"}),
+            "an absent node_id is not serialized as null"
+        );
+        assert!(
+            serde_json::from_value::<StartPoint>(json!({"kind": "logged_write"})).is_err(),
+            "logged_write is the variant whose only content is node_id"
+        );
+    }
+
+    #[test]
+    fn typos_are_still_rejected() {
+        let err = serde_json::from_value::<StartPoint>(
+            json!({"kind": "stack_frame", "frame": "src/a.rs:1", "nodeid": "mem-1"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unknown field `nodeid`"), "{err}");
+        assert!(
+            err.contains("node_id"),
+            "the message names the real field: {err}"
+        );
+    }
+
+    #[test]
+    fn blank_node_id_names_no_record() {
+        assert_eq!(stack_frame("f", Some("   ")).record_id(), None);
+        assert_eq!(stack_frame("f", Some("")).record_id(), None);
+        assert_eq!(
+            stack_frame("f", Some("  mem-9 ")).record_id(),
+            Some("mem-9")
+        );
+    }
+
+    #[test]
+    fn normalize_appends_logged_writes_and_keeps_original_positions() {
+        let starts = vec![
+            stack_frame("src/a.rs:1", Some("mem-1")),
+            StartPoint::VersionRange {
+                worked_in: "v1".into(),
+                broke_in: "v2".into(),
+                repo: "/r".into(),
+                node_id: Some("mem-2".into()),
+            },
+            stack_frame("src/b.rs:2", None),
+        ];
+        let out = normalize_start_points(&starts);
+        assert_eq!(
+            out,
+            vec![
+                stack_frame("src/a.rs:1", None),
+                StartPoint::VersionRange {
+                    worked_in: "v1".into(),
+                    broke_in: "v2".into(),
+                    repo: "/r".into(),
+                    node_id: None,
+                },
+                stack_frame("src/b.rs:2", None),
+                logged_write("mem-1"),
+                logged_write("mem-2"),
+            ],
+            "originals keep their index (resolved version ranges are index-keyed)"
+        );
+        assert_eq!(normalize_start_points(&out), out, "idempotent");
+    }
+
+    #[test]
+    fn normalize_never_repeats_a_node_an_explicit_logged_write_names() {
+        // the explicit logged_write comes AFTER the start point that carries it
+        let starts = vec![
+            stack_frame("src/a.rs:1", Some("mem-1")),
+            stack_frame("src/b.rs:2", Some("mem-1")),
+            logged_write("mem-1"),
+        ];
+        let out = normalize_start_points(&starts);
+        assert_eq!(
+            out.iter()
+                .filter(|s| matches!(s, StartPoint::LoggedWrite { .. }))
+                .count(),
+            1,
+            "{out:?}"
+        );
+        // and two carriers of the same node produce one synthesized start
+        let out = normalize_start_points(&[
+            stack_frame("src/a.rs:1", Some("mem-7")),
+            stack_frame("src/b.rs:2", Some(" mem-7 ")),
+        ]);
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert_eq!(out[2], logged_write("mem-7"));
+    }
+
+    #[test]
+    fn normalize_leaves_canonical_input_alone() {
+        let starts = vec![logged_write("mem-1"), stack_frame("src/a.rs:1", None)];
+        assert_eq!(normalize_start_points(&starts), starts);
+        assert!(normalize_start_points(&[]).is_empty());
     }
 }

@@ -1995,13 +1995,14 @@ fn maintain_scores_importance_dry_runs_gc_consolidates_and_restore_needs_a_path(
     assert!(gc["processed"].as_u64().unwrap() <= 100);
     assert_under(&gc, 3_000, "maintain gc");
 
-    let consolidate = server.call_tool_ok("maintain", json!({ "action": "consolidate" }));
-    assert_keys(
-        &consolidate,
-        &["nodesProcessed", "decayApplied", "durationMs"],
-        "maintain consolidate",
+    // Every consolidate phase is a no-op on a Strata log, so the action is
+    // withheld rather than answered with zero counts that read as a pass.
+    let consolidate = server.call_tool("maintain", json!({ "action": "consolidate" }));
+    assert_error_mentions(&consolidate, "unavailable_in_4_0", "maintain consolidate");
+    assert!(
+        consolidate.get("nodesProcessed").is_none(),
+        "a withheld action must not carry counts: {consolidate}"
     );
-    assert_under(&consolidate, 3_000, "maintain consolidate");
 
     let bad = server.call_tool("maintain", json!({ "action": "restore" }));
     assert!(

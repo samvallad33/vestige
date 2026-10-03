@@ -174,8 +174,9 @@ fn causal_walk_stdio_returns_the_recorded_cause() {
         .iter()
         .find(|row| row["id"] == cause)
         .unwrap_or_else(|| panic!("missing recorded cause: {first}"));
-    assert_eq!(cause_row["path"][0]["source_id"], cause);
-    assert_eq!(cause_row["path"][0]["target_id"], effect);
+    // The hop is the recorded edge: `effect derived_from cause`.
+    assert_eq!(cause_row["path"][0]["source_id"], effect);
+    assert_eq!(cause_row["path"][0]["target_id"], cause);
     assert_eq!(cause_row["path"][0]["link_type"], "derived_from");
     let ids: Vec<&str> = first["nodes"]
         .as_array()
@@ -192,5 +193,63 @@ fn causal_walk_stdio_returns_the_recorded_cause() {
         2,
         "only the start and its recorded cause: {first}"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn causal_walk_stdio_walks_every_start_point_kind_that_carries_a_node_id() {
+    let dir = std::env::temp_dir().join(format!(
+        "vestige-causal-walk-node-id-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (effect, cause, _decoy) =
+        vestige_mcp::tools::causal_walk::seed_recorded_cause(&dir).expect("seed strata log");
+
+    let mut server = Server::spawn(&dir);
+    server.handshake();
+
+    // A bare stack_frame cannot be walked on a Strata log. The refusal must
+    // say so, and say what to add.
+    let bare = server.call_tool(
+        "causal_walk",
+        json!({"scope": "user", "start_points": [{"kind": "stack_frame", "frame": "src/auth.rs:10"}]}),
+    );
+    assert_eq!(
+        bare["needs_report"]["missing"],
+        json!(["node_id"]),
+        "{bare}"
+    );
+    assert_eq!(bare["start_points"][0]["status"], "unresolved", "{bare}");
+
+    // Adding the node_id the refusal asked for must be accepted on EVERY kind
+    // (call_tool fails the test on an `unknown field` error).
+    let starts = [
+        json!({"kind": "failing_test", "name": "test_login", "node_id": effect}),
+        json!({"kind": "stack_frame", "frame": "src/auth.rs:10", "node_id": effect}),
+        json!({"kind": "ci_run", "run_id": "run-1", "node_id": effect}),
+        json!({"kind": "version_range", "worked_in": "v1", "broke_in": "v2", "repo": "/r", "node_id": effect}),
+        json!({"kind": "logged_write", "node_id": effect}),
+    ];
+    for start in starts {
+        let out = server.call_tool(
+            "causal_walk",
+            json!({"scope": "user", "start_points": [start.clone()]}),
+        );
+        assert!(out["needs_report"].is_null(), "{start}: {out}");
+        assert_eq!(out["start"], json!(effect), "{start}: {out}");
+        let cause_row = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == json!(cause))
+            .unwrap_or_else(|| panic!("{start}: missing recorded cause: {out}"));
+        assert_eq!(cause_row["path"][0]["link_type"], "derived_from", "{start}");
+    }
+    println!("{}", server.transcript.join("\n"));
     let _ = std::fs::remove_dir_all(&dir);
 }

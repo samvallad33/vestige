@@ -530,6 +530,21 @@ pub async fn execute_consolidate(
     }
     let parsed: Args = serde_json::from_value(args.unwrap_or_else(|| serde_json::json!({})))
         .map_err(|error| error.to_string())?;
+    if !matches!(
+        parsed.phase.as_deref().unwrap_or("all"),
+        "all" | "lifecycle" | "logs"
+    ) {
+        return Err("phase must be all, lifecycle or logs".into());
+    }
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        // `maintain action=consolidate` is withheld before it reaches here; the
+        // hidden `consolidate` alias carries no `action`, so it lands here and
+        // gets the same refusal instead of a no-op's all-zero "success".
+        return Err(super::unavailable::withheld_in_4_0(
+            "maintain action 'consolidate'",
+            super::unavailable::CONSOLIDATE_NOOP,
+        ));
+    }
     match parsed.phase.as_deref().unwrap_or("all") {
         // w1b: the "embeddings" phase was removed with the vector runtime;
         // only lifecycle/log row batches and the full sweep remain.

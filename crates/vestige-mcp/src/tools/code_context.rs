@@ -26,6 +26,72 @@ pub(super) fn current_nodes(
         .map_err(|e| format!("Cannot read current code context: {e}"))
 }
 
+/// Code memories held in one scope: the advice `get_context` lists (patterns
+/// and decisions) and the change records `verify` also checks (events).
+pub(super) struct ScopeCounts {
+    pub(super) scope: String,
+    pub(super) patterns: usize,
+    pub(super) decisions: usize,
+    /// `event` memories tagged `codebase:<name>`, such as `ingest_repo` change
+    /// records. Counted only for a named codebase.
+    pub(super) events: usize,
+}
+
+impl ScopeCounts {
+    /// Any pattern or decision, the kinds `get_context` returns.
+    pub(super) fn has_advice(&self) -> bool {
+        self.patterns + self.decisions > 0
+    }
+
+    /// The row as `get_context` and `session_start` list it.
+    pub(super) fn json(&self) -> Value {
+        json!({
+            "scope": self.scope,
+            "patterns": self.patterns,
+            "decisions": self.decisions,
+            "events": self.events,
+        })
+    }
+}
+
+/// Every scope that holds code memories for `codebase`, with exact totals,
+/// ordered by scope name. Events are counted only when a codebase is named:
+/// without its exact tag, `event` would match every event in the store.
+/// `Err` only when the backend cannot list scopes; callers report that
+/// instead of an empty list.
+pub(super) fn code_scopes(
+    storage: &Arc<Storage>,
+    codebase: Option<&str>,
+) -> Result<Vec<ScopeCounts>, String> {
+    let tag = codebase.map(|c| format!("codebase:{c}"));
+    let kinds: &[&str] = if tag.is_some() {
+        &["pattern", "decision", "event"]
+    } else {
+        &["pattern", "decision"]
+    };
+    let mut by_scope: std::collections::BTreeMap<String, ScopeCounts> =
+        std::collections::BTreeMap::new();
+    for kind in kinds {
+        let counts = storage
+            .current_code_context_scope_counts(kind, tag.as_deref())
+            .map_err(|e| format!("scope listing is unavailable on this storage backend: {e}"))?;
+        for (scope, count) in counts {
+            let row = by_scope.entry(scope.clone()).or_insert(ScopeCounts {
+                scope,
+                patterns: 0,
+                decisions: 0,
+                events: 0,
+            });
+            match *kind {
+                "pattern" => row.patterns = count,
+                "decision" => row.decisions = count,
+                _ => row.events = count,
+            }
+        }
+    }
+    Ok(by_scope.into_values().collect())
+}
+
 /// Skip the generated title so a startup summary contains the actual advice.
 pub(super) fn summary(content: &str) -> String {
     let body = content

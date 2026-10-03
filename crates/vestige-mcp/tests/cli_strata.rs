@@ -343,6 +343,69 @@ fn causal_walk_on_strata_walks_recorded_edges_only_and_writes_nothing() {
 }
 
 #[test]
+fn causal_walk_node_id_makes_a_named_start_point_walkable_on_strata() {
+    let dir = TempDir::new().unwrap();
+    let (effect, cause, decoy) =
+        vestige_mcp::tools::causal_walk::seed_recorded_cause(dir.path()).expect("seed");
+    let edges_before = edge_count(dir.path());
+
+    // --node-id names the recorded memory the stack frame describes
+    let walked = vestige(
+        dir.path(),
+        &[
+            "causal-walk",
+            "--stack-frame",
+            "src/auth.rs:10",
+            "--node-id",
+            &effect,
+            "--json",
+        ],
+    );
+    assert!(walked.ok, "{}", walked.text());
+    let value: Value = serde_json::from_str(&walked.stdout).unwrap();
+    let causes: Vec<&str> = value["causes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["id"].as_str())
+        .collect();
+    assert!(causes.contains(&cause.as_str()), "{value}");
+    assert!(!causes.contains(&decoy.as_str()), "{value}");
+    assert_eq!(value["start_points"][0]["kind"], "stack_frame", "{value}");
+    assert_eq!(value["start_points"][0]["status"], "walked", "{value}");
+    assert_eq!(edge_count(dir.path()), edges_before, "a walk wrote edges");
+
+    // without it the frame is only a name, which a Strata log cannot walk
+    let bare = vestige(
+        dir.path(),
+        &["causal-walk", "--stack-frame", "src/auth.rs:10", "--json"],
+    );
+    assert!(!bare.ok, "{}", bare.text());
+    assert!(
+        bare.stderr.contains("unavailable_in_4_0"),
+        "{}",
+        bare.text()
+    );
+    assert!(bare.stderr.contains("--node-id"), "{}", bare.text());
+
+    // half a version range is refused, not walked as something else
+    let half = vestige(
+        dir.path(),
+        &[
+            "causal-walk",
+            "--git-repo",
+            "x",
+            "--worked-in",
+            "a",
+            "--node-id",
+            &effect,
+        ],
+    );
+    assert!(!half.ok, "{}", half.text());
+    assert!(half.stderr.contains("together"), "{}", half.text());
+}
+
+#[test]
 fn portable_and_sync_refuse_and_write_nothing() {
     let seeded = seed();
     let out = TempDir::new().unwrap();

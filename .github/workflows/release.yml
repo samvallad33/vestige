@@ -16,6 +16,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Only a vX.Y.Z tag is a product release. Every other release on this repo
+  # (Operator Lite, benchmarks, launches, the whitepaper) must not build or
+  # upload product binaries. The old prefix deny-list missed `operator-lite-`,
+  # so on 2026-10-01 the Operator Lite v0.3.4 release got a stray Android
+  # archive uploaded to it.
+  classify:
+    name: Is this a product release tag?
+    runs-on: ubuntu-latest
+    outputs:
+      product: ${{ steps.tag.outputs.product }}
+    steps:
+      - id: tag
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+            echo "product=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "product=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::'$TAG' is not a product release tag; no binaries will be built or uploaded."
+          fi
+
   # Every shipped feature set must resolve without reqwest. Runs before the
   # matrix builds so a regression cannot upload an artifact.
   no-http-client:
@@ -34,9 +56,9 @@ jobs:
         run: bash scripts/check-release-no-reqwest.sh
 
   build:
-    # Benchmark evidence releases must not build or publish product binaries.
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
-    needs: [no-http-client]
+    # Non-product releases must not build or publish product binaries.
+    if: ${{ needs.classify.outputs.product == 'true' }}
+    needs: [classify, no-http-client]
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -211,8 +233,8 @@ jobs:
   # ships no musl prebuilts, so embeddings would not work. The ubuntu-22.04
   # runner label begins deprecation in 2026; a container keeps this floor.
   build-linux:
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
-    needs: [no-http-client]
+    if: ${{ needs.classify.outputs.product == 'true' }}
+    needs: [classify, no-http-client]
     name: Build x86_64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-latest
     container: ubuntu:22.04
@@ -366,10 +388,10 @@ jobs:
           path: vestige-mcp-x86_64-unknown-linux-gnu.tar.gz
 
   publish-linux:
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    if: ${{ needs.classify.outputs.product == 'true' }}
     name: Smoke + publish x86_64-unknown-linux-gnu
     runs-on: ubuntu-latest
-    needs: [build-linux]
+    needs: [classify, build-linux]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -421,7 +443,8 @@ jobs:
   # aarch64 Linux asset (#240): the x86_64 job on GitHub's arm64 runner, same
   # Ubuntu 22.04 container for the glibc 2.35 floor, same checks and smokes.
   build-linux-arm64:
-    needs: [no-http-client]
+    if: ${{ needs.classify.outputs.product == 'true' }}
+    needs: [classify, no-http-client]
     name: Build aarch64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-24.04-arm
     container: ubuntu:22.04
@@ -575,9 +598,10 @@ jobs:
           path: vestige-mcp-aarch64-unknown-linux-gnu.tar.gz
 
   publish-linux-arm64:
+    if: ${{ needs.classify.outputs.product == 'true' }}
     name: Smoke + publish aarch64-unknown-linux-gnu
     runs-on: ubuntu-24.04-arm
-    needs: [build-linux-arm64]
+    needs: [classify, build-linux-arm64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -751,9 +775,9 @@ jobs:
   # libc/libm/libdl/liblog appear as runtime dependencies. No npm installer
   # mapping yet — on-device Termux users build from source or take the asset.
   build-android:
-    needs: [no-http-client]
+    needs: [classify, no-http-client]
     name: Build aarch64-linux-android (no embeddings)
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    if: ${{ needs.classify.outputs.product == 'true' }}
     runs-on: ubuntu-latest
     env:
       ANDROID_API: "24"
@@ -832,9 +856,9 @@ jobs:
 
   publish-android:
     name: Checksum + publish aarch64-linux-android
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    if: ${{ needs.classify.outputs.product == 'true' }}
     runs-on: ubuntu-latest
-    needs: [build-android]
+    needs: [classify, build-android]
     steps:
       - name: Download android artifact
         uses: actions/download-artifact@v4
@@ -855,3 +879,27 @@ jobs:
             dist/vestige-mcp-aarch64-linux-android.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The README install command, the release notes and `vestige update` all
+  # fetch releases/latest/download/vestige-mcp-<target>. On 2026-10-01 a
+  # non-product release took the "latest" flag and that URL returned 404.
+  # This runs after every release event, product or not, and fails when the
+  # release GitHub marks latest does not carry the full archive set. The
+  # failure message prints the repair command.
+  verify-latest:
+    name: releases/latest carries every platform archive
+    needs: [build, publish-linux, publish-linux-arm64, publish-android]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
+
+      - name: Check the latest release's assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/check-latest-release.sh "${{ github.repository }}"
