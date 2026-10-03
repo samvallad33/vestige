@@ -37,7 +37,7 @@ try:
 except ImportError:                                  # Windows: receipts lock through msvcrt instead
     fcntl = None
 
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 INTEGRITY = "reference_digest_not_signature"
 IS_WINDOWS = os.name == "nt"
 

@@ -12,6 +12,10 @@ copy one file, wire one hook, and your agent has a deterministic gate.
 
     curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
 
+On Windows, in PowerShell, with Python 3.9 or newer installed:
+
+    curl.exe -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o "$env:TEMP\operator-gate.py"; python "$env:TEMP\operator-gate.py" install
+
 From a clone, `python3 operator-gate.py install` does the same. It copies the gate to
 `~/.operator/gate`, registers the Claude Code hook, starts in shadow mode (records
 every verdict, blocks nothing) and then replays your last 30 days of Claude Code
