@@ -46,9 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   short name is the same target as its long name, receipts lock through
   `msvcrt`, and `install` registers a hook command Windows can run. A tool call
   named PowerShell is read as PowerShell: `Remove-Item` and its aliases are
-  judged like `rm`. `test_windows.py` runs on a Windows CI runner. Not yet on
-  Windows: the parser, replay and corpus test suites, and `cmd.exe` forms such
-  as `rmdir /s`.
+  judged like `rm`, and so are the `cmd.exe` forms `rmdir /s`, `rd /s`,
+  `del /s` and `erase /s` handed to `cmd /c`. `test_windows.py` runs on a
+  Windows CI runner. Not yet on Windows: the parser, replay and corpus test
+  suites.
 
 ### Fixed
 

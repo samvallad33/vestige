@@ -840,6 +840,10 @@ def analyze(cmd, cwd, depth=0, vars_=None):
             continue
         prog = os.path.basename(toks[0])
         rest = toks[1:]
+        handed = cmd_exe_line(toks)
+        if handed is not None:                              # `cmd /c "rmdir /s /q X"` from a shell
+            effects += cmd_exe_effects(handed, state["cwd"])
+            continue
         if "__SUBST__" in prog or "$" in prog:
             # dynamic command name: `$(echo rm) -rf x` / `$CMD ~/vestige` -- treat as a delete-shaped unknown
             dflags, dargs = flags_and_args(rest)
@@ -1051,6 +1055,37 @@ def ps_param(word, full):
     return len(low) >= 2 and full.startswith(low)
 
 
+CMD_DELETE = {"rmdir", "rd", "del", "erase"}
+
+
+def cmd_exe_effects(line, cwd):
+    """Delete effects in a cmd.exe command line (what follows `cmd /c`). `&`, `&&` and `|` separate
+    commands, double quotes group, and a one-letter `/x` word is a switch: `/s` makes it recursive."""
+    effects = []
+    for part in re.split(r"&&|&|\|", line or ""):
+        toks = [t.strip('"') for t in re.findall(r'"[^"]*"|\S+', part)]
+        if not toks or toks[0].lower() not in CMD_DELETE:
+            continue
+        switches = [t.lower() for t in toks[1:] if re.match(r"^/[A-Za-z](:.*)?$", t)]
+        paths = [t for t in toks[1:] if not re.match(r"^/[A-Za-z](:.*)?$", t)]
+        resolved = resolve_targets(paths, cwd)
+        kept = [t for t in resolved if not t.startswith(UNKNOWN_CWD) and "$" not in t and "%" not in t]
+        effects.append({"prog": toks[0].lower(), "seg": part.strip(), "targets": kept, "recursive": "/s" in switches,
+                        "kind": "delete", "filtered": False, "unresolved": len(kept) != len(resolved) or not paths,
+                        "flags": switches, "args": paths, "cwd": cwd or UNKNOWN_CWD, "writes": [], "text": part.strip()})
+    return effects
+
+
+def cmd_exe_line(toks):
+    """The command line handed to cmd.exe by `cmd /c ...` or `cmd.exe /k ...`, or None."""
+    if not toks or os.path.basename(toks[0]).lower() not in ("cmd", "cmd.exe"):
+        return None
+    for i, t in enumerate(toks[1:], 1):
+        if t.lower() in ("/c", "/k"):
+            return " ".join(toks[i + 1:])
+    return None
+
+
 def analyze_powershell(cmd, cwd):
     """Effects of a PowerShell command. Remove-Item and its aliases become delete effects; every other
     statement goes through the shell walker, which reads git, npm and the like the same way."""
@@ -1060,6 +1095,10 @@ def analyze_powershell(cmd, cwd):
         while toks and toks[0] in ("&", "."):                # call operators
             toks = toks[1:]
         if not toks:
+            continue
+        handed = cmd_exe_line(toks)
+        if handed is not None:                              # `cmd /c rmdir /s /q C:\\x` from PowerShell
+            effects += cmd_exe_effects(handed, cwd)
             continue
         if toks[0].lower() not in PS_DELETE:
             effects += analyze(stmt, cwd)
