@@ -2021,9 +2021,10 @@ def cmd_status(argv):
                                                if RULES.get(c, ("", "", ""))[1] == "STOP"), (r.get("commitments") or ["?"])[0])
             when = time.strftime("%b %d %H:%M", time.localtime(receipt_time(r)))
             project = os.path.basename(str(r.get("cwd") or "").rstrip("/"))[:16]
-            why = str(r.get("detail") or "").split(";")[0].replace(HOME, "~")[:64]
+            why = " ".join(str(r.get("detail") or "").split(";")[0].replace(HOME, "~").split())[:64]
+            ran_ = " ".join(str(r.get("action_preview") or "").replace(HOME, "~").split())[:72]
             print("  %s  %-16s %s %s" % (when, project, paint(rid, "31"), why))
-            print("  %s  %-16s %s" % (" " * len(when), "", paint(str(r.get("action_preview") or "").replace(HOME, "~")[:72], "2")))
+            print("  %s  %-16s %s" % (" " * len(when), "", paint(ran_, "2")))
         if len(rows) > 5:
             print("  and %d more in ~/.operator/receipts" % (len(rows) - 5))
 
