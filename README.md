@@ -48,8 +48,33 @@ echo shadow > ~/.operator/mode        # shadow-first: log everything, block noth
 - **Every verdict gets a hash-chained receipt** — and `verify` walks the chain
 - **Shadow-first**: install logs everything and blocks nothing until you flip
 
+See what it would have said about last month before you rely on it. `replay` runs the
+Claude Code history already on your machine through the same rules and executes nothing:
+
 ```bash
-python3 ~/.operator/gate/operator-gate.py corpus guardfall   # 43/43 bypass cases
+python3 ~/.operator/gate/operator-gate.py replay
+```
+
+It prints what the built-in rules would have stopped, what they would have flagged, and
+the actions no built-in rule decides: pushes, package installs by name, deploys, database
+commands, CI config and env-file writes.
+
+<a id="vestige-operator"></a>
+## Vestige Operator, the paid tier
+
+Operator Lite is free and stays free. **Vestige Operator** is the owner's version of the same gate, $149 a month:
+
+- **Your own laws.** Sentences you write ("never publish without a dry run", "recall before grep") become rules the gate enforces on every host, with a compliant rewrite or a stop, and a one-time permit only you can grant from your own terminal.
+- **The Board.** Today's stops, law violations and canary bites as cards, built from your receipts.
+- **The Letter.** One weekly digest of what your agents tried and what stopped them.
+- **A five-minute onboarding wizard** that writes your first laws and proves the gate stops a violation before you rely on it.
+
+Buy it at the account page: [vestige-pro-production.fly.dev/account](https://vestige-pro-production.fly.dev/account). After checkout the gate arrives by email as a small archive with its checksum; extract it and run the wizard. From an installed Operator Lite, `operator-gate upgrade` prints the same summary and link.
+
+What it is not: Operator blocks what is routed through it. It cannot block a call that bypasses the hooked tools, and receipts are hash-chained digests, not signatures.
+
+```bash
+python3 ~/.operator/gate/operator-gate.py corpus guardfall   # 46/46 bypass cases
 python3 ~/.operator/gate/operator-gate.py verify             # receipt chain check
 ```
 

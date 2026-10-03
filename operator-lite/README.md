@@ -35,6 +35,20 @@ binary: gate exit 0 = allow, exit 2 = block with the reason.)
 ALLOW = exit 0, silent. STOP = exit 2, reason on stderr (the agent sees it and
 must change course). Flip to blocking with: `echo enforce > ~/.operator/mode`.
 
+## See it on your own history first
+
+    python3 operator-gate.py replay            # last 30 days of Claude Code history on this machine
+    python3 operator-gate.py replay --here     # only calls made under the current directory
+
+`replay` runs every tool call in the Claude Code transcripts on this machine through
+the same classifier the hook uses and prints three lists: what the built-in rules
+would have stopped, what they would have flagged in shadow, and the actions no
+built-in rule decides (pushes, hook-skipping commits, package installs by name,
+deploys, database commands, CI config and env-file writes). Classification only:
+nothing in the history is executed and no receipt is written. It needs no install,
+and `install` runs it once at the end. `--days N`, `--all`, `--budget SECONDS` and
+`--json` change the window and the output.
+
 ## What it stops
 
 | Rule | Mode | Catches |
@@ -62,10 +76,11 @@ fork bombs, `mv x /dev/null`. Every STOP tells you which transforms it applied.
 
 ## Commands
 
-    operator-gate status | verify | corpus guardfall | install
+    operator-gate status | verify | corpus guardfall | install | upgrade | replay
 
-`verify` walks the receipt hash chain. `corpus guardfall` replays 43 adapted
-GuardFall bypass cases (must pass 43/43). Every verdict appends to
+`verify` walks the receipt hash chain. `corpus guardfall` replays 46 adapted
+GuardFall bypass cases (must pass 46/46). `upgrade` describes the paid Operator
+gate and where to get it. Every verdict appends to
 `~/.operator/receipts/<date>.jsonl`.
 
 ## Honest boundary
