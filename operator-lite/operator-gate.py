@@ -120,6 +120,11 @@ def is_same_or_ancestor(target, protected):
     return False
 
 
+def same_path(a, b):
+    """The same place, whatever the spelling: symlinks resolved, and on Windows slashes and case."""
+    return bool(a and b and (variants(a) & variants(b)))
+
+
 def is_inside(target, root):
     for t in variants(target):
         for r in variants(root):
@@ -1255,9 +1260,9 @@ def classify_effect(e, cfg, cwd):
                          "Scope the find to a named project directory; never sweep from /."))
         if kind == "delete" and e["recursive"] and not e.get("filtered"):
             unsafe = [t for t in e["targets"] if not is_scratch(t)]
-            broad = ecwd in (None, "/", HOME) or ecwd in tuple(pj(HOME, d) for d in
-                                                              ("Developer", "Documents", "Downloads", "Desktop"))
-            wide = [t for t in unsafe if t in ("/", HOME) or t.count("/") <= 2]
+            broad = ecwd in (None, "/") or same_path(ecwd, HOME) or any(
+                same_path(ecwd, pj(HOME, d)) for d in ("Developer", "Documents", "Downloads", "Desktop"))
+            wide = [t for t in unsafe if t == "/" or same_path(t, HOME) or t.count("/") <= 2]
             outside = [t for t in unsafe if broad or not is_inside(t, ecwd)]
             if (wide or outside) and not e["unresolved"] and \
                     not any(h[0] in ("OP-001", "OP-000", "OP-002") for h in hits):
@@ -1500,7 +1505,7 @@ def classify(payload, cfg):
     ti = payload.get("tool_input") or payload.get("toolInput") or payload.get("input") or {}
     if not isinstance(ti, dict):
         ti = {"command": ti}
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = canon(payload.get("cwd") or os.getcwd())
     hits, previews = [], []
     meta = {"normalized": "", "transforms": []}
     effects_out = []

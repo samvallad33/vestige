@@ -184,6 +184,14 @@ allow("recursive delete inside the Windows temp directory", 'rm -rf "%s"' % os.p
 allow("recursive delete of a build directory in the project", "rm -rf node_modules")
 allow("plain command", "git status")
 
+# a session whose working directory is the home directory, in the spelling Windows reports it
+rc, first = hook("rm -rf ~/Documents/old-project", cwd=HOME)
+check("stop   recursive delete inside the home directory when the session started there", rc == 2 and "(OP-003 " in first, "exit %d %s" % (rc, first))
+rc, first = hook("rm -rf old-project", cwd=os.path.join(HOME, "Documents"))
+check("stop   recursive delete of a relative folder with the session in Documents", rc == 2 and "(OP-003 " in first, "exit %d %s" % (rc, first))
+rc, first = hook("Remove-Item -Recurse -Force old-project", cwd=HOME.upper(), tool="PowerShell")
+check("stop   the same from PowerShell with the directory in another letter case", rc == 2 and "(OP-003 " in first, "exit %d %s" % (rc, first))
+
 # the PowerShell tool, with Windows paths
 stop("PowerShell: Remove-Item -Recurse on the home directory", "Remove-Item -Recurse -Force %s" % HOME, "OP-001", tool="PowerShell")
 stop("PowerShell: the same through $env:USERPROFILE", "Remove-Item -Recurse -Force $env:USERPROFILE", "OP-001", tool="PowerShell")
