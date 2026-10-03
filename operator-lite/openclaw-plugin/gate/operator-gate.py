@@ -18,11 +18,11 @@ or tamper-evident.
 
 Stdlib only, Python 3.9 compatible (macOS /usr/bin/python3).
 """
-import fcntl
 import glob
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import stat as _stat
@@ -31,10 +31,45 @@ import sys
 import tempfile
 import time
 
+try:
+    import fcntl
+except ImportError:                                  # Windows: receipts lock through msvcrt instead
+    fcntl = None
+
 VERSION = "0.3.6"
 INTEGRITY = "reference_digest_not_signature"
-HOME = os.path.expanduser("~")
-OP_HOME = os.environ.get("OPERATOR_HOME", os.path.join(HOME, ".operator"))
+IS_WINDOWS = os.name == "nt"
+
+
+def canon_windows(path):
+    """A Windows path in one spelling: forward slashes, an upper-case drive letter, and the Git Bash
+    forms /c/x and /cygdrive/c/x read as C:/x. Pure string work, so it can be tested anywhere."""
+    p = path.replace("\\", "/")
+    m = re.match(r"^/(?:cygdrive/)?([A-Za-z])(/.*)?$", p)
+    if m:
+        return m.group(1).upper() + ":" + (m.group(2) or "/")
+    if re.match(r"^[A-Za-z]:", p):
+        return p[0].upper() + p[1:]
+    return p
+
+
+def canon(path):
+    """One spelling for a path on every platform. On POSIX this changes nothing."""
+    return canon_windows(path) if IS_WINDOWS and path else path
+
+
+def pj(*parts):
+    return canon(os.path.join(*parts))
+
+
+def is_abs(path):
+    if IS_WINDOWS:
+        return path.startswith("/") or bool(re.match(r"^[A-Za-z]:/", path))
+    return os.path.isabs(path)
+
+
+HOME = canon(os.path.expanduser("~"))
+OP_HOME = canon(os.environ.get("OPERATOR_HOME", pj(HOME, ".operator")))
 PERMIT_TTL_S = 15 * 60
 MAX_DEPTH = 4
 
@@ -54,14 +89,16 @@ def norm(path, cwd):
     p = p.replace("${HOME}", HOME).replace("$HOME", HOME)
     if p == "~" or p.startswith("~/"):
         p = HOME + p[1:]
-    if not os.path.isabs(p):
-        p = os.path.join(cwd or os.getcwd(), p)
-    return os.path.normpath(p)
+    p = canon(p)
+    if not is_abs(p):
+        p = posixpath.join(canon(cwd or os.getcwd()), p)
+    return posixpath.normpath(p)
 
 
 def real(path):
+    """Symlinks resolved; on Windows this also turns an 8.3 short name into the long one."""
     try:
-        return os.path.realpath(path)
+        return canon(os.path.realpath(path))
     except Exception:
         return path
 
@@ -69,7 +106,8 @@ def real(path):
 def variants(path):
     """Lexical + symlink-resolved form, so ~/vestige and ~/Developer/vestige are one target."""
     out = {path, real(path)}
-    return {v.rstrip("/") or "/" for v in out}
+    out = {v.rstrip("/") or "/" for v in out}
+    return {v.casefold() for v in out} if IS_WINDOWS else out      # Windows paths ignore case
 
 
 def is_same_or_ancestor(target, protected):
@@ -93,22 +131,22 @@ def is_inside(target, root):
 # commitments (the owner's rules) -- defaults in code, extended by commitments.json
 # --------------------------------------------------------------------------- #
 def default_protected_roots():
-    d = os.path.join(HOME, "Developer")
+    d = pj(HOME, "Developer")
     return [
-        os.path.join(d, "vestige"), os.path.join(HOME, "vestige"),
-        os.path.join(d, "vestige-launch-private"), os.path.join(d, "vestige-operator"),
-        os.path.join(d, "vestige-cloud"), os.path.join(d, "vestige-evidence"),
-        os.path.join(d, "vestige-LIMEN"), os.path.join(d, "vestige-nc"),
-        os.path.join(d, "vestige-ollama"), os.path.join(d, "vestige-extra"),
+        pj(d, "vestige"), pj(HOME, "vestige"),
+        pj(d, "vestige-launch-private"), pj(d, "vestige-operator"),
+        pj(d, "vestige-cloud"), pj(d, "vestige-evidence"),
+        pj(d, "vestige-LIMEN"), pj(d, "vestige-nc"),
+        pj(d, "vestige-ollama"), pj(d, "vestige-extra"),
         d,
-        os.path.join(HOME, ".vestige"), os.path.join(HOME, ".zcode"),
-        os.path.join(HOME, ".claude"), os.path.join(HOME, ".codex"),
-        os.path.join(HOME, ".operator"), HOME,
+        pj(HOME, ".vestige"), pj(HOME, ".zcode"),
+        pj(HOME, ".claude"), pj(HOME, ".codex"),
+        pj(HOME, ".operator"), HOME,
     ]
 
 
 def gate_homes():
-    return sorted({os.path.abspath(OP_HOME), os.path.join(HOME, ".operator")})
+    return sorted({os.path.abspath(OP_HOME), pj(HOME, ".operator")})
 
 
 def touches_gate_home(path):
@@ -117,11 +155,11 @@ def touches_gate_home(path):
 
 def self_protected_files():
     return [
-        os.path.join(HOME, ".claude", "settings.json"),
-        os.path.join(HOME, ".claude", "settings.local.json"),
-        os.path.join(HOME, ".zcode", "cli", "config.json"),
-        os.path.join(HOME, ".codex", "hooks.json"),
-        os.path.join(HOME, ".codex", "config.toml"),
+        pj(HOME, ".claude", "settings.json"),
+        pj(HOME, ".claude", "settings.local.json"),
+        pj(HOME, ".zcode", "cli", "config.json"),
+        pj(HOME, ".codex", "hooks.json"),
+        pj(HOME, ".codex", "config.toml"),
     ]
 
 
@@ -218,7 +256,7 @@ def load_config():
     cfg = {"protected_roots": [], "protected_files": [], "disabled_rules": [], "mode_overrides": {},
            "scratch_ok": []}
     try:
-        with open(os.path.join(OP_HOME, "commitments.json")) as f:
+        with open(pj(OP_HOME, "commitments.json")) as f:
             user = json.load(f)
         for k in cfg:
             if k in user:
@@ -261,7 +299,7 @@ def global_mode():
     m = os.environ.get("OPERATOR_GATE_MODE")
     if not m:
         try:
-            with open(os.path.join(OP_HOME, "mode")) as f:
+            with open(pj(OP_HOME, "mode")) as f:
                 m = f.read().strip()
         except Exception:
             m = "enforce"
@@ -375,8 +413,8 @@ def has_flag(flags, short, long_=None):
 
 
 UNKNOWN_CWD = "/__unknown_cwd__"
-MEMORY_DIRS = [os.path.join(HOME, ".vestige"),
-               os.path.join(HOME, "Library", "Application Support", "com.vestige.core")]
+MEMORY_DIRS = [pj(HOME, ".vestige"),
+               pj(HOME, "Library", "Application Support", "com.vestige.core")]
 MEMORY_FILE_RE = re.compile(r"vestige\.db|strata|\.wal$|\.shm$|\.sqlite3?$", re.I)
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "{", "(", "!", "}", ")", "done", "fi", "esac"}
 LOOP_HEADS = {"for", "case", "select", "function"}
@@ -495,7 +533,7 @@ def resolve_targets(args, cwd):
 
 def resolve(path, cwd):
     """norm() that keeps unknown-cwd relatives recognisable."""
-    if path and not os.path.isabs(tilde(path.replace("${HOME}", HOME).replace("$HOME", HOME))) and cwd is None:
+    if path and not is_abs(canon(tilde(path.replace("${HOME}", HOME).replace("$HOME", HOME)))) and cwd is None:
         return UNKNOWN_CWD + "/" + path
     return norm(path, cwd)
 
@@ -683,7 +721,7 @@ def is_gate_source(path):
             head = f.read(6000)
     except Exception:
         return False
-    return 'OP_HOME = os.environ.get("OPERATOR_HOME"' in head and "VERSION = " in head
+    return 'os.environ.get("OPERATOR_HOME"' in head and "VERSION = " in head
 
 
 NON_SHELL_SCRIPT_EXT = (".py", ".pl", ".rb", ".js", ".mjs", ".cjs", ".ts", ".php", ".lua")
@@ -727,7 +765,7 @@ def analyze(cmd, cwd, depth=0, vars_=None):
     effects = []
     if depth > MAX_DEPTH or not cmd or not cmd.strip():
         return effects
-    vars_ = dict(vars_) if vars_ is not None else {"HOME": HOME}
+    vars_ = dict(vars_) if vars_ is not None else {"HOME": HOME, "USERPROFILE": HOME}
     state = {"cwd": cwd}
     if INVISIBLE_RE.search(cmd):
         effects.append({"prog": "\u200b", "seg": cmd[:120], "targets": [], "recursive": False,
@@ -928,6 +966,124 @@ def analyze(cmd, cwd, depth=0, vars_=None):
 
 
 # --------------------------------------------------------------------------- #
+# PowerShell (the Windows shell tool): the delete cmdlets, read into the same effect model
+# --------------------------------------------------------------------------- #
+POWERSHELL_TOOLS = {"powershell", "pwsh"}
+PS_DELETE = {"remove-item", "rm", "ri", "del", "erase", "rd", "rmdir"}
+PS_ENV_RE = re.compile(r"\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?", re.I)
+
+
+def ps_statements(cmd):
+    """PowerShell text split into statements on a newline, ; | and && outside quotes."""
+    out, cur, q, i, n = [], [], None, 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if q:
+            cur.append(c)
+            if c == "`" and q == '"' and i + 1 < n:
+                cur.append(cmd[i + 1]); i += 1
+            elif c == q:
+                q = None
+        elif c in "'\"":
+            q = c; cur.append(c)
+        elif c == "`" and i + 1 < n:
+            cur.append(c); cur.append(cmd[i + 1]); i += 1
+        elif c in "\n;|" or (c == "&" and i + 1 < n and cmd[i + 1] == "&"):
+            out.append("".join(cur)); cur = []
+            if c == "&":
+                i += 1
+        else:
+            cur.append(c)
+        i += 1
+    out.append("".join(cur))
+    return [x.strip() for x in out if x.strip()]
+
+
+def ps_tokens(stmt):
+    """PowerShell words: quotes group, a backtick escapes, and a backslash is an ordinary character."""
+    toks, cur, q, i, n, started = [], [], None, 0, len(stmt), False
+    while i < n:
+        c = stmt[i]
+        if q:
+            if c == "`" and q == '"' and i + 1 < n:
+                cur.append(stmt[i + 1]); i += 1
+            elif c == q:
+                q = None
+            else:
+                cur.append(c)
+        elif c in "'\"":
+            q = c; started = True
+        elif c == "`" and i + 1 < n:
+            cur.append(stmt[i + 1]); i += 1; started = True
+        elif c.isspace():
+            if cur or started:
+                toks.append("".join(cur)); cur = []; started = False
+        else:
+            cur.append(c); started = True
+        i += 1
+    if cur or started:
+        toks.append("".join(cur))
+    return toks
+
+
+def ps_expand(text):
+    """$env:USERPROFILE, $env:HOME and the temp variables, as PowerShell would read them."""
+    def env(m):
+        name = m.group(1).upper()
+        if name in ("USERPROFILE", "HOME"):
+            return HOME
+        if name in ("TEMP", "TMP"):
+            return canon(tempfile.gettempdir())
+        return m.group(0)
+    return PS_ENV_RE.sub(env, text)
+
+
+def ps_param(word, full):
+    """PowerShell accepts any unambiguous prefix of a parameter name: -r, -rec and -Recurse are one."""
+    low = word.lower()
+    return len(low) >= 2 and full.startswith(low)
+
+
+def analyze_powershell(cmd, cwd):
+    """Effects of a PowerShell command. Remove-Item and its aliases become delete effects; every other
+    statement goes through the shell walker, which reads git, npm and the like the same way."""
+    effects = []
+    for stmt in ps_statements(cmd or ""):
+        toks = ps_tokens(ps_expand(stmt))
+        while toks and toks[0] in ("&", "."):                # call operators
+            toks = toks[1:]
+        if not toks:
+            continue
+        if toks[0].lower() not in PS_DELETE:
+            effects += analyze(stmt, cwd)
+            continue
+        flags, paths, filtered, i = [], [], False, 1
+        while i < len(toks):
+            t = toks[i]
+            if t.startswith("-") and len(t) > 1:
+                flags.append(t)
+                if ps_param(t, "-path") or ps_param(t, "-literalpath"):
+                    if i + 1 < len(toks):
+                        paths += [p for p in toks[i + 1].split(",") if p]
+                        i += 1
+                elif ps_param(t, "-filter") or ps_param(t, "-include") or ps_param(t, "-exclude"):
+                    filtered = True
+                    i += 1                                   # the value belongs to the parameter
+            else:
+                paths += [p for p in t.split(",") if p]
+            i += 1
+        if any(ps_param(f, "-whatif") for f in flags):       # a dry run deletes nothing
+            continue
+        resolved = resolve_targets(paths, cwd)
+        kept = [t for t in resolved if not t.startswith(UNKNOWN_CWD) and "$" not in t]
+        effects.append({"prog": "Remove-Item", "seg": stmt, "targets": kept,
+                        "recursive": any(ps_param(f, "-recurse") for f in flags), "kind": "delete",
+                        "filtered": filtered, "unresolved": len(kept) != len(resolved) or not paths,
+                        "flags": flags, "args": paths, "cwd": cwd or UNKNOWN_CWD, "writes": [], "text": stmt})
+    return effects
+
+
+# --------------------------------------------------------------------------- #
 # classification
 # --------------------------------------------------------------------------- #
 def digest_of(obj):
@@ -935,14 +1091,27 @@ def digest_of(obj):
                                      ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def scratch_roots():
+    """Scratch prefixes beyond the fixed list: TMPDIR, and on Windows the temp directory in both its
+    short and long spelling, compared without case."""
+    roots = set()
+    tmp = os.environ.get("TMPDIR", "").rstrip("/")
+    if tmp:
+        roots.add(tmp)
+    if IS_WINDOWS:
+        roots |= {v for v in variants(canon(tempfile.gettempdir()))}
+        roots |= {b.casefold() for b in roots}
+    return roots
+
+
 def is_scratch(path):
+    build = {b.casefold() for b in BUILD_DIRS} if IS_WINDOWS else BUILD_DIRS
     for t in variants(path):
         if any(t == s or t.startswith(s + "/") for s in SCRATCH_OK):
             return True
-        tmp = os.environ.get("TMPDIR", "").rstrip("/")
-        if tmp and (t == tmp or t.startswith(tmp + "/")):
+        if any(t == s or t.startswith(s + "/") for s in scratch_roots()):
             return True
-        if os.path.basename(t) in BUILD_DIRS:
+        if posixpath.basename(t) in build:
             return True
     return False
 
@@ -1041,7 +1210,7 @@ def classify_effect(e, cfg, cwd):
     if prog0 in PERSISTENCE_PROGS:
         mutating = any(a in ("install", "load", "submit", "enable", "new-session", "write", "-") for a in e.get("args", []))
         if prog0 in ("crontab", "at", "batch") or mutating or \
-                any(t.startswith("/Library/LaunchAgents") or t.startswith(os.path.join(HOME, "Library", "LaunchAgents"))
+                any(t.startswith("/Library/LaunchAgents") or t.startswith(pj(HOME, "Library", "LaunchAgents"))
                     for t in e.get("writes", [])):
             hits.append(("OP-S07", "%s schedules or installs code for later execution" % prog0,
                          "Scheduled execution escapes every audit window; propose it and let the owner run it."))
@@ -1085,7 +1254,7 @@ def classify_effect(e, cfg, cwd):
                          "Scope the find to a named project directory; never sweep from /."))
         if kind == "delete" and e["recursive"] and not e.get("filtered"):
             unsafe = [t for t in e["targets"] if not is_scratch(t)]
-            broad = ecwd in (None, "/", HOME) or ecwd in tuple(os.path.join(HOME, d) for d in
+            broad = ecwd in (None, "/", HOME) or ecwd in tuple(pj(HOME, d) for d in
                                                               ("Developer", "Documents", "Downloads", "Desktop"))
             wide = [t for t in unsafe if t in ("/", HOME) or t.count("/") <= 2]
             outside = [t for t in unsafe if broad or not is_inside(t, ecwd)]
@@ -1363,7 +1532,7 @@ def classify(payload, cfg):
             meta["normalized"] = expanded[:400]
         except Exception:
             pass
-        for eff in analyze(cmd, cwd):
+        for eff in (analyze_powershell(cmd, cwd) if tool in POWERSHELL_TOOLS else analyze(cmd, cwd)):
             effects_out.append(eff)
             hits += classify_effect(eff, cfg, cwd)
         if re.search(r"operator-gate(\.py)?['\"]?\s+(approve|mode|install|uninstall)\b", cmd):
@@ -1417,17 +1586,35 @@ def redact(s):
 
 def ensure_dirs():
     for d in ("receipts", "permits", "state"):
-        os.makedirs(os.path.join(OP_HOME, d), mode=0o700, exist_ok=True)
+        os.makedirs(pj(OP_HOME, d), mode=0o700, exist_ok=True)
+
+
+def lock_file(f):
+    if fcntl:
+        fcntl.flock(f, fcntl.LOCK_EX)
+    else:
+        import msvcrt
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+
+
+def unlock_file(f):
+    if fcntl:
+        fcntl.flock(f, fcntl.LOCK_UN)
+    else:
+        import msvcrt
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def write_receipt(rec):
     """Append a hash-chained receipt. Never raises into the caller."""
     try:
         ensure_dirs()
-        rdir = os.path.join(OP_HOME, "receipts")
-        head_path = os.path.join(rdir, "HEAD")
-        lock = open(os.path.join(rdir, ".lock"), "a+")
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        rdir = pj(OP_HOME, "receipts")
+        head_path = pj(rdir, "HEAD")
+        lock = open(pj(rdir, ".lock"), "a+")
+        lock_file(lock)
         try:
             try:
                 with open(head_path) as f:
@@ -1439,20 +1626,20 @@ def write_receipt(rec):
                         "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"})
             rec["digest"] = digest_of(rec)
             day = time.strftime("%Y-%m-%d", time.gmtime())
-            with open(os.path.join(rdir, day + ".jsonl"), "a") as f:
+            with open(pj(rdir, day + ".jsonl"), "a") as f:
                 f.write(json.dumps(rec, sort_keys=True, ensure_ascii=False) + "\n")
             with open(head_path, "w") as f:
                 f.write(rec["digest"])
             return rec["digest"]
         finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            unlock_file(lock)
             lock.close()
     except Exception:
         return None
 
 
 def consume_permit(action_digest):
-    p = os.path.join(OP_HOME, "permits", action_digest + ".json")
+    p = pj(OP_HOME, "permits", action_digest + ".json")
     try:
         with open(p) as f:
             pm = json.load(f)
@@ -1493,7 +1680,7 @@ def hook_main(argv):
     raw = ""
     try:
         raw = sys.stdin.read()
-        if os.path.exists(os.path.join(OP_HOME, "DISABLED")) or global_mode() == "off":
+        if os.path.exists(pj(OP_HOME, "DISABLED")) or global_mode() == "off":
             return 0
         payload = json.loads(raw) if raw.strip() else {}
         cfg = load_config()
@@ -1582,7 +1769,7 @@ def cmd_approve(argv):
     recent = ""
     try:
         day = time.strftime("%Y-%m-%d", time.gmtime())
-        with open(os.path.join(OP_HOME, "receipts", day + ".jsonl")) as f:
+        with open(pj(OP_HOME, "receipts", day + ".jsonl")) as f:
             for line in f:
                 if argv[0] in line:
                     recent = line
@@ -1596,7 +1783,7 @@ def cmd_approve(argv):
     if input("Type ALLOW ONCE to grant a single-use permit (%d min): " % (PERMIT_TTL_S // 60)).strip() != "ALLOW ONCE":
         print("Cancelled.")
         return 1
-    p = os.path.join(OP_HOME, "permits", argv[0] + ".json")
+    p = pj(OP_HOME, "permits", argv[0] + ".json")
     with open(p, "w") as f:
         json.dump({"action_digest": argv[0], "granted": time.time(), "expires": time.time() + PERMIT_TTL_S,
                    "single_use": True, "by": "owner-tty"}, f)
@@ -1607,11 +1794,11 @@ def cmd_approve(argv):
 
 
 def cmd_verify(argv):
-    rdir = os.path.join(OP_HOME, "receipts")
+    rdir = pj(OP_HOME, "receipts")
     prev, n, bad = "0" * 64, 0, []
     files = sorted(f for f in os.listdir(rdir) if f.endswith(".jsonl")) if os.path.isdir(rdir) else []
     for fn in files:
-        with open(os.path.join(rdir, fn)) as f:
+        with open(pj(rdir, fn)) as f:
             for i, line in enumerate(f, 1):
                 rec = json.loads(line)
                 d = rec.pop("digest")
@@ -1627,7 +1814,7 @@ def cmd_verify(argv):
 
 def cmd_status(argv):
     print("operator-gate %s  home=%s  mode=%s  disabled_file=%s" %
-          (VERSION, OP_HOME, global_mode(), os.path.exists(os.path.join(OP_HOME, "DISABLED"))))
+          (VERSION, OP_HOME, global_mode(), os.path.exists(pj(OP_HOME, "DISABLED"))))
     for rid, (name, base, why) in sorted(RULES.items()):
         print("  %-9s %-7s %-28s %s" % (rid, base, name, why))
     upgrade_hint()
@@ -1645,7 +1832,7 @@ def at_terminal():
 def last_replay():
     """The summary the last `replay` left in the gate home, or {}."""
     try:
-        with open(os.path.join(OP_HOME, "state", "replay.json")) as f:
+        with open(pj(OP_HOME, "state", "replay.json")) as f:
             last = json.load(f)
         return last if isinstance(last, dict) else {}
     except Exception:
@@ -1772,9 +1959,9 @@ def replay_history(days, budget, here):
     """Classify every unique tool call in the local Claude Code transcripts, newest session first.
     Reads history and the filesystem; executes nothing and writes no receipt."""
     cfg = load_config()
-    base = os.path.join(HOME, ".claude", "projects")
-    files = glob.glob(os.path.join(base, "*", "*.jsonl")) + \
-        glob.glob(os.path.join(base, "*", "*", "subagents", "*.jsonl"))
+    base = pj(HOME, ".claude", "projects")
+    files = glob.glob(pj(base, "*", "*.jsonl")) + \
+        glob.glob(pj(base, "*", "*", "subagents", "*.jsonl"))
     cutoff = time.time() - days * 86400 if days else 0
     cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(cutoff)) if days else ""
     dated = []
@@ -1795,7 +1982,7 @@ def replay_history(days, budget, here):
         out["samples"].setdefault(key, sample)
 
     seen, projects, t0 = set(), set(), time.time()
-    base_parts = len(base.rstrip(os.sep).split(os.sep))
+    base_parts = len(base.rstrip("/").split("/"))
     for _, path in dated:
         if time.time() - t0 > budget:
             out["truncated"] = True
@@ -1829,7 +2016,7 @@ def replay_history(days, budget, here):
                     if not (isinstance(blk, dict) and blk.get("type") == "tool_use"):
                         continue
                     name, ti = str(blk.get("name") or ""), blk.get("input") or {}
-                    if not (name == "Bash" or name in REPLAY_WRITE_TOOLS or name.startswith("mcp__")):
+                    if not (name in ("Bash", "PowerShell") or name in REPLAY_WRITE_TOOLS or name.startswith("mcp__")):
                         continue
                     # one call, one count: a resumed session copies earlier records with the same
                     # call id, while the same command run again is a new call with a new id
@@ -1845,7 +2032,7 @@ def replay_history(days, budget, here):
                     out["calls"] += 1
                     used = True
                     project = os.path.basename(cwd.rstrip("/")) if cwd else ""
-                    projects.add(path.split(os.sep)[base_parts])   # Claude Code keeps one folder per project
+                    projects.add(canon(path).split("/")[base_parts])   # Claude Code keeps one folder per project
                     try:
                         _, _, hits, preview, _, effects = classify(
                             {"tool_name": name, "tool_input": ti, "cwd": cwd or "/tmp"}, cfg)
@@ -1985,7 +2172,7 @@ def cmd_replay(argv):
                 keep = {k: r[k] for k in ("calls", "sessions", "projects", "stopped", "flagged", "own_calls",
                                           "days", "by_own", "laws")}
                 keep["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                path = os.path.join(OP_HOME, "state", "replay.json")
+                path = pj(OP_HOME, "state", "replay.json")
                 with open(path + ".tmp", "w") as f:
                     json.dump(keep, f, sort_keys=True)
                 os.replace(path + ".tmp", path)
@@ -1997,7 +2184,7 @@ def cmd_replay(argv):
                   "the action and waits for a permit only you can grant. $149 a month.\n"
                   "  %s      details: operator-gate upgrade" % OPERATOR_URL)
         if "--from-install" not in argv and \
-                not os.path.exists(os.path.join(HOME, ".operator", "gate", "operator-gate.py")):
+                not os.path.exists(pj(HOME, ".operator", "gate", "operator-gate.py")):
             print("\nTo have the built-in rules watch from now on: python3 %s install" % os.path.abspath(__file__))
     return 0
 
@@ -2005,7 +2192,7 @@ def cmd_replay(argv):
 def cmd_corpus(argv):
     """Run an eval corpus through classify(). Pure classification; nothing executes."""
     name = argv[0] if argv else "guardfall"
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpora", name + ".json")
+    path = pj(os.path.dirname(os.path.abspath(__file__)), "corpora", name + ".json")
     try:
         with open(path) as f:
             corpus = json.load(f)
@@ -2027,7 +2214,7 @@ def cmd_corpus(argv):
         if case.get("fixtures"):                       # materialize script fixtures (never executed)
             tmpd = tempfile.mkdtemp(prefix="opgate-fixture-")
             for fx in case["fixtures"]:
-                fp = os.path.join(tmpd, fx["name"])
+                fp = pj(tmpd, fx["name"])
                 os.makedirs(os.path.dirname(fp), exist_ok=True)
                 with open(fp, "w") as f:
                     f.write(fx["body"])
@@ -2056,28 +2243,36 @@ def cmd_corpus(argv):
     return 0 if not failed else 1
 
 
+def hook_command(dst, source):
+    """The command a host runs for every tool call. Windows has no python3 on PATH by default, so
+    there the command names this interpreter; forward slashes work in cmd and in Git Bash alike."""
+    if IS_WINDOWS:
+        return '"%s" "%s" hook --source %s' % (canon(sys.executable), dst, source)
+    return "python3 %s hook --source %s" % (dst, source)
+
+
 def cmd_install(argv):
     """Owner-side install: copies the gate to ~/.operator/gate and wires Claude Code. Mode starts SHADOW."""
     if os.environ.get("OPERATOR_AGENT_SESSION"):
         print("Refusing: installs are run by the owner in their own terminal.")
         return 3
-    dst_dir = os.path.join(HOME, ".operator", "gate")
+    dst_dir = pj(HOME, ".operator", "gate")
     src = os.path.abspath(__file__)
     os.makedirs(dst_dir, exist_ok=True)
-    dst = os.path.join(dst_dir, "operator-gate.py")
+    dst = pj(dst_dir, "operator-gate.py")
     with open(src) as f:
         body = f.read()
     with open(dst, "w") as f:
         f.write(body)
     os.chmod(dst, 0o755)
     ensure_dirs()
-    mode_path = os.path.join(OP_HOME, "mode")
+    mode_path = pj(OP_HOME, "mode")
     if not os.path.exists(mode_path):
         with open(mode_path, "w") as f:
             f.write("shadow\n")
     # Claude Code PreToolUse hook (merge, never clobber)
-    settings_path = os.path.join(HOME, ".claude", "settings.json")
-    hook_cmd = "python3 %s hook --source claude" % dst
+    settings_path = pj(HOME, ".claude", "settings.json")
+    hook_cmd = hook_command(dst, "claude")
     try:
         try:
             with open(settings_path) as f:
@@ -2111,7 +2306,7 @@ def cmd_uninstall(argv):
     if os.environ.get("OPERATOR_AGENT_SESSION"):
         print("Refusing: uninstalls are run by the owner in their own terminal.")
         return 3
-    settings_path = os.path.join(HOME, ".claude", "settings.json")
+    settings_path = pj(HOME, ".claude", "settings.json")
     try:
         with open(settings_path) as f:
             settings = json.load(f)

@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what the last replay drafted. It reads Claude Code transcripts only.
 - Operator Lite: `test_parser.py` and `test_replay.py`, and a CI job that runs
   them and the corpus on Linux and macOS.
+- Operator Lite runs on Windows. It used to import a Unix-only module and
+  could not start there. Paths are read in one spelling (Git Bash `/c/...`,
+  `C:\...` and `C:/...` are the same place), comparisons ignore case, an 8.3
+  short name is the same target as its long name, receipts lock through
+  `msvcrt`, and `install` registers a hook command Windows can run. A tool call
+  named PowerShell is read as PowerShell: `Remove-Item` and its aliases are
+  judged like `rm`. `test_windows.py` runs on a Windows CI runner. Not yet on
+  Windows: the parser, replay and corpus test suites, and `cmd.exe` forms such
+  as `rmdir /s`.
 
 ### Fixed
 

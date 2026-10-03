@@ -113,6 +113,14 @@ Your first laws, drafted from this history:
 The built-in rules are free. Enforcing the drafted laws is what Operator, the paid
 gate, does: `operator-gate upgrade`.
 
+## Platforms
+
+macOS and Linux. Windows support is new: the gate reads Git Bash and PowerShell
+commands, Windows paths in every spelling (`/c/Users/me`, `C:\Users\me`, the 8.3
+short name), and `install` registers a hook Windows can run. On Windows it is
+tested by `test_windows.py` on a CI runner; `cmd.exe` forms such as `rmdir /s`
+are not parsed yet.
+
 ## What it stops
 
 | Rule | Mode | Catches |
