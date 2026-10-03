@@ -44,8 +44,9 @@ curl.exe -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operat
 One command. It copies the gate to `~/.operator/gate`, registers the Claude Code hook and
 starts in shadow mode, which records every verdict and blocks nothing. Then it replays your
 last 30 days of Claude Code history through the same rules, so the first thing you see is
-what it would have said about your own agents. Nothing in that history is executed. When the
-report looks right, switch it on: `echo enforce > ~/.operator/mode`.
+what it would have said about your own agents. Nothing in that history is executed. After a
+day of use, `python3 ~/.operator/gate/operator-gate.py status` shows what it caught on your
+machine. When that looks right, switch it on with `mode enforce`.
 
 - **27 deterministic rules** — workspace armor, memory-store protection, destructive
   SQL, force-push, unreviewed publishes, paid deploys, reverse shells, cloud-metadata
@@ -119,7 +120,7 @@ Operator Lite is free and stays free. **Vestige Operator** is the owner's versio
 - **The Letter.** One weekly digest of what your agents tried and what stopped them.
 - **A five-minute onboarding wizard** that writes your first laws and proves the gate stops a violation before you rely on it.
 
-Buy it at the account page: [vestige-pro-production.fly.dev/account](https://vestige-pro-production.fly.dev/account). After checkout the gate arrives by email as a small archive with its checksum; extract it and run the wizard. From an installed Operator Lite, `operator-gate upgrade` prints the same summary and link.
+Buy it at the account page: [vestige-pro-production.fly.dev/account](https://vestige-pro-production.fly.dev/account). You receive a small archive with its checksum. From an installed Operator Lite, one command unpacks it and starts the wizard: `upgrade --install <the archive you downloaded>`. If you ran `replay` first, the wizard opens with the laws your own history drafted.
 
 What it is not: Operator blocks what is routed through it. It cannot block a call that bypasses the hooked tools, and receipts are hash-chained digests, not signatures.
 

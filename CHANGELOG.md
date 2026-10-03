@@ -28,18 +28,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what the last replay drafted. It reads Claude Code transcripts only.
 - Operator Lite: `test_parser.py` and `test_replay.py`, and a CI job that runs
   them and the corpus on Linux and macOS.
+- Operator Lite: `status` is now the log. It shows the mode, whether the hook is
+  registered, the last call checked, the counts for the last 7 days, and the most
+  recent commands the gate stopped or, in shadow mode, would have stopped, each
+  with its project, rule and reason. `status --rules` prints the rule table.
+- Operator Lite: `upgrade --install <archive>` unpacks the paid Operator archive
+  a buyer downloaded into `~/vestige-operator` and starts its wizard. It prints
+  the archive's SHA-256 first, refuses any entry outside `vestige-operator/`,
+  and is an owner command: it needs an interactive terminal.
+- Operator Lite: `mode enforce|shadow|off`, an owner command, replaces writing
+  into the mode file by hand. `install` places an `operator-gate` command on
+  PATH when a user bin directory is already on it and never edits a shell init
+  file; every hint the gate prints names a command that works when pasted.
 - Operator Lite 0.3.7 runs on Windows. It used to import a Unix-only module and
   could not start there. Paths are read in one spelling (Git Bash `/c/...`,
   `C:\...` and `C:/...` are the same place), comparisons ignore case, an 8.3
   short name is the same target as its long name, receipts lock through
   `msvcrt`, and `install` registers a hook command Windows can run. A tool call
   named PowerShell is read as PowerShell: `Remove-Item` and its aliases are
-  judged like `rm`. `test_windows.py` runs on a Windows CI runner. Not yet on
-  Windows: the parser, replay and corpus test suites, and `cmd.exe` forms such
-  as `rmdir /s`.
+  judged like `rm`, and so are the `cmd.exe` forms `rmdir /s`, `rd /s`,
+  `del /s` and `erase /s` handed to `cmd /c`. `test_windows.py` runs on a
+  Windows CI runner. Not yet on Windows: the parser, replay and corpus test
+  suites.
 
 ### Fixed
 
+- Operator Lite: a call no rule matched was recorded as `SHADOW_STOP` with no
+  rule; it is now recorded as `PASS`. `ALLOW` still means the owner's permit. The text of rule OP-006 and three hints named
+  things that exist only on the author's machine; they are reworded.
 - Operator Lite 0.3.6, the parser:
   - A command written after a leading redirection (`>log rm -rf x`,
     `2>/dev/null rm -rf x`) was not seen as that command. It is now.

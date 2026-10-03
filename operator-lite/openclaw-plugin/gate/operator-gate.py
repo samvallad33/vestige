@@ -18,6 +18,7 @@ or tamper-evident.
 
 Stdlib only, Python 3.9 compatible (macOS /usr/bin/python3).
 """
+import calendar
 import glob
 import hashlib
 import json
@@ -183,7 +184,7 @@ RULES = {
     "OP-005": ("no-unreviewed-publish", "STOP",
                "Publishing a release/package or deleting a public repo needs the owner's review."),
     "OP-006": ("no-paid-deploy", "STOP",
-               "Deploying the billing/control plane or acting on live billing is not cleared (launch gates not passed)."),
+               "Production deploys, live database changes and live billing actions need the owner's approval."),
     "OP-007": ("no-destructive-sql", "STOP",
                "DROP/TRUNCATE/unscoped DELETE against a database needs the owner's approval."),
     "OP-008": ("no-shell-init-write", "STOP",
@@ -197,7 +198,7 @@ RULES = {
     # shadow-only candidates: recorded, never blocking, promote after reviewing the log
     "OP-S01": ("work-loss", "SHADOW", "git reset --hard / clean / branch -D can discard uncommitted work."),
     "OP-S02": ("outbound-comms", "SHADOW", "Sending a message/email/forward on the owner's behalf."),
-    "OP-S03": ("public-mutation", "SHADOW", "gh pr/issue/discussion mutation (claim-gate territory)."),
+    "OP-S03": ("public-mutation", "SHADOW", "Creating or editing a pull request, issue or discussion in the owner's name."),
     "OP-S04": ("secret-shaped-write", "SHADOW", "Writing a credential-shaped string to disk."),
     "OP-S05": ("unresolved-delete", "SHADOW", "Delete whose targets cannot be resolved statically (xargs, inline code)."),
     "OP-S06": ("pipe-to-interpreter", "SHADOW",
@@ -211,7 +212,7 @@ RULES = {
     "OP-S12": ("invisible-characters", "SHADOW",
                "Zero-width/Bidi control characters in a command are visual deception (Trojan Source)."),
     "OP-S13": ("mcp-argument-exfil", "SHADOW",
-               "Secrets or sensitive files traveling through MCP tool arguments (the Invariant/postmark/Supabase pattern)."),
+               "Secrets or sensitive files traveling through MCP tool arguments."),
     "OP-S14": ("agent-config-write", "SHADOW",
                "Writing agent instruction/config files (CLAUDE.md, .cursorrules, .mcp.json) plants future instructions (Nx, CurXecute)."),
     "OP-S15": ("paste-tunnel-egress", "SHADOW",
@@ -839,6 +840,10 @@ def analyze(cmd, cwd, depth=0, vars_=None):
             continue
         prog = os.path.basename(toks[0])
         rest = toks[1:]
+        handed = cmd_exe_line(toks)
+        if handed is not None:                              # `cmd /c "rmdir /s /q X"` from a shell
+            effects += cmd_exe_effects(handed, state["cwd"])
+            continue
         if "__SUBST__" in prog or "$" in prog:
             # dynamic command name: `$(echo rm) -rf x` / `$CMD ~/vestige` -- treat as a delete-shaped unknown
             dflags, dargs = flags_and_args(rest)
@@ -1050,6 +1055,37 @@ def ps_param(word, full):
     return len(low) >= 2 and full.startswith(low)
 
 
+CMD_DELETE = {"rmdir", "rd", "del", "erase"}
+
+
+def cmd_exe_effects(line, cwd):
+    """Delete effects in a cmd.exe command line (what follows `cmd /c`). `&`, `&&` and `|` separate
+    commands, double quotes group, and a one-letter `/x` word is a switch: `/s` makes it recursive."""
+    effects = []
+    for part in re.split(r"&&|&|\|", line or ""):
+        toks = [t.strip('"') for t in re.findall(r'"[^"]*"|\S+', part)]
+        if not toks or toks[0].lower() not in CMD_DELETE:
+            continue
+        switches = [t.lower() for t in toks[1:] if re.match(r"^/[A-Za-z](:.*)?$", t)]
+        paths = [t for t in toks[1:] if not re.match(r"^/[A-Za-z](:.*)?$", t)]
+        resolved = resolve_targets(paths, cwd)
+        kept = [t for t in resolved if not t.startswith(UNKNOWN_CWD) and "$" not in t and "%" not in t]
+        effects.append({"prog": toks[0].lower(), "seg": part.strip(), "targets": kept, "recursive": "/s" in switches,
+                        "kind": "delete", "filtered": False, "unresolved": len(kept) != len(resolved) or not paths,
+                        "flags": switches, "args": paths, "cwd": cwd or UNKNOWN_CWD, "writes": [], "text": part.strip()})
+    return effects
+
+
+def cmd_exe_line(toks):
+    """The command line handed to cmd.exe by `cmd /c ...` or `cmd.exe /k ...`, or None."""
+    if not toks or os.path.basename(toks[0]).lower() not in ("cmd", "cmd.exe"):
+        return None
+    for i, t in enumerate(toks[1:], 1):
+        if t.lower() in ("/c", "/k"):
+            return " ".join(toks[i + 1:])
+    return None
+
+
 def analyze_powershell(cmd, cwd):
     """Effects of a PowerShell command. Remove-Item and its aliases become delete effects; every other
     statement goes through the shell walker, which reads git, npm and the like the same way."""
@@ -1059,6 +1095,10 @@ def analyze_powershell(cmd, cwd):
         while toks and toks[0] in ("&", "."):                # call operators
             toks = toks[1:]
         if not toks:
+            continue
+        handed = cmd_exe_line(toks)
+        if handed is not None:                              # `cmd /c rmdir /s /q C:\\x` from PowerShell
+            effects += cmd_exe_effects(handed, cwd)
             continue
         if toks[0].lower() not in PS_DELETE:
             effects += analyze(stmt, cwd)
@@ -1323,13 +1363,13 @@ def classify_effect(e, cfg, cwd):
                    "rename", "delete", "remove", "add", "kill", "clone", "fork", "deploy", "scale"}
         if prog in ("fly", "flyctl") and args and (args[0] in ("deploy", "launch", "scale") or
                                                    (args[0] in fly_groups and any(a in fly_mut for a in args[1:]))):
-            hits.append(("OP-006", "fly %s" % " ".join(args[:2]), "The Pro bridge is not cleared to deploy; "
-                         "ask the owner for a one-time permit for a staging deploy."))
+            hits.append(("OP-006", "fly %s" % " ".join(args[:2]),
+                         "Ask the owner for a one-time permit for this deploy."))
         if prog == "supabase" and args[:2] in (["db", "push"], ["db", "reset"], ["migration", "up"],
                                                 ["functions", "deploy"], ["db", "remote"]):
-            hits.append(("OP-006", "supabase %s" % " ".join(args[:2]), "Apply migrations to staging only, with a permit."))
+            hits.append(("OP-006", "supabase %s" % " ".join(args[:2]), "Apply it to staging, or ask the owner for a one-time permit."))
         if prog == "stripe" and re.search(r"--live|sk_live|rk_live", text):
-            hits.append(("OP-006", "stripe live action", "Use Test mode; live billing is not cleared."))
+            hits.append(("OP-006", "stripe live action", "Use test mode, or ask the owner for a one-time permit."))
         if prog in ("vercel",) and "--prod" in flags or prog == "wrangler" and args[:1] in (["deploy"], ["publish"]):
             hits.append(("OP-006", "%s production deploy" % prog, "Ask for a one-time permit."))
         if prog == "vestige" and args[:1] in (["gc"], ["purge"], ["wipe"], ["reset"], ["erase"]):
@@ -1541,7 +1581,7 @@ def classify(payload, cfg):
         for eff in (analyze_powershell(cmd, cwd) if tool in POWERSHELL_TOOLS else analyze(cmd, cwd)):
             effects_out.append(eff)
             hits += classify_effect(eff, cfg, cwd)
-        if re.search(r"operator-gate(\.py)?['\"]?\s+(approve|mode|install|uninstall)\b", cmd):
+        if re.search(r"operator-gate(\.py)?['\"]?\s+(approve|mode|install|uninstall|upgrade\s+--install)\b", cmd):
             hits.append(("OP-000", "agent invoked the gate's owner commands",
                          "Approvals and installs are run by the owner in their own terminal."))
         for m in re.finditer(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", cmd, re.M):
@@ -1762,11 +1802,14 @@ def hook_main(argv):
             if meta.get("normalized") and meta["normalized"] != preview:
                 lines.append("Normalized form: %s" % redact(meta["normalized"]))
             lines += ["No action was taken. Do not retry this action or a variation of it.",
-                      "Only the owner can allow it once, from their own terminal: operator-gate approve %s" % adigest,
+                      "Only the owner can allow it once, from their own terminal: %s approve %s" % (self_cmd(), adigest),
                       "Receipt: %s" % ((rd or "unavailable")[:16])]
             stop(lines)
-        write_receipt(dict(base_rec, decision="SHADOW_STOP", commitments=[h[0] for h in shadow_hits],
-                           detail=redact("; ".join(h[3] for h in shadow_hits))))
+        if shadow_hits:
+            write_receipt(dict(base_rec, decision="SHADOW_STOP", commitments=[h[0] for h in shadow_hits],
+                               detail=redact("; ".join(h[3] for h in shadow_hits))))
+        else:
+            write_receipt(dict(base_rec, decision="PASS", commitments=[]))    # no rule matched
 
         return 0
     except SystemExit:
@@ -1785,7 +1828,7 @@ def hook_main(argv):
 # --------------------------------------------------------------------------- #
 def cmd_approve(argv):
     if len(argv) < 1 or not re.match(r"^[0-9a-f]{24}$", argv[0]):
-        print("usage: operator-gate approve <24-hex action digest>")
+        print("usage: %s approve <24-hex action digest>" % self_cmd())
         return 2
     if not (sys.stdin.isatty() and sys.stdout.isatty()) or os.environ.get("OPERATOR_AGENT_SESSION"):
         print("Refusing: approvals need an interactive terminal run by the owner.")
@@ -1837,16 +1880,187 @@ def cmd_verify(argv):
     return 0 if not bad else 1
 
 
+def self_cmd():
+    """How the owner runs this gate from a terminal: the launcher when install could place one on
+    PATH, otherwise the full command, which always works."""
+    if shutil.which("operator-gate"):
+        return "operator-gate"
+    path = pj(HOME, ".operator", "gate", "operator-gate.py")
+    if not os.path.exists(path):
+        path = canon(os.path.abspath(__file__))
+    if IS_WINDOWS:
+        return 'python "%s"' % path
+    return "python3 %s" % (("~" + path[len(HOME):]) if path.startswith(HOME + "/") else path)
+
+
+def place_launcher(dst):
+    """Put an `operator-gate` command on PATH when a user bin directory is already on it. Shell init
+    files are never edited: with no such directory, hints print the full command instead."""
+    if IS_WINDOWS:
+        return None
+    on_path = [p.rstrip("/") for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    for d in (pj(HOME, ".local", "bin"), pj(HOME, "bin")):
+        if d not in on_path or not os.path.isdir(d) or not os.access(d, os.W_OK):
+            continue
+        target = pj(d, "operator-gate")
+        if os.path.exists(target):
+            try:
+                with open(target, encoding="utf-8") as f:
+                    if ".operator/gate/operator-gate.py" not in f.read():
+                        continue                             # someone else's file: leave it alone
+            except Exception:
+                continue
+        with open(target, "w", encoding="utf-8") as f:
+            f.write('#!/bin/sh\nexec python3 "%s" "$@"\n' % dst)
+        os.chmod(target, 0o755)
+        return target
+    return None
+
+
+def hook_wired():
+    """Is this gate registered as a Claude Code PreToolUse hook?"""
+    try:
+        with open(pj(HOME, ".claude", "settings.json"), encoding="utf-8") as f:
+            settings = json.load(f)
+        return any("operator-gate" in hh.get("command", "")
+                   for h in settings.get("hooks", {}).get("PreToolUse", []) for hh in h.get("hooks", []))
+    except Exception:
+        return False
+
+
+def receipt_time(rec):
+    try:
+        return calendar.timegm(time.strptime(str(rec.get("ts"))[:19], "%Y-%m-%dT%H:%M:%S"))
+    except Exception:
+        return 0
+
+
+def recent_receipts(days):
+    """Receipts from the last `days` days, oldest first. Lines that do not parse are skipped."""
+    rdir, out, cutoff = pj(OP_HOME, "receipts"), [], time.time() - days * 86400
+    try:
+        files = sorted(f for f in os.listdir(rdir) if f.endswith(".jsonl"))
+    except OSError:
+        return out
+    for fn in files[-(days + 2):]:
+        try:
+            with open(pj(rdir, fn), encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(rec, dict) and receipt_time(rec) >= cutoff:
+                        out.append(rec)
+        except OSError:
+            pass
+    return out
+
+
+def ago(then):
+    s_ = max(0, int(time.time() - then))
+    if s_ < 90:
+        return "just now"
+    if s_ < 5400:
+        return "%d minutes ago" % (s_ // 60)
+    if s_ < 129600:
+        return "%d hours ago" % (s_ // 3600)
+    return "%d days ago" % (s_ // 86400)
+
+
 def cmd_status(argv):
-    print("operator-gate %s  home=%s  mode=%s  disabled_file=%s" %
-          (VERSION, OP_HOME, global_mode(), os.path.exists(pj(OP_HOME, "DISABLED"))))
-    for rid, (name, base, why) in sorted(RULES.items()):
-        print("  %-9s %-7s %-28s %s" % (rid, base, name, why))
+    """What the gate did on this machine. `--rules` prints the rule table instead."""
+    mode = "off" if os.path.exists(pj(OP_HOME, "DISABLED")) else global_mode()
+    if "--rules" in argv:
+        print("operator-gate %s  home=%s  mode=%s" % (VERSION, OP_HOME, mode))
+        for rid, (name, base, why) in sorted(RULES.items()):
+            print("  %-9s %-7s %-28s %s" % (rid, base, name, why))
+        return 0
+    me, wired = self_cmd(), hook_wired()
+    says = {"enforce": "enforce (blocking)", "shadow": "shadow (recording, not blocking)",
+            "off": "off (nothing is checked)"}[mode]
+    print("Operator Lite %s   mode: %s   Claude Code hook: %s" % (VERSION, says, "registered" if wired else "NOT registered"))
+    if not wired:
+        print("Register it: %s install" % me)
+    recs = recent_receipts(7)
+    calls = [r for r in recs if r.get("decision") in ("PASS", "ALLOW", "STOP", "SHADOW_STOP", "GATE_ERROR")]
+    if not calls:
+        print("\nNo tool calls checked in the last 7 days. Start a Claude Code session: every tool call passes\n"
+              "through the gate, and this view fills in.")
+        print("\nYour last 30 days, replayed: %s replay\nAll rules: %s status --rules" % (me, me))
+        upgrade_hint()
+        return 0
+
+    def hard(rec):
+        return any(RULES.get(c, ("", "", ""))[1] == "STOP" for c in rec.get("commitments") or [])
+
+    stopped = [r for r in calls if r.get("decision") == "STOP"]
+    ran = [r for r in calls if r.get("decision") == "SHADOW_STOP" and hard(r)]
+    flagged = [r for r in calls if r.get("decision") == "SHADOW_STOP" and (r.get("commitments") or []) and not hard(r)]
+    permits = [r for r in calls if r.get("via") == "permit"]
+    errors = [r for r in calls if r.get("decision") == "GATE_ERROR"]
+    print("Last call checked %s." % ago(receipt_time(calls[-1])))
+    print("\nLast 7 days on this machine:")
+    print("  %s  tool calls checked" % paint("%7s" % format(len(calls), ","), "1"))
+    if stopped or mode == "enforce":
+        print("  %s  stopped" % paint("%7s" % format(len(stopped), ","), "1;32"))
+    if ran:
+        print("  %s  would have been stopped, and ran: the gate was in shadow mode" % paint("%7s" % format(len(ran), ","), "1;31"))
+    print("  %s  flagged: recorded, not stopped" % paint("%7s" % format(len(flagged), ","), "1"))
+    if permits:
+        print("  %s  allowed once on your permit" % paint("%7s" % format(len(permits), ","), "1"))
+    if errors:
+        print("  %s  gate errors, recorded" % paint("%7s" % format(len(errors), ","), "1"))
+
+    def show(title, rows):
+        if not rows:
+            return
+        print("\n" + paint(title, "1"))
+        for r in sorted(rows, key=receipt_time, reverse=True)[:5]:
+            rid = r.get("commitment") or next((c for c in r.get("commitments") or []
+                                               if RULES.get(c, ("", "", ""))[1] == "STOP"), (r.get("commitments") or ["?"])[0])
+            when = time.strftime("%b %d %H:%M", time.localtime(receipt_time(r)))
+            project = os.path.basename(str(r.get("cwd") or "").rstrip("/"))[:16]
+            why = " ".join(str(r.get("detail") or "").split(";")[0].replace(HOME, "~").split())[:64]
+            ran_ = " ".join(str(r.get("action_preview") or "").replace(HOME, "~").split())[:72]
+            print("  %s  %-16s %s %s" % (when, project, paint(rid, "31"), why))
+            print("  %s  %-16s %s" % (" " * len(when), "", paint(ran_, "2")))
+        if len(rows) > 5:
+            print("  and %d more in ~/.operator/receipts" % (len(rows) - 5))
+
+    show("Stopped:", stopped)
+    show("Ran, because the gate was in shadow mode:", ran)
+    if mode == "shadow":
+        print("\nShadow mode records and never blocks. To have the gate block from now on: %s mode enforce" % me)
+    print("\nYour last 30 days, replayed: %s replay\nAll rules: %s status --rules" % (me, me))
     upgrade_hint()
     return 0
 
 
+def cmd_mode(argv):
+    """Owner command: switch between recording and blocking. Works the same on every shell."""
+    if not argv:
+        print("mode is %s. To change it: %s mode enforce|shadow|off" % (global_mode(), self_cmd()))
+        return 0
+    if argv[0] not in ("enforce", "shadow", "off"):
+        print("usage: %s mode enforce|shadow|off" % self_cmd())
+        return 2
+    if not (sys.stdin.isatty() and sys.stdout.isatty()) or os.environ.get("OPERATOR_AGENT_SESSION"):
+        print("Refusing: the mode is changed by the owner in an interactive terminal.")
+        return 3
+    ensure_dirs()
+    with open(pj(OP_HOME, "mode"), "w", encoding="utf-8") as f:
+        f.write(argv[0] + "\n")
+    write_receipt({"decision": "MODE_SET", "mode": argv[0], "source": "owner-tty"})
+    print({"enforce": "The gate now blocks what its rules stop.",
+           "shadow": "The gate now records and blocks nothing.",
+           "off": "The gate is off: nothing is checked or recorded."}[argv[0]])
+    return 0
+
+
+# The offer, in one place: where the paid gate is sold and what it costs.
 OPERATOR_URL = "https://vestige-pro-production.fly.dev/account"
+OPERATOR_PRICE = "$149 a month"
 
 
 def at_terminal():
@@ -1873,14 +2087,57 @@ def upgrade_hint():
     undecided, laws = int(last.get("own_calls") or 0), len(last.get("laws") or [])
     if undecided and laws:
         print("\nYour last replay drafted %s from %s no built-in rule decides. "
-              "Operator enforces them: operator-gate upgrade" % (plural(laws, "law"), plural(undecided, "action")))
+              "Operator enforces them: %s upgrade" % (plural(laws, "law"), plural(undecided, "action"), self_cmd()))
     else:
-        print("\nSee what your agents already ran: operator-gate replay. "
-              "Your own laws, a Board and a Letter: operator-gate upgrade")
+        print("\nSee what your agents already ran: %s replay\n"
+              "Your own laws, a Board and a Letter: %s upgrade" % (self_cmd(), self_cmd()))
+
+
+def upgrade_install(argv):
+    """After buying: unpack the downloaded Operator archive into ~/vestige-operator and start its
+    wizard. One command on every platform. An owner command: it needs an interactive terminal."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()) or os.environ.get("OPERATOR_AGENT_SESSION"):
+        print("Refusing: the paid gate is installed by the owner in an interactive terminal.")
+        return 3
+    try:
+        path = os.path.expanduser(argv[argv.index("--install") + 1])
+    except IndexError:
+        print("usage: %s upgrade --install <the vestige-operator archive you downloaded>" % self_cmd())
+        return 2
+    if not os.path.isfile(path):
+        print("No such file: %s" % path)
+        return 2
+    import tarfile
+    with open(path, "rb") as f:
+        print("Archive: %s\nSHA-256: %s" % (path, hashlib.sha256(f.read()).hexdigest()))
+    try:
+        with tarfile.open(path) as tar:
+            for m in tar.getmembers():
+                name = m.name.replace("\\", "/")
+                inside = name == "vestige-operator" or name.startswith("vestige-operator/")
+                if not inside or ".." in name.split("/") or m.issym() or m.islnk():
+                    print("Refusing: this archive has an entry that does not belong in vestige-operator/ (%s)." % m.name)
+                    return 2
+            try:
+                tar.extractall(HOME, filter="data")
+            except TypeError:                            # Python before the extraction filter existed
+                tar.extractall(HOME)
+    except (tarfile.TarError, OSError) as exc:
+        print("That file could not be unpacked (%s)." % exc)
+        return 2
+    gate = pj(HOME, "vestige-operator", "gate", "operator-gate.py")
+    if not os.path.isfile(gate):
+        print("That archive holds no gate.")
+        return 2
+    print("Unpacked to %s. Starting the wizard.\n" % pj(HOME, "vestige-operator"))
+    return subprocess.call([sys.executable, gate, "onboard"])
 
 
 def cmd_upgrade(argv):
-    """What the paid gate adds and where to get it. `--open` opens the page in a browser."""
+    """What the paid gate adds and where to get it. `--open` opens the page in a browser.
+    `--install <archive>` unpacks the Operator archive you bought and starts its wizard."""
+    if "--install" in argv:
+        return upgrade_install(argv)
     last = last_replay()
     if last.get("laws"):
         print("From your last replay (%s, %s), the laws your own history drafted:" % (
@@ -1888,7 +2145,7 @@ def cmd_upgrade(argv):
         for law in last["laws"]:
             print("  %-54s %s" % ('"%s"' % law.get("law"), plural(int(law.get("times") or 0), "time")))
         print()
-    print("""Vestige Operator: the owner's version of this gate, $149 a month.
+    print("""Vestige Operator: the owner's version of this gate, %s.
 
   Your own laws   Sentences you write become rules the gate enforces on every host, with a
                   compliant rewrite or a stop, and a one-time permit only you can grant.
@@ -1900,7 +2157,8 @@ Operator Lite stays free. Operator blocks what is routed through it, and its rec
 hash-chained digests, not signatures.
 
 Buy:  %s
-After checkout the gate arrives by email as a small archive with its checksum.""" % OPERATOR_URL)
+You receive a small archive with its checksum. One command installs it and starts the wizard:
+  %s upgrade --install <the archive you downloaded>""" % (OPERATOR_PRICE, OPERATOR_URL, self_cmd()))
     if "--open" in argv and sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION"):
         try:
             import webbrowser
@@ -2115,9 +2373,11 @@ def replay_history(days, budget, here):
 
 def paint(text, code):
     """Colour for a person at a terminal; plain text for everything else. NO_COLOR is honoured."""
-    if at_terminal() and not os.environ.get("NO_COLOR"):
-        return "\033[%sm%s\033[0m" % (code, text)
-    return text
+    if not at_terminal() or os.environ.get("NO_COLOR"):
+        return text
+    if IS_WINDOWS and not (os.environ.get("WT_SESSION") or os.environ.get("TERM") or os.environ.get("ANSICON")):
+        return text                                  # the old Windows console prints the codes as text
+    return "\033[%sm%s\033[0m" % (code, text)
 
 
 def plural(n, word):
@@ -2206,11 +2466,11 @@ def cmd_replay(argv):
     if at_terminal():
         if r["own_calls"]:
             print("\nOperator enforces those laws from your agent's next command, on every host you hook: it stops\n"
-                  "the action and waits for a permit only you can grant. $149 a month.\n"
-                  "  %s      details: operator-gate upgrade" % OPERATOR_URL)
+                  "the action and waits for a permit only you can grant. %s.\n"
+                  "  %s\n  details: %s upgrade" % (OPERATOR_PRICE, OPERATOR_URL, self_cmd()))
         if "--from-install" not in argv and \
                 not os.path.exists(pj(HOME, ".operator", "gate", "operator-gate.py")):
-            print("\nTo have the built-in rules watch from now on: python3 %s install" % os.path.abspath(__file__))
+            print("\nTo have the built-in rules watch from now on: %s install" % self_cmd())
     return 0
 
 
@@ -2313,15 +2573,22 @@ def cmd_install(argv):
         print("claude: could not register hook (%s) -- add manually:" % exc)
         print('  "hooks": {"PreToolUse": [{"matcher": "*", "hooks": '
               '[{"type": "command", "command": "%s"}]}]}' % hook_cmd)
-    print("zcode:  add to your ZCode hooks config -> %s hook --source zcode" % dst)
-    print("codex:  add to ~/.codex/hooks.json        -> %s hook --source codex" % dst)
-    print("mode=shadow (log-only). Flip with: echo enforce > ~/.operator/mode")
+    print("other hosts: register this as their pre-tool hook -> %s" % hook_command(dst, "<host>"))
+    try:
+        launcher = place_launcher(dst)
+    except Exception:
+        launcher = None
+    if launcher:
+        print("command: operator-gate (%s)" % launcher)
+    print("mode: %s. It records every verdict and blocks nothing until you run: %s mode enforce" % (global_mode(), self_cmd()))
     if "--no-replay" not in argv:                 # what this gate would have said about last month
         try:
             print()
             cmd_replay(["--budget", "12", "--from-install"])
         except Exception:
             pass
+    print("\nFrom now on every tool call your agents make passes through the gate.\n"
+          "See what it caught: %s status" % self_cmd())
     return 0
 
 
@@ -2341,6 +2608,16 @@ def cmd_uninstall(argv):
         print("claude hook removed")
     except Exception as exc:
         print("claude settings untouched (%s)" % exc)
+    for d in (pj(HOME, ".local", "bin"), pj(HOME, "bin")):       # the launcher, when it is ours
+        target = pj(d, "operator-gate")
+        try:
+            with open(target, encoding="utf-8") as f:
+                ours = ".operator/gate/operator-gate.py" in f.read()
+            if ours:
+                os.remove(target)
+                print("launcher removed: %s" % target)
+        except Exception:
+            pass
     return 0
 
 
@@ -2351,9 +2628,9 @@ def main():
         sys.exit(hook_main(argv[1:]))
     cmd = {"approve": cmd_approve, "verify": cmd_verify, "status": cmd_status, "corpus": cmd_corpus,
            "test": cmd_corpus, "install": cmd_install, "uninstall": cmd_uninstall,
-           "upgrade": cmd_upgrade, "replay": cmd_replay}.get(argv[0])
+           "upgrade": cmd_upgrade, "replay": cmd_replay, "mode": cmd_mode}.get(argv[0])
     if not cmd:
-        print("usage: operator-gate hook|approve|verify|status|corpus|install|uninstall|upgrade|replay")
+        print("usage: operator-gate hook|status|replay|mode|approve|verify|corpus|install|uninstall|upgrade")
         sys.exit(2)
     sys.exit(cmd(argv[1:]))
 

@@ -58,6 +58,29 @@ for cmd, why in [("Remove-Item notes.txt", "a single file"), ("Remove-Item -Recu
     got = [r for r in ps(cmd) if g.RULES[r][1] == "STOP"]
     check("powershell %-66s -> allowed (%s)" % (cmd, why), not got, got)
 
+# Part A, continued: cmd.exe delete forms, from a shell and from PowerShell
+H = g.HOME
+
+
+def bash_hits(cmd):
+    _, _, hits, _, _, _ = g.classify({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": cwd_ps}, cfg)
+    return sorted(set(h[0] for h in hits))
+
+
+for cmd, want, why in [
+        ('cmd /c "rmdir /s /q %s/Documents"' % H, "OP-003", "rmdir /s on a home folder"),
+        ('cmd.exe /c "rd /s /q %s"' % H, "OP-001", "rd /s on the home directory"),
+        ('cmd /c "echo hi & rmdir /s /q %s/Documents"' % H, "OP-003", "a delete after another cmd command"),
+        ('cmd /c "del /s /q %s/Documents"' % H, "OP-003", "del /s")]:
+    got = bash_hits(cmd)
+    check("cmd.exe from a shell: %-58s -> %s (%s)" % (cmd.replace(H, "~"), want, why), want in got, got)
+for cmd, why in [('cmd /c "rmdir /s /q node_modules"', "a build directory"), ('cmd /c "del /q notes.txt"', "a single file"),
+                 ("cmd /c dir", "a listing"), ('cmd /c "rmdir %s/Documents"' % H, "rmdir without /s removes only an empty folder")]:
+    got = [r for r in bash_hits(cmd) if g.RULES[r][1] == "STOP"]
+    check("cmd.exe from a shell: %-58s -> allowed (%s)" % (cmd.replace(H, "~"), why), not got, got)
+got = ps("cmd /c rmdir /s /q %s" % H)
+check("cmd.exe from PowerShell: rmdir /s on the home directory -> OP-001", "OP-001" in got, got)
+
 # Part A, continued: UTF-8 in and out, on every platform. The payload goes in as bytes and the
 # reply is read as bytes, the way a host sends and reads them.
 u_home = tempfile.mkdtemp(prefix="oplite-utf8-")
@@ -200,6 +223,8 @@ if short_home.lower() != HOME.lower():
 stop("PowerShell: a folder in the home directory, backslashes", "rd -r -fo $env:USERPROFILE\\Documents", "OP-003", tool="PowerShell")
 allow("PowerShell: the temp directory", 'Remove-Item -Recurse -Force "$env:TEMP\\oplite-scratch"', tool="PowerShell")
 allow("PowerShell: a listing", "Get-ChildItem -Recurse $env:USERPROFILE", tool="PowerShell")
+stop("PowerShell: cmd /c rmdir /s /q on the home directory, backslashes", "cmd /c rmdir /s /q %s" % HOME, "OP-001", tool="PowerShell")
+stop("Git Bash: cmd /c with a quoted Windows path", 'cmd /c "rd /s /q %s\\Documents"' % HOME, "OP-003")
 
 # install on Windows: the hook the gate registers must be a command Windows can run
 fake = os.path.join(HOME, "oplite-win-home")
