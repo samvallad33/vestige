@@ -62,10 +62,11 @@ fork bombs, `mv x /dev/null`. Every STOP tells you which transforms it applied.
 
 ## Commands
 
-    operator-gate status | verify | corpus guardfall | install
+    operator-gate status | verify | corpus guardfall | install | upgrade
 
-`verify` walks the receipt hash chain. `corpus guardfall` replays 43 adapted
-GuardFall bypass cases (must pass 43/43). Every verdict appends to
+`verify` walks the receipt hash chain. `corpus guardfall` replays 46 adapted
+GuardFall bypass cases (must pass 46/46). `upgrade` describes the paid Operator
+gate and where to get it. Every verdict appends to
 `~/.operator/receipts/<date>.jsonl`.
 
 ## Honest boundary

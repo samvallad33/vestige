@@ -1441,6 +1441,7 @@ def cmd_verify(argv):
                 n += 1
     print("receipts=%d chain=%s integrity=%s" % (n, "OK" if not bad else "BROKEN at " + ",".join(bad[:5]), INTEGRITY))
     print("note: a digest chain detects accidental edits; it is not a signature and proves no authorship.")
+    upgrade_hint()
     return 0 if not bad else 1
 
 
@@ -1449,6 +1450,41 @@ def cmd_status(argv):
           (VERSION, OP_HOME, global_mode(), os.path.exists(os.path.join(OP_HOME, "DISABLED"))))
     for rid, (name, base, why) in sorted(RULES.items()):
         print("  %-9s %-7s %-28s %s" % (rid, base, name, why))
+    upgrade_hint()
+    return 0
+
+
+OPERATOR_URL = "https://vestige-pro-production.fly.dev/account"
+
+
+def upgrade_hint():
+    """One line for the person at the terminal. Never printed to an agent, a pipe or a script,
+    and never part of a verdict: stop messages go to the model, and a pitch does not belong there."""
+    if sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION"):
+        print("\nOperator adds your own laws, a daily Board and a weekly Letter: operator-gate upgrade")
+
+
+def cmd_upgrade(argv):
+    """What the paid gate adds and where to get it. `--open` opens the page in a browser."""
+    print("""Vestige Operator: the owner's version of this gate, $149 a month.
+
+  Your own laws   Sentences you write become rules the gate enforces on every host, with a
+                  compliant rewrite or a stop, and a one-time permit only you can grant.
+  The Board       Today's stops and law violations as cards, built from your receipts.
+  The Letter      One weekly digest of what your agents tried and what stopped them.
+  Onboarding      A five-minute wizard that writes your first laws and proves one stop.
+
+Operator Lite stays free. Operator blocks what is routed through it, and its receipts are
+hash-chained digests, not signatures.
+
+Buy:  %s
+After checkout the gate arrives by email as a small archive with its checksum.""" % OPERATOR_URL)
+    if "--open" in argv and sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION"):
+        try:
+            import webbrowser
+            webbrowser.open(OPERATOR_URL)
+        except Exception:
+            pass
     return 0
 
 
@@ -1570,9 +1606,10 @@ def main():
     if not argv or argv[0] == "hook":
         sys.exit(hook_main(argv[1:]))
     cmd = {"approve": cmd_approve, "verify": cmd_verify, "status": cmd_status, "corpus": cmd_corpus,
-           "test": cmd_corpus, "install": cmd_install, "uninstall": cmd_uninstall}.get(argv[0])
+           "test": cmd_corpus, "install": cmd_install, "uninstall": cmd_uninstall,
+           "upgrade": cmd_upgrade}.get(argv[0])
     if not cmd:
-        print("usage: operator-gate hook|approve|verify|status|corpus|install|uninstall")
+        print("usage: operator-gate hook|approve|verify|status|corpus|install|uninstall|upgrade")
         sys.exit(2)
     sys.exit(cmd(argv[1:]))
 
