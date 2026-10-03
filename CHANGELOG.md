@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registered, the last call checked, the counts for the last 7 days, and the most
   recent commands the gate stopped or, in shadow mode, would have stopped, each
   with its project, rule and reason. `status --rules` prints the rule table.
+- Operator Lite: `upgrade --install <archive>` unpacks the paid Operator archive
+  a buyer downloaded into `~/vestige-operator` and starts its wizard. It prints
+  the archive's SHA-256 first, refuses any entry outside `vestige-operator/`,
+  and is an owner command: it needs an interactive terminal.
 - Operator Lite: `mode enforce|shadow|off`, an owner command, replaces writing
   into the mode file by hand. `install` places an `operator-gate` command on
   PATH when a user bin directory is already on it and never edits a shell init

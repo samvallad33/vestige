@@ -1542,7 +1542,7 @@ def classify(payload, cfg):
         for eff in (analyze_powershell(cmd, cwd) if tool in POWERSHELL_TOOLS else analyze(cmd, cwd)):
             effects_out.append(eff)
             hits += classify_effect(eff, cfg, cwd)
-        if re.search(r"operator-gate(\.py)?['\"]?\s+(approve|mode|install|uninstall)\b", cmd):
+        if re.search(r"operator-gate(\.py)?['\"]?\s+(approve|mode|install|uninstall|upgrade\s+--install)\b", cmd):
             hits.append(("OP-000", "agent invoked the gate's owner commands",
                          "Approvals and installs are run by the owner in their own terminal."))
         for m in re.finditer(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", cmd, re.M):
@@ -2018,7 +2018,9 @@ def cmd_mode(argv):
     return 0
 
 
+# The offer, in one place: where the paid gate is sold and what it costs.
 OPERATOR_URL = "https://vestige-pro-production.fly.dev/account"
+OPERATOR_PRICE = "$149 a month"
 
 
 def at_terminal():
@@ -2051,8 +2053,51 @@ def upgrade_hint():
               "Your own laws, a Board and a Letter: %s upgrade" % (self_cmd(), self_cmd()))
 
 
+def upgrade_install(argv):
+    """After buying: unpack the downloaded Operator archive into ~/vestige-operator and start its
+    wizard. One command on every platform. An owner command: it needs an interactive terminal."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()) or os.environ.get("OPERATOR_AGENT_SESSION"):
+        print("Refusing: the paid gate is installed by the owner in an interactive terminal.")
+        return 3
+    try:
+        path = os.path.expanduser(argv[argv.index("--install") + 1])
+    except IndexError:
+        print("usage: %s upgrade --install <the vestige-operator archive you downloaded>" % self_cmd())
+        return 2
+    if not os.path.isfile(path):
+        print("No such file: %s" % path)
+        return 2
+    import tarfile
+    with open(path, "rb") as f:
+        print("Archive: %s\nSHA-256: %s" % (path, hashlib.sha256(f.read()).hexdigest()))
+    try:
+        with tarfile.open(path) as tar:
+            for m in tar.getmembers():
+                name = m.name.replace("\\", "/")
+                inside = name == "vestige-operator" or name.startswith("vestige-operator/")
+                if not inside or ".." in name.split("/") or m.issym() or m.islnk():
+                    print("Refusing: this archive has an entry that does not belong in vestige-operator/ (%s)." % m.name)
+                    return 2
+            try:
+                tar.extractall(HOME, filter="data")
+            except TypeError:                            # Python before the extraction filter existed
+                tar.extractall(HOME)
+    except (tarfile.TarError, OSError) as exc:
+        print("That file could not be unpacked (%s)." % exc)
+        return 2
+    gate = pj(HOME, "vestige-operator", "gate", "operator-gate.py")
+    if not os.path.isfile(gate):
+        print("That archive holds no gate.")
+        return 2
+    print("Unpacked to %s. Starting the wizard.\n" % pj(HOME, "vestige-operator"))
+    return subprocess.call([sys.executable, gate, "onboard"])
+
+
 def cmd_upgrade(argv):
-    """What the paid gate adds and where to get it. `--open` opens the page in a browser."""
+    """What the paid gate adds and where to get it. `--open` opens the page in a browser.
+    `--install <archive>` unpacks the Operator archive you bought and starts its wizard."""
+    if "--install" in argv:
+        return upgrade_install(argv)
     last = last_replay()
     if last.get("laws"):
         print("From your last replay (%s, %s), the laws your own history drafted:" % (
@@ -2060,7 +2105,7 @@ def cmd_upgrade(argv):
         for law in last["laws"]:
             print("  %-54s %s" % ('"%s"' % law.get("law"), plural(int(law.get("times") or 0), "time")))
         print()
-    print("""Vestige Operator: the owner's version of this gate, $149 a month.
+    print("""Vestige Operator: the owner's version of this gate, %s.
 
   Your own laws   Sentences you write become rules the gate enforces on every host, with a
                   compliant rewrite or a stop, and a one-time permit only you can grant.
@@ -2072,7 +2117,8 @@ Operator Lite stays free. Operator blocks what is routed through it, and its rec
 hash-chained digests, not signatures.
 
 Buy:  %s
-After checkout the gate arrives by email as a small archive with its checksum.""" % OPERATOR_URL)
+You receive a small archive with its checksum. One command installs it and starts the wizard:
+  %s upgrade --install <the archive you downloaded>""" % (OPERATOR_PRICE, OPERATOR_URL, self_cmd()))
     if "--open" in argv and sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION"):
         try:
             import webbrowser
@@ -2380,8 +2426,8 @@ def cmd_replay(argv):
     if at_terminal():
         if r["own_calls"]:
             print("\nOperator enforces those laws from your agent's next command, on every host you hook: it stops\n"
-                  "the action and waits for a permit only you can grant. $149 a month.\n"
-                  "  %s\n  details: %s upgrade" % (OPERATOR_URL, self_cmd()))
+                  "the action and waits for a permit only you can grant. %s.\n"
+                  "  %s\n  details: %s upgrade" % (OPERATOR_PRICE, OPERATOR_URL, self_cmd()))
         if "--from-install" not in argv and \
                 not os.path.exists(pj(HOME, ".operator", "gate", "operator-gate.py")):
             print("\nTo have the built-in rules watch from now on: %s install" % self_cmd())

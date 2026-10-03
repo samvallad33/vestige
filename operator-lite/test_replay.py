@@ -304,6 +304,35 @@ check("at a terminal the owner can switch to enforce", "The gate now blocks what
       and open(os.path.join(home, ".operator", "mode")).read().strip() == "enforce", t[-200:])
 t = tty_run(["mode", "shadow"])
 check("and back to shadow", open(os.path.join(home, ".operator", "mode")).read().strip() == "shadow", t[-200:])
+# upgrade --install: the archive a buyer downloaded, unpacked, and its wizard started
+import io, tarfile
+arch_dir = tempfile.mkdtemp(prefix="oplite-archive-")
+good = os.path.join(arch_dir, "vestige-operator-test.tar.gz")
+with tarfile.open(good, "w:gz") as tar:
+    body = b"import sys\nprint('WIZARD STARTED', sys.argv[1:])\n"
+    info = tarfile.TarInfo("vestige-operator/gate/operator-gate.py")
+    info.size = len(body)
+    tar.addfile(info, io.BytesIO(body))
+bad = os.path.join(arch_dir, "escape.tar.gz")
+with tarfile.open(bad, "w:gz") as tar:
+    info = tarfile.TarInfo("vestige-operator/../outside.txt")
+    info.size = 1
+    tar.addfile(info, io.BytesIO(b"x"))
+p = run(["upgrade", "--install", good])
+check("upgrade --install refuses outside an interactive terminal", p.returncode == 3 and not os.path.exists(os.path.join(home, "vestige-operator")), p.stdout)
+t = tty_run(["upgrade", "--install", bad])
+check("an archive with an entry outside vestige-operator is refused", "does not belong in vestige-operator" in t
+      and not os.path.exists(os.path.join(home, "outside.txt")) and not os.path.exists(os.path.join(home, "vestige-operator")), t[-300:])
+t = tty_run(["upgrade", "--install", good])
+check("at a terminal it prints the checksum, unpacks and starts the wizard", "SHA-256: " in t and "WIZARD STARTED ['onboard']" in t
+      and os.path.exists(os.path.join(home, "vestige-operator", "gate", "operator-gate.py")), t[-400:])
+payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "python3 ~/.operator/gate/operator-gate.py upgrade --install x.tar.gz"}, "cwd": REPO, "session_id": "t"})
+open(os.path.join(home, ".operator", "mode"), "w").write("enforce\n")
+p = subprocess.run([sys.executable, GATE, "hook", "--source", "claude"], input=payload, capture_output=True, text=True, env=env)
+check("an agent running upgrade --install is stopped as an owner command", p.returncode == 2 and "OP-000" in p.stderr, p.stderr[:200])
+open(os.path.join(home, ".operator", "mode"), "w").write("shadow\n")
+shutil.rmtree(arch_dir, ignore_errors=True)
+
 t = tty_run(["replay"], color=True)
 check("at a terminal the numbers are coloured; NO_COLOR turns it off", "\033[1;31m" in t and "\033[0m" in t, t[:300])
 
