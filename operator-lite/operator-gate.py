@@ -2009,6 +2009,11 @@ def cmd_corpus(argv):
     try:
         with open(path) as f:
             corpus = json.load(f)
+    except FileNotFoundError:
+        print("corpus %s is not beside this file: the corpus ships in the repository, not with the single\n"
+              "gate file. From a clone of github.com/samvallad33/vestige: python3 operator-lite/operator-gate.py corpus %s"
+              % (name, name))
+        return 2
     except Exception as exc:
         print("cannot load corpus %s: %s" % (name, exc))
         return 2

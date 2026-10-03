@@ -8,14 +8,23 @@ every decision.
 Part of [Vestige](https://github.com/samvallad33/vestige). Free and standalone:
 copy one file, wire one hook, and your agent has a deterministic gate.
 
-## Install (3 hosts, one script)
+## Install (one command)
+
+    curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
+
+From a clone, `python3 operator-gate.py install` does the same. It copies the gate to
+`~/.operator/gate`, registers the Claude Code hook, starts in shadow mode (records
+every verdict, blocks nothing) and then replays your last 30 days of Claude Code
+history through the rules. Nothing in that history is executed.
+
+## Other hosts, or by hand
 
     mkdir -p ~/.operator/gate
     cp operator-gate.py ~/.operator/gate/
     chmod 755 ~/.operator/gate/operator-gate.py
     echo shadow > ~/.operator/mode          # always shadow first
 
-**Claude Code** (`~/.claude/settings.json`):
+**Claude Code** (`~/.claude/settings.json`), which `install` writes for you:
 ```json
 { "hooks": { "PreToolUse": [{ "matcher": "*",
   "hooks": [{ "type": "command",
@@ -137,7 +146,8 @@ fork bombs, `mv x /dev/null`, a command written after a redirection
 `verify` walks the receipt hash chain. `corpus guardfall` replays 46 adapted
 GuardFall bypass cases (must pass 46/46). `upgrade` describes the paid Operator
 gate and where to get it. `python3 test_parser.py` and `python3 test_replay.py`
-run the tests. Every verdict appends to
+run the tests; CI runs them on Linux and macOS. `corpus` needs a clone: the corpus
+file ships in the repository, not with the single gate file. Every verdict appends to
 `~/.operator/receipts/<date>.jsonl`.
 
 ## Honest boundary

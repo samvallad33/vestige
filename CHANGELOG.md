@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window and the output. `install` runs it once at the end (`--no-replay` skips
   it); the terminal-only hint on `status` and `verify`, and `upgrade`, then show
   what the last replay drafted. It reads Claude Code transcripts only.
-- Operator Lite: `test_parser.py` and `test_replay.py`, run by hand with
-  `python3`.
+- Operator Lite: `test_parser.py` and `test_replay.py`, and a CI job that runs
+  them and the corpus on Linux and macOS.
 
 ### Fixed
 
@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README: Operator Lite installs with one command. The four-line block it
+  replaces copied the file and never registered the hook, and its corpus line
+  could not work from a single downloaded file; `corpus` now says where the
+  corpus lives.
 - README: a section on Vestige Operator, the paid tier, with what it adds, the
   price, how it is delivered and what it does not do. The GuardFall corpus count
   in the README and the Operator Lite README now reads 46, the number of cases

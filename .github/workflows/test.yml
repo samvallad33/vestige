@@ -25,6 +25,31 @@ jobs:
       - run: python3 -m py_compile hooks/sanhedrin-local.py tests/hooks/test_sanhedrin_claim_mode.py
       - run: bash -n hooks/sanhedrin.sh scripts/install-sandwich.sh scripts/check-sandwich-prereqs.sh
 
+  operator-lite:
+    name: Operator Lite (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: macos-latest
+            python: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python3 operator-lite/test_parser.py
+      - run: python3 operator-lite/test_replay.py
+      - run: python3 operator-lite/operator-gate.py corpus guardfall
+      - run: cmp operator-lite/operator-gate.py operator-lite/openclaw-plugin/gate/operator-gate.py
+      - run: cmp operator-lite/operator-gate.py operator-lite/ports/opencode/operator-gate.py
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest

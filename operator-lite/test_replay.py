@@ -174,6 +174,39 @@ check("install --no-replay skips it", "operator-gate replay:" not in p.stdout)
 p = run(["install"], extra_env={"OPERATOR_AGENT_SESSION": "1"})
 check("install still refuses inside an agent session", p.returncode == 3)
 
+# 3b. the README's one command: a single downloaded file, nothing beside it, in a home of its own
+home2 = tempfile.mkdtemp(prefix="oplite-lone-home-")
+shutil.copytree(os.path.join(home, ".claude"), os.path.join(home2, ".claude"))
+os.remove(os.path.join(home2, ".claude", "settings.json"))
+lone = os.path.join(tempfile.mkdtemp(prefix="oplite-download-"), "operator-gate.py")
+shutil.copyfile(GATE, lone)
+env2 = dict(env, HOME=home2)
+p = subprocess.run([sys.executable, lone, "install"], capture_output=True, text=True, env=env2, cwd=home2)
+installed = os.path.join(home2, ".operator", "gate", "operator-gate.py")
+check("lone file: install exits 0 and installs a byte-identical copy",
+      p.returncode == 0 and os.path.exists(installed) and open(installed, "rb").read() == open(GATE, "rb").read(), p.stderr[-300:])
+try:
+    wired = json.load(open(os.path.join(home2, ".claude", "settings.json")))["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+except Exception as exc:
+    wired = repr(exc)
+check("lone file: the Claude Code hook points at the installed copy", wired == "python3 %s hook --source claude" % installed, wired)
+check("lone file: install starts in shadow and shows the replay without being asked",
+      open(os.path.join(home2, ".operator", "mode")).read().strip() == "shadow"
+      and "tool calls your agents made" in p.stdout and "Your first laws, drafted from this history:" in p.stdout, p.stdout[-400:])
+payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}, "cwd": REPO, "session_id": "t"})
+p = subprocess.run(wired.split(), input=payload, capture_output=True, text=True, env=env2)
+check("lone file: the wired hook records in shadow and does not block", p.returncode == 0 and not p.stderr, p.stderr[:200])
+open(os.path.join(home2, ".operator", "mode"), "w").write("enforce\n")
+p = subprocess.run(wired.split(), input=payload, capture_output=True, text=True, env=env2)
+check("lone file: after the flip to enforce the wired hook stops the force-push", p.returncode == 2 and "OP-004" in p.stderr, p.stderr[:200])
+p = subprocess.run([sys.executable, installed, "verify"], capture_output=True, text=True, env=env2)
+check("lone file: both verdicts are in the receipt chain", "receipts=2 chain=OK" in p.stdout, p.stdout[:200])
+p = subprocess.run([sys.executable, installed, "corpus", "guardfall"], capture_output=True, text=True, env=env2)
+check("lone file: corpus says where the corpus lives instead of failing with a traceback",
+      p.returncode == 2 and "ships in the repository" in p.stdout and "Traceback" not in p.stdout + p.stderr, p.stdout[:200])
+shutil.rmtree(home2, ignore_errors=True)
+shutil.rmtree(os.path.dirname(lone), ignore_errors=True)
+
 # 4. the hint a person sees, run under a pseudo-terminal
 import pty
 def tty_run(args, color=False):

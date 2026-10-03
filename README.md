@@ -32,11 +32,14 @@ PreToolUse hook (Claude Code, Codex, OpenClaw — any host with command hooks), 
 **blocks destructive, polluting and exfiltrating commands before they run.**
 
 ```bash
-mkdir -p ~/.operator/gate
-curl -sL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o ~/.operator/gate/operator-gate.py
-chmod 755 ~/.operator/gate/operator-gate.py
-echo shadow > ~/.operator/mode        # shadow-first: log everything, block nothing, then flip
+curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
 ```
+
+One command. It copies the gate to `~/.operator/gate`, registers the Claude Code hook and
+starts in shadow mode, which records every verdict and blocks nothing. Then it replays your
+last 30 days of Claude Code history through the same rules, so the first thing you see is
+what it would have said about your own agents. Nothing in that history is executed. When the
+report looks right, switch it on: `echo enforce > ~/.operator/mode`.
 
 - **27 deterministic rules** — workspace armor, memory-store protection, destructive
   SQL, force-push, unreviewed publishes, paid deploys, reverse shells, cloud-metadata
@@ -48,8 +51,7 @@ echo shadow > ~/.operator/mode        # shadow-first: log everything, block noth
 - **Every verdict gets a hash-chained receipt** — and `verify` walks the chain
 - **Shadow-first**: install logs everything and blocks nothing until you flip
 
-See what it would have said about last month before you rely on it. `replay` runs the
-Claude Code history already on your machine through the same rules and executes nothing:
+Run the replay again any time:
 
 ```bash
 python3 ~/.operator/gate/operator-gate.py replay
@@ -116,8 +118,8 @@ Buy it at the account page: [vestige-pro-production.fly.dev/account](https://ves
 What it is not: Operator blocks what is routed through it. It cannot block a call that bypasses the hooked tools, and receipts are hash-chained digests, not signatures.
 
 ```bash
-python3 ~/.operator/gate/operator-gate.py corpus guardfall   # 46/46 bypass cases
 python3 ~/.operator/gate/operator-gate.py verify             # receipt chain check
+python3 operator-lite/operator-gate.py corpus guardfall      # 46/46 bypass cases, from a clone of this repo
 ```
 
 **On OpenClaw?** One line, gate bundled:
