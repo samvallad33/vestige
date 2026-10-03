@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that only mentions a gate path in a string is no longer stopped.
   - Parentheses inside quotes and array literals (`name=(...)`,
     `name+=(...)`) are data, not subshells, and `name+=value` is an assignment.
+  - The hook decodes its input as UTF-8 from bytes, writes UTF-8, and opens every
+    file as UTF-8. On Windows the defaults are the ANSI code page: input it
+    cannot decode, or a stop message it cannot print, raised an error, and an
+    error in the hook is an allow. `install` copies the gate byte for byte and
+    no longer re-encodes the settings file.
   - OP-S05 no longer records an inline write whose target cannot be resolved.
     An unresolved inline delete is still recorded, and either one fails closed
     when the code names a gate path.

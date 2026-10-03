@@ -58,6 +58,46 @@ for cmd, why in [("Remove-Item notes.txt", "a single file"), ("Remove-Item -Recu
     got = [r for r in ps(cmd) if g.RULES[r][1] == "STOP"]
     check("powershell %-66s -> allowed (%s)" % (cmd, why), not got, got)
 
+# Part A, continued: UTF-8 in and out, on every platform. The payload goes in as bytes and the
+# reply is read as bytes, the way a host sends and reads them.
+u_home = tempfile.mkdtemp(prefix="oplite-utf8-")
+with open(os.path.join(u_home, "mode"), "w") as f:
+    f.write("enforce\n")
+u_env = dict(os.environ, OPERATOR_HOME=u_home)
+u_env.pop("OPERATOR_AGENT_SESSION", None)
+u_env.pop("OPERATOR_GATE_MODE", None)
+odd = "rm -rf ~/Documents/\u65e5\u672c\u8a9e-\u201dnotes\u201d-\u00fc"      # CJK, a curly quote cp1252 cannot decode, an umlaut
+payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": odd}, "cwd": os.path.expanduser("~"),
+                      "session_id": "t"}, ensure_ascii=False).encode("utf-8")
+p = subprocess.run([sys.executable, GATE, "hook", "--source", "claude"], input=payload, capture_output=True, env=u_env)
+err = p.stderr.decode("utf-8", errors="strict") if p.stderr else ""
+check("a command with non-ASCII text is still stopped, not failed open", p.returncode == 2 and "OPERATOR: STOPPED (OP-003" in err, (p.returncode, p.stderr[:200]))
+check("the stop message is valid UTF-8 and names the target as written", "\u65e5\u672c\u8a9e" in err, err[:300])
+p = subprocess.run([sys.executable, GATE, "verify"], capture_output=True, env=u_env)
+check("the receipt with non-ASCII text is in the chain and the chain verifies", b"receipts=1 chain=OK" in p.stdout, p.stdout[:200])
+with open(os.path.join(u_home, "receipts", sorted(x for x in os.listdir(os.path.join(u_home, "receipts")) if x.endswith(".jsonl"))[0]), encoding="utf-8") as f:
+    check("the receipt file is UTF-8 and keeps the text", "\u65e5\u672c\u8a9e" in f.read())
+shutil.rmtree(u_home, ignore_errors=True)
+
+# install keeps non-ASCII text in the user's settings file and copies the gate byte for byte
+i_home = os.path.join(os.path.expanduser("~"), "oplite-utf8-home")
+shutil.rmtree(i_home, ignore_errors=True)
+os.makedirs(os.path.join(i_home, ".claude"))
+note = "\u65e5\u672c\u8a9e \u201dquoted\u201d \u00fc"
+with open(os.path.join(i_home, ".claude", "settings.json"), "w", encoding="utf-8") as f:
+    json.dump({"env": {"NOTE": note}}, f, ensure_ascii=False)
+i_env = dict(os.environ, HOME=i_home, USERPROFILE=i_home)
+for k in ("OPERATOR_HOME", "OPERATOR_AGENT_SESSION", "OPERATOR_GATE_MODE"):
+    i_env.pop(k, None)
+p = subprocess.run([sys.executable, GATE, "install", "--no-replay"], capture_output=True, env=i_env, cwd=i_home)
+check("install exits 0 beside a settings file with non-ASCII text", p.returncode == 0, p.stderr[-300:])
+with open(os.path.join(i_home, ".claude", "settings.json"), encoding="utf-8") as f:
+    after = json.load(f)
+check("the non-ASCII text in the settings file is unchanged", after.get("env", {}).get("NOTE") == note and "PreToolUse" in after.get("hooks", {}), after.get("env"))
+with open(os.path.join(i_home, ".operator", "gate", "operator-gate.py"), "rb") as a, open(GATE, "rb") as b:
+    check("the installed gate is byte for byte the file that was run", a.read() == b.read())
+shutil.rmtree(i_home, ignore_errors=True)
+
 if os.name != "nt":
     check("on this platform a path is left exactly as written", g.canon("/c/Users/me") == "/c/Users/me" and g.canon("a\\b") == "a\\b")
     print("\n(Part B runs on Windows only)")

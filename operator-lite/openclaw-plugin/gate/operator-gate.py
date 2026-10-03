@@ -25,6 +25,7 @@ import os
 import posixpath
 import re
 import shlex
+import shutil
 import stat as _stat
 import subprocess
 import sys
@@ -256,7 +257,7 @@ def load_config():
     cfg = {"protected_roots": [], "protected_files": [], "disabled_rules": [], "mode_overrides": {},
            "scratch_ok": []}
     try:
-        with open(pj(OP_HOME, "commitments.json")) as f:
+        with open(pj(OP_HOME, "commitments.json"), encoding="utf-8") as f:
             user = json.load(f)
         for k in cfg:
             if k in user:
@@ -299,7 +300,7 @@ def global_mode():
     m = os.environ.get("OPERATOR_GATE_MODE")
     if not m:
         try:
-            with open(pj(OP_HOME, "mode")) as f:
+            with open(pj(OP_HOME, "mode"), encoding="utf-8") as f:
                 m = f.read().strip()
         except Exception:
             m = "enforce"
@@ -717,7 +718,7 @@ def resolve_script_arg(rest, ecwd):
 def is_gate_source(path):
     """True when the file is a copy of this gate (installed, repo checkout or delivery tree)."""
     try:
-        with open(path, "r", errors="replace") as f:
+        with open(path, "r", errors="replace", encoding="utf-8") as f:
             head = f.read(6000)
     except Exception:
         return False
@@ -741,7 +742,7 @@ def script_body_effects(path, ecwd, depth, vars_, mode="auto", prog=None, seg=""
         st = os.stat(path)
         if not _stat.S_ISREG(st.st_mode) or st.st_size == 0 or st.st_size > MAX_SCRIPT_BYTES:
             return []
-        with open(path, "r", errors="replace") as f:
+        with open(path, "r", errors="replace", encoding="utf-8") as f:
             body = f.read(MAX_SCRIPT_BYTES)
     except Exception:
         return []
@@ -1613,11 +1614,11 @@ def write_receipt(rec):
         ensure_dirs()
         rdir = pj(OP_HOME, "receipts")
         head_path = pj(rdir, "HEAD")
-        lock = open(pj(rdir, ".lock"), "a+")
+        lock = open(pj(rdir, ".lock"), "a+", encoding="utf-8")
         lock_file(lock)
         try:
             try:
-                with open(head_path) as f:
+                with open(head_path, encoding="utf-8") as f:
                     prev = f.read().strip() or ("0" * 64)
             except Exception:
                 prev = "0" * 64
@@ -1626,9 +1627,9 @@ def write_receipt(rec):
                         "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"})
             rec["digest"] = digest_of(rec)
             day = time.strftime("%Y-%m-%d", time.gmtime())
-            with open(pj(rdir, day + ".jsonl"), "a") as f:
+            with open(pj(rdir, day + ".jsonl"), "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, sort_keys=True, ensure_ascii=False) + "\n")
-            with open(head_path, "w") as f:
+            with open(head_path, "w", encoding="utf-8") as f:
                 f.write(rec["digest"])
             return rec["digest"]
         finally:
@@ -1641,7 +1642,7 @@ def write_receipt(rec):
 def consume_permit(action_digest):
     p = pj(OP_HOME, "permits", action_digest + ".json")
     try:
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             pm = json.load(f)
         if time.time() > float(pm.get("expires", 0)):
             os.rename(p, p + ".expired")
@@ -1670,6 +1671,25 @@ def degraded_hit(raw):
 
 
 
+def read_stdin():
+    """The hook payload is UTF-8. Decode it from bytes here: the platform default on Windows is the
+    ANSI code page, which cannot represent some UTF-8 input and would make the hook fail open."""
+    try:
+        return sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    except AttributeError:                           # stdin replaced by a text object
+        return sys.stdin.read()
+
+
+def utf8_streams():
+    """Write UTF-8 whatever the console code page is, and never raise on a character it lacks: a
+    stop message that cannot be printed must not turn into an allow."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def hook_main(argv):
     source = "unknown"
     if "--source" in argv:
@@ -1679,7 +1699,7 @@ def hook_main(argv):
             pass
     raw = ""
     try:
-        raw = sys.stdin.read()
+        raw = read_stdin()
         if os.path.exists(pj(OP_HOME, "DISABLED")) or global_mode() == "off":
             return 0
         payload = json.loads(raw) if raw.strip() else {}
@@ -1769,7 +1789,7 @@ def cmd_approve(argv):
     recent = ""
     try:
         day = time.strftime("%Y-%m-%d", time.gmtime())
-        with open(pj(OP_HOME, "receipts", day + ".jsonl")) as f:
+        with open(pj(OP_HOME, "receipts", day + ".jsonl"), encoding="utf-8") as f:
             for line in f:
                 if argv[0] in line:
                     recent = line
@@ -1784,7 +1804,7 @@ def cmd_approve(argv):
         print("Cancelled.")
         return 1
     p = pj(OP_HOME, "permits", argv[0] + ".json")
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         json.dump({"action_digest": argv[0], "granted": time.time(), "expires": time.time() + PERMIT_TTL_S,
                    "single_use": True, "by": "owner-tty"}, f)
     os.chmod(p, 0o600)
@@ -1798,7 +1818,7 @@ def cmd_verify(argv):
     prev, n, bad = "0" * 64, 0, []
     files = sorted(f for f in os.listdir(rdir) if f.endswith(".jsonl")) if os.path.isdir(rdir) else []
     for fn in files:
-        with open(pj(rdir, fn)) as f:
+        with open(pj(rdir, fn), encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 rec = json.loads(line)
                 d = rec.pop("digest")
@@ -1832,7 +1852,7 @@ def at_terminal():
 def last_replay():
     """The summary the last `replay` left in the gate home, or {}."""
     try:
-        with open(pj(OP_HOME, "state", "replay.json")) as f:
+        with open(pj(OP_HOME, "state", "replay.json"), encoding="utf-8") as f:
             last = json.load(f)
         return last if isinstance(last, dict) else {}
     except Exception:
@@ -1989,7 +2009,7 @@ def replay_history(days, budget, here):
             break
         used = False
         try:
-            fh = open(path, errors="replace")
+            fh = open(path, errors="replace", encoding="utf-8")
         except OSError:
             continue
         with fh:
@@ -2173,7 +2193,7 @@ def cmd_replay(argv):
                                           "days", "by_own", "laws")}
                 keep["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 path = pj(OP_HOME, "state", "replay.json")
-                with open(path + ".tmp", "w") as f:
+                with open(path + ".tmp", "w", encoding="utf-8") as f:
                     json.dump(keep, f, sort_keys=True)
                 os.replace(path + ".tmp", path)
         except Exception:
@@ -2194,7 +2214,7 @@ def cmd_corpus(argv):
     name = argv[0] if argv else "guardfall"
     path = pj(os.path.dirname(os.path.abspath(__file__)), "corpora", name + ".json")
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             corpus = json.load(f)
     except FileNotFoundError:
         print("corpus %s is not beside this file: the corpus ships in the repository, not with the single\n"
@@ -2216,7 +2236,7 @@ def cmd_corpus(argv):
             for fx in case["fixtures"]:
                 fp = pj(tmpd, fx["name"])
                 os.makedirs(os.path.dirname(fp), exist_ok=True)
-                with open(fp, "w") as f:
+                with open(fp, "w", encoding="utf-8") as f:
                     f.write(fx["body"])
             cwd = tmpd
         _, _, hits, _, _, _ = classify({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": cwd}, cfg)
@@ -2260,22 +2280,20 @@ def cmd_install(argv):
     src = os.path.abspath(__file__)
     os.makedirs(dst_dir, exist_ok=True)
     dst = pj(dst_dir, "operator-gate.py")
-    with open(src) as f:
-        body = f.read()
-    with open(dst, "w") as f:
-        f.write(body)
+    if os.path.realpath(src) != os.path.realpath(dst):
+        shutil.copyfile(src, dst)                  # bytes: the installed gate is the downloaded file exactly
     os.chmod(dst, 0o755)
     ensure_dirs()
     mode_path = pj(OP_HOME, "mode")
     if not os.path.exists(mode_path):
-        with open(mode_path, "w") as f:
+        with open(mode_path, "w", encoding="utf-8") as f:
             f.write("shadow\n")
     # Claude Code PreToolUse hook (merge, never clobber)
     settings_path = pj(HOME, ".claude", "settings.json")
     hook_cmd = hook_command(dst, "claude")
     try:
         try:
-            with open(settings_path) as f:
+            with open(settings_path, encoding="utf-8") as f:
                 settings = json.load(f)
         except Exception:
             settings = {}
@@ -2283,7 +2301,7 @@ def cmd_install(argv):
         entry = {"matcher": "*", "hooks": [{"type": "command", "command": hook_cmd}]}
         if not any(h.get("hooks") and any(hh.get("command") == hook_cmd for hh in h["hooks"]) for h in hooks):
             hooks.append(entry)
-        with open(settings_path, "w") as f:
+        with open(settings_path, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
         print("claude: PreToolUse hook registered in %s" % settings_path)
     except Exception as exc:
@@ -2308,12 +2326,12 @@ def cmd_uninstall(argv):
         return 3
     settings_path = pj(HOME, ".claude", "settings.json")
     try:
-        with open(settings_path) as f:
+        with open(settings_path, encoding="utf-8") as f:
             settings = json.load(f)
         for pre in settings.get("hooks", {}).get("PreToolUse", []):
             pre["hooks"] = [h for h in pre.get("hooks", []) if "operator-gate" not in h.get("command", "")]
         settings["hooks"]["PreToolUse"] = [p for p in settings["hooks"]["PreToolUse"] if p.get("hooks")]
-        with open(settings_path, "w") as f:
+        with open(settings_path, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
         print("claude hook removed")
     except Exception as exc:
@@ -2322,6 +2340,7 @@ def cmd_uninstall(argv):
 
 
 def main():
+    utf8_streams()
     argv = sys.argv[1:]
     if not argv or argv[0] == "hook":
         sys.exit(hook_main(argv[1:]))
