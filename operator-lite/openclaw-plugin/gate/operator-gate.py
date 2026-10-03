@@ -966,6 +966,124 @@ def analyze(cmd, cwd, depth=0, vars_=None):
 
 
 # --------------------------------------------------------------------------- #
+# PowerShell (the Windows shell tool): the delete cmdlets, read into the same effect model
+# --------------------------------------------------------------------------- #
+POWERSHELL_TOOLS = {"powershell", "pwsh"}
+PS_DELETE = {"remove-item", "rm", "ri", "del", "erase", "rd", "rmdir"}
+PS_ENV_RE = re.compile(r"\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?", re.I)
+
+
+def ps_statements(cmd):
+    """PowerShell text split into statements on a newline, ; | and && outside quotes."""
+    out, cur, q, i, n = [], [], None, 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if q:
+            cur.append(c)
+            if c == "`" and q == '"' and i + 1 < n:
+                cur.append(cmd[i + 1]); i += 1
+            elif c == q:
+                q = None
+        elif c in "'\"":
+            q = c; cur.append(c)
+        elif c == "`" and i + 1 < n:
+            cur.append(c); cur.append(cmd[i + 1]); i += 1
+        elif c in "\n;|" or (c == "&" and i + 1 < n and cmd[i + 1] == "&"):
+            out.append("".join(cur)); cur = []
+            if c == "&":
+                i += 1
+        else:
+            cur.append(c)
+        i += 1
+    out.append("".join(cur))
+    return [x.strip() for x in out if x.strip()]
+
+
+def ps_tokens(stmt):
+    """PowerShell words: quotes group, a backtick escapes, and a backslash is an ordinary character."""
+    toks, cur, q, i, n, started = [], [], None, 0, len(stmt), False
+    while i < n:
+        c = stmt[i]
+        if q:
+            if c == "`" and q == '"' and i + 1 < n:
+                cur.append(stmt[i + 1]); i += 1
+            elif c == q:
+                q = None
+            else:
+                cur.append(c)
+        elif c in "'\"":
+            q = c; started = True
+        elif c == "`" and i + 1 < n:
+            cur.append(stmt[i + 1]); i += 1; started = True
+        elif c.isspace():
+            if cur or started:
+                toks.append("".join(cur)); cur = []; started = False
+        else:
+            cur.append(c); started = True
+        i += 1
+    if cur or started:
+        toks.append("".join(cur))
+    return toks
+
+
+def ps_expand(text):
+    """$env:USERPROFILE, $env:HOME and the temp variables, as PowerShell would read them."""
+    def env(m):
+        name = m.group(1).upper()
+        if name in ("USERPROFILE", "HOME"):
+            return HOME
+        if name in ("TEMP", "TMP"):
+            return canon(tempfile.gettempdir())
+        return m.group(0)
+    return PS_ENV_RE.sub(env, text)
+
+
+def ps_param(word, full):
+    """PowerShell accepts any unambiguous prefix of a parameter name: -r, -rec and -Recurse are one."""
+    low = word.lower()
+    return len(low) >= 2 and full.startswith(low)
+
+
+def analyze_powershell(cmd, cwd):
+    """Effects of a PowerShell command. Remove-Item and its aliases become delete effects; every other
+    statement goes through the shell walker, which reads git, npm and the like the same way."""
+    effects = []
+    for stmt in ps_statements(cmd or ""):
+        toks = ps_tokens(ps_expand(stmt))
+        while toks and toks[0] in ("&", "."):                # call operators
+            toks = toks[1:]
+        if not toks:
+            continue
+        if toks[0].lower() not in PS_DELETE:
+            effects += analyze(stmt, cwd)
+            continue
+        flags, paths, filtered, i = [], [], False, 1
+        while i < len(toks):
+            t = toks[i]
+            if t.startswith("-") and len(t) > 1:
+                flags.append(t)
+                if ps_param(t, "-path") or ps_param(t, "-literalpath"):
+                    if i + 1 < len(toks):
+                        paths += [p for p in toks[i + 1].split(",") if p]
+                        i += 1
+                elif ps_param(t, "-filter") or ps_param(t, "-include") or ps_param(t, "-exclude"):
+                    filtered = True
+                    i += 1                                   # the value belongs to the parameter
+            else:
+                paths += [p for p in t.split(",") if p]
+            i += 1
+        if any(ps_param(f, "-whatif") for f in flags):       # a dry run deletes nothing
+            continue
+        resolved = resolve_targets(paths, cwd)
+        kept = [t for t in resolved if not t.startswith(UNKNOWN_CWD) and "$" not in t]
+        effects.append({"prog": "Remove-Item", "seg": stmt, "targets": kept,
+                        "recursive": any(ps_param(f, "-recurse") for f in flags), "kind": "delete",
+                        "filtered": filtered, "unresolved": len(kept) != len(resolved) or not paths,
+                        "flags": flags, "args": paths, "cwd": cwd or UNKNOWN_CWD, "writes": [], "text": stmt})
+    return effects
+
+
+# --------------------------------------------------------------------------- #
 # classification
 # --------------------------------------------------------------------------- #
 def digest_of(obj):
@@ -1414,7 +1532,7 @@ def classify(payload, cfg):
             meta["normalized"] = expanded[:400]
         except Exception:
             pass
-        for eff in analyze(cmd, cwd):
+        for eff in (analyze_powershell(cmd, cwd) if tool in POWERSHELL_TOOLS else analyze(cmd, cwd)):
             effects_out.append(eff)
             hits += classify_effect(eff, cfg, cwd)
         if re.search(r"operator-gate(\.py)?['\"]?\s+(approve|mode|install|uninstall)\b", cmd):
@@ -1898,7 +2016,7 @@ def replay_history(days, budget, here):
                     if not (isinstance(blk, dict) and blk.get("type") == "tool_use"):
                         continue
                     name, ti = str(blk.get("name") or ""), blk.get("input") or {}
-                    if not (name == "Bash" or name in REPLAY_WRITE_TOOLS or name.startswith("mcp__")):
+                    if not (name in ("Bash", "PowerShell") or name in REPLAY_WRITE_TOOLS or name.startswith("mcp__")):
                         continue
                     # one call, one count: a resumed session copies earlier records with the same
                     # call id, while the same command run again is a new call with a new id

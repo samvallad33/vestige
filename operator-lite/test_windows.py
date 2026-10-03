@@ -31,6 +31,33 @@ for given, want in [("C:\\Users\\me\\proj", "C:/Users/me/proj"), ("c:/Users/me",
                     ("C:\\Users\\ALPHIN~1", "C:/Users/ALPHIN~1")]:
     got = g.canon_windows(given)
     check("spelling %-24s -> %s" % (given, want), got == want, got)
+# Part A, continued: the PowerShell tool, judged through classify() on any platform
+cfg = g.load_config()
+cwd_ps = os.path.join(os.path.expanduser("~"), "oplite-ps-project")
+
+
+def ps(cmd):
+    _, _, hits, _, _, effects = g.classify({"tool_name": "PowerShell", "tool_input": {"command": cmd}, "cwd": cwd_ps}, cfg)
+    return sorted(set(h[0] for h in hits))
+
+
+for cmd, want, why in [
+        ("Remove-Item -Recurse -Force ~/Documents", "OP-003", "recursive delete of a home folder"),
+        ("Remove-Item -Recurse -Force $HOME", "OP-001", "recursive delete of the home directory"),
+        ("rm -r -fo $env:USERPROFILE", "OP-001", "the short aliases and parameter prefixes"),
+        ("Remove-Item -Path $env:USERPROFILE/Documents, ~/Desktop -Recurse", "OP-003", "-Path with a comma list"),
+        ("Get-ChildItem . ; Remove-Item -Recurse -Force ~/Documents", "OP-003", "a delete after another statement"),
+        ("git push --force origin main", "OP-004", "git reads the same in PowerShell"),
+        ("Remove-Item -Recurse -Force $target", "OP-S05", "a target the gate cannot resolve is recorded")]:
+    got = ps(cmd)
+    check("powershell %-66s -> %s (%s)" % (cmd, want, why), want in got, got)
+for cmd, why in [("Remove-Item notes.txt", "a single file"), ("Remove-Item -Recurse -Force node_modules", "a build directory"),
+                 ("Remove-Item -Recurse -WhatIf ~/Documents", "a dry run"), ("Get-ChildItem -Recurse ~", "a listing"),
+                 ("Remove-Item -Recurse -Force $env:TEMP/oplite-scratch", "the temp directory"),
+                 ("Write-Output 'Remove-Item -Recurse -Force ~'", "a quoted sentence")]:
+    got = [r for r in ps(cmd) if g.RULES[r][1] == "STOP"]
+    check("powershell %-66s -> allowed (%s)" % (cmd, why), not got, got)
+
 if os.name != "nt":
     check("on this platform a path is left exactly as written", g.canon("/c/Users/me") == "/c/Users/me" and g.canon("a\\b") == "a\\b")
     print("\n(Part B runs on Windows only)")
@@ -49,20 +76,20 @@ work = os.path.join(HOME, "oplite-win-work")           # a project folder outsid
 os.makedirs(work, exist_ok=True)
 
 
-def hook(cmd, cwd=None):
-    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": cwd or work, "session_id": "t"})
+def hook(cmd, cwd=None, tool="Bash"):
+    payload = json.dumps({"tool_name": tool, "tool_input": {"command": cmd}, "cwd": cwd or work, "session_id": "t"})
     p = subprocess.run([sys.executable, GATE, "hook", "--source", "claude"], input=payload,
                        capture_output=True, text=True, env=env)
     return p.returncode, (p.stderr.strip().splitlines() or [""])[0]
 
 
-def stop(name, cmd, rule):
-    rc, first = hook(cmd)
+def stop(name, cmd, rule, tool="Bash"):
+    rc, first = hook(cmd, tool=tool)
     check("stop   " + name, rc == 2 and ("(%s " % rule) in first, "exit %d %s" % (rc, first))
 
 
-def allow(name, cmd):
-    rc, first = hook(cmd)
+def allow(name, cmd, tool="Bash"):
+    rc, first = hook(cmd, tool=tool)
     check("allow  " + name, rc == 0, "exit %d %s" % (rc, first))
 
 
@@ -94,6 +121,15 @@ allow("recursive delete inside the temp directory, Git Bash /tmp", "rm -rf /tmp/
 allow("recursive delete inside the Windows temp directory", 'rm -rf "%s"' % os.path.join(tempfile.gettempdir(), "oplite-scratch"))
 allow("recursive delete of a build directory in the project", "rm -rf node_modules")
 allow("plain command", "git status")
+
+# the PowerShell tool, with Windows paths
+stop("PowerShell: Remove-Item -Recurse on the home directory", "Remove-Item -Recurse -Force %s" % HOME, "OP-001", tool="PowerShell")
+stop("PowerShell: the same through $env:USERPROFILE", "Remove-Item -Recurse -Force $env:USERPROFILE", "OP-001", tool="PowerShell")
+if short_home.lower() != HOME.lower():
+    stop("PowerShell: the same through the 8.3 short name", 'Remove-Item -Recurse -Force "%s"' % short_home, "OP-001", tool="PowerShell")
+stop("PowerShell: a folder in the home directory, backslashes", "rd -r -fo $env:USERPROFILE\\Documents", "OP-003", tool="PowerShell")
+allow("PowerShell: the temp directory", 'Remove-Item -Recurse -Force "$env:TEMP\\oplite-scratch"', tool="PowerShell")
+allow("PowerShell: a listing", "Get-ChildItem -Recurse $env:USERPROFILE", tool="PowerShell")
 
 # install on Windows: the hook the gate registers must be a command Windows can run
 fake = os.path.join(HOME, "oplite-win-home")
