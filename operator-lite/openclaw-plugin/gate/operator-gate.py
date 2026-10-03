@@ -2059,8 +2059,8 @@ def cmd_mode(argv):
 
 
 # The offer, in one place: where the paid gate is sold and what it costs.
-OPERATOR_URL = "https://vestige-pro-production.fly.dev/account"
-OPERATOR_PRICE = "$149 a month"
+OPERATOR_URL = "https://payhip.com/b/d4xvu"
+OPERATOR_PRICE = "$149 once, yours to keep"
 
 
 def at_terminal():
@@ -2157,7 +2157,8 @@ Operator Lite stays free. Operator blocks what is routed through it, and its rec
 hash-chained digests, not signatures.
 
 Buy:  %s
-You receive a small archive with its checksum. One command installs it and starts the wizard:
+Pay once. Every later version is yours at no charge. Download the archive, and one command
+installs it and starts the wizard:
   %s upgrade --install <the archive you downloaded>""" % (OPERATOR_PRICE, OPERATOR_URL, self_cmd()))
     if "--open" in argv and sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION"):
         try:
@@ -2566,6 +2567,7 @@ def cmd_install(argv):
         entry = {"matcher": "*", "hooks": [{"type": "command", "command": hook_cmd}]}
         if not any(h.get("hooks") and any(hh.get("command") == hook_cmd for hh in h["hooks"]) for h in hooks):
             hooks.append(entry)
+        os.makedirs(os.path.dirname(settings_path), exist_ok=True)   # Claude Code not started yet on this machine
         with open(settings_path, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
         print("claude: PreToolUse hook registered in %s" % settings_path)
