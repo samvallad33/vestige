@@ -95,6 +95,31 @@ allow("recursive delete inside the Windows temp directory", 'rm -rf "%s"' % os.p
 allow("recursive delete of a build directory in the project", "rm -rf node_modules")
 allow("plain command", "git status")
 
+# install on Windows: the hook the gate registers must be a command Windows can run
+fake = os.path.join(HOME, "oplite-win-home")
+shutil.rmtree(fake, ignore_errors=True)
+os.makedirs(os.path.join(fake, ".claude"))
+env2 = dict(env, USERPROFILE=fake, HOME=fake)
+env2.pop("OPERATOR_HOME", None)
+p = subprocess.run([sys.executable, GATE, "install"], capture_output=True, text=True, env=env2, cwd=fake)
+check("install exits 0 in a fresh Windows home", p.returncode == 0, (p.stdout + p.stderr)[-400:])
+try:
+    with open(os.path.join(fake, ".claude", "settings.json")) as f:
+        wired = json.load(f)["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+except Exception as exc:
+    wired = repr(exc)
+print("wired hook: %s" % wired)
+check("the registered hook names this interpreter and the installed gate", wired.startswith('"') and "python3 " not in wired
+      and "/.operator/gate/operator-gate.py" in wired and wired.endswith("hook --source claude"), wired)
+payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}, "cwd": work, "session_id": "t"})
+p = subprocess.run(wired, shell=True, input=payload, capture_output=True, text=True, env=env2)
+check("the registered hook runs through the Windows shell and records in shadow", p.returncode == 0 and not p.stderr.strip(), p.stderr[:200])
+with open(os.path.join(fake, ".operator", "mode"), "w") as f:
+    f.write("enforce\n")
+p = subprocess.run(wired, shell=True, input=payload, capture_output=True, text=True, env=env2)
+check("after the flip to enforce the registered hook stops the force-push", p.returncode == 2 and "OP-004" in p.stderr, p.stderr[:200])
+shutil.rmtree(fake, ignore_errors=True)
+
 p = subprocess.run([sys.executable, GATE, "verify"], capture_output=True, text=True, env=env)
 check("receipts were written under the Windows lock and the chain verifies", "chain=OK" in p.stdout and "receipts=0" not in p.stdout, p.stdout[:200])
 

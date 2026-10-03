@@ -2125,6 +2125,14 @@ def cmd_corpus(argv):
     return 0 if not failed else 1
 
 
+def hook_command(dst, source):
+    """The command a host runs for every tool call. Windows has no python3 on PATH by default, so
+    there the command names this interpreter; forward slashes work in cmd and in Git Bash alike."""
+    if IS_WINDOWS:
+        return '"%s" "%s" hook --source %s' % (canon(sys.executable), dst, source)
+    return "python3 %s hook --source %s" % (dst, source)
+
+
 def cmd_install(argv):
     """Owner-side install: copies the gate to ~/.operator/gate and wires Claude Code. Mode starts SHADOW."""
     if os.environ.get("OPERATOR_AGENT_SESSION"):
@@ -2146,7 +2154,7 @@ def cmd_install(argv):
             f.write("shadow\n")
     # Claude Code PreToolUse hook (merge, never clobber)
     settings_path = pj(HOME, ".claude", "settings.json")
-    hook_cmd = "python3 %s hook --source claude" % dst
+    hook_cmd = hook_command(dst, "claude")
     try:
         try:
             with open(settings_path) as f:
