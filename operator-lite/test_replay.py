@@ -81,14 +81,20 @@ OTHER = os.path.join(home, "work", "other")
 os.makedirs(OTHER)
 
 
-def line(tool, ti, cwd=REPO, ts="2099-01-01T00:00:00.000Z"):
+CALL = [0]
+
+
+def line(tool, ti, cwd=REPO, ts="2099-01-01T00:00:00.000Z", call_id=None):
+    CALL[0] += 1
     return json.dumps({"type": "assistant", "timestamp": ts, "cwd": cwd,
-                       "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": tool, "input": ti}]}})
+                       "message": {"role": "assistant", "content": [
+                           {"type": "tool_use", "id": call_id or "call-%d" % CALL[0], "name": tool, "input": ti}]}})
 
 
 rows = [
-    line("Bash", {"command": "git push origin main"}),
-    line("Bash", {"command": "git push origin main"}),                      # duplicate: counted once
+    line("Bash", {"command": "git push origin main"}, call_id="resumed-1"),
+    line("Bash", {"command": "git push origin main"}, call_id="resumed-1"),   # the same call copied by a resumed session: once
+    line("Bash", {"command": "git push origin main"}),                      # the same command run again: a new call
     line("Bash", {"command": "git push origin main"}, cwd=OTHER),           # other cwd: its own call
     line("Bash", {"command": "git push --force origin main"}),              # built-in stop
     line("Bash", {"command": "git reset --hard HEAD~1"}),                   # shadow flag
@@ -112,14 +118,16 @@ def run(args, cwd=None, extra_env=None):
 p = run(["replay", "--json"])
 check("replay --json exits 0", p.returncode == 0, p.stderr[-300:])
 r = json.loads(p.stdout or "{}")
-check("calls counted once per unique call (7)", r.get("calls") == 7, r.get("calls"))
+check("a copied record counts once, a repeated command counts again (8 calls)", r.get("calls") == 8, r.get("calls"))
 check("one session", r.get("sessions") == 1, r.get("sessions"))
 check("force-push would have been stopped (OP-004)", r.get("stopped") == 1 and r.get("by_stop") == {"OP-004": 1}, r.get("by_stop"))
 check("reset --hard flagged in shadow (OP-S01)", r.get("flagged") == 1 and "OP-S01" in r.get("by_shadow", {}), r.get("by_shadow"))
-check("undecided: 2 pushes, 1 package, 1 ci-config", r.get("by_own") == {"push": 2, "packages": 1, "ci-config": 1}, r.get("by_own"))
-check("undecided calls = 4", r.get("own_calls") == 4, r.get("own_calls"))
+check("undecided: 3 pushes, 1 package, 1 ci-config", r.get("by_own") == {"push": 3, "packages": 1, "ci-config": 1}, r.get("by_own"))
+check("undecided calls = 5", r.get("own_calls") == 5, r.get("own_calls"))
 check("record older than the window is skipped (no deploy)", "deploy" not in r.get("by_own", {}))
 check("no classify errors", r.get("errors") == 0, r.get("errors"))
+check("json carries the drafted laws and the incident", [l["class"] for l in r.get("laws", [])] == ["push", "packages", "ci-config"]
+      and len(r.get("incidents", [])) == 1 and r["incidents"][0]["rule"] == "OP-004" and r["incidents"][0]["project"] == "app", r.get("laws"))
 
 p = run(["replay", "--all", "--json"])
 check("--all reads the old record too (deploy appears)", json.loads(p.stdout).get("by_own", {}).get("deploy") == 1, p.stdout[:200])
@@ -128,40 +136,56 @@ check("--here keeps only calls made under the current directory", json.loads(p.s
 
 p = run(["replay"])
 out = p.stdout
-check("report: headline", "7 tool calls from 1 Claude Code session, last 30 days. Nothing was executed." in out, out[:200])
-check("report: stop table", "Built-in rules would have stopped 1:" in out and "OP-004 no-history-destruction" in out)
-check("report: undecided table", "No built-in rule decides these. They ran (4):" in out and "pushed to a remote" in out)
+check("report: headline", "operator-gate replay: the last 30 days on this machine. Nothing was executed." in out, out[:200])
+check("report: scoreboard", "8  tool calls your agents made (1 Claude Code session, 1 project)" in out
+      and "1  a built-in rule would have stopped" in out and "5  no built-in rule decides: only you can" in out, out[:600])
+check("report: the stop is listed with its project and reason", "Would have been stopped (all of them):" in out
+      and "app" in out and "OP-004 force push to a shared branch" in out and "OP-004 no-history-destruction" in out, out[:900])
+check("report: undecided table", "No built-in rule decides these. They ran:" in out and "pushed to a remote" in out)
+check("report: laws drafted from the history, most frequent first", "Your first laws, drafted from this history:" in out
+      and out.index('"No push without my permit."') < out.index('"No new package without my review."')
+      and "3 times" in out and "1 time\n" in out, out[-500:])
 check("report: samples are shown relative to the working directory", "Write .github/workflows/ci.yml" in out, out[-400:])
-check("piped report carries no pitch and no install line", "$149" not in out and "operator-gate upgrade" not in out and "python3" not in out, out[-300:])
+check("piped report carries no pitch and no install line", "$149" not in out and "operator-gate upgrade" not in out and "vestige-pro-production" not in out
+      and "python3" not in out and "\033[" not in out, out[-300:])
 check("no gate home was created by a read-only replay", not os.path.exists(os.path.join(home, ".operator")))
 check("nothing in the history was executed (no left-pad, no .github written)",
       not os.path.exists(os.path.join(REPO, ".github")) and not os.path.exists(os.path.join(REPO, "node_modules")))
 
+p = run(["replay", "--share"])
+check("--share prints counts only, nothing from the history", p.stdout.count("\n") == 3 and "made 8 tool calls" in p.stdout
+      and "would have stopped 1, flagged 1, and found 5" in p.stdout and "git" not in p.stdout.replace("github.com", ""), p.stdout)
 p = run(["replay", "--days", "x"])
 check("bad --days is a usage error", p.returncode == 2 and "usage:" in p.stdout)
 
 # 3. install runs the replay by itself and remembers the count
 p = run(["install"])
 check("install exits 0", p.returncode == 0, p.stderr[-300:])
-check("install ends with the replay report", "operator-gate replay: 7 tool calls" in p.stdout and "mode=shadow" in p.stdout, p.stdout[-400:])
+check("install ends with the replay report", "operator-gate replay: the last 30 days" in p.stdout and "mode=shadow" in p.stdout, p.stdout[-400:])
 sp = os.path.join(home, ".operator", "state", "replay.json")
-check("replay summary remembered for the status hint", os.path.exists(sp) and json.load(open(sp)).get("own_calls") == 4)
+check("replay summary remembered for the status hint", os.path.exists(sp) and json.load(open(sp)).get("own_calls") == 5)
 p = run(["status"])
 check("piped status prints no hint", "operator-gate upgrade" not in p.stdout and "Your last replay" not in p.stdout, p.stdout[-200:])
 p = run(["install", "--no-replay"])
+p2 = run(["upgrade"])
+check("upgrade opens with the laws the last replay drafted", p2.stdout.startswith("From your last replay (")
+      and '"No push without my permit."' in p2.stdout and "Vestige Operator: the owner's version" in p2.stdout, p2.stdout[:300])
 check("install --no-replay skips it", "operator-gate replay:" not in p.stdout)
 p = run(["install"], extra_env={"OPERATOR_AGENT_SESSION": "1"})
 check("install still refuses inside an agent session", p.returncode == 3)
 
 # 4. the hint a person sees, run under a pseudo-terminal
 import pty
-def tty_run(args):
+def tty_run(args, color=False):
     chunks = []
     pid, fd = pty.fork()
     if pid == 0:
         os.environ.update(env)
         os.environ.pop("OPERATOR_HOME", None)
         os.environ.pop("OPERATOR_AGENT_SESSION", None)
+        os.environ.pop("NO_COLOR", None)
+        if not color:
+            os.environ["NO_COLOR"] = "1"
         os.chdir(home)
         os.execv(sys.executable, [sys.executable, GATE] + args)
     while True:
@@ -175,10 +199,13 @@ def tty_run(args):
     os.waitpid(pid, 0)
     return b"".join(chunks).decode(errors="replace")
 t = tty_run(["status"])
-check("at a terminal, status ends with the remembered count", "Your last replay found 4 actions no built-in rule decides." in t, t[-300:])
+check("at a terminal, status ends with the remembered count", "Your last replay drafted 3 laws from 5 actions no built-in rule decides." in t, t[-300:])
 t = tty_run(["replay"])
-check("at a terminal, replay ends with the pointer and the price", "can be a law in Operator" in t and "$149 a month: operator-gate upgrade" in t, t[-400:])
-check("installed gate: replay does not tell the owner to install again", "python3" not in t.split("can be a law")[-1], t[-300:])
+check("at a terminal, replay ends with the pointer and the price", "Operator enforces those laws" in t and "$149 a month." in t
+      and "https://vestige-pro-production.fly.dev/account" in t, t[-400:])
+check("installed gate: replay does not tell the owner to install again", "python3" not in t.split("Operator enforces")[-1], t[-300:])
+t = tty_run(["replay"], color=True)
+check("at a terminal the numbers are coloured; NO_COLOR turns it off", "\033[1;31m" in t and "\033[0m" in t, t[:300])
 
 # 5. verdicts unchanged: the hook, the corpus, the three copies
 payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}, "cwd": REPO, "session_id": "t"})
