@@ -239,8 +239,8 @@ rdir3 = os.path.join(home3, ".operator", "receipts")
 for fn in sorted(x for x in os.listdir(rdir3) if x.endswith(".jsonl")):
     with open(os.path.join(rdir3, fn), encoding="utf-8") as f:
         recs3 += [json.loads(line) for line in f]
-check("an allowed call is recorded as ALLOW and a rule hit as SHADOW_STOP",
-      [r["decision"] for r in recs3] == ["ALLOW", "SHADOW_STOP", "SHADOW_STOP", "SHADOW_STOP", "ALLOW"], [r["decision"] for r in recs3])
+check("a call no rule matched is recorded as PASS and a rule hit as SHADOW_STOP",
+      [r["decision"] for r in recs3] == ["PASS", "SHADOW_STOP", "SHADOW_STOP", "SHADOW_STOP", "PASS"], [r["decision"] for r in recs3])
 p = subprocess.run(["operator-gate", "status"], capture_output=True, text=True, env=env3, cwd=home3)
 st = p.stdout
 check("status counts the week: 5 checked, 2 would have been stopped and ran, 1 flagged", "5  tool calls checked" in st

@@ -1770,7 +1770,7 @@ def hook_main(argv):
             write_receipt(dict(base_rec, decision="SHADOW_STOP", commitments=[h[0] for h in shadow_hits],
                                detail=redact("; ".join(h[3] for h in shadow_hits))))
         else:
-            write_receipt(dict(base_rec, decision="ALLOW", commitments=[]))
+            write_receipt(dict(base_rec, decision="PASS", commitments=[]))    # no rule matched
 
         return 0
     except SystemExit:
@@ -1944,7 +1944,7 @@ def cmd_status(argv):
     if not wired:
         print("Register it: %s install" % me)
     recs = recent_receipts(7)
-    calls = [r for r in recs if r.get("decision") in ("ALLOW", "STOP", "SHADOW_STOP", "GATE_ERROR")]
+    calls = [r for r in recs if r.get("decision") in ("PASS", "ALLOW", "STOP", "SHADOW_STOP", "GATE_ERROR")]
     if not calls:
         print("\nNo tool calls checked in the last 7 days. Start a Claude Code session: every tool call passes\n"
               "through the gate, and this view fills in.")

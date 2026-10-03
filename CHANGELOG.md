@@ -52,8 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Operator Lite: an allowed call was recorded as `SHADOW_STOP` with no rule; it
-  is now recorded as `ALLOW`. The text of rule OP-006 and three hints named
+- Operator Lite: a call no rule matched was recorded as `SHADOW_STOP` with no
+  rule; it is now recorded as `PASS`. `ALLOW` still means the owner's permit. The text of rule OP-006 and three hints named
   things that exist only on the author's machine; they are reworded.
 - Operator Lite 0.3.6, the parser:
   - A command written after a leading redirection (`>log rm -rf x`,
