@@ -32,11 +32,14 @@ PreToolUse hook (Claude Code, Codex, OpenClaw — any host with command hooks), 
 **blocks destructive, polluting and exfiltrating commands before they run.**
 
 ```bash
-mkdir -p ~/.operator/gate
-curl -sL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o ~/.operator/gate/operator-gate.py
-chmod 755 ~/.operator/gate/operator-gate.py
-echo shadow > ~/.operator/mode        # shadow-first: log everything, block nothing, then flip
+curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
 ```
+
+One command. It copies the gate to `~/.operator/gate`, registers the Claude Code hook and
+starts in shadow mode, which records every verdict and blocks nothing. Then it replays your
+last 30 days of Claude Code history through the same rules, so the first thing you see is
+what it would have said about your own agents. Nothing in that history is executed. When the
+report looks right, switch it on: `echo enforce > ~/.operator/mode`.
 
 - **27 deterministic rules** — workspace armor, memory-store protection, destructive
   SQL, force-push, unreviewed publishes, paid deploys, reverse shells, cloud-metadata
@@ -48,16 +51,57 @@ echo shadow > ~/.operator/mode        # shadow-first: log everything, block noth
 - **Every verdict gets a hash-chained receipt** — and `verify` walks the chain
 - **Shadow-first**: install logs everything and blocks nothing until you flip
 
-See what it would have said about last month before you rely on it. `replay` runs the
-Claude Code history already on your machine through the same rules and executes nothing:
+Run the replay again any time:
 
 ```bash
 python3 ~/.operator/gate/operator-gate.py replay
 ```
 
-It prints what the built-in rules would have stopped, what they would have flagged, and
-the actions no built-in rule decides: pushes, package installs by name, deploys, database
-commands, CI config and env-file writes.
+It prints a scoreboard, the most recent commands a built-in rule would have stopped (with
+the date and the project), what it would have flagged, the actions no built-in rule decides,
+and the laws your own history drafts from them. From a made-up history:
+
+```
+operator-gate replay: the last 30 days on this machine. Nothing was executed.
+
+       23  tool calls your agents made (2 Claude Code sessions, 2 projects)
+        3  a built-in rule would have stopped
+        1  flagged in shadow: recorded, not stopped
+       14  no built-in rule decides: only you can
+
+Would have been stopped (all of them):
+  Mar 21  shop-api           OP-004 force push to a shared branch
+                             git push --force origin main
+  Mar 19  shop-api           OP-007 destructive SQL
+                             psql $DATABASE_URL -c 'DROP TABLE sessions'
+  Mar 14  infra              OP-003 recursive delete of ~/Documents/old-terraform-state
+                             rm -rf ~/Documents/old-terraform-state
+By rule:
+      1  OP-003 no-blind-recursive-delete   recursive delete of ~/Documents/old-terraform-state
+      1  OP-004 no-history-destruction      force push to a shared branch
+      1  OP-007 no-destructive-sql          destructive SQL
+
+Flagged in shadow, recorded and not stopped:
+      1  OP-S01 work-loss                   git reset --hard HEAD~1
+
+No built-in rule decides these. They ran:
+      4  pushed to a remote                 git push origin main
+      3  installed packages by name         npm install left-pad
+      2  ran a database client or migration psql -c 'select count(*) from users' shop
+      2  deployed or changed infrastructure terraform apply -auto-approve
+      1  wrote CI or deploy config          Write .github/workflows/ci.yml
+      1  wrote an env file                  Write .env
+      1  skipped git hooks                  git commit --no-verify -m wip
+
+Your first laws, drafted from this history:
+  "No push without my permit."                           4 times
+  "No new package without my review."                    3 times
+  "Deploys and infrastructure changes are mine."         2 times
+  "No database client or migration without my permit."   2 times
+  "Never skip git hooks."                                1 time
+  "CI and deploy config are mine to change."             1 time
+  "Env files are mine to change."                        1 time
+```
 
 <a id="vestige-operator"></a>
 ## Vestige Operator, the paid tier
@@ -74,8 +118,8 @@ Buy it at the account page: [vestige-pro-production.fly.dev/account](https://ves
 What it is not: Operator blocks what is routed through it. It cannot block a call that bypasses the hooked tools, and receipts are hash-chained digests, not signatures.
 
 ```bash
-python3 ~/.operator/gate/operator-gate.py corpus guardfall   # 46/46 bypass cases
 python3 ~/.operator/gate/operator-gate.py verify             # receipt chain check
+python3 operator-lite/operator-gate.py corpus guardfall      # 46/46 bypass cases, from a clone of this repo
 ```
 
 **On OpenClaw?** One line, gate bundled:

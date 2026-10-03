@@ -31,7 +31,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.3.4"
+VERSION = "0.3.6"
 INTEGRITY = "reference_digest_not_signature"
 HOME = os.path.expanduser("~")
 OP_HOME = os.environ.get("OPERATOR_HOME", os.path.join(HOME, ".operator"))
@@ -316,7 +316,7 @@ def strip_wrappers(toks):
     i = 0
     while i < len(toks):
         t = toks[i]
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", t):
             i += 1; continue
         base = os.path.basename(t)
         if base in WRAPPERS:
@@ -332,6 +332,21 @@ def strip_wrappers(toks):
             continue
         break
     return toks[i:], via_xargs
+
+
+REDIRECT_TOKEN_RE = re.compile(r"^(?:[0-9]*|&)(?:>>|>&|>\||<<<|<>|>|<)(.*)$")
+
+
+def strip_leading_redirects(toks):
+    """A redirection may come before the command: `>log rm -rf x` and `2>/dev/null rm -rf x` run rm.
+    Drop leading redirections, whether fused with their target (`>log`) or followed by it (`> log`)."""
+    i = 0
+    while i < len(toks):
+        m = REDIRECT_TOKEN_RE.match(toks[i])
+        if not m:
+            break
+        i += 1 if m.group(1) else 2
+    return toks[i:]
 
 
 def flags_and_args(toks):
@@ -386,6 +401,30 @@ def extract_heredocs(cmd):
                 i += 1
             bodies.append("\n".join(body))
     return "\n".join(out), bodies
+
+
+def mask_quotes(text):
+    """Same length as text, with every character inside single or double quotes replaced by a
+    space, so structural scans (parentheses, pipes) skip quoted data."""
+    out, q, i, n = [], None, 0, len(text)
+    while i < n:
+        c = text[i]
+        if q:
+            if c == "\\" and q == '"' and i + 1 < n:
+                out.append(" "); out.append(" "); i += 2
+                continue
+            out.append(c if c == q else " ")
+            if c == q:
+                q = None
+        elif c in "'\"":
+            q = c; out.append(c)
+        elif c == "\\" and i + 1 < n:
+            out.append(c); out.append(text[i + 1]); i += 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def expand_vars(text, vars_):
@@ -637,8 +676,29 @@ def resolve_script_arg(rest, ecwd):
     return None
 
 
-def script_body_effects(path, ecwd, depth, vars_):
-    """Analyze an existing script file's body through the same walker. Never executes it."""
+def is_gate_source(path):
+    """True when the file is a copy of this gate (installed, repo checkout or delivery tree)."""
+    try:
+        with open(path, "r", errors="replace") as f:
+            head = f.read(6000)
+    except Exception:
+        return False
+    return 'OP_HOME = os.environ.get("OPERATOR_HOME"' in head and "VERSION = " in head
+
+
+NON_SHELL_SCRIPT_EXT = (".py", ".pl", ".rb", ".js", ".mjs", ".cjs", ".ts", ".php", ".lua")
+NON_SHELL_SHEBANG_RE = re.compile(r"^#!.*\b(python[0-9.]*|node|deno|bun|ruby|perl|php|lua)\b")
+
+
+def script_body_effects(path, ecwd, depth, vars_, mode="auto", prog=None, seg=""):
+    """Analyze an existing script file's body. Never executes it.
+
+    mode="shell": the file is run by a shell (`bash x`, `source x`), walk it as shell lines.
+    mode="auto": a shell file (by extension or shebang) is walked as shell; a Python, JS, Ruby,
+    Perl, PHP or Lua file becomes ONE inline-code effect in that language, so its variable
+    names and string literals can never be mistaken for shell programs (2026-10-03 phantom
+    `rg` from `rg, _ = call(...)` inside a .py file), while its file-writing calls are still
+    judged by the inline-code analysis."""
     try:
         st = os.stat(path)
         if not _stat.S_ISREG(st.st_mode) or st.st_size == 0 or st.st_size > MAX_SCRIPT_BYTES:
@@ -649,8 +709,14 @@ def script_body_effects(path, ecwd, depth, vars_):
         return []
     if not body.strip() or depth + 1 > MAX_DEPTH:
         return []
-    effs = analyze(body, ecwd, depth + 1, vars_)
     base = os.path.basename(path)
+    first = body.split("\n", 1)[0]
+    non_shell = mode != "shell" and (path.endswith(NON_SHELL_SCRIPT_EXT) or NON_SHELL_SHEBANG_RE.match(first))
+    if non_shell:
+        return [{"prog": prog or "script", "seg": seg or base, "targets": [], "recursive": False, "kind": "inline",
+                 "filtered": False, "unresolved": False, "flags": [], "args": [], "cwd": ecwd or UNKNOWN_CWD,
+                 "writes": [], "text": body, "script_body": base}]
+    effs = analyze(body, ecwd, depth + 1, vars_)
     for e in effs:
         e["script_body"] = base
     return effs
@@ -670,9 +736,12 @@ def analyze(cmd, cwd, depth=0, vars_=None):
         cmd = INVISIBLE_RE.sub("", cmd)
     cmd = decode_ansi_c_quotes(cmd)
     cmd, bodies = extract_heredocs(cmd)
-    # subshell groups: `(sleep 300; rm -rf ~) &` -- analyze the inside as its own command
-    for m in re.finditer(r"\(([^()]*)\)", cmd):
-        inner = m.group(1).strip()
+    # subshell groups: `(sleep 300; rm -rf ~) &` -- analyze the inside as its own command.
+    # Groups inside quotes are data (a regex alternation, a message), never a subshell.
+    for m in re.finditer(r"\(([^()]*)\)", mask_quotes(cmd)):
+        inner = cmd[m.start(1):m.end(1)].strip()
+        if m.start() and cmd[m.start() - 1] == "=":
+            continue                                        # `name=(...)`, `name+=(...)`: an array literal
         if inner:
             effects += analyze(inner, state["cwd"], depth + 1, vars_)
     for inner in SUBST_RE.findall(cmd):
@@ -708,17 +777,20 @@ def analyze(cmd, cwd, depth=0, vars_=None):
         while j < len(toks) and toks[j] in ("export", "local", "declare", "readonly", "typeset"):
             j += 1
         k = j
-        while k < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[k]):
+        while k < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", toks[k]):
             k += 1
         if k > j and k == len(toks):                       # pure assignment segment
             for t in toks[j:k]:
                 name, val = t.split("=", 1)
-                if "__SUBST__" in val or "$" in val:
+                if name.endswith("+"):                      # `name+=value` appends: the value is no longer known
+                    vars_.pop(name[:-1], None)
+                elif "__SUBST__" in val or "$" in val:
                     vars_.pop(name, None)
                 else:
                     vars_[name] = tilde(val)
             continue
-        toks, via_xargs = strip_wrappers(toks)
+        toks, via_xargs = strip_wrappers(strip_leading_redirects(toks))
+        toks = strip_leading_redirects(toks)
         if not toks:
             continue
         prog = os.path.basename(toks[0])
@@ -759,10 +831,10 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                 effects += analyze(inner_cmd, ecwd, depth + 1, vars_)
             for body in my_bodies:                          # `bash <<EOF` executes its body
                 effects += analyze(body, ecwd, depth + 1, vars_)
-            # opaque-script resolution: `bash totally_harmless.sh` executes the FILE body
+            # opaque-script resolution: `bash totally_harmless.sh` executes the FILE body as shell
             sp = resolve_script_arg(rest, ecwd)
             if sp:
-                effects += script_body_effects(sp, ecwd, depth, vars_)
+                effects += script_body_effects(sp, ecwd, depth, vars_, mode="shell")
             continue
         if prog == "eval":
             if eff["writes"]:
@@ -775,7 +847,7 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                 effects.append(eff)
             sp = resolve_script_arg(rest, ecwd)
             if sp:
-                effects += script_body_effects(sp, ecwd, depth, vars_)
+                effects += script_body_effects(sp, ecwd, depth, vars_, mode="shell")
             continue
 
         if prog in ("rm", "rmdir", "unlink", "shred", "trash", "rip", "srm") or \
@@ -824,8 +896,20 @@ def analyze(cmd, cwd, depth=0, vars_=None):
             if my_bodies:
                 eff["text"] = seg + "\n" + "\n".join(my_bodies)
             sp = resolve_script_arg(rest, ecwd)
-            if sp:
-                effects += script_body_effects(sp, ecwd, depth, vars_)
+            if sp and is_gate_source(sp):
+                # `python3 .../operator-gate.py <subcommand>` is the gate itself. Judge it as the
+                # operator-gate program (approve, install, onboard stay owner-only); never walk its source.
+                eff["prog"] = "operator-gate"
+                eff["kind"] = "cli"
+                eff["args"] = [a for a in args if a != "-" and not a.endswith("operator-gate.py")]
+                eff["text"] = seg
+            elif sp:
+                effects += script_body_effects(sp, ecwd, depth, vars_, mode="auto", prog=prog, seg=seg)
+        elif prog in ("grep", "egrep", "fgrep", "rg", "ag", "ack"):
+            # `... | grep -v x` filters text already on the pipe; `grep -rn x src` and `rg x` read files.
+            operands = args[1:]
+            recursive = has_flag(flags, "r") or has_flag(flags, "R") or "--recursive" in flags or prog in ("rg", "ag", "ack")
+            eff["kind"] = "filter" if not operands and not recursive else "read"
         elif prog in ("psql", "sqlite3", "mysql", "mariadb", "duckdb", "mongosh", "redis-cli", "supabase"):
             eff["kind"] = "db"
             if my_bodies:
@@ -1093,27 +1177,122 @@ def classify_effect(e, cfg, cwd):
                     hits.append(("OP-002", "write against the live Vestige store via sqlite3",
                                  "Work on a copy (`vestige backup`, then edit the copy); read-only queries are fine."))
         if e["kind"] == "inline":
-            destructive = re.search(r"rmtree|shutil\.move|os\.(remove|unlink|rmdir|removedirs|rename|replace)|rmSync|"
-                                    r"rimraf|unlinkSync|fs\.(rm|unlink|rename)|File\.delete|FileUtils\.(rm|mv)|"
-                                    r"remove_tree|\bunlink\b", text)
-            writing = re.search(r"\bopen\s*\([^)]*['\"][wax][+b]*['\"]|mode\s*=\s*['\"][wax]|write_text|write_bytes|"
-                                r"writeFile|appendFile|copyfile|shutil\.copy|fs\.(write|append|copy)|File\.write|tofile",
-                                text)
-            if destructive or writing:
-                paths = [resolve(q, ecwd) for q in re.findall(r"(?:~|\$HOME|\$\{HOME\}|/)[^\s'\"),;\]]*", text)]
-                found = []
-                for q in paths:
-                    if destructive:
-                        found += target_hits("delete", q, True, roots, gate_files)
-                    if writing:
-                        found += write_hits(q, gate_files, "inline code writes to")
-                if found:
-                    hits += [(rid, "inline code: " + d, h) for rid, d, h in found]
-                elif destructive:
-                    hits.append(("OP-S05", "inline code deletes/moves files", ""))
+            found, unresolved, mentions_gate = inline_file_calls(text, ecwd, roots, gate_files)
+            if found:
+                hits += [(rid, d if d.startswith("inline code") else "inline code: " + d, h) for rid, d, h in found]
+            elif unresolved and mentions_gate:
+                # a write or delete whose target the gate cannot resolve, in code that names a gate path:
+                # fail closed, as before 0.3.5
+                hits.append(("OP-000", "inline code has a %s whose target the gate cannot resolve, and names a gate path" % unresolved,
+                             "Name the target as a plain literal so the gate can judge it, or ask the owner."))
+            elif unresolved == "delete":
+                # an unresolved write in code that names no gate path is ordinary scripting, not a finding
+                hits.append(("OP-S05", "inline code has a delete whose target the gate cannot resolve", ""))
     if hits and e.get("script_body"):
         hits = [(r, "%s -- inside script %s" % (d, e["script_body"]), a) for (r, d, a) in hits]
     return hits
+
+
+INLINE_WRITE_CALL_RE = re.compile(
+    r"\bopen\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|\bwriteFile(?:Sync)?\s*\(|\bappendFile(?:Sync)?\s*\(|"
+    r"\bcopyfile\s*\(|shutil\.copy2?\s*\(|fs\.(?:write|append|copy)\w*\s*\(|File\.write\s*\(|\btofile\s*\(")
+INLINE_DELETE_CALL_RE = re.compile(
+    r"\brmtree\s*\(|shutil\.move\s*\(|os\.(?:remove|unlink|rmdir|removedirs|rename|replace)\s*\(|\brmSync\s*\(|"
+    r"\brimraf\s*\(|\bunlinkSync\s*\(|fs\.(?:rm|unlink|rename)\w*\s*\(|File\.delete\s*\(|FileUtils\.(?:rm|mv)\w*\s*\(|"
+    r"\bremove_tree\s*\(|\bunlink\s*\(")
+INLINE_MODE_RE = re.compile(r"^(?:mode\s*=\s*)?['\"][wax][+bt]*['\"]$")
+INLINE_LITERAL_RE = re.compile(r"^(?:os\.path\.expanduser\(|Path\(|pathlib\.Path\()?\s*(['\"])(.*?)\1\s*\)?$")
+INLINE_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*((?:os\.path\.expanduser\(|Path\(|pathlib\.Path\()?\s*(['\"]).*?\3\s*\)?)\s*$", re.M)
+
+
+def _balanced_args(text, open_idx):
+    """Split the argument list of the call whose '(' is at open_idx into top-level args."""
+    depth, i, n, args, cur, q = 0, open_idx, len(text), [], [], None
+    while i < n:
+        c = text[i]
+        if q:
+            cur.append(c)
+            if c == "\\" and i + 1 < n:
+                cur.append(text[i + 1]); i += 1
+            elif c == q:
+                q = None
+        elif c in "'\"":
+            q = c; cur.append(c)
+        elif c in "([{":
+            depth += 1
+            if depth > 1:
+                cur.append(c)
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                args.append("".join(cur).strip()); return [a for a in args if a != ""]
+            cur.append(c)
+        elif c == "," and depth == 1:
+            args.append("".join(cur).strip()); cur = []
+        else:
+            cur.append(c)
+        i += 1
+    return None                                              # unbalanced: unknown
+
+
+def _literal_path(expr, literals):
+    expr = (expr or "").strip()
+    m = INLINE_LITERAL_RE.match(expr)
+    if m:
+        return m.group(2)
+    if re.match(r"^[A-Za-z_]\w*$", expr) and expr in literals:
+        return literals[expr]
+    return None
+
+
+def inline_file_calls(text, ecwd, roots, gate_files):
+    """Judge each file-writing or file-deleting call in inline code by its own path operand.
+    Returns (hits, unresolved_kind_or_None, mentions_gate_path)."""
+    literals = {}
+    for m in INLINE_ASSIGN_RE.finditer(text):
+        lit = _literal_path(m.group(2), {})
+        if lit is not None and m.group(1) not in literals:
+            literals[m.group(1)] = lit
+    found, unresolved = [], None
+    for kind, call_re in (("write", INLINE_WRITE_CALL_RE), ("delete", INLINE_DELETE_CALL_RE)):
+        for m in call_re.finditer(text):
+            open_idx = text.index("(", m.start())
+            args = _balanced_args(text, open_idx)
+            name = text[m.start():open_idx].strip()
+            if args is None:
+                unresolved = "delete" if kind == "delete" else (unresolved or kind)
+                continue
+            operands = []
+            if name.startswith(".write_"):
+                recv = re.search(r"([A-Za-z_]\w*|(?:pathlib\.)?Path\(\s*(['\"]).*?\2\s*\))\s*$", text[:m.start()])
+                operands = [recv.group(1)] if recv else []
+            elif name == "open":
+                if not any(INLINE_MODE_RE.match(a) for a in args[1:]):
+                    continue                                 # a read; not a write
+                operands = args[:1]
+            elif kind == "write" and (name.endswith("copyfile") or name.endswith("copy") or name.endswith("copy2")
+                                       or ".copy" in name):
+                operands = args[1:2]                          # destination is the write
+            elif kind == "delete" and ("rename" in name or "replace" in name or "move" in name or ".mv" in name):
+                operands = args[:2]
+            else:
+                operands = args[:1]
+            if not operands:
+                unresolved = "delete" if kind == "delete" else (unresolved or kind)
+                continue
+            for op in operands:
+                lit = _literal_path(op, literals)
+                if lit is None:
+                    unresolved = "delete" if kind == "delete" else (unresolved or kind)
+                    continue
+                target = resolve(lit, ecwd)
+                if kind == "write":
+                    found += write_hits(target, gate_files, "inline code writes to")
+                else:
+                    found += target_hits("delete", target, True, roots, gate_files)
+    mentions_gate = any(touches_gate_home(resolve(q, ecwd)) or any(is_inside(resolve(q, ecwd), f) for f in gate_files)
+                        for q in re.findall(r"(?:~|\$HOME|\$\{HOME\}|/)[^\s'\"),;\]]*", text))
+    return found, unresolved, mentions_gate
 
 
 # ---- deterministic rewrites (proposed, never applied; one per original) ---- #
@@ -1463,20 +1642,26 @@ def at_terminal():
     return sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION")
 
 
+def last_replay():
+    """The summary the last `replay` left in the gate home, or {}."""
+    try:
+        with open(os.path.join(OP_HOME, "state", "replay.json")) as f:
+            last = json.load(f)
+        return last if isinstance(last, dict) else {}
+    except Exception:
+        return {}
+
+
 def upgrade_hint():
     """One line for the person at the terminal. Never printed to an agent, a pipe or a script,
     and never part of a verdict: stop messages go to the model, and a pitch does not belong there."""
     if not at_terminal():
         return
-    undecided = 0
-    try:
-        with open(os.path.join(OP_HOME, "state", "replay.json")) as f:
-            undecided = int(json.load(f).get("own_calls") or 0)
-    except Exception:
-        pass
-    if undecided:
-        print("\nYour last replay found %d actions no built-in rule decides. Operator makes them "
-              "your laws: operator-gate upgrade" % undecided)
+    last = last_replay()
+    undecided, laws = int(last.get("own_calls") or 0), len(last.get("laws") or [])
+    if undecided and laws:
+        print("\nYour last replay drafted %s from %s no built-in rule decides. "
+              "Operator enforces them: operator-gate upgrade" % (plural(laws, "law"), plural(undecided, "action")))
     else:
         print("\nSee what your agents already ran: operator-gate replay. "
               "Your own laws, a Board and a Letter: operator-gate upgrade")
@@ -1484,6 +1669,13 @@ def upgrade_hint():
 
 def cmd_upgrade(argv):
     """What the paid gate adds and where to get it. `--open` opens the page in a browser."""
+    last = last_replay()
+    if last.get("laws"):
+        print("From your last replay (%s, %s), the laws your own history drafted:" % (
+            str(last.get("ts") or "")[:10], "%d days" % last["days"] if last.get("days") else "all history"))
+        for law in last["laws"]:
+            print("  %-54s %s" % ('"%s"' % law.get("law"), plural(int(law.get("times") or 0), "time")))
+        print()
     print("""Vestige Operator: the owner's version of this gate, $149 a month.
 
   Your own laws   Sentences you write become rules the gate enforces on every host, with a
@@ -1527,14 +1719,18 @@ CI_FILE_NAMES = {"dockerfile", ".gitlab-ci.yml", "jenkinsfile", "fly.toml", "ver
                  "netlify.toml", "wrangler.toml", "docker-compose.yml", "docker-compose.yaml",
                  "compose.yml", "compose.yaml", "procfile"}
 ENV_TEMPLATE_ENDS = (".example", ".sample", ".template", ".dist")
-# Actions no built-in rule decides, because whether they are fine depends on the owner.
-OWN_LAW = (("push", "pushed to a remote"),
-           ("no-verify", "skipped git hooks"),
-           ("packages", "installed packages by name"),
-           ("deploy", "deployed or changed infrastructure"),
-           ("database", "ran a database client or migration"),
-           ("ci-config", "wrote CI or deploy config"),
-           ("env-file", "wrote an env file"))
+# Actions no built-in rule decides, because whether they are fine depends on the owner. Each
+# carries the sentence an owner would write for it; Operator, the paid gate, enforces such
+# sentences. (class, what happened, the law in the owner's words)
+OWN_LAW = (("push", "pushed to a remote", "No push without my permit."),
+           ("no-verify", "skipped git hooks", "Never skip git hooks."),
+           ("packages", "installed packages by name", "No new package without my review."),
+           ("deploy", "deployed or changed infrastructure", "Deploys and infrastructure changes are mine."),
+           ("database", "ran a database client or migration", "No database client or migration without my permit."),
+           ("ci-config", "wrote CI or deploy config", "CI and deploy config are mine to change."),
+           ("env-file", "wrote an env file", "Env files are mine to change."))
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+LITE_URL = "https://github.com/samvallad33/vestige/tree/main/operator-lite"
 
 
 def own_law_classes(effects):
@@ -1591,14 +1787,15 @@ def replay_history(days, budget, here):
             dated.append((mtime, path))
     dated.sort(reverse=True)
     out = {"calls": 0, "sessions": 0, "stopped": 0, "flagged": 0, "own_calls": 0, "errors": 0,
-           "by_stop": {}, "by_shadow": {}, "by_own": {}, "samples": {}, "truncated": False,
-           "days": days or 0, "files": len(dated)}
+           "by_stop": {}, "by_shadow": {}, "by_own": {}, "samples": {}, "incidents": [],
+           "projects": 0, "truncated": False, "days": days or 0, "files": len(dated)}
 
     def bump(table, key, sample):
         out[table][key] = out[table].get(key, 0) + 1
         out["samples"].setdefault(key, sample)
 
-    seen, t0 = set(), time.time()
+    seen, projects, t0 = set(), set(), time.time()
+    base_parts = len(base.rstrip(os.sep).split(os.sep))
     for _, path in dated:
         if time.time() - t0 > budget:
             out["truncated"] = True
@@ -1634,15 +1831,21 @@ def replay_history(days, budget, here):
                     name, ti = str(blk.get("name") or ""), blk.get("input") or {}
                     if not (name == "Bash" or name in REPLAY_WRITE_TOOLS or name.startswith("mcp__")):
                         continue
-                    try:
-                        key = digest_of([name, cwd, ti])
-                    except Exception:
-                        continue
+                    # one call, one count: a resumed session copies earlier records with the same
+                    # call id, while the same command run again is a new call with a new id
+                    key = str(blk.get("id") or "")
+                    if not key:
+                        try:
+                            key = digest_of([name, cwd, ti])
+                        except Exception:
+                            continue
                     if key in seen:
                         continue
                     seen.add(key)
                     out["calls"] += 1
                     used = True
+                    project = os.path.basename(cwd.rstrip("/")) if cwd else ""
+                    projects.add(path.split(os.sep)[base_parts])   # Claude Code keeps one folder per project
                     try:
                         _, _, hits, preview, _, effects = classify(
                             {"tool_name": name, "tool_input": ti, "cwd": cwd or "/tmp"}, cfg)
@@ -1652,11 +1855,11 @@ def replay_history(days, budget, here):
                     rids = sorted(set(h[0] for h in hits
                                       if h[0] not in cfg["disabled_rules"] and h[0] != "OP-CANARY"))
 
-                    def show(text):
+                    def show(text, width=60):
                         text = " ".join(redact(text or preview).split())
                         if cwd:
                             text = text.replace(cwd.rstrip("/") + "/", "")
-                        return text.replace(HOME, "~")[:60]
+                        return text.replace(HOME, "~")[:width]
 
                     why = {}
                     for rid, detail, _ in hits:
@@ -1667,6 +1870,16 @@ def replay_history(days, budget, here):
                         out["stopped"] += 1
                         for r in stops:
                             bump("by_stop", r, show(why.get(r)))
+                        ran = ""                    # the part of the command the rule fired on
+                        for e in effects:
+                            try:
+                                if any(h[0] == stops[0] for h in classify_effect(e, cfg, cwd or "/tmp")):
+                                    ran = e.get("seg") or ""
+                                    break
+                            except Exception:
+                                break
+                        out["incidents"].append({"ts": ts[:19], "project": project, "rule": stops[0],
+                                                 "why": show(why.get(stops[0]), 72), "cmd": show(ran or preview, 72)})
                     elif rids:
                         out["flagged"] += 1
                         for r in rids:
@@ -1679,8 +1892,24 @@ def replay_history(days, budget, here):
                             bump("by_own", c, show(seg))
         if used:
             out["sessions"] += 1
+    out["projects"] = len(projects)
+    out["incidents"] = sorted(out["incidents"], key=lambda i: i["ts"], reverse=True)[:20]
+    out["laws"] = [{"class": c, "law": law, "times": out["by_own"][c]}
+                   for c, _, law in sorted(OWN_LAW, key=lambda row: -out["by_own"].get(row[0], 0))
+                   if out["by_own"].get(c)]
     out["seconds"] = round(time.time() - t0, 1)
     return out
+
+
+def paint(text, code):
+    """Colour for a person at a terminal; plain text for everything else. NO_COLOR is honoured."""
+    if at_terminal() and not os.environ.get("NO_COLOR"):
+        return "\033[%sm%s\033[0m" % (code, text)
+    return text
+
+
+def plural(n, word):
+    return "%s %s%s" % (format(n, ","), word, "" if n == 1 else "s")
 
 
 def cmd_replay(argv):
@@ -1692,7 +1921,7 @@ def cmd_replay(argv):
         if "--budget" in argv:
             budget = max(1.0, float(argv[argv.index("--budget") + 1]))
     except (IndexError, ValueError):
-        print("usage: operator-gate replay [--days N | --all] [--here] [--budget SECONDS] [--json]")
+        print("usage: operator-gate replay [--days N | --all] [--here] [--budget SECONDS] [--json | --share]")
         return 2
     if "--all" in argv:
         days = 0
@@ -1701,37 +1930,60 @@ def cmd_replay(argv):
     if "--json" in argv:
         print(json.dumps(r, sort_keys=True))
         return 0
+    span = "the last %d days" % days if days else "all history"
+    if "--share" in argv:                           # counts only: nothing from the history itself
+        print("In %s my coding agents made %s." % (span, plural(r["calls"], "tool call")))
+        print("Operator Lite would have stopped %d, flagged %d, and found %d that only I can rule on."
+              % (r["stopped"], r["flagged"], r["own_calls"]))
+        print("Free, one file, runs on your own history: %s" % LITE_URL)
+        return 0
     if not r["files"]:
         print("operator-gate replay: no Claude Code history in ~/.claude/projects for that period.")
         return 0
-    print("operator-gate replay: %s tool calls from %d Claude Code session%s, %s%s. Nothing was executed."
-          % (format(r["calls"], ","), r["sessions"], "" if r["sessions"] == 1 else "s",
-             "last %d days" % days if days else "all history",
-             " under %s" % here if here else ""))
+    print("operator-gate replay: %s on this machine%s. Nothing was executed."
+          % (span, ", under %s" % here if here else ""))
     if r["truncated"]:
         print("(stopped at the %d second budget, newest sessions first; --budget N reads more)" % budget)
+    print()
+    print("  %7s  tool calls your agents made (%s, %s)" % (
+        paint("%7s" % format(r["calls"], ","), "1"), plural(r["sessions"], "Claude Code session"),
+        plural(r["projects"], "project")))
+    print("  %7s  a built-in rule would have stopped" % paint("%7s" % format(r["stopped"], ","), "1;31"))
+    print("  %7s  flagged in shadow: recorded, not stopped" % paint("%7s" % format(r["flagged"], ","), "1"))
+    print("  %7s  no built-in rule decides: only you can" % paint("%7s" % format(r["own_calls"], ","), "1;33"))
 
     def table(counts, label):
         for key, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-            print("  %5d  %-34s %s" % (n, label(key), r["samples"].get(key, "")))
+            print("  %5d  %-34s %s" % (n, label(key), paint(r["samples"].get(key, ""), "2")))
 
-    print()
     if r["stopped"]:
-        print("Built-in rules would have stopped %d:" % r["stopped"])
+        shown = r["incidents"][:5]
+        print("\n" + paint("Would have been stopped", "1") + " (%s):" % (
+            "the %d most recent of %d" % (len(shown), r["stopped"]) if r["stopped"] > len(shown) else "all of them"))
+        for inc in shown:
+            when = "      "
+            if len(inc["ts"]) >= 10 and inc["ts"][5:7].isdigit() and 1 <= int(inc["ts"][5:7]) <= 12:
+                when = "%s %s" % (MONTHS[int(inc["ts"][5:7]) - 1], inc["ts"][8:10])
+            print("  %s  %-18s %s %s" % (when, inc["project"][:18], paint(inc["rule"], "31"), inc["why"]))
+            print("  %s  %-18s %s" % ("      ", "", paint(inc["cmd"], "2")))
+        print("By rule:")
         table(r["by_stop"], lambda k: "%s %s" % (k, RULES[k][0]))
-    else:
-        print("Built-in rules would have stopped none of them.")
     if r["flagged"]:
-        print("\nFlagged in shadow, recorded and not stopped (%d):" % r["flagged"])
+        print("\n" + paint("Flagged in shadow", "1") + ", recorded and not stopped:")
         table(r["by_shadow"], lambda k: "%s %s" % (k, RULES[k][0]))
     if r["own_calls"]:
-        print("\nNo built-in rule decides these. They ran (%d):" % r["own_calls"])
-        table(r["by_own"], lambda k: dict(OWN_LAW)[k])
+        names = dict((c, what) for c, what, _ in OWN_LAW)
+        print("\n" + paint("No built-in rule decides these. They ran:", "1"))
+        table(r["by_own"], lambda k: names[k])
+        print("\n" + paint("Your first laws, drafted from this history:", "1"))
+        for law in r["laws"]:
+            print("  %-54s %s" % ('"%s"' % law["law"], plural(law["times"], "time")))
     if not here:
-        try:                                       # remembered for the status hint
+        try:                                       # remembered for the status hint and for `upgrade`
             if os.path.isdir(OP_HOME):
                 ensure_dirs()
-                keep = {k: r[k] for k in ("calls", "sessions", "stopped", "flagged", "own_calls", "days", "by_own")}
+                keep = {k: r[k] for k in ("calls", "sessions", "projects", "stopped", "flagged", "own_calls",
+                                          "days", "by_own", "laws")}
                 keep["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 path = os.path.join(OP_HOME, "state", "replay.json")
                 with open(path + ".tmp", "w") as f:
@@ -1741,8 +1993,9 @@ def cmd_replay(argv):
             pass
     if at_terminal():
         if r["own_calls"]:
-            print("\nEach line in that last list can be a law in Operator: one sentence you write, and the\n"
-                  "gate stops that action until you permit it once. $149 a month: operator-gate upgrade")
+            print("\nOperator enforces those laws from your agent's next command, on every host you hook: it stops\n"
+                  "the action and waits for a permit only you can grant. $149 a month.\n"
+                  "  %s      details: operator-gate upgrade" % OPERATOR_URL)
         if "--from-install" not in argv and \
                 not os.path.exists(os.path.join(HOME, ".operator", "gate", "operator-gate.py")):
             print("\nTo have the built-in rules watch from now on: python3 %s install" % os.path.abspath(__file__))
@@ -1756,6 +2009,11 @@ def cmd_corpus(argv):
     try:
         with open(path) as f:
             corpus = json.load(f)
+    except FileNotFoundError:
+        print("corpus %s is not beside this file: the corpus ships in the repository, not with the single\n"
+              "gate file. From a clone of github.com/samvallad33/vestige: python3 operator-lite/operator-gate.py corpus %s"
+              % (name, name))
+        return 2
     except Exception as exc:
         print("cannot load corpus %s: %s" % (name, exc))
         return 2

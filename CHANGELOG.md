@@ -15,18 +15,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   points to it, printed only to a person at a terminal: never to an agent, a pipe
   or a script, and never inside a stop message. Verdicts are unchanged.
 - Operator Lite: `operator-gate replay` runs the Claude Code history on this
-  machine through the gate's classifier and reports what the built-in rules would
-  have stopped, what they would have flagged in shadow, and the actions no
-  built-in rule decides (pushes, hook-skipping commits, package installs by name,
-  deploys, database commands, CI config and env-file writes). Classification
-  only: nothing is executed and no receipt is written. `--days N`, `--all`,
-  `--here`, `--budget SECONDS` and `--json` change the window and the output.
-  `install` runs it once at the end (`--no-replay` skips it), and the
-  terminal-only hint on `status` and `verify` carries the count from the last
-  replay. It reads Claude Code transcripts only. Verdicts are unchanged.
+  machine through the gate's classifier. It prints a scoreboard, the most recent
+  commands a built-in rule would have stopped (date, project, rule, reason and
+  the part of the command the rule fired on), what would have been flagged in
+  shadow, the actions no built-in rule decides (pushes, hook-skipping commits,
+  package installs by name, deploys, database commands, CI config and env-file
+  writes), and the laws that history drafts from them. Classification only:
+  nothing is executed and no receipt is written. `--days N`, `--all`, `--here`,
+  `--budget SECONDS`, `--json` and `--share` (three lines of counts) change the
+  window and the output. `install` runs it once at the end (`--no-replay` skips
+  it); the terminal-only hint on `status` and `verify`, and `upgrade`, then show
+  what the last replay drafted. It reads Claude Code transcripts only.
+- Operator Lite: `test_parser.py` and `test_replay.py`, and a CI job that runs
+  them and the corpus on Linux and macOS.
+
+### Fixed
+
+- Operator Lite 0.3.6, the parser:
+  - A command written after a leading redirection (`>log rm -rf x`,
+    `2>/dev/null rm -rf x`) was not seen as that command. It is now.
+  - A script file in another language (`python3 report.py`; also JavaScript,
+    Ruby, Perl, PHP and Lua) is judged as code in that language instead of being
+    walked as shell lines. Running the gate's own file through `python3` is
+    judged as the gate program: `verify` and `status` are no longer stopped,
+    and `install` and `approve` stay owner-only.
+  - Inline code is judged by the path each write or delete call names. A write
+    to the gate's rules file through a nested call is now stopped, and a script
+    that only mentions a gate path in a string is no longer stopped.
+  - Parentheses inside quotes and array literals (`name=(...)`,
+    `name+=(...)`) are data, not subshells, and `name+=value` is an assignment.
+  - OP-S05 no longer records an inline write whose target cannot be resolved.
+    An unresolved inline delete is still recorded, and either one fails closed
+    when the code names a gate path.
 
 ### Changed
 
+- README: Operator Lite installs with one command. The four-line block it
+  replaces copied the file and never registered the hook, and its corpus line
+  could not work from a single downloaded file; `corpus` now says where the
+  corpus lives.
 - README: a section on Vestige Operator, the paid tier, with what it adds, the
   price, how it is delivered and what it does not do. The GuardFall corpus count
   in the README and the Operator Lite README now reads 46, the number of cases
