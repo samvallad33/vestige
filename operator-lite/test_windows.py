@@ -72,6 +72,28 @@ payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": odd}, "cwd"
 p = subprocess.run([sys.executable, GATE, "hook", "--source", "claude"], input=payload, capture_output=True, env=u_env)
 err = p.stderr.decode("utf-8", errors="strict") if p.stderr else ""
 check("a command with non-ASCII text is still stopped, not failed open", p.returncode == 2 and "OPERATOR: STOPPED (OP-003" in err, (p.returncode, p.stderr[:200]))
+if p.returncode != 2:                                # say what the gate saw, so the cause is in the log
+    try:
+        _, _, d_hits, _, _, d_eff = g.classify({"tool_name": "Bash", "tool_input": {"command": odd}, "cwd": os.path.expanduser("~")}, g.load_config())
+        print("diag in-process hits=%s" % ascii(sorted(set(h[0] for h in d_hits))))
+        for e in d_eff:
+            print("diag effect prog=%s kind=%s recursive=%s unresolved=%s targets=%s" % (
+                ascii(e.get("prog")), e.get("kind"), e.get("recursive"), e.get("unresolved"), ascii(e.get("targets"))))
+            for t in e.get("targets") or []:
+                print("diag target scratch=%s variants=%s" % (g.is_scratch(t), ascii(sorted(g.variants(t)))))
+        print("diag scratch_roots=%s home=%s" % (ascii(sorted(g.scratch_roots())), ascii(g.HOME)))
+    except Exception as exc:
+        print("diag in-process classify raised %r" % (exc,))
+    try:
+        rdir = os.path.join(u_home, "receipts")
+        for fn in sorted(x for x in os.listdir(rdir) if x.endswith(".jsonl")):
+            with open(os.path.join(rdir, fn), encoding="utf-8") as f:
+                for line in f:
+                    r = json.loads(line)
+                    print("diag receipt decision=%s commitments=%s error=%s preview=%s" % (
+                        r.get("decision"), r.get("commitments"), ascii(r.get("error")), ascii(r.get("action_preview"))))
+    except Exception as exc:
+        print("diag receipts unreadable %r" % (exc,))
 check("the stop message is valid UTF-8 and names the target as written", "\u65e5\u672c\u8a9e" in err, err[:300])
 p = subprocess.run([sys.executable, GATE, "verify"], capture_output=True, env=u_env)
 check("the receipt with non-ASCII text is in the chain and the chain verifies", b"receipts=1 chain=OK" in p.stdout, p.stdout[:200])
