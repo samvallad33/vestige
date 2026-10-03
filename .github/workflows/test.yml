@@ -29,8 +29,6 @@ jobs:
     name: Operator Lite (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
-    # The Windows port is in progress: its job reports, and does not fail the run, until it is finished.
-    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,7 +41,6 @@ jobs:
             python: "3.12"
           - os: windows-latest
             python: "3.12"
-            experimental: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
