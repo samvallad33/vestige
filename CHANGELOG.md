@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what the last replay drafted. It reads Claude Code transcripts only.
 - Operator Lite: `test_parser.py` and `test_replay.py`, and a CI job that runs
   them and the corpus on Linux and macOS.
-- Operator Lite runs on Windows. It used to import a Unix-only module and
+- Operator Lite 0.3.7 runs on Windows. It used to import a Unix-only module and
   could not start there. Paths are read in one spelling (Git Bash `/c/...`,
   `C:\...` and `C:/...` are the same place), comparisons ignore case, an 8.3
   short name is the same target as its long name, receipts lock through
@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that only mentions a gate path in a string is no longer stopped.
   - Parentheses inside quotes and array literals (`name=(...)`,
     `name+=(...)`) are data, not subshells, and `name+=value` is an assignment.
+  - The hook decodes its input as UTF-8 from bytes, writes UTF-8, and opens every
+    file as UTF-8. On Windows the defaults are the ANSI code page: input it
+    cannot decode, or a stop message it cannot print, raised an error, and an
+    error in the hook is an allow. `install` copies the gate byte for byte and
+    no longer re-encodes the settings file.
   - OP-S05 no longer records an inline write whose target cannot be resolved.
     An unresolved inline delete is still recorded, and either one fails closed
     when the code names a gate path.

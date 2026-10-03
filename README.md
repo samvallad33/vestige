@@ -35,6 +35,12 @@ PreToolUse hook (Claude Code, Codex, OpenClaw — any host with command hooks), 
 curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
 ```
 
+On Windows, in PowerShell, with Python 3.9 or newer installed:
+
+```powershell
+curl.exe -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o "$env:TEMP\operator-gate.py"; python "$env:TEMP\operator-gate.py" install
+```
+
 One command. It copies the gate to `~/.operator/gate`, registers the Claude Code hook and
 starts in shadow mode, which records every verdict and blocks nothing. Then it replays your
 last 30 days of Claude Code history through the same rules, so the first thing you see is
