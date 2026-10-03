@@ -296,8 +296,8 @@ def tty_run(args, color=False):
 t = tty_run(["status"])
 check("at a terminal, status ends with the remembered count", "Your last replay drafted 3 laws from 5 actions no built-in rule decides." in t, t[-300:])
 t = tty_run(["replay"])
-check("at a terminal, replay ends with the pointer and the price", "Operator enforces those laws" in t and "$149 a month." in t
-      and "https://vestige-pro-production.fly.dev/account" in t, t[-400:])
+check("at a terminal, replay ends with the pointer and the price", "Operator enforces those laws" in t and "$149 once, yours to keep." in t
+      and "https://payhip.com/b/d4xvu" in t, t[-400:])
 check("installed gate: replay does not tell the owner to install again", " install" not in t.split("Operator enforces")[-1], t[-300:])
 t = tty_run(["mode", "enforce"])
 check("at a terminal the owner can switch to enforce", "The gate now blocks what its rules stop." in t
