@@ -46,7 +46,7 @@ history through the rules. Nothing in that history is executed.
 binary: gate exit 0 = allow, exit 2 = block with the reason.)
 
 ALLOW = exit 0, silent. STOP = exit 2, reason on stderr (the agent sees it and
-must change course). Flip to blocking with: `echo enforce > ~/.operator/mode`.
+must change course). Flip to blocking with `operator-gate mode enforce`.
 
 ## See it on your own history first
 
@@ -153,7 +153,18 @@ fork bombs, `mv x /dev/null`, a command written after a redirection
 
 ## Commands
 
-    operator-gate status | verify | corpus guardfall | install | upgrade | replay
+    operator-gate status | replay | mode | approve | verify | install | uninstall | upgrade | corpus guardfall
+
+`status` is the log: the mode, whether the hook is registered, the last call
+checked, the counts for the last 7 days, and the most recent commands the gate
+stopped or would have stopped, each with its project and reason. `status --rules`
+prints the rule table. `mode enforce` switches from recording to blocking, and
+`mode shadow` switches back; it is an owner command and needs your own terminal.
+
+`install` puts an `operator-gate` command on your PATH when `~/.local/bin` or
+`~/bin` is already on it. Otherwise run it as
+`python3 ~/.operator/gate/operator-gate.py`; every hint the gate prints uses the
+form that works on your machine.
 
 `verify` walks the receipt hash chain. `corpus guardfall` replays 46 adapted
 GuardFall bypass cases (must pass 46/46). `upgrade` describes the paid Operator

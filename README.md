@@ -44,8 +44,9 @@ curl.exe -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operat
 One command. It copies the gate to `~/.operator/gate`, registers the Claude Code hook and
 starts in shadow mode, which records every verdict and blocks nothing. Then it replays your
 last 30 days of Claude Code history through the same rules, so the first thing you see is
-what it would have said about your own agents. Nothing in that history is executed. When the
-report looks right, switch it on: `echo enforce > ~/.operator/mode`.
+what it would have said about your own agents. Nothing in that history is executed. After a
+day of use, `python3 ~/.operator/gate/operator-gate.py status` shows what it caught on your
+machine. When that looks right, switch it on with `mode enforce`.
 
 - **27 deterministic rules** — workspace armor, memory-store protection, destructive
   SQL, force-push, unreviewed publishes, paid deploys, reverse shells, cloud-metadata

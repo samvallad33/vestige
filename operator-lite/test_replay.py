@@ -161,7 +161,8 @@ check("bad --days is a usage error", p.returncode == 2 and "usage:" in p.stdout)
 # 3. install runs the replay by itself and remembers the count
 p = run(["install"])
 check("install exits 0", p.returncode == 0, p.stderr[-300:])
-check("install ends with the replay report", "operator-gate replay: the last 30 days" in p.stdout and "mode=shadow" in p.stdout, p.stdout[-400:])
+check("install ends with the replay report", "operator-gate replay: the last 30 days" in p.stdout and "mode: shadow" in p.stdout
+      and p.stdout.rstrip().endswith("operator-gate.py status"), p.stdout[-400:])
 sp = os.path.join(home, ".operator", "state", "replay.json")
 check("replay summary remembered for the status hint", os.path.exists(sp) and json.load(open(sp)).get("own_calls") == 5)
 p = run(["status"])
@@ -207,6 +208,67 @@ check("lone file: corpus says where the corpus lives instead of failing with a t
 shutil.rmtree(home2, ignore_errors=True)
 shutil.rmtree(os.path.dirname(lone), ignore_errors=True)
 
+# 3c. the log: after a day of use, status says what the gate saw on this machine
+home3 = tempfile.mkdtemp(prefix="oplite-log-home-")
+os.makedirs(os.path.join(home3, ".claude"))
+bin3 = os.path.join(home3, ".local", "bin")
+os.makedirs(bin3)
+env3 = dict(env, HOME=home3, PATH=bin3 + os.pathsep + env.get("PATH", ""))
+p = subprocess.run([sys.executable, GATE, "install", "--no-replay"], capture_output=True, text=True, env=env3, cwd=home3)
+gate3 = os.path.join(home3, ".operator", "gate", "operator-gate.py")
+launcher = os.path.join(bin3, "operator-gate")
+check("install places a launcher when a user bin directory is on PATH", p.returncode == 0 and os.path.exists(launcher)
+      and "command: operator-gate" in p.stdout, p.stdout[-300:])
+p = subprocess.run(["operator-gate", "status"], capture_output=True, text=True, env=env3, cwd=home3)
+check("the launcher runs the installed gate", p.returncode == 0 and p.stdout.startswith("Operator Lite "), (p.stdout + p.stderr)[:200])
+check("status before any call says so and names the hook", "Claude Code hook: registered" in p.stdout
+      and "No tool calls checked in the last 7 days" in p.stdout, p.stdout[:400])
+proj3 = os.path.join(home3, "work", "shop-api")
+os.makedirs(proj3)
+
+
+def call3(cmd):
+    pl = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": proj3, "session_id": "d"})
+    return subprocess.run([sys.executable, gate3, "hook", "--source", "claude"], input=pl, capture_output=True, text=True, env=env3)
+
+
+for c in ("git status", "git push --force origin main", "psql -c 'DROP TABLE users' app", "git reset --hard HEAD~1", "ls"):
+    call3(c)
+recs3 = []
+rdir3 = os.path.join(home3, ".operator", "receipts")
+for fn in sorted(x for x in os.listdir(rdir3) if x.endswith(".jsonl")):
+    with open(os.path.join(rdir3, fn), encoding="utf-8") as f:
+        recs3 += [json.loads(line) for line in f]
+check("an allowed call is recorded as ALLOW and a rule hit as SHADOW_STOP",
+      [r["decision"] for r in recs3] == ["ALLOW", "SHADOW_STOP", "SHADOW_STOP", "SHADOW_STOP", "ALLOW"], [r["decision"] for r in recs3])
+p = subprocess.run(["operator-gate", "status"], capture_output=True, text=True, env=env3, cwd=home3)
+st = p.stdout
+check("status counts the week: 5 checked, 2 would have been stopped and ran, 1 flagged", "5  tool calls checked" in st
+      and "2  would have been stopped, and ran: the gate was in shadow mode" in st and "1  flagged: recorded, not stopped" in st, st[:700])
+check("status lists what ran, with the project, the rule and the command", "Ran, because the gate was in shadow mode:" in st
+      and "shop-api" in st and "OP-004" in st and "git push --force origin main" in st and "OP-007" in st and "DROP TABLE users" in st, st)
+check("status says how to start blocking, with a command that works", "operator-gate mode enforce" in st and "Last call checked just now." in st, st[-400:])
+check("piped status carries no pitch and no colour", "upgrade" not in st and "\033[" not in st, st[-300:])
+p = subprocess.run(["operator-gate", "status", "--rules"], capture_output=True, text=True, env=env3, cwd=home3)
+check("status --rules is the rule table, in words a stranger can read", "OP-004" in p.stdout and "no-history-destruction" in p.stdout
+      and not any(w in p.stdout for w in ("launch gates", "claim-gate", "Pro bridge", "postmark")), p.stdout[:300])
+p = subprocess.run(["operator-gate", "mode", "enforce"], capture_output=True, text=True, env=env3, cwd=home3)
+check("mode refuses outside an interactive terminal", p.returncode == 3 and open(os.path.join(home3, ".operator", "mode")).read().strip() == "shadow", p.stdout)
+p = subprocess.run(["operator-gate", "mode"], capture_output=True, text=True, env=env3, cwd=home3)
+check("mode with no argument reports the mode", p.returncode == 0 and "mode is shadow" in p.stdout, p.stdout)
+open(os.path.join(home3, ".operator", "mode"), "w").write("enforce\n")
+r3 = call3("git push --force origin main")
+check("the stop message names a command the owner can paste", r3.returncode == 2 and "operator-gate approve " in r3.stderr, r3.stderr[-300:])
+p = subprocess.run(["operator-gate", "status"], capture_output=True, text=True, env=env3, cwd=home3)
+check("in enforce mode status shows the stop under Stopped", "mode: enforce (blocking)" in p.stdout and "1  stopped" in p.stdout
+      and "Stopped:" in p.stdout and "operator-gate mode enforce" not in p.stdout, p.stdout[:900])
+p = subprocess.run([sys.executable, gate3, "uninstall"], capture_output=True, text=True, env=env3, cwd=home3)
+check("uninstall removes the hook and the launcher it placed", not os.path.exists(launcher) and "launcher removed" in p.stdout, p.stdout)
+p = subprocess.run([sys.executable, gate3, "status"], capture_output=True, text=True, env=dict(env3, PATH=env.get("PATH", "")), cwd=home3)
+check("without the hook status says it is not registered, and without the launcher it prints the full command",
+      "Claude Code hook: NOT registered" in p.stdout and "python3 ~/.operator/gate/operator-gate.py install" in p.stdout, p.stdout[:400])
+shutil.rmtree(home3, ignore_errors=True)
+
 # 4. the hint a person sees, run under a pseudo-terminal
 import pty
 def tty_run(args, color=False):
@@ -236,7 +298,12 @@ check("at a terminal, status ends with the remembered count", "Your last replay 
 t = tty_run(["replay"])
 check("at a terminal, replay ends with the pointer and the price", "Operator enforces those laws" in t and "$149 a month." in t
       and "https://vestige-pro-production.fly.dev/account" in t, t[-400:])
-check("installed gate: replay does not tell the owner to install again", "python3" not in t.split("Operator enforces")[-1], t[-300:])
+check("installed gate: replay does not tell the owner to install again", " install" not in t.split("Operator enforces")[-1], t[-300:])
+t = tty_run(["mode", "enforce"])
+check("at a terminal the owner can switch to enforce", "The gate now blocks what its rules stop." in t
+      and open(os.path.join(home, ".operator", "mode")).read().strip() == "enforce", t[-200:])
+t = tty_run(["mode", "shadow"])
+check("and back to shadow", open(os.path.join(home, ".operator", "mode")).read().strip() == "shadow", t[-200:])
 t = tty_run(["replay"], color=True)
 check("at a terminal the numbers are coloured; NO_COLOR turns it off", "\033[1;31m" in t and "\033[0m" in t, t[:300])
 
