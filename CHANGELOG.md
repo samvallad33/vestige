@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to buy it; `--open` opens the page. `status` and `verify` end with one line that
   points to it, printed only to a person at a terminal: never to an agent, a pipe
   or a script, and never inside a stop message. Verdicts are unchanged.
+- Operator Lite: `operator-gate replay` runs the Claude Code history on this
+  machine through the gate's classifier and reports what the built-in rules would
+  have stopped, what they would have flagged in shadow, and the actions no
+  built-in rule decides (pushes, hook-skipping commits, package installs by name,
+  deploys, database commands, CI config and env-file writes). Classification
+  only: nothing is executed and no receipt is written. `--days N`, `--all`,
+  `--here`, `--budget SECONDS` and `--json` change the window and the output.
+  `install` runs it once at the end (`--no-replay` skips it), and the
+  terminal-only hint on `status` and `verify` carries the count from the last
+  replay. It reads Claude Code transcripts only. Verdicts are unchanged.
 
 ### Changed
 

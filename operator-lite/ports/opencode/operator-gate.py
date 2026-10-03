@@ -19,6 +19,7 @@ or tamper-evident.
 Stdlib only, Python 3.9 compatible (macOS /usr/bin/python3).
 """
 import fcntl
+import glob
 import hashlib
 import json
 import os
@@ -1457,11 +1458,28 @@ def cmd_status(argv):
 OPERATOR_URL = "https://vestige-pro-production.fly.dev/account"
 
 
+def at_terminal():
+    """A person is reading: stdout is a terminal and this is not an agent's session."""
+    return sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION")
+
+
 def upgrade_hint():
     """One line for the person at the terminal. Never printed to an agent, a pipe or a script,
     and never part of a verdict: stop messages go to the model, and a pitch does not belong there."""
-    if sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION"):
-        print("\nOperator adds your own laws, a daily Board and a weekly Letter: operator-gate upgrade")
+    if not at_terminal():
+        return
+    undecided = 0
+    try:
+        with open(os.path.join(OP_HOME, "state", "replay.json")) as f:
+            undecided = int(json.load(f).get("own_calls") or 0)
+    except Exception:
+        pass
+    if undecided:
+        print("\nYour last replay found %d actions no built-in rule decides. Operator makes them "
+              "your laws: operator-gate upgrade" % undecided)
+    else:
+        print("\nSee what your agents already ran: operator-gate replay. "
+              "Your own laws, a Board and a Letter: operator-gate upgrade")
 
 
 def cmd_upgrade(argv):
@@ -1485,6 +1503,249 @@ After checkout the gate arrives by email as a small archive with its checksum.""
             webbrowser.open(OPERATOR_URL)
         except Exception:
             pass
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# replay: this machine's agent history through the gate (classification only)
+# --------------------------------------------------------------------------- #
+REPLAY_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+PKG_ADD = {"npm": ("install", "i", "add"), "pnpm": ("add", "install", "i"), "yarn": ("add",),
+           "bun": ("add", "install", "i"), "pip": ("install",), "pip3": ("install",), "uv": ("add",),
+           "cargo": ("add", "install"), "go": ("get", "install"), "gem": ("install",),
+           "brew": ("install",)}
+DEPLOY_SUBS = {"fly": ("deploy",), "flyctl": ("deploy",), "vercel": ("deploy",), "netlify": ("deploy",),
+               "wrangler": ("deploy", "publish"), "railway": ("up",), "firebase": ("deploy",),
+               "serverless": ("deploy",), "sls": ("deploy",), "cdk": ("deploy",), "pulumi": ("up",),
+               "terraform": ("apply", "destroy"), "tofu": ("apply", "destroy"),
+               "kubectl": ("apply", "delete", "rollout", "scale"),
+               "helm": ("install", "upgrade", "uninstall"), "docker": ("push",)}
+MIGRATE_SUBS = {"prisma": ("migrate", "db"), "alembic": ("upgrade", "downgrade"),
+                "drizzle-kit": ("push", "migrate"), "diesel": ("migration",), "sqlx": ("migrate",),
+                "dbmate": ("up", "down", "migrate", "rollback")}
+CI_FILE_NAMES = {"dockerfile", ".gitlab-ci.yml", "jenkinsfile", "fly.toml", "vercel.json",
+                 "netlify.toml", "wrangler.toml", "docker-compose.yml", "docker-compose.yaml",
+                 "compose.yml", "compose.yaml", "procfile"}
+ENV_TEMPLATE_ENDS = (".example", ".sample", ".template", ".dist")
+# Actions no built-in rule decides, because whether they are fine depends on the owner.
+OWN_LAW = (("push", "pushed to a remote"),
+           ("no-verify", "skipped git hooks"),
+           ("packages", "installed packages by name"),
+           ("deploy", "deployed or changed infrastructure"),
+           ("database", "ran a database client or migration"),
+           ("ci-config", "wrote CI or deploy config"),
+           ("env-file", "wrote an env file"))
+
+
+def own_law_classes(effects):
+    """Which OWN_LAW classes a call falls in, each with the command segment that put it there.
+    Read from the parsed effects (program, subcommand, flags, write targets), never from the raw text."""
+    out = {}
+    for e in effects:
+        prog, args, flags = e.get("prog") or "", list(e.get("args") or []), e.get("flags") or []
+        if prog in ("npx", "bunx", "pnpx") and args:
+            prog, args = os.path.basename(args[0]), args[1:]
+        sub = args[0] if args else ""
+        dry = "--dry-run" in flags
+        if e.get("kind") == "git":
+            sub = e.get("sub") or ""
+            if sub == "push" and not dry and "-n" not in flags:
+                out.setdefault("push", e.get("seg") or "")
+            if "--no-verify" in flags or (sub == "commit" and has_flag(flags, "n")):
+                out.setdefault("no-verify", e.get("seg") or "")
+        elif prog in PKG_ADD and sub in PKG_ADD[prog]:
+            named = [a for a in args[1:] if a != "."]
+            if named and not dry and not any(f in ("-r", "--requirement", "-e", "--editable") for f in flags):
+                out.setdefault("packages", e.get("seg") or "")
+        elif prog in DEPLOY_SUBS and not dry and \
+                (sub in DEPLOY_SUBS[prog] or (prog == "vercel" and "--prod" in flags)):
+            out.setdefault("deploy", e.get("seg") or "")
+        elif e.get("kind") == "db" or (prog in MIGRATE_SUBS and sub in MIGRATE_SUBS[prog]):
+            out.setdefault("database", e.get("seg") or "")
+        for p in e.get("writes") or []:
+            base = os.path.basename(p).lower()
+            if "/.github/workflows/" in p or "/.circleci/" in p or base in CI_FILE_NAMES \
+                    or base.startswith("dockerfile."):
+                out.setdefault("ci-config", e.get("seg") or "")
+            if base == ".env" or (base.startswith(".env.") and not base.endswith(ENV_TEMPLATE_ENDS)):
+                out.setdefault("env-file", e.get("seg") or "")
+    return out
+
+
+def replay_history(days, budget, here):
+    """Classify every unique tool call in the local Claude Code transcripts, newest session first.
+    Reads history and the filesystem; executes nothing and writes no receipt."""
+    cfg = load_config()
+    base = os.path.join(HOME, ".claude", "projects")
+    files = glob.glob(os.path.join(base, "*", "*.jsonl")) + \
+        glob.glob(os.path.join(base, "*", "*", "subagents", "*.jsonl"))
+    cutoff = time.time() - days * 86400 if days else 0
+    cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(cutoff)) if days else ""
+    dated = []
+    for path in files:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if mtime >= cutoff:
+            dated.append((mtime, path))
+    dated.sort(reverse=True)
+    out = {"calls": 0, "sessions": 0, "stopped": 0, "flagged": 0, "own_calls": 0, "errors": 0,
+           "by_stop": {}, "by_shadow": {}, "by_own": {}, "samples": {}, "truncated": False,
+           "days": days or 0, "files": len(dated)}
+
+    def bump(table, key, sample):
+        out[table][key] = out[table].get(key, 0) + 1
+        out["samples"].setdefault(key, sample)
+
+    seen, t0 = set(), time.time()
+    for _, path in dated:
+        if time.time() - t0 > budget:
+            out["truncated"] = True
+            break
+        used = False
+        try:
+            fh = open(path, errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                if '"tool_use"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                ts = str(rec.get("timestamp") or "")
+                if cutoff_iso and ts and ts[:19] < cutoff_iso:
+                    continue
+                cwd = rec.get("cwd") or ""
+                if here and not (cwd and is_inside(cwd, here)):
+                    continue
+                msg = rec.get("message")
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if not isinstance(content, list):
+                    continue
+                for blk in content:
+                    if not (isinstance(blk, dict) and blk.get("type") == "tool_use"):
+                        continue
+                    name, ti = str(blk.get("name") or ""), blk.get("input") or {}
+                    if not (name == "Bash" or name in REPLAY_WRITE_TOOLS or name.startswith("mcp__")):
+                        continue
+                    try:
+                        key = digest_of([name, cwd, ti])
+                    except Exception:
+                        continue
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out["calls"] += 1
+                    used = True
+                    try:
+                        _, _, hits, preview, _, effects = classify(
+                            {"tool_name": name, "tool_input": ti, "cwd": cwd or "/tmp"}, cfg)
+                    except Exception:
+                        out["errors"] += 1
+                        continue
+                    rids = sorted(set(h[0] for h in hits
+                                      if h[0] not in cfg["disabled_rules"] and h[0] != "OP-CANARY"))
+
+                    def show(text):
+                        text = " ".join(redact(text or preview).split())
+                        if cwd:
+                            text = text.replace(cwd.rstrip("/") + "/", "")
+                        return text.replace(HOME, "~")[:60]
+
+                    why = {}
+                    for rid, detail, _ in hits:
+                        why.setdefault(rid, detail)
+                    stops = [r for r in rids if cfg["mode_overrides"].get(
+                        r, "shadow" if RULES[r][1] == "SHADOW" else "enforce") == "enforce"]
+                    if stops:
+                        out["stopped"] += 1
+                        for r in stops:
+                            bump("by_stop", r, show(why.get(r)))
+                    elif rids:
+                        out["flagged"] += 1
+                        for r in rids:
+                            bump("by_shadow", r, show(why.get(r)))
+                    else:
+                        classes = own_law_classes(effects)
+                        if classes:
+                            out["own_calls"] += 1
+                        for c, seg in classes.items():
+                            bump("by_own", c, show(seg))
+        if used:
+            out["sessions"] += 1
+    out["seconds"] = round(time.time() - t0, 1)
+    return out
+
+
+def cmd_replay(argv):
+    """Run this machine's agent history through classify(). Classification only; nothing executes."""
+    days, budget = 30, 30.0
+    try:
+        if "--days" in argv:
+            days = max(1, int(argv[argv.index("--days") + 1]))
+        if "--budget" in argv:
+            budget = max(1.0, float(argv[argv.index("--budget") + 1]))
+    except (IndexError, ValueError):
+        print("usage: operator-gate replay [--days N | --all] [--here] [--budget SECONDS] [--json]")
+        return 2
+    if "--all" in argv:
+        days = 0
+    here = os.getcwd() if "--here" in argv else None
+    r = replay_history(days, budget, here)
+    if "--json" in argv:
+        print(json.dumps(r, sort_keys=True))
+        return 0
+    if not r["files"]:
+        print("operator-gate replay: no Claude Code history in ~/.claude/projects for that period.")
+        return 0
+    print("operator-gate replay: %s tool calls from %d Claude Code session%s, %s%s. Nothing was executed."
+          % (format(r["calls"], ","), r["sessions"], "" if r["sessions"] == 1 else "s",
+             "last %d days" % days if days else "all history",
+             " under %s" % here if here else ""))
+    if r["truncated"]:
+        print("(stopped at the %d second budget, newest sessions first; --budget N reads more)" % budget)
+
+    def table(counts, label):
+        for key, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print("  %5d  %-34s %s" % (n, label(key), r["samples"].get(key, "")))
+
+    print()
+    if r["stopped"]:
+        print("Built-in rules would have stopped %d:" % r["stopped"])
+        table(r["by_stop"], lambda k: "%s %s" % (k, RULES[k][0]))
+    else:
+        print("Built-in rules would have stopped none of them.")
+    if r["flagged"]:
+        print("\nFlagged in shadow, recorded and not stopped (%d):" % r["flagged"])
+        table(r["by_shadow"], lambda k: "%s %s" % (k, RULES[k][0]))
+    if r["own_calls"]:
+        print("\nNo built-in rule decides these. They ran (%d):" % r["own_calls"])
+        table(r["by_own"], lambda k: dict(OWN_LAW)[k])
+    if not here:
+        try:                                       # remembered for the status hint
+            if os.path.isdir(OP_HOME):
+                ensure_dirs()
+                keep = {k: r[k] for k in ("calls", "sessions", "stopped", "flagged", "own_calls", "days", "by_own")}
+                keep["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                path = os.path.join(OP_HOME, "state", "replay.json")
+                with open(path + ".tmp", "w") as f:
+                    json.dump(keep, f, sort_keys=True)
+                os.replace(path + ".tmp", path)
+        except Exception:
+            pass
+    if at_terminal():
+        if r["own_calls"]:
+            print("\nEach line in that last list can be a law in Operator: one sentence you write, and the\n"
+                  "gate stops that action until you permit it once. $149 a month: operator-gate upgrade")
+        if "--from-install" not in argv and \
+                not os.path.exists(os.path.join(HOME, ".operator", "gate", "operator-gate.py")):
+            print("\nTo have the built-in rules watch from now on: python3 %s install" % os.path.abspath(__file__))
     return 0
 
 
@@ -1579,6 +1840,12 @@ def cmd_install(argv):
     print("zcode:  add to your ZCode hooks config -> %s hook --source zcode" % dst)
     print("codex:  add to ~/.codex/hooks.json        -> %s hook --source codex" % dst)
     print("mode=shadow (log-only). Flip with: echo enforce > ~/.operator/mode")
+    if "--no-replay" not in argv:                 # what this gate would have said about last month
+        try:
+            print()
+            cmd_replay(["--budget", "12", "--from-install"])
+        except Exception:
+            pass
     return 0
 
 
@@ -1607,9 +1874,9 @@ def main():
         sys.exit(hook_main(argv[1:]))
     cmd = {"approve": cmd_approve, "verify": cmd_verify, "status": cmd_status, "corpus": cmd_corpus,
            "test": cmd_corpus, "install": cmd_install, "uninstall": cmd_uninstall,
-           "upgrade": cmd_upgrade}.get(argv[0])
+           "upgrade": cmd_upgrade, "replay": cmd_replay}.get(argv[0])
     if not cmd:
-        print("usage: operator-gate hook|approve|verify|status|corpus|install|uninstall|upgrade")
+        print("usage: operator-gate hook|approve|verify|status|corpus|install|uninstall|upgrade|replay")
         sys.exit(2)
     sys.exit(cmd(argv[1:]))
 

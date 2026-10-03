@@ -48,6 +48,17 @@ echo shadow > ~/.operator/mode        # shadow-first: log everything, block noth
 - **Every verdict gets a hash-chained receipt** — and `verify` walks the chain
 - **Shadow-first**: install logs everything and blocks nothing until you flip
 
+See what it would have said about last month before you rely on it. `replay` runs the
+Claude Code history already on your machine through the same rules and executes nothing:
+
+```bash
+python3 ~/.operator/gate/operator-gate.py replay
+```
+
+It prints what the built-in rules would have stopped, what they would have flagged, and
+the actions no built-in rule decides: pushes, package installs by name, deploys, database
+commands, CI config and env-file writes.
+
 <a id="vestige-operator"></a>
 ## Vestige Operator, the paid tier
 
