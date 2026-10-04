@@ -53,7 +53,7 @@ pub fn schema() -> Value {
         obj.insert(
             "description".to_string(),
             serde_json::json!(
-                "Mode-specific retrieval. lookup supports the lookup schema. reason supports query, depth, limit, scope/includeCrossScope, retention/similarity/type/tag/validAt/source filters, and token_budget, while rejecting lookup-only controls. contradictions supports topic, since, min_trust, limit, and scope/includeCrossScope; it rejects token_budget and lookup/reason filters instead of silently ignoring them."
+                "Pass handle: a full memory id or an exact tag. Every other field belongs to the legacy engine's lookup, reason and contradictions modes; Strata returns similarity_disabled for them. reason takes query, depth, limit, scope/includeCrossScope, the retention/score/type/tag/validAt/source filters and token_budget, and rejects lookup-only controls. contradictions takes topic, since, min_trust, limit and scope/includeCrossScope, and rejects token_budget and the lookup/reason filters instead of silently ignoring them."
             ),
         );
         // Drop the global `query` requirement — contradictions uses `topic`.
@@ -66,7 +66,7 @@ pub fn schema() -> Value {
                 "handle".to_string(),
                 serde_json::json!({
                     "type": "string",
-                    "description": "[handle mode] Exact or unique-prefix handle: memory id (uuid), commit sha (40-hex or >=7-char prefix), file path, symbol (snake/camel), test name, run id, tool-call id, or tag. No fuzzy or lexical matching. Passing this key (even empty) switches recall to handle mode: a resolvable handle returns the node payloads plus one-hop connection neighbors; anything else returns the handle_required error with exact/prefix candidates."
+                    "description": "[handle mode] Exact handle: a full memory id or an exact tag (case-sensitive); a unique id prefix of 8+ characters also resolves. Commit sha, file path, symbol, test name, run id and tool-call id handles resolve on the legacy engine only. No fuzzy or lexical matching. Passing this key (even empty) switches recall to handle mode: a resolvable handle returns the node payloads plus one-hop recorded-edge neighbors; anything else returns the handle_required error with exact candidates."
                 }),
             );
             props.insert(
@@ -75,7 +75,7 @@ pub fn schema() -> Value {
                     "type": "string",
                     "enum": ["lookup", "reason", "contradictions"],
                     "default": "lookup",
-                    "description": "'lookup' (default): fast hybrid search. 'reason': scoped deep pass with heuristic ranking, spreading activation, supersession, and contradiction analysis; its text is assembled from computed values; needs 'query' and requires current-source verification for material claims. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories."
+                    "description": "'lookup' (default): by handle; a free-text 'query' is legacy engine only. 'reason': legacy engine only; scoped supersession and contradiction analysis of 'query'; verify material claims against current sources. 'contradictions': legacy engine only; disagreement pairs for a 'topic', or recent memories."
                 }),
             );
             // reason (deep_reference) extra field.

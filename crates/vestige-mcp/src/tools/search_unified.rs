@@ -37,7 +37,7 @@ pub fn schema() -> Value {
                 "description":"[lookup only] Send only while the previous complete packet remains in the model context. Matching packets return notModified=true and no cards. Omit after context loss to refresh."},
             "query": {
                 "type": "string",
-                "description": "Search query"
+                "description": "Free-text query. Legacy engine only; Strata returns similarity_disabled."
             },
             "limit": {
                 "type": "integer",
@@ -57,7 +57,7 @@ pub fn schema() -> Value {
                 "type": "number",
                 "minimum": 0.0,
                 "maximum": 1.0,
-                "description": "Metamemory: below this confidence recall abstains and returns nearest matches instead of a weak answer. Default 0.35; 1 disables."
+                "description": "Legacy engine only: confidence floor, 0 to 1; below it recall abstains instead of returning a weak answer. Default 0.35; 1 disables."
             },
             "include_superseded": {
                 "type": "boolean",
@@ -66,7 +66,7 @@ pub fn schema() -> Value {
 
             "min_similarity": {
                 "type": "number",
-                "description": "Minimum similarity, 0 to 1 (default 0.5).",
+                "description": "Score floor, 0 to 1 (default 0.5). Legacy engine only.",
                 "default": 0.5,
                 "minimum": 0.0,
                 "maximum": 1.0
@@ -80,7 +80,7 @@ pub fn schema() -> Value {
             "context_topics": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Topics that boost context-dependent retrieval."
+                "description": "Context topics for the lookup. Legacy engine only."
             },
             "exclude_types": {
                 "type": "array",
@@ -100,18 +100,18 @@ pub fn schema() -> Value {
             },
             "retrieval_mode": {
                 "type": "string",
-                "description": "'precise': top hits, no activation or competition. 'balanced' (default): full pipeline. 'exhaustive': 5x overfetch, deep traversal.",
+                "description": "Legacy engine only. 'precise': top hits only. 'balanced' (default). 'exhaustive': 5x overfetch, deep traversal.",
                 "enum": ["precise", "balanced", "exhaustive"],
                 "default": "balanced"
             },
             "concrete": {
                 "type": "boolean",
-                "description": "Literal search, no semantic expansion or side effects. Auto-on for quoted strings, env vars, UUIDs, paths, identifiers.",
+                "description": "Literal lookup, no expansion or side effects. Auto-on for quoted strings, env vars, UUIDs, paths, identifiers. Legacy engine only.",
                 "default": false
             },
             "rank_native_fusion": {
                 "type": "boolean",
-                "description": "Experimental: fuse post-retrieval stages by weighted RRF instead of multipliers.",
+                "description": "Experimental, legacy engine only: weighted RRF across retrieval stages instead of multipliers.",
                 "default": false
             },
             "tag_prefix": {
@@ -129,7 +129,7 @@ pub fn schema() -> Value {
             },
             "validAt": {
                 "type": "string",
-                "description": "Only facts valid at this time ('now', RFC3339, YYYY-MM-DD). Omitted: expired and future facts are downranked, not hidden."
+                "description": "Only facts valid at this time ('now', RFC3339, YYYY-MM-DD). Omitted: expired and future facts are listed last, not hidden."
             },
             "source_system": {
                 "type": "string",

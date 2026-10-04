@@ -352,7 +352,7 @@ fn recorded_causes(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value,
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "description": "Fix/lesson memories decayed below R 0.5 at failure time.",
+        "description": "Recorded causal edges from a failure, lowest FSRS R first. Legacy engine only: exact-anchor fix/lesson memories with R below 0.5.",
         "properties": {
             "failure_id": {
                 "type": "string",
@@ -368,7 +368,7 @@ pub fn schema() -> Value {
                 "minimum": 10,
                 "maximum": 5000,
                 "default": 1000,
-                "description": "Max lesson-candidate memories to scan."
+                "description": "Max memories scanned in the walk."
             }
         },
         "required": ["failure_id"]

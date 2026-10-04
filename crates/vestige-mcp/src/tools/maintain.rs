@@ -65,7 +65,13 @@ pub fn schema() -> Value {
             for (name, field) in fields {
                 let mut field = field.clone();
                 if let Some(description) = field["description"].as_str() {
-                    field["description"] = format!("[{action}] {description}").into();
+                    // consolidate and restore are withheld on Strata.
+                    let label = if matches!(action, "consolidate" | "restore") {
+                        format!("{action}; legacy engine only")
+                    } else {
+                        action.to_string()
+                    };
+                    field["description"] = format!("[{label}] {description}").into();
                 }
                 properties.insert(name.clone(), field);
             }
@@ -77,9 +83,9 @@ pub fn schema() -> Value {
         branches.push(branch);
     }
     properties.insert("action".into(), serde_json::json!({"type":"string", "enum":ACTIONS,
-        "description":"Store-wide maintenance: consolidate, dream, dream_compile (run the 4-phase DreamEngine; every proposed memory change lands as a reviewable PR), gc (preview by default), importance_score, backup, export, restore. Inspect the selected action's schema. Export uses since; start/end are unsupported."}));
+        "description":"Store-wide maintenance: dream, dream_compile (replays recorded edges; the legacy engine also files reviewable PRs), gc (preview by default), importance_score, backup, export; legacy engine only: consolidate, restore. Inspect the selected action's schema. Export uses since; start/end are unsupported."}));
     // path has different meanings in export and restore; do not hide either.
-    properties.get_mut("path").unwrap()["description"] = "[export] Confined filename inside exports/. [restore] JSON archive path, confined unless allowAnyPath=true for a trusted file.".into();
+    properties.get_mut("path").unwrap()["description"] = "[export] Confined filename inside exports/. [restore; legacy engine only] JSON archive path, confined unless allowAnyPath=true for a trusted file.".into();
     serde_json::json!({"type":"object", "properties":properties, "required":["action"], "oneOf":branches})
 }
 

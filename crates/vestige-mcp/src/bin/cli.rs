@@ -1,6 +1,6 @@
 //! Vestige CLI
 //!
-//! Command-line interface for managing cognitive memory system.
+//! Command-line interface for Vestige, the Causal Proof Engine.
 
 // Supplies the `__isoc23_*` and `__cxa_call_terminate` symbols that the
 // statically linked ONNX Runtime archive imports from glibc >= 2.38 and
@@ -29,14 +29,14 @@ use vestige_core::{
     SourceUpsertOutcome, Storage, scan_secrets,
 };
 
-/// Vestige - Cognitive Memory System CLI
+/// Vestige - Causal Proof Engine CLI
 #[derive(Parser)]
 #[command(name = "vestige")]
 #[command(author = "samvallad33")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(about = "CLI for the Vestige cognitive memory system")]
+#[command(about = "CLI for Vestige, the Causal Proof Engine and operating system for AI agents")]
 #[command(
-    long_about = "Vestige is a local-first memory system for coding agents.\n\nVestige 4.0 keeps memories in a Strata log inside the data directory: an append-only log where every write passes a gate and FSRS-6 schedules review. Recall is by exact handle (memory id, id prefix, tag); a Strata log runs no similarity search. Builds with the legacy-sqlite feature keep the v3 SQLite engine."
+    long_about = "Vestige is the Causal Proof Engine and the operating system for AI agents.\n\nIts kernel, Strata, is an append-only, hash-chained, signed log in the data directory (log/): every write passes a gate and returns a receipt, and FSRS-6 schedules review. Zero vectors, zero RAG, no lookalike text: recall is by exact handle (a full memory id or an exact tag; a unique id prefix of 8+ characters also resolves) and every result carries its proof. Builds with the legacy-sqlite feature keep the v3 SQLite engine."
 )]
 struct Cli {
     /// Use a specific Vestige data directory for this command.
@@ -107,13 +107,13 @@ enum SandwichCommands {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show memory statistics
+    /// Show store statistics
     Stats {
         /// Show tagging/retention distribution
         #[arg(long)]
         tagging: bool,
 
-        /// Show cognitive state distribution
+        /// Show memory state distribution (active, dormant, silent, unavailable)
         #[arg(long)]
         states: bool,
     },
@@ -311,7 +311,7 @@ enum Commands {
         yes: bool,
     },
 
-    /// Launch the memory web dashboard
+    /// Launch the web dashboard
     Dashboard {
         /// Port to bind the dashboard server to
         #[arg(long, default_value = "3927")]
@@ -506,8 +506,8 @@ enum Commands {
     /// with any handles found in the text.
     ///
     /// On a legacy SQLite store a QUERY runs the v3 deep_reference engine
-    /// (keyword search, FSRS-6 trust, spreading activation, supersession and
-    /// contradiction analysis) and prints its answer, evidence and confidence.
+    /// (trust scoring, supersession and contradiction analysis) and prints its
+    /// answer, evidence and confidence.
     Recall {
         /// Free-text query or claim to reason about (legacy SQLite stores)
         #[arg(required_unless_present = "handle", conflicts_with = "handle")]
@@ -599,7 +599,7 @@ enum Commands {
     /// On a Strata log it plants a cause, an intermediate and a symptom with
     /// recorded derived_from edges plus distractors in a temp log, walks back
     /// over recorded causal edges, and deletes the temp log. A legacy SQLite
-    /// store runs backfill hit@1/hit@3 and gap calibration on a temp copy.
+    /// store runs the v3 backfill selftest on a temp copy.
     Selftest,
 
     /// Find decayed fix/lesson memories linked to a failure

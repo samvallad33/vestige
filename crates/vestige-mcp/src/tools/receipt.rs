@@ -32,7 +32,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["get", "replay", "save_walk"],
-                "description": "'get': one receipt with its replay-capsule summary. 'replay': on a Strata log, re-derive state from the log and the receipt and report any mismatch (read-only). Otherwise withhold named evidence slots from a frozen capsule, or re-execute a saved walk receipt (id 'wr_…'). 'save_walk': freeze a backfill parameter envelope as a digest-addressed walk receipt."
+                "description": "'get': one receipt with its replay-capsule summary. 'replay': on a Strata log, re-derive state from the log and the receipt and report any mismatch (read-only). Legacy engine only: withhold named evidence slots from a frozen capsule, or re-execute a saved walk receipt (id 'wr_…'). 'save_walk' (legacy engine only): freeze a walk parameter envelope as a digest-addressed walk receipt."
             },
             "receipt_id": {
                 "type": "string",
@@ -42,15 +42,15 @@ pub fn schema() -> Value {
                 "type": "array",
                 "items": { "type": "string", "pattern": "^evidence_[1-9][0-9]*$" },
                 "uniqueItems": true,
-                "description": "[counterfactual replay] Slots to remove from the frozen context; search is never rerun."
+                "description": "[counterfactual replay; legacy engine only] Slots to remove from the frozen context; the lookup is never rerun."
             },
             "remove_edge": {
                 "type": "string",
-                "description": "[walk replay] Candidate memory id or 'source->target' edge to filter out of the candidate pool before the re-run; the verdict delta between the unfiltered and filtered runs is reported. Never combined with withheld_slots."
+                "description": "[walk replay; legacy engine only] Candidate memory id or 'source->target' edge to filter out of the candidate pool before the re-run; the verdict delta between the unfiltered and filtered runs is reported. Never combined with withheld_slots."
             },
             "params": {
                 "type": "object",
-                "description": "[save_walk] The backfill parameter envelope to freeze (scope, failure_id, lookback_days, scan_limit, manual, …). Canonicalized (RFC 8785) and digested (blake3); the same envelope always yields the same receipt id."
+                "description": "[save_walk; legacy engine only] The walk parameter envelope to freeze (scope, failure_id, lookback_days, scan_limit, manual, …). Canonicalized (RFC 8785) and digested (blake3); the same envelope always yields the same receipt id."
             }
         },
         "required": ["action"],

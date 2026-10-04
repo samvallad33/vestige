@@ -25,11 +25,11 @@ use vestige_core::neuroscience::active_forgetting::{ActiveForgettingSystem, DEFA
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "description": "Top-down suppression (Anderson 2025 SIF, Davis Rac1): the memory persists but is inhibited from retrieval and decays faster. Each call compounds. A background worker spreads accelerated decay to co-activated neighbours over 72 hours. Local state is reversible within 24 hours when its snapshot still matches. Journaled cascade effects are reversed atomically when neighbor state still matches.",
+        "description": "Hide a memory from every read; the log keeps its bytes. On Strata in 4.0 it cannot be undone and is not erasure. Legacy engine only: faster decay that compounds per call, accelerated decay of co-activated neighbours over 72 hours, and reversal within 24 hours when its snapshot still matches (journaled cascade effects are reversed atomically when neighbor state still matches).",
         "properties": {
             "id": {
                 "type": "string",
-                "description": "Memory UUID to suppress (or reverse-suppress)"
+                "description": "Memory id to suppress (or reverse-suppress on the legacy engine)"
             },
             "reason": {
                 "type": "string",
@@ -38,7 +38,7 @@ pub fn schema() -> Value {
             "reverse": {
                 "type": "boolean",
                 "default": false,
-                "description": "If true, reverse a previous suppression. Requires a matching snapshot within the 24-hour labile window; later state changes and legacy suppressions need review. Includes journaled neighbor cascades when their state still matches."
+                "description": "Legacy engine only (Strata refuses it): reverse a previous suppression. Requires a matching snapshot within the 24-hour labile window; later state changes and legacy suppressions need review. Includes journaled neighbor cascades when their state still matches."
             },
             "cascade_derived_from": {
                 "type": "boolean",

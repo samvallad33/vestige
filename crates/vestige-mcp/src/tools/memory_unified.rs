@@ -55,7 +55,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["get", "get_batch", "delete", "purge", "state", "promote", "demote", "edit"],
-                "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node), 'purge' (confirm=true; retired, not retrievable). 'delete' aliases purge"
+                "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node). 'purge' (confirm=true; retired, not retrievable) and its alias 'delete' are legacy engine only; Strata withholds erasure"
             },
             "id": {
                 "type": "string",
@@ -76,7 +76,7 @@ pub fn schema() -> Value {
             },
             "confirm": {
                 "type": "boolean",
-                "description": "Required for purge and delete. Retires the memory so it can't be retrieved.",
+                "description": "Required for purge and delete (legacy engine only). Retires the memory so it can't be retrieved.",
                 "default": false
             },
             "content": {

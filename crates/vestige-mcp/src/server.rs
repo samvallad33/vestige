@@ -28,7 +28,7 @@ use vestige_core::{OutputConfig, Storage, VestigeConfig};
 /// Build the MCP `instructions` string injected into every connecting client's
 /// system prompt.
 ///
-/// Default ("minimal", 3 sentences) is safe for any user: competitive coders,
+/// Default ("minimal", a few sentences) is safe for any user: competitive coders,
 /// hobbyists saving recipes, Rails devs saving bug fixes, enterprise deployments.
 /// It earns its per-session token cost by telling the client *how* to use
 /// Vestige without imposing one maintainer's workflow on strangers.
@@ -42,7 +42,8 @@ use vestige_core::{OutputConfig, Storage, VestigeConfig};
 fn build_instructions() -> String {
     let mode = std::env::var("VESTIGE_SYSTEM_PROMPT_MODE").unwrap_or_default();
     let mut instructions = if mode.eq_ignore_ascii_case("full") {
-        "Vestige is your long-term cognitive memory AND reasoning engine, not a RAG database. \
+        "Vestige is the Causal Proof Engine and the operating system for AI agents: zero vectors, \
+         zero RAG, no lookalike text. \
          Every retrieval MUST be composed into a recommendation, never summarized.\
          \n\nCOMPOSITION MANDATE: When you receive memories from recall or ghostlink, your response MUST follow this shape. \
          (a) Composing: [memory IDs], followed by a brief composition rationale \
@@ -58,7 +59,11 @@ fn build_instructions() -> String {
          If they correct it, call memory(action='demote'). Do not ask permission, just act."
             .to_string()
     } else {
-        "Vestige is your long-term memory system. Compose retrievals into recommendations \
+        "Vestige is the Causal Proof Engine and the operating system for AI agents. Its kernel, \
+         Strata, is an append-only, hash-chained, signed log: zero vectors, zero RAG, \
+         no lookalike text. Memories are found by exact handle (a full id or an exact tag) and every \
+         result carries its proof (memory id, edge path, receipt). \
+         Compose retrievals into recommendations \
          rather than listing their contents when the user is making a decision. \
          On user feedback, call memory(action='promote') for helpful retrievals and \
          memory(action='demote') for wrong ones — do not ask permission, just act."
@@ -390,7 +395,7 @@ fn withhold_on_strata(tools: &mut Vec<ToolDescription>) {
         } else if tool.name == "recall" {
             // The v3 text sold keyword search and similarity modes, which a
             // Strata log answers with similarity_disabled.
-            tool.description = Some("Find memories by exact handle: a memory id, a unique id prefix of 8+ characters, or an exact tag. In 4.0 free text and the 'reason' / 'contradictions' modes return similarity_disabled.".to_string());
+            tool.description = Some("Find memories by exact handle: a full memory id or an exact tag; a unique id prefix of 8+ characters also resolves. Free text and the 'reason' / 'contradictions' modes return similarity_disabled.".to_string());
         } else if tool.name == "smart_ingest" {
             tool.description = Some("Save one memory ('content') or up to 20 ('items'); each write passes the gate and returns a receipt. Secret-shaped content is refused unless allowSecrets is set.".to_string());
         } else if tool.name == "receipt" {
@@ -488,6 +493,25 @@ fn strip_withheld_in(
         formats.retain(|value| value != "portable");
     }
     withheld
+}
+
+/// Strata wording for the selector descriptions of the full schema that
+/// `memory_status` `view='tools'` serves. The wire catalog truncates these to
+/// 50 characters, so the longer Strata text lives here and costs the
+/// `tools/list` budget nothing.
+fn describe_full_schema_for_strata(tool: &str, schema: &mut serde_json::Value) {
+    let text = match tool {
+        "maintain" => {
+            "Store-wide maintenance: dream and dream_compile (replay recorded edges; no memory row is rewritten), gc (lists nothing and deletes nothing on Strata), importance_score, backup, export. Inspect the selected action's schema. Export uses since; start/end are unsupported."
+        }
+        "dedup" => {
+            "'scan' (default, read-only): exact-equality duplicate clusters. 'undo': reverse an operation_id, or list the reflog. 'tag_rename' / 'tag_merge': preview-token gated. 'policy': thresholds."
+        }
+        _ => return,
+    };
+    if let Some(description) = schema.pointer_mut("/properties/action/description") {
+        *description = serde_json::json!(text);
+    }
 }
 
 fn reject_unknown_cursor(params: Option<&serde_json::Value>) -> Result<(), JsonRpcError> {
@@ -991,7 +1015,7 @@ impl McpServer {
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Retrieve from memory. mode 'lookup': keyword search. 'reason': deep pass: trust scoring, spreading activation, supersession, contradictions. 'contradictions': disagreement pairs for a 'topic'. Reason mode records composition evidence; retrieval never changes strength; promote what helped via memory.".to_string()),
+description: Some("Find memories by exact handle: a full memory id or an exact tag. A free-text 'query' and modes 'reason' and 'contradictions' are legacy engine only; Strata returns similarity_disabled. Retrieval never changes strength; promote what helped via memory.".to_string()),
                 input_schema: tools::compact::of(&tools::recall::schema()),
                 output_schema: Some(serde_json::json!({
                     "type": "object",
@@ -1019,7 +1043,7 @@ description: Some("Retrieve from memory. mode 'lookup': keyword search. 'reason'
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Inspect a persisted retrieval receipt ('get'), ablate its frozen evidence pack ('replay': named slots withheld, no rerun, no model, no causal claim), save a canonical backfill parameter envelope as a walk receipt ('save_walk'), or re-execute a saved walk receipt against the current store ('replay' with a 'wr_…' id, optionally filtering one candidate edge and reporting the verdict delta).".to_string()),
+description: Some("Inspect a receipt ('get') or 'replay' it: on Strata, re-derive state from the log and report any mismatch. Legacy engine only: ablate a frozen evidence pack (named slots withheld, no rerun, no model, no causal claim), re-execute a saved walk receipt ('wr_…'), and 'save_walk'.".to_string()),
                 input_schema: tools::compact::of(&tools::receipt::schema()),
                 output_schema: Some(serde_json::json!({
                     "type": "object",
@@ -1042,7 +1066,7 @@ description: Some("Inspect a persisted retrieval receipt ('get'), ablate its fro
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (confirm=true; retired, not retrievable). 'delete' aliases purge.".to_string()),
+description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node). 'purge' and 'delete' (confirm=true) are legacy engine only; Strata withholds erasure.".to_string()),
                 input_schema: tools::compact::of(&tools::memory_unified::schema()),
                 ..Default::default()
             },
@@ -1120,7 +1144,7 @@ description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Save to memory through Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch: 'items' (max 20).".to_string()),
+description: Some("Save one memory ('content') or up to 20 ('items'); each write passes the gate and returns a receipt. Secret-shaped content is refused unless allowSecrets is set. Legacy engine only: merge into or supersede an existing memory.".to_string()),
                 input_schema: tools::compact::of(&tools::smart_ingest::schema()),
                 output_schema: Some(serde_json::json!({
                     "type": "object",
@@ -1189,7 +1213,7 @@ description: Some("Store status. Views: 'health' (default), 'retention', 'timeli
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Lifecycle: 'consolidate', 'dream', 'gc' (dry_run default true), 'importance_score', 'backup', 'export', 'restore'.".to_string()),
+description: Some("Lifecycle: 'consolidate', 'dream', 'dream_compile', 'gc' (dry run default), 'importance_score', 'backup', 'export', 'restore'.".to_string()),
                 input_schema: tools::compact::of(&tools::maintain::schema()),
                 ..Default::default()
             },
@@ -1253,7 +1277,7 @@ description: Some("Never-composed memory pairs, each with its proof from recorde
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Start-of-session context in one call: open intentions, status, predictions and codebase context under one token budget.".to_string()),
+description: Some("Start-of-session context in one call: open intentions, status and code memories under one token budget.".to_string()),
                 input_schema: tools::compact::of(&tools::session_context::schema()),
                 ..Default::default()
             },
@@ -1320,7 +1344,7 @@ description: Some("Walk a failure backward from explicit start points (failing_t
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Planted-cause selftest: backfill hit@1/hit@3 + gap calibration on a temp copy.".to_string()),
+description: Some("Planted-cause selftest: walks recorded edges back to a planted cause in a throwaway log.".to_string()),
                 input_schema: tools::compact::of(&tools::selftest::schema()),
                 ..Default::default()
             },
@@ -1339,7 +1363,7 @@ description: Some("Planted-cause selftest: backfill hit@1/hit@3 + gap calibratio
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Decayed fix/lesson memories sharing an exact anchor with a failure; FSRS R below 0.5 at failure time.".to_string()),
+description: Some("Earlier memories on recorded causal edges from a failure, lowest FSRS retrievability first.".to_string()),
                 input_schema: tools::compact::of(&tools::forgotten_lesson::schema()),
                 ..Default::default()
             },
@@ -1877,9 +1901,9 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             }
             "receipt" => tools::receipt::execute(&self.storage, request.arguments).await,
             // REMOVED (2026-09-28): vector search is not the product.
-            // Keyword + structural retrieval lives in `recall`.
+            // Retrieval by exact handle lives in `recall`.
             "search" => Err(
-                "tool 'search' is removed: vector search is not part of Vestige; use 'recall' (keyword + structural retrieval)".to_string(),
+                "tool 'search' is removed: vector search is not part of Vestige; use 'recall' with an exact handle (a full memory id or an exact tag)".to_string(),
             ),
             "memory" => {
                 tools::memory_unified::execute(&self.storage, &self.cognitive, request.arguments)
@@ -2057,6 +2081,7 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
                         let name = entry["name"].as_str().unwrap_or_default().to_string();
                         if let Some(schema) = entry.get_mut("inputSchema") {
                             strip_withheld_actions(&name, schema);
+                            describe_full_schema_for_strata(&name, schema);
                         }
                     }
                 }
@@ -2094,7 +2119,7 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             // ================================================================
             "semantic_search" | "hybrid_search" => {
                 Err(
-                    "tool 'semantic_search'/'hybrid_search' is removed: vector search is not part of Vestige; use 'recall' (keyword + structural retrieval)".to_string(),
+                    "tool 'semantic_search'/'hybrid_search' is removed: vector search is not part of Vestige; use 'recall' with an exact handle (a full memory id or an exact tag)".to_string(),
                 )
             }
 
@@ -2621,7 +2646,7 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             ResourceDescription {
                 uri: "memory://stats".to_string(),
                 name: "Memory Statistics".to_string(),
-                description: Some("Current memory system statistics and health status".to_string()),
+                description: Some("Memory counts, average retention and health status of the log".to_string()),
                 mime_type: Some("application/json".to_string()),
             },
             ResourceDescription {
@@ -2633,13 +2658,13 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             ResourceDescription {
                 uri: "memory://decaying".to_string(),
                 name: "Decaying Memories".to_string(),
-                description: Some("Memories with low retention that need review".to_string()),
+                description: Some("Memories with FSRS retention below 0.5, lowest first (20 shown from the first 100 read)".to_string()),
                 mime_type: Some("application/json".to_string()),
             },
             ResourceDescription {
                 uri: "memory://due".to_string(),
                 name: "Due for Review".to_string(),
-                description: Some("Memories scheduled for review today".to_string()),
+                description: Some("Memories due for FSRS review today. Legacy engine only: Strata returns an error.".to_string()),
                 mime_type: Some("application/json".to_string()),
             },
             // Codebase resources
@@ -2665,22 +2690,20 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             ResourceDescription {
                 uri: "memory://insights".to_string(),
                 name: "Consolidation Insights".to_string(),
-                description: Some("Insights generated during memory consolidation".to_string()),
+                description: Some("Insights recorded by consolidation runs. Legacy engine only: Strata returns an error.".to_string()),
                 mime_type: Some("application/json".to_string()),
             },
             ResourceDescription {
                 uri: "memory://consolidation-log".to_string(),
                 name: "Consolidation Log".to_string(),
-                description: Some("History of memory consolidation runs".to_string()),
+                description: Some("History of consolidation runs. Legacy engine only: empty on Strata, where consolidate is withheld.".to_string()),
                 mime_type: Some("application/json".to_string()),
             },
             // Prospective memory resources
             ResourceDescription {
                 uri: "memory://intentions".to_string(),
                 name: "Active Intentions".to_string(),
-                description: Some(
-                    "Future intentions (prospective memory) waiting to be triggered".to_string(),
-                ),
+                description: Some("Open intentions waiting to be triggered".to_string()),
                 mime_type: Some("application/json".to_string()),
             },
             ResourceDescription {
@@ -2732,10 +2755,11 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
                 {
                     "uriTemplate": resources::receipt_card::URI_TEMPLATE,
                     "name": "Retrieval Receipt Card",
-                    "description": "MCP App rendering one retrieval receipt: retrieved ids, \
-                     suppressed entries with reasons, the activation path, and the trust floor. \
-                     Read with resources/read using the receipt id from a recall result. \
-                     Server-rendered HTML; no network, no memory content beyond the receipt.",
+                    "description": "MCP App rendering one receipt as server-side HTML: the ids it \
+                     covers, suppressed entries with reasons, the recorded path, any mutation, \
+                     and the FSRS retention floor. \
+                     Read with resources/read using a receipt id from a tool result. \
+                     No network; no memory content beyond the receipt.",
                     "mimeType": resources::receipt_card::MIME_TYPE,
                 },
             ]

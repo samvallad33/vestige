@@ -253,7 +253,7 @@ pub fn unified_schema() -> Value {
                 "type": "string",
                 "enum": ["scan", "plan_merge", "plan_supersede", "apply", "undo", "verdict", "tag_rename", "tag_merge", "protect", "policy"],
                 "default": "scan",
-                "description": "'scan' (default, read-only): duplicate clusters, merge candidates, pending reconsolidation plans. 'plan_merge' / 'plan_supersede': preview a reversible plan. 'apply': run a plan_id. 'undo': reverse an operation_id, or list the reflog. 'verdict': approve|reject|quarantine a reconsolidation plan. 'tag_rename' / 'tag_merge': preview-token gated. 'protect': pin a memory. 'policy': thresholds."
+                "description": "'scan' (default, read-only): exact-equality duplicate clusters; the legacy engine adds merge candidates and pending reconsolidation plans. 'undo': reverse an operation_id, or list the reflog. 'tag_rename' / 'tag_merge': preview-token gated. 'policy': thresholds. Legacy engine only: 'plan_merge' / 'plan_supersede' (preview a reversible plan), 'apply' (run a plan_id), 'verdict' (approve|reject|quarantine a reconsolidation plan), 'protect' (pin a memory)."
             },
             "limit": {
                 "type": "integer",

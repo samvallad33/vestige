@@ -40,7 +40,7 @@ pub fn schema() -> Value {
         "properties": {
             "content": {
                 "type": "string",
-                "description": "What to remember; compared against existing memories (single mode)."
+                "description": "What to remember (single mode). Strata admits it as a new memory; the legacy engine compares it with existing memories."
             },
             "node_type": {
                 "type": "string",
@@ -50,7 +50,7 @@ pub fn schema() -> Value {
             "tags": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Tags. Close existing same-scope tags come back as suggestions, never auto-applied."
+                "description": "Tags, stored exactly as given. Legacy engine only: near-miss same-scope tag suggestions come back, never auto-applied."
             },
             "source": {
                 "type": "string",
@@ -58,7 +58,7 @@ pub fn schema() -> Value {
             },
             "scope": {
                 "type": "string",
-                "description": "Project namespace (default 'user'). Recall searches it unless includeCrossScope=true."
+                "description": "Project namespace (default 'user')."
             },
             "validFrom": {
                 "type": "string",
@@ -70,7 +70,7 @@ pub fn schema() -> Value {
             },
             "forceCreate": {
                 "type": "boolean",
-                "description": "Create even if similar content exists.",
+                "description": "Legacy engine only: create even when a merge would apply. Strata always creates.",
                 "default": false
             },
             "allowSecrets": {
@@ -80,18 +80,18 @@ pub fn schema() -> Value {
             },
             "previewTagSuggestions": {
                 "type": "boolean",
-                "description": "Read-only preflight: tag suggestions and inferred validity, nothing stored.",
+                "description": "Read-only preflight: inferred validity, plus tag suggestions on the legacy engine only; nothing stored.",
                 "default": false
             },
             "acceptedTagSuggestions": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
-                "description": "Accepted input-tag to existing-tag mappings from a preflight; revalidated before ingest."
+                "description": "Legacy engine only: accepted input-tag to existing-tag mappings from a preflight; revalidated before ingest."
             },
             "batchMergePolicy": {
                 "type": "string",
                 "enum": ["force_create", "smart"],
-                "description": "Batch only. 'force_create' (default) keeps items separate; 'smart' lets the gate merge.",
+                "description": "Batch only. 'force_create' (default) keeps items separate; 'smart' (legacy engine only) lets the gate merge.",
                 "default": "force_create"
             },
             "role": {
@@ -1293,14 +1293,14 @@ async fn execute_verbose(
             "decision": "create",
             "nodeId": node_id,
             "scope": scope,
-            "message": "Memory created (this build has no embedding runtime, so the prediction-error gate did not run)",
+            "message": "Memory created (this build makes no merge or reinforce decision)",
             "hasEmbedding": false,
             "embeddingsCompiledIn": false,
             "dedup": "unavailable in this build",
             "predictionError": 1.0,
             "importanceScore": importance_composite,
             "synapticCapture": synaptic_capture,
-            "reason": "built without embeddings: stored as a new memory, no dedup or reinforce decision",
+            "reason": "stored as a new memory: this build makes no merge, dedup or reinforce decision",
             "validity": validity_response(&validity),
             "tagSuggestions": tag_suggestions.suggestions,
             "tagSuggestionStatus": tag_suggestions.status,
@@ -1821,7 +1821,7 @@ async fn execute_batch(
                         "dedup": "unavailable in this build",
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
-                        "reason": "built without embeddings: stored as a new memory, no dedup or reinforce decision",
+                        "reason": "stored as a new memory: this build makes no merge, dedup or reinforce decision",
                         "validity": validity_response(&validity),
                         "tagSuggestions": tag_suggestions.suggestions,
                         "tagSuggestionStatus": tag_suggestions.status,
@@ -2275,7 +2275,7 @@ mod tests {
                 || value["reason"]
                     .as_str()
                     .unwrap()
-                    .contains("built without embeddings")
+                    .contains("makes no merge, dedup or reinforce decision")
         );
     }
 

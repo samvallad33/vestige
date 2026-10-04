@@ -104,7 +104,7 @@ pub fn schema() -> Value {
             "promote": {
                 "type": "boolean",
                 "default": false,
-                "description": "Explicitly persist evidence_of trail edges after review. Default false: preview only, no graph mutation. Promotion does not verify causality."
+                "description": "Legacy engine only: explicitly persist evidence_of trail edges after review. Default false: preview only, no graph mutation. Promotion does not verify causality. A Strata walk follows recorded edges only and records nothing."
             },
             "scan_limit": {
                 "type": "integer",

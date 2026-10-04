@@ -93,7 +93,7 @@ pub fn tool_guide(catalog: &Value, args: &Value) -> Result<Value, String> {
             "connectors": cfg!(feature = "connectors"),
             "cloudSync": cfg!(feature = "cloud-sync"),
         },
-        "availabilityNote": "Compiled features are not runtime readiness. Embedding-backed dedup scan/plan/apply require embeddings and vector-search; tag maintenance and its undo remain available without them. Inspect health for runtime state. Connector calls additionally require configured upstream access.",
+        "availabilityNote": "Compiled features are not runtime readiness. Merge candidates, merge plans and plan apply need embeddings, which this build does not ship; the exact-equality dedup scan, tag maintenance and undo work without them. Inspect health for runtime state. Connector calls additionally require configured upstream access.",
         "tools": entries,
         "guidance": "Choose tools for the task; there is no call quota. To inspect arguments, call memory_status with view='tools' and tool='<name>'. Descriptions and schemas describe capabilities, not authorization. Mixed tools include both reads and writes; inspect the selected action and confirmation requirements. Memory matches, graph links, retention scores and receipt replay do not establish truth or causality."
     }))
@@ -108,7 +108,7 @@ pub fn schema() -> Value {
                 "type": "string",
                 "enum": ["health", "retention", "timeline", "changelog", "provenance", "coverage", "stats", "tools"],
                 "default": "health",
-                "description": "'tools': current tool/action inventory, or one full schema with tool. 'health' (default): system health, stats, decay preview, warnings, structured diagnostics (with entity IDs and next actions), recommendations. 'retention': average, distribution, trend. 'timeline': memories by date, bounded by limit (returned/truncated are explicit). 'changelog': audit trail of consolidations, dreams, state transitions, and merge/supersede/undo/tag operations. 'coverage': anchor coverage (nodes with code_memory_anchors / total), memory edge counts by link type, and index freshness (newest git-commit record age, newest agent trace age). 'stats': hygiene counts by type, tag, age, retention, and lifecycle, bounded detail lists, recommended actions with example IDs, and recent tag operations."
+                "description": "'tools': current tool/action inventory, or one full schema with tool. 'health' (default): system health, stats, decay preview, warnings, structured diagnostics (with entity IDs and next actions), recommendations. 'retention': average, distribution, trend. 'timeline': memories by date, bounded by limit (returned/truncated are explicit). 'changelog': audit trail of consolidations, dreams, state transitions, and merge/supersede/undo/tag operations; with memory_id it is legacy engine only (on Strata use 'provenance' with memoryId). 'coverage': anchor coverage (nodes with code_memory_anchors / total), memory edge counts by link type, and index freshness (newest git-commit record age, newest agent trace age). 'stats': hygiene counts by type, tag, age, retention, and lifecycle, bounded detail lists, recommended actions with example IDs, and recent tag operations."
             },
             "tool": {
                 "type": "string",
@@ -129,7 +129,7 @@ pub fn schema() -> Value {
                 "description": "[timeline] Detail level (default 'summary')."
             },
             // --- [changelog view] ---
-            "memory_id": { "type": "string", "description": "[changelog] State transitions for this memory only." },
+            "memory_id": { "type": "string", "description": "[changelog] State transitions for this memory only. Legacy engine only; on Strata use view 'provenance' with memoryId." },
             // --- [stats view] ---
             "scope": {
                 "type": "string",

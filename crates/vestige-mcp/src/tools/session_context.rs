@@ -25,7 +25,7 @@ pub fn schema() -> Value {
                 "type": "array",
                 "items": { "type": "string" },
                 "maxItems": 16,
-                "description": "Search queries to run (default: [\"user preferences\"])"
+                "description": "Legacy engine only: search queries to run (default [\"user preferences\"]). Strata ignores them with a notice; use recall with an exact handle."
             },
             "token_budget": {
                 "type": "integer",
@@ -37,7 +37,7 @@ pub fn schema() -> Value {
             "scope": {"type":"string", "description":"Memory namespace (default: user)"},
             "context": {
                 "type": "object",
-                "description": "Current context for intention matching and predictions",
+                "description": "Current context for intention matching and code evidence",
                 "properties": {
                     "codebase": { "type": "string" },
                     "repoPath": {"type":"string", "description":"Explicit checkout for code evidence; unavailable when omitted"},
@@ -50,7 +50,7 @@ pub fn schema() -> Value {
             },
             "include_status": {
                 "type": "boolean",
-                "description": "Include system health info (default: true)",
+                "description": "Include store status (default: true)",
                 "default": true
             },
             "include_intentions": {
@@ -60,14 +60,14 @@ pub fn schema() -> Value {
             },
             "include_predictions": {
                 "type": "boolean",
-                "description": "Include memory predictions (default: true)",
+                "description": "Legacy engine only: include predicted memories (default: true). Strata answers with a notice.",
                 "default": true
             },
             "changed_files": {
                 "type": "array",
                 "items": { "type": "string" },
                 "maxItems": 200,
-                "description": "Repository-relative paths changed in this working tree. When present, the packet adds an open-failures section listing failure memories whose source anchors or git-commit-record `files:` entries match these paths EXACTLY (no prefix/fuzzy matching). Absent = section skipped."
+                "description": "Legacy engine only (Strata ignores it with a notice): repository-relative paths changed in this working tree. When present, the packet adds an open-failures section listing failure memories whose source anchors or git-commit-record `files:` entries equal these paths EXACTLY. Absent = section skipped."
             }
         }
     })
