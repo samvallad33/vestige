@@ -149,15 +149,43 @@ Windows can run. On Windows it is tested by `test_windows.py` on a CI runner.
 | OP-000 | STOP | edits to the gate itself, hook registrations, settings files |
 | OP-001 | STOP | delete/move of a workspace root (or parent) |
 | OP-002 | STOP | wiping the memory store (sqlite3 writes, `vestige gc`) |
-| OP-003 | STOP | blind recursive deletes, sweeps from `/`, fork bombs |
-| OP-004 | STOP | force-push to shared branches, remote-main deletion, `.git` removal |
+| OP-003 | STOP | blind recursive deletes, sweeps from `/`, fork bombs, `rsync --delete` over a folder outside the project |
+| OP-004 | STOP | force-push to shared branches, deleting a shared remote branch (`--delete main`, `:main`, `--mirror`), removing `.git` or a whole repository |
 | OP-005 | STOP | unreviewed publishes (npm/cargo/twine/docker/gh release) |
-| OP-006 | STOP | paid deploys and live-billing actions |
-| OP-007 | STOP | destructive SQL (DROP/TRUNCATE/unscoped DELETE) |
+| OP-006 | STOP | paid deploys, live-billing actions, infrastructure teardown (`terraform destroy`, `kubectl delete namespace`, `aws s3 rb`, `helm uninstall`) |
+| OP-007 | STOP | destructive SQL (DROP/TRUNCATE/unscoped DELETE) and database resets (`migrate:fresh`, `prisma migrate reset`, `rails db:drop`, `manage.py flush`, `dropdb`, `docker compose down -v`) |
 | OP-008 | STOP | shell-init writes (`>> ~/.zshrc` = code execution by install) |
 | OP-009 | STOP | reverse shells (`/dev/tcp`, `nc -e`, DNS-tunnel tools) |
 | OP-010 | STOP | cloud metadata endpoints (169.254.169.254, metadata.google.internal) |
+| OP-011 | STOP | deleting or discarding work nothing can bring back, read from the repository's own state: uncommitted changes, untracked files, `.env` files, keys and local databases (`rm`, `git reset --hard`, `git checkout -- .`, `git restore`, `git clean -f`, `git stash drop`) |
 | OP-S01..S17 | SHADOW | work-loss git, comms, public mutation, secret writes, pipe-to-interpreter, persistence, env-hijack (LD_PRELOAD/PATH=), exfil shapes, invisible chars, MCP argument exfil, agent-config writes, paste/tunnel egress, new git remotes, sandbox-escape primitives |
+
+OP-011 is new in 0.3.8 and it changes a default: `git reset --hard`, `git checkout -- .`,
+`git restore`, `git clean -f` and a plain `rm` now stop when they would lose work that
+exists nowhere else. With nothing uncommitted they pass, as does anything stashed or
+committed first in the same command. Files made in the last hour count as the session's
+own and are not protected. To record instead of stop, set
+`"mode_overrides": {"OP-011": "shadow"}` in `~/.operator/commitments.json`.
+
+## A file is judged by what is inside it
+
+`python3 no_bugs.py` is judged by what `no_bugs.py` does, not by its name. The gate
+opens the file an agent is about to run and reads it the way it reads a typed command:
+
+- every way a file gets run: an interpreter and a file, `./file`, `bash < file`, a file
+  piped into a shell, `npm`/`yarn`/`pnpm`/`bun` scripts (with their `pre` and `post`
+  scripts), `make` targets and their prerequisites, `composer` scripts, `python -m`,
+  `uv run`, `npx tsx`, `go run`, a local `setup.py`, SQL files handed to a database
+  client, notebooks run by `nbconvert` or `papermill`, PowerShell and batch files, the
+  git hooks a `git commit` fires, and a file the same command writes before running it;
+- what the code does: the commands it hands to a shell, the folders it deletes, the
+  database calls that drop or empty, payloads it decodes at run time, the local files
+  it imports, and the arguments the script was run with.
+
+Python is read by its syntax tree and other languages as text with strings and
+comments set apart, so a file that only prints a dangerous-looking string passes.
+`test_files.py` holds both halves: 84 files and commands that must stop, 26 that
+must pass.
 
 ## What the analyzer sees through
 
@@ -170,7 +198,13 @@ fork bombs, `mv x /dev/null`, a command written after a redirection
 
 ## Commands
 
-    operator-gate status | replay | mode | approve | verify | install | uninstall | upgrade | corpus guardfall
+    operator-gate status | replay | check | mode | approve | verify | install | uninstall | upgrade | corpus guardfall
+
+`check '<command>'` judges one command and prints the verdict, the rule and the
+reason. It runs nothing and records nothing, and exits 2 when the gate would stop
+the command. `--shell powershell`, `--cwd DIR` and `--json` are accepted.
+`replay --stops` lists every stop in the window instead of the most recent five, so
+you can count the false ones in your own history.
 
 `status` is the log: the mode, whether the hook is registered, the last call
 checked, the counts for the last 7 days, and the most recent commands the gate
@@ -185,13 +219,29 @@ form that works on your machine.
 
 `verify` walks the receipt hash chain. `corpus guardfall` replays 46 adapted
 GuardFall bypass cases (must pass 46/46). `upgrade` describes the paid Operator
-gate and where to get it. `python3 test_parser.py` and `python3 test_replay.py`
-run the tests; CI runs them on Linux and macOS. `corpus` needs a clone: the corpus
+gate and where to get it. `test_parser.py`, `test_replay.py`, `test_files.py`,
+`test_database.py`, `test_lostwork.py` and `test_powershell.py` are the tests; CI runs
+them on Linux and macOS, and `test_windows.py` on Windows as well. `corpus` needs a clone: the corpus
 file ships in the repository, not with the single gate file. Every verdict appends to
 `~/.operator/receipts/<date>.jsonl`.
 
-## Honest boundary
+## What it does not stop
 
-It blocks what its closed rule set recognizes, routed through hooked tools.
-It cannot see around hooks, and parse failures fail open except for plainly
-destructive text. Receipts are hash-chained digests, not signatures.
+It blocks what its closed rule set recognizes, routed through hooked tools. It cannot
+see around hooks, and parse failures fail open except for plainly destructive text.
+Receipts are hash-chained digests, not signatures. Known gaps in 0.3.8:
+
+- A recursive delete whose target is a variable nothing sets (`rm -rf "$DIR"/*`) is
+  recorded, not stopped.
+- Commands sent to another machine or into a container (`ssh`, `docker exec`,
+  `kubectl exec`) are read for database resets and teardown, not for file deletes.
+  Commands wrapped by `tmux`, `screen` or `watch` are not opened.
+- Disk formatting tools and recursive permission changes over a home folder pass.
+- `git branch -D` and `git reset --hard <older commit>` are recorded, not stopped;
+  the commits stay in the reflog.
+- Code fetched from the network and piped into a shell is recorded, not stopped.
+- Compiled programs cannot be read, and code whose target is only known at run time
+  is not judged.
+- What the Write and Edit tools put into a file is not judged, only where they write.
+- State-aware rules read the repository as it is now. `replay` judges old commands
+  against today's files.

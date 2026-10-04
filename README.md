@@ -63,6 +63,12 @@ That path registers Claude Code only.
 - **27 deterministic rules** — workspace armor, memory-store protection, destructive
   SQL, force-push, unreviewed publishes, paid deploys, reverse shells, cloud-metadata
   endpoints, shell-init poisoning, MCP argument exfil
+- **Judges a file by what is inside it** — `python3 no_bugs.py`, `npm test`, `make clean`,
+  `./deploy.sh` and a script written and run in one command are opened and read before
+  they run; a file that only prints a dangerous string passes
+- **Stops work nobody can bring back** — `git reset --hard`, `git clean -f` and `rm` stop
+  when they would lose uncommitted changes, untracked files, a `.env` or a local database,
+  and pass when git can restore everything
 - **Sees through shell obfuscation** — quote reassembly (`r''m`), `$IFS` expansion,
   `$(echo rm)` as program, ANSI-C `$'\x72m'`, base64-decoded pipelines, brace/glob
   expansion against the live filesystem, subshell time-bombs, session variables, cd

@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Operator Lite 0.3.8: a file an agent runs is judged by what is inside it. The gate
+  opens the file behind `python3 x.py`, `./x.sh`, `bash < x.sh`, an `npm`, `yarn`,
+  `pnpm` or `bun` script, a `make` target, a `composer` script, `python -m`, `go run`,
+  a notebook, a SQL file handed to a database client, a PowerShell or batch file, a
+  git hook, and a file the same command writes before running it. It reads the
+  commands the code hands to a shell, the folders it deletes, the database calls
+  that drop or empty, payloads decoded at run time, local imports, and the
+  arguments the script was run with. Python is read by its syntax tree, so a file
+  that only prints a dangerous-looking string passes.
+- Operator Lite 0.3.8: database resets stop under OP-007: `migrate:fresh`,
+  `prisma migrate reset`, `rails db:drop`, `manage.py flush`, `dropdb`,
+  `docker compose down -v` and the other framework and admin forms. A command that
+  names the test environment passes.
+- Operator Lite 0.3.8: OP-011 stops deleting or discarding work nothing can bring
+  back, read from the repository's own state with read-only git queries:
+  uncommitted changes, untracked files, `.env` files, keys and local databases.
+  It covers `rm`, `git reset --hard`, `git checkout`, `git restore`, `git clean -f`
+  and `git stash drop`. This changes a default; `mode_overrides` sets it to shadow.
+- Operator Lite 0.3.8: infrastructure teardown stops under OP-006
+  (`terraform destroy`, `kubectl delete namespace`, `aws s3 rb`, `helm uninstall`),
+  and OP-004 now covers `git push origin :main`, `git push --mirror` and removing a
+  whole repository.
+- Operator Lite 0.3.8: `operator-gate check '<command>'` judges one command and
+  runs nothing; `replay --stops` lists every stop in the window.
+- Operator Lite 0.3.8: `test_files.py`, `test_database.py`, `test_lostwork.py` and
+  `test_powershell.py`, run by CI on Linux and macOS.
+
+### Fixed
+
+- Operator Lite 0.3.8: arithmetic such as `$(( size / 1048576 ))` beside a delete
+  was read as a delete of `/` (reported by rulereceipt on anthropics/claude-code#2544).
+- Operator Lite 0.3.8: a data file passed to `python3 -` was read as the program,
+  words inside strings and comments of a script were read as commands, and a short
+  base64 payload in a decode pipeline was missed.
+- Operator Lite 0.3.8: `rsync --delete` was judged by its source folder instead of
+  the destination it deletes from.
+- Operator Lite 0.3.8: a PowerShell command that hands a line to `bash.exe` through
+  the call operator is now read, including a `$X` that PowerShell fills in itself.
+
+### Added (earlier, unreleased)
+
 - Operator Lite: `operator-gate upgrade` prints what the paid Operator gate adds
   (owner laws, the Board, the Letter, the onboarding wizard), its price and where
   to buy it; `--open` opens the page. `status` and `verify` end with one line that

@@ -52,6 +52,14 @@ jobs:
       - if: runner.os != 'Windows'
         run: python3 operator-lite/test_replay.py
       - if: runner.os != 'Windows'
+        run: python3 operator-lite/test_files.py
+      - if: runner.os != 'Windows'
+        run: python3 operator-lite/test_database.py
+      - if: runner.os != 'Windows'
+        run: python3 operator-lite/test_lostwork.py
+      - if: runner.os != 'Windows'
+        run: python3 operator-lite/test_powershell.py
+      - if: runner.os != 'Windows'
         run: python3 operator-lite/operator-gate.py corpus guardfall
       - if: runner.os != 'Windows'
         run: cmp operator-lite/operator-gate.py operator-lite/openclaw-plugin/gate/operator-gate.py

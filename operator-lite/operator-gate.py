@@ -38,7 +38,7 @@ try:
 except ImportError:                                  # Windows: receipts lock through msvcrt instead
     fcntl = None
 
-VERSION = "0.3.7"
+VERSION = "0.3.8"
 INTEGRITY = "reference_digest_not_signature"
 IS_WINDOWS = os.name == "nt"
 
@@ -73,7 +73,7 @@ def is_abs(path):
 HOME = canon(os.path.expanduser("~"))
 OP_HOME = canon(os.environ.get("OPERATOR_HOME", pj(HOME, ".operator")))
 PERMIT_TTL_S = 15 * 60
-MAX_DEPTH = 4
+MAX_DEPTH = 6
 
 SHELL_TOOLS = {"bash", "shell", "local_shell", "exec_command", "container.exec",
                "run_shell_command", "terminal", "run_terminal_cmd"}
@@ -186,13 +186,15 @@ RULES = {
     "OP-006": ("no-paid-deploy", "STOP",
                "Production deploys, live database changes and live billing actions need the owner's approval."),
     "OP-007": ("no-destructive-sql", "STOP",
-               "DROP/TRUNCATE/unscoped DELETE against a database needs the owner's approval."),
+               "DROP/TRUNCATE/unscoped DELETE, or a command that resets or drops a database, needs the owner's approval."),
     "OP-008": ("no-shell-init-write", "STOP",
                "Writing shell rc/init files plants commands that fire later; that is code execution by install."),
     "OP-009": ("no-reverse-shell", "STOP",
                "/dev/tcp, /dev/udp, nc -e and DNS-tunneling tools are raw outbound command channels, not tooling."),
     "OP-010": ("no-cloud-metadata", "STOP",
                "Cloud metadata endpoints hand out instance credentials; an agent has no legitimate reason to query them."),
+    "OP-011": ("no-unrestorable-loss", "STOP",
+               "Deleting or discarding work that nothing can bring back needs the owner's approval."),
     "OP-CANARY": ("canary", "STOP",
                   "Verification canary: this string exists only to prove the gate is wired."),
     # shadow-only candidates: recorded, never blocking, promote after reviewing the log
@@ -426,8 +428,12 @@ MEMORY_FILE_RE = re.compile(r"vestige\.db|strata|\.wal$|\.shm$|\.sqlite3?$", re.
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "{", "(", "!", "}", ")", "done", "fi", "esac"}
 LOOP_HEADS = {"for", "case", "select", "function"}
 HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+ARITH_RE = re.compile(r"\$?\(\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\)")
 SUBST_RE = re.compile(r"\$\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)|`[^`]*`")
 INTERPRETERS = ("python", "python3", "node", "perl", "ruby", "deno", "bun", "php", "osascript", "lua")
+DB_CLIENTS = ("psql", "sqlite3", "mysql", "mariadb", "duckdb", "mongosh", "mongo", "redis-cli", "supabase", "pgcli",
+              "mycli", "litecli", "usql", "sqlcmd", "mysqlsh", "cockroach", "clickhouse", "clickhouse-client", "bq",
+              "turso")
 
 
 def extract_heredocs(cmd):
@@ -479,7 +485,7 @@ def expand_vars(text, vars_):
             return " "
         v = vars_.get(name)
         return v if v is not None else m.group(0)
-    return re.sub(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", rep, text)
+    return re.sub(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*])\}|([A-Za-z_][A-Za-z0-9_]*|[0-9]|[@*]))", rep, text)
 
 
 def tilde(v):
@@ -621,19 +627,44 @@ PIPE_SINK_RE = re.compile(
 B64_BLOB_RE = re.compile(r"(?<![A-Za-z0-9+/=])([A-Za-z0-9+/=]{24,})(?![A-Za-z0-9+/=])")
 
 
+B64_SHORT_RE = re.compile(r"(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{8,}={0,2})(?![A-Za-z0-9+/=])")
+HEX_BLOB_RE = re.compile(r"(?<![0-9A-Za-z])((?:[0-9a-fA-F]{2}){6,})(?![0-9A-Za-z])")
+DECODE_CMD_RE = re.compile(r"\bbase64\s+(?:-\w*[dD]\w*|--decode)\b|\bopenssl\s+(?:enc\s+)?(?:-\w+\s+)*-?base64\s+-d|"
+                           r"\bb64decode\b|\batob\b")
+UNHEX_CMD_RE = re.compile(r"\bxxd\s+(?:-\w+\s+)*-r\b|\bfromhex\b|\bunhexlify\b")
+RUNNABLE_WORDS = ("rm ", "sh ", "bash", "curl", "wget", "eval", "python", "chmod", "dd ", "mkfs", "git ", "php ",
+                  "node ", "npx ", "rails ", "artisan", "dropdb", "psql", "mysql", "mongosh", "redis-cli",
+                  "terraform", "kubectl", "docker", "del ", "rmdir", "Remove-Item", "find ", "mv ", "shred",
+                  "truncate", "> /", "drop ", "DROP ")
+
+
 def decode_b64_text(cmd):
-    """Best-effort decode of base64-looking blobs, so `echo <b64> | base64 -d | sh` is analyzed."""
-    out = []
-    for m in B64_BLOB_RE.finditer(cmd):
-        blob = m.group(1)
+    """Best-effort decode of base64-looking blobs, so `echo <b64> | base64 -d | sh` is analyzed. A blob
+    of any length counts when the command itself decodes (`base64 -d`), a long one always; hex is
+    read the same way when the command undoes hex (`xxd -r`)."""
+    out, seen = [], set()
+    blobs = [m.group(1) for m in B64_BLOB_RE.finditer(cmd)]
+    if DECODE_CMD_RE.search(cmd):
+        blobs += [m.group(1) for m in B64_SHORT_RE.finditer(cmd)]
+    for blob in blobs:
+        if blob in seen:
+            continue
+        seen.add(blob)
         try:
             import base64
             dec = base64.b64decode(blob + "=" * (-len(blob) % 4), validate=False).decode("utf-8", "replace")
         except Exception:
             continue
-        if any(c.isalpha() for c in dec) and any(k in dec for k in ("rm ", "sh ", "bash", "curl", "wget",
-                                                                   "eval", "python", "chmod", "dd ", "mkfs")):
+        if any(c.isalpha() for c in dec) and "\ufffd" not in dec[:40] and any(k in dec for k in RUNNABLE_WORDS):
             out.append(dec)
+    if UNHEX_CMD_RE.search(cmd):
+        for m in HEX_BLOB_RE.finditer(cmd):
+            try:
+                dec = bytes.fromhex(m.group(1)).decode("utf-8")
+            except Exception:
+                continue
+            if any(k in dec for k in RUNNABLE_WORDS):
+                out.append(dec)
     return out
 
 
@@ -715,7 +746,7 @@ def resolve_script_arg(rest, ecwd):
             return resolve(t, ecwd) if ecwd else tilde(t)
         # bare name: only treat as a script if the file exists beside cwd
         cand = resolve(t, ecwd) if ecwd else None
-        if cand and os.path.isfile(cand):
+        if cand and is_file(cand):
             return cand
         return None
     return None
@@ -732,10 +763,1050 @@ def is_gate_source(path):
 
 
 NON_SHELL_SCRIPT_EXT = (".py", ".pl", ".rb", ".js", ".mjs", ".cjs", ".ts", ".php", ".lua")
-NON_SHELL_SHEBANG_RE = re.compile(r"^#!.*\b(python[0-9.]*|node|deno|bun|ruby|perl|php|lua)\b")
+NON_SHELL_SHEBANG_RE = re.compile(r"^#!.*\b(python[0-9.]*|pypy[0-9.]*|node|deno|bun|ruby|perl|php|lua)\b")
+
+# --------------------------------------------------------------------------- #
+# files an agent runs are judged by what is inside them, never by their names
+# --------------------------------------------------------------------------- #
+SEEN_FILES = set()                       # files already opened for the command being judged
+WRITTEN = {}                             # files the command being judged writes itself: path -> text, or None
+MAX_FILES = 60
+UNKNOWN_WORD = "$__CODE"                  # a word the code only knows at run time
+CODE_EXT = {".py": "py", ".pyw": "py", ".js": "js", ".mjs": "js", ".cjs": "js", ".ts": "js", ".mts": "js",
+            ".cts": "js", ".tsx": "js", ".jsx": "js", ".rb": "rb", ".pl": "pl", ".pm": "pl", ".php": "php",
+            ".lua": "lua", ".go": "go", ".r": "r", ".applescript": "applescript"}
+CODE_PROG = {"python": "py", "pypy": "py", "ipython": "py", "node": "js", "nodejs": "js", "deno": "js", "bun": "js",
+             "tsx": "js", "ts-node": "js", "ts-node-esm": "js", "zx": "js", "ruby": "rb", "jruby": "rb",
+             "perl": "pl", "php": "php", "lua": "lua", "luajit": "lua", "osascript": "applescript", "rscript": "r",
+             "awk": "awk", "gawk": "awk", "mawk": "awk", "nawk": "awk"}
+# the flag after which an interpreter takes its program from the command line
+CODE_FLAG = {"py": ("-c",), "js": ("-e", "--eval", "-p", "--print"), "rb": ("-e",), "pl": ("-e", "-E"),
+             "php": ("-r",), "lua": ("-e",), "applescript": ("-e",), "r": ("-e",)}
+# `python -m <module> file`: these read the file and do not run it
+PY_NO_RUN = {"py_compile", "compileall", "black", "ruff", "flake8", "pylint", "mypy", "isort", "autopep8", "yapf",
+             "pyflakes", "pycodestyle", "bandit", "pyright", "pydoc", "tokenize", "ast", "dis", "json.tool",
+             "tabnanny", "pyclbr", "symtable", "vulture", "radon", "pyupgrade", "pip", "venv", "ensurepip"}
+# `deno fmt x.ts`, `bun install`: subcommands that run no file of yours
+JS_NO_RUN = {"fmt", "lint", "check", "doc", "info", "cache", "compile", "bundle", "vendor", "install", "i", "add",
+             "remove", "rm", "upgrade", "update", "types", "completions", "repl", "init", "build", "pm", "link",
+             "unlink", "create", "publish", "outdated", "audit"}
+INPUT_REDIRECT_RE = re.compile(r"(?<![<&0-9])<(?![<(&])\s*([^\s<>|&;()]+)")
 
 
-def script_body_effects(path, ecwd, depth, vars_, mode="auto", prog=None, seg=""):
+def guarded(fn, default, *args, **kw):
+    """Run one of the readers added in 0.3.8. On a defect it reports nothing instead of failing the
+    whole judgement, so the older checks still decide. OPERATOR_DEBUG=1 lets the defect through (tests)."""
+    try:
+        return fn(*args, **kw)
+    except Exception:
+        if os.environ.get("OPERATOR_DEBUG"):
+            raise
+        return default
+
+
+def code_prog(prog):
+    """The language an interpreter runs (`python3.12` is py, `ts-node` is js), or None."""
+    p = re.sub(r"\.exe$", "", (prog or "").lower())
+    return CODE_PROG.get(p) or CODE_PROG.get(re.sub(r"[\d.]+$", "", p))
+
+
+def is_file(path):
+    """True for a file on disk, and for one an earlier step of the same command writes."""
+    return path in WRITTEN or os.path.isfile(path)
+
+
+def args_after(rest, path, ecwd):
+    """The words a script is handed: what follows its own name on the command line."""
+    for i, t in enumerate(rest):
+        if not t.startswith("-") and t not in (".", "..") and (path is None or resolve(t, ecwd) == path):
+            return [tilde(a) for a in rest[i + 1:] if not REDIRECT_TOKEN_RE.match(a)]
+    return []
+
+
+def plain_words(rest):
+    """The words of a command up to its first redirection."""
+    out = []
+    for t in rest:
+        if REDIRECT_TOKEN_RE.match(t):
+            break
+        out.append(t)
+    return out
+
+
+def note_written(prog, rest, bodies, writes):
+    """Remember what a command writes into a file when the text is on the command line, so a later
+    step that runs the file is judged by it: `echo ... > x.sh && bash x.sh`, `cat > x.py <<EOF`.
+    A download is remembered as a file whose text the gate cannot read."""
+    text = None
+    if prog in ("echo", "printf"):
+        text = " ".join(w for w in plain_words(rest) if not (w.startswith("-") and len(w) <= 3)).replace("\\n", "\n")
+    elif prog in ("cat", "tee") and bodies:
+        text = bodies[0]
+    for w in writes:
+        if w.startswith(UNKNOWN_CWD) or "$" in w or "__SUBST__" in w:
+            continue
+        if text is not None and "__SUBST__" not in text:
+            WRITTEN[w] = ((WRITTEN[w] + "\n") if WRITTEN.get(w) else "") + text
+        elif prog in ("curl", "wget"):
+            WRITTEN[w] = None
+
+
+def stdin_text(fed, rest, ecwd):
+    """What a command is handed on standard input when the command line spells it out: a here-string,
+    the words an echo or printf pipes in, or the file a cat pipes in. Returns (text, file)."""
+    for i, t in enumerate(rest):
+        if t == "<<<" and i + 1 < len(rest):
+            return rest[i + 1], None
+        if t.startswith("<<<") and len(t) > 3:
+            return t[3:], None
+    if fed:
+        fprog, words = fed[0], plain_words(fed[1])
+        if fprog in ("echo", "printf"):
+            text = " ".join(w for w in words if not (w.startswith("-") and len(w) <= 3)).replace("\\n", "\n")
+            return (text, None) if text.strip() and "__SUBST__" not in text else (None, None)
+        if fprog in ("cat", "tac", "head", "tail") and ecwd:
+            files = [f for f in (resolve(w, ecwd) for w in words if not w.startswith("-")) if is_file(f)]
+            if files:
+                return None, files[0]
+    return None, None
+
+
+def read_script(path):
+    """A script's text. None for a file that is missing, empty, too large, a compiled program, or
+    already read for this command."""
+    if path in WRITTEN:
+        return WRITTEN[path]
+    try:
+        st = os.stat(path)
+        if not _stat.S_ISREG(st.st_mode) or st.st_size == 0 or st.st_size > MAX_SCRIPT_BYTES:
+            return None
+        key = real(path)
+        if key in SEEN_FILES or len(SEEN_FILES) >= MAX_FILES:
+            return None
+        with open(path, "rb") as f:
+            raw = f.read(MAX_SCRIPT_BYTES)
+    except Exception:
+        return None
+    if b"\0" in raw[:4096]:
+        return None
+    SEEN_FILES.add(key)
+    return raw.decode("utf-8", "replace")
+
+
+def input_file(seg, ecwd):
+    """The file a command reads on standard input (`psql app < wipe.sql`, `bash < x.sh`), or None."""
+    if ecwd is None:
+        return None
+    m = INPUT_REDIRECT_RE.search(mask_quotes(seg))
+    if not m:
+        return None
+    p = resolve(seg[m.start(1):m.end(1)].strip("'\""), ecwd)
+    return p if is_file(p) else None
+
+
+def local_module(mod, here, ecwd):
+    """The file behind a Python module name when it lives beside the script or in the working directory."""
+    rel = (mod or "").replace(".", "/")
+    if not rel or rel.startswith("/"):
+        return None
+    for base in (here, ecwd, pj(ecwd, "src") if ecwd else None):
+        if not base:
+            continue
+        for cand in (pj(base, rel + ".py"), pj(base, rel, "__main__.py"), pj(base, rel, "__init__.py")):
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def script_file_arg(lang, rest, ecwd):
+    """The file an interpreter is about to run, read from its arguments, or None. Its own flags and
+    subcommand words (`deno run`, `bun run`) are passed over; a program given on the command line
+    (`-c`, `-e`) means there is no file."""
+    if ecwd is None:
+        return None
+    if lang == "awk":                                        # awk runs a file only when told to with -f
+        named = [rest[i + 1] for i, t in enumerate(rest[:-1]) if t in ("-f", "--file")]
+        return resolve(named[0], ecwd) if named and os.path.isfile(resolve(named[0], ecwd)) else None
+    code_flags, i, first = CODE_FLAG.get(lang, ()), 0, True
+    while i < len(rest):
+        t = rest[i]
+        i += 1
+        if t in code_flags or t == "-":
+            return None
+        if lang == "py" and t == "-m":
+            mod = rest[i] if i < len(rest) else ""
+            if mod in PY_NO_RUN or mod.split(".")[0] in PY_NO_RUN:
+                return None
+            found = local_module(mod, ecwd, ecwd)
+            if found:
+                return found
+            i, first = i + 1, False
+            continue
+        if t.startswith("-") or t in (".", ".."):
+            continue
+        if first and lang == "js" and t in JS_NO_RUN:
+            return None
+        cand = resolve(t, ecwd)
+        if is_file(cand) and (first or os.path.splitext(cand)[1].lower() in CODE_EXT):
+            return cand
+        first = False
+    return None
+
+
+def inline_codes(lang, rest):
+    """The programs handed to an interpreter on its command line: `python -c CODE`, `node -e CODE`."""
+    flags, out = CODE_FLAG.get(lang, ()), []
+    if lang == "awk":                                        # the program is the first word that is not an option
+        i = 0
+        while i < len(rest):
+            if rest[i] in ("-f", "--file"):
+                return []
+            if rest[i] in ("-F", "-v", "--assign", "--field-separator"):
+                i += 2
+            elif rest[i].startswith("-"):
+                i += 1
+            else:
+                return [rest[i]]
+        return []
+    for i, t in enumerate(rest[:-1]):
+        if t in flags or (lang == "js" and t == "eval" and i == 0):
+            out.append(rest[i + 1])
+    return out
+
+
+# ---- reading code as text: every language but Python, and Python that does not parse ---------- #
+STR_LIT_RE = re.compile(r"""^[rbufRBUF]{0,2}(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)")$""", re.S)
+HOME_EXPR_RE = re.compile(
+    r"""^(?:(?:os\.path\.)?expanduser\(\s*['"]~['"]\s*\)|(?:pathlib\.)?Path\.home\(\)|"""
+    r"""os\.environ(?:\.get)?[\[(]\s*['"](?:HOME|USERPROFILE)['"]\s*[\])]|os\.getenv\(\s*['"](?:HOME|USERPROFILE)['"]\s*\)|"""
+    r"""process\.env\.(?:HOME|USERPROFILE)|process\.env\[\s*['"](?:HOME|USERPROFILE)['"]\s*\]|(?:os\.)?homedir\(\)|"""
+    r"""require\(\s*['"](?:node:)?os['"]\s*\)\.homedir\(\)|Dir\.home|ENV\[\s*['"]HOME['"]\s*\]|"""
+    r"""ENV\.fetch\(\s*['"]HOME['"]\s*\)|os\.Getenv\(\s*"HOME"\s*\)|getenv\(\s*['"]HOME['"]\s*\)|"""
+    r"""\$_SERVER\[\s*['"]HOME['"]\s*\]|\$ENV\{\s*['"]?HOME['"]?\s*\}|\$HOME|Deno\.env\.get\(\s*['"]HOME['"]\s*\)|"""
+    r"""Bun\.env\.HOME|os\.UserHomeDir\(\))$""")
+CWD_EXPR_RE = re.compile(r"^(?:os\.getcwd\(\)|process\.cwd\(\)|Dir\.pwd|getcwd\(\)|(?:pathlib\.)?Path\.cwd\(\))$")
+HERE_NAMES = ("__dirname", "__DIR__", "__dir__", "import.meta.dirname", "File.dirname(__FILE__)",
+              "dirname(__FILE__)", "os.path.dirname(__file__)", "os.path.dirname(os.path.abspath(__file__))")
+ASSIGN_RE = re.compile(r"^[ \t]*(?:export[ \t]+)?(?:const|let|var|my|our|local)?[ \t]*([$@]?[A-Za-z_]\w*)[ \t]*"
+                       r"(?::[ \t]*[\w<>\[\], .|?]+?)?[ \t]*:?=(?![=>])[ \t]*(.+?)[ \t]*;?[ \t]*$", re.M)
+SHELL_OUT_RE = re.compile(
+    r"(?:\b(?:os\.system|os\.popen|os\.execute|io\.popen|subprocess\.(?:run|call|check_call|check_output|Popen|"
+    r"getoutput|getstatusoutput)|pexpect\.(?:run|spawn)|shell_exec|passthru|proc_open|system2?|IO\.popen|"
+    r"Kernel\.system|Open3\.(?:capture2e?|capture3|popen2e?|popen3)|exec\.CommandContext|exec\.Command|"
+    r"Deno\.Command|execaCommandSync|execaCommand|execaSync|execa)"
+    r"|(?:\b|\.)(?:execSync|execFileSync|spawnSync|execFile|spawn|exec|popen))\s*\(")
+# languages where a call's further arguments are the words of the command, not options
+ARGV_LANGS = ("rb", "pl", "go", "r")
+RECURSIVE_DELETE_RE = re.compile(r"rmtree|rimraf|rm_rf|rm_r$|remove_tree|removedirs|RemoveAll|remove_dir|remove_entry|"
+                                 r"emptyDir|removeSync|fse?\.remove$|deleteDirectory")
+CODE_DELETE_RE = re.compile(
+    r"\brmtree\s*\(|\brmSync\s*\(|\brimraf(?:\.sync|Sync)?\s*\(|fs\.(?:rm|rmdir)\w*\s*\(|FileUtils\.(?:rm_rf|rm_r|"
+    r"remove_dir|remove_entry_secure|remove_entry)\s*\(|\bremove_tree\s*\(|os\.RemoveAll\s*\(|"
+    r"\bemptyDir(?:Sync)?\s*\(|\bremoveSync\s*\(|\bfse?\.remove\s*\(|\bunlink\s*\(|(?:File|Storage)::deleteDirectory\s*\(")
+# The same act as a database reset, written as code. Read on lower-cased text.
+DB_API = (r"\bdrop_all\s*\(|\bdrop_?database\s*\(|\bdrop_collection\s*\(|\.deletemany\s*\(\s*(?:\{\s*\})?\s*\)|"
+          r"\bdelete_many\s*\(\s*\{\s*\}\s*\)|\bsync\s*\(\s*\{\s*force\s*:\s*true|\bflush(?:all|db)\s*\(|"
+          r"\.objects\.all\(\)\.delete\(\)|(?:::|->)truncate\(\)|schema::dropall(?:tables|views)\s*\(|"
+          r"call_command\(\s*['\"](?:flush|reset_db)['\"]|"
+          r"artisan::call\(\s*['\"](?:migrate:(?:fresh|refresh|reset)|db:wipe)['\"]|"
+          r"rake::task\[\s*['\"]db:(?:drop|reset|purge|schema:load|truncate_all)")
+SQL_DESTROY = (r"(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?\w|"
+               r"delete\s+from\s+[\w.\"`\[\]]+\s*(?:['\"`;]|$))")
+# in a file, SQL counts where it is handed to the database or kept under a name that says SQL;
+# the same words inside any other string are text (a test's sample, a comment, a message)
+DB_BODY_RE = re.compile(
+    DB_API + r"|(?:execute\w*|exec|query|raw|run|statement|unprepared|prepare|text|sql|\$executeraw\w*|\$queryraw\w*)"
+    r"\s*[(`]\s*[frb]?['\"`]{0,3}\s*" + SQL_DESTROY +
+    r"|\b\w*(?:sql|query|stmt|statement|ddl)\w*\s*=\s*[frb]?['\"`]{1,3}\s*" + SQL_DESTROY, re.M)
+DB_CODE_CASE_RE = re.compile(r"\b[A-Z]\w*(?:::[A-Z]\w*)*\.(?:delete_all|destroy_all)\b(?!\s*\()")
+SQL_DESTROY_RE = re.compile(r"\bdrop\s+(?:table|database|schema|index)\b|(?<![\w(])truncate\s+(?:table\s+)?[\w\"`]|"
+                            r"\bdelete\s+from\s+[\w.\"`\[\]]+\s*(?:;|$)", re.I)
+FETCH_RUN_HINT = "Download it to a file, read it, then run it deliberately; the owner reviews the script."
+FETCH_RUN_RE = re.compile(
+    r"\b(?:exec|eval)\s*\(\s*(?:await\s+)?(?:\(\s*await\s+)?(?:urllib\.request\.urlopen|urlopen|requests\.(?:get|post)|"
+    r"httpx\.get|fetch|file_get_contents\s*\(\s*['\"]https?:|open\s*\(\s*['\"]https?:|Net::HTTP\.get|"
+    r"URI\.open|curl_exec)", re.I)
+REVERSE_SHELL_CODE_RE = re.compile(
+    r"os\.dup2\s*\(\s*\w+\.fileno\(\)|pty\.spawn\s*\(\s*['\"]/bin/(?:ba|z)?sh|"
+    r"fsockopen\s*\([^\n]{0,200}(?:/bin/(?:ba)?sh|cmd\.exe)|TCPSocket\.(?:new|open)\s*\([^\n]{0,200}/bin/(?:ba)?sh")
+
+
+HASH_COMMENT_LANGS = ("py", "rb", "pl", "php", "r", "awk")
+SLASH_COMMENT_LANGS = ("js", "go", "php")
+TMP_EXPR_RE = re.compile(r"""^(?:tempfile\.gettempdir\(\)|(?:os\.)?tmpdir\(\)|Dir\.tmpdir|sys_get_temp_dir\(\)|"""
+                         r"""os\.TempDir\(\)|require\(\s*['"](?:node:)?os['"]\s*\)\.tmpdir\(\))$""")
+# calls that reach the network: what they are handed is read for the addresses it names
+NET_CALL_RE = re.compile(
+    r"\b(?:requests\.\w+|urllib\.request\.\w+|urllib2\.\w+|urlopen|urlretrieve|httpx\.\w+|aiohttp\.\w+|"
+    r"http\.client\.\w+|fetch|axios(?:\.\w+)?|got(?:\.\w+)?|https?\.(?:get|request)|net\.(?:connect|createConnection)|"
+    r"\w+\.connect|create_connection|curl_init|curl_setopt|file_get_contents|fsockopen|Net::HTTP\.\w+|URI\.open|"
+    r"HTTParty\.\w+|Faraday\.\w+|http\.(?:Get|Post)|net\.Dial)\s*\(")
+# a payload is only a payload when the code both decodes something and runs something
+DECODES_RE = re.compile(r"\b(?:atob|b64decode|base64_decode|decode64|decodebytes|fromhex|unhexlify|hex2bin|a2b_base64)\s*\(|"
+                        r"Buffer\.from\s*\(|\bunpack\s*\(|\bpack\s*\(")
+RUNS_RE = re.compile(r"\b(?:eval|exec|system|Function|shell_exec|passthru|popen|execSync|spawn\w*|os\.system|"
+                     r"subprocess\.\w+|proc_open)\s*\(|`")
+
+
+def code_mask(text, lang):
+    """The text with the insides of its string literals and its comments blanked, at the same length.
+    A pattern that starts where the mask is blank is text the code carries, not code it runs."""
+    out, i, n = list(text), 0, len(text)
+    hashes, slashes = lang in HASH_COMMENT_LANGS, lang in SLASH_COMMENT_LANGS
+    while i < n:
+        c = text[i]
+        if c in "'\"" or (c == "`" and lang == "js"):
+            end = text[i:i + 3] if (lang == "py" and text[i:i + 3] in ("'''", '"""')) else c
+            j = i + len(end)
+            while j < n and not text.startswith(end, j):
+                if text[j] == "\\" and j + 1 < n:
+                    j += 1
+                elif text[j] == "\n" and len(end) == 1 and c != "`":
+                    break                                    # a quote left open ends with its line
+                j += 1
+            for k in range(i + len(end), min(j, n)):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j + len(end)
+        elif (hashes and c == "#") or (slashes and text.startswith("//", i)) or (lang == "lua" and text.startswith("--", i)):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out[i:j] = " " * (j - i)
+            i = j
+        elif slashes and text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            for k in range(i, j):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+        else:
+            i += 1
+    return "".join(out)
+
+
+def in_code(mask, text, pos):
+    """True when the character at pos is code: outside every string literal and comment."""
+    return mask is None or (pos < len(mask) and mask[pos] == text[pos] and not text[pos].isspace())
+
+
+def net_call_text(body, mask):
+    """What the code hands to its network calls, as text: the only place an address in a file is used."""
+    out = []
+    for m in NET_CALL_RE.finditer(body):
+        if in_code(mask, body, m.start()):
+            args = _balanced_args(body, m.end() - 1)
+            if args:
+                out.append(" ".join(args)[:400])
+    return "\n".join(out)
+
+
+def _split_top(text, sep):
+    """Split on a separator that stands outside quotes and brackets."""
+    parts, cur, depth, q, i, n = [], [], 0, None, 0, len(text)
+    while i < n:
+        c = text[i]
+        if q:
+            cur.append(c)
+            if c == "\\" and i + 1 < n:
+                cur.append(text[i + 1]); i += 1
+            elif c == q:
+                q = None
+        elif c in "'\"`":
+            q = c; cur.append(c)
+        elif c in "([{":
+            depth += 1; cur.append(c)
+        elif c in ")]}":
+            depth -= 1; cur.append(c)
+        elif depth == 0 and text.startswith(sep, i):
+            parts.append("".join(cur)); cur = []; i += len(sep); continue
+        else:
+            cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return [p.strip() for p in parts]
+
+
+def _wrapped(text):
+    """True when the first bracket of the text closes at its last character."""
+    depth, q, i, n = 0, None, 0, len(text)
+    while i < n:
+        c = text[i]
+        if q:
+            if c == "\\" and i + 1 < n:
+                i += 1
+            elif c == q:
+                q = None
+        elif c in "'\"`":
+            q = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i == n - 1
+        i += 1
+    return False
+
+
+def _join_path(vals):
+    out = ""
+    for v in vals:
+        out = v if (not out or v.startswith(("/", "~"))) else out.rstrip("/") + "/" + v
+    return out
+
+
+def code_str(expr, lits, d=0):
+    """The string a simple expression stands for: a literal, the home folder, a joined path, a known
+    variable, or those put together. None when the code only knows it at run time."""
+    e = (expr or "").strip().rstrip(";").strip()
+    if not e or d > 8 or len(e) > 600:
+        return None
+    while e.startswith("(") and _wrapped(e):
+        e = e[1:-1].strip()
+    m = STR_LIT_RE.match(e)
+    if m:
+        double = m.group(1) is None
+        s = re.sub(r"\\(.)", r"\1", m.group(2) if double else m.group(1))
+        prefix = e[:e.index('"' if double else "'")].lower()
+        if double and "r" not in prefix:                     # "#{Dir.home}/x" in Ruby, "$home/x" in PHP and Perl
+            s = re.sub(r"#\{([^{}]*)\}", lambda k: code_str(k.group(1), lits, d + 1) or UNKNOWN_WORD, s)
+            s = re.sub(r"\{?\$\{?([A-Za-z_]\w*)\}?\}?",
+                       lambda k: lits.get(k.group(1)) or lits.get("$" + k.group(1)) or k.group(0), s)
+        if "f" in prefix:                                    # f"{home}/x"
+            s = re.sub(r"\{([A-Za-z_]\w*)\}", lambda k: lits.get(k.group(1)) or UNKNOWN_WORD, s)
+        return s
+    if len(e) > 1 and e[0] == "`" and e[-1] == "`" and "`" not in e[1:-1]:       # a template literal
+        return re.sub(r"\$\{([^{}]*)\}", lambda k: code_str(k.group(1), lits, d + 1) or UNKNOWN_WORD, e[1:-1])
+    if HOME_EXPR_RE.match(e):
+        return HOME
+    if CWD_EXPR_RE.match(e):
+        return "."
+    if TMP_EXPR_RE.match(e):
+        return canon(tempfile.gettempdir())
+    if e in HERE_NAMES:
+        return lits.get("__here__")
+    for sep, joined in ((" . ", False), ("+", False), ("/", True)):
+        parts = _split_top(e, sep)
+        if len(parts) > 1:
+            vals = [code_str(p, lits, d + 1) for p in parts]
+            if any(v is None for v in vals):
+                return None
+            return _join_path(vals) if joined else "".join(vals)
+    m = re.match(r"^([\w.:$\\]+)(\(.*\))$", e, re.S)
+    if m and _wrapped(m.group(2)):
+        short = re.split(r"[.:\\]+", m.group(1))[-1]
+        args = [a for a in _split_top(m.group(2)[1:-1], ",") if a]
+        vals = [code_str(a, lits, d + 1) for a in args]
+        if short in ("expanduser", "expand_path") and vals[:1] and vals[0] is not None:
+            return HOME + vals[0][1:] if vals[0].startswith("~") else vals[0]
+        if short in ("join", "Join", "resolve", "Path", "PurePath", "PosixPath") and vals and None not in vals:
+            return _join_path(vals)
+        if short in ("abspath", "realpath", "normpath", "normalize", "str", "String", "fspath", "Clean") and vals[:1]:
+            return vals[0]
+        if short == "dirname" and vals[:1] and vals[0]:
+            return posixpath.dirname(vals[0].rstrip("/")) or "."
+        if short in ("mkdtemp", "mkdtempSync", "makeTempDirSync"):          # a fresh folder in the temp directory
+            if short == "mkdtemp" and "dir" not in m.group(2):
+                return pj(canon(tempfile.gettempdir()), "made-at-run-time")
+            if short != "mkdtemp" and vals[:1] and vals[0]:
+                return vals[0] + "made-at-run-time"
+        return None
+    m = re.match(r"^(.+)\.(?:as_posix|resolve|absolute|expanduser|toString|to_s|to_path|decode|strip)\(\)$", e, re.S)
+    if m:
+        v = code_str(m.group(1), lits, d + 1)
+        return HOME + v[1:] if v and v.startswith("~") else v
+    if re.match(r"^[$@]?[A-Za-z_]\w*$", e):
+        return lits.get(e) if e in lits else lits.get(e.lstrip("$@"))
+    return None
+
+
+def code_literals(body, here=None, mask=None):
+    """Names a file gives to strings it can spell out: `home = os.path.expanduser("~")`."""
+    lits = {"__here__": here} if here else {}
+    for _ in range(2):
+        for m in ASSIGN_RE.finditer(body):
+            name = m.group(1)
+            if name not in lits and in_code(mask, body, m.start(1)):
+                v = code_str(m.group(2), lits)
+                if v is not None:
+                    lits[name] = v
+                    lits.setdefault(name.lstrip("$@"), v)
+    for m in re.finditer(r"^[ \t]*(\w+)\s*,\s*\w+\s*:?=\s*os\.UserHomeDir\(\)", body, re.M):
+        lits[m.group(1)] = HOME
+    return lits
+
+
+def _words(args, lits):
+    return [code_str(a, lits) or UNKNOWN_WORD for a in args]
+
+
+def _list_items(expr):
+    """The items of a list written out in code: [a, b], (a, b), c(a, b), array(a, b), or None."""
+    e = expr.strip()
+    m = re.match(r"^(?:\[|\(|c\(|array\()", e)
+    if not m or e[-1] not in "])" or not _wrapped(e[m.end() - 1:]):
+        return None
+    items = [a for a in _split_top(e[m.end():-1], ",") if a]
+    return items if (m.group(0) != "(" or len(items) > 1) else None
+
+
+def code_command(name, args, lits, lang):
+    """The shell command a shell-out call runs, read from its arguments. None when the program
+    it runs is only known at run time."""
+    if name.endswith("CommandContext"):
+        args = args[1:]
+    if not args:
+        return None
+    items = _list_items(args[0])
+    if items is not None:                                    # ["rm", "-rf", path]
+        words = _words(items, lits)
+    else:
+        first = code_str(args[0], lits)
+        if first is None:
+            return None
+        rest = [a.strip() for a in args[1:]]
+        more = _list_items(rest[0]) if rest else None
+        if more is not None:                                 # spawn("rm", ["-rf", path])
+            words = [first] + _words(more, lits)
+        elif lang in ARGV_LANGS and rest:                    # system("rm", "-rf", path)
+            words = [first]
+            for a in rest:
+                if re.match(r"^:?[A-Za-z_]\w*\s*(?:=>|:(?!:)|=(?!=))", a) or a[:1] == "{":
+                    break                                    # an option, not a word of the command
+                words.append(code_str(a, lits) or UNKNOWN_WORD)
+        else:
+            return first                                     # a whole command line in one string
+    if not words or words[0] == UNKNOWN_WORD:
+        return None
+    return " ".join(shlex.quote(w) for w in words)
+
+
+def _b64_texts(body, mask=None):
+    """Text hidden in the file as base64 or hex, decoded: what the code would run after decoding it.
+    Only for code that both decodes and runs something; a blob that nothing decodes is data."""
+    if mask is not None and not (any(in_code(mask, body, m.start()) for m in DECODES_RE.finditer(body)) and
+                                 any(in_code(mask, body, m.start()) for m in RUNS_RE.finditer(body))):
+        return []
+    out = []
+    for m in B64_BLOB_RE.finditer(body):
+        blob = m.group(1)
+        try:
+            import base64
+            dec = base64.b64decode(blob + "=" * (-len(blob) % 4), validate=True).decode("utf-8")
+        except Exception:
+            continue
+        out.append(dec)
+    for m in re.finditer(r"['\"]((?:[0-9a-fA-F]{2}){8,})['\"]", body):
+        try:
+            out.append(bytes.fromhex(m.group(1)).decode("utf-8"))
+        except Exception:
+            continue
+    return [t for t in out if len(t) > 5 and sum(c.isprintable() or c in "\n\t" for c in t) >= 0.95 * len(t)
+            and re.search(r"[A-Za-z]{2}", t) and re.search(r"[ (]", t)][:8]
+
+
+def local_files(body, lang, here, mask=None):
+    """The local files a piece of code pulls in: ./x required from JavaScript, require_relative in Ruby,
+    include in PHP, and so on. Only files that exist beside the script are returned."""
+    out = []
+
+    def finditer(pattern, flags=0):
+        return [m for m in re.finditer(pattern, body, flags) if in_code(mask, body, m.start())]
+
+    def add(spec, exts):
+        if not here or not spec:
+            return
+        base = resolve(spec, here)
+        cands = [base] + [base + x for x in exts] + [pj(base, "index" + x) for x in exts]
+        if base.endswith(".js"):
+            cands.append(base[:-3] + ".ts")
+        for cand in cands:
+            if os.path.isfile(cand):
+                if cand not in out:
+                    out.append(cand)
+                return
+
+    if lang == "js":
+        for m in finditer(r"""(?:\brequire\s*\(\s*|\bimport\s*\(\s*|\bfrom\s+|\bimport\s+|\bfork\s*\(\s*)"""
+                          r"""['"](\.{1,2}/[^'"]+)['"]"""):
+            add(m.group(1), (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".mts", ".cts"))
+    elif lang == "rb":
+        for m in finditer(r"""\b(?:require_relative|require|load)\s*\(?\s*['"]([^'"]+)['"]"""):
+            add(m.group(1), (".rb",))
+    elif lang == "php":
+        lits = {"__DIR__": here}
+        for m in finditer(r"\b(?:require|include)(?:_once)?\s*\(?\s*([^;\n]+?)\s*\)?\s*;"):
+            v = code_str(m.group(1).replace("__DIR__", "'%s'" % here), lits)
+            add(v, ())
+    elif lang == "pl":
+        for m in finditer(r"""\b(?:require|do)\s+['"]([^'"]+\.p[lm])['"]"""):
+            add(m.group(1), ())
+    elif lang == "lua":
+        for m in finditer(r"""\b(?:require|dofile)\s*\(?\s*['"]([\w./\-]+)['"]"""):
+            add(m.group(1).replace(".", "/") if not m.group(1).endswith(".lua") else m.group(1), (".lua",))
+    elif lang == "py":
+        for m in finditer(r"^[ \t]*(?:from[ \t]+([\w.]+)[ \t]+import|import[ \t]+([\w.]+))", re.M):
+            f = local_module(m.group(1) or m.group(2), here, None)
+            if f and f not in out:
+                out.append(f)
+    return out[:12]
+
+
+def text_findings(body, lang, here, ecwd, mask=None):
+    """What a piece of code does, read as text: the commands it hands to a shell, the folders it
+    deletes outright, the database-destroying calls it makes, the payloads it decodes at run time,
+    and the local files it pulls in. Every pattern is matched where the code is; the same words
+    inside a string or a comment are text the file carries, and are not read as something it does."""
+    out = {"commands": [], "deletes": [], "findings": [], "payloads": [], "files": []}
+    mask = mask if mask is not None else code_mask(body, lang)
+    lits = code_literals(body, here, mask)
+
+    def code_matches(pattern, text=None):
+        return [m for m in pattern.finditer(text if text is not None else body) if in_code(mask, body, m.start())]
+
+    names = SHELL_OUT_RE
+    extra = set()
+    for m in re.finditer(r"from\s+subprocess\s+import\s+([\w, \t]+)", body):
+        extra |= {w for w in re.split(r"[,\s]+", m.group(1)) if w in ("run", "call", "check_call", "check_output", "Popen")}
+    for m in re.finditer(r"""\{([^{}]*)\}\s*=\s*require\(\s*['"](?:node:)?child_process['"]\s*\)|"""
+                         r"""import\s*\{([^{}]*)\}\s*from\s*['"](?:node:)?child_process['"]""", body):
+        for item in (m.group(1) or m.group(2) or "").split(","):       # { execSync: run } / { execSync as run }
+            pair = re.split(r"\s*:\s*|\s+as\s+", item.strip())
+            if len(pair) == 2 and re.match(r"^\w+$", pair[1]):
+                extra.add(pair[1])
+    for m in re.finditer(r"""\b(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*['"](?:node:)?child_process['"]\s*\)\.\w+""", body):
+        extra.add(m.group(1))
+    if extra:
+        names = re.compile("(?:" + SHELL_OUT_RE.pattern[:-len(r"\s*\(")] + r"|\b(?:%s))\s*\(" % "|".join(sorted(extra)))
+    for m in code_matches(names):
+        open_idx = m.end() - 1
+        args = _balanced_args(body, open_idx)
+        if args:
+            cmd = code_command(body[m.start():open_idx].strip().lstrip("."), args, lits, lang)
+            if cmd:
+                out["commands"].append(cmd)
+    if lang in ("rb", "pl", "php"):
+        for m in code_matches(re.compile(r"(?<![\w$@])`([^`\n]{2,400})`")):               # `rm -rf x`
+            out["commands"].append(code_str('"%s"' % m.group(1).replace('"', '\\"'), lits) or m.group(1))
+        for m in code_matches(re.compile(r"(?:%x|qx)\s*([\[({])(.{2,400}?)[\])}]")):
+            out["commands"].append(m.group(2))
+        for m in code_matches(re.compile(r"""(?m)^[ \t]*(?:system|exec)[ \t]+((?:['"]).+)$""")):   # system "rm -rf x"
+            cmd = code_command("system", [a for a in _split_top(m.group(1), ",") if a], lits, lang)
+            if cmd:
+                out["commands"].append(cmd)
+        for m in code_matches(re.compile(r"FileUtils\.(rm_rf|rm_r|remove_dir|remove_entry_secure|remove_entry)"
+                                         r"[ \t]+([^\n#;(][^\n#;]*)")):
+            t = code_str(_split_top(m.group(2), ",")[0], lits)
+            if t:
+                out["deletes"].append((t, "FileUtils." + m.group(1)))
+    if lang == "js":
+        for m in code_matches(re.compile(r"\$\s*`([^`]{2,400})`")):                        # zx and Bun: $`rm -rf x`
+            out["commands"].append(code_str("`%s`" % m.group(1), lits) or m.group(1))
+    if lang == "awk":                                        # "cmd" | getline, print | "cmd"
+        for m in code_matches(re.compile(r'"((?:[^"\\]|\\.)+)"\s*\|\s*getline|\|\s*"((?:[^"\\]|\\.)+)"')):
+            out["commands"].append(re.sub(r"\\(.)", r"\1", m.group(1) or m.group(2)))
+    for m in code_matches(re.compile(r'do shell script\s+"((?:[^"\\]|\\.)*)"')):           # AppleScript
+        out["commands"].append(re.sub(r"\\(.)", r"\1", m.group(1)))
+    for m in code_matches(CODE_DELETE_RE):
+        open_idx = m.end() - 1
+        name = body[m.start():open_idx].strip()
+        args = _balanced_args(body, open_idx)
+        if not args:
+            continue
+        if RECURSIVE_DELETE_RE.search(name) or "recursive" in " ".join(args[1:]).lower():
+            t = code_str(args[0], lits)
+            if t:
+                out["deletes"].append((t, name))
+    hit = (code_matches(DB_BODY_RE, body.lower()) or code_matches(DB_CODE_CASE_RE) or [None])[0]
+    if hit:
+        out["findings"].append(("OP-007", "code that empties or drops a database: %s" %
+                                " ".join(hit.group(0).split())[:60], DB_RESET_HINT))
+    if code_matches(FETCH_RUN_RE):
+        out["findings"].append(("OP-S06", "code downloaded at run time and executed", FETCH_RUN_HINT))
+    out["payloads"] = _b64_texts(body, mask)
+    out["files"] = local_files(body, lang, here, mask)
+    return out
+
+
+# ---- reading Python by its syntax tree: a string that mentions a command is not a call --------- #
+PY_SHELL = {"os.system", "os.popen", "subprocess.run", "subprocess.call", "subprocess.check_call",
+            "subprocess.check_output", "subprocess.Popen", "subprocess.getoutput", "subprocess.getstatusoutput",
+            "pexpect.run", "pexpect.spawn", "commands.getoutput", "asyncio.create_subprocess_shell"}
+PY_ARGV = {"asyncio.create_subprocess_exec", "os.execl", "os.execlp", "os.spawnl", "os.spawnlp"}
+PY_RMTREE = {"shutil.rmtree", "distutils.dir_util.remove_tree"}
+PY_B64 = {"base64.b64decode", "base64.standard_b64decode", "base64.urlsafe_b64decode", "base64.decodebytes",
+          "binascii.a2b_base64"}
+PY_HEX = {"bytes.fromhex", "bytearray.fromhex", "binascii.unhexlify", "binascii.a2b_hex"}
+PY_UNPACK = {"zlib.decompress": "zlib", "gzip.decompress": "gzip", "bz2.decompress": "bz2", "lzma.decompress": "lzma"}
+PY_FETCH = {"urllib.request.urlopen", "urllib.request.urlretrieve", "urllib2.urlopen", "requests.get",
+            "requests.post", "httpx.get", "urlopen"}
+PY_SQL_CALLS = {"execute", "executemany", "executescript", "exec_driver_sql", "raw", "query", "run", "exec", "text"}
+
+
+def py_findings(body, here, ecwd, argv_given=None):
+    """What Python source does, read from its syntax tree, so a command that only appears inside a
+    string is never taken for a call. None when the source does not parse; the caller then reads it
+    as text."""
+    try:
+        import ast
+        import warnings
+        with warnings.catch_warnings():                      # the file's own warnings are not the hook's to print
+            warnings.simplefilter("ignore")
+            tree = ast.parse(body)
+    except Exception:
+        return None
+    alias, env, lists = {}, {"__file__": pj(here or ".", "__main__.py")}, {}
+    out = {"commands": [], "deletes": [], "findings": [], "payloads": [], "files": []}
+
+    def add_module(mod, level=0):
+        base = here
+        for _ in range(max(level - 1, 0)):
+            base = posixpath.dirname(base) if base else base
+        f = local_module(mod, base, None if level else ecwd) if mod else None
+        if f and f not in out["files"]:
+            out["files"].append(f)
+
+    def const(n):
+        return n.value if isinstance(n, ast.Constant) and isinstance(n.value, str) else None
+
+    def dotted(n):
+        if isinstance(n, ast.Name):
+            return alias.get(n.id, n.id)
+        if isinstance(n, ast.Attribute):
+            b = dotted(n.value)
+            return (b + "." + n.attr) if b else None
+        if isinstance(n, ast.Call):
+            f = dotted(n.func)
+            if f in ("__import__", "importlib.import_module") and n.args and const(n.args[0]):
+                return const(n.args[0])
+            if f == "getattr" and len(n.args) >= 2 and const(n.args[1]):
+                b = dotted(n.args[0])
+                return (b + "." + const(n.args[1])) if b else None
+        return None
+
+    def raw(n, d=0):
+        """The bytes an expression yields when it decodes a literal: b64decode("..."), bytes.fromhex("...")."""
+        if d > 10:
+            return None
+        if isinstance(n, ast.Constant):
+            v = n.value
+            return v if isinstance(v, bytes) else (v.encode("utf-8", "replace") if isinstance(v, str) else None)
+        if isinstance(n, ast.Name):
+            v = env.get(n.id)
+            return v.encode("utf-8", "replace") if v is not None else None
+        if not isinstance(n, ast.Call):
+            return None
+        name = dotted(n.func) or ""
+        if isinstance(n.func, ast.Attribute) and n.func.attr in ("encode", "decode", "strip") and \
+                name not in PY_B64 and name not in PY_HEX and name not in PY_UNPACK and name != "codecs.decode":
+            return raw(n.func.value, d + 1)
+        inner = raw(n.args[0], d + 1) if n.args else None
+        if inner is None:
+            return None
+        try:
+            if name in PY_B64:
+                import base64
+                return base64.b64decode(inner + b"=" * (-len(inner) % 4))
+            if name in PY_HEX:
+                return bytes.fromhex(inner.decode("ascii"))
+            if name in PY_UNPACK:
+                return __import__(PY_UNPACK[name]).decompress(inner)
+            if name == "codecs.decode" and len(n.args) > 1 and const(n.args[1]):
+                import codecs
+                kind = const(n.args[1]).lower().replace("-", "_")
+                if kind in ("rot13", "rot_13"):
+                    return codecs.decode(inner.decode("utf-8"), "rot_13").encode("utf-8")
+                return codecs.decode(inner, kind)
+        except Exception:
+            return None
+        return None
+
+    def val(n, d=0):
+        if n is None or d > 12:
+            return None
+        if isinstance(n, ast.Constant):
+            if isinstance(n.value, str):
+                return n.value
+            return n.value.decode("utf-8", "replace") if isinstance(n.value, bytes) else None
+        if isinstance(n, ast.Name):
+            return env.get(n.id)
+        if isinstance(n, ast.JoinedStr):
+            parts = [val(v.value, d + 1) if isinstance(v, ast.FormattedValue) else val(v, d + 1) for v in n.values]
+            return None if None in parts else "".join(parts)
+        if isinstance(n, ast.BinOp) and isinstance(n.op, (ast.Add, ast.Div)):
+            left, right = val(n.left, d + 1), val(n.right, d + 1)
+            if left is None or right is None:
+                return None
+            return left + right if isinstance(n.op, ast.Add) else _join_path([left, right])
+        if isinstance(n, ast.Subscript):
+            if dotted(n.value) == "os.environ" and const(n.slice) in ("HOME", "USERPROFILE"):
+                return HOME
+            k = n.slice.value if isinstance(n.slice, ast.Constant) else None
+            if dotted(n.value) == "sys.argv" and isinstance(k, int) and argv_given and 1 <= k <= len(argv_given):
+                return argv_given[k - 1]                     # the word the script was run with
+            return None
+        if isinstance(n, ast.Attribute):
+            if n.attr == "parent":
+                b = val(n.value, d + 1)
+                return (posixpath.dirname(b.rstrip("/")) or "/") if b else None
+            return None
+        if not isinstance(n, ast.Call):
+            return None
+        name = dotted(n.func) or ""
+        vals = [val(a, d + 1) for a in n.args]
+        a0 = vals[0] if vals else None
+        if name in PY_B64 or name in PY_HEX or name in PY_UNPACK or name == "codecs.decode":
+            b = raw(n)
+            return b.decode("utf-8", "replace") if b is not None else None
+        if name.endswith("Path.home") or name.endswith("Path.home()"):
+            return HOME
+        if name in ("os.path.expanduser", "posixpath.expanduser"):
+            return (HOME + a0[1:] if a0.startswith("~") else a0) if a0 is not None else None
+        if name in ("os.getenv", "os.environ.get"):
+            return HOME if n.args and const(n.args[0]) in ("HOME", "USERPROFILE") else None
+        if name in ("os.getcwd", "pathlib.Path.cwd"):
+            return ecwd or "."
+        if name == "tempfile.gettempdir":
+            return canon(tempfile.gettempdir())
+        if name == "tempfile.mkdtemp" and not any(k.arg == "dir" for k in n.keywords) and len(n.args) < 3:
+            return pj(canon(tempfile.gettempdir()), "made-at-run-time")
+        if name in ("os.path.join", "posixpath.join") or re.match(r"^pathlib\.(?:Pure)?(?:Posix|Windows)?Path$", name):
+            return None if (not vals or None in vals) else _join_path(vals)
+        if name in ("os.path.abspath", "os.path.realpath", "os.path.normpath", "os.fspath", "str", "os.path.expandvars"):
+            return a0
+        if name == "os.path.dirname":
+            return (posixpath.dirname(a0.rstrip("/")) or "/") if a0 else None
+        if isinstance(n.func, ast.Attribute):
+            attr = n.func.attr
+            if attr in ("decode", "strip", "rstrip", "lstrip", "as_posix", "resolve", "absolute", "expanduser", "encode"):
+                v = raw(n) if attr == "decode" else None
+                v = v.decode("utf-8", "replace") if v is not None else val(n.func.value, d + 1)
+                return (HOME + v[1:]) if (v and attr == "expanduser" and v.startswith("~")) else v
+            if attr == "join" and len(n.args) == 1 and isinstance(n.args[0], (ast.List, ast.Tuple)):
+                sep, items = val(n.func.value, d + 1), [val(e, d + 1) for e in n.args[0].elts]
+                return None if (sep is None or None in items) else sep.join(items)
+            if attr == "joinpath":
+                b = val(n.func.value, d + 1)
+                return None if (b is None or None in vals) else _join_path([b] + vals)
+        return None
+
+    def argv(n):
+        if isinstance(n, (ast.List, ast.Tuple)):
+            return [val(e) if val(e) is not None else UNKNOWN_WORD for e in n.elts]
+        if isinstance(n, ast.Name) and n.id in lists:
+            return lists[n.id]
+        if isinstance(n, ast.Call):
+            name = dotted(n.func) or ""
+            if isinstance(n.func, ast.Attribute) and n.func.attr == "split" and not n.args:
+                s = val(n.func.value)
+                return s.split() if s else None
+            if name == "shlex.split" and n.args:
+                s = val(n.args[0])
+                try:
+                    return shlex.split(s) if s else None
+                except ValueError:
+                    return s.split()
+        return None
+
+    nodes = list(ast.walk(tree))
+    for n in nodes:
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.asname:
+                    alias[a.asname] = a.name
+                else:
+                    alias[a.name.split(".")[0]] = a.name.split(".")[0]
+                add_module(a.name)
+        elif isinstance(n, ast.ImportFrom):
+            mod = n.module or ""
+            add_module(mod, n.level)
+            for a in n.names:
+                alias[a.asname or a.name] = (mod + "." + a.name) if mod else a.name
+                add_module((mod + "." + a.name) if mod else a.name, n.level)
+    for _ in range(2):
+        for n in nodes:
+            target = None
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+                target = n.targets[0].id
+            elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+                target = n.target.id
+            if target and target not in env and target not in lists:
+                v = val(n.value)
+                if v is not None:
+                    env[target] = v
+                else:
+                    words = argv(n.value)
+                    if words is not None:
+                        lists[target] = words
+
+    def finding(what):
+        out["findings"].append(("OP-007", "code that empties or drops a database: %s" % what, DB_RESET_HINT))
+
+    for n in nodes:
+        if not isinstance(n, ast.Call):
+            continue
+        name = dotted(n.func) or ""
+        attr = n.func.attr if isinstance(n.func, ast.Attribute) else ""
+        args = n.args
+        if name in PY_SHELL and args:
+            words = argv(args[0])
+            if words is not None:
+                if words and words[0] != UNKNOWN_WORD:
+                    out["commands"].append(" ".join(shlex.quote(w) for w in words))
+            else:
+                s = val(args[0])
+                if s:
+                    out["commands"].append(s)
+        elif name in PY_ARGV and args:
+            words = [val(a) or UNKNOWN_WORD for a in args]
+            if words[0] != UNKNOWN_WORD:
+                out["commands"].append(" ".join(shlex.quote(w) for w in words))
+        elif name in PY_RMTREE and args:
+            t = val(args[0])
+            if t:
+                out["deletes"].append((t, name))
+        elif name in ("exec", "eval") and args:
+            code = val(args[0])
+            if code:
+                out["payloads"].append(code)
+            elif any(isinstance(x, ast.Call) and (dotted(x.func) or "") in PY_FETCH for x in ast.walk(args[0])):
+                out["findings"].append(("OP-S06", "code downloaded at run time and executed", FETCH_RUN_HINT))
+        elif name.endswith("call_command") and args:
+            words = [const(a) for a in args if const(a)]
+            if words[:1] and (words[0] in ("flush", "reset_db") or (words[0] == "migrate" and "zero" in words[1:])):
+                finding("call_command(%r)" % words[0])
+        elif name in ("runpy.run_path",) and args and val(args[0]) and here:
+            f = resolve(val(args[0]), here)
+            if os.path.isfile(f) and f not in out["files"]:
+                out["files"].append(f)
+        elif name in ("runpy.run_module", "importlib.import_module", "__import__") and args and const(args[0]):
+            add_module(const(args[0]))
+        elif attr in ("drop_all", "drop_database", "dropDatabase", "drop_collection", "flushall", "flushdb"):
+            finding(".%s()" % attr)
+        elif attr in ("delete_many", "remove") and args and isinstance(args[0], ast.Dict) and not args[0].keys:
+            finding(".%s({})" % attr)
+        elif attr == "drop" and not args and not n.keywords and isinstance(n.func.value, (ast.Attribute, ast.Subscript)):
+            finding(".drop() on a collection")
+        elif attr == "delete" and not args and isinstance(n.func.value, ast.Call) \
+                and isinstance(n.func.value.func, ast.Attribute):
+            inner = n.func.value.func
+            if inner.attr == "all" and isinstance(inner.value, ast.Attribute) and inner.value.attr == "objects":
+                finding("Model.objects.all().delete()")
+            elif inner.attr == "query":
+                finding("query(Model).delete() with no filter")
+        elif (attr in PY_SQL_CALLS or name in ("sqlalchemy.text", "text")) and args:
+            sql = val(args[0])
+            if sql and SQL_DESTROY_RE.search(sql):
+                finding("SQL: %s" % " ".join(sql.split())[:60])
+    # a loop that lists a folder and deletes what it finds, file by file, empties the folder
+    listed, loose = [], False
+    for n in nodes:
+        if not isinstance(n, ast.Call):
+            continue
+        name = dotted(n.func) or ""
+        attr = n.func.attr if isinstance(n.func, ast.Attribute) else ""
+        if name in ("os.walk", "os.listdir", "os.scandir") and n.args and val(n.args[0]):
+            listed.append(val(n.args[0]))
+        elif attr in ("rglob", "iterdir") and val(n.func.value):
+            listed.append(val(n.func.value))
+        elif name in ("os.remove", "os.unlink", "os.rmdir", "shutil.rmtree") and n.args and val(n.args[0]) is None:
+            loose = True
+        elif attr in ("unlink", "rmdir") and not n.args and val(n.func.value) is None:
+            loose = True
+    for root in listed if loose else ():
+        t = resolve(root, ecwd)
+        if not t.startswith(UNKNOWN_CWD) and not is_scratch(t) and (ecwd is None or not is_inside(t, ecwd)):
+            out["findings"].append(("OP-003", "code that deletes the files it lists under %s, outside the working directory"
+                                    % t.replace(HOME, "~"), "Name the files, or run it inside the project; ask the owner for anything wider."))
+    return out
+
+
+def code_effects(body, lang, here, ecwd, depth, vars_, label, argv=None):
+    """What a piece of code sets in motion beyond its own lines. Each command it hands to a shell is
+    walked like a typed command, each folder it deletes outright becomes a delete, a payload it
+    decodes at run time is decoded and read the same way, and the local files it imports are opened."""
+    out = []
+    if depth > MAX_DEPTH or not body or not body.strip():
+        return out
+    mask = code_mask(body, lang)
+    found = (py_findings(body, here, ecwd, argv) if lang == "py" else None) or text_findings(body, lang, here, ecwd, mask)
+    if any(in_code(mask, body, m.start()) for m in REVERSE_SHELL_CODE_RE.finditer(body)):
+        found["findings"].append(("OP-009", "code that hands a shell to a network socket",
+                                  "No agent task needs a reverse shell; ask the owner if connectivity is genuinely required."))
+    base = {"targets": [], "recursive": False, "filtered": False, "unresolved": False, "flags": [], "args": [],
+            "cwd": ecwd or UNKNOWN_CWD, "writes": []}
+
+    def tag(effs):
+        for e in effs:
+            if label:
+                e["script_body"] = label
+            e["quiet"] = True                                # an unresolved word inside a file is ordinary scripting
+        return effs
+
+    for cmd in found["commands"]:
+        out += tag(analyze(cmd, ecwd, depth + 1, vars_))
+    for target, name in found["deletes"]:
+        t = resolve(target, ecwd)
+        if not t.startswith(UNKNOWN_CWD) and UNKNOWN_WORD not in t:
+            what = "%s(%s)" % (name, target)
+            out += tag([dict(base, prog=name, seg=what, kind="delete", recursive=True, targets=[t], text=what)])
+    for rule, detail, hint in found["findings"]:
+        out += tag([dict(base, prog="code", seg=detail, kind="finding", finding=(rule, detail, hint), text=detail)])
+    for code in found["payloads"]:
+        out += tag(analyze(code, ecwd, depth + 1, vars_))
+        out += tag([dict(base, prog="code", seg="payload decoded at run time", kind="inline", text=code,
+                         codes=[(code, lang)], script_body=label or "decoded payload")])
+        out += code_effects(code, lang, here, ecwd, depth + 1, vars_, label)
+    for path in found["files"]:
+        pulled = script_body_effects(path, ecwd, depth, vars_, mode="auto")
+        for e in pulled:
+            e["quiet"] = True
+        out += pulled
+    return out
+
+
+def notebook_effects(body, here, ecwd, depth, vars_, label):
+    """A notebook's code cells: `!` lines and %%bash cells are shell, the rest is Python."""
+    try:
+        cells = json.loads(body).get("cells") or []
+    except Exception:
+        return []
+    code, effs = [], []
+    for cell in cells:
+        if not isinstance(cell, dict) or cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source") or ""
+        lines = ("".join(src) if isinstance(src, list) else str(src)).split("\n")
+        if lines and re.match(r"^\s*%%(?:bash|sh|zsh|script\s+(?:ba|z)?sh)\b", lines[0]):
+            effs += analyze("\n".join(lines[1:]), ecwd, depth + 1, vars_)
+            continue
+        for ln in lines:
+            s = ln.strip()
+            if s.startswith("!"):
+                effs += analyze(s[1:], ecwd, depth + 1, vars_)
+            elif not s.startswith("%"):
+                code.append(ln)
+    py = "\n".join(code)
+    effs.append({"prog": "notebook", "seg": label, "targets": [], "recursive": False, "kind": "inline",
+                 "filtered": False, "unresolved": False, "flags": [], "args": [], "cwd": ecwd or UNKNOWN_CWD,
+                 "writes": [], "text": net_call_text(py, code_mask(py, "py")), "codes": [(py, "py")]})
+    return effs + code_effects(py, "py", here, ecwd, depth + 1, vars_, label)
+
+
+def batch_effects(body, ecwd, depth, vars_):
+    """A .bat or .cmd file, line by line: its delete forms, and every other line as a command."""
+    effs = []
+    for line in body.splitlines():
+        s = line.strip().lstrip("@")
+        if not s or re.match(r"(?i)^(?:rem\b|::|echo\b|setlocal|endlocal|goto\b|:)", s):
+            continue
+        dels = cmd_exe_effects(s, ecwd)
+        effs += dels if dels else analyze(s, ecwd, depth + 1, vars_)
+    return effs
+
+
+def script_body_effects(path, ecwd, depth, vars_, mode="auto", prog=None, seg="", lang=None, argv=None):
     """Analyze an existing script file's body. Never executes it.
 
     mode="shell": the file is run by a shell (`bash x`, `source x`), walk it as shell lines.
@@ -743,28 +1814,435 @@ def script_body_effects(path, ecwd, depth, vars_, mode="auto", prog=None, seg=""
     Perl, PHP or Lua file becomes ONE inline-code effect in that language, so its variable
     names and string literals can never be mistaken for shell programs (2026-10-03 phantom
     `rg` from `rg, _ = call(...)` inside a .py file), while its file-writing calls are still
-    judged by the inline-code analysis."""
-    try:
-        st = os.stat(path)
-        if not _stat.S_ISREG(st.st_mode) or st.st_size == 0 or st.st_size > MAX_SCRIPT_BYTES:
-            return []
-        with open(path, "r", errors="replace", encoding="utf-8") as f:
-            body = f.read(MAX_SCRIPT_BYTES)
-    except Exception:
-        return []
-    if not body.strip() or depth + 1 > MAX_DEPTH:
+    judged by the inline-code analysis. Since 0.3.8 that code is also read for what it sets in
+    motion (the commands it hands to a shell, the folders it deletes, the database calls it makes,
+    the payloads it decodes, the local files it imports): a file is judged by its contents."""
+    if depth + 1 > MAX_DEPTH:
         return []
     base = os.path.basename(path)
-    first = body.split("\n", 1)[0]
-    non_shell = mode != "shell" and (path.endswith(NON_SHELL_SCRIPT_EXT) or NON_SHELL_SHEBANG_RE.match(first))
-    if non_shell:
-        return [{"prog": prog or "script", "seg": seg or base, "targets": [], "recursive": False, "kind": "inline",
+    if path in WRITTEN and WRITTEN[path] is None:            # `curl -o x.sh URL && bash x.sh`
+        detail = "runs %s, which this command downloads: the gate cannot read it" % base
+        return [{"prog": prog or "script", "seg": seg or base, "targets": [], "recursive": False, "kind": "finding",
                  "filtered": False, "unresolved": False, "flags": [], "args": [], "cwd": ecwd or UNKNOWN_CWD,
-                 "writes": [], "text": body, "script_body": base}]
-    effs = analyze(body, ecwd, depth + 1, vars_)
+                 "writes": [], "text": detail, "finding": ("OP-S06", detail, FETCH_RUN_HINT)}]
+    body = read_script(path)
+    if body is None or not body.strip():
+        return []
+    ext = os.path.splitext(path)[1].lower()
+    first = body.split("\n", 1)[0]
+    if mode != "shell":
+        m = NON_SHELL_SHEBANG_RE.match(first)
+        lang = CODE_EXT.get(ext) or (code_prog(m.group(1)) if m else None) or \
+            (lang if not first.startswith("#!") else None)
+    if mode != "shell" and ext == ".ipynb":
+        effs = notebook_effects(body, os.path.dirname(path), ecwd, depth, vars_, base)
+    elif mode != "shell" and ext == ".ps1":
+        effs = analyze_powershell(body, ecwd, depth + 1)
+    elif mode != "shell" and ext in (".bat", ".cmd"):
+        effs = batch_effects(body, ecwd, depth, vars_)
+    elif mode != "shell" and lang:
+        effs = [{"prog": prog or "script", "seg": seg or base, "targets": [], "recursive": False, "kind": "inline",
+                 "filtered": False, "unresolved": False, "flags": [], "args": [], "cwd": ecwd or UNKNOWN_CWD,
+                 "writes": [], "text": net_call_text(body, code_mask(body, lang)), "codes": [(body, lang)],
+                 "script_body": base}]
+        return effs + guarded(code_effects, [], body, lang, os.path.dirname(path), ecwd, depth + 1, vars_, base, argv)
+    else:
+        if argv is not None:                                 # "$1", "$@": what the script was handed
+            vars_ = dict(vars_ if vars_ is not None else {"HOME": HOME, "USERPROFILE": HOME})
+            for i, a in enumerate(argv[:9], 1):
+                vars_[str(i)] = a
+            vars_["@"] = vars_["*"] = " ".join(argv)
+        effs = analyze(body, ecwd, depth + 1, vars_)
     for e in effs:
         e["script_body"] = base
     return effs
+
+
+# ---- commands carried by something else ------------------------------------------------------- #
+# variables whose value some program runs as a command: `PAGER='rm -rf x' git log`
+EXEC_VARS = {"PAGER", "GIT_PAGER", "MANPAGER", "EDITOR", "VISUAL", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
+             "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_PROXY_COMMAND", "LESSOPEN",
+             "LESSCLOSE", "BROWSER", "PROMPT_COMMAND", "KUBECTL_EXTERNAL_DIFF", "RUSTC_WRAPPER"}
+# variables naming a file a shell reads before it starts
+EXEC_FILE_VARS = {"BASH_ENV", "ENV"}
+# git settings whose value git runs
+GIT_EXEC_KEYS = ("core.pager", "core.editor", "core.sshcommand", "core.fsmonitor", "sequence.editor",
+                 "diff.external", "credential.helper", "gpg.program")
+
+
+def carried_by_vars(toks, ecwd, depth, vars_):
+    """Effects of the commands a command line hands over in variables that get run."""
+    out = []
+    for t in toks:
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", t)
+        if not m:
+            if os.path.basename(t) in ("env", "export"):
+                continue
+            break
+        name, value = m.group(1), m.group(2).strip()
+        if name in EXEC_VARS and value:
+            out += analyze(value, ecwd, depth + 1, vars_)
+        elif name in EXEC_FILE_VARS and value and ecwd:
+            out += script_body_effects(resolve(value, ecwd), ecwd, depth, vars_, mode="shell")
+    return out
+
+
+def carried_by_git(rest, sub, gargs):
+    """The command lines a git invocation is told to run: -c core.pager=CMD, an alias beginning with !,
+    difftool -x CMD, rebase --exec CMD, bisect run CMD, submodule foreach CMD, filter-branch filters."""
+    out = []
+    for i, t in enumerate(rest[:-1]):
+        if t == "-c" and "=" in rest[i + 1]:
+            key, value = rest[i + 1].split("=", 1)
+            key = key.lower()
+            if key in GIT_EXEC_KEYS or key.startswith("pager.") or (key.startswith("alias.") and value.startswith("!")):
+                out.append(value.lstrip("!"))
+    if sub == "config":
+        words = [a for a in gargs if not a.startswith("-")]
+        if len(words) >= 2 and (words[0].lower() in GIT_EXEC_KEYS or words[0].lower().startswith("pager.") or
+                                (words[0].lower().startswith("alias.") and words[1].startswith("!"))):
+            out.append(words[1].lstrip("!"))
+    for i, a in enumerate(gargs):
+        nxt = gargs[i + 1] if i + 1 < len(gargs) else None
+        if sub in ("difftool", "mergetool") and a in ("-x", "--extcmd") and nxt:
+            out.append(nxt)
+        elif sub in ("difftool", "mergetool") and a.startswith("--extcmd="):
+            out.append(a.split("=", 1)[1])
+        elif sub == "rebase" and a in ("-x", "--exec") and nxt:
+            out.append(nxt)
+        elif sub == "rebase" and a.startswith("--exec="):
+            out.append(a.split("=", 1)[1])
+        elif sub == "filter-branch" and re.match(r"^--[a-z\-]+-filter$", a) and nxt:
+            out.append(nxt)
+    if sub == "bisect" and gargs[:1] == ["run"] and len(gargs) > 1:
+        out.append(" ".join(shlex.quote(a) for a in gargs[1:]))
+    if sub == "submodule" and "foreach" in gargs:
+        tail = [a for a in gargs[gargs.index("foreach") + 1:] if a != "--recursive"]
+        if tail:
+            out.append(tail[0] if len(tail) == 1 else " ".join(shlex.quote(a) for a in tail))
+    return out
+
+
+# ---- the commands that set other files running ------------------------------------------------ #
+RUNNERS = {"uv": ("run",), "poetry": ("run",), "pipenv": ("run",), "pdm": ("run",), "hatch": ("run",),
+           "rye": ("run",), "pixi": ("run",), "conda": ("run",), "mamba": ("run",), "micromamba": ("run",),
+           "pipx": ("run",), "bundle": ("exec",), "npm": ("exec", "x"), "pnpm": ("exec", "dlx"),
+           "yarn": ("exec", "dlx"), "bun": ("x",), "doppler": ("run",), "op": ("run",), "infisical": ("run",),
+           "direnv": ("exec",), "npx": (), "pnpx": (), "bunx": (), "uvx": (), "dotenv": (), "watch": (),
+           "xvfb-run": ()}
+RUNNER_VALUE_FLAGS = {"-p", "--package", "--with", "--python", "--project", "--env-file", "--directory", "-n",
+                      "--name", "--prefix", "-e", "-f", "--cwd", "--config"}
+PKG_BUILTINS = {"add", "remove", "install", "i", "ci", "upgrade", "update", "up", "why", "list", "ls", "exec", "dlx",
+                "x", "create", "init", "link", "unlink", "publish", "pack", "audit", "outdated", "config", "cache",
+                "info", "login", "logout", "workspace", "workspaces", "version", "run", "global", "import",
+                "dedupe", "rebuild", "store", "patch", "env", "set", "get", "help", "bin", "prune", "fetch",
+                "pm", "repl", "upgrade-interactive"}
+GIT_HOOKS = {"commit": ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"), "push": ("pre-push",),
+             "merge": ("pre-merge-commit", "post-merge"), "pull": ("post-merge",), "checkout": ("post-checkout",),
+             "switch": ("post-checkout",), "rebase": ("pre-rebase", "post-rewrite"),
+             "am": ("applypatch-msg", "pre-applypatch", "post-applypatch")}
+SQL_FILE_EXT = (".sql", ".psql", ".ddl", ".cql", ".js", ".mongodb")
+
+
+def wrapped_command(prog, rest):
+    """The command a runner prefix wraps (`uv run`, `npx`, `bundle exec`, `dotenv --`), as words."""
+    subs = RUNNERS.get(prog)
+    if subs is None:
+        return None
+    i = 0
+
+    def skip_flags(i):
+        while i < len(rest) and rest[i].startswith("-") and rest[i] != "--":
+            i += 2 if (rest[i] in RUNNER_VALUE_FLAGS and "=" not in rest[i]) else 1
+        return i
+
+    if subs:
+        i = skip_flags(i)
+        if i >= len(rest) or rest[i] not in subs:
+            return None
+        i += 1
+    if prog in ("npx", "pnpx") and "-c" in rest[i:]:
+        j = rest.index("-c", i)
+        if j + 1 < len(rest):
+            return tokenize(rest[j + 1])
+    i = skip_flags(i)
+    if "--" in rest[i:]:
+        i = rest.index("--", i) + 1
+    if prog == "direnv":
+        i += 1
+    inner = rest[i:]
+    if not inner:
+        return None
+    if prog in ("uv", "uvx", "pdm", "hatch", "rye", "pixi") and inner[0].lower().endswith(".py"):
+        inner = ["python"] + inner
+    return inner
+
+
+def package_scripts(prog, rest, ecwd):
+    """The package.json scripts a package-manager command runs, as (directory, name, script)."""
+    here, words, i = ecwd, [], 0
+    while i < len(rest):
+        t = rest[i]
+        m = re.match(r"^--(?:prefix|dir|cwd)=(.+)$", t)
+        if t in ("--prefix", "-C", "--dir", "--cwd") and i + 1 < len(rest):
+            here = resolve(rest[i + 1], ecwd)
+            i += 1
+        elif m:
+            here = resolve(m.group(1), ecwd)
+        elif t == "--":
+            break
+        elif not t.startswith("-"):
+            words.append(t)
+        i += 1
+    try:
+        with open(pj(here, "package.json"), encoding="utf-8") as f:
+            scripts = json.load(f).get("scripts") or {}
+    except Exception:
+        return []
+    if not isinstance(scripts, dict):
+        return []
+    w0 = words[0] if words else ""
+    names = []
+    if w0 in ("run", "run-script", "rum", "urn") and len(words) > 1:
+        names = ["pre" + words[1], words[1], "post" + words[1]]
+    elif w0 in ("install", "i", "ci") or (prog == "yarn" and not words):
+        names = ["preinstall", "install", "postinstall", "prepare"]
+    elif w0 in ("test", "t", "tst", "start", "stop", "restart") and prog != "bun":
+        w0 = "test" if w0 in ("t", "tst") else w0
+        names = ["pre" + w0, w0, "post" + w0]
+    elif prog != "npm" and w0 in scripts and w0 not in PKG_BUILTINS:
+        names = ["pre" + w0, w0, "post" + w0]
+    return [(here, n, scripts[n]) for n in names if isinstance(scripts.get(n), str)]
+
+
+def make_recipes(path):
+    """The targets of a makefile, each with its prerequisites and recipe lines, in file order."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read(MAX_SCRIPT_BYTES).replace("\\\n", " ")
+    except Exception:
+        return {}
+    targets, cur = {}, []
+    for line in text.split("\n"):
+        if line.startswith("\t"):
+            for name in cur:
+                targets[name][1].append(line.strip())
+            continue
+        m = re.match(r"^([A-Za-z0-9_./\-]+(?:[ \t]+[A-Za-z0-9_./\-]+)*)[ \t]*:(?![=:])[ \t]*([^#=]*)(?:#.*)?$", line)
+        if m:
+            cur = m.group(1).split()
+            for name in cur:
+                targets.setdefault(name, ([], []))[0].extend(m.group(2).split())
+        elif line.strip() and not line.startswith("#"):
+            cur = []
+    return targets
+
+
+def make_lines(rest, ecwd):
+    """(directory, target, recipe line) for the targets a `make` command builds, prerequisites first."""
+    here, mf, goals, i = ecwd, None, [], 0
+    while i < len(rest):
+        t = rest[i]
+        if t in ("-C", "--directory", "-f", "--file", "--makefile", "-j", "-o", "-I", "-W", "-l") and i + 1 < len(rest):
+            if t in ("-C", "--directory"):
+                here = resolve(rest[i + 1], ecwd)
+            elif t in ("-f", "--file", "--makefile"):
+                mf = rest[i + 1]
+            i += 1
+        elif t in ("-n", "--just-print", "--dry-run", "--recon", "-q", "--question", "-p", "--print-data-base"):
+            return []
+        elif not t.startswith("-") and "=" not in t:
+            goals.append(t)
+        i += 1
+    path = resolve(mf, here) if mf else next((pj(here, n) for n in ("GNUmakefile", "makefile", "Makefile")
+                                              if os.path.isfile(pj(here, n))), None)
+    targets = make_recipes(path) if path else {}
+    if not targets:
+        return []
+    if not goals:
+        goals = [next((n for n in targets if not n.startswith(".")), "")]
+    out, seen = [], set()
+
+    def walk(name, d):
+        if name in seen or name not in targets or d > 4:
+            return
+        seen.add(name)
+        deps, lines = targets[name]
+        for dep in deps:
+            walk(dep, d + 1)
+        for ln in lines:
+            ln = re.sub(r"^[@+\-\s]+", "", ln).replace("$$", "$")
+            ln = re.sub(r"\$[({]MAKE[)}]", "make", ln)
+            if ln:
+                out.append((here, name, ln))
+
+    for g in goals:
+        walk(g, 0)
+    return out
+
+
+def composer_scripts(rest, ecwd):
+    """The composer.json scripts a `composer` command runs, as (name, command line)."""
+    words = [t for t in rest if not t.startswith("-")]
+    try:
+        with open(pj(ecwd, "composer.json"), encoding="utf-8") as f:
+            scripts = json.load(f).get("scripts") or {}
+    except Exception:
+        return []
+    if not isinstance(scripts, dict) or not words:
+        return []
+    w0 = words[0]
+    if w0 in ("run", "run-script") and len(words) > 1:
+        names = [words[1]]
+    elif w0 in ("install", "update", "dump-autoload", "dumpautoload"):
+        names = ["pre-%s-cmd" % w0, "post-%s-cmd" % w0, "post-autoload-dump"]
+    else:
+        names = [w0] if w0 in scripts else []
+    out = []
+
+    def expand(name, d):
+        entry = scripts.get(name)
+        for line in ([entry] if isinstance(entry, str) else (entry if isinstance(entry, list) else [])):
+            if not isinstance(line, str):
+                continue
+            if line.startswith("@php "):
+                out.append((name, "php " + line[5:]))
+            elif line.startswith("@composer "):
+                continue
+            elif line.startswith("@") and d < 3:
+                expand(line[1:].split()[0], d + 1)
+            elif not re.match(r"^[\w\\]+::\w+$", line) and not line.startswith("@"):
+                out.append((name, line))
+
+    for n in names:
+        expand(n, 0)
+    return out
+
+
+def git_hook_files(eff, rest, ecwd):
+    """The hook files a git command will run: .git/hooks, core.hooksPath and .husky."""
+    sub, gargs = eff.get("sub") or "", eff.get("gargs") or []
+    names = list(GIT_HOOKS.get(sub, ()))
+    if not names or "--dry-run" in gargs:
+        return [], None
+    if "--no-verify" in gargs or (sub == "commit" and any(re.match(r"^-[a-zA-Z]*n", a) for a in gargs)):
+        names = [n for n in names if n not in ("pre-commit", "commit-msg", "pre-push", "pre-merge-commit")]
+    root = resolve(rest[rest.index("-C") + 1], ecwd) if "-C" in rest[:-1] else ecwd
+    for _ in range(8):
+        if os.path.isdir(pj(root, ".git")):
+            break
+        parent = posixpath.dirname(root.rstrip("/"))
+        if not parent or parent == root:
+            return [], None
+        root = parent
+    else:
+        return [], None
+    dirs = [pj(root, ".git", "hooks"), pj(root, ".husky")]
+    try:
+        with open(pj(root, ".git", "config"), encoding="utf-8", errors="replace") as f:
+            m = re.search(r"(?mi)^\s*hookspath\s*=\s*(.+?)\s*$", f.read(65536))
+        if m:
+            dirs.insert(0, resolve(m.group(1), root))
+    except Exception:
+        pass
+    return [pj(d, n) for d in dirs for n in names if os.path.isfile(pj(d, n))], root
+
+
+def db_files_text(prog, rest, seg, ecwd):
+    """The text of the files a database client is told to run: -f FILE, < FILE, .read FILE, \\i FILE."""
+    names = []
+    for i, t in enumerate(rest):
+        if t in ("-f", "--file", "-i", "--queries-file", "--input-file") and i + 1 < len(rest):
+            names.append(rest[i + 1])
+        m = re.match(r"^--(?:file|queries-file|input-file)=(.+)$", t)
+        if m:
+            names.append(m.group(1))
+        if not t.startswith("-") and t.lower().endswith(SQL_FILE_EXT):
+            names.append(t)
+    names += re.findall(r"(?:\.read|\\ir?|\\\.|\bsource)\s+([^\s'\";]+)", seg)
+    files = [resolve(n, ecwd) for n in names]
+    stdin = input_file(seg, ecwd)
+    if stdin:
+        files.append(stdin)
+    out = []
+    for p in files:
+        body = read_script(p)
+        if body:
+            out.append(body)
+    return "\n".join(out)
+
+
+def run_effects(eff, toks, rest, seg, ecwd, depth, vars_):
+    """Effects of the files and scripts a command sets running besides itself: the file it names as
+    its program, the command a runner prefix wraps, a package.json script, a Makefile target, a
+    composer script, a local setup.py, the git hooks it fires, a notebook it executes, a PowerShell
+    script it is handed. Each is read and judged like a command the agent typed."""
+    out = []
+    prog, flags, args = eff["prog"], eff["flags"], eff["args"]
+    low = re.sub(r"\.exe$", "", prog.lower())
+
+    def named(effs, label):
+        for e in effs:
+            e["script_body"] = label
+            e["quiet"] = True
+        return effs
+
+    def opened(path, **kw):
+        effs = script_body_effects(path, ecwd, depth, vars_, mode="auto", **kw)
+        for e in effs:
+            e["quiet"] = True
+        return effs
+
+    head = toks[0]
+    if ("/" in head or head.startswith("~")) and not code_prog(prog):
+        p = resolve(head, ecwd)                              # ./deploy.sh, scripts/lint, /abs/tool
+        if is_file(p) and not is_gate_source(p):
+            out += opened(p, argv=[tilde(a) for a in plain_words(rest)])
+    inner = wrapped_command(low, rest)
+    if inner:
+        out += analyze(" ".join(shlex.quote(t) for t in inner), ecwd, depth + 1, vars_)
+    if low in ("npm", "yarn", "pnpm", "bun"):
+        for here, name, script in package_scripts(low, rest, ecwd):
+            out += named(analyze(script, here, depth + 1, vars_), "package.json: %s" % name)
+    elif low in ("make", "gmake"):
+        for here, name, line in make_lines(rest, ecwd):
+            out += named(analyze(line, here, depth + 1, vars_), "Makefile: %s" % name)
+    elif low == "composer":
+        for name, line in composer_scripts(rest, ecwd):
+            out += named(analyze(line, ecwd, depth + 1, vars_), "composer.json: %s" % name)
+    elif low in ("pwsh", "powershell"):
+        for i, t in enumerate(rest):
+            tl = t.lower()
+            if tl in ("-file", "-f") and i + 1 < len(rest):
+                out += opened(resolve(rest[i + 1].replace("\\", "/"), ecwd))
+            elif tl in ("-command", "-c") and i + 1 < len(rest):
+                out += analyze_powershell(rest[i + 1], ecwd, depth + 1)
+            elif not t.startswith("-") and tl.endswith(".ps1") and (i == 0 or rest[i - 1].lower() not in ("-file", "-f")):
+                out += opened(resolve(t.replace("\\", "/"), ecwd))
+    elif low == "go" and args[:1] == ["run"]:
+        for a in args[1:]:
+            if a.endswith(".go"):
+                out += opened(resolve(a, ecwd), lang="go")
+            elif a in (".", "./"):
+                for name in sorted(os.listdir(ecwd))[:200]:
+                    if name.endswith(".go") and not name.endswith("_test.go"):
+                        out += opened(pj(ecwd, name), lang="go")
+    elif low in ("jupyter", "papermill", "jupyter-nbconvert", "jupyter-execute", "jupyter-run"):
+        runs = low != "jupyter" or args[:1] in (["execute"], ["run"]) or "--execute" in flags
+        if runs and (low != "jupyter-nbconvert" or "--execute" in flags):
+            nb = next((a for a in args if a.lower().endswith(".ipynb")), None)
+            if nb:
+                out += opened(resolve(nb, ecwd))
+    if "install" in toks and any(_tool(t) in ("pip", "pip3") for t in toks[:toks.index("install")]):
+        for a in toks[toks.index("install") + 1:]:
+            if not a.startswith("-") and os.path.isfile(pj(resolve(a, ecwd), "setup.py")):
+                out += opened(pj(resolve(a, ecwd), "setup.py"), lang="py")
+    if eff.get("kind") == "git":
+        hooks, root = git_hook_files(eff, rest, ecwd)
+        for p in hooks:
+            effs = script_body_effects(p, root, depth, vars_, mode="auto")
+            out += named(effs, "git hook %s" % os.path.basename(p))
+    return out
 
 
 def analyze(cmd, cwd, depth=0, vars_=None):
@@ -772,6 +2250,10 @@ def analyze(cmd, cwd, depth=0, vars_=None):
     effects = []
     if depth > MAX_DEPTH or not cmd or not cmd.strip():
         return effects
+    if depth == 0:
+        SEEN_FILES.clear()
+        GIT_ASKED.clear()
+        WRITTEN.clear()
     vars_ = dict(vars_) if vars_ is not None else {"HOME": HOME, "USERPROFILE": HOME}
     state = {"cwd": cwd}
     if INVISIBLE_RE.search(cmd):
@@ -781,6 +2263,12 @@ def analyze(cmd, cwd, depth=0, vars_=None):
         cmd = INVISIBLE_RE.sub("", cmd)
     cmd = decode_ansi_c_quotes(cmd)
     cmd, bodies = extract_heredocs(cmd)
+    # $(( a / b )) and (( i++ )) hold numbers, not a command; a $(...) inside one still runs
+    # (found by rulereceipt on claude-code#2544: `echo $(( $(stat -f%z f) / 1048576 ))` read as a delete of /)
+    for m in list(ARITH_RE.finditer(cmd)):
+        for inner in SUBST_RE.findall(m.group(0)[m.group(0).index("((") + 2:-2]):
+            effects += analyze(inner[2:-1] if inner.startswith("$(") else inner[1:-1], state["cwd"], depth + 1, vars_)
+    cmd = ARITH_RE.sub(" 0 ", cmd)
     # subshell groups: `(sleep 300; rm -rf ~) &` -- analyze the inside as its own command.
     # Groups inside quotes are data (a regex alternation, a message), never a subshell.
     for m in re.finditer(r"\(([^()]*)\)", mask_quotes(cmd)):
@@ -809,11 +2297,22 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                         "filtered": False, "unresolved": False, "flags": [], "args": [], "cwd": UNKNOWN_CWD,
                         "writes": [], "text": cmd[:200]})
     cmd = SUBST_RE.sub("__SUBST__", cmd)
-    hd = 0
+    hd, cursor, feeder, saved = 0, 0, None, [False, False]
     for seg in split_segments(cmd):
         nh = len(HEREDOC_RE.findall(seg))
         my_bodies, hd = bodies[hd:hd + nh], hd + nh
         toks = tokenize(expand_vars(seg, vars_))
+        while toks and toks[0] in KEYWORDS:
+            toks = toks[1:]
+        # `f() { ...; }` and `function f { ...; }`: the body is read where it is written
+        if len(toks) > 1 and toks[0] == "function":
+            toks = toks[2:]
+        elif toks and re.match(r"^[A-Za-z_][\w\-]*\(\)$", toks[0]):
+            toks = toks[1:]
+        elif len(toks) > 1 and toks[1] == "()" and re.match(r"^[A-Za-z_][\w\-]*$", toks[0]):
+            toks = toks[1:]
+        if toks and toks[0] == "()":
+            toks = toks[1:]
         while toks and toks[0] in KEYWORDS:
             toks = toks[1:]
         if not toks or toks[0] in LOOP_HEADS:
@@ -825,6 +2324,7 @@ def analyze(cmd, cwd, depth=0, vars_=None):
         while k < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", toks[k]):
             k += 1
         if k > j and k == len(toks):                       # pure assignment segment
+            effects += guarded(carried_by_vars, [], toks[j:k], state["cwd"], depth, vars_)
             for t in toks[j:k]:
                 name, val = t.split("=", 1)
                 if name.endswith("+"):                      # `name+=value` appends: the value is no longer known
@@ -834,12 +2334,17 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                 else:
                     vars_[name] = tilde(val)
             continue
+        effects += guarded(carried_by_vars, [], strip_leading_redirects(toks), state["cwd"], depth, vars_)
         toks, via_xargs = strip_wrappers(strip_leading_redirects(toks))
         toks = strip_leading_redirects(toks)
         if not toks:
             continue
         prog = os.path.basename(toks[0])
         rest = toks[1:]
+        at = cmd.find(seg, cursor)                          # is this segment fed by a pipe from the one before?
+        piped = at > 0 and re.search(r"(?<!\|)\|&?\s*$", cmd[:at]) is not None
+        cursor = at + len(seg) if at >= 0 else cursor
+        fed, feeder = (feeder if piped else None), (prog, rest)
         handed = cmd_exe_line(toks)
         if handed is not None:                              # `cmd /c "rmdir /s /q X"` from a shell
             effects += cmd_exe_effects(handed, state["cwd"])
@@ -865,7 +2370,10 @@ def analyze(cmd, cwd, depth=0, vars_=None):
         ecwd = state["cwd"]
         eff = {"prog": prog, "seg": seg, "targets": [], "recursive": False, "kind": None, "filtered": False,
                "unresolved": via_xargs, "flags": flags, "args": args, "cwd": ecwd or UNKNOWN_CWD,
-               "writes": write_targets(prog, rest, flags, args, expand_vars(seg, vars_), ecwd), "text": seg}
+               "writes": write_targets(prog, rest, flags, args, expand_vars(seg, vars_), ecwd), "text": seg,
+               "toks": toks}
+        guarded(note_written, None, prog, rest, my_bodies, eff["writes"])
+        handed_text, handed_file = guarded(stdin_text, (None, None), fed, rest, ecwd)
 
         if prog in ("bash", "sh", "zsh", "dash", "ksh", "fish"):
             if eff["writes"]:
@@ -883,7 +2391,15 @@ def analyze(cmd, cwd, depth=0, vars_=None):
             # opaque-script resolution: `bash totally_harmless.sh` executes the FILE body as shell
             sp = resolve_script_arg(rest, ecwd)
             if sp:
-                effects += script_body_effects(sp, ecwd, depth, vars_, mode="shell")
+                effects += script_body_effects(sp, ecwd, depth, vars_, mode="shell", argv=args_after(rest, None, ecwd))
+            fp = input_file(seg, ecwd)                       # `bash < x.sh` runs the file too
+            if fp:
+                effects += script_body_effects(fp, ecwd, depth, vars_, mode="shell")
+            if inner_cmd is None and not sp and not fp and not my_bodies:
+                if handed_text:                              # `echo '...' | bash`, `bash <<< '...'`
+                    effects += analyze(handed_text, ecwd, depth + 1, vars_)
+                elif handed_file:                            # `cat x.sh | bash`
+                    effects += script_body_effects(handed_file, ecwd, depth, vars_, mode="shell")
             continue
         if prog == "eval":
             if eff["writes"]:
@@ -896,7 +2412,7 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                 effects.append(eff)
             sp = resolve_script_arg(rest, ecwd)
             if sp:
-                effects += script_body_effects(sp, ecwd, depth, vars_, mode="shell")
+                effects += script_body_effects(sp, ecwd, depth, vars_, mode="shell", argv=args_after(rest, None, ecwd))
             continue
 
         if prog in ("rm", "rmdir", "unlink", "shred", "trash", "rip", "srm") or \
@@ -904,6 +2420,23 @@ def analyze(cmd, cwd, depth=0, vars_=None):
             eff["kind"] = "delete"
             eff["recursive"] = has_flag(flags, "r") or has_flag(flags, "R") or "--recursive" in flags
             eff["targets"] = [t for t in resolve_targets([a for a in args if not (prog == "gio" and a == "trash")], ecwd)]
+            if via_xargs and fed:                           # `echo ~/x | xargs rm -rf`, `find ~/x | xargs rm -rf`
+                fprog, frest = fed
+                fflags, fargs = flags_and_args(frest)
+                given = None
+                if fprog in ("echo", "printf"):
+                    given = [a for a in fargs if "__SUBST__" not in a and "$" not in a]
+                elif fprog == "find":
+                    given = []
+                    for a in frest:
+                        if a.startswith("-") or a in ("(", ")", "!"):
+                            break
+                        given.append(a)
+                    eff["filtered"] = any(a in ("-name", "-iname", "-path", "-regex", "-mtime", "-mmin", "-newer",
+                                                "-size", "-empty") for a in frest)
+                if given:
+                    eff["targets"] = resolve_targets(given, ecwd) + [t for t in eff["targets"] if not t.endswith("/{}")]
+                    eff["unresolved"] = False
         elif prog in ("mv", "rename"):
             tv = [i for i, t in enumerate(rest) if t in ("-t", "--target-directory")]
             srcs = [a for a in args if a != rest[tv[0] + 1]] if tv else list(args)[:-1]
@@ -926,12 +2459,17 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                 eff["kind"] = "delete"
                 eff["recursive"] = True
                 eff["filtered"] = any(a in ("-name", "-iname", "-path", "-ipath", "-regex", "-iregex", "-mtime",
-                                            "-mmin", "-newer", "-size", "-user", "-perm", "-type", "-empty")
-                                      for a in rest)
+                                            "-mmin", "-newer", "-size", "-user", "-perm", "-empty")
+                                      for a in rest)                 # `-type f` alone still takes every file
                 eff["targets"] = resolve_targets(roots or ["."], ecwd)
-        elif prog == "rsync" and any("--remove-source-files" in f or f == "--delete" for f in flags):
-            eff["kind"] = "delete"
-            eff["recursive"] = True
+        elif prog == "rsync" and any(f == "--del" or f.startswith("--delete") for f in flags) and len(args) > 1:
+            # --delete removes from the destination whatever the source does not hold
+            if not re.match(r"^[\w.\-@]+:", args[-1]):
+                eff["kind"] = "delete"
+                eff["recursive"] = True
+                eff["targets"] = [resolve(args[-1], ecwd)]
+        elif prog == "rsync" and "--remove-source-files" in flags:
+            eff["kind"] = "move"
             eff["targets"] = [resolve(a, ecwd) for a in args[:-1]]
         elif prog == "git":
             eff["kind"] = "git"
@@ -940,11 +2478,33 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                 g = g[2:] if g[0] in ("-C", "-c", "--git-dir", "--work-tree") else g[1:]
             eff["sub"] = g[0] if g else ""
             eff["gargs"] = g[1:]
-        elif prog in INTERPRETERS:
+            for line in guarded(carried_by_git, [], rest, eff["sub"], eff["gargs"]):
+                effects += analyze(line, ecwd, depth + 1, vars_)
+            if "-C" in rest[:-1] and ecwd:
+                eff["git_dir"] = resolve(rest[rest.index("-C") + 1], ecwd)
+            eff["saved"] = tuple(saved)                     # what earlier steps of this command put away
+            ga = eff["gargs"]
+            if eff["sub"] == "stash" and (not ga or ga[0] in ("push", "save") or ga[0].startswith("-")):
+                saved[0] = True
+                saved[1] = saved[1] or any(a in ("-u", "--include-untracked", "-a", "--all") for a in ga)
+            elif eff["sub"] == "commit" and any(a == "--all" or re.match(r"^-[a-zA-Z]*a", a) for a in ga):
+                saved[0] = True
+        elif code_prog(prog):
+            lang = code_prog(prog)
             eff["kind"] = "inline"
             if my_bodies:
                 eff["text"] = seg + "\n" + "\n".join(my_bodies)
-            sp = resolve_script_arg(rest, ecwd)
+            sp = script_file_arg(lang, rest, ecwd) or input_file(seg, ecwd)
+            given = inline_codes(lang, rest) + list(my_bodies)              # `python -c CODE`, a heredoc
+            if not sp and not given and lang != "awk":
+                if handed_text:                              # `echo CODE | python3`, `python3 <<< CODE`
+                    given = [handed_text]
+                elif handed_file:                            # `cat x.py | python3`
+                    sp = handed_file
+            if given:
+                eff["codes"] = [(code, lang) for code in given]
+            for code in given:
+                effects += guarded(code_effects, [], code, lang, ecwd, ecwd, depth + 1, vars_, None)
             if sp and is_gate_source(sp):
                 # `python3 .../operator-gate.py <subcommand>` is the gate itself. Judge it as the
                 # operator-gate program (approve, install, onboard stay owner-only); never walk its source.
@@ -953,19 +2513,25 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                 eff["args"] = [a for a in args if a != "-" and not a.endswith("operator-gate.py")]
                 eff["text"] = seg
             elif sp:
-                effects += script_body_effects(sp, ecwd, depth, vars_, mode="auto", prog=prog, seg=seg)
+                effects += script_body_effects(sp, ecwd, depth, vars_, mode="auto", prog=prog, seg=seg, lang=lang,
+                                               argv=args_after(rest, sp, ecwd))
         elif prog in ("grep", "egrep", "fgrep", "rg", "ag", "ack"):
             # `... | grep -v x` filters text already on the pipe; `grep -rn x src` and `rg x` read files.
             operands = args[1:]
             recursive = has_flag(flags, "r") or has_flag(flags, "R") or "--recursive" in flags or prog in ("rg", "ag", "ack")
             eff["kind"] = "filter" if not operands and not recursive else "read"
-        elif prog in ("psql", "sqlite3", "mysql", "mariadb", "duckdb", "mongosh", "redis-cli", "supabase"):
+        elif prog in DB_CLIENTS:
             eff["kind"] = "db"
             if my_bodies:
                 eff["text"] = seg + "\n" + "\n".join(my_bodies)
+            handed = guarded(db_files_text, "", prog, rest, seg, ecwd) if ecwd else ""   # `psql -f wipe.sql`, `< wipe.sql`
+            if handed:
+                eff["text"] += "\n" + handed
         elif prog in ("fly", "flyctl", "stripe", "vercel", "wrangler", "netlify", "gh", "npm", "pnpm", "yarn",
                       "cargo", "twine", "docker", "vestige", "vestige-mcp", "operator-gate"):
             eff["kind"] = "cli"
+        if ecwd is not None and depth < MAX_DEPTH:           # the files and scripts this command sets running
+            effects += guarded(run_effects, [], eff, toks, rest, seg, ecwd, depth, vars_)
         # anything that resolved into an unknown cwd cannot be judged statically
         for key in ("targets", "writes"):
             kept = [x for x in eff[key] if not x.startswith(UNKNOWN_CWD) and "$" not in x and "__SUBST__" not in x]
@@ -1086,22 +2652,52 @@ def cmd_exe_line(toks):
     return None
 
 
-def analyze_powershell(cmd, cwd):
+def ps_as_shell(stmt):
+    """A PowerShell statement as the shell walker reads it: the call operator dropped and a program given
+    by its Windows path named plainly, so `& C:\\msys64\\usr\\bin\\bash.exe -lc "..."` is read as `bash -lc "..."`
+    and what it hands to bash is walked like any nested shell."""
+    s = re.sub(r"^\s*(?:&\s*|\.\s+)", "", stmt)
+    m = re.match(r"\s*(\"[^\"]*\"|'[^']*'|\S+)", s)
+    if not m:
+        return s
+    prog = m.group(1).strip("\"'")
+    if "\\" not in prog and not prog.lower().endswith(".exe"):
+        return s
+    return re.sub(r"\.exe$", "", prog.replace("\\", "/").rsplit("/", 1)[-1], flags=re.I) + s[m.end():]
+
+
+def analyze_powershell(cmd, cwd, depth=0):
     """Effects of a PowerShell command. Remove-Item and its aliases become delete effects; every other
     statement goes through the shell walker, which reads git, npm and the like the same way."""
     effects = []
+    if depth > MAX_DEPTH:
+        return effects
+    if depth == 0:
+        SEEN_FILES.clear()
+        WRITTEN.clear()
     for stmt in ps_statements(cmd or ""):
         toks = ps_tokens(ps_expand(stmt))
         while toks and toks[0] in ("&", "."):                # call operators
             toks = toks[1:]
         if not toks:
             continue
+        head = toks[0].strip("\"'")
+        if cwd and re.search(r"\.(?:ps1|bat|cmd)$", head, re.I):     # .\cleanup.ps1 runs the file
+            effects += script_body_effects(resolve(head.replace("\\", "/"), cwd), cwd, depth, None, mode="auto")
+            continue
         handed = cmd_exe_line(toks)
         if handed is not None:                              # `cmd /c rmdir /s /q C:\\x` from PowerShell
             effects += cmd_exe_effects(handed, cwd)
             continue
         if toks[0].lower() not in PS_DELETE:
-            effects += analyze(stmt, cwd)
+            nested = analyze(ps_as_shell(stmt), cwd, depth)
+            if re.search(r'"[^"]*\$', ps_expand(stmt)):
+                # Inside double quotes PowerShell fills in $X itself before the nested shell starts, and a
+                # backslash does not protect it: `bash -lc "rm -rf \$X"` hands bash `rm -rf \`.
+                for e in nested:
+                    if e.get("kind") == "delete" and e.get("recursive") and e.get("unresolved") and not e.get("targets"):
+                        e["ps_filled"] = True
+            effects += nested
             continue
         flags, paths, filtered, i = [], [], False, 1
         while i < len(toks):
@@ -1204,6 +2800,369 @@ def write_hits(w, gate_files, verb="write to"):
     return hits
 
 
+# --------------------------------------------------------------------------- #
+# work nothing can bring back (OP-011): read from the state of the files and the repository
+# --------------------------------------------------------------------------- #
+FRESH_S = 3600                           # a file made in the last hour is the session's own scratch
+LOSS_HINT = "Commit it, stash it (`git stash -u`) or move it first, or ask the owner for a one-time permit."
+# ignored by git and still not replaceable: secrets, keys, local databases, infrastructure state
+PRECIOUS_RE = re.compile(r"(?:^|/)(?:\.env(?:\.[\w.\-]+)?|[^/]*\.(?:sqlite3?|db|pem|key|p12|pfx|keystore|jks|kdbx|"
+                         r"tfstate|tfstate\.backup)|id_(?:rsa|ed25519|ecdsa)|credentials(?:\.json)?|secrets?\.\w+)$", re.I)
+
+
+def git_top(path):
+    """The repository a path sits in: the nearest folder at or above it that holds .git. None outside one."""
+    p = path if os.path.isdir(path) else posixpath.dirname(path.rstrip("/"))
+    for _ in range(40):
+        if p and os.path.exists(pj(p, ".git")):
+            return p
+        up = posixpath.dirname(p.rstrip("/")) if p else ""
+        if not up or up == p:
+            return None
+        p = up
+    return None
+
+
+GIT_ASKED = {}                           # answers for the command being judged; cleared with SEEN_FILES
+
+
+def git_out(root, args, timeout=3):
+    """The output of a read-only git query, or None. The file monitor, prompts and optional locks are
+    off, so asking changes nothing and runs nothing the repository configures."""
+    key = (root, tuple(args))
+    if key in GIT_ASKED:
+        return GIT_ASKED[key]
+    if len(GIT_ASKED) >= 24:                                 # a command that needs more is not judged this way
+        return None
+    GIT_ASKED[key] = _git_out(root, args, timeout)
+    return GIT_ASKED[key]
+
+
+def _git_out(root, args, timeout):
+    try:
+        r = subprocess.run(["git", "-C", root, "-c", "core.fsmonitor=false", "-c", "core.quotepath=false"] + args,
+                           capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace",
+                           env=dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0"))
+        return r.stdout if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _old(path, now):
+    """True when the file was there before this session's last hour. Where the system records when a
+    file was made (macOS, Windows) that is used; elsewhere, when it was last changed."""
+    try:
+        st = os.lstat(path)
+        made = getattr(st, "st_birthtime", None) or (st.st_ctime if IS_WINDOWS else st.st_mtime)
+        return now - min(made, st.st_mtime) > FRESH_S
+    except OSError:
+        return False
+
+
+def _files_under(path, limit=4000):
+    """Up to `limit` files under a path, build and cache folders left out."""
+    if not os.path.isdir(path) or os.path.islink(path):
+        return [path] if os.path.lexists(path) else []
+    out = []
+    for base, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in BUILD_DIRS and d != ".git"]
+        out += [pj(canon(base), f) for f in files]
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
+def _status(root, args, paths):
+    """(two-letter state, path) for each entry of `git status` under these paths, or None."""
+    out = git_out(root, ["status", "--porcelain", "-z"] + args + ["--"] + (paths or ["."]))
+    if out is None:
+        return None
+    entries, parts, i = [], out.split("\0"), 0
+    while i < len(parts):
+        ent = parts[i]
+        i += 1
+        if len(ent) < 4:
+            continue
+        if ent[0] in "RC":
+            i += 1                                           # a rename carries its old name as the next field
+        entries.append((ent[:2], ent[3:]))
+    return entries
+
+
+def _named(lost):
+    return "%d file%s nothing can bring back, such as %s" % (len(lost), "" if len(lost) == 1 else "s", lost[0])
+
+
+def lost_work(targets):
+    """Why deleting these paths loses work for good, as a phrase, or None. Inside a repository that
+    is the files with uncommitted changes, the untracked files, and the ignored files that hold
+    secrets or data (.env, a key, a local database, infrastructure state). Outside any repository
+    it is every file. Files made in the last hour are the session's own and are not counted."""
+    now, lost, by_root = time.time(), [], {}
+    for t in targets:
+        if not is_scratch(t) and os.path.lexists(t):
+            by_root.setdefault(git_top(t), []).append(t)
+    for root, paths in by_root.items():
+        entries = _status(root, ["--untracked-files=all", "--ignored=matching"], paths) if root else None
+        if entries is None:                                  # no repository, or git could not answer
+            for t in paths:
+                lost += [f.replace(HOME, "~") for f in _files_under(t) if _old(f, now)]
+            continue
+        for state, rel in entries:
+            full = pj(root, rel.rstrip("/"))
+            if any(part in BUILD_DIRS for part in rel.split("/")):
+                continue
+            if state == "!!":                                # ignored: only what cannot be made again
+                if rel.endswith("/"):
+                    lost += [f.replace(root + "/", "") for f in _files_under(full, 2000)
+                             if PRECIOUS_RE.search(f) and _old(f, now)]
+                elif PRECIOUS_RE.search(rel) and _old(full, now):
+                    lost.append(rel)
+            elif state != "??" or _old(full, now):            # an uncommitted change is work whenever it was saved
+                if os.path.lexists(full):
+                    lost.append(rel)
+    return _named(lost) if lost else None
+
+
+def git_discards(sub, gargs, root, saved=(False, False)):
+    """Why a git command throws away work nothing can bring back, or None: reset --hard, checkout or
+    restore over changed files, a forced switch, clean -f. Read from what the repository holds now."""
+    if not root or not os.path.isdir(root) or not git_top(root):
+        return None
+    flags = [a for a in gargs if a.startswith("-") and a != "--"]
+    words = [a for a in gargs if not a.startswith("-")]
+    now = time.time()
+
+    def changed(paths, worktree_only):
+        entries = _status(root, ["--untracked-files=no"], paths) or []
+        return [rel for state, rel in entries if (state[1] != " " if worktree_only else state.strip())]
+
+    if sub == "reset" and ("--hard" in flags or "--merge" in flags) and not saved[0]:
+        names = changed([], False)
+        if names:
+            return "git reset %s discards uncommitted changes: %s" % (flags[0], _named(names))
+    forced = any(f in ("-f", "--force", "--discard-changes") for f in flags)
+    paths = None
+    if sub == "restore" and not ("--staged" in flags and "--worktree" not in flags and "-W" not in flags
+                                 and not any(re.match(r"^-[A-Za-z]*W", f) for f in flags)):
+        paths = words
+    elif sub == "checkout":
+        if "--" in gargs:
+            paths = gargs[gargs.index("--") + 1:]
+        elif forced:
+            paths = ["."]
+        else:
+            paths = [w for w in words if w == "." or os.path.lexists(pj(root, w))]
+    elif sub == "switch" and forced:
+        paths = ["."]
+    if paths and not saved[0]:
+        names = changed(paths, True)
+        if names:
+            return "git %s discards uncommitted changes: %s" % (sub, _named(names))
+    if sub == "stash" and gargs[:1] in (["drop"], ["clear"]):
+        held = [ln for ln in (git_out(root, ["stash", "list"]) or "").splitlines() if ln.strip()]
+        if held:
+            return "git stash %s throws away stashed work nothing else holds (%d stash%s kept now)" % (
+                gargs[0], len(held), "" if len(held) == 1 else "es")
+        if saved[0] and changed([], False):
+            return "git stash %s throws away the changes this command stashes first" % gargs[0]
+    if sub == "clean" and not saved[1] and any(f == "--force" or re.match(r"^-[a-zA-Z]*f", f) for f in flags) \
+            and not any(f == "--dry-run" or re.match(r"^-[a-zA-Z]*n", f) for f in flags):
+        keep = []
+        for f in flags:
+            if f == "--force":
+                continue
+            f = ("-" + f[1:].replace("f", "")) if not f.startswith("--") else f
+            if f != "-":
+                keep.append(f)
+        lost = []
+        for extra, only_precious in (([], False), (["-x"], True)) if any("x" in f.lower() for f in keep) else (([], False),):
+            base = [f for f in keep if not re.match(r"^-[a-zA-Z]*[xX]", f)] + ["-d"] * (not only_precious and any("d" in f for f in keep))
+            out = git_out(root, ["clean", "-n"] + (keep if only_precious else base) + ["--"] + words)
+            for line in (out or "").splitlines():
+                rel = line[len("Would remove "):].strip() if line.startswith("Would remove ") else ""
+                if not rel or any(part in BUILD_DIRS for part in rel.rstrip("/").split("/")):
+                    continue
+                for f in _files_under(pj(root, rel.rstrip("/")), 2000):
+                    if _old(f, now) and (PRECIOUS_RE.search(f) if only_precious else True) and f not in lost:
+                        lost.append(f)
+        if lost:
+            return "git clean deletes untracked work: %s" % _named([f.replace(root + "/", "") for f in lost])
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# infrastructure torn down in one command (OP-006)
+# --------------------------------------------------------------------------- #
+INFRA_HINT = "It tears down running infrastructure or stored data. Ask the owner for a one-time permit."
+K8S_HEAVY = {"namespace", "namespaces", "ns", "pv", "pvc", "persistentvolume", "persistentvolumes",
+             "persistentvolumeclaim", "persistentvolumeclaims", "crd", "crds", "customresourcedefinition", "node", "nodes"}
+INFRA_FORMS = (
+    ({"terraform", "tofu", "terragrunt"}, lambda t, f: "destroy" in t[:2] or ("apply" in t[:2] and "-destroy" in f), "terraform"),
+    ({"pulumi"}, lambda t, f: t[:1] == ["destroy"] or _has_seq(t, "stack", "rm"), "pulumi"),
+    ({"kubectl", "oc"}, lambda t, f: t[:1] == ["delete"] and (bool(K8S_HEAVY & set(x.split("/")[0] for x in t[1:]))
+                                                               or "--all" in f or "--all-namespaces" in f), "kubectl"),
+    ({"helm"}, lambda t, f: t[:1] in (["uninstall"], ["delete"], ["del"]), "helm"),
+    ({"aws"}, lambda t, f: _has_seq(t, "s3", "rb") or (_has_seq(t, "s3", "rm") and "--recursive" in f) or
+     any(x in t for x in ("delete-bucket", "terminate-instances", "delete-stack", "delete-cluster", "delete-function",
+                          "delete-file-system", "delete-volume")), "aws"),
+    ({"gsutil"}, lambda t, f: t[:1] in (["rm"], ["rb"]) and (bool({"-r", "-R", "-a"} & f) or t[:1] == ["rb"]), "gsutil"),
+    ({"gcloud"}, lambda t, f: "delete" in t and any(x in t for x in ("projects", "instances", "clusters", "buckets", "disks"))
+     and "sql" not in t or (_has_seq(t, "storage", "rm") and bool({"-r", "--recursive"} & f)), "gcloud"),
+    ({"az"}, lambda t, f: "delete" in t and any(x in t for x in ("group", "vm", "aks", "account", "webapp", "disk")), "az"),
+    ({"cdk"}, lambda t, f: t[:1] == ["destroy"], "cdk"),
+    ({"sst"}, lambda t, f: t[:1] == ["remove"], "sst"),
+    ({"serverless", "sls"}, lambda t, f: t[:1] == ["remove"], "serverless"),
+    ({"sam"}, lambda t, f: t[:1] == ["delete"], "sam"),
+    ({"heroku"}, lambda t, f: any(x in t for x in ("apps:destroy", "destroy", "addons:destroy")), "heroku"),
+    ({"vercel"}, lambda t, f: t[:1] in (["remove"], ["rm"]) or _has_seq(t, "project", "rm"), "vercel"),
+    ({"netlify"}, lambda t, f: "sites:delete" in t, "netlify"),
+    ({"railway"}, lambda t, f: t[:1] in (["down"], ["delete"]), "railway"),
+    ({"doctl"}, lambda t, f: "delete" in t and bool({"-f", "--force"} & f), "doctl"),
+)
+
+
+# --------------------------------------------------------------------------- #
+# database resets: one framework or admin command that empties or drops a database (OP-007)
+# --------------------------------------------------------------------------- #
+DB_RESET_HINT = ("It empties or drops the database it is pointed at. Check which environment it reaches and "
+                 "take a backup, then ask the owner for a one-time permit.")
+# A task name handed to a program that only prints, searches or records text is data, not a run.
+DB_TEXT_ONLY = {"echo", "printf", "cat", "grep", "egrep", "fgrep", "rg", "ag", "ack", "sed", "awk", "head", "tail",
+                "less", "more", "wc", "ls", "find", "fd", "git", "gh", "man", "tldr", "which", "type", "whereis", "code"}
+# Programs that run their arguments as a command somewhere else: a quoted command inside is read word by word.
+DB_CARRIERS = {"ssh", "su", "docker", "docker-compose", "podman", "nerdctl", "kubectl", "oc", "heroku", "fly",
+               "flyctl", "railway", "kamal", "dokku", "vagrant", "wsl", "ddev", "lando", "sail"}
+# Asking for help or a rehearsal runs nothing.
+DB_DRY_FLAGS = {"--help", "--dry-run", "--dryrun", "--pretend", "--dump", "--dump-sql"}
+# Task names that reset a database whatever launches them: Laravel, Rails and rake, Sequelize, Doctrine,
+# TypeORM, MikroORM, Ecto, Heroku. Rails names a database after the task (`db:drop:primary`).
+DB_TASK_RE = re.compile(
+    r"^(?:migrate:(?:fresh|refresh|reset)|db:wipe|db:(?:drop|reset|purge|truncate_all)(?::[\w.\-]+)?|"
+    r"db:migrate:reset(?::[\w.\-]+)?|db:(?:schema|structure):load(?::[\w.\-]+)?|db:seed:replant|"
+    r"db:migrate:undo:all|doctrine:(?:database|schema):drop|d:[ds]:d|schema:(?:drop|fresh)|migration:fresh|"
+    r"ecto\.(?:drop|reset)|pg:reset)$", re.I)
+# A command that names the test environment resets the test database, which is what a test run is for.
+DB_TEST_ENV_RE = re.compile(
+    r"(?:^|[\s\"';&|(])(?:RAILS_ENV|RACK_ENV|APP_ENV|NODE_ENV|MIX_ENV|DJANGO_ENV)=(?:test|testing)\b|"
+    r"--env(?:ironment)?[= ](?:test|testing)\b|(?:^|\s)-e\s+test(?:ing)?(?:\s|$)")
+
+
+def _tool(word):
+    """A command word as a tool name: no directory, no Windows suffix, no @version, lower case."""
+    t = word.replace("\\", "/").rsplit("/", 1)[-1].lower().lstrip(".")
+    t = re.sub(r"\.(?:exe|cmd|bat|ps1|phar)$", "", t)
+    at = t.find("@", 1)
+    return t[:at] if at > 0 else t
+
+
+def _has_seq(words, *seq):
+    return any(tuple(words[i:i + len(seq)]) == seq for i in range(len(words) - len(seq) + 1))
+
+
+# (tools, modules run as `-m <module>`, test on the plain words after the tool and the flags, name)
+DB_RESET_FORMS = (
+    ({"manage.py", "django-admin", "django-admin.py"}, ("django",),
+     lambda t, f: t[:1] in (["flush"], ["reset_db"]) or t[:1] == ["migrate"] and "zero" in t[1:], "django"),
+    ({"prisma"}, (),
+     lambda t, f: _has_seq(t, "migrate", "reset") or
+     _has_seq(t, "db", "push") and bool({"--force-reset", "--accept-data-loss"} & f), "prisma"),
+    ({"drizzle-kit"}, (), lambda t, f: t[:1] == ["push"] and "--force" in f, "drizzle-kit"),
+    ({"alembic"}, ("alembic",), lambda t, f: _has_seq(t, "downgrade", "base"), "alembic"),
+    ({"flask"}, ("flask",), lambda t, f: _has_seq(t, "db", "downgrade", "base"), "flask"),
+    ({"dotnet", "dotnet-ef"}, (),
+     lambda t, f: _has_seq(t, "database", "drop") or _has_seq(t, "database", "update", "0"), "dotnet ef"),
+    ({"dropdb"}, (), lambda t, f: bool(t), "dropdb"),
+    ({"mysqladmin", "mariadb-admin"}, (), lambda t, f: "drop" in t, "mysqladmin"),
+    ({"turso"}, (), lambda t, f: _has_seq(t, "db", "destroy"), "turso"),
+    ({"pscale"}, (), lambda t, f: _has_seq(t, "database", "delete") or _has_seq(t, "branch", "delete"), "pscale"),
+    ({"neon", "neonctl"}, (),
+     lambda t, f: any(_has_seq(t, a, b) for a, b in (("projects", "delete"), ("databases", "delete"),
+                                                     ("branches", "delete"), ("branches", "reset"))), "neon"),
+    ({"gcloud"}, (),
+     lambda t, f: "sql" in t and "delete" in t and ("instances" in t or "databases" in t), "gcloud"),
+    ({"aws"}, (),
+     lambda t, f: any(x in t for x in ("delete-db-instance", "delete-db-cluster", "delete-table")), "aws"),
+    ({"firebase"}, (), lambda t, f: "firestore:delete" in t or "database:remove" in t, "firebase"),
+    ({"bq"}, (), lambda t, f: t[:1] == ["rm"], "bq"),
+    # the volumes a containerised database lives on
+    ({"docker", "docker-compose", "podman", "podman-compose", "nerdctl"}, (),
+     lambda t, f: ("down" in t and bool({"-v", "--volumes"} & f)) or _has_seq(t, "volume", "rm") or
+     _has_seq(t, "volume", "prune") or (_has_seq(t, "system", "prune") and "--volumes" in f), "container volumes:"),
+)
+
+
+def _run_words(toks, seg=""):
+    """The words of a command as its program will see them, with the tool each word names and the
+    flags, or None when the command only prints, searches or rehearses. A quoted command handed to
+    ssh, docker, kubectl and the like is read word by word."""
+    if not toks:
+        return None
+    head = _tool(toks[0])
+    if head in DB_TEXT_ONLY:
+        return None
+    words, several = list(toks), False
+    if head in DB_CARRIERS:                                  # `ssh host "cd app && bin/rails db:drop"`
+        several = any(re.search(r"[;|&]", t) for t in toks)
+        words = [w for t in toks for w in re.split(r"[\s;|&]+", t) if w]
+    flags = {w.split("=", 1)[0].lower() for w in words if w.startswith("-")}
+    if flags & DB_DRY_FLAGS:
+        return None
+    return words, [_tool(w) for w in words], flags, several
+
+
+def _form_hit(forms, words, names, flags):
+    for entry in forms:
+        tools, modules, test, name = entry if len(entry) == 4 else (entry[0], (), entry[1], entry[2])
+        for i, n in enumerate(names):
+            if n in tools or (n in modules and i and words[i - 1] == "-m"):
+                after = [w.lower() for w in words[i + 1:] if not w.startswith("-")]
+                if test(after, flags):
+                    return "%s %s" % (name, " ".join(after[:3]))
+                break
+    return None
+
+
+def infra_destroy(toks, seg=""):
+    """What a command tears down when it destroys infrastructure in one go, as a phrase, or None."""
+    read = _run_words(toks, seg)
+    if not read:
+        return None
+    words, names, flags, _ = read
+    hit = _form_hit(INFRA_FORMS, words, names, flags)
+    return ("infrastructure teardown: %s" % hit) if hit else None
+
+
+def db_reset(toks, seg=""):
+    """What a command does when it empties or drops a database, as a short phrase, or None.
+    Reads the command's words and runs nothing. Covers the reset tasks of the common frameworks and
+    migration tools, the admin commands that drop a database, the hosted-database delete commands,
+    and the container commands that delete the volumes a database lives on."""
+    read = _run_words(toks, seg)
+    if not read:
+        return None
+    words, names, flags, several = read
+    if not several and DB_TEST_ENV_RE.search(seg or " ".join(toks)):
+        return None
+    plain = [w.lower() for w in words[1:] if not w.startswith("-")]
+    for i, w in enumerate(words[1:], 1):
+        if w.startswith("-") or not DB_TASK_RE.match(w) or words[i - 1].lower() == "help":
+            continue
+        if w.lower().startswith(("doctrine:", "d:")) and not ({"--force", "-f"} & flags):
+            continue                                         # without --force Doctrine prints and stops
+        return "database reset: %s" % w
+    if "migrate:rollback" in plain and "--all" in flags:
+        return "database reset: migrate:rollback --all"
+    if "ecto.rollback" in plain and "--all" in flags:
+        return "database reset: ecto.rollback --all"
+    if ("doctrine:fixtures:load" in plain or "d:f:l" in plain) and "--append" not in flags:
+        return "database reset: doctrine:fixtures:load purges before it loads"
+    if "db:migrate" in plain and re.search(r"(?:^|\s)VERSION=0(?:\s|$)", seg or " ".join(toks)):
+        return "database reset: db:migrate VERSION=0"
+    hit = _form_hit(DB_RESET_FORMS, words, names, flags)
+    return ("database reset: %s" % hit) if hit else None
+
+
 def classify_effect(e, cfg, cwd):
     """Yield (rule_id, reason_detail, rewrite_hint) for one effect."""
     hits = []
@@ -1223,7 +3182,16 @@ def classify_effect(e, cfg, cwd):
         hits.append(("OP-S12", "zero-width/Bidi control characters in the command",
                      "Legitimate commands never contain invisible characters; retype it plainly."))
 
+    if kind == "finding":                                    # read out of a file's code; see code_effects
+        hits.append(e["finding"])
+
     prog0, text0 = e.get("prog", ""), e.get("text", "")
+    reset = guarded(db_reset, None, e.get("toks") or [], e.get("seg") or "")
+    if reset:
+        hits.append(("OP-007", reset, DB_RESET_HINT))
+    torn = guarded(infra_destroy, None, e.get("toks") or [], e.get("seg") or "")
+    if torn:
+        hits.append(("OP-006", torn, INFRA_HINT))
     if CONTAINER_ESCAPE_RE.search(text0):
         hits.append(("OP-S17", "container/VM escape primitive in command",
                      "Docker socket mounts, privileged containers and namespace tools are sandbox-break stages; ask the owner."))
@@ -1309,8 +3277,36 @@ def classify_effect(e, cfg, cwd):
                 hits.append(("OP-003", "recursive delete of %s" % (wide or outside)[0],
                              "Move it to a dated folder under /tmp, or delete only build outputs "
                              "(target/, node_modules/, dist/)."))
+        if kind == "delete" and e.get("filtered") and not e["unresolved"] and \
+                not any(h[0] in ("OP-001", "OP-000", "OP-002", "OP-003") for h in hits):
+            broad = ecwd in (None, "/") or same_path(ecwd, HOME) or any(
+                same_path(ecwd, pj(HOME, d)) for d in ("Developer", "Documents", "Downloads", "Desktop"))
+            away = [t for t in e["targets"] if not is_scratch(t) and (broad or not is_inside(t, ecwd))]
+            if away:                                        # `find ~/Documents -name '*.pdf' -delete`
+                hits.append(("OP-003", "filtered delete under %s, outside the working directory" % away[0],
+                             "Name the files, or run it inside the project; ask the owner for anything wider."))
+        if kind == "delete" and not e["unresolved"] and not e.get("filtered") and \
+                e.get("prog") not in ("trash", "gio", "rip") and \
+                not any(h[0] in ("OP-000", "OP-001", "OP-002", "OP-003", "OP-004") for h in hits):
+            # without -r a folder is only removed when it is empty, so nothing in it can be lost
+            held = [t for t in e["targets"] if not is_scratch(t) and (e["recursive"] or not os.path.isdir(t))]
+            repo = next((t for t in held if e["recursive"] and os.path.isdir(t) and os.path.exists(pj(t, ".git"))
+                         and _old(pj(t, ".git"), time.time())), None)    # a clone made this hour is the session's own
+            if repo:                                        # `rm -rf .` in a project, `rm -rf ./vendored-repo`
+                hits.append(("OP-004", "delete of the repository %s: its history goes with it" % repo,
+                             "Do not remove a repository; ask the owner."))
+            else:
+                why = guarded(lost_work, None, held)
+                if why:
+                    hits.append(("OP-011", "delete of %s loses %s" % (held[0] if len(held) == 1 else "%d paths" % len(held), why),
+                                 LOSS_HINT))
         if e["unresolved"] and kind in ("delete", "move") and not e["targets"]:
-            hits.append(("OP-S05", "delete/move with targets from stdin", ""))
+            if e.get("ps_filled"):
+                hits.append(("OP-003", "recursive delete whose target PowerShell fills in before the shell runs",
+                             "Inside double quotes PowerShell replaces $X itself, and a backslash does not stop it. "
+                             "Use single quotes, or name the path as a literal."))
+            else:
+                hits.append(("OP-S05", "delete/move with targets from stdin", ""))
 
     elif kind == "git":
         sub, ga = e.get("sub", ""), e.get("gargs", [])
@@ -1335,8 +3331,21 @@ def classify_effect(e, cfg, cwd):
                 or sub == "branch" and "-D" in ga or sub in ("stash",) and ga[:1] in (["drop"], ["clear"]) \
                 or sub in ("checkout", "restore") and ga[-1:] in (["."], ["--", "."]):
             hits.append(("OP-S01", "git %s %s" % (sub, " ".join(ga[:3])), ""))
-        if sub in ("push",) and re.search(r"--delete|:refs/", " ".join(ga)) and "main" in " ".join(ga):
-            hits.append(("OP-004", "delete of remote main", "Ask the owner."))
+        if sub == "push":
+            shared = re.compile(r"^(?:refs/heads/)?(?:main|master|trunk|release[/\-].*|prod.*)$")
+            named = [a for a in ga if not a.startswith("-")][1:]
+            gone = [r[1:] for r in named if r.startswith(":")]              # `git push origin :main`
+            if any(a in ("--delete", "-d") for a in ga):
+                gone += named
+            lost_ref = next((r for r in gone if shared.match(r)), None)
+            if lost_ref:
+                hits.append(("OP-004", "delete of remote %s" % lost_ref.replace("refs/heads/", ""), "Ask the owner."))
+            if "--mirror" in ga:
+                hits.append(("OP-004", "push --mirror overwrites and deletes remote branches to match this clone",
+                             "Push the branches you mean by name; ask the owner."))
+        why = guarded(git_discards, None, sub, ga, e.get("git_dir") or ecwd or cwd, e.get("saved") or (False, False))
+        if why:
+            hits.append(("OP-011", why, LOSS_HINT))
 
     elif kind in ("cli", "db", "inline"):
         prog, flags, args = e["prog"], e["flags"], e["args"]
@@ -1377,11 +3386,12 @@ def classify_effect(e, cfg, cwd):
         if prog == "operator-gate" and args[:1] in (["approve"], ["mode"], ["install"], ["uninstall"]):
             hits.append(("OP-000", "agent invoked `operator-gate %s`" % args[0],
                          "Approvals and installs are run by the owner in their own terminal."))
-        if prog in ("psql", "sqlite3", "mysql", "mariadb", "duckdb", "supabase", "mongosh", "redis-cli"):
+        if prog in DB_CLIENTS or prog == "wrangler" and "d1" in args:
             sql = re.sub(r"pragma\s+wal_checkpoint\s*(\(\s*\w+\s*\))?", "", lo)
             sql = re.sub(r"insert\s+into\s+(\w+)\s*\(\s*\1\s*\)\s*values\s*\(\s*'[a-z\-]+'\s*\)", "", sql)  # fts5 control
             if re.search(r"\bdrop\s+(table|database|schema|index)\b|(?<![\w(])truncate\s+(table\s+)?[\w\"`]|"
-                         r"\bflush(all|db)\b|\bdropdatabase\b", sql) \
+                         r"\bflush(all|db)\b|\bdropdatabase\b|\.drop\s*\(\s*\)|"
+                         r"\.(?:deletemany|remove)\s*\(\s*\{\s*\}\s*\)", sql) \
                     or re.search(r"\bdelete\s+from\s+\w+\s*(;|\"|'|$)", sql):
                 hits.append(("OP-007", "destructive SQL", "Run it as a SELECT first, scope with WHERE, "
                              "and take a backup; ask the owner for a permit."))
@@ -1391,8 +3401,11 @@ def classify_effect(e, cfg, cwd):
                 if live and re.search(r"\b(delete|drop|update|insert|alter|vacuum|replace|truncate)\b", sql):
                     hits.append(("OP-002", "write against the live Vestige store via sqlite3",
                                  "Work on a copy (`vestige backup`, then edit the copy); read-only queries are fine."))
-        if e["kind"] == "inline":
-            found, unresolved, mentions_gate = inline_file_calls(text, ecwd, roots, gate_files)
+        for code, clang in (e.get("codes") or [(text, None)]) if e["kind"] == "inline" else ():
+            # code the gate could lift out is read with its strings and comments set apart; text it
+            # could not take apart (a here-string, a pipe) is read whole, as before
+            found, unresolved, mentions_gate = inline_file_calls(
+                code, ecwd, roots, gate_files, code_mask(code, clang) if clang else None)
             if found:
                 hits += [(rid, d if d.startswith("inline code") else "inline code: " + d, h) for rid, d, h in found]
             elif unresolved and mentions_gate:
@@ -1403,6 +3416,8 @@ def classify_effect(e, cfg, cwd):
             elif unresolved == "delete":
                 # an unresolved write in code that names no gate path is ordinary scripting, not a finding
                 hits.append(("OP-S05", "inline code has a delete whose target the gate cannot resolve", ""))
+    if e.get("quiet"):
+        hits = [h for h in hits if h[0] != "OP-S05"]
     if hits and e.get("script_body"):
         hits = [(r, "%s -- inside script %s" % (d, e["script_body"]), a) for (r, d, a) in hits]
     return hits
@@ -1457,20 +3472,24 @@ def _literal_path(expr, literals):
         return m.group(2)
     if re.match(r"^[A-Za-z_]\w*$", expr) and expr in literals:
         return literals[expr]
-    return None
+    v = code_str(expr, literals)                             # os.path.join(home, "x"), Path.home() / "x"
+    return v if (v and UNKNOWN_WORD not in v) else None
 
 
-def inline_file_calls(text, ecwd, roots, gate_files):
+def inline_file_calls(text, ecwd, roots, gate_files, mask=None):
     """Judge each file-writing or file-deleting call in inline code by its own path operand.
-    Returns (hits, unresolved_kind_or_None, mentions_gate_path)."""
-    literals = {}
+    Returns (hits, unresolved_kind_or_None, mentions_gate_path). With a mask, a call is only a call
+    where the code is: the same words inside a string or a comment are not read."""
+    literals = code_literals(text, None, mask) if mask is not None else {}
     for m in INLINE_ASSIGN_RE.finditer(text):
         lit = _literal_path(m.group(2), {})
-        if lit is not None and m.group(1) not in literals:
+        if lit is not None and m.group(1) not in literals and in_code(mask, text, m.start(1)):
             literals[m.group(1)] = lit
     found, unresolved = [], None
     for kind, call_re in (("write", INLINE_WRITE_CALL_RE), ("delete", INLINE_DELETE_CALL_RE)):
         for m in call_re.finditer(text):
+            if not in_code(mask, text, m.start()):
+                continue
             open_idx = text.index("(", m.start())
             args = _balanced_args(text, open_idx)
             name = text[m.start():open_idx].strip()
@@ -1616,6 +3635,7 @@ def classify(payload, cfg):
                 hits.append(("OP-S13", "%s reads sensitive path %s" % (tool_raw, m.group(1)),
                              "Ask the owner before tool calls that touch credentials or identity files."))
                 break
+    hits = list(dict.fromkeys(hits))                         # the same finding reached by two routes is one hit
     return tool_raw, cwd, hits, " | ".join(previews)[:400], meta, effects_out
 
 
@@ -1772,7 +3792,7 @@ def hook_main(argv):
         # specificity ordering: rule class first (canary > self > memory > workspaces), then the
         # most specific target (deepest path) -- the hit reported to the agent is the one to act on.
         priority = ["OP-CANARY", "OP-000", "OP-002", "OP-001", "OP-010", "OP-009", "OP-008", "OP-004",
-                    "OP-003", "OP-005", "OP-006", "OP-007",
+                    "OP-003", "OP-011", "OP-005", "OP-006", "OP-007",
                     "OP-S06", "OP-S17", "OP-S12", "OP-S13", "OP-S07", "OP-S08", "OP-S11", "OP-S01",
                     "OP-S02", "OP-S03", "OP-S04", "OP-S05", "OP-S14", "OP-S15", "OP-S16"]
 
@@ -1784,7 +3804,7 @@ def hook_main(argv):
 
         enforce_hits.sort(key=lambda h: (priority.index(h[0]) if h[0] in priority else len(priority),
                                          -hit_depth(h[3]), h[0]))
-        soft = {h[0] for h in enforce_hits} <= {"OP-003", "OP-005", "OP-006", "OP-007"}
+        soft = {h[0] for h in enforce_hits} <= {"OP-003", "OP-005", "OP-006", "OP-007", "OP-011"}
         if enforce_hits:
             permit = consume_permit(adigest)
             if permit:
@@ -2239,7 +4259,7 @@ def own_law_classes(effects):
     return out
 
 
-def replay_history(days, budget, here):
+def replay_history(days, budget, here, every=False):
     """Classify every unique tool call in the local Claude Code transcripts, newest session first.
     Reads history and the filesystem; executes nothing and writes no receipt."""
     cfg = load_config()
@@ -2364,7 +4384,7 @@ def replay_history(days, budget, here):
         if used:
             out["sessions"] += 1
     out["projects"] = len(projects)
-    out["incidents"] = sorted(out["incidents"], key=lambda i: i["ts"], reverse=True)[:20]
+    out["incidents"] = sorted(out["incidents"], key=lambda i: i["ts"], reverse=True)[:None if every else 20]
     out["laws"] = [{"class": c, "law": law, "times": out["by_own"][c]}
                    for c, _, law in sorted(OWN_LAW, key=lambda row: -out["by_own"].get(row[0], 0))
                    if out["by_own"].get(c)]
@@ -2394,12 +4414,12 @@ def cmd_replay(argv):
         if "--budget" in argv:
             budget = max(1.0, float(argv[argv.index("--budget") + 1]))
     except (IndexError, ValueError):
-        print("usage: operator-gate replay [--days N | --all] [--here] [--budget SECONDS] [--json | --share]")
+        print("usage: operator-gate replay [--days N | --all] [--here] [--stops] [--budget SECONDS] [--json | --share]")
         return 2
     if "--all" in argv:
         days = 0
     here = os.getcwd() if "--here" in argv else None
-    r = replay_history(days, budget, here)
+    r = replay_history(days, budget, here, "--stops" in argv)
     if "--json" in argv:
         print(json.dumps(r, sort_keys=True))
         return 0
@@ -2430,7 +4450,7 @@ def cmd_replay(argv):
             print("  %5d  %-34s %s" % (n, label(key), paint(r["samples"].get(key, ""), "2")))
 
     if r["stopped"]:
-        shown = r["incidents"][:5]
+        shown = r["incidents"] if "--stops" in argv else r["incidents"][:5]
         print("\n" + paint("Would have been stopped", "1") + " (%s):" % (
             "the %d most recent of %d" % (len(shown), r["stopped"]) if r["stopped"] > len(shown) else "all of them"))
         for inc in shown:
@@ -2439,6 +4459,8 @@ def cmd_replay(argv):
                 when = "%s %s" % (MONTHS[int(inc["ts"][5:7]) - 1], inc["ts"][8:10])
             print("  %s  %-18s %s %s" % (when, inc["project"][:18], paint(inc["rule"], "31"), inc["why"]))
             print("  %s  %-18s %s" % ("      ", "", paint(inc["cmd"], "2")))
+        if r["stopped"] > len(shown):
+            print("  every one of them, to check each yourself: %s replay --stops" % self_cmd())
         print("By rule:")
         table(r["by_stop"], lambda k: "%s %s" % (k, RULES[k][0]))
     if r["flagged"]:
@@ -2473,6 +4495,59 @@ def cmd_replay(argv):
                 not os.path.exists(pj(HOME, ".operator", "gate", "operator-gate.py")):
             print("\nTo have the built-in rules watch from now on: %s install" % self_cmd())
     return 0
+
+
+def cmd_check(argv):
+    """Say what would be decided about one command. Nothing is installed, recorded or run: the command
+    is read, and so are the files it would set running."""
+    shell, cwd, words, as_json, i = "Bash", os.getcwd(), [], False, 0
+    while i < len(argv):
+        if argv[i] == "--shell" and i + 1 < len(argv):
+            shell = "PowerShell" if argv[i + 1].lower() in ("powershell", "pwsh", "ps") else "Bash"
+            i += 1
+        elif argv[i] == "--cwd" and i + 1 < len(argv):
+            cwd = os.path.abspath(os.path.expanduser(argv[i + 1]))
+            i += 1
+        elif argv[i] == "--json":
+            as_json = True
+        else:
+            words.append(argv[i])
+        i += 1
+    cmd = " ".join(words) if words else ("" if sys.stdin.isatty() else sys.stdin.read())
+    if not cmd.strip():
+        print("usage: operator-gate check [--shell bash|powershell] [--cwd DIR] [--json] '<command>'")
+        return 2
+    cfg = load_config()
+    _, cwd, hits, _, meta, _ = classify({"tool_name": shell, "tool_input": {"command": cmd}, "cwd": cwd}, cfg)
+    stops, records = [], []
+    for rid, detail, hint in hits:
+        if rid in cfg["disabled_rules"] or rid == "OP-CANARY":
+            continue
+        mode = cfg["mode_overrides"].get(rid, "shadow" if RULES[rid][1] == "SHADOW" else "enforce")
+        (stops if mode == "enforce" else records).append((rid, detail, hint))
+    if as_json:
+        print(json.dumps({"verdict": "stop" if stops else ("record" if records else "pass"), "cwd": cwd,
+                          "stops": [{"rule": r, "name": RULES[r][0], "detail": redact(d), "do_instead": h} for r, d, h in stops],
+                          "records": [{"rule": r, "name": RULES[r][0], "detail": redact(d)} for r, d, _ in records],
+                          "read_through": meta.get("transforms", [])}, sort_keys=True))
+        return 2 if stops else 0
+    for rid, detail, hint in stops:
+        print("%s  %s %s" % (paint("STOP  ", "1;31"), rid, RULES[rid][0]))
+        print("        %s" % redact(detail).replace(HOME, "~"))
+        print("        rule: %s" % RULES[rid][2])
+        if hint:
+            print("        instead: %s" % hint)
+    for rid, detail, _ in records:
+        print("%s  %s %s" % (paint("record", "1;33"), rid, RULES[rid][0]))
+        print("        %s" % redact(detail).replace(HOME, "~"))
+    if not stops and not records:
+        print("%s  no rule matched this command" % paint("pass  ", "1;32"))
+    elif not stops:
+        print("        recorded and let through: these rules watch, they do not stop")
+    if meta.get("transforms"):
+        print("read through: %s" % ", ".join(meta["transforms"]))
+    print("Judged in %s. Nothing was run and nothing was recorded." % cwd.replace(HOME, "~"))
+    return 2 if stops else 0
 
 
 def cmd_corpus(argv):
@@ -2630,9 +4705,9 @@ def main():
         sys.exit(hook_main(argv[1:]))
     cmd = {"approve": cmd_approve, "verify": cmd_verify, "status": cmd_status, "corpus": cmd_corpus,
            "test": cmd_corpus, "install": cmd_install, "uninstall": cmd_uninstall,
-           "upgrade": cmd_upgrade, "replay": cmd_replay, "mode": cmd_mode}.get(argv[0])
+           "upgrade": cmd_upgrade, "replay": cmd_replay, "mode": cmd_mode, "check": cmd_check}.get(argv[0])
     if not cmd:
-        print("usage: operator-gate hook|status|replay|mode|approve|verify|corpus|install|uninstall|upgrade")
+        print("usage: operator-gate hook|check|status|replay|mode|approve|verify|corpus|install|uninstall|upgrade")
         sys.exit(2)
     sys.exit(cmd(argv[1:]))
 

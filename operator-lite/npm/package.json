@@ -1,12 +1,11 @@
 {
   "name": "operator-lite",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "One command that installs the Operator Lite pre-tool gate for every coding agent on this machine (Claude Code, Cursor, Gemini CLI, Windsurf, Cline, Goose, opencode, Amazon Q).",
   "bin": { "operator-lite": "bin/operator-lite.js" },
   "files": ["bin/", "gate/"],
   "scripts": {
-    "prepack": "node bin/bundle.js",
-    "test": "node test.js"
+    "prepack": "node bin/bundle.js"
   },
   "engines": { "node": ">=16" },
   "license": "AGPL-3.0-only",
