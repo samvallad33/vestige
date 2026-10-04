@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Operator Lite: `install` on a machine where Claude Code has never run creates
+  `~/.claude/settings.json` and registers the hook. It printed manual steps before.
+- Vestige Operator is sold once: $149, with every later version included. The gate's
+  `upgrade` text, the replay report and the README carry the new price and link.
 - README: Operator Lite installs with one command. The four-line block it
   replaces copied the file and never registered the hook, and its corpus line
   could not work from a single downloaded file; `corpus` now says where the

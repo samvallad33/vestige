@@ -208,6 +208,15 @@ check("lone file: corpus says where the corpus lives instead of failing with a t
 shutil.rmtree(home2, ignore_errors=True)
 shutil.rmtree(os.path.dirname(lone), ignore_errors=True)
 
+# 3b2. a machine where Claude Code has never run: no ~/.claude yet, and the hook is still registered
+home0 = tempfile.mkdtemp(prefix="oplite-empty-home-")
+env0 = dict(env, HOME=home0)
+p = subprocess.run([sys.executable, GATE, "install", "--no-replay"], capture_output=True, text=True, env=env0, cwd=home0)
+check("install on a machine with no ~/.claude creates the settings file and registers the hook",
+      p.returncode == 0 and "hook registered" in p.stdout and "could not register" not in p.stdout
+      and os.path.exists(os.path.join(home0, ".claude", "settings.json")), p.stdout[-300:])
+shutil.rmtree(home0, ignore_errors=True)
+
 # 3c. the log: after a day of use, status says what the gate saw on this machine
 home3 = tempfile.mkdtemp(prefix="oplite-log-home-")
 os.makedirs(os.path.join(home3, ".claude"))
@@ -296,8 +305,8 @@ def tty_run(args, color=False):
 t = tty_run(["status"])
 check("at a terminal, status ends with the remembered count", "Your last replay drafted 3 laws from 5 actions no built-in rule decides." in t, t[-300:])
 t = tty_run(["replay"])
-check("at a terminal, replay ends with the pointer and the price", "Operator enforces those laws" in t and "$149 a month." in t
-      and "https://vestige-pro-production.fly.dev/account" in t, t[-400:])
+check("at a terminal, replay ends with the pointer and the price", "Operator enforces those laws" in t and "$149 once, yours to keep." in t
+      and "https://payhip.com/b/d4xvu" in t, t[-400:])
 check("installed gate: replay does not tell the owner to install again", " install" not in t.split("Operator enforces")[-1], t[-300:])
 t = tty_run(["mode", "enforce"])
 check("at a terminal the owner can switch to enforce", "The gate now blocks what its rules stop." in t
