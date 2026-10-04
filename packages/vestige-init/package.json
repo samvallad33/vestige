@@ -1,15 +1,15 @@
 {
   "name": "@vestige/init",
   "version": "4.1.1",
-  "description": "Configure Vestige local memory for MCP-compatible AI agents",
+  "description": "Set up Vestige, the Causal Proof Engine and operating system for AI agents, in your MCP client",
   "bin": {
     "vestige-init": "bin/init.js"
   },
   "keywords": [
     "vestige",
     "mcp",
-    "ai",
-    "memory",
+    "ai-agents",
+    "causal-proof-engine",
     "claude",
     "copilot",
     "cursor",

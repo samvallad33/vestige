@@ -7,9 +7,9 @@
   "category": "developer",
   "homepage": "https://github.com/samvallad33/vestige",
   "icon": "\ud83e\udde0",
-  "description": "Vestige 4.1.1: local memory for AI coding agents, on Strata, an append-only signed log on your machine. Recall by exact handle, every write admitted through a gate with a receipt, GhostLink proposals of never-composed memory pairs with a proof from recorded edges, intentions, code memories whose anchors check themselves against source, and causal walks over recorded edges. 16 MCP tools; purge is withheld until real erasure ships. Upgrading from v3 imports your memories, links, intentions and code anchors on first launch and keeps the v3 file. Install the v4.1.0 binary from the GitHub Release. Binaries: macOS Apple Silicon/Intel, Linux x64/ARM64, Windows x64. Data stays on your machine.",
+  "description": "Vestige 4.1.1: the Causal Proof Engine and operating system for AI agents. Its kernel is Strata, an append-only signed log on your machine: zero vectors, zero RAG, and every answer carries its proof. Recall by exact handle, every write admitted through a gate with a receipt, GhostLink proposals of never-composed pairs with a proof from recorded edges, intentions, code records whose anchors check themselves against source, and causal walks over recorded edges. 16 MCP tools; purge is withheld until real erasure ships. Upgrading from v3 imports your records, links, intentions and code anchors on first launch and keeps the v3 file. Install the v4.1.1 binary from the GitHub Release. Binaries: macOS Apple Silicon/Intel, Linux x64/ARM64, Windows x64. Data stays on your machine.",
   "tags": [
-    "memory",
+    "operating-system",
     "local-first",
     "stdio",
     "rust",
@@ -17,7 +17,7 @@
     "recall",
     "smart-ingest",
     "backfill",
-    "causal-memory"
+    "causal-proof-engine"
   ],
   "tools": [
     {

@@ -4,7 +4,7 @@ version = "4.1.1"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Vestige Team"]
-description = "Cognitive memory engine - FSRS-6 spaced repetition and temporal memory"
+description = "Vestige core engine: FSRS-6 scheduling and temporal records for the Causal Proof Engine"
 license = "AGPL-3.0-only"
 repository = "https://github.com/samvallad33/vestige"
 # crates.io already has this name under conorluddy/Vestige. Do not publish.

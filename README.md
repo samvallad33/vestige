@@ -4,157 +4,81 @@
 
 # Vestige
 
-**Local memory for MCP agents, on a signed log.**
+**The Causal Proof Engine. The operating system for AI agents.**
 
-It keeps the decisions a project already made, and it can walk a failure backward along the links your memory actually recorded. Every write passes a gate and leaves a receipt. The store is Strata: an append-only, signed log on your machine.
+**Zero vectors. Zero RAG. No lookalike text.** Nothing in Vestige's engine is found, ranked, paired or explained by embeddings, keyword scoring or similarity. Every answer comes from what the system recorded, and carries its proof: a memory id, an edge path, or a receipt. Two narrow exceptions are disclosed in [docs/TOOL-CONTRACTS.md](docs/TOOL-CONTRACTS.md): intention triggers match by substring, and a save can infer its start date from an "as of DATE" phrase.
+
+Its kernel is **Strata**, an append-only, hash-chained, signed log on your machine. One install gives every agent on that machine the same kernel, the same gate, the same debugger and the same shell. Nothing leaves your machine by default.
+
+Left alone, agents re-learn the same lessons. They recommend a change you already tested and rejected, re-derive a fix that was already written down, and run commands nobody checked. Vestige is the layer underneath them. It keeps what was decided, checks what is about to happen, proves what did, and when something breaks it walks the failure backward along the links the system recorded, because **the cause never looks like the bug.**
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/samvallad33/vestige/media/vestige-black-box.mp4">
-    <img src="https://raw.githubusercontent.com/samvallad33/vestige/media/black-box-cause.gif" alt="Vestige Black Box — the cause never looks like the bug" width="100%">
+    <img src="https://raw.githubusercontent.com/samvallad33/vestige/media/black-box-cause.gif" alt="Vestige Black Box: the cause never looks like the bug" width="100%">
   </a>
 </p>
 
-**New in 4.1.1:** `smart_ingest` takes typed `links` to existing memories, `codebase` can `ingest_repo` a checkout's commits as anchored change records, `causal_walk` takes `node_id` on every start point, a successful save no longer carries fields that read as errors, and the credential gate blocks Anthropic, OpenAI and Stripe live keys ([changelog](CHANGELOG.md)). 4.1.0 brought [GhostLink](#ghostlink-the-negative-space), which proposes pairs of memories nobody has combined yet, each with its proof.
+<p align="center"><sub>Recorded on v3.1 with <code>vestige backfill --contrast</code>. Since 4.0 the backward walk is <code>causal_walk</code>, which follows only recorded edges. <a href="https://raw.githubusercontent.com/samvallad33/vestige/media/vestige-black-box.mp4">Watch the walk</a>.</sub></p>
 
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige?color=06b6d4)](https://github.com/samvallad33/vestige/releases/latest)
 [![Tests](https://img.shields.io/github/actions/workflow/status/samvallad33/vestige/ci.yml?branch=main&label=CI)](https://github.com/samvallad33/vestige/actions)
 [![Binary](https://img.shields.io/badge/platforms-5_release_targets-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
-[Install](#install) · [Upgrading from v3](#upgrading-from-v3) · [Recall by handle](#recall-by-handle-not-resemblance) · [GhostLink](#ghostlink-the-negative-space) · [The tools](#the-tools) · [Backups](#backups-and-export) · [Science](#the-science) · [Docs](#go-deeper)
+[How it fits](#how-it-fits-together) · [What's new](#whats-new-in-411) · [Install](#install) · [The gate](#operator-lite) · [Recall by handle](#recall-by-handle-not-resemblance) · [GhostLink](#ghostlink-the-negative-space) · [The science](#the-science) · [System calls](#the-tools) · [Upgrading from v3](#upgrading-from-v3) · [Docs](#go-deeper)
 
-<a id="getting-started"></a>
-## 🛡️ Operator Lite — your agent's commands, enforced on the metal
+<a id="how-it-fits-together"></a>
+## How it fits together
 
-Ships in this repo under [`operator-lite/`](operator-lite/): a one-file, stdlib-only,
-dependency-free gate that sits between your AI agent and your machine as a
-PreToolUse hook (Claude Code, Codex, OpenClaw — any host with command hooks), and
-**blocks destructive, polluting and exfiltrating commands before they run.**
+Every layer is part of one system, and each does a job an agent cannot do for itself. The engine itself, meaning recall, ranking, pairing and explanation, uses no vectors, no RAG and no similarity; the Operator gate's command rules are a separate layer of pattern rules.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
-```
+| Layer | What it is | What it does for your agents |
+|---|---|---|
+| **Kernel** | **Strata**: an append-only, hash-chained, signed log | The one source of truth. State is re-derived by replaying it. One process owns the store and every agent on the machine attaches to it |
+| **Proof** | Receipts, typed edges, `receipt replay` | Every output names what justifies it. A link counts only if the log recorded it: a typed edge, a woven outcome, or a receipt |
+| **Admission** | The gate on every write | A write is proposed, checked and admitted as an effect, and returns a receipt you can replay |
+| **Addressing** | Exact handles: an id, a unique prefix, or an exact tag | An agent finds what it saved by name, not by lookalike wording |
+| **Debugger** | `causal_walk`, `forgotten_lesson`, `selftest` | Walks a failure backward along recorded links to the decision behind it |
+| **Lifecycle** | FSRS scheduling, `dream`, `suppress` | Records strengthen with use and fade without it. Dreaming replays recorded edges. Suppress takes a record out of every read |
+| **Discovery** | GhostLink | Finds pairs of records nobody has combined, each with its proof |
+| **Commitments** | `intention` and `session_start` | Deadlines and triggers surface when a session opens |
+| **Source awareness** | `codebase` | Anchors decisions to code, flags drift, and turns git history into change records |
+| **Security** | Operator Lite (free) and Operator (paid) | Blocks destructive commands before they run. Stdlib-only, with its own hash-chained receipts |
+| **Shell** | `vestige dashboard` | See the store, its timeline and its receipts in a browser on `127.0.0.1` |
+| **Snapshots** | `vestige backup`, `maintain` `export` | Owner-only copies, taken while your agents are running |
 
-On Windows, in PowerShell, with Python 3.9 or newer installed:
+<a id="whats-new-in-411"></a>
+## What's new in 4.1.1
 
-```powershell
-curl.exe -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o "$env:TEMP\operator-gate.py"; python "$env:TEMP\operator-gate.py" install
-```
+4.1.1 makes the system more trustworthy at every layer. The debugger's walk now points the right way, a cause can be declared when it is saved, your git history becomes part of the system, and a call that cannot do something says so instead of returning zeros. Full list in the [changelog](CHANGELOG.md).
 
-One command. It copies the gate to `~/.operator/gate`, registers the Claude Code hook and
-starts in shadow mode, which records every verdict and blocks nothing. Then it replays your
-last 30 days of Claude Code history through the same rules, so the first thing you see is
-what it would have said about your own agents. Nothing in that history is executed. After a
-day of use, `python3 ~/.operator/gate/operator-gate.py status` shows what it caught on your
-machine. When that looks right, switch it on with `mode enforce`.
+**Fixed: walks now go toward the cause.** A link written as `new derived_from existing` is stored in that direction, and GhostLink weaves write it too. `causal_walk` and `forgotten_lesson` followed it the wrong way, so from a symptom they returned the memories *derived from it* as its causes and never reached what the symptom itself derives from. They now go from a memory to what it derives from, to the records that are `evidence_of` it, that it closed, or that touched it. If you wove pairs on 4.1.0, walks across those edges now answer differently.
 
-- **27 deterministic rules** — workspace armor, memory-store protection, destructive
-  SQL, force-push, unreviewed publishes, paid deploys, reverse shells, cloud-metadata
-  endpoints, shell-init poisoning, MCP argument exfil
-- **Sees through shell obfuscation** — quote reassembly (`r''m`), `$IFS` expansion,
-  `$(echo rm)` as program, ANSI-C `$'\x72m'`, base64-decoded pipelines, brace/glob
-  expansion against the live filesystem, subshell time-bombs, session variables, cd
-  tracking, heredocs, fork bombs (10 of 11 vendor gates failed these classes)
-- **Every verdict gets a hash-chained receipt** — and `verify` walks the chain
-- **Shadow-first**: install logs everything and blocks nothing until you flip
+**New: declare the cause when you save.**
+- `smart_ingest` takes typed `links` to existing memories: `derived_from`, `evidence_of` or `closes`. Each link is a recorded edge with its own receipt, checked before anything is written, and one bad link refuses the whole save. Those edges are what `causal_walk` follows and what GhostLink's bridge lens walks.
+- `ghostlink` `weave` can carry up to 8 `evidence` findings from outside (URL, sha256 of what was fetched, time), tagged `evidence:<sha256>`. Vestige never fetches the URL, and the release binary stays offline.
 
-Run the replay again any time:
+**New: your git history becomes part of the system.** `codebase` action `ingest_repo` turns each non-merge commit of a local checkout into a change record in its own scope, anchored to every symbol and file it touched. `verify` then re-checks those records against your working tree, so you see which past changes the code has since drifted from. It previews first, skips anything the secret gate refuses, and re-running skips commits already recorded.
 
-```bash
-python3 ~/.operator/gate/operator-gate.py replay
-```
+**Better walks.**
+- `causal_walk` takes `node_id` on every start point (failing test, stack frame, CI run, version range). Several start points walk together, and `start_points` reports what happened to each one with a reason. The CLI gains `--node-id`.
+- An empty walk says why: how many causal edges arrive from another scope, and how many incoming edges are not causal, by link type.
+- `codebase` `get_context` lists every scope that holds a codebase's memories. `verify` says exactly what `limit` left unchecked. `session_start` names the scopes that hold code memories when the requested one has none.
 
-It prints a scoreboard, the most recent commands a built-in rule would have stopped (with
-the date and the project), what it would have flagged, the actions no built-in rule decides,
-and the laws your own history drafts from them. From a made-up history:
+**Honest responses.**
+- A capability this build lacks says so. `maintain` `consolidate`, a no-op on Strata, is refused with `unavailable_in_4_0` instead of an all-zero "completed pass". The dashboard's Consolidate button answers the same. `dedup scan` and `dream` report `unavailable` with a reason.
+- A successful `smart_ingest` no longer carries fields that read as a failure. A demote explains its own numbers: the memory is not deleted, and it fades faster.
 
-```
-operator-gate replay: the last 30 days on this machine. Nothing was executed.
+**Security.**
+- The credential gate now blocks Anthropic, OpenAI and Stripe live keys (`sk-ant-`, `sk-proj-`, `sk_live_` and the rest), in every stored field. `vestige scan-secrets` reports any already in the log. Stripe test keys are left alone.
+- A hostile checkout's own git config can no longer make `ingest_repo` run a program.
+- The credential scanner no longer aborts a save that ends within a few bytes of a key prefix such as `ghp_` or `AKIA`.
 
-       23  tool calls your agents made (2 Claude Code sessions, 2 projects)
-        3  a built-in rule would have stopped
-        1  flagged in shadow: recorded, not stopped
-       14  no built-in rule decides: only you can
+**Releases.** Binaries are built only for `vX.Y.Z` tags, and a check after every release fails the run if `releases/latest` could not serve the install URL below.
 
-Would have been stopped (all of them):
-  Mar 21  shop-api           OP-004 force push to a shared branch
-                             git push --force origin main
-  Mar 19  shop-api           OP-007 destructive SQL
-                             psql $DATABASE_URL -c 'DROP TABLE sessions'
-  Mar 14  infra              OP-003 recursive delete of ~/Documents/old-terraform-state
-                             rm -rf ~/Documents/old-terraform-state
-By rule:
-      1  OP-003 no-blind-recursive-delete   recursive delete of ~/Documents/old-terraform-state
-      1  OP-004 no-history-destruction      force push to a shared branch
-      1  OP-007 no-destructive-sql          destructive SQL
+**Came with 4.1.0.** [GhostLink](#ghostlink-the-negative-space) proposes pairs of memories nobody has combined yet, each with its proof. The dashboard API now checks who is calling: before, any web page open in your browser could POST to it while it ran. A full disk is an error to the caller instead of a process abort, and a crashed owner can no longer block the store.
 
-Flagged in shadow, recorded and not stopped:
-      1  OP-S01 work-loss                   git reset --hard HEAD~1
-
-No built-in rule decides these. They ran:
-      4  pushed to a remote                 git push origin main
-      3  installed packages by name         npm install left-pad
-      2  ran a database client or migration psql -c 'select count(*) from users' shop
-      2  deployed or changed infrastructure terraform apply -auto-approve
-      1  wrote CI or deploy config          Write .github/workflows/ci.yml
-      1  wrote an env file                  Write .env
-      1  skipped git hooks                  git commit --no-verify -m wip
-
-Your first laws, drafted from this history:
-  "No push without my permit."                           4 times
-  "No new package without my review."                    3 times
-  "Deploys and infrastructure changes are mine."         2 times
-  "No database client or migration without my permit."   2 times
-  "Never skip git hooks."                                1 time
-  "CI and deploy config are mine to change."             1 time
-  "Env files are mine to change."                        1 time
-```
-
-<a id="vestige-operator"></a>
-## Vestige Operator, the paid tier
-
-Operator Lite is free and stays free. **Vestige Operator** is the owner's version of the same gate. $149 once, and every later version is yours at no charge:
-
-- **Your own laws.** Sentences you write ("never publish without a dry run", "recall before grep") become rules the gate enforces on every host, with a compliant rewrite or a stop, and a one-time permit only you can grant from your own terminal.
-- **The Board.** Today's stops, law violations and canary bites as cards, built from your receipts.
-- **The Letter.** One weekly digest of what your agents tried and what stopped them.
-- **A five-minute onboarding wizard** that writes your first laws and proves the gate stops a violation before you rely on it.
-
-[Buy Vestige Operator](https://payhip.com/b/d4xvu). You download a small archive the moment you pay. From an installed Operator Lite, one command unpacks it and starts the wizard: `upgrade --install <the archive you downloaded>`. If you ran `replay` first, the wizard opens with the laws your own history drafted.
-
-What it is not: Operator blocks what is routed through it. It cannot block a call that bypasses the hooked tools, and receipts are hash-chained digests, not signatures.
-
-```bash
-python3 ~/.operator/gate/operator-gate.py verify             # receipt chain check
-python3 operator-lite/operator-gate.py corpus guardfall      # 46/46 bypass cases, from a clone of this repo
-```
-
-**On OpenClaw?** One line, gate bundled:
-
-```bash
-clawhub install vestige-operator-lite
-```
-
-Vestige's memory kernel is also on ClawHub as a six-tool plugin —
-[`clawhub install vestige-strata`](https://clawhub.ai/plugins/vestige-strata) —
-signed append-only log, exact-handle recall, causal root-cause walks.
-
-Full details in [operator-lite/README.md](operator-lite/README.md). The free tier
-blocks. Operator — the same kernel extended with a full governance loop — is where
-the product lives.
-
-## The cause never looks like the bug
-
-Agents re-learn the same lessons. They recommend a change you already tested and rejected, re-derive a fix that was already written down, and treat every session as if the last one never happened. Vestige is the local memory an MCP client calls while you work: `smart_ingest` stores, `recall` finds a memory by an exact handle, and `causal_walk` walks a failure backward along edges the log recorded. Memory strength follows FSRS scheduling, and every write comes back with a receipt you can replay against the log.
-
-<p align="center">
-  <a href="https://raw.githubusercontent.com/samvallad33/vestige/media/vestige-black-box.mp4">
-    <img src="https://raw.githubusercontent.com/samvallad33/vestige/media/black-box-cause.gif" alt="Vestige Black Box, recorded on v3.1" width="100%">
-  </a>
-</p>
-
-<p align="center"><sub>Recorded on v3.1 with <code>vestige backfill --contrast</code>. Since 4.0 the backward walk is <code>causal_walk</code>, which follows only recorded edges from an explicit start point. <a href="https://raw.githubusercontent.com/samvallad33/vestige/media/vestige-black-box.mp4">Watch the walk</a>.</sub></p>
-
+<a id="install"></a>
 ## Install
 
 Each release archive holds four binaries: `vestige-mcp` (the MCP server your agents run), `vestige` (the CLI), `vestige-upgrade` (the v3 importer) and `vestige-restore`. Keep all four in one folder. No Docker, no signup, no compile step, and nothing downloads on first start.
@@ -176,21 +100,21 @@ Use the archive for your machine:
 | Linux arm64 (same glibc floor) | `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows x86_64 | `vestige-mcp-x86_64-pc-windows-msvc.zip` |
 
-Then check it:
+Check it:
 
 ```bash
-vestige-mcp --version
+vestige-mcp --version    # vestige-mcp 4.1.1
 ```
 
-It should print `vestige-mcp 4.1.1`. If the shell says command not found, `~/.local/bin` is not on your PATH yet: add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (or `~/.bashrc`) and open a new terminal. If it prints an older version, an older install comes first on your PATH; `which -a vestige-mcp` lists them.
+If the shell says command not found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (or `~/.bashrc`) and open a new terminal. If it prints an older version, an older install comes first on your PATH; `which -a vestige-mcp` lists them. A running Vestige server keeps its old build until its app restarts, so restart every agent after an upgrade.
 
-On a Mac, download with `curl` as above rather than a browser. A browser marks the files as quarantined and macOS then refuses to run them. If you already used a browser, clear the flag with `xattr -d com.apple.quarantine ~/.local/bin/vestige*`.
+On a Mac, download with `curl` as above rather than a browser: a browser quarantines the files and macOS then refuses to run them. If you already used one, run `xattr -d com.apple.quarantine ~/.local/bin/vestige*`.
 
 **Windows.** Download `vestige-mcp-x86_64-pc-windows-msvc.zip` from [the latest release](https://github.com/samvallad33/vestige/releases/latest), unzip all four `.exe` files into one folder, and add that folder to your PATH.
 
 **Homebrew** (macOS and Linux): `brew install samvallad33/tap/vestige`.
 
-Every archive has a `.sha256` file beside it on the release page. Do not install this version with npm: the npm package still serves 3.0.0.
+Every archive has a `.sha256` file beside it on the release page. **npm** also works: `npm install -g vestige-mcp-server` (4.1.1 is published). Its installer downloads the same release archive for your platform and checks the `.sha256` before installing.
 
 **Connect your agents.** The MCP command is `vestige-mcp`:
 
@@ -199,7 +123,7 @@ Every archive has a `.sha256` file beside it on the release page. Do not install
 | Claude Code | `claude mcp add vestige vestige-mcp -s user` |
 | Codex | `codex mcp add vestige -- vestige-mcp` |
 | Cursor / VS Code / Windsurf | [docs/integrations/](docs/integrations/) |
-| Claude Desktop, and any other app you start from the Dock or Start menu | the JSON below, with the full path from `which vestige-mcp` (desktop apps do not read your shell's PATH) |
+| Claude Desktop, and any app you start from the Dock or Start menu | the JSON below, with the full path from `which vestige-mcp` (desktop apps do not read your shell's PATH) |
 | Cline / Continue / Zed / Goose | the JSON below, in that client's MCP settings |
 
 ```json
@@ -210,64 +134,75 @@ Every archive has a `.sha256` file beside it on the release page. Do not install
 }
 ```
 
-**Use it from every agent at once.** Claude Code in three terminals, Cursor, Codex and Claude Desktop can all run Vestige at the same time on one machine. The first one to start serves the store and the others connect to it, so every agent reads and writes the same memory through one writer. When that first agent quits, one of the others takes over and keeps its session.
+**Every agent at once.** Claude Code in three terminals, Cursor, Codex and Claude Desktop can all run Vestige on one machine. The first to start serves the store and the others connect to it, so every agent reads and writes the same memory through one writer. When that first agent quits, another takes over and keeps its session.
 
-`vestige-mcp` also takes `--data-dir <PATH>`, `--http`, `--no-http`, and `--http-port <PORT>` (default 3928, and passing the flag turns HTTP on). HTTP binds to `127.0.0.1` unless `VESTIGE_HTTP_BIND` is set. `VESTIGE_AUTH_TOKEN` overrides the bearer token. `VESTIGE_HTTP_ALLOWED_ORIGINS` is a comma-separated browser allowlist. `VESTIGE_DASHBOARD_ENABLED=1` starts the dashboard from the server; `VESTIGE_DASHBOARD_PORT` defaults to 3927. `VESTIGE_SYSTEM_PROMPT_MODE` is `minimal` or `full`. `RUST_LOG` filters logs. `VESTIGE_DATA_DIR` is the data directory when `--data-dir` is absent. The Strata log lives in `log/` inside that directory.
+**Configuration.** `vestige-mcp` takes `--data-dir`, `--http`, `--no-http` and `--http-port` (default 3928). HTTP binds to `127.0.0.1`. Environment variables, `vestige.toml` output profiles (`lean`, `default`, `audit`, `research`) and dashboard access are in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). `VESTIGE_SYSTEM_PROMPT_MODE` is `minimal` or `full`.
 
-Optional output defaults live in `<data-dir>/vestige.toml`. A missing file uses the built-in defaults. An explicit MCP argument wins over the file.
+**Offline by default.** A default 4.x build has no embedding model and no startup version check. `source_sync` (`--features connectors`) and `vestige sync --cloud` (`--features cloud-sync`) are the only calls that use the network, and neither is in a 4.x release build. Walkthrough: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
 
-```toml
-[defaults]
-profile = "default"       # lean | default | audit | research
-detail_level = "summary"  # brief | summary | full
-limit = 10
+<a id="operator-lite"></a>
+<a id="getting-started"></a>
+## The gate: Operator Lite
+
+The security layer. Free, and in this repo under [`operator-lite/`](operator-lite/). A one-file, stdlib-only gate that sits between your agent and your machine as a PreToolUse hook, and blocks destructive, polluting and exfiltrating commands before they execute.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
 ```
 
-`lean` presets brief detail and a limit of 5. `audit` presets full detail. `research` presets full detail and a limit of 25. `default` leaves the historical tool limits alone.
+On Windows, in PowerShell, with Python 3.9 or newer:
 
-Nothing leaves the machine by default. A default 4.x build has no embedding model and no startup version check. `source_sync` (`--features connectors`) and `vestige sync --cloud` (`--features cloud-sync`) are the only calls that use the network, and neither feature is in a 4.x release build. Full walkthrough: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+```powershell
+curl.exe -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o "$env:TEMP\operator-gate.py"; python "$env:TEMP\operator-gate.py" install
+```
 
-`vestige --help` lists the CLI. `--data-dir` is global.
+One command copies the gate to `~/.operator/gate`, registers the Claude Code hook, and starts in **shadow mode**: it records every verdict and blocks nothing. It then replays your last 30 days of Claude Code history through the same rules, so the first thing you see is what it would have said about your own agents. Nothing in that history is executed. When the log looks right, `mode enforce` switches it on.
 
-<a id="upgrading-from-v3"></a>
-## Upgrading from v3
+- **Deterministic rules, in two tiers.** 11 rules stop a command: protecting the gate itself, registered workspaces and the Vestige store, blind recursive delete, force-push over shared history, unreviewed publishes, paid deploys, destructive SQL, shell-init writes, reverse shells and cloud-metadata endpoints. 15 more run in shadow and flag without stopping: work-loss commands, outbound messages, public mutations, secret-shaped writes, pipe-to-interpreter, persistence writes, exfil shapes and MCP argument exfil among them.
+- **Reads through shell obfuscation.** Quote reassembly, `$IFS` expansion, base64-decoded pipelines, brace and glob expansion, heredocs, subshell time-bombs.
+- **Every verdict gets a hash-chained receipt**, and `verify` walks the chain.
+- **Hosts.** Claude Code (`install` registers it for you), Codex and OpenClaw. [Ports](operator-lite/ports/) cover Cursor, Windsurf, Cline, Aider, Gemini CLI, Goose, OpenCode, OpenHands, Crush, Amazon Q, LangChain/LangGraph, CrewAI and the OpenAI Agents SDK.
 
-Quit every app that runs Vestige v3 (each agent, the dashboard, any background job), point all of them at the 4.x `vestige-mcp`, and start them again. A v3 server left running keeps writing to `vestige.db`, which 4.x no longer reads after the upgrade.
+```bash
+python3 ~/.operator/gate/operator-gate.py status      # what it caught on your machine
+python3 ~/.operator/gate/operator-gate.py replay      # re-run the 30-day history replay
+python3 ~/.operator/gate/operator-gate.py verify      # receipt chain check
+python3 operator-lite/operator-gate.py corpus guardfall   # 46/46 bypass cases, from a clone of this repo
+```
 
-Point 4.x at your existing data directory. The first launch finds `vestige.db`, builds a Strata log from it next to the file, verifies that log against a signed migration receipt, and only then publishes it as `log/`. The v3 file is never modified. A backup copy is written first, owner-only.
+On OpenClaw: `clawhub install vestige-operator-lite`. Vestige's kernel is also there as a six-tool plugin: [`clawhub install vestige-strata`](https://clawhub.ai/plugins/vestige-strata). Details: [operator-lite/README.md](operator-lite/README.md).
 
-What carries over: every memory with its scope, tags and scheduling state; links; supersession; suppression (suppressed memories stay hidden); intentions; and code anchors. Links v3 inferred by similarity come across as `legacy_inferred` history. They are kept, and they never count as recorded evidence.
+<a id="vestige-operator"></a>
+**Vestige Operator** is the owner's version of the same gate: $149 once, every later version included. You write your own laws as sentences ("never publish without a dry run"), get a board of today's stops, a weekly digest of what your agents tried, and a five-minute onboarding wizard. [Buy Vestige Operator](https://payhip.com/b/d4xvu); from an installed Operator Lite, `upgrade --install <the archive you downloaded>` unpacks it and starts the wizard.
 
-On a real 297 MB store with 8,902 memories in 34 scopes, the first launch took about 17 seconds before the MCP handshake answered, and average retention right after the upgrade was 0.810 against 0.8105 computed by v3 itself. Agents that start during the upgrade wait for it and then connect; there is nothing to coordinate by hand.
-
-If the upgrade fails, the v3 data is untouched and the message says so. A `vestige.db` that is unreadable, empty or not plain SQLite is refused by name, never treated as an empty store, and a symlinked `vestige.db` is followed to the real file so memories that live only in its WAL come across. You can keep using v3.1.1 meanwhile. `vestige strata-verify <data-dir>` checks the log and its migration receipt at any time.
-
-If you installed v3 with npm, make sure your agents now run the 4.x binary: `vestige-mcp --version` should print 4.1.1, and `which -a vestige-mcp` shows every copy on your PATH in the order they are found.
+What it is not: Operator blocks what is routed through it. It cannot block a call that bypasses the hooked tools, and receipts are hash-chained digests, not signatures.
 
 <a id="recall-by-handle-not-resemblance"></a>
 ## Recall by handle, not resemblance
 
 Since 4.0, Vestige does not rank text that resembles your query. There are no embeddings, no BM25 and no keyword search in the default binaries. `recall` takes a handle: a memory id, a unique id prefix of 8 or more characters, or an exact tag. A free-text query returns `similarity_disabled` and asks for a handle.
 
+Why: the cause of a bug rarely shares words with the error it produces. A search that ranks by lookalike words hands the agent the nearest-sounding memory, and the agent loads more context and guesses again. Vestige finds a memory by the handle you gave it and follows only the links the log recorded.
+
 | | Resemblance search | Vestige 4.x |
 |---|---|---|
 | How a memory is found | Similarity to the query | An exact handle |
 | What counts as a link | Anything that scores close | Only an edge the log recorded. Imported v3 links are marked `legacy_inferred` |
-| Walking back from a failure | Nearest lookalikes | `causal_walk` from the memory that records the symptom, backward over recorded edges, at most 8 hops and 500 nodes by default. Any start point (failing test, stack frame, CI run, version range, or a plain `logged_write`) carries that memory's id as `node_id` |
+| Walking back from a failure | Nearest lookalikes | `causal_walk` from the memory that records the symptom, backward over recorded edges, at most 8 hops and 500 nodes by default |
 | Proof of a write | None | A receipt per write. `receipt replay` re-derives the state from the log |
 | Unused memories | Persist at full weight | Fade under FSRS scheduling |
 | Your data | Often a hosted index | A signed, append-only log in the data directory |
 
-`causal_walk` never guesses. With no start point it returns `needs_report` and names what is missing. A start point with no `node_id` is not walked: `start_points` in the response says so, with the reason, for each one. A walk that finds no cause says why in `emptyBecause`, from the edges the log holds. `forgotten_lesson` walks backward from a failure the same way and ranks fix or lesson memories by how far they have faded.
+`causal_walk` never guesses. With no start point it returns `needs_report` and names what is missing. A start point with no `node_id` is not walked, and the response says why. A walk that finds no cause says why in `emptyBecause`, from the edges the log holds. `forgotten_lesson` walks backward from a failure the same way and ranks fix or lesson memories by how far they have faded.
 
 <a id="ghostlink-the-negative-space"></a>
 ## GhostLink: the negative space
 
 `ghostlink` finds pairs of memories nobody has combined yet and hands one to your agent to compose. Every pair comes with its proof, built only from what the log recorded: ids, exact tags and types, typed edges, woven outcomes and FSRS state. No text, embeddings or keyword overlap.
 
-- **Bridge lens** (the default): two memories within three hops over recorded `touched`, `derived_from` or `closed_by` edges that were never woven together. The shortest path is the proof. Pairs rank by hop proximity, how rarely each memory has been composed, retention, and the outcomes earlier pairs recorded.
-- **Divergent lens**: two memories joined by no recorded edge at all, scored `min(path length, 7) × divergence`, where divergence is how few typed neighbors they share. When a memory has no typed neighbors there is nothing to measure, so the pair is a *forced juxtaposition* picked by a deterministic sampler, with no invented score. Links imported from v3 can only lower a score, never raise one.
-- **Weave** records what came of a pair (`helpful`, `dead_end`, `accepted`, …): a composition memory plus a `derived_from` edge to each member, each with a receipt. Later proposals learn from it. A weave can carry `evidence` from outside: the URL, the sha256 of what was fetched, and when. Each finding is tagged `evidence:<sha256>`, and Vestige never fetches the URL itself.
+- **Bridge lens** (default): two memories within three hops over recorded `touched`, `derived_from` or `closed_by` edges that were never woven together. The shortest path is the proof. Pairs rank by hop proximity, how rarely each memory has been composed, retention, and the outcomes earlier pairs recorded.
+- **Divergent lens**: two memories joined by no recorded edge at all, scored by path length and how few typed neighbors they share. When a memory has no typed neighbors there is nothing to measure, so the pair is a *forced juxtaposition* picked by a deterministic sampler, with no invented score. Imported v3 links can only lower a score.
+- **Weave** records what came of a pair (`helpful`, `dead_end`, `accepted`, ...) as a composition memory plus a `derived_from` edge to each member, each with a receipt. Later proposals learn from it, and a weave can carry outside `evidence`.
 
 ```json
 {"mode": "propose", "lens": "divergent", "limit": 5}
@@ -275,77 +210,68 @@ Since 4.0, Vestige does not rank text that resembles your query. There are no em
 
 `map`, `inspect`, `explore`, `bounty`, `predict` and `harden` read and seed around the same graph. Reading never writes to the log.
 
-<a id="founding-operator"></a>
-## 🛡️ Every write is admitted
+## Strata: every write is admitted and proven
 
-On a Strata log a write is proposed, checked by the gate, and admitted as an effect, and the call returns an `eff-` receipt. `receipt get` shows what that write did. `receipt replay` rebuilds the state from the log and reports any mismatch. `selftest` plants a known cause in a throwaway copy of your store and checks that the walk finds it, without touching the live store.
+Strata is the kernel. On a Strata log a write is proposed, checked by the gate, and admitted as an effect, and the call returns an `eff-` receipt. `receipt get` shows what that write did. `receipt replay` rebuilds the state from the log and reports any mismatch. `selftest` plants a known cause in a throwaway copy of your store and checks that the walk finds it, without touching the live store.
 
-The Memory PR review modes from v3 (`risk_gated`, `paranoid`) are not available on a Strata log in 4.x. A review setting carried over from v3 reads as `fast`, and the dashboard's Memory PR list says review is unavailable.
-
-**Recorded run on v3.1: [THE LIVE GATE](https://github.com/samvallad33/vestige/releases/tag/launch-night-live-gate-20260914).**
-
-<a id="managed-continuity"></a>
-<a id="backups-and-export"></a>
-## 🔄 Backups and export
-
-`maintain` action `backup` copies the whole Strata log into `<data-dir>/backups/` and reports its size. From a terminal, `vestige backup <new-folder>` does the same, and it works while your agents are running: it asks their Vestige server for the copy. To restore, stop Vestige and copy the backup's `log/` back into the data directory. Backups are owner-only (folders `0700`, files `0600`), and a log that fails verification is refused rather than copied. `session_start` reports `needsBackup` and `needsDream` from the last backup and dream that actually completed.
-
-The log has one writer. CLI commands that open it directly, such as `vestige stats` or `vestige ingest`, run only while no Vestige server holds the store, and they name the process that does. `maintain` action `export` writes every live memory as JSON or JSONL into `<data-dir>/exports/`.
-
-Portable archives, file sync and hosted sync are not available on a Strata log in 4.x. The CLI says so when you call them.
-
-<a id="vestige-pro"></a>
-
-## The receipts: Silent Rotation
-
-Measured on v3.1, where recall still used hybrid search:
-
-| Arm (6 models, 25 trials) | Converged correct | Converged wrong | Split |
-|---|---|---|---|
-| No memory | 0/25 | **21/25** | 4/25 |
-| Dense cosine RAG | 4/23 | **12/23** | 7/23 |
-| Vestige | 20/23 | **0/23** | 3/23 |
-
-Outcomes come from `tests/by_model_tables.py`: a trial is correct when the tests were green, the production replay passed, and the key was right; wrong when the tests were green but production failed; split when the merge conflicted.
-
+<a id="the-science"></a>
 ## The science
 
-Write-up: [docs/SCIENCE.md](docs/SCIENCE.md).
+Vestige is built on memory research, and says plainly where it is inspired by it rather than a literal model of the brain. Write-up: [docs/SCIENCE.md](docs/SCIENCE.md).
 
-| Mechanism | In 4.x | Source in the code |
-|---|---|---|
-| FSRS scheduling | Every card, native or imported, decays and strengthens under FSRS in the Strata kernel | `strata-kernel` `fsrs` |
-| Memory dreaming | `maintain` actions `dream` and `dream_compile` replay recorded edges and strengthen co-activated ones | `dream`, `dream_compile` |
-| Active forgetting | `suppress` takes a memory out of every read and keeps its bytes | `suppress` |
-| Causal walk | Backward over recorded edges only, bounded and deterministic | `causal_walk` |
-| Prediction-error gating, synaptic tagging, spreading activation, narrative edges, Retroactive Salience Backfill | In the v3 engine. The 4.x default build does not use them, because each depends on similarity or inferred links | `vestige-core` (v3 engine) |
+| Mechanism | The idea from memory research | In 4.x | Source |
+|---|---|---|---|
+| FSRS scheduling | The forgetting curve: memories fade with time and strengthen when used | Every card, native or imported, decays and strengthens under FSRS in the Strata kernel | `strata-kernel` `fsrs` |
+| Memory dreaming | Sleep replay: consolidation strengthens what was active together | `maintain` actions `dream` and `dream_compile` replay recorded edges and strengthen co-activated ones | `dream`, `dream_compile` |
+| Active forgetting | Forgetting as a function, not a failure | `suppress` takes a memory out of every read and keeps its bytes | `suppress` |
+| Causal walk | Tracing an effect back to its antecedents | Backward over recorded edges only, bounded and deterministic | `causal_walk` |
+| Prediction-error gating, synaptic tagging, spreading activation, narrative edges, Retroactive Salience Backfill | Novelty gates storage; importance is assigned retroactively; activation spreads along associations | In the v3 engine. The 4.x default build does not use them, because each depends on similarity or inferred links | `vestige-core` (v3 engine) |
 
-## The tools
+<a id="the-tools"></a>
+## The tools: your agents' system calls
 
-`tools/list` advertises these 16 tools, sorted by name. The list is compact: every field a call can send is on the wire with its type, prose and deep structure move one call deeper, and filter fields are grouped under `filters` and `source` (sent either grouped or flat). The serialized catalog is about 20 KiB. `memory_status` with `view=tools` lists every tool; set `tool` to a name for that tool's full input schema. Actions a Strata log cannot honor are left out of the schema and refused with the reason.
+`tools/list` advertises 16 tools, sorted by name. The catalog is compact (about 20 KiB): every field a call can send is on the wire with its type, and prose moves one call deeper. `memory_status` with `view=tools` lists every tool; set `tool` to a name for its full input schema. Actions a Strata log cannot honor are left out of the schema and refused with the reason.
 
 | Tool | Purpose |
 |---|---|
 | `causal_walk` | Walk a failure backward from explicit start points over recorded edges |
-| `codebase` | Remember a pattern or decision with code anchors, fetch context marked current or stale (with every scope that holds the codebase's patterns, decisions and change records), `verify` anchors against source (saying what `limit` left unchecked), `reanchor`, and `ingest_repo`: the commits of a checkout, read from the top of its working tree, as anchored change records in their own scope (previews first) |
+| `codebase` | Remember a pattern or decision with code anchors, fetch context marked current or stale, `verify` anchors against source, `reanchor`, and `ingest_repo` (commits as anchored change records) |
 | `dedup` | `scan` for duplicates, `undo` a recorded operation, `tag_rename` and `tag_merge` with a preview, `policy` |
 | `forgotten_lesson` | Faded fix or lesson memories behind a failure, over recorded edges |
-| `ghostlink` | Never-composed memory pairs, each with its proof from recorded edges only. `propose` with lens `bridge` (within three typed-edge hops, never woven) or `divergent` (no recorded edge at all; a forced juxtaposition when nothing can be measured), `weave` an outcome (a write with receipts), `inspect` woven compositions, `explore` typed paths, `map`, `bounty`, `predict`, and `harden` to seed invariant laws once. `graph` still answers as a hidden alias |
+| `ghostlink` | Never-composed memory pairs, each with its proof. `propose` (bridge or divergent lens), `weave`, `inspect`, `explore`, `map`, `bounty`, `predict`, `harden` |
 | `intention` | `set`, `check`, `update`, `list`. `graph` runs the evidence-aware plan |
-| `maintain` | `dream`, `dream_compile`, `gc` (dry run unless you turn it off), `importance_score`, `backup`, `export`. `consolidate` is refused on a Strata log, where every phase is a no-op |
+| `maintain` | `dream`, `dream_compile`, `gc` (dry run unless you turn it off), `importance_score`, `backup`, `export` |
 | `memory` | `get`, `get_batch`, `state`, `promote`, `demote`, `edit`. Demote does not delete. An edit admits a successor and keeps its code anchors |
 | `memory_status` | `health`, `retention`, `timeline`, `changelog`, `provenance`, `coverage`, `stats`, `tools` |
 | `project` | Preview a fenced region of `CLAUDE.md` or `MEMORY.md`. `write` needs `confirm=true` and replaces only the fence |
 | `recall` | Find memories by exact handle: id, unique prefix, or exact tag |
 | `receipt` | `get` a receipt, or `replay` it against the log |
 | `selftest` | Plant a known cause in a throwaway copy and check the walk finds it |
-| `session_start` | Status, open intentions for the scope (with id, due date and an overdue mark), backup and dream needs, and codebase context under one budget; when the scope holds none of a codebase's code memories, it names the scopes that do. It writes nothing. Queries are answered with a notice: memories are found by handle |
-| `smart_ingest` | Store one memory, or up to 20 with `items`. `links` declares typed edges to existing memories (`derived_from`, `evidence_of`, `closes`), each with its own receipt, which is what GhostLink's bridge lens walks. Secrets are refused unless you say otherwise |
-| `suppress` | Take a memory out of every read. The log keeps its bytes, and on Strata it cannot be undone. `destructiveHint` is true |
+| `session_start` | Status, open intentions, backup and dream needs, and codebase context under one budget. It writes nothing |
+| `smart_ingest` | Store one memory, or up to 20 with `items`. `links` declares typed edges to existing memories. Secrets are refused unless you say otherwise |
+| `suppress` | Take a memory out of every read. The log keeps its bytes, and on Strata it cannot be undone |
 
-**Withheld since 4.0.** `purge` is the one tool 4.x does not ship. On an append-only signed log a purge could hide a memory but not erase its bytes, and a tool called purge must not pretend otherwise. `purge`, `memory` action `purge` or `delete`, and `delete_knowledge` return `unavailable_in_4_0`. Real erasure is planned as crypto-erasure ([#402](https://github.com/samvallad33/vestige/issues/402)).
+**Withheld since 4.0.** `purge`, `memory` action `purge` or `delete`, and `delete_knowledge` return `unavailable_in_4_0`. On an append-only signed log a purge could hide a memory but not erase its bytes, and a tool called purge must not pretend otherwise. Real erasure is planned as crypto-erasure ([#402](https://github.com/samvallad33/vestige/issues/402)).
 
-Full contracts: [docs/TOOL-CONTRACTS.md](docs/TOOL-CONTRACTS.md) · Hygiene and standing habits: [docs/MEMORY_HYGIENE.md](docs/MEMORY_HYGIENE.md)
+Full contracts: [docs/TOOL-CONTRACTS.md](docs/TOOL-CONTRACTS.md) · Habits: [docs/MEMORY_HYGIENE.md](docs/MEMORY_HYGIENE.md)
+
+<a id="backups-and-export"></a>
+## Backups and export
+
+`vestige backup <new-folder>` copies the whole Strata log and works while your agents are running, because it asks their Vestige server for the copy. `maintain` action `backup` writes into `<data-dir>/backups/`. To restore, stop Vestige and copy the backup's `log/` back into the data directory. Backups are owner-only (folders `0700`, files `0600`), and a log that fails verification is refused rather than copied. `maintain` action `export` writes every live memory as JSON or JSONL into `<data-dir>/exports/`.
+
+The log has one writer. CLI commands that open it directly, such as `vestige stats` or `vestige ingest`, run only while no Vestige server holds the store, and they name the process that does. Portable archives, file sync and hosted sync are not available on a Strata log in 4.x.
+
+<a id="upgrading-from-v3"></a>
+## Upgrading from v3
+
+1. Quit every app that runs Vestige v3 (each agent, the dashboard, any background job).
+2. Point them all at the 4.x `vestige-mcp` and start them again. A v3 server left running keeps writing to `vestige.db`, which 4.x no longer reads.
+3. Use your existing data directory. The first launch builds a Strata log from `vestige.db`, verifies it against a signed migration receipt, and only then publishes it as `log/`. The v3 file is never modified, and an owner-only backup is written first.
+
+Memories (with scope, tags and scheduling state), links, supersession, suppression, intentions and code anchors all carry over. Links v3 inferred by similarity come across as `legacy_inferred` history and never count as recorded evidence. On a real 297 MB store with 8,902 memories in 34 scopes, the first launch took about 17 seconds before the MCP handshake answered, and average retention was 0.810 afterward against 0.8105 computed by v3.
+
+If the upgrade fails, the v3 data is untouched and you can keep using v3.1.1. `vestige strata-verify <data-dir>` checks the log and its migration receipt at any time. More in [docs/MIGRATING-v4.md](docs/MIGRATING-v4.md).
 
 ## The dashboard
 
@@ -353,7 +279,7 @@ Full contracts: [docs/TOOL-CONTRACTS.md](docs/TOOL-CONTRACTS.md) · Hygiene and 
 vestige dashboard
 ```
 
-The server binds **http://127.0.0.1:3927** and redirects `/` to **/dashboard**. It works while your agents are running: the Vestige server they share serves the dashboard until you press Ctrl+C. It answers only to `127.0.0.1` and `localhost` on its port. Only its own page can change memory; a script needs `Authorization: Bearer $VESTIGE_AUTH_TOKEN` ([Dashboard access](docs/CONFIGURATION.md#dashboard-access)). The observatory steps a fixed 60fps clock, 720 frames, 12 seconds, and can export that loop as an mp4. Share artifacts are structure-only: the shape of the store, not the memory text.
+Serves **http://127.0.0.1:3927** and works while your agents are running. It answers only to `127.0.0.1` and `localhost`, and only its own page can change memory; a script needs `Authorization: Bearer $VESTIGE_AUTH_TOKEN` ([Dashboard access](docs/CONFIGURATION.md#dashboard-access)). The observatory can export a 12-second loop of your memory graph as an mp4, and share artifacts are structure-only: the shape of the store, not the memory text.
 
 ## Under the hood
 
@@ -367,7 +293,7 @@ The server binds **http://127.0.0.1:3927** and redirects `/` to **/dashboard**. 
 
 ## Go deeper
 
-[Getting Started](docs/GETTING-STARTED.md) · [FAQ](docs/FAQ.md) · [The Science](docs/SCIENCE.md) · [Configuration](docs/CONFIGURATION.md) · [Storage](docs/STORAGE.md) · [Tool contracts](docs/TOOL-CONTRACTS.md) · [Changelog](CHANGELOG.md)
+[Getting Started](docs/GETTING-STARTED.md) · [FAQ](docs/FAQ.md) · [The Science](docs/SCIENCE.md) · [Configuration](docs/CONFIGURATION.md) · [Storage](docs/STORAGE.md) · [Tool contracts](docs/TOOL-CONTRACTS.md) · [Benchmarks](docs/BENCHMARKS.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

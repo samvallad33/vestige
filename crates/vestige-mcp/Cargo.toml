@@ -2,7 +2,7 @@
 name = "vestige-mcp"
 version = "4.1.1"
 edition = "2024"
-description = "Cognitive memory MCP server for AI agents - FSRS-6, spreading activation, synaptic tagging, 3D dashboard, and 130 years of memory research"
+description = "Vestige MCP server: the Causal Proof Engine and operating system for AI agents (Strata signed log, causal walks, receipts, dashboard)"
 authors = ["samvallad33"]
 license = "AGPL-3.0-only"
 keywords = ["mcp", "ai", "memory", "fsrs", "neuroscience", "cognitive-science", "spaced-repetition"]

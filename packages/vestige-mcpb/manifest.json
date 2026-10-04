@@ -3,7 +3,7 @@
   "name": "vestige",
   "display_name": "Vestige",
   "version": "4.1.1",
-  "description": "AI memory system built on 130 years of cognitive science. Reaches backward through time to find a failure's root cause (Retroactive Salience Backfill), FSRS-6 spaced repetition, synaptic tagging, and local-first storage.",
+  "description": "The Causal Proof Engine and operating system for AI agents. Strata, a signed append-only log, is the kernel. Zero vectors, zero RAG: a failure is traced back to its cause along recorded links, and every answer carries its proof. Runs on your machine.",
   "author": {
     "name": "Sam Valladares",
     "url": "https://github.com/samvallad33"

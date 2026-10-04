@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
-description = "STRATA-native memory store: StrataLog as the append-only source of truth, gate-admitted writes, kernel-folded FSRS"
+description = "STRATA-native store: StrataLog as the append-only source of truth, gate-admitted writes, kernel-folded FSRS"
 publish = false
 
 # Standalone on purpose: this crate keeps its own (empty) workspace table so

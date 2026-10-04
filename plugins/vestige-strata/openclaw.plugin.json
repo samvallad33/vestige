@@ -2,7 +2,7 @@
   "id": "vestige-strata",
   "name": "Vestige Strata",
   "version": "4.1.1",
-  "description": "Local-first memory for coding agents: a signed append-only causal log where every write passes a gate and comes back with a replayable receipt. Tools: ingest, exact-handle recall, causal root-cause walks, composition leads, log verification, stats. Requires the vestige CLI (4.0+).",
+  "description": "The Causal Proof Engine's kernel for coding agents: Strata, a signed append-only log where every write passes a gate and comes back with a replayable receipt. Tools: ingest, exact-handle recall, causal root-cause walks, composition leads, log verification, stats. Requires the vestige CLI (4.0+).",
   "kind": "memory",
   "activation": { "onStartup": true },
   "configSchema": {

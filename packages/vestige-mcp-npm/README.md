@@ -1,64 +1,33 @@
 # vestige-mcp-server
 
-Vestige MCP Server - A synthetic hippocampus for AI assistants.
+**The Causal Proof Engine. The operating system for AI agents.**
 
-Built on 130 years of cognitive science research, Vestige provides biologically-inspired memory that decays, strengthens, and consolidates like the human mind.
+**Zero vectors. Zero RAG. No lookalike text.** Nothing in the engine is found, ranked, paired or explained by embeddings, keyword scoring or similarity. Every answer comes from what Strata recorded and carries its proof: a memory id, an edge path, or a receipt.
 
-## Installation
+Strata is the kernel: an append-only, hash-chained, signed log on your machine. One install gives every agent on that machine the same kernel, the same gate, the same debugger and the same shell. Nothing leaves your machine by default.
 
-v3.1.1 is not published to npm. Download the archive for your machine from the [GitHub Release](https://github.com/samvallad33/vestige/releases).
+This package installs the Vestige binaries. Full documentation: [github.com/samvallad33/vestige](https://github.com/samvallad33/vestige).
 
-Already installed from a previous release? Update without copying release URLs:
-
-```bash
-vestige update
-```
-
-This refreshes the binaries only. Optional Claude Code Cognitive Sandwich
-companion files are refreshed with `vestige update --sandwich-companion` or
-`vestige sandwich install`.
-
-## Vestige Pro — your memory on every machine
-
-The entire cognitive engine is free forever, local, and never metered. Vestige
-Pro is for when that memory needs to follow you:
-
-- **End-to-end encrypted continuity** across every machine you work on: your
-  memory graph plus your accountability history (Black Box traces, receipts,
-  memory PRs).
-- **Zero-knowledge by construction**: your passphrase never leaves your machine.
-  The server only ever stores ciphertext. The client refuses to sync without
-  encryption.
-- **$19/month.** No annual lock-in, no lifetime gimmicks.
+## Install
 
 ```bash
-npm update -g vestige-mcp-server   # get the Pro-capable client (v2.3.0+)
-vestige sync --cloud               # walks you through the rest
+npm install -g vestige-mcp-server
 ```
 
-Subscribe: [github.com/samvallad33/vestige#vestige-pro](https://github.com/samvallad33/vestige#vestige-pro)
-
-One passphrase, chosen by you, for every device. Vestige never receives it. A
-lost passphrase means the encrypted data is unrecoverable — that is the point.
-
-### What gets installed
-
-| Command | Description |
-|---------|-------------|
-| `vestige-mcp` | MCP server for local agent memory |
-| `vestige` | CLI for stats, health checks, and maintenance |
-| `vestige-restore` | Restore helper for backup recovery |
-| `vestige-upgrade` | One-shot v3 store importer |
-
-### Verify installation
+The installer downloads the release archive for your platform from the GitHub Release and checks its `.sha256` before it installs anything. Node 18 or newer. You can also download the archive yourself from [the latest release](https://github.com/samvallad33/vestige/releases/latest).
 
 ```bash
-vestige health
+vestige-mcp --version
 ```
 
-## Usage with MCP Clients
+| Command | What it is |
+|---|---|
+| `vestige-mcp` | The MCP server your agents run |
+| `vestige` | The CLI: `backup`, `strata-verify`, `dashboard` and more |
+| `vestige-upgrade` | One-shot importer for a v3 store |
+| `vestige-restore` | Re-imports an export as new records |
 
-Vestige works with any client that can register a stdio MCP server.
+## Connect your agents
 
 **Claude Code**
 
@@ -72,139 +41,56 @@ claude mcp add vestige vestige-mcp -s user
 codex mcp add vestige -- vestige-mcp
 ```
 
-Then restart your MCP client.
-
-**OpenCode**
-
-Add to `~/.config/opencode/opencode.json` or a project-local `opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "vestige": {
-      "type": "local",
-      "command": ["vestige-mcp"],
-      "enabled": true,
-      "timeout": 10000
-    }
-  }
-}
-```
-
-Prefer the unpacked `vestige-mcp` command for OpenCode:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "vestige": {
-      "type": "local",
-      "command": ["vestige-mcp"],
-      "enabled": true,
-      "timeout": 10000
-    }
-  }
-}
-```
-
-## Usage with Claude Desktop
-
-Add to your Claude Desktop configuration:
-
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+**Claude Desktop and any other client**
 
 ```json
 {
   "mcpServers": {
-    "vestige": {
-      "command": "vestige-mcp"
-    }
+    "vestige": { "command": "vestige-mcp" }
   }
 }
 ```
 
-## CLI Commands
+Desktop apps do not read your shell's PATH, so use the full path from `which vestige-mcp` there. Then restart the client. Claude Desktop's config lives at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and `%APPDATA%\Claude\claude_desktop_config.json` on Windows.
+
+Every agent on the machine can run Vestige at once. The first to start serves the store and the others attach to it, so they all read and write through one writer.
+
+## What is in the system
+
+- **Strata**, the kernel: an append-only, hash-chained, signed log. State is re-derived by replaying it.
+- **Admission**: every write is proposed, checked by the gate and admitted, and returns a receipt you can replay.
+- **Recall by handle**: an agent finds a record by id, unique id prefix or exact tag, never by resemblance.
+- **The debugger**: `causal_walk` walks a failure backward along recorded links to the decision behind it. `forgotten_lesson` and `selftest` work the same way.
+- **GhostLink**: finds pairs of records nobody has combined, each with its proof.
+- **Lifecycle**: FSRS scheduling, dreaming over recorded edges, and suppression.
+- **Source awareness**: decisions anchored to code, drift flagged, and git history turned into change records.
+
+## Dashboard and backups
 
 ```bash
-vestige stats          # Memory statistics
-vestige stats --states # Cognitive state distribution
-vestige health         # System health check
-vestige consolidate    # Run memory maintenance cycle
-vestige update         # Update binaries
-vestige update --sandwich-companion # Also refresh optional Claude Code files
-vestige sandwich install # Manage optional Claude Code hook files
+vestige dashboard         # http://127.0.0.1:3927
+vestige backup <new-dir>  # works while your agents are running
 ```
 
-## Features
+## Upgrading from v3
 
-- **FSRS-6 Algorithm**: State-of-the-art spaced repetition for optimal memory retention
-- **Dual-Strength Memory**: Bjork & Bjork (1992) - Storage + Retrieval strength model
-- **Synaptic Tagging**: Memories become important retroactively (Frey & Morris 1997)
-- **Semantic Search**: Local embeddings via nomic-embed-text-v1.5 (768 dimensions)
-- **Local-First**: All data stays on your machine - no cloud, no API costs
+Quit every app that runs Vestige v3, point them at the 4.x `vestige-mcp`, and start them again. The first launch builds a Strata log from your `vestige.db`, verifies it against a signed migration receipt, and never modifies the v3 file. Details: [Upgrading from v3](https://github.com/samvallad33/vestige#upgrading-from-v3).
 
-## Storage & Memory
+## Environment
 
-Vestige uses SQLite for storage. Your memories are stored on **disk**, not in RAM.
+| Variable | What it does |
+|---|---|
+| `VESTIGE_DATA_DIR` | Data directory when `--data-dir` is absent. The Strata log lives in `log/` inside it |
+| `VESTIGE_DASHBOARD_PORT` | Dashboard port (default 3927) |
+| `VESTIGE_AUTH_TOKEN` | Bearer token for the dashboard API and HTTP MCP |
+| `RUST_LOG` | Log filter |
 
-- **Database limit**: 216TB (SQLite theoretical max)
-- **RAM usage**: ~64MB cache (configurable)
-- **Typical usage**: 1 million memories ≈ 1-2GB on disk
+More in [docs/CONFIGURATION.md](https://github.com/samvallad33/vestige/blob/main/docs/CONFIGURATION.md).
 
-You'll never run out of space. A heavy user creating 100 memories/day would use ~1.5GB after 10 years.
+## Platforms
 
-## Embeddings
-
-Vestige does not download embedding models on startup or first use. Optional embedding profiles are explicitly installed from verified local artifacts, evaluated, migrated into their own vector space, and activated by the user.
-
-The model is stored in Vestige's OS cache directory, or you can set a global location:
-
-```bash
-export FASTEMBED_CACHE_PATH="$HOME/.fastembed_cache"
-```
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `RUST_LOG` | Log verbosity + per-module filter | `info` |
-| `FASTEMBED_CACHE_PATH` | Embeddings model cache override | OS cache dir |
-| `VESTIGE_DATA_DIR` | Storage directory fallback; database lives at `<dir>/vestige.db` | OS data dir |
-| `VESTIGE_DASHBOARD_PORT` | Dashboard port | `3927` |
-| `VESTIGE_AUTH_TOKEN` | Bearer auth for dashboard + HTTP MCP | auto-generated |
-
-Storage precedence is `--data-dir <path>`, then `VESTIGE_DATA_DIR`, then your OS's per-user data directory.
-
-## Troubleshooting
-
-### "Could not attach to MCP server vestige"
-
-1. Verify binary exists: `which vestige-mcp`
-2. Test directly: `vestige-mcp` (should wait for stdio input)
-3. Check your MCP client's server logs.
-
-### "vestige: command not found"
-
-Unpack the GitHub Release archive again and put `vestige-mcp` on your PATH.
-
-### Embeddings not downloading
-
-The model downloads on first memory ingest or search operation. If your MCP
-client cannot connect to the MCP server, no memory operations happen and no
-model downloads.
-
-Fix the MCP connection first, then the model will download automatically.
-
-## Supported Platforms
-
-| Platform | Architecture |
-|----------|--------------|
-| macOS | ARM64 (Apple Silicon), x86_64 (Intel) |
-| Linux | x86_64 (Ubuntu 22.04, Debian 12, and newer) |
-| Windows | x86_64 |
+macOS (Apple silicon and Intel), Linux x64 and arm64 (glibc 2.35 or newer), Windows x64.
 
 ## License
 
-AGPL-3.0-only
+AGPL-3.0-only.

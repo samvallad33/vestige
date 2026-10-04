@@ -1,6 +1,6 @@
 # Vestige MCP Server
 
-Local cognitive memory for MCP-compatible AI agents.
+The Causal Proof Engine and operating system for AI agents. Strata, a signed append-only log, is the kernel: zero vectors, zero RAG, and every answer carries its proof.
 
 This crate provides the `vestige-mcp` stdio MCP server plus the `vestige` CLI.
 The cognitive engine lives in `vestige-core`; this crate owns protocol handling,
