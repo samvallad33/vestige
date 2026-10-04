@@ -33,7 +33,7 @@ gate; the rest are shadow candidates):
 |---|---|---|
 | OP-000 | protect-the-gate | Editing the gate, its rules, permits, mode or hook registrations |
 | OP-001 | protect-workspaces | Deleting or moving a registered workspace root (or a parent of one) |
-| OP-002 | protect-memory | Wiping, deleting or rewriting the Vestige memory store |
+| OP-002 | protect-memory | Wiping, deleting or rewriting the Vestige store |
 | OP-003 | no-blind-recursive-delete | Recursive delete outside scratch/build directories |
 | OP-004 | no-history-destruction | Force-pushing over a shared branch, deleting `.git` |
 | OP-005 | no-unreviewed-publish | Publishing a release/package, deleting a public repo |

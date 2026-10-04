@@ -1,5 +1,7 @@
 # v3 candidate validation
 
+> Historical. This page describes Vestige v3 and is kept for the record. For 4.x see the [README](../README.md).
+
 The release candidate has three separate gates: local deterministic correctness,
 real-binary integration, and target-platform CI. A provider-cost claim additionally
 requires the frozen empirical evaluation described in `V3-ROADMAP.md`.

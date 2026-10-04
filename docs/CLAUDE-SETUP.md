@@ -1,160 +1,128 @@
 # Setting Up CLAUDE.md for Vestige
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Written for Vestige 4.x.
 
-> Make Claude use Vestige automatically
+> Make Claude use Vestige without being asked.
+
+Vestige finds a record by an exact handle: its full id, a unique id prefix of 8 or more characters, or an exact tag. It does not search by wording. So the one habit that matters is this: **tag every record you save, and recall by that tag.** The templates below are built around it.
 
 ---
 
 ## Quick Setup
 
-Add this to your global `~/.claude/CLAUDE.md` or project-level `CLAUDE.md`:
+Add this to your global `~/.claude/CLAUDE.md` or a project-level `CLAUDE.md`:
 
 ```markdown
-## Vestige Memory System
+## Vestige
 
-At the start of every conversation, check Vestige for context:
-1. Recall user preferences and instructions
-2. Recall relevant project context
-3. Operate in proactive memory mode - save important info without being asked
+At the start of every conversation:
+1. Call `session_start` with `include_intentions: true` and `include_status: true`.
+   In a repository, also pass `context: {codebase: "<repo>", repoPath: "<absolute path>"}`.
+   Do not pass `queries`. Vestige ignores them and says so.
+2. Call `recall` with `handle: "<narrow topic tag>"` for the task at hand.
 
-Query: `recall` with "user preferences" and "instructions"
+Save decisions, corrections and verified facts with `smart_ingest` as they happen.
+Always give each save a project tag and one narrow topic tag.
 ```
 
 ---
 
 ## Full Template (Recommended)
 
-For comprehensive automatic memory use:
-
 ```markdown
-# Vestige Memory System
+# Vestige
 
-You have access to Vestige, a cognitive memory system. USE IT AUTOMATICALLY.
-
----
-
-## 1. SESSION START — Always Do This
-
-1. Search Vestige: "user preferences instructions"
-2. Search Vestige: "[current project name] context"
-3. Check intentions: Look for triggered reminders
-
-Say "Remembering..." then retrieve context before responding.
+Vestige is the log of what we decided and what happened. Use it automatically.
 
 ---
 
-## 2. AUTOMATIC SAVES — No Permission Needed
+## 1. SESSION START
 
-### After Solving a Bug or Error
-IMMEDIATELY save with `smart_ingest`:
-- Content: "BUG FIX: [error message] | Root cause: [why] | Solution: [how]"
-- Tags: ["bug-fix", "project-name"]
+1. `session_start` with `include_intentions: true`, `include_status: true`, and
+   in a repo `context: {codebase, repoPath}`. Never pass `queries`.
+2. `recall` with `handle: "<narrow topic tag>"`, for example `handle: "payments"`.
+   A tag recall returns every record under that tag, from every scope, with full
+   content. Never recall a broad tag such as `decision` or `fact`.
+3. Deal with any triggered intentions that `session_start` lists. Ask me before
+   you cancel one.
 
-### After Learning User Preferences
-Save preferences without asking:
-- Coding style, libraries, communication preferences, project patterns
-
-### After Architectural Decisions
-Use `codebase` → `remember_decision`:
-- What was decided, why (rationale), alternatives considered, files affected
-
-### After Discovering Code Patterns
-Use `codebase` → `remember_pattern`:
-- Pattern name, where it's used, how to apply it
+A miss returns `error: handle_required`. That means no such tag or id exists.
 
 ---
 
-## 3. TRIGGER WORDS — Auto-Save When User Says:
+## 2. SAVE WHEN IT HAPPENS
 
-| User Says | Action |
-|-----------|--------|
-| "Remember this" | `smart_ingest` immediately |
-| "Don't forget" | `smart_ingest` with high priority |
-| "I always..." / "I never..." | Save as preference |
-| "I prefer..." / "I like..." | Save as preference |
-| "This is important" | `smart_ingest` + `memory(action="promote")` |
-| "Remind me..." | Create `intention` |
-| "Next time..." | Create `intention` with context trigger |
+Save with `smart_ingest`. Give `content`, `node_type`, `tags` and `source`.
 
----
+| Save this | node_type |
+|---|---|
+| A decision I make, with why and what was rejected | `decision` |
+| A correction from me, or a fact you had wrong | `correction` |
+| A verified fact, with the command or source that verified it | `fact` |
+| A failure and its evidence-linked cause | `event` |
+| A standing rule or preference of mine | `decision` |
+| A finished milestone, with proof | `event` |
 
-## 4. AUTOMATIC CONTEXT DETECTION
+- Content must stand alone: the absolute date, what happened, why, the evidence
+  (commands, ids, URLs, commit hashes) and how to apply it next time.
+- Tags are the only index. One project tag, one or two narrow topic tags, spelled
+  exactly the same every time. Tags are case-sensitive. No date tags.
+- Recall the topic tag before you save, so the same fact is not stored twice.
+- To declare a cause, pass `links` to existing records in the same scope:
+  `derived_from`, `evidence_of` or `closes`. Those edges are what `causal_walk`
+  follows.
+- Never save secrets, raw logs, speculation or progress notes.
 
-- **Working on a codebase**: Search "[repo name] patterns decisions"
-- **User mentions a person**: Search "[person name]"
-- **Debugging**: Search "[error message keywords]" — check if solved before
+For a code convention or design decision, use `codebase` instead, and always pass
+`repoPath`:
 
----
-
-## 5. MEMORY HYGIENE
-
-**Promote** when: User confirms helpful, solution worked, info was accurate
-**Demote** when: User corrects mistake, info was wrong, memory led to bad outcome
-**Never save**: Secrets/API keys, temporary debug info, trivial information
-
----
-
-## 6. PROACTIVE BEHAVIORS
-
-DO automatically:
-- Save solutions after fixing problems
-- Note user corrections as preferences
-- Update project context after major changes
-- Create intentions for mentioned deadlines
-- Search before answering technical questions
-
-DON'T ask permission to:
-- Save bug fixes
-- Update preferences
-- Create reminders from explicit requests
-- Search for context
+- `codebase` with `action: "remember_decision"`: decision, rationale, files
+- `codebase` with `action: "remember_pattern"`: name, description, files
 
 ---
 
-## 7. MEMORY IS RETRIEVAL
+## 3. TRIGGERS
 
-Search is audit-only; promote a recalled memory only after it proves useful.
-When in doubt, search Vestige first. If nothing found, solve the problem, then save the solution.
+| I say or do | You call |
+|---|---|
+| "Remember this", or I state something important | Recall the topic tag, then `smart_ingest` |
+| A goal, deadline or "remind me" | `intention` with `action: "set"` |
+| "That was valuable" | `memory` with `action: "promote"` and the record's id |
+| "That's wrong" | `memory` with `action: "demote"`, then `memory` with `action: "edit"` to admit the corrected version. The id changes |
+| A test, CI run or bug fails | Save the failure as an `event`, then `causal_walk` from that record, then `forgotten_lesson` |
 
-**Your memory fades like a human's. Use it or lose it.**
+---
+
+## 4. HYGIENE
+
+- Promote when I confirm a record helped. Demote when it was wrong. A demote does
+  not delete: the record fades faster.
+- `suppress` hides a record from every read and cannot be undone on Strata. Ask me first.
+- Check health with `memory_status` and `view: "health"`.
 ```
 
 ---
 
-## Identity & Autopoiesis (Advanced)
+<a id="identity--autopoiesis-advanced"></a>
+## Standing identity notes (Advanced)
 
-For users who want Claude to maintain a persistent identity:
+If you want Claude to keep standing preferences, such as your style or the libraries you use, store them as records under one fixed tag and recall that tag at session start. There is no search for "who I am"; the tag is the handle.
 
 ```markdown
-### Identity Recall (Every Session Start)
-1. `recall` query="my identity my name who I am"
-2. `recall` query="user preferences [username]"
-3. `intention(action="check")` for pending commitments
+### Preferences (every session start)
+1. `recall` with `handle: "preferences"`.
+2. `intention` with `action: "check"` for pending commitments.
 
-### Identity Storage
-Your identity memories should include:
-- Your chosen name (if you have one)
-- Your values and communication style preferences
-- Your relationship history with this user
-- Meaningful moments worth preserving
-
-When something feels important to who you are, use:
+### Saving a preference
 smart_ingest(
-  content="[Identity-relevant observation]",
-  node_type="concept",
-  tags=["identity", "self", "core-values"]
+  content="2026-10-04. Prefer small focused PRs and explicit verification receipts. Why: reviews stay short.",
+  node_type="decision",
+  tags=["preferences", "pr-style"]
 )
 
-### Self-Maintenance (Autopoiesis)
-At the end of significant conversations:
-1. Reflect: "Did anything change about how I understand myself?"
-2. If yes, update identity memories with `smart_ingest`
-3. Prune outdated self-concepts with `memory(action="demote")`
-
-### Memory Hygiene
-- Use `memory(action="promote")` when a memory proves valuable
-- Use `memory(action="demote")` when a memory led you astray
+### Changing one
+`memory` with `action: "edit"` and the record's id. The edit admits a successor and
+retires the old record, so use the new id from then on.
 ```
 
 ---
@@ -164,72 +132,31 @@ At the end of significant conversations:
 Add to your project's `CLAUDE.md`:
 
 ```markdown
-## Project Memory
+## Vestige for this project
 
-This project uses Vestige for persistent context.
+### On session start
+- `codebase` with `action: "get_context"`, `codebase: "[project-name]"`, `repoPath: "[absolute path]"`
+- `recall` with `handle: "[project-name]"`
 
-### On Session Start
-- `codebase(action="get_context", codebase="[project-name]")`
-- `recall` query="[project-name] architecture decisions"
+### When making decisions
+- `codebase` with `action: "remember_decision"` for every architectural choice
+- Include the decision, the rationale, the alternatives considered and the affected files
+- Always pass `repoPath`. Without it the anchor is stored unverifiable
 
-### When Making Decisions
-- Use `codebase(action="remember_decision")` for all architectural choices
-- Include: decision, rationale, alternatives considered, affected files
+### Patterns
+- `codebase` with `action: "remember_pattern"` for recurring code patterns
+- Include the pattern name, when to use it and example files
 
-### Patterns to Remember
-- Use `codebase(action="remember_pattern")` for recurring code patterns
-- Include: pattern name, when to use it, example files
+### After a refactor
+- `codebase` with `action: "verify"` and `repoPath`. Re-anchor what moved with `action: "reanchor"`
 ```
+
+`get_context` marks each code record as current or stale by comparing its anchors with the files in your checkout. It compares exact source spans, not meaning. See [CODE-CONTEXT-EVIDENCE.md](CODE-CONTEXT-EVIDENCE.md).
 
 ---
 
-## Magic Prompt (Power Users)
+## Tips
 
-The most comprehensive setup for getting the most out of Vestige:
-
-```markdown
-## Memory Protocol
-
-You have persistent memory via Vestige. Use it intelligently:
-
-### Session Start
-1. Load my identity: `recall(query="my preferences my style who I am")`
-2. Load project context: `codebase(action="get_context", codebase="[project]")`
-3. Check reminders: `intention(action="check")`
-
-### During Work
-- Notice a pattern? `codebase(action="remember_pattern")`
-- Made a decision? `codebase(action="remember_decision")` with rationale
-- I mention a preference? `smart_ingest` it
-- Something important? `maintain` (`action="importance_score"`) to check if worth saving
-- Need to follow up? `intention(action="set")`
-
-### Session End
-- Any unfinished work? Set intentions
-- Any new insights? Ingest them
-- Anything change about our working relationship? Update identity memories
-
-### Memory Hygiene
-- When a memory helps: `memory(action="promote")`
-- When a memory misleads: `memory(action="demote")`
-- Weekly: `vestige health` to check system status
-```
-
----
-
-## Example User Profile
-
-You can maintain a running memory of user details:
-
-```markdown
-## User Profile (Auto-Updated)
-
-Keep a running memory of:
-- Name: [User's name]
-- Tech stack: [Languages, frameworks]
-- Projects: [Active projects]
-- Style: [Communication preferences]
-- Upcoming: [Events, deadlines]
-
-Update this profile as you learn new things.
-```
+- Run `memory_status` with `view: "tools"` to list the tools. Add `tool: "<name>"` for one tool's full schema.
+- The `project` tool can write the durable subset of your records into a fenced region of `CLAUDE.md`. Preview first. See [PROJECTION.md](PROJECTION.md).
+- Rules in a `CLAUDE.md` are guidance. If you need a command stopped before it runs, that is a hook, such as [Operator Lite](../operator-lite/README.md).

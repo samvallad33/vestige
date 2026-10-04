@@ -1,34 +1,43 @@
 # Contributing to Vestige
 
-Thank you for your interest in contributing to Vestige! This guide covers everything you need to get started.
+Thank you for your interest in contributing to Vestige. This guide covers what you need to build, test and submit a change.
 
 ## Project Overview
 
-Vestige is a cognitive memory MCP server written in Rust. It gives AI agents persistent long-term memory using neuroscience-backed algorithms (FSRS-6, prediction error gating, synaptic tagging, spreading activation, memory dreaming).
+Vestige is the Causal Proof Engine and the operating system for AI agents, written in Rust. Its kernel is Strata, an append-only, hash-chained, signed log. The engine (recall, ranking, pairing and explanation) uses zero vectors, zero string matching and zero RAG. A record is found by an exact handle and linked only by an edge the log recorded. Every output carries its proof: a memory id, an edge path or a receipt.
 
-**Architecture:**
+Do not add embeddings, similarity, fuzzy matching, BM25 or full-text search to the engine. A change that does will not be merged.
+
+**Layout:**
 
 ```
 vestige/
 ├── crates/
-│   ├── vestige-core/       # Cognitive engine, FSRS-6, search, embeddings, storage
-│   └── vestige-mcp/        # MCP server, Axum dashboard, WebSocket, tool handlers
+│   ├── strata/             # Append-only log: frames, segments, hash chain
+│   ├── strata-kernel/      # Canonical FSRS fold, checkpoints, replay verification
+│   ├── strata-gate/        # The gate every write passes
+│   ├── strata-store/       # Gate-admitted store on the log
+│   ├── strata-verify/      # Log and receipt verification (`vestige strata-verify`)
+│   ├── strata-migrate/     # v3 vestige.db to Strata importer
+│   ├── vestige-core/       # Shared types, storage trait, intention graph, projection, credential scanner
+│   ├── vestige-mcp/        # MCP server, CLI, Axum dashboard, tool handlers
+│   ├── vestige-upgrade/    # Runs the v3 import on first launch
+│   └── vestige-spacetime/  # Standalone algorithm crate; no shipped binary depends on it
 ├── apps/
-│   └── dashboard/          # SvelteKit + Three.js 3D dashboard
-├── packages/
-│   ├── vestige-init/       # npx @vestige/init installer
-│   └── vestige-mcp-npm/    # npm binary wrapper
-└── tests/
-    └── vestige-e2e-tests/  # End-to-end MCP protocol tests
+│   └── dashboard/          # SvelteKit + Three.js dashboard
+├── packages/               # npm installer and per-platform binary packages
+├── operator-lite/          # The Operator Lite gate (Python, stdlib only)
+└── tests/                  # e2e, phase_1 and differential test crates
 ```
+
+The `strata*` crates are excluded from the root Cargo workspace and have their own manifests. The root workspace members are `vestige-core`, `vestige-spacetime`, `vestige-mcp`, `vestige-upgrade` and the three test crates.
 
 ## Development Setup
 
 ### Prerequisites
 
-- **Rust** (1.91+ stable): [rustup.rs](https://rustup.rs)
-- **Node.js** (v22+): [nodejs.org](https://nodejs.org)
-- **pnpm** (v9+): `npm install -g pnpm`
+- **Rust**: the toolchain is pinned in `rust-toolchain.toml`. `rustup` installs it on the first `cargo` call. See [rustup.rs](https://rustup.rs).
+- **Node.js** (v22+) and **pnpm**: only for the dashboard. The release workflow uses Node 22 and pnpm 10.
 
 ### Getting Started
 
@@ -36,42 +45,47 @@ vestige/
 git clone https://github.com/samvallad33/vestige.git
 cd vestige
 
-# Build the dashboard (required for include_dir! embedding)
+# Build the dashboard (the server embeds it with include_dir!)
 cd apps/dashboard && pnpm install && pnpm build && cd ../..
 
 # Build the Rust workspace
 cargo build
-
-# Run tests
-VESTIGE_TEST_MOCK_EMBEDDINGS=1 cargo test --workspace
 ```
+
+Nothing downloads at build time or at first run. The default build has no embedding model.
 
 ### Environment Variables
 
 | Variable | Purpose |
 |----------|---------|
-| `VESTIGE_TEST_MOCK_EMBEDDINGS=1` | Use mock embeddings in tests (skips ONNX model download) |
-| `VESTIGE_DB_PATH` | Override default database path (`~/.vestige/vestige.db`) |
+| `VESTIGE_DATA_DIR` | Data directory for `vestige-mcp`, `vestige` and `vestige-restore`. `--data-dir` wins over it. Use a scratch directory when you test |
+| `VESTIGE_HTTP_ENABLED`, `VESTIGE_DASHBOARD_ENABLED` | Turn the HTTP transport or the dashboard on or off. The stdio scripts under `scripts/` set both to `false` |
+
+More variables are in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Running Tests
 
+CI runs these. Run the narrowest one that covers your change, then the full set before you open a PR.
+
 ```bash
-# All tests (746+ total)
-VESTIGE_TEST_MOCK_EMBEDDINGS=1 cargo test --workspace
+# Default workspace
+cargo check --workspace
+cargo clippy --workspace -- -D warnings
+cargo test --workspace
 
-# Core library tests only (352 tests)
-VESTIGE_TEST_MOCK_EMBEDDINGS=1 cargo test -p vestige-core --lib
+# Workspace-excluded Strata crates, each with its own manifest
+cargo test --manifest-path crates/strata/Cargo.toml
+cargo test --manifest-path crates/strata-kernel/Cargo.toml
+cargo test --manifest-path crates/strata-gate/Cargo.toml
+cargo test --manifest-path crates/strata-store/Cargo.toml
+cargo test --manifest-path crates/strata-verify/Cargo.toml
+cargo test --manifest-path crates/strata-migrate/Cargo.toml
 
-# MCP server tests only (378 tests)
-VESTIGE_TEST_MOCK_EMBEDDINGS=1 cargo test -p vestige-mcp --lib
-
-# E2E MCP protocol tests (requires release build)
-cargo build --release -p vestige-mcp
-cargo test -p vestige-e2e-tests --features legacy-sqlite --test mcp_protocol -- --test-threads=1
-
-# Dashboard build test
-cd apps/dashboard && pnpm build
+# Dashboard
+cd apps/dashboard && pnpm check && pnpm test && pnpm build
 ```
+
+The v3 SQLite engine is not linked into the shipped binaries. Its tests run behind feature flags, for example `cargo test -p vestige-mcp --features v3-engine --lib --tests` and `cargo test -p vestige-core --features bundled-sqlite,v3-engine,connectors,cloud-sync --lib`. CI lists the full set in `.github/workflows/ci.yml`.
 
 ## Building
 
@@ -79,46 +93,30 @@ cd apps/dashboard && pnpm build
 # Debug build
 cargo build -p vestige-mcp
 
-# Release build (22MB binary with embedded dashboard)
+# Release build with the embedded dashboard
 cargo build --release -p vestige-mcp
 
 # The release binary is at target/release/vestige-mcp
 ```
 
-Linux release assets are built in Ubuntu 22.04 (glibc 2.35) so `vestige-mcp`
-starts on 22.04 LTS and Debian 12. musl is not a release target: ONNX Runtime
-has no musl prebuilts, so embeddings would not ship.
+Release archives hold four binaries: `vestige-mcp`, `vestige`, `vestige-upgrade` and `vestige-restore`. Linux release assets are built on Ubuntu 22.04 (glibc 2.35), so `vestige-mcp` starts on Ubuntu 22.04 and Debian 12. musl is not a release target.
 
 ### Release Profile
 
-The release profile uses `lto = true`, `codegen-units = 1`, `opt-level = "z"`, and `strip = true` for minimum binary size.
+The release profile uses `lto = true`, `codegen-units = 1`, `opt-level = "z"`, `panic = "abort"` and `strip = true` for minimum binary size.
 
 ## Publishing a GitHub Release
 
-Version tags (`vX.Y.Z`) drive two independent workflows:
+Only a tag of the form `vX.Y.Z` builds product binaries. Any other release on this repository (Operator Lite, benchmarks, launches) builds and uploads nothing. A `verify-latest` job runs `scripts/check-latest-release.sh` after every release event and fails the run if `releases/latest` could not serve the install URL in the README.
 
-1. **Release** (`.github/workflows/release.yml`) — builds and uploads
-   binaries. Intel Mac and Windows feature flags live only there; do not
-   fold registry publish into those jobs.
-2. **Publish MCP Registry**
-   (`.github/workflows/publish-mcp-registry.yml`) — authenticates with
-   `mcp-publisher login github-oidc` and publishes repo-root
-   `server.json` to `https://registry.modelcontextprotocol.io`.
+Version tags drive two independent workflows:
 
-v3.1.1 ships from the GitHub Release archives only. The npm publish
-jobs and the MCP registry job are `if: false` while the npm account is
-suspended. Do not `npm install` this version. Nothing publishes to
-crates.io.
+1. **Release** (`.github/workflows/release.yml`) builds and uploads the binaries. Do not fold registry publishing into its jobs.
+2. **Publish MCP Registry** (`.github/workflows/publish-mcp-registry.yml`) authenticates with `mcp-publisher login github-oidc` and publishes the repo-root `server.json` to `https://registry.modelcontextprotocol.io`.
 
-GitHub OIDC for `io.github.samvallad33/*` is automatic from this
-repository (`id-token: write` on the registry job). No PAT, no GitHub
-App, and no extra org/repo OIDC trust binding is required.
+`server.json` version (and each `packages[].version`) must match the release tag with the leading `v` stripped. The release workflow also checks the versions in `package.json`, `apps/dashboard/package.json`, `packages/vestige-init/package.json`, `packages/vestige-mcp-npm/package.json`, `packages/vestige-mcpb/manifest.json` and `lhm.plugin.json`. An already-listed version is skipped rather than republished. Dry run: Actions, Publish MCP Registry, Run workflow, with `dry_run` enabled.
 
-`server.json` version (and each `packages[].version`) must match the
-release tag with a leading `v` stripped. An already-listed version is
-skipped rather than republished. Merging the workflow does not publish;
-the next tag is the first automated publish. Dry-run: Actions → Publish
-MCP Registry → Run workflow, with `dry_run` enabled.
+GitHub OIDC for `io.github.samvallad33/*` is automatic from this repository (`id-token: write` on the registry job). No PAT, no GitHub App and no extra org or repo trust binding is required. Nothing publishes to crates.io.
 
 ## Code Style
 
@@ -132,56 +130,52 @@ cargo fmt --all
 cargo clippy --workspace -- -D warnings
 ```
 
-- Rust 2024 edition
+- Rust 2024 edition for the root workspace
 - Standard `rustfmt` defaults
 - All public items should have doc comments
-- Tests go in `#[cfg(test)] mod tests` at the bottom of each file
+- Tests go in `#[cfg(test)] mod tests` at the bottom of each file, or under a crate's `tests/` directory for stdio tests
 
 ### TypeScript/Svelte (Dashboard)
 
 ```bash
 cd apps/dashboard
 pnpm check    # Svelte type checking
-pnpm lint     # ESLint
+pnpm test     # Vitest
 ```
 
 ## Project Structure
 
 ### vestige-core
 
-The cognitive engine. Key modules:
+Shared types and the storage trait. Its default build links no SQLite. Key modules:
 
 | Module | Purpose |
 |--------|---------|
-| `fsrs/` | FSRS-6 spaced repetition (21 parameters, power-law decay) |
-| `neuroscience/` | Synaptic tagging, spreading activation, hippocampal index, importance signals |
-| `advanced/` | Prediction error gating, dreaming, compression, cross-project learning |
-| `search/` | Hybrid search (BM25 + semantic), HyDE, reranker, temporal search |
-| `embeddings/` | fastembed (Nomic Embed v1.5), ONNX inference |
-| `storage/` | SQLite + FTS5 + USearch HNSW |
+| `storage/memory_store.rs` | The storage trait the server calls. The Strata backend lives in `vestige-mcp` (`strata_memory.rs`) |
+| `intention_graph.rs` | The deterministic evidence-aware intention evaluator |
+| `projection.rs` | Rendering of the fenced region that `project` writes |
+| `security.rs` | The credential scanner behind the gate's secret refusal |
+| `codebase/` | Code anchors and `verify_anchor`, which compares exact source spans |
+| `composition.rs` | Outcome types for GhostLink weaves |
+| `neuroscience/`, `advanced/`, `search/`, `fts.rs` | v3 engine code (spreading activation, prediction-error gating, hybrid search, FTS). Kept in the tree for the `legacy-sqlite` build. The default 4.x build does not use it for recall, ranking or pairing. `neuroscience/prospective_memory.rs` still backs intention triggers |
 
 ### vestige-mcp
 
-The MCP server and dashboard. Key modules:
+The MCP server, the `vestige` CLI and the dashboard. Key modules:
 
 | Module | Purpose |
 |--------|---------|
-| `server.rs` | MCP JSON-RPC server (rmcp 0.14) |
-| `cognitive.rs` | CognitiveEngine — 29 stateful modules |
-| `tools/` | One file per MCP tool (24 tools) |
-| `dashboard/` | Axum HTTP + WebSocket + event bus |
+| `server.rs` | MCP JSON-RPC server, the tool catalog, and the table of actions a Strata log withholds |
+| `strata_memory.rs`, `strata_memory/ghostlink.rs` | The Strata storage backend and the GhostLink engine over recorded edges |
+| `tools/` | One file per tool or action family |
+| `attach.rs` | The single-writer lock and the owner-only socket other agents attach through |
+| `dashboard/` | Axum HTTP, WebSocket and the request guards |
+| `bin/cli.rs` | The `vestige` CLI |
+| `main_sqlite.rs`, `bin/cli_sqlite.rs`, `cognitive.rs` | v3 engine entry points, behind `legacy-sqlite` |
 
 ### apps/dashboard
 
-SvelteKit 2 + Three.js + Tailwind CSS. Pages:
-
-- `/dashboard` — 3D memory graph with force-directed layout
-- `/dashboard/memories` — Searchable memory browser
-- `/dashboard/timeline` — Chronological memory timeline
-- `/dashboard/feed` — Real-time WebSocket event stream
-- `/dashboard/explore` — Connection explorer (associations, chains, bridges)
-- `/dashboard/intentions` — Intention manager
-- `/dashboard/stats` — System health, retention distribution, module status
+SvelteKit 2 + Three.js + Tailwind CSS. Pages are under `apps/dashboard/src/routes/(app)/`, for example `graph`, `memories`, `timeline`, `feed`, `explore`, `intentions`, `stats`, `dreams`, `blackbox` and `observatory`. Pages that need a feature the Strata log withholds show the reason code the server returns.
 
 ## Pull Request Process
 
@@ -189,48 +183,42 @@ SvelteKit 2 + Three.js + Tailwind CSS. Pages:
 2. **Write tests** for new functionality
 3. **Ensure all checks pass**: `cargo fmt`, `cargo clippy`, `cargo test`
 4. **Build the dashboard** if you modified `apps/dashboard/`
-5. **Keep commits focused**: One logical change per commit
+5. **Keep commits focused**: one logical change per commit
 6. **Open a PR** with a clear description
 
 ### PR Checklist
 
-- [ ] `cargo fmt --all` — code is formatted
-- [ ] `cargo clippy --workspace -- -D warnings` — zero warnings
-- [ ] `VESTIGE_TEST_MOCK_EMBEDDINGS=1 cargo test --workspace` — all tests pass
+- [ ] `cargo fmt --all` formats the code
+- [ ] `cargo clippy --workspace -- -D warnings` reports zero warnings
+- [ ] `cargo test --workspace` passes, and so do the tests of any Strata crate you touched
 - [ ] Dashboard builds (if modified): `cd apps/dashboard && pnpm build`
-- [ ] No secrets, API keys, or credentials in code
+- [ ] No secrets, API keys or credentials in code
+- [ ] A new claim in the docs is backed by a command you ran or code you read
 
 ### Good First Issues
 
-Look for issues labeled `good first issue`. These are scoped, well-defined tasks ideal for new contributors:
+Look for issues labeled `good first issue`. These are scoped, well-defined tasks:
 
 - Adding tests for existing modules
 - Documentation improvements
 - Dashboard UI enhancements
-- New MCP tool implementations
 
-## Adding a New MCP Tool
+## Adding or Changing a Tool
 
-1. Create `crates/vestige-mcp/src/tools/your_tool.rs`
-2. Implement `pub fn schema() -> Tool` and `pub fn execute(...) -> Result<CallToolResult>`
-3. Register in `crates/vestige-mcp/src/tools/mod.rs`
-4. Add tests in the same file
-5. Update tool count in README and CLAUDE.md
-
-## Adding a New Cognitive Module
-
-1. Add the module to `crates/vestige-core/src/neuroscience/` or `advanced/`
-2. Add the field to `CognitiveEngine` in `crates/vestige-mcp/src/cognitive.rs`
-3. Initialize it in `CognitiveEngine::new()` and `new_with_events()`
-4. Write comprehensive tests (aim for 10+ per module)
-5. Document the neuroscience citation in the module's doc comment
+1. Create `crates/vestige-mcp/src/tools/your_tool.rs` with a schema and an `execute` function.
+2. Register it in `crates/vestige-mcp/src/tools/mod.rs`, add its entry to `tool_catalog` in `server.rs`, and add its dispatch arm in `server.rs`.
+3. Keep `tools/list` small. A build-time guard fails if the catalog exceeds 22 KiB. Put long descriptions in the full schema that `memory_status` with `view='tools'` serves.
+4. If the action cannot work on a Strata log, add it to `STRATA_WITHHELD_ACTIONS` in `server.rs` with the reason. Do not return a zero result in its place. Reason codes are `unavailable_in_4_0`, `similarity_disabled` and `pending_strata`.
+5. Every write goes through the gate and must return its receipt.
+6. Add tests, including a stdio test under `crates/vestige-mcp/tests/` when the behavior is visible on the wire.
+7. Update the tool count in the README and in `CLAUDE.md` and `AGENTS.md`.
 
 ## Issue Reporting
 
 Use the issue templates:
 
-- **Bug Report**: Include OS, install method, IDE, vestige version, and steps to reproduce
-- **Feature Request**: Describe the problem, proposed solution, and alternatives considered
+- **Bug Report**: include OS, install method, IDE, Vestige version, and steps to reproduce
+- **Feature Request**: describe the problem, the proposed solution, and alternatives considered
 
 ## Code of Conduct
 

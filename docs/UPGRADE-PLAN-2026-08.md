@@ -1,5 +1,7 @@
 # Vestige Upgrade Plan — August 30, 2026
 
+> Historical. This page describes Vestige v3 and is kept for the record. For 4.x see the [README](../README.md).
+
 Synthesized from seven parallel research lanes. Ranked by user-visible benefit ÷ migration cost. Every claim traced to a primary source or to verified repo source. Where lanes contradicted each other, the contradiction is stated, not smoothed.
 
 ---

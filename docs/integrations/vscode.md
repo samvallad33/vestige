@@ -2,9 +2,9 @@
 
 > Written for Vestige 4.x.
 
-> Give Copilot a brain that remembers between sessions.
+> Give Copilot a record of what you decided, that carries across sessions.
 
-VS Code supports MCP servers through GitHub Copilot's agent mode. Vestige plugs directly in, giving Copilot persistent memory across every coding session.
+VS Code supports MCP servers through GitHub Copilot's agent mode. Vestige plugs directly in, so Copilot can reload your decisions and past fixes in every coding session.
 
 ---
 
@@ -20,7 +20,7 @@ VS Code supports MCP servers through GitHub Copilot's agent mode. Vestige plugs 
 
 ### 1. Create the config file
 
-**Workspace (recommended — shareable with team):**
+**Workspace (recommended, shareable with the team):**
 
 Create `.vscode/mcp.json` in your project root:
 
@@ -69,7 +69,7 @@ Note: VS Code uses `"servers"` (not `"mcpServers"`).
 
 ### 3. Verify
 
-VS Code auto-detects config changes — no restart needed.
+VS Code auto-detects config changes, so no restart is needed.
 
 Open **Copilot Chat** (agent mode) and ask:
 
@@ -118,16 +118,16 @@ VS Code supports input variables, so a value such as the data directory is asked
 
 ---
 
-## Share Memory Config With Your Team
+## Share the Config With Your Team
 
 Since `.vscode/mcp.json` lives in the project, you can commit it:
 
 ```bash
 git add .vscode/mcp.json
-git commit -m "Add Vestige memory server for Copilot"
+git commit -m "Add Vestige MCP config for Copilot"
 ```
 
-Every team member with Vestige installed will automatically get memory-enabled Copilot.
+Every team member with Vestige installed gets the same MCP entry. Each person keeps their own local store.
 
 ---
 
@@ -161,4 +161,4 @@ Every team member with Vestige installed will automatically get memory-enabled C
 | Claude Code | [Setup](../CONFIGURATION.md#claude-code-one-liner) |
 | Claude Desktop | [Setup](../CONFIGURATION.md#claude-desktop-macos) |
 
-Your AI remembers everything, everywhere.
+Every agent on the machine shares one store through one writer. The first to start serves it, and the others attach.

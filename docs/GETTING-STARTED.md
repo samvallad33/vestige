@@ -3,8 +3,10 @@
 Your first 15 minutes on Vestige 4.x, start to finish. Every command on this page
 was run against the 4.1.1 release binaries.
 
-Vestige is local-first: four small binaries, your data on your disk, no account, no
-cloud, and nothing downloads on first start.
+Vestige is the Causal Proof Engine and the operating system for AI agents. Its
+kernel is Strata, an append-only, hash-chained, signed log on your machine. It is
+local-first: four small binaries, your data on your disk, no account, no cloud, and
+nothing downloads on first start.
 
 ---
 
@@ -26,7 +28,8 @@ vestige stats             # Total Memories: 0 on a fresh install
 
 If `vestige-mcp --version` prints an older number, an older install comes first on
 your PATH. `which -a vestige-mcp` lists every copy in the order the shell finds them.
-Do not install 4.x with npm: the npm package still serves 3.0.0.
+A running Vestige server keeps the build it started with until its app restarts, so
+restart every agent after an upgrade.
 
 ---
 
@@ -34,32 +37,38 @@ Do not install 4.x with npm: the npm package still serves 3.0.0.
 
 This is what most people get wrong on day one, so it is worth 60 seconds.
 
-Vestige 4.x does not search by resemblance. There are no embeddings and no keyword
-search. A memory is found by an **exact handle**:
+Vestige 4.x does not search by resemblance. There are no embeddings, no keyword
+search and no ranking by lookalike text. A record is found by an **exact handle**:
 
 - its id, such as `mem-0000000000000001`
+- a unique prefix of that id, 8 or more characters
 - an exact tag, such as `incident`
 
-So **tag every memory on purpose**. The tag is how you, or your agent, get it back.
-Tags are case-sensitive.
+So **tag every record on purpose**. The tag is how you, or your agent, get it back.
+Tags are case-sensitive: `incident` and `Incident` are different handles. A tag
+returns every live record that carries it, from every scope.
 
-Vestige also does not record everything you type. A memory is written when you ask
-your agent to remember something, when your agent decides a fact is worth keeping, or
-when you ingest from the terminal. Nothing is merged or dropped as a "near duplicate"
-in 4.x: saving the same text twice makes two memories.
+Ids are log positions, so they are not consecutive. Two saves in a row can come
+back as `mem-0000000000000001` and `mem-0000000000000005`.
+
+Vestige also does not record everything you type. A record is written when you ask
+your agent to save something, when your agent decides a fact is worth keeping, or
+when you ingest from the terminal. Nothing is merged or dropped as a near duplicate
+in 4.x: saving the same text twice makes two records. `dedup scan` lists exact
+duplicates (identical content hash or identical declared source) and nothing more.
 
 ---
 
 ## 3. Save, find, and prove it (5 minutes)
 
-Save two memories. The second one carries tags:
+Save two records. Both carry tags:
 
 ```bash
 vestige ingest "We switched the prod cache from Redis to an in-memory LRU to cut costs." --tags cache,decision
 vestige ingest "Prod is dropping sessions under load." --tags cache,incident
 ```
 
-Each prints a `Node ID`. Find a memory by tag or by id:
+Each prints a `Node ID`. Find a record by tag or by id:
 
 ```bash
 vestige recall --handle incident
@@ -70,8 +79,11 @@ Free text is refused, and the refusal tells you which handles it found in your w
 
 ```bash
 vestige recall "why are sessions dropping"
-# Error: similarity_disabled: ... Recall by exact handle instead
+# Error: similarity_disabled: free-text recall is not a Strata operation ... Recall by exact handle instead
 ```
+
+A prefix that matches more than one id is refused with the candidates, so you can pass
+a longer prefix or the full id.
 
 Check the log itself. This reads every frame and verifies the hash chain:
 
@@ -79,24 +91,32 @@ Check the log itself. This reads every frame and verifies the hash chain:
 vestige strata-verify "<your data directory>"
 ```
 
-The data directory is printed in the server's startup log. On macOS it is
-`~/Library/Application Support/com.vestige.core`.
+The data directory is printed in the server's startup log, on the line that starts
+`Strata log initialized at`. On macOS it is `~/Library/Application Support/com.vestige.core`.
+Other platforms are in [Storage](STORAGE.md#data-directory).
+
+Every write returns a receipt. Through an agent, `receipt` with `action: "get"` and the
+record's id shows what that write did, and `action: "replay"` rebuilds the state from the
+log and reports any mismatch.
 
 ---
 
 ## 4. Two things to try next
 
-**Pairs nobody has connected yet.** GhostLink lists memories that no recorded edge
+**Pairs nobody has connected yet.** GhostLink lists records that no recorded edge
 joins and asks a question about each pair. These are leads, not findings:
 
 ```bash
 vestige compose --lens divergent
 ```
 
-With the two memories above, it pairs the cache decision with the session incident
-and asks you to name the mechanism that would connect them.
+With the two records above, it pairs the cache decision with the session incident
+and asks you to name the mechanism that would connect them. Neither record has a typed
+edge yet, so the pair is marked `unmeasured`: a forced juxtaposition picked by a
+deterministic sampler, with no invented score. The default `bridge` lens lists nothing
+until records have typed edges, and says so.
 
-**Walking back from a failure.** `causal-walk` starts at a memory you name and walks
+**Walking back from a failure.** `causal-walk` starts at a record you name and walks
 backward over edges the log recorded. It never guesses:
 
 ```bash
@@ -104,16 +124,17 @@ vestige causal-walk --logged-write mem-0000000000000005
 ```
 
 On a new store this reports that no recorded causal edge leads upstream from the
-memory. That is the correct answer: nothing has linked the two yet. The walk only
-follows edges that were written. Your agent writes one when it saves a memory with
+record. That is the correct answer: nothing has linked the two yet. The walk only
+follows edges that were written. Your agent writes one when it saves a record with
 `links`, for example the failure with `{"kind": "derived_from", "to": "<decision id>"}`.
-After that, the walk from the failure reaches the decision.
+Each link is a recorded edge with its own receipt. After that, the walk from the failure
+reaches the decision. `links` accepts `derived_from`, `evidence_of` and `closes`.
 
 `vestige selftest` plants a known cause in a throwaway copy and checks that the walk
 finds it. Your live store is only read.
 
 > The v3 command `vestige backfill --contrast` is not available on a 4.x store. It
-> joined memories by shared names, which 4.x does not treat as evidence. `causal-walk`
+> joined records by shared names, which 4.x does not treat as evidence. `causal-walk`
 > is its successor.
 
 ---
@@ -122,18 +143,18 @@ finds it. Your live store is only read.
 
 Once an agent is connected, talk to it normally and name the tag:
 
-> "Remember that this project uses React with TypeScript. Tag it `stack`."
+> "Save that this project uses React with TypeScript. Tag it `stack`."
 
 In a new session:
 
 > "Recall the `stack` tag from Vestige."
 
 Every save your agent makes goes through the log's gate and gets a receipt. Ask the
-agent to call `receipt` with `action: "get"` and the memory's id to see it, or
-`action: "replay"` to rebuild the state from the log and compare.
+agent to call `receipt` with `action: "get"` and the record's id to see it.
 
 Several agents can run Vestige at once on one machine. The first one to start serves
-the store and the others connect to it.
+the store and the others connect to it, so every agent reads and writes the same log
+through one writer.
 
 ---
 
@@ -147,21 +168,22 @@ the store and the others connect to it.
 - **Dashboard:** `vestige dashboard`
 
 While an agent's server holds the store, `backup`, `strata-verify` and `dashboard`
-work from the terminal. The other commands open the log directly, so run them when no
-agent is running, or use the same tools through your agent.
+work from the terminal. The other commands open the log directly, so they exit with
+an error that names the holder. Run them when no agent is running, or use the same
+tools through your agent.
 
 The store is a signed, append-only log in `log/` inside the data directory. It is not
 a SQLite file.
 
 ---
 
-## 7. One memory for everything, or one per project
+## 7. One store for everything, or one per project
 
-By default Vestige keeps one memory in your OS data directory. For a memory that
+By default Vestige keeps one store in your OS data directory. For a store that
 lives with a repo, point it at a directory:
 
 ```bash
-vestige stats --data-dir ./.vestige          # this project's memory
+vestige stats --data-dir ./.vestige          # this project's store
 VESTIGE_DATA_DIR=./.vestige vestige-mcp       # run the server against it
 ```
 
@@ -184,3 +206,5 @@ stopped before the switch.
 | Why recall takes a handle | [README → Recall by handle](../README.md#recall-by-handle-not-resemblance) |
 | GhostLink lenses and weaving | [README → GhostLink](../README.md#ghostlink-the-negative-space) |
 | Backups and restore | [README → Backups and export](../README.md#backups-and-export) |
+| Environment variables and `vestige.toml` | [Configuration](CONFIGURATION.md) |
+| Where files live | [Storage](STORAGE.md) |

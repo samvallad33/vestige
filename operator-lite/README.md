@@ -130,7 +130,7 @@ Windows can run. On Windows it is tested by `test_windows.py` on a CI runner.
 |---|---|---|
 | OP-000 | STOP | edits to the gate itself, hook registrations, settings files |
 | OP-001 | STOP | delete/move of a workspace root (or parent) |
-| OP-002 | STOP | wiping the memory store (sqlite3 writes, `vestige gc`) |
+| OP-002 | STOP | wiping the Vestige store (its log or database files, sqlite3 writes, `vestige gc`) |
 | OP-003 | STOP | blind recursive deletes, sweeps from `/`, fork bombs |
 | OP-004 | STOP | force-push to shared branches, remote-main deletion, `.git` removal |
 | OP-005 | STOP | unreviewed publishes (npm/cargo/twine/docker/gh release) |

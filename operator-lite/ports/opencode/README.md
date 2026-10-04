@@ -25,7 +25,7 @@ In enforce mode the gate blocks (exit 2) on eleven closed, deterministic rules:
 |---|---|
 | OP-000 | editing the gate itself, its rules, permits, mode or hook registrations |
 | OP-001 | deleting or moving a registered workspace root (or any parent of one) |
-| OP-002 | wiping or rewriting the Vestige memory store |
+| OP-002 | wiping or rewriting the Vestige store |
 | OP-003 | blind recursive deletes outside scratch/build directories |
 | OP-004 | force-pushing over a shared branch; deleting `.git` |
 | OP-005 | publishing releases/packages; deleting public repos |
@@ -99,7 +99,7 @@ overrides the gate path; `$OPERATOR_PYTHON` overrides the interpreter.
   unreadable gate file, 8 s timeout), the port allows the call — unless the
   command plainly looks destructive (`rm -r*`, `mv` onto workspace/config
   paths, `push --force`, `DROP TABLE`, `fly deploy`, `mkfs`, `dd if=`,
-  the memory store, the canary), in which case it blocks and says so.
+  the Vestige store, the canary), in which case it blocks and says so.
 - **Receipts are digests, not signatures**: the hash chain detects accidental
   edits; it does not prove authorship or resist a determined tamperer.
 - **No inline execution**: test strings are only ever fed to the gate as JSON;

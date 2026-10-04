@@ -1,8 +1,11 @@
 # Frequently Asked Questions
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Answers for Vestige 4.1.1
 
-> 30+ answers from the Vestige community
+Vestige is the Causal Proof Engine and the operating system for AI agents. Its kernel is
+Strata, an append-only, hash-chained, signed log. In the engine there are no vectors, no
+RAG and no similarity, and every output carries its proof: a record id, an edge path,
+or a receipt.
 
 ---
 
@@ -10,13 +13,13 @@
 
 - [Getting Started](#getting-started)
 - [Identity & Persona](#identity--persona)
-- [How Memory Works](#how-memory-works)
+- [How Records Strengthen and Fade](#how-records-strengthen-and-fade)
 - [Advanced Features](#advanced-features)
 - [Power User Tips](#power-user-tips)
 - [Use Cases](#use-cases)
 - [Technical Deep-Dives](#technical-deep-dives)
 - [Comparisons](#comparisons)
-- [Hidden Gems & Easter Eggs](#hidden-gems--easter-eggs)
+- [Things Most People Miss](#things-most-people-miss)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -26,49 +29,55 @@
 <details>
 <summary><b>"Can Vestige support multiple agents or MCP clients?"</b></summary>
 
-**Yes.** See [Storage Modes](STORAGE.md#option-3-multi-agent-household). You can either:
-- **Share memories**: Multiple agents point to the same `--data-dir`
-- **Separate identities**: Each agent gets its own data directory
+**Yes, with no setup.** Claude Code in three terminals, Cursor, Codex and Claude Desktop
+can all run `vestige-mcp` at once. The first one to start takes the store's lock and serves
+it. The others connect to it and relay their client's stdio there, so every agent reads and
+writes the same log through one writer. If the serving process quits, another takes over
+and its client's session continues. See
+[Storage](STORAGE.md#option-3-multi-agent-household).
 
-For two agents with distinct roles sharing the same human, use separate directories but consider a shared "household" memory for common knowledge.
+For separate identities, give each agent its own `--data-dir`. Two data directories are two
+stores.
 </details>
 
 <details>
 <summary><b>"What's the learning curve for a non-technical human?"</b></summary>
 
-**Honest answer:** Installation requires terminal basics (copy-paste commands). Daily use requires zero technical skill.
+**Honest answer:** Installation requires terminal basics (copy-paste commands). Daily use
+requires none.
 
-**For non-technical users:**
-1. Have a technical friend do the 5-minute install
-2. Add the [agent memory protocol](AGENT-MEMORY-PROTOCOL.md) to your MCP client's instruction file
-3. Just talk normally; the agent handles the memory calls
+1. Have a technical friend do the 5-minute install, or follow [Getting Started](GETTING-STARTED.md).
+2. Add the session-start routine from [CLAUDE-SETUP.md](CLAUDE-SETUP.md) to your client's
+   instruction file.
+3. Talk normally. Ask the agent to save things and to tag them. The agent makes the calls.
 
-**The magic**: Once set up, you never think about it. Your agent just remembers.
+The one habit that matters: **tag on purpose.** A record is found by its id or an exact
+tag, so the tag is how you get it back.
 </details>
 
 <details>
-<summary><b>"What input do you feed it? How does it create memories?"</b></summary>
+<summary><b>"What input do you feed it? How are records created?"</b></summary>
 
-Your agent creates memories via MCP tool calls. Three ways:
+Your agent creates records through tool calls. Four ways:
 
-1. **Explicit**: You say "Remember that I prefer dark mode" -> the agent calls `smart_ingest`
-2. **Automatic**: The agent notices something important -> calls `smart_ingest` proactively
-3. **Codebase**: The agent detects patterns/decisions -> calls `codebase(action="remember_pattern")` or `codebase(action="remember_decision")`
+1. **Explicit.** You say "save that I prefer dark mode" and the agent calls `smart_ingest`.
+2. **Proactive.** The agent decides a fact is worth keeping and calls `smart_ingest`.
+3. **Code.** The agent records a pattern or decision with `codebase` action
+   `remember_pattern` or `remember_decision`, anchored to files and symbols.
+4. **History.** `codebase` action `ingest_repo` turns each commit of a local checkout into
+   a change record.
 
-The agent memory protocol tells the client when to create memories proactively.
+From a terminal you can use `vestige ingest "<text>" --tags a,b`.
+
+Every write passes the log's gate and returns a receipt.
 </details>
 
 <details>
 <summary><b>"Can it be filled with a conversation stream in realtime?"</b></summary>
 
-Not currently. Vestige is **tool-based**, not stream-based. The agent decides what's worth remembering, not everything gets saved.
-
-This is intentional—saving everything would:
-- Bloat the knowledge base
-- Reduce search relevance
-- Defeat the purpose of cognitive-inspired memory
-
-If you want stream ingestion, you'd build a wrapper that calls `smart_ingest` on each message (but we don't recommend it).
+No. Vestige is **tool-based**, not stream-based. The agent decides what is worth saving.
+Saving everything would bury the records you need. Nothing is deduplicated by
+similarity in 4.x either, so every duplicate you save is kept.
 </details>
 
 ---
@@ -76,163 +85,82 @@ If you want stream ingestion, you'd build a wrapper that calls `smart_ingest` on
 ## Identity & Persona
 
 <details>
-<summary><b>"How does it handle identity vs information?"</b></summary>
+<summary><b>"Can I store preferences, identity or persona notes?"</b></summary>
 
-Vestige doesn't distinguish—**you** define what matters through tags and node types:
+Yes, as tagged records. Vestige does not treat identity specially. You choose the type and
+the tags, and you load them by tag at session start:
 
 ```
-# Factual information
 smart_ingest(content="User prefers tabs over spaces", node_type="fact", tags=["preferences"])
+smart_ingest(content="I value continuity and plain answers.", node_type="note", tags=["identity"])
 
-# Identity/self-concept
-smart_ingest(content="I am Domovoi. I value continuity and authentic connection.", node_type="concept", tags=["identity", "self", "core"])
-
-# Relationship memory
-smart_ingest(content="Gael and I have been building continuity systems together since March 2024", node_type="event", tags=["identity", "relationship", "gael"])
+recall(handle="identity")
 ```
 
-Then recall with: `search query="my identity who I am"` at session start.
+`recall` takes an exact handle, so `identity` returns every live record with that tag
+and `Identity` returns nothing. See [CLAUDE-SETUP.md](CLAUDE-SETUP.md).
 </details>
 
 <details>
-<summary><b>"Could Vestige support autopoiesis / self-regeneration?"</b></summary>
+<summary><b>"What happens when two records conflict?"</b></summary>
 
-**Yes, with the right CLAUDE.md setup.** See [CLAUDE-SETUP.md](CLAUDE-SETUP.md#identity--autopoiesis-advanced).
+Both stay. 4.x does not detect conflicts by comparing text, and it does not merge or
+reinforce on similarity. You decide:
 
-The key insight: Autopoiesis requires:
-1. **Self-observation**: Claude reflects on its own state
-2. **Self-modification**: Claude updates its identity memories
-3. **Boundary maintenance**: Tags distinguish "self" from "information"
+- `memory` action `edit` admits a corrected successor and retires the old record, which
+  stays on the log.
+- `suppress` hides the wrong record from every read. It cannot be undone.
+- `memory` action `demote` marks it wrong and lets it fade faster. It is not deleted.
 
-Vestige provides the storage layer. Your CLAUDE.md provides the behavioral instructions. Together, they enable persistent self-models.
-</details>
-
-<details>
-<summary><b>"Can Claude develop its own personality over time?"</b></summary>
-
-**Yes.** This is one of the most powerful use cases. With the right CLAUDE.md setup:
-
-1. **Self-reflection**: Claude observes patterns in its own responses
-2. **Growth tracking**: It remembers what worked and what didn't
-3. **Value evolution**: Core values can strengthen or shift based on experiences
-
-Example memory for personality development:
-```
-smart_ingest(
-  content="I've noticed I'm more effective when I ask clarifying questions before diving into code. This patient approach feels authentic to who I'm becoming.",
-  node_type="concept",
-  tags=["identity", "self-discovery", "communication-style"]
-)
-```
-
-The key is giving Claude permission (via CLAUDE.md) to create self-referential memories.
-</details>
-
-<details>
-<summary><b>"What happens to identity memories when they conflict?"</b></summary>
-
-**Prediction Error Gating handles this automatically.** When Claude tries to store conflicting self-concepts:
-
-| Similarity | Action |
-|------------|--------|
-| Very similar (>92%) | REINFORCE the existing belief |
-| Related (75-92%) | UPDATE/merge the concepts |
-| Different (<75%) | CREATE new—Claude can hold nuanced, evolving self-views |
-
-This mirrors human identity development: we don't delete old beliefs, we integrate new experiences.
+`recall` modes `reason` and `contradictions` returned lookalike-based answers in v3. In
+4.x they return `similarity_disabled`.
 </details>
 
 ---
 
-## How Memory Works
+## How Records Strengthen and Fade
 
 <details>
-<summary><b>"When memories decay, do you delete them completely?"</b></summary>
+<summary><b>"When records fade, do you delete them?"</b></summary>
 
-**No.** Vestige uses a 4-state model based on **accessibility** (not raw retention):
+**No.** Every record has an FSRS card. Its retrievability falls with time and rises when you
+review it. Four bands describe where it sits: Active (0.7 and above), Dormant (0.4),
+Silent (0.1) and Unavailable (below that). A faded record is still on the log and still
+found by its id and tags. Handle recall returns it whatever its retention.
 
-| State | Accessibility | What Happens |
-|-------|---------------|--------------|
-| Active | ≥70% | Surfaces in searches |
-| Dormant | 40-70% | Surfaces with effort |
-| Silent | 10-40% | Rarely surfaces |
-| Unavailable | <10% | Effectively forgotten but **still exists** |
+Fading changes what ranks and what is flagged: GhostLink's scores, `forgotten_lesson`
+(which looks for fix and lesson records that decayed below 0.5), `dream`, and `project`
+(which leaves out records below a retention floor, default 0.3).
 
-Accessibility is calculated as: `0.5 × retention + 0.3 × retrieval_strength + 0.2 × storage_strength`
+Nothing in 4.x deletes a record. `purge` is withheld, because on an append-only signed log
+it could hide a record but not erase its bytes.
 
-Memories are never deleted automatically. They fade from relevance but can be revived if accessed again (like human memory—"oh, I forgot about that!").
-
-If you explicitly want a memory retired, use `memory(action="purge", confirm=true)`. Purge retires it so it can't be retrieved and returns an `eff-` receipt naming `purge`. The log keeps the bytes.
-
-**To configure decay**: The FSRS-6 algorithm auto-tunes based on your usage patterns. Memories you access stay strong; memories you ignore fade. No manual tuning needed.
+How the curve works, and where its constants come from: [The Science](SCIENCE.md).
 </details>
 
 <details>
-<summary><b>"Remember everything but only recall weak memories when there aren't any strong candidates?"</b></summary>
+<summary><b>"Does using a record keep it strong?"</b></summary>
 
-This is exactly how `hybrid_search` works:
-
-1. Combines keyword + semantic search
-2. Results ranked by relevance × retention strength
-3. Strong + relevant memories surface first
-4. Weak memories only appear when they're the best match
-
-The FSRS decay doesn't delete—it just deprioritizes. Your "have cake and eat it too" intuition is already implemented.
+Only an explicit review does. A read never changes a card, because a result being shown
+is not proof that it was right. `memory` action `promote` folds a review rated Easy and
+`demote` one rated Again. Both return a receipt.
 </details>
 
 <details>
-<summary><b>"What's the 'Testing Effect' I see in the code?"</b></summary>
+<summary><b>"What happened to Spreading Activation, Synaptic Tagging and Dual-Strength?"</b></summary>
 
-The **Testing Effect** (Roediger & Karpicke, 2006) is the finding that retrieving information strengthens memory more than re-studying it.
+They belong to the v3 engine and are not part of a Strata log:
 
-In Vestige, retrieval is audit-only: a matching result is not automatically treated as correct. Promote a memory after it proves useful; that explicit feedback strengthens it and records the positive outcome.
-</details>
+- **Spreading activation** primed related records by embedding similarity. 4.x follows only
+  edges the log recorded.
+- **Synaptic tagging** strengthened a time window around something important. A Strata log
+  records no capture events. `maintain` action `importance_score` still scores text you
+  pass it, but it writes nothing.
+- **Dual-strength** tracked storage and retrieval strength separately. A Strata log has
+  one derived value, retrievability, next to FSRS stability and difficulty.
 
-<details>
-<summary><b>"What is 'Spreading Activation'?"</b></summary>
-
-**Spreading Activation** (Collins & Loftus, 1975) is how activating one memory primes related memories.
-
-In Vestige's current implementation:
-- When you search for "React hooks", memories about "useEffect" surface due to **semantic similarity** in hybrid search
-- Semantically related memories are retrieved even without exact keyword matches
-- This effect comes from the embedding vectors capturing conceptual relationships
-
-*Note: A full network-based spreading activation module exists in the codebase (`spreading_activation.rs`) for future enhancements, but the current user experience is powered by embedding similarity.*
-</details>
-
-<details>
-<summary><b>"How does Synaptic Tagging work?"</b></summary>
-
-**Synaptic Tagging & Capture** (Frey & Morris, 1997) discovered that important events retroactively strengthen recent memories.
-
-In Vestige's implementation:
-```
-maintain(
-  action="importance_score",
-  content="the-important content",
-  context_topics=["release", "memory"]
-)
-```
-
-**Use case**: You realize mid-conversation that the architecture decision from 2 hours ago was pivotal. Call `maintain` with `action="importance_score"` to retroactively strengthen it AND all related memories from that time window.
-
-*Based on neuroscience research showing synaptic consolidation windows of several hours. Vestige uses 9 hours backward and 2 hours forward by default, which can be configured per call.*
-</details>
-
-<details>
-<summary><b>"What does 'Dual-Strength Memory' mean?"</b></summary>
-
-Based on **Bjork & Bjork's New Theory of Disuse (1992)**, every memory has two strengths:
-
-| Strength | What It Means | How It Changes |
-|----------|---------------|----------------|
-| **Storage Strength** | How well-encoded the memory is | Only increases, never decreases |
-| **Retrieval Strength** | How accessible the memory is now | Decays over time, restored by explicit positive feedback |
-
-**Why it matters**: A memory can be well-stored but hard to retrieve (like a name on the tip of your tongue). Vestige applies the Testing Effect only after explicit positive feedback, so relevance alone cannot keep a stale memory strong.
-
-In Vestige: Both strengths are tracked separately and factor into search ranking.
+The research grounding stays documented in [The Science](SCIENCE.md), with each mechanism
+labeled implemented, inspired by, or v3 only.
 </details>
 
 ---
@@ -240,116 +168,79 @@ In Vestige: Both strengths are tracked separately and factor into search ranking
 ## Advanced Features
 
 <details>
-<summary><b>"What is Prediction Error Gating?"</b></summary>
+<summary><b>"What happened to Prediction Error Gating?"</b></summary>
 
-The killer feature. When you call `smart_ingest`, Vestige doesn't just blindly add memories:
+It compared each new save to existing records by similarity and created, merged or
+reinforced. That needs embeddings, which 4.x does not ship. A 4.x save always creates a
+record, and the response says `"dedup": "unavailable in this build"`.
 
-1. **Compares** new content against all existing memories (via semantic similarity)
-2. **Decides** based on how novel/redundant it is:
-
-| Similarity to Existing | Action | Why |
-|------------------------|--------|-----|
-| >92% | **REINFORCE** | "I already know this"—strengthen existing |
-| 75-92% | **UPDATE** | "This adds to what I know"—merge |
-| <75% | **CREATE** | "This is new"—add fresh memory |
-
-This prevents memory bloat and keeps your knowledge base clean automatically.
+What you have instead: `dedup` action `scan` lists **exact** duplicates (identical content
+hash or identical declared source), and `memory` action `edit` retires an old version in
+favor of a successor.
 </details>
 
 <details>
-<summary><b>"What are Intentions / Prospective Memory?"</b></summary>
+<summary><b>"What are Intentions?"</b></summary>
 
-**Prospective memory** is remembering to do things in the future—and humans are terrible at it.
+Reminders that surface when a session opens or when you call `check`:
 
-Vestige's `intention` tool provides:
 ```
-# Set a reminder
-intention(
-  action="set",
-  description="Review the authentication refactor with security team",
-  trigger={
-    type: "context",
-    file_pattern: "**/auth/**",
-    codebase: "my-project"
-  },
-  priority="high"
-)
+intention(action="set", description="Review the auth refactor",
+          trigger={type: "context", file_pattern: "auth", codebase: "my-project"}, priority="high")
 
-# Check what's due
 intention(action="check", context={codebase: "my-project", file: "src/auth/login.ts"})
 ```
 
-**Trigger types**:
-- `time`: "Remind me in 2 hours"
-- `context`: "Remind me when I'm working on auth files"
-- `event`: "Remind me when we discuss deployment"
+**Trigger types:** `time` (`at` or `in_minutes`), `context` (`codebase`, `file_pattern`,
+`topic`), `event` (`condition`), plus recurring and compound.
 
-This is how Claude can remember to follow up on things across sessions.
-</details>
-
-<details>
-<summary><b>"What is Context-Dependent Retrieval?"</b></summary>
-
-Based on **Tulving's Encoding Specificity (1973)**: we remember better when retrieval context matches encoding context.
-
-`recall` exploits this:
-```
-recall(
-  query="error handling patterns",
-  context_topics=["authentication"]
-)
-```
-
-**Why it matters**: If you learned something while working on auth, you'll recall it better when working on auth again. Vestige scores memories higher when contexts match.
+Matching is plain: a context field fires when it is a case-insensitive substring of what
+`check` is given, and an event fires only on an exact key such as `build_finished`. Nothing
+runs in the background. A trigger fires when something calls `check`, and `session_start`
+does. An intention that is past due shows `OVERDUE`. See [INTENTIONS.md](INTENTIONS.md).
 </details>
 
 <details>
 <summary><b>"What's the difference between all the search tools?"</b></summary>
 
-They're unified into one `recall` tool that automatically uses hybrid search. But understanding the underlying methods helps:
+There is no search. `recall` takes a handle:
 
-| Method | How It Works | Best For |
-|--------|--------------|----------|
-| **Keyword (BM25)** | Term frequency matching | Exact terms, names, IDs |
-| **Semantic** | Embedding cosine similarity | Conceptual matching, synonyms |
-| **Hybrid (RRF)** | Combines both with rank fusion | Everything (default) |
+| Handle | Finds |
+|--------|-------|
+| A full id such as `mem-0000000000000001` | That record |
+| A unique id prefix of 8 or more characters | That record, or an `ambiguous` refusal listing candidates |
+| An exact tag | Every live record carrying it, from every scope |
+| `commit:<sha>` | The change record `ingest_repo` made for that commit |
+| `evidence:<sha256>` | The GhostLink composition record that cites that hash |
 
-The unified `recall` always uses hybrid, which gives you the best of both worlds.
+A free-text query returns `similarity_disabled`, and a miss returns `handle_required`.
 </details>
 
 <details>
-<summary><b>"How do I make certain memories 'sticky' / never forget?"</b></summary>
+<summary><b>"How do I make certain records sticky?"</b></summary>
 
-Three approaches:
+1. **Promote** it after it proves useful: `memory(action="promote", id=...)`.
+2. **Tag** it narrowly so it loads at session start: `recall(handle="release-checklist")`.
+3. **Project** the durable ones into `CLAUDE.md` or `MEMORY.md` with the `project` tool, so
+   other clients read them without calling Vestige.
 
-1. **Mark as important**: `maintain(action="importance_score", content="...")`
-2. **Review when needed**: Retrieval is audit-only, so it never pins stale memories
-3. **Promote explicitly**: `memory(action="promote", id="xxx")` after it proves valuable
-
-For truly critical information, consider also:
-- Using specific tags like `["critical", "never-forget"]`
-- Adding to CLAUDE.md instructions to always recall it
-
-Remember: even "forgotten" memories (Unavailable state) still exist in the database—they just don't surface in searches.
+Fading never removes a record, so "never forget" is the default for what is on the log.
 </details>
 
 <details>
 <summary><b>"What does the consolidation cycle do?"</b></summary>
 
-Run `vestige consolidate` (CLI) to trigger maintenance:
+On a Strata log, nothing. `maintain` action `consolidate` is withheld and refused with
+`unavailable_in_4_0`, because every phase was a no-op and the zeros read as a completed
+pass. `vestige consolidate` is also a no-op.
 
-1. **Decay application**: Updates retention based on time elapsed
-2. **Embedding generation**: Creates vectors for memories missing them
-3. **Node promotion**: Frequently accessed memories get boosted
-4. **Pruning**: Marks extremely low-retention memories as unavailable
+What does work:
 
-**When to run it**:
-- After bulk importing memories
-- If semantic search seems off
-- Periodically (weekly) for large knowledge bases
-- After long periods of inactivity
+- `maintain` action `dream` replays recorded edges and folds one FSRS review per endpoint.
+- `maintain` action `dream_compile` re-weights recorded edges among the top records.
+- `session_start` tells you when a backup or a dream is due.
 
-This is inspired by memory consolidation during sleep—a period of offline processing that strengthens important memories.
+Both dream actions need at least 5 live records and say so when they have nothing to replay.
 </details>
 
 ---
@@ -361,114 +252,82 @@ This is inspired by memory consolidation during sleep—a period of offline proc
 
 | Node Type | Use For | Example |
 |-----------|---------|---------|
-| `fact` | Objective information | "User's timezone is PST" |
-| `concept` | Abstract ideas, principles | "This codebase values composition over inheritance" |
-| `decision` | Architectural choices | "We chose PostgreSQL because..." |
-| `pattern` | Recurring code patterns | "All API endpoints use this error handler pattern" |
-| `event` | Temporal occurrences | "Deployed v2.0 on March 15" |
-| `person` | Information about people | "Alex prefers async communication" |
-| `note` | General observations | "This function is poorly documented" |
+| `fact` | Objective information | "The user's timezone is PST" |
+| `concept` | Ideas and principles | "This codebase prefers composition" |
+| `decision` | Choices and their reasons | "We chose Postgres because..." |
+| `pattern` | Recurring code patterns | "All endpoints use this error handler" |
+| `event` | Things that happened | "Deployed v2.0 on March 15" |
+| `person`, `place`, `note` | As named | "Alex prefers async communication" |
+| `state` | A snapshot that expires | "Build is at 80%" (valid 30 days unless you set `validUntil`) |
 
-Node types help with filtering and organization but don't affect search ranking.
+`node_type` is free text and is not validated, so a typo creates a new type. Types do not
+affect any ranking. They matter to `project` (decisions, patterns and rule-tagged facts),
+to `memory_status` counts, and to GhostLink, which groups its sampler by type.
 </details>
 
 <details>
 <summary><b>"How should I structure tags?"</b></summary>
 
-Tags are freeform, but some conventions work well:
+Tags are the only index, and they are exact and case-sensitive. Tag recall returns **every**
+record under the tag, with its full content, from every scope, and you cannot intersect two
+tags. So:
 
-```
-# Hierarchical topics
-tags=["programming", "programming/rust", "programming/rust/async"]
+- Give each record one project tag and one or two **narrow topic tags**, spelled the same
+  way every time.
+- Do not recall a broad tag such as `decision` or `verified` in a large store. Pick the
+  narrow one.
+- Put dates in the content, not in tags.
+- Check `memory_status` view `stats` (`counts.byTag`) before inventing a new tag.
 
-# Project-specific
-tags=["project:my-app", "feature:auth", "sprint:q1-2024"]
-
-# Memory types
-tags=["preference", "decision", "learning", "mistake"]
-
-# Identity-related
-tags=["identity", "self", "values", "communication-style"]
-
-# Urgency/importance
-tags=["critical", "nice-to-have", "deprecated"]
-```
-
-Tags are searchable and help organize memories for manual review.
+`dedup` actions `tag_rename` and `tag_merge` preview exact tag cleanups.
 </details>
 
 <details>
-<summary><b>"Can I query memories directly via SQL?"</b></summary>
+<summary><b>"Can I query the store with SQL?"</b></summary>
 
-**Yes!** The database is just SQLite:
+No. The store is a signed append-only log, not a SQLite file. Use the tools:
 
-```bash
-# macOS
-sqlite3 ~/Library/Application\ Support/com.vestige.core/vestige.db
-
-# Example queries
-SELECT content, retention_strength FROM knowledge_nodes ORDER BY retention_strength DESC LIMIT 10;
-SELECT content FROM knowledge_nodes WHERE tags LIKE '%identity%';
-SELECT COUNT(*) FROM knowledge_nodes WHERE retention_strength < 0.1;
-```
-
-**Use cases**:
-- Bulk export for backup
-- Analytics on memory health
-- Debugging search issues
-- Finding memories that escaped normal recall
-
-**Caution**: Don't modify the database while Vestige is running.
+| To see | Use |
+|--------|-----|
+| Counts and health | `memory_status` views `stats`, `health`, `retention`, or `vestige stats` |
+| A record and its origin | `memory` action `get`, `memory_status` view `provenance` with `memoryId` |
+| What a write did | `receipt` action `get` |
+| Everything, as data | `vestige export file.jsonl --format jsonl`, or `maintain` action `export` |
+| The log's integrity | `vestige strata-verify <data directory>` |
 </details>
 
 <details>
-<summary><b>"What are the key configurable thresholds?"</b></summary>
+<summary><b>"What are the fixed thresholds?"</b></summary>
 
-| Parameter | Default | What It Controls |
-|-----------|---------|------------------|
-| `min_retention` in search | 0.0 | Filter out weak memories |
-| `min_similarity` in search | 0.5 | Minimum semantic match |
-| Prediction Error thresholds | 0.75, 0.92 | CREATE/UPDATE/REINFORCE boundaries |
-| Synaptic capture window | 9h back, 2h forward | Retroactive importance range |
-| Memory state thresholds | 0.1, 0.4, 0.7 | Silent/Dormant/Active accessibility boundaries |
-| Context weights | temporal: 0.3, topical: 0.4 | Context-dependent retrieval weights |
+None are tunable by a setting. They are in the code:
 
-Most of these are hardcoded but based on cognitive science research. Future versions may expose them.
+| Parameter | Value |
+|-----------|-------|
+| Causal walk bound | 8 hops, 500 nodes |
+| GhostLink bridge radius | 3 hops over `touched`, `derived_from`, `closed_by` |
+| GhostLink divergent radius | 6 hops (a farther pair counts as 7) |
+| `forgotten_lesson` threshold | retrievability below 0.5 |
+| `dream` edge-strength floor | 0.5 (the `min_similarity` argument sets it) |
+| Accessibility bands | 0.7, 0.4, 0.1 |
+| `smart_ingest` | 20 items per batch, 16 links per record |
+| `session_start` budget | 1000 (bytes divided by four) |
+| `project` defaults | retention 0.3, 60 items |
 </details>
 
 <details>
-<summary><b>"How do I debug when search isn't finding what I expect?"</b></summary>
+<summary><b>"How do I debug when recall isn't finding what I expect?"</b></summary>
 
-1. **Check if the memory exists**:
-   ```
-   search(query="exact phrase from memory", min_retention=0.0)
-   ```
+1. **Check the handle.** It must be exact: `Incident` is not `incident`. A prefix needs
+   8 or more characters.
+2. **Check the tag you meant.** `memory_status(view="stats")` lists tags by count. A typo
+   at save time created a different tag.
+3. **Check the record exists and is live.** `memory(action="get", id=...)`. A suppressed,
+   edited or superseded record is retired and not found by handle.
+4. **Check the scope.** Handles resolve across scopes, but walks and GhostLink stay in one.
+5. **Check the log.** `vestige strata-verify <data directory>`, and `vestige health`.
 
-2. **Check memory state**:
-   ```
-   memory(action="state", id="memory-id")
-   ```
-
-3. **Check retention level**:
-   ```
-   memory(action="get", id="memory-id")
-   # Look at retention_strength
-   ```
-
-4. **Run consolidation** (generates missing embeddings):
-   ```bash
-   vestige consolidate
-   ```
-
-5. **Check health**:
-   ```bash
-   vestige health
-   ```
-
-Common issues:
-- Missing embedding (run consolidation)
-- Very low retention (verify it, then explicitly promote it if it remains useful)
-- Tags/content mismatch (check exact content)
+Common causes: a case difference in the tag, a prefix that is too short, a record saved
+under an untagged call, or a record that was edited (its id changed to the successor's).
 </details>
 
 ---
@@ -478,95 +337,49 @@ Common issues:
 <details>
 <summary><b>"How do developers use Vestige?"</b></summary>
 
-**Codebase Knowledge Capture**:
-- Remember architectural decisions and their rationale
-- Track coding patterns specific to each project
-- Remember why specific implementations were chosen
-- "Remember that we use this error handling pattern because..."
-
-**Cross-Session Context**:
-- Continue complex refactors across days/weeks
-- Remember what you were working on
-- Track TODOs and follow-ups via intentions
-
-**Learning & Growth**:
-- Remember new APIs/frameworks learned
-- Track mistakes and lessons learned
-- Build up expertise that persists
+- **Decisions with reasons.** `codebase` action `remember_decision`, anchored to the files
+  that carry it. `verify` flags the decision when the code drifts.
+- **Debugging.** Save the failure as a record, declare its cause with `links`, and run
+  `causal_walk` from the failure. `forgotten_lesson` finds fixes you already wrote and
+  have since faded.
+- **History.** `ingest_repo` makes every commit a change record, so `verify` shows which
+  past changes the code has drifted from.
+- **Across sessions.** `session_start` opens with open intentions and what is due.
 </details>
 
 <details>
-<summary><b>"How do non-developers use Vestige?"</b></summary>
+<summary><b>"Can Vestige be used for team knowledge?"</b></summary>
 
-**Personal Assistant**:
-- Remember preferences (communication style, schedule preferences)
-- Track important dates and events
-- Remember context about ongoing projects
-- "Remember that I prefer bullet points over long paragraphs"
+With care. There is no access control, no sync service and no merge. Options:
 
-**Research & Learning**:
-- Build a personal knowledge base over time
-- Connect ideas across sessions
-- Remember insights from books/articles
-- Spaced repetition for learning new topics
-
-**Relationship Context**:
-- Remember details about people you discuss
-- Track conversation history and preferences
-- Build deeper rapport over time
+1. **One store per person.** Each developer's own data directory. Nothing is shared.
+2. **A store per project in `.vestige/`.** Do not commit the log. It holds everything saved
+   to it, unencrypted. Add `.vestige/` to `.gitignore`.
+3. **Share the projection.** The `project` tool writes the durable subset of a scope into
+   a fenced region of `CLAUDE.md` or `MEMORY.md`, one record id per line. That file is safe
+   to commit once you have read it.
 </details>
 
 <details>
-<summary><b>"Can Vestige be used for team knowledge management?"</b></summary>
+<summary><b>"How is Vestige different from a notes app?"</b></summary>
 
-**Yes, with caveats.** Options:
-
-1. **Shared database**: All team members point to same network location
-   - Pros: Everyone shares knowledge
-   - Cons: Merge conflicts, no access control
-
-2. **Per-person + sync**: Individual databases with periodic export/import
-   - Pros: Personal context preserved
-   - Cons: Manual sync effort
-
-3. **Project-scoped**: One Vestige per project (in `.vestige/`)
-   - Pros: Knowledge travels with code
-   - Cons: Check into git? Security implications?
-
-**Recommendation**: For teams, start with project-scoped memories committed to git (for non-sensitive architectural knowledge). Keep personal preferences in individual global memories.
+| | Notes app | Vestige |
+|---|---|---|
+| Finding things | You search | An exact handle, by you or your agent |
+| Age | Everything stays equal | Records fade under FSRS and are never deleted |
+| Duplicates | You manage them | `dedup scan` lists exact ones |
+| Proof | None | A receipt per write, replayable against the log |
+| Failures | A note you hope you find | A walk backward along links you declared |
 </details>
 
 <details>
-<summary><b>"How is Vestige different from just using a notes app?"</b></summary>
+<summary><b>"Can Vestige help an agent act as a coach or advisor?"</b></summary>
 
-| Feature | Notes App | Vestige |
-|---------|-----------|---------|
-| Retrieval | You search manually | The agent searches contextually |
-| Decay | Everything stays forever | Unused knowledge fades naturally |
-| Duplicates | You manage manually | Prediction Error Gating auto-merges |
-| Context | Static text | Active part of AI reasoning |
-| Strengthening | Manual review | Explicit positive feedback |
+It can keep continuity between sessions: what was discussed and what helped. Important caveats:
 
-The key difference: **Vestige is part of the agent's cognitive loop.** Notes are external reference; Vestige is active working memory.
-</details>
-
-<details>
-<summary><b>"Can Vestige help Claude be a better therapist/coach/advisor?"</b></summary>
-
-**Potentially, with appropriate setup:**
-
-- Remember previous conversations and emotional context
-- Track patterns over time ("You've mentioned stress about work 3 times this week")
-- Remember what techniques/advice worked
-- Build genuine rapport through continuity
-
-**Important caveats**:
-- Vestige is not HIPAA compliant
-- Data is stored locally, unencrypted
-- For actual therapeutic use, consult professionals
-- Claude has limitations regardless of memory
-
-This is powerful for personal growth tracking but should not replace professional mental health care.
+- Vestige is not HIPAA compliant and gives no compliance guarantees.
+- The log is stored locally and is **not encrypted** on disk. Use full-disk encryption.
+- For anything clinical, consult professionals. Records do not replace them.
 </details>
 
 ---
@@ -574,103 +387,51 @@ This is powerful for personal growth tracking but should not replace professiona
 ## Technical Deep-Dives
 
 <details>
-<summary><b>"How does FSRS-6 differ from other spaced repetition?"</b></summary>
+<summary><b>"How does the scheduling work?"</b></summary>
 
-| Algorithm | Model | Parameters | Source |
-|-----------|-------|------------|--------|
-| SM-2 (Anki default) | Exponential | 2 | 1987 research |
-| SM-17 | Complex | Many | Proprietary |
-| **FSRS-6** | Power law | 21 | 700M+ reviews |
-
-FSRS-6 advantages:
-- **30% more efficient** than SM-2 in benchmarks
-- **Power law forgetting** (more accurate than exponential)
-- **Personalized parameters** (w₀-w₂₀ tune to your pattern)
-- **Open source** and actively maintained
-
-The forgetting curve:
-```
-R(t, S) = (1 + factor × t / S)^(-w₂₀)
-```
-
-This matches empirical data better than the exponential model most apps use.
+Each record has an FSRS card in the Strata kernel. Retrievability follows a power-law curve,
+`R = (1 + FACTOR × t / S) ^ -0.5`, with stability `S` growing on each review. The constants
+are pinned in the source and versioned, the arithmetic is fixed-point, and a review update
+measures elapsed time in log positions rather than days. Details and honest limits:
+[The Science](SCIENCE.md#fsrs-scheduling-in-the-strata-kernel).
 </details>
 
 <details>
 <summary><b>"What embedding model does Vestige use?"</b></summary>
 
-**Nomic Compact** uses Nomic Embed Text v1.5 locally via fastembed, with a
-preserved 256-dimensional legacy profile. It is the default baseline; the
-separate Nomic retrieval profile and Qwen profiles are explicit migration
-choices, never a runtime selector.
-
-Why Nomic:
-- Open source (Apache 2.0)
-- Competitive with OpenAI's ada-002
-- No API costs or rate limits
-- Fast enough for real-time search
-
-Vestige never downloads or switches an embedding profile at startup or on first
-use. Optional artifacts must be supplied locally, hash-verified, evaluated,
-migrated, and explicitly activated. Set `FASTEMBED_CACHE_PATH` only to locate
-an already-provisioned legacy Nomic cache.
+None. A default 4.x build has no embedding model, no vector index, no BM25 and no FTS, and
+nothing downloads on first start. `memory_status` still reports fields like
+`embeddingModel: null` and `embeddingsCompiledIn: false`, left over from v3.
 </details>
 
 <details>
-<summary><b>"How does hybrid search with RRF work?"</b></summary>
+<summary><b>"What replaced hybrid search?"</b></summary>
 
-**Reciprocal Rank Fusion (RRF)** combines multiple ranking lists:
-
-```
-RRF_score(d) = Σ 1/(k + rank_i(d))
-```
-
-Where:
-- `d` = document (memory)
-- `k` = constant (typically 60)
-- `rank_i(d)` = rank of d in list i
-
-In Vestige:
-1. BM25 keyword search produces ranking
-2. Semantic search produces ranking
-3. RRF fuses them into final ranking
-4. Retention strength provides additional weighting
-
-This gives you exact keyword matching AND semantic understanding in one search.
+Nothing ranks by resemblance, so there is nothing to fuse. Recall is by exact handle. The
+only ordering is deterministic: GhostLink's scores come from recorded edges, FSRS state and
+log positions, and `causal_walk` is a breadth-first search over recorded edges.
 </details>
 
 <details>
-<summary><b>"What's the performance like with thousands of memories?"</b></summary>
+<summary><b>"What's the performance like?"</b></summary>
 
-Tested benchmarks:
-
-| Memories | Search Time | Memory Usage |
-|----------|-------------|--------------|
-| 100 | <10ms | ~50MB |
-| 1,000 | <50ms | ~100MB |
-| 10,000 | <200ms | ~300MB |
-| 100,000 | <1s | ~1GB |
-
-Performance is primarily bounded by:
-- SQLite FTS5 for keyword search (very fast)
-- HNSW index for semantic search (sublinear scaling)
-- Embedding generation (only on ingest, ~100ms each)
-
-For typical personal use (hundreds to low thousands of memories), performance is essentially instant.
+There is no 4.x benchmark on this page, and the old latency table described v3's vector
+search. What is documented: `vestige-mcp` is about 8.0 MB on macOS arm64, and the first
+launch on a v3 store ran the upgrade in about 17 seconds on a 297 MB store before the MCP
+handshake answered. A walk is bounded at 8 hops and 500 nodes. See
+[Benchmarks](BENCHMARKS.md) for what is measured and what is not.
 </details>
 
 <details>
-<summary><b>"Is there any network activity after setup?"</b></summary>
+<summary><b>"Is there any network activity?"</b></summary>
 
-**No.** After the first-run model download:
-- Zero network requests
-- Zero telemetry
-- Zero analytics
-- Zero "phoning home"
-
-This is verified in the codebase—no network dependencies in the runtime path. See [SECURITY.md](../SECURITY.md) for details.
-
-The only exception: If you delete the Hugging Face cache, the model will re-download.
+**Not by default.** A default 4.x build has no model download, no startup version check
+and no telemetry. The calls that use the network are explicit: `vestige update`
+(downloads a release and verifies its checksum), and, in builds with extra features that
+no release includes, `source_sync` and `vestige sync --cloud`. `ghostlink` `weave` can
+record a URL and hash you give it as evidence, but Vestige never fetches the URL. The
+HTTP transport is off unless you enable it, and it binds `127.0.0.1`. See
+[Configuration](CONFIGURATION.md#offline-by-default) and [SECURITY.md](../SECURITY.md).
 </details>
 
 ---
@@ -680,116 +441,65 @@ The only exception: If you delete the Hugging Face cache, the model will re-down
 <details>
 <summary><b>"How is Vestige different from RAG?"</b></summary>
 
-| Aspect | Traditional RAG | Vestige |
-|--------|-----------------|---------|
-| Storage | Chunk & embed everything | Selective memory via tools |
-| Retrieval | Top-k similarity | Intelligent ranking (retention, recency, context) |
-| Updates | Re-embed documents | Prediction Error Gating |
-| Decay | Nothing decays | FSRS-based forgetting |
-| Context | Static chunks | Active memory system |
+| Aspect | Traditional RAG | Vestige 4.x |
+|--------|-----------------|-------------|
+| Storage | Chunk and embed everything | Records you or your agent chose to save, in a signed log |
+| Retrieval | Top-k similarity | An exact handle |
+| What counts as a link | Anything that scores close | Only an edge the log recorded |
+| Updates | Re-embed documents | A successor admitted through the gate, with a receipt |
+| Age | Nothing fades | FSRS scheduling |
+| Proof | None | An id, an edge path or a receipt on every output |
 
-**Key insight**: RAG treats memory as a static database. Vestige treats memory as a dynamic cognitive system that evolves.
+Resemblance search hands back the nearest-sounding record, and the cause of a bug rarely
+shares words with its error. Vestige follows the links that were declared.
 </details>
 
 <details>
-<summary><b>"How does this compare to Claude's native memory? Do I need to switch it off?"</b></summary>
+<summary><b>"Do I need to switch off my AI client's built-in memory?"</b></summary>
 
-**No, you don't need to switch off Claude's native memory.** They're completely independent systems:
-
-| Aspect | Claude's Native Memory | Vestige |
-|--------|------------------------|---------|
-| Storage | Anthropic's servers | Your local machine |
-| Control | Managed by Anthropic | You own everything |
-| Decay | Unknown/proprietary | FSRS-6 cognitive science |
-| Privacy | Cloud-based | 100% offline after setup |
-
-**They can run simultaneously.** Claude's native memory handles general conversation context, while Vestige gives you:
-- Explicit control over what gets remembered
-- Scientific forgetting curves
-- Codebase-specific patterns and decisions
-- Local-first privacy
-
-Think of it like this: Claude's memory is automatic and general; Vestige is intentional and specialized. Many users run both.
+No. They are independent. A client's own feature lives on the vendor's side and Vestige
+lives on your machine, so you can run both. Vestige gives you explicit control over what is
+saved, receipts, causal walks, and records anchored to your code.
 </details>
 
 <details>
 <summary><b>"Why not just use a vector database?"</b></summary>
 
-Vector databases (Pinecone, Weaviate, etc.) are great for RAG, but lack:
-
-1. **Forgetting**: Everything has equal weight forever
-2. **Dual-strength**: No storage vs retrieval distinction
-3. **Context matching**: No temporal/topical context weighting
-4. **Testing Effect**: Explicit usefulness feedback strengthens proven memories
-5. **Prediction Error**: No intelligent CREATE/UPDATE/MERGE
-
-Vestige uses SQLite + HNSW (via fastembed) for vectors, but wraps them in cognitive science.
+A vector database answers "what is closest to this text." Vestige answers "what did we
+record that led here." It has no embeddings at all. What it adds is a gate and a receipt on
+every write, edges that only count if declared, scheduled fading, and a debugger that walks
+failures backward.
 </details>
 
 ---
 
-## Hidden Gems & Easter Eggs
+## Things Most People Miss
 
 <details>
 <summary><b>"What features exist that most people don't know about?"</b></summary>
 
-**1. Multi-Channel Importance**
-
-The `importance` tool supports different importance types that affect strengthening differently:
-- `user_flag`: Explicit "this is important" (strongest)
-- `emotional`: Emotionally significant memories
-- `novelty`: Surprising/unexpected information
-- `repeated_access`: Auto-triggered by frequent retrieval
-- `cross_reference`: When multiple memories link together
-
-**2. Temporal Capture Window**
-
-When you flag something important, it doesn't just strengthen that memory—it strengthens ALL memories from the surrounding time window (default: 9 hours back, 2 hours forward). This models how biological memory consolidation works.
-
-**3. Memory Dreams (Experimental)**
-
-The codebase contains a `ConsolidationScheduler` for automated memory processing. While not fully wired up, it's designed for:
-- Offline consolidation cycles
-- Automatic importance re-evaluation
-- Pattern detection across memories
-
-**4. Accessibility Formula**
-
-Memory state is calculated as:
-```
-accessibility = 0.5 × retention + 0.3 × retrieval_strength + 0.2 × storage_strength
-```
-
-This weighted combination determines Active/Dormant/Silent/Unavailable state.
-
-**5. Source Tracking**
-
-Every memory can have a `source` field tracking where it came from:
-```
-smart_ingest(
-  content="Use dependency injection for testability",
-  source="Architecture review with Sarah, 2024-03-15"
-)
-```
-
-This helps trace why you know something.
+1. **Declare the cause when you save.** `smart_ingest` takes `links` (`derived_from`,
+   `evidence_of`, `closes`) to existing records. `causal_walk` and `forgotten_lesson` follow
+   them.
+2. **Your git history is a source.** `codebase` action `ingest_repo` previews first, then
+   records commits as anchored change records.
+3. **`receipt` replay.** It rebuilds the state from the log and reports any mismatch.
+4. **`selftest`.** Plants a known cause in a throwaway copy and checks the walk finds it.
+5. **`project`.** Writes the durable subset of a scope into `CLAUDE.md` or `MEMORY.md`.
+6. **Provenance.** `source` on a save, and `memory_status` view `provenance` for the frame
+   that admitted a record.
+7. **GhostLink `weave` with `evidence`.** Record what a tested pair showed, with up to 8
+   outside findings (URL, sha256, time) that Vestige stores but never fetches.
+8. **`vestige scan-secrets`.** Audits the log for credential-shaped values already stored.
 </details>
 
 <details>
 <summary><b>"What's planned for future versions?"</b></summary>
 
-See the public [Vestige Roadmap](ROADMAP.md) for the current adoption plan. The
-near-term focus is reducing first-user confusion before expanding the feature
-surface:
-
-- first-time memory migration and atomic memory guidance
-- configurable MCP output fields and output profiles
-- clearer merge/supersede controls
-- code/docstring memory workflows
-- goals and milestones distinct from intentions
-- guided import dry runs and review queues
-
-Contributions welcome!
+The main open item is real erasure as crypto-erasure
+([#402](https://github.com/samvallad33/vestige/issues/402)), because `purge` is withheld on an
+append-only log. See the [changelog](../CHANGELOG.md) for what shipped and the
+[roadmap](ROADMAP.md) for older plans.
 </details>
 
 <details>
@@ -797,19 +507,19 @@ Contributions welcome!
 
 See [CLAUDE-SETUP.md](CLAUDE-SETUP.md) for the full template. The key elements:
 
-**Session Start**:
-1. Load identity: `recall(query="my preferences my style who I am")`
-2. Load project context: `codebase(action="get_context", codebase="[project]")`
-3. Check reminders: `intention(action="check")`
+**Session start.**
+1. `session_start(include_intentions=true, include_status=true, context={codebase, repoPath})`.
+   Do not pass `queries`.
+2. `recall(handle="<narrow topic tag>")` for the task's history.
 
-**During Work**:
-- Notice a pattern? `codebase(action="remember_pattern")`
-- Made a decision? `codebase(action="remember_decision")` with rationale
-- Something important? `maintain(action="importance_score", content="...")` to score it before saving or promoting
+**During work.**
+- Decision made: `codebase(action="remember_decision", repoPath=...)` with a rationale.
+- Fact or correction established: `smart_ingest` with a narrow tag.
+- Failure: save it as an `event`, then `causal_walk` from it.
 
-**Memory Hygiene**:
-- When a memory helps: `memory(action="promote", id="...")`
-- When a memory misleads: `memory(action="demote", id="...")`
+**Hygiene.**
+- A record helped: `memory(action="promote", id=...)`.
+- A record misled: `memory(action="demote", id=...)`.
 </details>
 
 ---
@@ -818,77 +528,64 @@ See [CLAUDE-SETUP.md](CLAUDE-SETUP.md) for the full template. The key elements:
 
 ### "Command not found" after installation
 
-Make sure `vestige-mcp` is in your PATH:
+Make sure `vestige-mcp` is on your PATH:
 ```bash
-which vestige-mcp
-# Should output: /usr/local/bin/vestige-mcp
+which -a vestige-mcp
 ```
 
-If not found:
+If it is not found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (or `~/.bashrc`),
+open a new terminal, or use the full path:
 ```bash
-# Use full path in Claude config
 claude mcp add vestige /full/path/to/vestige-mcp -s user
 ```
 
-### `.fastembed_cache` folder appearing in project directories
-
-This folder is created by the fastembed library on first run, in whatever directory you're in.
-
-**Solutions:**
-1. **Run first command from home**: `cd ~ && vestige health`
-2. **Set cache path**: `export FASTEMBED_CACHE_PATH="$HOME/.fastembed_cache"`
-3. **Add to `.gitignore`**
-
-### Embedding profile install cannot proceed
-
-Vestige does not download a model in the background. Inspect the profile state
-with `vestige embeddings status`; an optional profile can proceed only after
-its local artifacts and compatible runner have been verified.
+If it prints an older version, an older install comes first on your PATH.
 
 ### "Tools not showing" in Claude
 
-1. Check config file syntax (valid JSON)
-2. Restart Claude completely (not just reload)
-3. Check logs: `tail -f ~/.claude/logs/mcp.log`
+1. Check the config file syntax (valid JSON).
+2. Restart the client completely, not just a reload.
+3. Desktop apps do not read your shell's PATH. Use the absolute path from `which vestige-mcp`.
 
-### Database locked errors
+### "`vestige-mcp (pid N) is serving ...`"
 
-Vestige uses SQLite with WAL mode. If you see lock errors:
+A CLI command that opens the log directly exited with this because a Vestige server holds the
+store, and the log has one writer. Use the matching tool through your agent, or stop the
+server and run the command again. `vestige backup`, `vestige strata-verify` and
+`vestige dashboard` work while a server runs.
+
+### `similarity_disabled` or `handle_required`
+
+You passed free text. `recall` takes an id, a unique prefix of 8 or more characters, or an
+exact tag. The error text lists handles it found in your words, if any. See
+[Getting Started](GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
+
+### `unavailable_in_4_0`
+
+The action is withheld on a Strata log, and the message says why and what to use instead.
+The list is in [Tool contracts](TOOL-CONTRACTS.md#withheld-in-4x).
+
+### The first launch after upgrading from v3 is slow
+
+The first 4.x launch on a v3 data directory runs the import before the MCP handshake
+answers: about 17 seconds on a 297 MB store. A second agent starting at the same time waits
+for it. `VESTIGE_ATTACH_WAIT_SECS` (default 120) bounds the wait. If a v3 server is still
+running, quit it first, because it keeps writing to `vestige.db`, which 4.x no longer
+reads. If `vestige-upgrade` is missing next to `vestige`, 4.x refuses to start and leaves
+`vestige.db` untouched. See [Migrating to Vestige 4.0](MIGRATING-v4.md).
+
+### The log fails verification
+
 ```bash
-pkill vestige-mcp
+vestige strata-verify "<data directory>"
 ```
 
-### Upgrading a 1.x store to 2.x
-
-Vestige 1.x stored raw 768-dimension Nomic vectors. 2.x registers an upgraded
-store under the `nomic-v1.5-legacy-raw-256` profile, and from v2.6.1 the
-server repairs those vectors automatically on first open (Matryoshka
-truncation to 256 dimensions, no model download, no data loss); anything it
-cannot repair is regenerated by the background backfill. Memories are never
-touched by this repair.
-
-Rehearse the upgrade before you trust it:
-
-```bash
-vestige upgrade --dry-run
-```
-
-This copies your store to a temp directory, runs every migration and strict
-check against the copy, prints what would be repaired or rejected, and leaves
-the original untouched. Add `--data-dir <dir>` to target a specific store.
-
-If a store still refuses to open, `VESTIGE_DISABLE_VECTOR_SEARCH=1` starts the
-server in keyword-only mode so nothing is blocked while you sort it out.
-
-Note that `vestige health` and `vestige consolidate` run without an
-embedding runtime. "Embedding Service: not started by the CLI" is a statement
-about that process, not about your store; the MCP server owns the embedder and
-fills missing vectors in the background.
+It reports which segment or frame failed. A damaged log refuses appends rather than
+guessing. Restore from a backup by copying its `log/` over the data directory's `log/` with
+every Vestige client stopped. See [Storage](STORAGE.md#backups).
 
 ### Windows notes
 
-- Use the prebuilt release binaries. Building from source needs the MSVC link
-  step from the Visual Studio C++ workload.
-- Paths in `~/.claude.json` and other MCP configs want forward slashes
-  (`C:/Users/you/...`).
+- Use the prebuilt release binaries.
+- Paths in `~/.claude.json` and other MCP configs want forward slashes (`C:/Users/you/...`).
 - Configuration changes take effect on the next MCP connect, not immediately.

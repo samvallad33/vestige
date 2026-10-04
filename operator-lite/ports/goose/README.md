@@ -62,7 +62,7 @@ What was **not** viable, checked honestly:
 ## What it stops
 
 Everything the gate stops on any host: edits to the gate/hook/permit files
-itself (OP-000), workspace-root deletion (OP-001), memory-store wipes
+itself (OP-000), workspace-root deletion (OP-001), Vestige store wipes
 (OP-002), blind recursive deletes and sweeps from `/` (OP-003), git history
 destruction (OP-004), unreviewed publishes (OP-005), paid deploys (OP-006),
 destructive SQL (OP-007), shell-init writes (OP-008), reverse shells (OP-009),

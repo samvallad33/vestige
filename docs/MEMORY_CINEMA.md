@@ -1,49 +1,58 @@
-# Memory Cinema — Complete Feature Reference
+# Memory Cinema: Complete Feature Reference
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Written for Vestige 4.1.1.
 
-Memory Cinema turns your real memory graph into a directed, narrated, infinitely-
-diving cinematic experience rendered as a 150,000-particle WebGPU compute storm.
-It is the dashboard's signature pillar.
+Memory Cinema turns the graph of your records into a directed, narrated,
+infinitely-diving cinematic experience rendered as a 150,000-particle WebGPU
+compute storm. It is a dashboard feature, in `apps/dashboard`, and it reads
+`/api/graph`. On a Strata log that endpoint returns the nodes and the edges the
+log recorded, each edge with its recorded type and strength. The cinema is a
+visualization. It adds no link of its own and writes nothing to the log.
 
-The whole thing is **dynamically imported only on launch** — the heavy WebGPU/TSL
+The whole thing is **dynamically imported only on launch**: the heavy WebGPU/TSL
 bundles never load for normal dashboard use. It boots a **separate WebGPU canvas**
-so the underlying WebGL graph (every current user's experience) is never touched —
+so the underlying WebGL graph (every current user's experience) is never touched:
 zero regression by construction.
 
-## Architecture — the 8 modules
+## Architecture: the 8 modules
 
 | Module | Role |
 |---|---|
 | `pathfinder.ts` | Plans the narrative path through the real graph (a story, not a BFS dump) |
 | `topology.ts` | Extracts graph signals (betweenness, contradictions, surprise, decay) |
-| `auteur.ts` | The director's brain — a typed cinematography grammar + shot-plan contract |
-| `narrator.ts` | Captions — 3-tier narration (LLM / local / deterministic) |
-| `director.ts` | The camera runtime — executes the shot plan frame-by-frame |
-| `sandbox.ts` | The isolated WebGPU stage — renderer, camera, selective bloom |
-| `storm.ts` | The 150k-particle GPU compute storm — physics, geometry, color, immersion |
-| `components/MemoryCinema.svelte` | The orchestration overlay — input, dream mode, UI |
+| `auteur.ts` | The director's brain: a typed cinematography grammar + shot-plan contract |
+| `narrator.ts` | Captions: 3-tier narration (LLM / local / deterministic) |
+| `director.ts` | The camera runtime: executes the shot plan frame-by-frame |
+| `sandbox.ts` | The isolated WebGPU stage: renderer, camera, selective bloom |
+| `storm.ts` | The 150k-particle GPU compute storm: physics, geometry, color, immersion |
+| `components/MemoryCinema.svelte` | The orchestration overlay: input, dream mode, UI |
 
-## Tier 1 — the narrative path (`pathfinder.ts`)
+## Tier 1: the narrative path (`pathfinder.ts`)
 
 The bulletproof core that always runs, using only the nodes + edges the backend
-returns. It plans a story: start at the origin (focused memory) → visit its
-strongest-weighted connections → detour to a contradiction edge if one exists
-(tension = interesting) → end on a recently-created node ("where the mind is now").
+returns. It plans a story: start at the origin (focused record) → visit its
+strongest-weighted connections → detour to a tension edge if one exists
+(tension = interesting) → end on a recently-created node ("what is newest").
 Each stop is a beat with a `kind` (origin/connection/contradiction/recent/bridge/
-surprise). Falls back to weighted BFS. No LLM, no WebGPU, no network — if
+surprise). Falls back to weighted BFS. No LLM, no WebGPU, no network; if
 everything else fails this alone produces a coherent, watchable flythrough.
 
-## Tier 2 — graph signal extraction (`topology.ts`)
+## Tier 2: graph signal extraction (`topology.ts`)
 
 Pure statistics over the real `/api/graph` data, computed once per launch:
-- **Brandes betweenness centrality** — the most load-bearing memory (graph keystone)
+- **Brandes betweenness centrality**: the most load-bearing memory (graph keystone)
 - **Connected-component clustering**
-- **Contradiction detection** + **merge/supersede detection**
+- **Tension edges**: an edge counts as tension when its recorded type contains
+  `contradict`, `conflict` or `supersede`, and as merge/supersede when it contains
+  `merge`, `supersede` or `duplicate`. On a Strata log the recorded types are
+  `touched`, `anchored_to`, `derived_from`, `supersedes`, `corrects`, `closed_by`,
+  `projected_to` and `evidence_of` (plus `legacy_inferred` history imported from
+  v3), so a `supersedes` edge is the one that can match. This is a display rule on
+  the edge's type name. It does not read record text.
 - **Surprise score** (shared neighbors yet low edge weight = non-obvious link)
 - **Recency rank**, **FSRS retention**, **suppression pressure**
 
-## The Auteur — the director's brain (`auteur.ts`)
+## The Auteur: the director's brain (`auteur.ts`)
 
 A real cinematography grammar applied to your memories. The director (LLM Tier-1 or
 a deterministic rule table Tier-2) produces a `DirectorPlan`: typed `Shot`s, each
@@ -61,10 +70,11 @@ grounded in a real node and justified by a real metric.
 
 ## Narration (`narrator.ts`)
 
-- **Tier 1:** backend LLM (`/api/narrative`) or opt-in on-device model (lazy-loaded
-  only when "Local AI" enabled; never downloads weights unprompted).
-- **Tier 2:** deterministic structured captions from real data — instant, no network.
-- **Tier 3:** can't fail — falls back to Tier 2.
+- **Tier 1:** a backend LLM (`/api/narrative`, which the 4.1.1 server does not
+  serve, so this tier is inactive) or an opt-in on-device model (lazy-loaded only
+  when "Local AI" is enabled; never downloads weights unprompted).
+- **Tier 2:** deterministic structured captions from real data: instant, no network.
+- **Tier 3:** can't fail: falls back to Tier 2.
 - Optional voice via `speechSynthesis`; typewriter caption stream (instant under
   reduced-motion).
 
@@ -74,7 +84,7 @@ grounded in a real node and justified by a real metric.
 compute nodes. One particle pool, one compute kernel, ~32 uniforms.
 
 ### The 7-beat world journey
-Each beat is a unique world — particles aren't swapped, only the forces (uWorld
+Each beat is a unique world: particles aren't swapped, only the forces (uWorld
 selects; uBlend crossfades over ~1s):
 0 nebula mist (curl-noise flow) · 1 orbital anchor (cross-product spin) · 2 strange
 attractor (Thomas) · 3 detonation void · 4 crystal lattice (voxel snap) · 5 fluid
@@ -92,7 +102,7 @@ expanded via exp; absent in three@0.172).
 ### Color
 - Full-spectrum iridescent palette (per-particle phase + radial shells + spatial
   bands + time + global drift).
-- Per-world cosine (IQ) palettes — each world a distinct identity.
+- Per-world cosine (IQ) palettes: each world a distinct identity.
 - **The Color Blast:** a long-lived uBlast envelope (~2.8s, decoupled from the fast
   physics burst so color outlives the shockwave) drives an outward spectral-
   dispersion wave (uBlastTime; prism order) over a blackbody ember core. Spectrum
@@ -103,12 +113,12 @@ expanded via exp; absent in three@0.172).
 
 ### 3D-within-3D nesting
 ~34% of particles form a second, smaller, counter-rotating figure (a different
-world, ~52% scale) inside the outer shell — a figure within a figure.
+world, ~52% scale) inside the outer shell: a figure within a figure.
 
 ### Anti-white-out / "solid" systems
 - Rim glow (Fresnel): bright edges, dim readable center.
 - Emissive routing: the rainbow goes to BOTH colorNode and emissiveNode (the
-  selective bloom reads emissive — the original white-out was an unset emissive).
+  selective bloom reads emissive; the original white-out was an unset emissive).
 - Hollow-shell spawn (the old tiny dense ball flashed white on frame 0).
 - Act/beat-aware brightness (uActDim): beats 0/1 fade in soft, Acts II/III blaze.
 
@@ -147,7 +157,7 @@ a random clash pair, full color blast, infinite zoom + flythrough on. Overlay sh
 
 - Separate WebGPU renderer + scene + PerspectiveCamera (clamped to a safe distance
   band, always lookAt(origin) → the storm can never leave frame).
-- Selective MRT bloom — blooms only the emissive channel against a clean void; falls
+- Selective MRT bloom: blooms only the emissive channel against a clean void; falls
   back to a plain pass if MRT is unavailable on a driver.
 - Per-frame camera-velocity tracking (one Vector3, zero compute) feeding the streak.
 - Pass-throughs: setZoom, setStreak, setFlythrough, setCameraVel, setContainRadius.
@@ -163,7 +173,7 @@ a random clash pair, full color blast, infinite zoom + flythrough on. Overlay sh
   hides the graph page's stats pill; overlay z-index 200).
 - Replay on completion.
 - Graceful degradation: if WebGPU is unavailable or render fails 3× consecutively,
-  drops to camera-only (captions still play) — never stalls.
+  drops to camera-only (captions still play), and never stalls.
 - Reduced-motion fully honored: no parallax listeners, zoom/flythrough/streak gated
   off, jump-cuts instead of flights, instant captions.
 

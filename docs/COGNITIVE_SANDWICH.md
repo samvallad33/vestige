@@ -1,46 +1,63 @@
 # Cognitive Sandwich
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Written for Vestige 4.1.1. The Sandwich is an optional set of Claude Code hook files that predates 4.0. Most of its layers call v3 tools and endpoints that a Strata log does not serve. Read [What works on 4.x](#what-works-on-4x) before you enable a layer.
 
-**Vestige's defense-in-depth safety architecture for Claude Code.**
+**An optional defense-in-depth hook set for Claude Code.**
 
 The default Cognitive Sandwich installer only stages files and removes old v2.1.0 hook wiring. It activates no Claude Code hooks and makes no automatic model calls. Both the preflight layer and the Stop-hook layer are explicit opt-ins:
 
 ```
-┌────────────────────────────────────────────────┐
-│  🥪 TOP BREAD  — UserPromptSubmit hooks         │
-│   • Vestige memory graph injection              │
-│   • CWD / git / CI state injection              │
-│   • Synthesis-protocol gate (decision-adjacent) │
-│   • Lateral-thinker subconscious swarm          │
-│   • Pulse daemon (background dream insights)    │
-├────────────────────────────────────────────────┤
-│  🥩 MEAT       — Claude Code reasons            │
-├────────────────────────────────────────────────┤
-│  🥪 OPTIONAL BOTTOM BREAD — Stop hooks          │
-│   • Veto-detector / synthesis validator         │
-│   • Sanhedrin Executioner verifier              │
-└────────────────────────────────────────────────┘
++------------------------------------------------+
+|  TOP LAYER     - UserPromptSubmit hooks         |
+|   - Vestige context injection (v3 endpoint)    |
+|   - CWD / git / CI state injection              |
+|   - Synthesis-protocol gate (decision-adjacent) |
+|   - Lateral-thinker subagent                    |
+|   - Pulse daemon (reads the dashboard changelog)|
++------------------------------------------------+
+|  MIDDLE        - Claude Code reasons            |
++------------------------------------------------+
+|  OPTIONAL BOTTOM LAYER - Stop hooks             |
+|   - Veto detector / synthesis validator         |
+|   - Sanhedrin Executioner verifier              |
++------------------------------------------------+
 ```
 
 Sanhedrin, preflight, and all Vestige Claude Code hooks are optional. The default installer wires none of them; it does not call Claude, start MLX, require a 19 GB model download, or require 20+ GB of RAM. Users who want preflight context can opt in with `--enable-preflight`. Users who want the post-response verifier can opt in with `--enable-sanhedrin` and point it at any OpenAI-compatible `/v1/chat/completions` endpoint and model name. Sanhedrin is model-agnostic: if no verifier model is configured, it fails open and records guidance instead of guessing a large model. On Apple Silicon, an additional `--with-launchd` flag can auto-start the local MLX Qwen backend.
+
+## What works on 4.x
+
+These hooks talk to the dashboard's HTTP API on `127.0.0.1:3927` (`VESTIGE_DASHBOARD_PORT`), so they do nothing unless `vestige dashboard` or `VESTIGE_DASHBOARD_ENABLED` has started it. Each one probes `/api/health` first and exits quietly if that fails. This table is from reading the hook scripts and the server, not from running each one against 4.1.1.
+
+| Hook | What it calls | On 4.1.1 |
+|---|---|---|
+| `synthesis-preflight.sh` | `POST /api/deep_reference` | No evidence. The dashboard answers `deep_reference` with 501 and a reason code (the 4.1.0 changelog lists it among the withheld routes), and a POST also needs the dashboard bearer token. The hook injects nothing and exits 0 |
+| `sanhedrin.sh`, `sanhedrin-local.py` | `POST /api/deep_reference` | Same. Sanhedrin records `deep_reference_unavailable`, fails open and blocks nothing |
+| `vestige-pulse-daemon.sh` | `GET /api/changelog` | The dashboard changelog is withheld on a Strata log (501 with a reason code), so there is no dream or link event to inject |
+| `preflight-swarm.sh`, `lateral-thinker` agent | `mcp__vestige__search`, `explore_connections`, `memory` | `search` and `explore_connections` are not advertised in 4.x. Only `memory` is left |
+| `veto-detector.sh` | `GET /api/memories?tag=veto-pattern` | Works by exact tag. It compares the draft against the records tagged `veto-pattern` with a regular expression, in the hook, not in the engine |
+| `cwd-state-injector.sh` | `git` and `gh` | Does not use Vestige |
+| `synthesis-stop-validator.sh` | The transcript only | Does not use Vestige |
+| `load-all-memory.sh` | Claude Code's own memory markdown files | Does not use Vestige. It is a legacy opt-in |
+
+The three agents in `agents/` (`executioner`, `lateral-thinker`, `synthesis-composer`) are declared with v3 tool names such as `mcp__vestige__deep_reference` and `mcp__vestige__search`. Edit them to the 4.x names (`recall` with a handle, `memory`, `ghostlink`) before you rely on them.
 
 ---
 
 ## How a single response flows through the Sandwich
 
 1. **You type a prompt in Claude Code.**
-2. **If explicitly enabled, UserPromptSubmit hooks fire in parallel** (none can block — all fail-open):
-   - `load-all-memory.sh` (opt-in) — dumps every memory MD into context
-   - `synthesis-preflight.sh` — POSTs your prompt to `vestige-mcp` `/api/deep_reference`, injects the trust-scored reasoning chain
-   - `cwd-state-injector.sh` — captures git status, branch, open PRs/issues, modified files
-   - `vestige-pulse-daemon.sh` — injects fresh Vestige dream insights from the past 20 min into the next prompt context
-   - `preflight-swarm.sh` — spawns the `lateral-thinker` subagent in fresh context to surface cross-disciplinary structural parallels
+2. **If explicitly enabled, UserPromptSubmit hooks fire in parallel** (none can block; all fail-open):
+   - `load-all-memory.sh` (opt-in): dumps every file in Claude Code's memory directory into context
+   - `synthesis-preflight.sh`: POSTs your prompt to `vestige-mcp` `/api/deep_reference`, injects the trust-scored reasoning chain (v3 only; see above)
+   - `cwd-state-injector.sh`: captures git status, branch, open PRs/issues, modified files
+   - `vestige-pulse-daemon.sh`: injects fresh dream insights from the dashboard changelog into the next prompt context (v3 only)
+   - `preflight-swarm.sh`: spawns the `lateral-thinker` subagent in fresh context to surface cross-disciplinary structural parallels
 3. **Claude reads the assembled context and generates a draft.**
 4. **By default, no Vestige Stop hooks are installed.** If explicitly enabled, Stop hooks fire serially (any can VETO with `exit 2`, forcing a rewrite):
-   - `veto-detector.sh` — fast regex against `veto`-tagged Vestige memories (~50ms)
-   - `sanhedrin.sh` → `sanhedrin-local.py` — optional Sanhedrin verifier
-   - `synthesis-stop-validator.sh` — regex against forbidden patterns (hedging, summary-instead-of-composition)
+   - `veto-detector.sh`: fast regex against `veto`-tagged Vestige memories (~50ms)
+   - `sanhedrin.sh` → `sanhedrin-local.py`: optional Sanhedrin verifier
+   - `synthesis-stop-validator.sh`: regex against forbidden patterns (hedging, summary-instead-of-composition)
 5. **If all enabled Stop hooks return `exit 0`, the response is delivered.**
 
 ---
@@ -49,14 +66,14 @@ Sanhedrin, preflight, and all Vestige Claude Code hooks are optional. The defaul
 
 Sanhedrin has two execution modes:
 
-- **Legacy mode** (`VESTIGE_SANHEDRIN_CLAIM_MODE=0`) keeps the original broad draft-level semantic check for technical-looking responses.
+- **Legacy mode** (`VESTIGE_SANHEDRIN_CLAIM_MODE=0`) keeps the original broad draft-level check for technical-looking responses.
 - **Claim mode** (`VESTIGE_SANHEDRIN_CLAIM_MODE=1`) extracts check-worthy claims, retrieves Vestige evidence per claim, and aggregates structured verdicts before the Stop hook allows delivery.
 
 The claim-mode Executioner extracts atomic claims from Claude's draft across these classes:
 
 `TECHNICAL` · `BIOGRAPHICAL` · `FINANCIAL` · `ACHIEVEMENT` · `TIMELINE` · `QUANTITATIVE` · `ATTRIBUTION` · `CAUSAL` · `COMPARATIVE` · `EXISTENTIAL` · plus v2.1.0 additions: `VAGUE-QUANTIFIER` · `UNVERIFIED-POSITIVE`
 
-For each check-worthy claim, claim mode calls Vestige's `/api/deep_reference` and judges the claim against high-trust durable evidence plus any optional staged evidence overlay. Decision rules:
+For each check-worthy claim, claim mode calls Vestige's `/api/deep_reference` and judges the claim against high-trust durable evidence plus any optional staged evidence overlay. On 4.x that endpoint is unavailable, so no durable evidence arrives and the hook passes the draft. The rest of this section describes the v3 behavior. Decision rules:
 
 | Class | Rule |
 |---|---|
@@ -162,7 +179,7 @@ user. Backend-specific payload extensions are enabled only by
 |---|---|
 | Python 3.10+ | typically preinstalled |
 | `jq` | `brew install jq` |
-| `vestige-mcp` | `npm install -g vestige-mcp-server` |
+| `vestige-mcp` | [README, Install](../README.md#install) |
 | Claude Code | https://claude.ai/code |
 
 Optional Apple Silicon local Sanhedrin backend:
@@ -230,9 +247,7 @@ On M3 Max 14-core or M2/M1 Max: closer to 3–7s prompt processing, ~50–60 tok
 
 ## Architecture provenance
 
-The Cognitive Sandwich originated April 2026 as a defense against a dogfood failure mode: Claude retrieved relevant memories but summarized them instead of composing them into a recommendation. The pre-cognitive layer enforces composition; the post-cognitive layer catches contradictions before they ship.
-
-Full architecture memory: search Vestige for `god-tier-plan` or `cognitive-sandwich` tags after install.
+The Cognitive Sandwich originated April 2026 as a defense against a dogfood failure mode: Claude retrieved relevant records but summarized them instead of composing them into a recommendation. The pre-cognitive layer enforces composition; the post-cognitive layer catches contradictions before they ship.
 
 ---
 

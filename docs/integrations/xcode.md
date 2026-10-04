@@ -1,12 +1,10 @@
 # Xcode 26.3
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../../README.md) and the [4.0.0 changelog](../../CHANGELOG.md).
+> Written for Vestige 4.x.
 
-> Give Xcode's AI agent a brain that remembers.
+> Give Xcode's AI agent a record of what you decided, that carries across sessions.
 
-Xcode 26.3 supports [agentic coding](https://developer.apple.com/documentation/xcode/giving-agentic-coding-tools-access-to-xcode) with full MCP (Model Context Protocol) integration. Vestige plugs directly into Xcode's Claude Agent, giving it persistent memory across every coding session.
-
-**Vestige is the first cognitive memory server for Xcode.**
+Xcode 26.3 supports [agentic coding](https://developer.apple.com/documentation/xcode/giving-agentic-coding-tools-access-to-xcode) with full MCP (Model Context Protocol) integration. Vestige plugs into Xcode's Claude Agent, so it can reload your decisions and past fixes in every coding session.
 
 ---
 
@@ -14,7 +12,7 @@ Xcode 26.3 supports [agentic coding](https://developer.apple.com/documentation/x
 
 ### 1. Install Vestige
 
-Download the archive for your machine from the [GitHub Release](https://github.com/samvallad33/vestige/releases) and put `vestige-mcp` on your PATH. Do not install this version with npm.
+Install Vestige as described in the [README](../../README.md#install). Xcode's agent does not read your shell PATH, so note the absolute path that `which vestige-mcp` prints.
 
 ### 2. Add to your Xcode project
 
@@ -26,7 +24,7 @@ cat > /path/to/your/project/.mcp.json << 'EOF'
   "mcpServers": {
     "vestige": {
       "type": "stdio",
-      "command": "vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": [],
       "env": {
         "PATH": "/usr/local/bin:/usr/bin:/bin"
@@ -68,28 +66,28 @@ Xcode 26.3's Claude Agent has a feature gate (`claudeai-mcp`) that blocks custom
 
 | Without Vestige | With Vestige |
 |-----------------|--------------|
-| Every session starts from zero | Agent recalls your architecture, patterns, and preferences |
-| Re-explain SwiftUI conventions each time | Agent knows your conventions from day one |
-| Bug fixes are forgotten | Agent remembers past fixes and avoids regressions |
-| No context between Xcode and other IDEs | Shared memory across Xcode, Cursor, VS Code, and more |
-| AI hallucinations persist forever | Agent detects and self-corrects bad memories |
+| Every session starts from zero | Agent recalls your architecture, patterns, and preferences by tag |
+| Re-explain SwiftUI conventions each time | Agent reloads your conventions from the tag you saved them under |
+| Bug fixes are forgotten | Agent can recall past fixes and walk a failure back along recorded links |
+| No context between Xcode and other IDEs | One store shared across Xcode, Cursor, VS Code, and more |
+| A wrong record keeps resurfacing | Agent demotes it and saves a corrected successor |
 
 ### Example Workflows
 
 **Architecture decisions:**
-> "Remember: we chose Observation framework over Combine for state management because it's simpler and Apple-recommended for iOS 17+."
+> "Remember: we chose Observation framework over Combine for state management because it's simpler and Apple-recommended for iOS 17+. Tag it `swiftui-state`."
 
 **Bug documentation:**
-> The agent fixes a Core Data migration crash? Vestige automatically stores the fix. Next time it encounters a migration issue, it remembers the solution.
+> The agent fixes a Core Data migration crash and saves the fix with `smart_ingest`, tagged `core-data`. Next time you hit a migration issue, ask it to recall the `core-data` tag.
 
-**Proactive reminders:**
-> The agent surfaces your pending deadlines, hackathon dates, and concert tickets — right inside Xcode's Agent panel.
+**Reminders:**
+> An intention with a deadline or a trigger shows up when `session_start` runs, right inside Xcode's Agent panel.
 
-**Self-correcting memory:**
-> The agent traces a hallucinated detail back to a specific memory, identifies it as wrong, and deletes it autonomously.
+**Correcting a record:**
+> The agent finds the record behind a wrong detail by its id, demotes it, and saves a corrected successor with `memory` action `edit`. Nothing is deleted from the log.
 
-**Cross-IDE memory:**
-> Fix a backend bug in VS Code. Open the iOS app in Xcode. The agent already knows about the API change because Vestige shares memory across all your tools.
+**One store across IDEs:**
+> Fix a backend bug in VS Code. Open the iOS app in Xcode. The agent can recall the tag you saved the API change under, because every agent on the machine shares one store.
 
 ---
 
@@ -111,7 +109,7 @@ cat > .mcp.json << 'EOF'
   "mcpServers": {
     "vestige": {
       "type": "stdio",
-      "command": "/usr/local/bin/vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": [],
       "env": {
         "PATH": "/usr/local/bin:/usr/bin:/bin"
@@ -122,16 +120,16 @@ cat > .mcp.json << 'EOF'
 EOF
 ```
 
-### Per-project isolated memory
+### Per-project data directory
 
-To give each project its own memory database:
+To give each project its own store:
 
 ```json
 {
   "mcpServers": {
     "vestige": {
       "type": "stdio",
-      "command": "/usr/local/bin/vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": ["--data-dir", "/Users/you/Developer/MyApp/.vestige"],
       "env": {
         "PATH": "/usr/local/bin:/usr/bin:/bin"
@@ -145,34 +143,20 @@ To give each project its own memory database:
 
 ## Tips
 
-### Use a CLAUDE.md for proactive memory
+### Use a CLAUDE.md so the agent calls Vestige
 
-Place a `CLAUDE.md` in your project root to make the agent use Vestige automatically:
+Place a `CLAUDE.md` in your project root to make the agent use Vestige without being asked:
 
 ```markdown
-## Memory
+## Vestige
 
 At the start of every session:
-1. Search Vestige for this project's context
-2. Recall architecture decisions and coding patterns
-3. Save important decisions and bug fixes without being asked
+1. Call `session_start` with the project's `context.codebase` and `context.repoPath`
+2. Call `recall` with `handle` set to this project's topic tag
+3. Save important decisions and bug fixes with `smart_ingest`, tagged with the project and one topic
 ```
 
 See [CLAUDE.md templates](../CLAUDE-SETUP.md) for a full setup.
-
-### Embedding model cache
-
-Vestige does not download or switch embedding models when it starts. If a
-legacy Nomic cache has already been provisioned locally, its Xcode sandbox
-location is:
-
-```
-~/Library/Caches/vestige/fastembed
-```
-
-Optional Qwen profiles require explicit local-artifact verification, evaluation,
-migration, and activation; they never use the Xcode session to download a
-model.
 
 ---
 
@@ -188,7 +172,7 @@ model.
 
 2. Verify the binary path is correct and absolute:
    ```bash
-   ls -la /usr/local/bin/vestige-mcp
+   ls -la "$(which vestige-mcp)"
    ```
 
 3. Check that `.mcp.json` is valid JSON:
@@ -228,26 +212,11 @@ Xcode 26.3 has a feature gate (`claudeai-mcp`) that may block custom MCP servers
 
 </details>
 
-<details>
-<summary>Embedding model fails to download</summary>
-
-The first run downloads ~130MB. If Xcode's sandbox blocks the download:
-
-1. Run `vestige-mcp` once from your terminal to cache the model
-2. The cache at `~/Library/Caches/vestige/fastembed` will be available to the sandboxed instance
-
-Behind a proxy:
-```bash
-HTTPS_PROXY=your-proxy:port vestige-mcp
-```
-
-</details>
-
 ---
 
 ## Also Works With
 
-Vestige uses the MCP standard — the same memory works across all your tools:
+Vestige uses the MCP standard, so the same store works across all your tools:
 
 | IDE | Guide |
 |-----|-------|
@@ -260,7 +229,7 @@ Vestige uses the MCP standard — the same memory works across all your tools:
 | JetBrains | [Setup](./jetbrains.md) |
 | Windsurf | [Setup](./windsurf.md) |
 
-Your AI remembers everything, everywhere.
+Every agent on the machine shares one store through one writer. The first to start serves it, and the others attach.
 
 ---
 

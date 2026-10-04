@@ -33,14 +33,24 @@ personal operating notes, or mandatory background hooks.
 
 ## Project Shape
 
-Vestige is a local-first MCP memory server written in Rust, with a SvelteKit
-dashboard embedded into the release binary. The core product promise is:
+Vestige is the Causal Proof Engine and the operating system for AI agents. It
+is written in Rust, with a SvelteKit dashboard embedded into the release
+binary. Its kernel is Strata, an append-only, hash-chained, signed log stored
+on the user's machine. `vestige-mcp` serves that log to agents over MCP. The
+core product promise is:
 
-- user-owned memory stored locally by default
+- user-owned data, stored locally by default
 - MCP-native integration with coding agents
-- retrieval and memory lifecycle behavior informed by cognitive science
-- explicit tools for search, review, suppression, purge, graph exploration,
-  contradiction inspection, and maintenance
+- zero vectors, zero string matching and zero RAG in the engine (recall,
+  ranking, pairing and explanation): a record is found by an exact handle (an
+  id, a unique id prefix of 8 or more characters, or an exact tag) and linked
+  only by an edge the log recorded
+- every output carries its proof: a memory id, an edge path or a receipt
+- a call the Strata log cannot honor says so with a reason code
+  (`unavailable_in_4_0`, `similarity_disabled`, `pending_strata`) instead of
+  returning zeros
+- 16 tools, listed by `memory_status` with `view='tools'`: causal walks,
+  GhostLink, receipts, code anchors, intentions, suppression and maintenance
 
 ## Working Rules
 
@@ -50,10 +60,16 @@ dashboard embedded into the release binary. The core product promise is:
   version/tag cleanup unless the release gate requires it.
 - Preserve local-first behavior. Heavy models, Sanhedrin-style verifier hooks,
   and preflight automation must remain optional.
-- Treat deletion semantics carefully. `purge` must remove content and
-  embeddings, while retaining only content-free audit tombstones.
-- Treat exact lookup semantics carefully. Env vars, paths, UUIDs, quoted
-  strings, and code identifiers should not be distorted by semantic expansion.
+- Treat deletion semantics carefully. A Strata log is append-only, so nothing
+  is erased. `purge`, `memory` actions `purge` and `delete`, and
+  `delete_knowledge` return `unavailable_in_4_0`. `suppress` hides a record
+  from every read, keeps its bytes, and cannot be undone. Never describe
+  either as erasure.
+- Treat exact lookup semantics carefully. Do not add embedding, similarity,
+  fuzzy or keyword behavior to recall, ranking, pairing or explanation. A
+  handle resolves exactly: an id, a unique id prefix, or an exact,
+  case-sensitive tag. Env vars, paths, UUIDs and code identifiers must reach
+  the log unchanged.
 
 ## Common Checks
 
@@ -82,7 +98,7 @@ git diff --check
 
 - User setup: `README.md`
 - Claude-specific templates: `docs/CLAUDE-SETUP.md`
-- Storage and sync behavior: `docs/STORAGE.md`
+- Storage and backup behavior: `docs/STORAGE.md`
 - Cognitive Sandwich and optional verifier hooks: `docs/COGNITIVE_SANDWICH.md`
 - Release history: `CHANGELOG.md`
 

@@ -1,5 +1,7 @@
 # Vestige v3 integration
 
+> Historical. This page describes Vestige v3 and is kept for the record. For 4.x see the [README](../README.md).
+
 V3 is the open-source local memory upgrade for developers and coding agents.
 Operator and full automation pipelines are separate products. Local memory and
 embeddings require no provider API key; memory writes apply automatically by

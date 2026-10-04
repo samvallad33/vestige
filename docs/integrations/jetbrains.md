@@ -1,10 +1,10 @@
 # JetBrains (IntelliJ, WebStorm, PyCharm, etc.)
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../../README.md) and the [4.0.0 changelog](../../CHANGELOG.md).
+> Written for Vestige 4.x.
 
-> Give your JetBrains AI assistant a brain that remembers.
+> Give your JetBrains AI assistant a record of what you decided, that carries across sessions.
 
-JetBrains IDEs (2025.2+) have built-in MCP support. Vestige integrates through the MCP server settings, giving your AI assistant persistent memory across sessions.
+JetBrains IDEs (2025.2+) have built-in MCP support. Vestige integrates through the MCP server settings, so your AI assistant can reload decisions and past fixes in every session.
 
 ---
 
@@ -26,7 +26,7 @@ JetBrains can auto-configure MCP servers for connected clients:
 3. Click **"+"** to add a new MCP server
 4. Configure:
    - **Name:** `vestige`
-   - **Command:** `/usr/local/bin/vestige-mcp`
+   - **Command:** the absolute path that `which vestige-mcp` prints (the README install puts it in `~/.local/bin`)
    - **Arguments:** (leave empty)
 5. Click **Apply**
 
@@ -46,7 +46,7 @@ Edit `~/.junie/mcp/mcp.json`:
 {
   "mcpServers": {
     "vestige": {
-      "command": "/usr/local/bin/vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": [],
       "env": {}
     }
@@ -74,19 +74,25 @@ After configuration, the MCP server should appear in **Settings > Tools > MCP Se
 
 Test by asking your AI assistant:
 
-> "Remember that this project uses Spring Boot with Kotlin and follows hexagonal architecture"
+> "Remember that this project uses Spring Boot with Kotlin and follows hexagonal architecture. Tag it `stack`."
+
+Start a new session, then ask:
+
+> "Recall the `stack` tag from Vestige."
+
+It comes back, with its memory id. Vestige 4.x finds a record by an exact handle (its id or an exact tag), not by resemblance, so name the tag when you save and when you ask. See [Getting Started](../GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
 
 ---
 
-## Project-Specific Memory
+## Project-Specific Data Directory
 
-Isolate memory per project:
+Keep a separate store per project:
 
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "/usr/local/bin/vestige-mcp",
+      "command": "<absolute path from which vestige-mcp>",
       "args": ["--data-dir", "/Users/you/projects/my-app/.vestige"],
       "env": {}
     }
@@ -130,4 +136,4 @@ In **Settings > Tools > MCP Server**, click the expansion arrow next to your cli
 | Claude Code | [Setup](../CONFIGURATION.md#claude-code-one-liner) |
 | Claude Desktop | [Setup](../CONFIGURATION.md#claude-desktop-macos) |
 
-Your AI remembers everything, everywhere.
+Every agent on the machine shares one store through one writer. The first to start serves it, and the others attach.

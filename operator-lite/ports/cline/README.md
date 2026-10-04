@@ -51,7 +51,7 @@ expansion, fork bombs.
 |---|---|
 | OP-000 | edits to the gate itself, hook registrations, agent settings files |
 | OP-001 | delete/move of a workspace root (or a parent of one) |
-| OP-002 | wiping the Vestige memory store |
+| OP-002 | wiping the Vestige store |
 | OP-003 | blind recursive deletes, sweeps from `/` |
 | OP-004 | force-push to shared branches, remote-main deletion, `.git` removal |
 | OP-005 | unreviewed publishes (npm/cargo/twine/docker/gh release) |
