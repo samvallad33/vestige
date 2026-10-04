@@ -10,16 +10,34 @@ copy one file, wire one hook, and your agent has a deterministic gate.
 
 ## Install (one command)
 
+    npx operator-lite
+
+The same on macOS, Linux and Windows. It needs Node for `npx` and Python 3.9 or newer
+for the gate. Run it in your own terminal: the gate refuses an install started by an
+agent.
+
+It copies the gate to `~/.operator/gate`, registers the Claude Code hook, then wires
+each other agent it finds on the machine (Cursor, Gemini CLI, Windsurf, Cline, Goose,
+opencode, Amazon Q). On Windows it wires Claude Code and lists the others with their
+manual steps. It starts in shadow mode (records every verdict, blocks nothing) and then
+replays your last 30 days of Claude Code history through the rules. Nothing in that
+history is executed. Everything else passes through to the gate: `npx operator-lite
+status`, `npx operator-lite replay`, `npx operator-lite mode enforce`.
+
+The package carries the gate and the host ports and downloads nothing else. It is
+published from [`npm/`](npm/) in this directory.
+
+### Without Node
+
+The gate is one Python file and installs itself. This registers Claude Code only:
+
     curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
 
 On Windows, in PowerShell, with Python 3.9 or newer installed:
 
     curl.exe -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o "$env:TEMP\operator-gate.py"; python "$env:TEMP\operator-gate.py" install
 
-From a clone, `python3 operator-gate.py install` does the same. It copies the gate to
-`~/.operator/gate`, registers the Claude Code hook, starts in shadow mode (records
-every verdict, blocks nothing) and then replays your last 30 days of Claude Code
-history through the rules. Nothing in that history is executed.
+From a clone, `python3 operator-gate.py install` does the same.
 
 ## Other hosts, or by hand
 

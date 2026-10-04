@@ -32,21 +32,33 @@ PreToolUse hook (Claude Code, Codex, OpenClaw — any host with command hooks), 
 **blocks destructive, polluting and exfiltrating commands before they run.**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
+npx operator-lite
 ```
 
-On Windows, in PowerShell, with Python 3.9 or newer installed:
+One command, the same on macOS, Linux and Windows. It needs Node for `npx` and Python 3.9
+or newer for the gate. Run it in your own terminal: the gate refuses an install started by
+an agent.
+
+It copies the gate to `~/.operator/gate`, registers the Claude Code hook, and then wires
+each other agent it finds on the machine (Cursor, Gemini CLI, Windsurf, Cline, Goose,
+opencode, Amazon Q). On Windows it wires Claude Code and lists the others with their manual
+steps. It starts in shadow mode, which records every verdict and blocks nothing. Then it
+replays your last 30 days of Claude Code history through the same rules, so the first thing
+you see is what it would have said about your own agents. Nothing in that history is
+executed. After a day of use, `npx operator-lite status` shows what it caught on your
+machine. When that looks right, switch it on with `npx operator-lite mode enforce`.
+
+No Node? The gate is one Python file, and it installs itself:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
+```
 
 ```powershell
 curl.exe -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o "$env:TEMP\operator-gate.py"; python "$env:TEMP\operator-gate.py" install
 ```
 
-One command. It copies the gate to `~/.operator/gate`, registers the Claude Code hook and
-starts in shadow mode, which records every verdict and blocks nothing. Then it replays your
-last 30 days of Claude Code history through the same rules, so the first thing you see is
-what it would have said about your own agents. Nothing in that history is executed. After a
-day of use, `python3 ~/.operator/gate/operator-gate.py status` shows what it caught on your
-machine. When that looks right, switch it on with `mode enforce`.
+That path registers Claude Code only.
 
 - **27 deterministic rules** — workspace armor, memory-store protection, destructive
   SQL, force-push, unreviewed publishes, paid deploys, reverse shells, cloud-metadata
