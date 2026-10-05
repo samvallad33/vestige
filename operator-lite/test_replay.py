@@ -6,8 +6,19 @@ import importlib.util, json, os, shutil, subprocess, sys, tempfile
 W = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATE = os.path.join(W, "operator-lite", "operator-gate.py")
 fails = []
+
+
+def no_launcher(path):
+    """PATH without any directory that holds an operator-gate launcher. Whether a launcher is
+    on PATH is something each check sets up for itself; the developer's own install must not
+    decide it."""
+    return os.pathsep.join(d for d in path.split(os.pathsep)
+                           if d and not os.path.exists(os.path.join(d, "operator-gate")))
+
+
 REAL_ENV = dict(os.environ)
 REAL_ENV.pop("OPERATOR_AGENT_SESSION", None)
+REAL_ENV["PATH"] = no_launcher(REAL_ENV.get("PATH", ""))
 
 
 def check(name, cond, detail=""):
@@ -21,6 +32,7 @@ home = tempfile.mkdtemp(prefix="oplite-replay-home-")
 env = dict(os.environ, HOME=home)
 env.pop("OPERATOR_HOME", None)
 env.pop("OPERATOR_AGENT_SESSION", None)
+env["PATH"] = no_launcher(env.get("PATH", ""))
 
 # 1. classes, read through classify() exactly as replay does
 os.environ["HOME"] = home
