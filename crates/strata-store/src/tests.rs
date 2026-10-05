@@ -2834,3 +2834,162 @@ fn proving_effects_over_a_damaged_sealed_segment_fails_instead_of_hiding_later_o
     std::fs::remove_dir_all(&dir).ok();
     std::fs::remove_dir_all(&dest).ok();
 }
+
+/// Every file under `root`, as (path relative to `root`, bytes), sorted.
+fn tree_files(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).expect("read_dir") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let rel = path.strip_prefix(root).expect("under root");
+                out.push((
+                    rel.to_string_lossy().into_owned(),
+                    std::fs::read(&path).expect("read"),
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// Names in `dir` that a backup staged and did not clean up.
+fn staging_leftovers(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .expect("read_dir")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.contains(".partial"))
+        .collect()
+}
+
+#[test]
+fn backup_to_a_new_directory_holds_the_same_segments_and_verifies() {
+    let dir = temp_dir("backup-new-src");
+    let parent = temp_dir("backup-new-parent");
+    let dest = parent.join("copy");
+    let mut store = StrataStore::open(&dir).expect("open");
+    store.ingest(input("first fact", &[])).expect("first");
+    store.seal_checkpoint().expect("seal");
+    store.backup_to(&dest).expect("backup");
+
+    // Byte for byte the live log (minus its lock) plus the anchor file, and
+    // nothing else: no staging directory beside or inside the backup.
+    let mut want: Vec<(String, Vec<u8>)> = tree_files(&dir.join("log"))
+        .into_iter()
+        .filter(|(name, _)| name != "strata.lock")
+        .map(|(name, bytes)| (format!("log/{name}"), bytes))
+        .collect();
+    want.push((
+        "store.meta".to_string(),
+        std::fs::read(dir.join("store.meta")).expect("anchor"),
+    ));
+    want.sort();
+    let got: Vec<(String, Vec<u8>)> = tree_files(&dest)
+        .into_iter()
+        .map(|(name, bytes)| (name.replace('\\', "/"), bytes))
+        .collect();
+    assert_eq!(got, want);
+    assert_eq!(segment_files(&dest).len(), segment_files(&dir).len());
+    assert!(staging_leftovers(&parent).is_empty());
+
+    let backup = StrataStore::open(&dest).expect("the backup opens");
+    assert_eq!(backup.node_count(), 1);
+    backup.verify_checkpoint_chain().expect("chain verifies");
+    backup.log().verify_log().expect("log verifies");
+    drop(backup);
+    // The live store keeps writing after the backup.
+    store.ingest(input("second fact", &[])).expect("second");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&parent).ok();
+}
+
+#[test]
+fn a_backup_whose_copy_fails_midway_leaves_nothing_under_the_final_name() {
+    use crate::store::BACKUP_COPIES_BEFORE_FAILURE;
+
+    let dir = temp_dir("backup-fail-src");
+    let parent = temp_dir("backup-fail-parent");
+    let mut store = StrataStore::open(&dir).expect("open");
+    store.ingest(input("first fact", &[])).expect("first");
+    store.seal_checkpoint().expect("seal");
+
+    // A destination that does not exist yet: it must still not exist.
+    let dest = parent.join("copy");
+    BACKUP_COPIES_BEFORE_FAILURE.set(Some(2));
+    let err = store.backup_to(&dest);
+    BACKUP_COPIES_BEFORE_FAILURE.set(None);
+    let err = err.expect_err("the third file copy fails");
+    assert!(matches!(err, StoreError::Io(_)), "got {err}");
+    assert!(!dest.exists(), "a failed backup left {}", dest.display());
+    assert!(staging_leftovers(&parent).is_empty());
+
+    // An empty directory that already exists: it must still be empty.
+    let empty = parent.join("empty");
+    std::fs::create_dir(&empty).expect("mkdir");
+    BACKUP_COPIES_BEFORE_FAILURE.set(Some(2));
+    let err = store.backup_to(&empty);
+    BACKUP_COPIES_BEFORE_FAILURE.set(None);
+    err.expect_err("the third file copy fails");
+    assert_eq!(std::fs::read_dir(&empty).expect("read_dir").count(), 0);
+
+    // The live store is unharmed and the next backup succeeds.
+    store.ingest(input("second fact", &[])).expect("second");
+    store.backup_to(&dest).expect("backup once copies work");
+    let backup = StrataStore::open(&dest).expect("the backup opens");
+    assert_eq!(backup.node_count(), 2);
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&parent).ok();
+}
+
+#[test]
+fn a_second_backup_into_the_same_directory_replaces_the_first() {
+    use crate::store::BACKUP_COPIES_BEFORE_FAILURE;
+
+    let dir = temp_dir("backup-again-src");
+    let dest = temp_dir("backup-again-dest");
+    let mut store = StrataStore::open(&dir).expect("open");
+    store.ingest(input("first fact", &[])).expect("first");
+    store.seal_checkpoint().expect("seal");
+    store.backup_to(&dest).expect("first backup");
+    // A file the caller keeps beside log/ stays where it is.
+    std::fs::write(dest.join("receipt-signing.key"), b"kept").expect("write");
+    let first = tree_files(&dest);
+
+    // A second backup that fails while copying leaves the first as it was.
+    store.ingest(input("second fact", &[])).expect("second");
+    store.seal_checkpoint().expect("seal");
+    BACKUP_COPIES_BEFORE_FAILURE.set(Some(1));
+    let err = store.backup_to(&dest);
+    BACKUP_COPIES_BEFORE_FAILURE.set(None);
+    err.expect_err("the second file copy fails");
+    assert_eq!(tree_files(&dest), first);
+
+    store.backup_to(&dest).expect("second backup");
+    assert!(staging_leftovers(&dest).is_empty());
+    assert_eq!(
+        std::fs::read(dest.join("receipt-signing.key")).expect("read"),
+        b"kept"
+    );
+    for (name, bytes) in tree_files(&dir.join("log")) {
+        if name != "strata.lock" {
+            let copied = std::fs::read(dest.join("log").join(&name)).expect("copied");
+            assert_eq!(copied, bytes, "{name}");
+        }
+    }
+    let backup = StrataStore::open(&dest).expect("the backup opens");
+    assert_eq!(backup.node_count(), 2);
+    backup.verify_checkpoint_chain().expect("chain verifies");
+    backup.log().verify_log().expect("log verifies");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&dest).ok();
+}

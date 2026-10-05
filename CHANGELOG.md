@@ -120,6 +120,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writing. When the segment was sealed but the next one could not be created,
   every later write failed until the server was restarted. The seal is now
   undone, the backup returns the error, and writes go on once there is room.
+- A backup is copied under a temporary name, synced to disk and only then
+  moved to its destination. Before, files were copied straight into the
+  destination without a sync, so a copy that failed halfway left a directory
+  that looked like a backup, and a power loss just after "Backup complete"
+  could leave short or empty segments.
 
 ### Changed
 

@@ -65,9 +65,39 @@ fn set_private_dir(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Durability barrier for a directory's entries. Unix: fsync the directory.
+/// Windows cannot open a directory for this and has no per-directory barrier
+/// to call, so there it is a no-op.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
+// Failpoint hook (test-only): the number of backup file copies that still
+// succeed on this thread; once it reaches 0 every copy fails. `None` = off.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BACKUP_COPIES_BEFORE_FAILURE: std::cell::Cell<Option<u32>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// Copy a file, creating the destination owner-only (0600) on unix so the
-/// copy is never readable by others, even briefly.
+/// copy is never readable by others, even briefly. The copy is synced before
+/// this returns.
 fn copy_private_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    match BACKUP_COPIES_BEFORE_FAILURE.get() {
+        Some(0) => return Err(std::io::Error::other("failpoint: injected copy failure")),
+        Some(left) => BACKUP_COPIES_BEFORE_FAILURE.set(Some(left - 1)),
+        None => {}
+    }
     let mut source = std::fs::File::open(from)?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -83,8 +113,50 @@ fn copy_private_file(from: &Path, to: &Path) -> std::io::Result<()> {
         target.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
     std::io::copy(&mut source, &mut target)?;
+    target.sync_all()
+}
+
+/// Move a staged, synced backup to `dest` and make the move durable.
+fn publish_backup(staging: &Path, dest: &Path, dest_is_new: bool) -> std::io::Result<()> {
+    if dest_is_new {
+        std::fs::rename(staging, dest)?;
+        return match dest.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => sync_dir(parent),
+            _ => sync_dir(Path::new(".")),
+        };
+    }
+    // `dest` already exists. With no `log/` of its own it takes the staged
+    // one whole, in one rename. Otherwise the files are moved in one by one,
+    // replacing any of the same name, in name order so the segments land
+    // before `head.state`; the anchor file lands last either way.
+    set_private_dir(dest)?;
+    let staging_log = staging.join(LOG_DIR);
+    let dest_log = dest.join(LOG_DIR);
+    if std::fs::symlink_metadata(&dest_log).is_err() {
+        std::fs::rename(&staging_log, &dest_log)?;
+    } else {
+        set_private_dir(&dest_log)?;
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(&staging_log)? {
+            names.push(entry?.file_name());
+        }
+        names.sort();
+        for name in &names {
+            std::fs::rename(staging_log.join(name), dest_log.join(name))?;
+        }
+    }
+    sync_dir(&dest_log)?;
+    let staged_meta = staging.join(META_NAME);
+    if staged_meta.exists() {
+        std::fs::rename(&staged_meta, dest.join(META_NAME))?;
+    }
+    sync_dir(dest)?;
+    // Everything is in place and durable; the emptied staging directory is
+    // only litter, so failing to remove it does not fail the backup.
+    let _ = std::fs::remove_dir_all(staging);
     Ok(())
 }
+
 /// Anchor file: hash of the head checkpoint (tamper-evidence for the
 /// successor-less head, per the strata-kernel verify contract).
 const META_NAME: &str = "store.meta";
@@ -2174,14 +2246,57 @@ impl StrataStore {
     /// A log that fails verification is not backed up: the call fails before
     /// anything is sealed or copied.
     ///
+    /// The copy is made and synced under a staging name and only then moved
+    /// to `dest`, so a copy that fails, or a power loss during it, never
+    /// leaves a short backup under the final name. The staging directory is
+    /// removed on failure.
+    ///
     /// `strata.lock` is deliberately NOT copied (it names this process).
     pub fn backup_to(&self, dest: impl AsRef<Path>) -> Result<(), StoreError> {
         let dest = dest.as_ref();
         self.log.verify_log()?;
         self.log.seal()?;
-        let dest_log = dest.join(LOG_DIR);
-        create_private_dir_all(&dest_log)?;
-        set_private_dir(dest)?;
+        // A new `dest` is staged beside it and renamed into place whole. An
+        // existing directory is staged inside it (the same filesystem even
+        // when `dest` is a mount point) and the files are moved in.
+        let dest_is_new = match std::fs::metadata(dest) {
+            Ok(_) => false,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+            Err(err) => return Err(err.into()),
+        };
+        let staging = if dest_is_new {
+            let name = dest.file_name().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("backup destination {} has no name", dest.display()),
+                )
+            })?;
+            let mut staged = std::ffi::OsString::from(".");
+            staged.push(name);
+            staged.push(format!(".partial-{}", std::process::id()));
+            dest.with_file_name(staged)
+        } else {
+            dest.join(format!(".partial-{}", std::process::id()))
+        };
+        let published = self
+            .stage_backup(&staging)
+            .and_then(|()| publish_backup(&staging, dest, dest_is_new));
+        if published.is_err() {
+            let _ = std::fs::remove_dir_all(&staging);
+        }
+        Ok(published?)
+    }
+
+    /// Copy the log (minus its lock) and the anchor file into `staging`,
+    /// syncing every file and both directories.
+    fn stage_backup(&self, staging: &Path) -> std::io::Result<()> {
+        // A leftover from an interrupted backup by a process with this pid.
+        if std::fs::symlink_metadata(staging).is_ok() {
+            std::fs::remove_dir_all(staging)?;
+        }
+        let staging_log = staging.join(LOG_DIR);
+        create_private_dir_all(&staging_log)?;
+        set_private_dir(staging)?;
         for entry in std::fs::read_dir(&self.log_dir)? {
             let path = entry?.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -2190,12 +2305,13 @@ impl StrataStore {
             if name == "strata.lock" {
                 continue;
             }
-            copy_private_file(&path, &dest_log.join(name))?;
+            copy_private_file(&path, &staging_log.join(name))?;
         }
         if self.meta_path().exists() {
-            copy_private_file(&self.meta_path(), &dest.join(META_NAME))?;
+            copy_private_file(&self.meta_path(), &staging.join(META_NAME))?;
         }
-        Ok(())
+        sync_dir(&staging_log)?;
+        sync_dir(staging)
     }
 
     // ------------------------------------------------------------------
