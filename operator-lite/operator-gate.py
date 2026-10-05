@@ -38,7 +38,7 @@ try:
 except ImportError:                                  # Windows: receipts lock through msvcrt instead
     fcntl = None
 
-VERSION = "0.3.8"
+VERSION = "0.3.9"
 INTEGRITY = "reference_digest_not_signature"
 IS_WINDOWS = os.name == "nt"
 
@@ -4099,18 +4099,24 @@ def last_replay():
 
 
 def upgrade_hint():
-    """One line for the person at the terminal. Never printed to an agent, a pipe or a script,
-    and never part of a verdict: stop messages go to the model, and a pitch does not belong there."""
+    """A short ruled block for the person at the terminal, so the offer is not one line lost in
+    the scroll. Never printed to an agent, a pipe or a script, and never part of a verdict: stop
+    messages go to the model, and a pitch does not belong there."""
     if not at_terminal():
         return
     last = last_replay()
     undecided, laws = int(last.get("own_calls") or 0), len(last.get("laws") or [])
+    rule = "-" * 72
+    print("\n" + rule)
     if undecided and laws:
-        print("\nYour last replay drafted %s from %s no built-in rule decides. "
-              "Operator enforces them: %s upgrade" % (plural(laws, "law"), plural(undecided, "action"), self_cmd()))
+        print("Your last replay drafted %s from %s no built-in rule decides."
+              % (plural(laws, "law"), plural(undecided, "action")))
+        print("Operator enforces them: %s." % OPERATOR_PRICE)
     else:
-        print("\nSee what your agents already ran: %s replay\n"
-              "Your own laws, a Board and a Letter: %s upgrade" % (self_cmd(), self_cmd()))
+        print("See what your agents already ran:  %s replay" % self_cmd())
+        print("Operator adds your own laws, a Board and a Letter: %s." % OPERATOR_PRICE)
+    print("See the offer and buy:  %s upgrade" % self_cmd())
+    print(rule)
 
 
 def upgrade_install(argv):
@@ -4173,19 +4179,32 @@ def cmd_upgrade(argv):
   The Letter      One weekly digest of what your agents tried and what stopped them.
   Onboarding      A five-minute wizard that writes your first laws and proves one stop.
 
-Operator Lite stays free. Operator blocks what is routed through it, and its receipts are
-hash-chained digests, not signatures.
+Operator Lite stays free. Operator stops everything Operator Lite stops and adds the four
+things above. It blocks what is routed through it, and its receipts are hash-chained
+digests, not signatures.
 
 Buy:  %s
 Pay once. Every later version is yours at no charge. Download the archive, and one command
 installs it and starts the wizard:
   %s upgrade --install <the archive you downloaded>""" % (OPERATOR_PRICE, OPERATOR_URL, self_cmd()))
-    if "--open" in argv and sys.stdout.isatty() and not os.environ.get("OPERATOR_AGENT_SESSION"):
+    # The last step is one key. Only for a person at a terminal: an agent, a pipe or a script
+    # gets the text above and nothing else.
+    if not at_terminal():
+        return 0
+    if "--open" not in argv:
+        if not sys.stdin.isatty():
+            return 0
         try:
-            import webbrowser
-            webbrowser.open(OPERATOR_URL)
-        except Exception:
-            pass
+            input("\nPress Enter to open the page in your browser, or Ctrl-C to stay here. ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+    try:
+        import webbrowser
+        if webbrowser.open(OPERATOR_URL):
+            print("Opened %s" % OPERATOR_URL)
+    except Exception:
+        pass
     return 0
 
 

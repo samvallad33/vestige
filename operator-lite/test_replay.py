@@ -292,11 +292,13 @@ shutil.rmtree(home3, ignore_errors=True)
 
 # 4. the hint a person sees, run under a pseudo-terminal
 import pty
-def tty_run(args, color=False):
+def tty_run(args, color=False, feed=None, extra=None):
+    """Run the gate under a pseudo-terminal. `feed` is typed into it; `extra` adds environment."""
     chunks = []
     pid, fd = pty.fork()
     if pid == 0:
         os.environ.update(env)
+        os.environ.update(extra or {})
         os.environ.pop("OPERATOR_HOME", None)
         os.environ.pop("OPERATOR_AGENT_SESSION", None)
         os.environ.pop("NO_COLOR", None)
@@ -304,6 +306,8 @@ def tty_run(args, color=False):
             os.environ["NO_COLOR"] = "1"
         os.chdir(home)
         os.execv(sys.executable, [sys.executable, GATE] + args)
+    if feed:
+        os.write(fd, feed)
     while True:
         try:
             data = os.read(fd, 65536)
@@ -316,10 +320,21 @@ def tty_run(args, color=False):
     return b"".join(chunks).decode(errors="replace")
 t = tty_run(["status"])
 check("at a terminal, status ends with the remembered count", "Your last replay drafted 3 laws from 5 actions no built-in rule decides." in t, t[-300:])
+check("at a terminal, the pointer is a ruled block with the price and the command",
+      "-" * 72 in t and "Operator enforces them: $149 once, yours to keep." in t and "See the offer and buy:" in t, t[-400:])
 t = tty_run(["replay"])
 check("at a terminal, replay ends with the pointer and the price", "Operator enforces those laws" in t and "$149 once, yours to keep." in t
       and "https://payhip.com/b/d4xvu" in t, t[-400:])
 check("installed gate: replay does not tell the owner to install again", " install" not in t.split("Operator enforces")[-1], t[-300:])
+# the last step to buying is one key: Enter opens the page (BROWSER points at echo, so no real browser opens)
+t = tty_run(["upgrade"], feed=b"\n", extra={"BROWSER": "/bin/echo OPENED %s"})
+check("at a terminal, upgrade waits for Enter and then opens the page",
+      "Press Enter to open the page in your browser" in t and "OPENED https://payhip.com/b/d4xvu" in t
+      and "Operator stops everything Operator Lite stops" in t, t[-500:])
+p = run(["upgrade"])
+check("piped, upgrade prints the offer and the link, asks nothing and opens nothing",
+      p.returncode == 0 and "https://payhip.com/b/d4xvu" in p.stdout and "Press Enter" not in p.stdout
+      and "Opened" not in p.stdout, p.stdout[-300:])
 t = tty_run(["mode", "enforce"])
 check("at a terminal the owner can switch to enforce", "The gate now blocks what its rules stop." in t
       and open(os.path.join(home, ".operator", "mode")).read().strip() == "enforce", t[-200:])

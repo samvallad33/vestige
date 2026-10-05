@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Operator Lite 0.3.9: the last step to the paid Operator is one key. At a terminal,
+  `operator-gate upgrade` prints the offer and waits; Enter opens the product page.
+  The pointer after `status` and `replay` is a ruled block that carries the price.
+  A pipe, a script or an agent session gets no prompt and no pitch, as before.
 - Operator Lite 0.3.8: a file an agent runs is judged by what is inside it. The gate
   opens the file behind `python3 x.py`, `./x.sh`, `bash < x.sh`, an `npm`, `yarn`,
   `pnpm` or `bun` script, a `make` target, a `composer` script, `python -m`, `go run`,
@@ -38,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Operator Lite 0.3.9: `test_replay.py` no longer inherits an `operator-gate` launcher
+  from the developer's own install through `PATH`.
 - Operator Lite 0.3.8: arithmetic such as `$(( size / 1048576 ))` beside a delete
   was read as a delete of `/` (reported by rulereceipt on anthropics/claude-code#2544).
 - Operator Lite 0.3.8: a data file passed to `python3 -` was read as the program,
