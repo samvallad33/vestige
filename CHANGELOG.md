@@ -122,6 +122,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fields, in both JSON and JSONL, and restore ingests it into that scope. A
   file from an earlier version has no `scope` and restores into `user` as
   before. A memory whose scope is not a valid name fails on its own line.
+- A backup that runs out of disk space no longer stops the live store from
+  writing. When the segment was sealed but the next one could not be created,
+  every later write failed until the server was restarted. The seal is now
+  undone, the backup returns the error, and writes go on once there is room.
+- A backup is copied under a temporary name, synced to disk and only then
+  moved to its destination. Before, files were copied straight into the
+  destination without a sync, so a copy that failed halfway left a directory
+  that looked like a backup, and a power loss just after "Backup complete"
+  could leave short or empty segments.
 
 ### Changed
 
