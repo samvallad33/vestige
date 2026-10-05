@@ -187,10 +187,10 @@ fn spawn(dir: &Path, home: &Path) -> Server {
     Server::spawn(dir, home)
 }
 
-/// Seed one memory. Each seed carries its own tag: a shared tag would
-/// auto-connect every pair at save time, and these tests assert a cold log
-/// until they write their own edges (auto-connect's own coverage lives in
-/// cli_strata.rs).
+/// Seed one memory. Each seed carries its own tag: an exact shared tag would
+/// auto-connect the pairs at save time, and these tests assert a cold log
+/// until they write their own edges. Words the seeds share never join them
+/// (see `smart_ingest_auto_connects_on_exact_identities_only`).
 fn save(server: &mut Server, content: &str, node_type: &str) -> String {
     static SEED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let tag = format!(
@@ -205,6 +205,64 @@ fn save(server: &mut Server, content: &str, node_type: &str) -> String {
         .as_str()
         .unwrap_or_else(|| panic!("smart_ingest returned no nodeId: {saved}"))
         .to_string()
+}
+
+/// smart_ingest's ingest-time auto-connect joins on exact identities only
+/// and explains each edge: memories sharing most of their words are not
+/// joined, an exact shared tag is, and the response names the pair and the
+/// identity that joined it.
+#[test]
+fn smart_ingest_auto_connects_on_exact_identities_only() {
+    let dir = data_dir();
+    let home = data_dir();
+    let mut server = spawn(dir.path(), home.path());
+
+    let ingest = |server: &mut Server, content: &str, tags: Value| {
+        server.call_tool_ok(
+            "smart_ingest",
+            json!({ "content": content, "node_type": "fact", "tags": tags }),
+        )
+    };
+
+    let first = ingest(
+        &mut server,
+        "streaming usage parser drops cached_tokens for the gateway",
+        json!(["exact-a"]),
+    );
+    assert!(first.get("autoConnect").is_none(), "{first}");
+
+    // Nearly the same words, a different tag: no identity is shared.
+    let words = ingest(
+        &mut server,
+        "streaming usage parser drops cached_tokens for the gateway again",
+        json!(["exact-b"]),
+    );
+    assert!(words.get("autoConnect").is_none(), "{words}");
+    assert!(words.get("autoConnectError").is_none(), "{words}");
+
+    // No word in common with the first memory, the same exact tag.
+    let tagged = ingest(
+        &mut server,
+        "unrelated wording entirely",
+        json!(["exact-a"]),
+    );
+    let report = &tagged["autoConnect"];
+    assert_eq!(report["edges"], json!(1), "{tagged}");
+    assert_eq!(
+        report["sharedIdentities"],
+        json!(["tag:exact-a"]),
+        "{tagged}"
+    );
+    assert_eq!(
+        report["pairs"],
+        json!([{
+            "source": first["nodeId"],
+            "target": tagged["nodeId"],
+            "joinedOn": ["tag:exact-a"],
+        }]),
+        "{tagged}"
+    );
+    server.shutdown();
 }
 
 fn pairs(proposal: &Value) -> Vec<(String, String)> {

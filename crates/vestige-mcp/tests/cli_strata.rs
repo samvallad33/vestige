@@ -840,12 +840,14 @@ fn scan_secrets_reaches_retired_memories_scopes_and_intentions() {
     );
 }
 
-/// Ingest auto-connects: the first memory lands alone, and the second —
-/// sharing the `euler` tag/entity with it — is joined by one `touched` edge
-/// written by the ingest itself, earlier -> later, so a backward causal-walk
-/// from the second reaches the first with no `vestige connect` in between.
+/// Ingest auto-connects on an exact identity: the first memory lands alone,
+/// and the second — carrying the same exact `euler` tag — is joined by one
+/// `touched` edge written by the ingest itself, earlier -> later, and the
+/// ingest names the identity that joined the pair. A backward causal-walk
+/// from the second then reaches the first with no `vestige connect` in
+/// between (as a hypothesis: the edge records a shared tag, not a cause).
 #[test]
-fn ingest_auto_connects_shared_entities_then_causal_walk_finds_the_cause() {
+fn ingest_auto_connects_an_exact_tag_then_causal_walk_reaches_the_earlier_memory() {
     let dir = TempDir::new().expect("temp dir");
 
     let ingest = |content: &str, source: &str, tags: &str| {
@@ -866,7 +868,7 @@ fn ingest_auto_connects_shared_entities_then_causal_walk_finds_the_cause() {
         "git-log",
         "euler,path.py",
     );
-    // Nothing shares an entity with the first memory yet.
+    // Nothing shares an identity with the first memory yet.
     assert_eq!(edge_count(dir.path()), 0, "the first ingest has no peer");
 
     let effect_run = vestige(
@@ -884,7 +886,7 @@ fn ingest_auto_connects_shared_entities_then_causal_walk_finds_the_cause() {
     assert!(
         effect_run
             .stdout
-            .contains("Auto-connected: 1 edge(s) created via shared entities: euler"),
+            .contains("Auto-connected: 1 edge(s) created on exact identities: tag:euler\n"),
         "{}",
         effect_run.text()
     );
@@ -896,6 +898,16 @@ fn ingest_auto_connects_shared_entities_then_causal_walk_finds_the_cause() {
         .trim()
         .to_string();
     assert_eq!(edge_count(dir.path()), 1, "{}", effect_run.text());
+    // The edge is explained: the pair, and the exact identity behind it.
+    // `euler` and `paths` also appear as words in both texts; no word is
+    // listed, because no word joined them.
+    assert!(
+        effect_run.stdout.contains(&format!(
+            "  {cause} -[touched]-> {effect}  joined on: tag:euler\n"
+        )),
+        "{}",
+        effect_run.text()
+    );
 
     // The walk follows the auto-written touched edge back to the PR without
     // `vestige connect` ever running.
@@ -904,6 +916,11 @@ fn ingest_auto_connects_shared_entities_then_causal_walk_finds_the_cause() {
     assert!(walk.stdout.contains(&cause), "{}", walk.text());
     assert!(walk.stdout.contains("touched"), "{}", walk.text());
     assert!(walk.stdout.contains("PR 4337"), "{}", walk.text());
+    assert!(
+        walk.stdout.contains("hypotheses, not proven causes"),
+        "{}",
+        walk.text()
+    );
 
     // The connect command stays the full-scan catch-up, and it sees nothing
     // left to do: the pair is already joined by the auto-written edge.
@@ -934,6 +951,8 @@ fn ingest_auto_connect_is_quiet_without_peers_and_idempotent() {
         (run, id)
     };
 
+    // `timeout` is a tag of the first memory and only a word in the second:
+    // the pair joins on the exact `redis` tag alone.
     let (first_run, _first) = ingest("Changed redis timeout to 5s in config", "redis,timeout");
     assert!(
         !first_run.stdout.contains("Auto-connected"),
@@ -946,7 +965,7 @@ fn ingest_auto_connect_is_quiet_without_peers_and_idempotent() {
     assert!(
         second_run
             .stdout
-            .contains("Auto-connected: 1 edge(s) created via shared entities: redis, timeout"),
+            .contains("Auto-connected: 1 edge(s) created on exact identities: tag:redis\n"),
         "{}",
         second_run.text()
     );
@@ -963,36 +982,51 @@ fn ingest_auto_connect_is_quiet_without_peers_and_idempotent() {
     assert_eq!(edge_count(dir.path()), 3);
 }
 
-/// --min-shared gates pairs on entity overlap: two memories sharing two
-/// entities connect, two sharing none never do.
+/// --min-shared gates pairs on how many distinct exact identities they share:
+/// a pair sharing an exact tag and an exact path qualifies at 2 and not at 3,
+/// and a memory sharing neither is never joined.
 #[test]
 fn connect_min_shared_gates_the_pairs() {
     let dir = TempDir::new().expect("temp dir");
     let storage = open(dir.path());
     let near = put(
         &storage,
-        "euler refactor touched connection_pool in db.py",
+        "refactor touched connection_pool in src/db.py",
         &["euler"],
     );
-    let far = put(&storage, "euler bends deform under load", &[]);
+    let far = put(
+        &storage,
+        "bends deform under load, traceback ends at src/db.py:88",
+        &["euler"],
+    );
     let lone = put(&storage, "release notes for the dashboard", &[]);
     drop(storage);
 
-    let strict = vestige(dir.path(), &["connect", "--min-shared", "2", "--dry-run"]);
+    let strict = vestige(dir.path(), &["connect", "--min-shared", "3", "--dry-run"]);
     assert!(strict.ok, "{}", strict.text());
-    // near/far share exactly one entity (euler); with --min-shared 2 no
-    // pair qualifies.
+    // near/far share exactly two identities (the tag and the path).
     assert!(
         strict.stdout.contains("Candidate pairs: 0"),
         "{}",
         strict.text()
     );
+    assert_eq!(edge_count(dir.path()), 0, "a dry run writes nothing");
 
-    let loose = vestige(dir.path(), &["connect", "--min-shared", "1"]);
+    let loose = vestige(dir.path(), &["connect", "--min-shared", "2"]);
     assert!(loose.ok, "{}", loose.text());
-    assert_eq!(edge_count(dir.path()), 1, "only near/euler pairs connect");
+    assert_eq!(edge_count(dir.path()), 1, "only the near/far pair connects");
+    assert!(
+        loose.stdout.contains(&format!(
+            "{near} -[touched]-> {far}  joined on: tag:euler, path:src/db.py"
+        )),
+        "{}",
+        loose.text()
+    );
 
-    let walk = vestige(dir.path(), &["causal-walk", "--logged-write", &far, "--json"]);
+    let walk = vestige(
+        dir.path(),
+        &["causal-walk", "--logged-write", &far, "--json"],
+    );
     assert!(walk.ok, "{}", walk.text());
     let value: Value = serde_json::from_str(&walk.stdout).unwrap();
     let causes: Vec<&str> = value["causes"]
@@ -1003,4 +1037,171 @@ fn connect_min_shared_gates_the_pairs() {
         .collect();
     assert_eq!(causes, vec![near.as_str()], "{value}");
     assert!(!causes.contains(&lone.as_str()), "{value}");
+}
+
+/// Shared words are not an identity: two memories with most of their words
+/// in common, and a word that is the other memory's tag, are joined neither
+/// by the ingest-time pass nor by the full scan.
+#[test]
+fn shared_words_never_connect() {
+    let dir = TempDir::new().expect("temp dir");
+
+    let first = vestige(
+        dir.path(),
+        &[
+            "ingest",
+            "euler refactor touched connection_pool, redis timeout raised",
+            "--tags",
+            "refactor",
+        ],
+    );
+    assert!(first.ok, "{}", first.text());
+    let second = vestige(
+        dir.path(),
+        &[
+            "ingest",
+            "Euler bends deform after the refactor, connection_pool exhausted, redis timeout",
+            "--tags",
+            "bug",
+        ],
+    );
+    assert!(second.ok, "{}", second.text());
+    assert!(
+        !second.stdout.contains("Auto-connected"),
+        "{}",
+        second.text()
+    );
+    assert_eq!(edge_count(dir.path()), 0, "{}", second.text());
+
+    let scan = vestige(dir.path(), &["connect"]);
+    assert!(scan.ok, "{}", scan.text());
+    assert!(
+        scan.stdout.contains("Candidate pairs: 0"),
+        "{}",
+        scan.text()
+    );
+    assert!(scan.stdout.contains("No new edges"), "{}", scan.text());
+    assert_eq!(edge_count(dir.path()), 0);
+}
+
+/// An exact file path joins two memories that share no tag: the full scan
+/// finds a path that appears only in the two texts and names it. A memory
+/// touching a different file with the same basename is not joined, and
+/// neither is the unrelated commit.
+#[test]
+fn connect_joins_an_exact_file_path_and_names_it() {
+    let dir = TempDir::new().expect("temp dir");
+    let storage = open(dir.path());
+    let commit = put(
+        &storage,
+        "Commit 6c231e84: validate dot components. Touched: worktree/checkout.go",
+        &[],
+    );
+    let same_basename = put(
+        &storage,
+        "Commit 3795ab71: add protect config. Touched: config/checkout.go",
+        &[],
+    );
+    let unrelated = put(
+        &storage,
+        "Commit 1f38e171: bound inflate size. Touched: plumbing/format/packfile/parser.go",
+        &[],
+    );
+    let failure = put(
+        &storage,
+        "checkout rejects prn.sh: panic at worktree/checkout.go:412",
+        &["failure"],
+    );
+    drop(storage);
+
+    let run = vestige(dir.path(), &["connect"]);
+    assert!(run.ok, "{}", run.text());
+    assert!(run.stdout.contains("Candidate pairs: 1"), "{}", run.text());
+    assert!(
+        run.stdout.contains(&format!(
+            "{commit} -[touched]-> {failure}  joined on: path:worktree/checkout.go"
+        )),
+        "{}",
+        run.text()
+    );
+    assert_eq!(edge_count(dir.path()), 1);
+
+    let walk = vestige(
+        dir.path(),
+        &["causal-walk", "--logged-write", &failure, "--json"],
+    );
+    assert!(walk.ok, "{}", walk.text());
+    let value: Value = serde_json::from_str(&walk.stdout).unwrap();
+    let causes: Vec<&str> = value["causes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["id"].as_str())
+        .collect();
+    assert_eq!(causes, vec![commit.as_str()], "{value}");
+    assert!(!causes.contains(&same_basename.as_str()), "{value}");
+    assert!(!causes.contains(&unrelated.as_str()), "{value}");
+}
+
+/// The too-common-tag guard: a tag carried by more than MAX_TAG_CARRIERS
+/// memories of the scope (a campaign tag) joins nothing, in the full scan
+/// and at ingest, and is named as skipped. A selective tag on two of the
+/// same memories still joins them.
+#[test]
+fn a_tag_carried_by_too_many_memories_joins_nothing() {
+    let limit = vestige_mcp::auto_connect::MAX_TAG_CARRIERS;
+    let dir = TempDir::new().expect("temp dir");
+    let storage = open(dir.path());
+    let mut ids = Vec::new();
+    for i in 0..=limit {
+        let tags: &[&str] = if i < 2 {
+            &["campaign", "art-index"]
+        } else {
+            &["campaign"]
+        };
+        ids.push(put(&storage, &format!("batch memory {i}"), tags));
+    }
+    drop(storage);
+
+    let run = vestige(dir.path(), &["connect", "--max-edges", "1000"]);
+    assert!(run.ok, "{}", run.text());
+    assert!(
+        run.stdout.contains(&format!(
+            "Tags skipped (carried by more than {limit} memories): campaign ({})",
+            limit + 1
+        )),
+        "{}",
+        run.text()
+    );
+    assert!(run.stdout.contains("Candidate pairs: 1"), "{}", run.text());
+    assert!(
+        run.stdout.contains(&format!(
+            "{} -[touched]-> {}  joined on: tag:art-index",
+            ids[0], ids[1]
+        )),
+        "{}",
+        run.text()
+    );
+    assert_eq!(edge_count(dir.path()), 1, "{}", run.text());
+
+    // One more carrier, through the ingest path: the tag is named as
+    // skipped and nothing is written.
+    let ingest = vestige(
+        dir.path(),
+        &["ingest", "one more batch memory", "--tags", "campaign"],
+    );
+    assert!(ingest.ok, "{}", ingest.text());
+    assert!(
+        !ingest.stdout.contains("Auto-connected"),
+        "{}",
+        ingest.text()
+    );
+    assert!(
+        ingest.stdout.contains(&format!(
+            "Auto-connect skipped tag(s) carried by more than {limit} memories: campaign"
+        )),
+        "{}",
+        ingest.text()
+    );
+    assert_eq!(edge_count(dir.path()), 1, "{}", ingest.text());
 }

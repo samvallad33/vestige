@@ -863,7 +863,8 @@ fn auto_connect_saved(storage: &Arc<Storage>, value: &mut Value) {
 
 /// Auto-connect one saved memory and attach the report to its response slot.
 /// The node is read back from the store so the memory's own (post-gate)
-/// content and tags drive the entity extraction.
+/// content and tags drive the identity extraction. Each written edge is
+/// reported with the exact identities that joined it.
 fn auto_connect_slot(storage: &Arc<Storage>, slot: &mut Value, node_id: &str, scope: &str) {
     let node = match storage.get_node(node_id) {
         Ok(node) => node,
@@ -886,7 +887,17 @@ fn auto_connect_slot(storage: &Arc<Storage>, slot: &mut Value, node_id: &str, sc
         Ok(report) if report.edges > 0 => {
             slot["autoConnect"] = serde_json::json!({
                 "edges": report.edges,
-                "sharedEntities": report.shared_entities,
+                "sharedIdentities": report.shared_identities,
+                "pairs": report
+                    .pairs
+                    .iter()
+                    .map(|pair| serde_json::json!({
+                        "source": pair.source_id,
+                        "target": pair.target_id,
+                        "joinedOn": pair.identities,
+                    }))
+                    .collect::<Vec<_>>(),
+                "skippedCommonTags": report.skipped_common_tags,
                 "edge": "touched",
             });
         }

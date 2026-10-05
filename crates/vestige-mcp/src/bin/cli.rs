@@ -325,8 +325,9 @@ enum Commands {
     ///
     /// Nothing is merged by similarity. On a Strata log the write passes the
     /// log's gate before it is admitted, then auto-connects to earlier
-    /// memories that share an entity (the ingest-time share of
-    /// `vestige connect`).
+    /// memories that record the same exact identity: an exact tag, or an
+    /// exact file path, commit sha, `owner/repo#123` reference or URL. Shared
+    /// words never join (the ingest-time share of `vestige connect`).
     Ingest {
         /// Content to remember
         content: String,
@@ -378,19 +379,24 @@ enum Commands {
         json: bool,
     },
 
-    /// Create typed edges between memories that share entities
+    /// Create typed edges between memories that record the same exact identity
     ///
-    /// Scans all memories, extracts deterministic entities (file paths,
-    /// identifiers, shared tags), and creates `touched` edges between
-    /// pairs that share at least one entity. This is the bridge that
-    /// makes causal-walk work on manually-ingested memories; ingest
-    /// auto-connects tag-sharing pairs as they land, and this full scan
-    /// also catches pairs that share only content entities.
+    /// Scans all memories of a scope and creates a `touched` edge between
+    /// each pair that records the same exact identity: an exact tag
+    /// (case-sensitive), an exact file path token, a whole-token commit sha
+    /// (40 hex, or 7+ hex), an `owner/repo#123` reference, or a URL. Shared
+    /// words never join two memories. A tag carried by more than 14
+    /// memories of the scope is too common to be evidence and is skipped;
+    /// file paths always join. Every pair is printed with the identities
+    /// that joined it. An edge records that two memories name the same
+    /// thing, not that one caused the other: a causal walk over these edges
+    /// returns hypotheses. Ingest auto-connects pairs as they land, and this
+    /// full scan also catches pairs that share a path only in their text.
     Connect {
         /// Show what edges would be created without writing them
         #[arg(long)]
         dry_run: bool,
-        /// Minimum shared entities required (default 1)
+        /// Minimum distinct shared identities required (default 1)
         #[arg(long, default_value = "1")]
         min_shared: usize,
         /// Maximum edges to create (safety cap)
@@ -3922,17 +3928,35 @@ fn run_ingest(
             &node.content,
             &node.tags,
         ) {
-            Ok(report) if report.edges > 0 => println!(
-                "{}",
-                format!(
-                    "Auto-connected: {} edge(s) created via shared entities: {}",
-                    report.edges,
-                    report.shared_entities.join(", ")
-                )
-                .green()
-                .bold()
-            ),
-            Ok(_) => {}
+            Ok(report) => {
+                if report.edges > 0 {
+                    println!(
+                        "{}",
+                        format!(
+                            "Auto-connected: {} edge(s) created on exact identities: {}",
+                            report.edges,
+                            report.shared_identities.join(", ")
+                        )
+                        .green()
+                        .bold()
+                    );
+                    for pair in &report.pairs {
+                        println!(
+                            "  {} -[touched]-> {}  joined on: {}",
+                            pair.source_id,
+                            pair.target_id,
+                            pair.identities.join(", ")
+                        );
+                    }
+                }
+                if !report.skipped_common_tags.is_empty() {
+                    println!(
+                        "Auto-connect skipped tag(s) carried by more than {} memories: {}",
+                        vestige_mcp::auto_connect::MAX_TAG_CARRIERS,
+                        report.skipped_common_tags.join(", ")
+                    );
+                }
+            }
             Err(err) => eprintln!("{} auto-connect skipped: {err}", "WARN".yellow()),
         }
     }
@@ -4809,9 +4833,9 @@ fn run_ingest_git(
     Ok(())
 }
 
-/// One candidate `touched` edge: the earlier memory as the source (the
-/// cause side), the later one as the target (the symptom side), with the
-/// entities they share.
+/// One candidate `touched` edge: the earlier memory as the source, the
+/// later one as the target, with the exact identities both record
+/// (`kind:value`).
 struct ConnectPair {
     source_id: String,
     target_id: String,
@@ -4820,19 +4844,22 @@ struct ConnectPair {
     shared: Vec<String>,
 }
 
-/// Create typed edges between memories that share entities.
+/// Create typed edges between memories that record the same exact identity.
 ///
 /// Memories ingested one by one used to land as isolated nodes: tags, no
 /// edges, so `causal-walk --logged-write` said no recorded causal edge leads
-/// upstream even when two memories plainly talked about the same `euler` or
-/// `path.py`. The ingest path now runs its share of this automatically
+/// upstream even when two memories recorded the same `src/path.py`. The
+/// ingest path now runs its share of this automatically
 /// (`vestige_mcp::auto_connect`, on the memories a save just wrote); this
-/// command remains the full-scan catch-up, joining pairs the ingest-time tag
-/// handles cannot see. It extracts deterministic entities from every memory
-/// in the scope (file paths, identifiers, tags — no ML, no similarity) and
-/// writes a `touched` edge for each pair sharing at least `--min-shared` of
-/// them, through `Storage::save_connection`, which on a Strata log is
-/// `StrataStore::save_connection` behind the gate.
+/// command remains the full-scan catch-up, joining pairs the ingest-time
+/// handles cannot see. It extracts the exact identities of every memory in
+/// the scope (`auto_connect::extract_identities`: tags, file paths, commit
+/// shas, issue references, URLs; no words, no ML, no similarity) and writes
+/// a `touched` edge for each pair sharing at least `--min-shared` of them,
+/// through `Storage::save_connection`, which on a Strata log is
+/// `StrataStore::save_connection` behind the gate. A tag carried by more
+/// than `auto_connect::MAX_TAG_CARRIERS` memories of the scope is skipped
+/// and named; every pair is printed with the identities that joined it.
 ///
 /// Direction follows the walk's rule for `touched` (causal_walk.rs: the
 /// source is the earlier record, so from the target the walk goes to the
@@ -4865,14 +4892,35 @@ fn run_connect(
         return Ok(());
     }
 
-    let entity_sets: Vec<HashSet<String>> = nodes
+    use vestige_mcp::auto_connect::{self, Identity};
+    let identity_sets: Vec<std::collections::BTreeSet<Identity>> = nodes
         .iter()
         .map(|node| {
-            vestige_mcp::auto_connect::extract_entities(&node.content, &node.tags)
+            auto_connect::extract_identities(&node.content, &node.tags)
                 .into_iter()
                 .collect()
         })
         .collect();
+
+    // The guard: a tag carried by more than MAX_TAG_CARRIERS memories of
+    // this scope joins everything to everything and is not evidence.
+    let common_tags = auto_connect::too_common_tags(nodes.iter().map(|node| node.tags.as_slice()));
+    if !common_tags.is_empty() {
+        println!(
+            "{}: {}",
+            format!(
+                "Tags skipped (carried by more than {} memories)",
+                auto_connect::MAX_TAG_CARRIERS
+            )
+            .white()
+            .bold(),
+            common_tags
+                .iter()
+                .map(|(tag, carriers)| format!("{tag} ({carriers})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
 
     // Pairs already joined by any recorded edge (either direction) are left
     // alone: re-running connect must not stack parallel edges.
@@ -4890,16 +4938,16 @@ fn run_connect(
         })
         .collect();
 
-    // An edge needs at least one shared entity; --min-shared 0 is read as 1.
+    // An edge needs at least one shared identity; --min-shared 0 is read as 1.
     let min_shared = min_shared.max(1);
     let mut pairs: Vec<ConnectPair> = Vec::new();
     for (i, node) in nodes.iter().enumerate() {
-        for (later, set) in nodes.iter().zip(&entity_sets).skip(i + 1) {
-            let mut shared: Vec<String> = entity_sets[i].intersection(set).cloned().collect();
-            shared.sort();
-            if shared.len() < min_shared {
+        for (later, set) in nodes.iter().zip(&identity_sets).skip(i + 1) {
+            let joining = auto_connect::joining_identities(&identity_sets[i], set, &common_tags);
+            if auto_connect::distinct_values(&joining) < min_shared {
                 continue;
             }
+            let shared: Vec<String> = joining.iter().map(Identity::to_string).collect();
             let key = if node.id < later.id {
                 (node.id.clone(), later.id.clone())
             } else {
@@ -4918,11 +4966,7 @@ fn run_connect(
         }
     }
 
-    println!(
-        "{}: {}",
-        "Candidate pairs".white().bold(),
-        pairs.len()
-    );
+    println!("{}: {}", "Candidate pairs".white().bold(), pairs.len());
     println!();
 
     let capped = pairs.len() > max_edges;
@@ -4931,7 +4975,7 @@ fn run_connect(
     if pairs.is_empty() {
         println!(
             "{}",
-            "No new edges: no memory pair shares an entity that is not already joined by a recorded edge."
+            "No new edges: no memory pair shares an exact identity that is not already joined by a recorded edge."
                 .green()
         );
         return Ok(());
@@ -4942,7 +4986,7 @@ fn run_connect(
             "  {} -[touched]-> {}  {}",
             pair.source_id.dimmed(),
             pair.target_id.dimmed(),
-            format!("shared: {}", pair.shared.join(", ")).dimmed()
+            format!("joined on: {}", pair.shared.join(", ")).dimmed()
         );
         println!("      {}", truncate(&pair.source_content, 72).dimmed());
         println!("      {}", truncate(&pair.target_content, 72).dimmed());
