@@ -238,7 +238,22 @@ const MAX_NEIGHBOR_EDGES: usize = 20;
 fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Value, String>> {
     let object = args.as_ref()?.as_object()?;
     if !object.contains_key("handle") {
-        return None;
+        // A Strata log has no free-text search, so a `query` there can only be
+        // an exact handle. Resolve it as one instead of refusing an id or a tag
+        // because it arrived under the other parameter name.
+        let query = object
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or("");
+        if query.is_empty() || !crate::strata_memory::is_strata_backend(storage.as_ref()) {
+            return None;
+        }
+        let resolution = storage.resolve_handle(query);
+        if resolution.ids.is_empty() && resolution.candidates.is_empty() {
+            return None; // not a handle: the search path answers similarity_disabled as before
+        }
+        return Some(Ok(handle_resolution_payload(storage, query, resolution)));
     }
     let handle = object
         .get("handle")

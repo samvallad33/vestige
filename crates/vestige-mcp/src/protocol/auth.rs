@@ -40,11 +40,29 @@ fn resolve_token_dir(
         return Ok(dir.clone());
     }
     if let Some(dir) = env_dir.filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(dir));
+        return Ok(expand_home(PathBuf::from(dir)));
     }
     let dirs = ProjectDirs::from("com", "vestige", "core")
         .ok_or("could not determine project directories")?;
     Ok(dirs.data_dir().to_path_buf())
+}
+
+/// A leading `~` in `VESTIGE_DATA_DIR` is the home directory, as it is for the
+/// store itself; the token must land beside the store, not in a folder named `~`.
+fn expand_home(dir: PathBuf) -> PathBuf {
+    let Ok(rest) = dir.strip_prefix("~") else {
+        return dir;
+    };
+    match directories::BaseDirs::new() {
+        Some(base) => base.home_dir().join(rest),
+        None => dir,
+    }
+}
+
+/// The token file in the platform default data directory, where every
+/// version before 4.1.2 kept it whatever data directory was in use.
+fn default_token_path() -> Option<PathBuf> {
+    ProjectDirs::from("com", "vestige", "core").map(|dirs| dirs.data_dir().join("auth_token"))
 }
 
 /// Return the auth token file path inside the Vestige data directory.
@@ -110,19 +128,39 @@ pub fn get_or_create_auth_token() -> Result<String, Box<dyn std::error::Error>> 
         }
     }
 
-    // 3. Generate new token and persist
-    let token = uuid::Uuid::new_v4().to_string();
+    // 3. A custom data directory with no token yet: carry over the token the
+    // default location already holds, so clients configured before 4.1.2 keep
+    // working instead of meeting a silent 401. Otherwise generate one.
+    let inherited = default_token_path()
+        .filter(|default| *default != path)
+        .and_then(|default| fs::read_to_string(default).ok())
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty());
+    let token = match inherited {
+        Some(token) => {
+            info!(
+                "Carrying the existing auth token over to {}",
+                path.display()
+            );
+            token
+        }
+        None => uuid::Uuid::new_v4().to_string(),
+    };
 
     // Ensure parent directory exists with restricted permissions
     if let Some(parent) = path.parent() {
+        // Only a directory this call creates is restricted: with a custom
+        // data directory the parent is the user's own folder, and its mode is theirs.
+        let created = !parent.exists();
         fs::create_dir_all(parent)?;
 
-        // Restrict parent directory permissions on Unix (owner only)
         #[cfg(unix)]
-        {
+        if created {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
         }
+        #[cfg(not(unix))]
+        let _ = created;
     }
 
     // Write token file with restricted permissions from the start.
@@ -168,6 +206,23 @@ mod tests {
     fn env_data_dir_is_used_without_an_explicit_dir() {
         let got = resolve_token_dir(None, Some(OsString::from("/tmp/vestige-env"))).unwrap();
         assert_eq!(got, PathBuf::from("/tmp/vestige-env"));
+    }
+
+    #[test]
+    fn env_data_dir_expands_a_leading_tilde() {
+        let got = resolve_token_dir(None, Some(OsString::from("~/vestige-env"))).unwrap();
+        assert!(got.ends_with("vestige-env"));
+        assert!(
+            !got.starts_with("~"),
+            "a leading ~ is the home directory: {}",
+            got.display()
+        );
+        let other = resolve_token_dir(None, Some(OsString::from("~someone/x"))).unwrap();
+        assert_eq!(
+            other,
+            PathBuf::from("~someone/x"),
+            "only a bare ~ is expanded"
+        );
     }
 
     #[test]

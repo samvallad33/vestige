@@ -60,7 +60,9 @@ answer. So the dashboard also checks each request itself:
 - A request that changes anything (any method but GET, HEAD and OPTIONS)
   must come from the dashboard's own page or carry
   `Authorization: Bearer <token>`. The token comes from `VESTIGE_AUTH_TOKEN`,
-  or else from the `auth_token` file in the default per-user data directory.
+  or else from the `auth_token` file in the data directory in use (`--data-dir`, then
+  `VESTIGE_DATA_DIR`, then the per-user default). A custom directory with no token yet
+  takes over the one the default location already holds.
 
 A refused request gets `401 auth_required` or `403` with a JSON `error` that
 says why. Reading the API from a local script (`curl http://127.0.0.1:3927/api/health`)

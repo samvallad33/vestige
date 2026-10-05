@@ -74,6 +74,15 @@ fn default_format() -> String {
 fn resolve_target(root: Option<&str>, path: &str) -> Result<PathBuf, String> {
     let root = match root {
         Some(dir) => PathBuf::from(dir),
+        // One server process can serve several agents in different projects,
+        // so its own working directory says nothing about the caller's.
+        None if !Path::new(path).is_absolute() => {
+            return Err(format!(
+                "path '{path}' is relative and no root was given: pass root (the absolute directory \
+                 the file belongs in) or an absolute path. A relative path would resolve against the \
+                 memory server's working directory, which may be another project."
+            ));
+        }
         None => std::env::current_dir()
             .map_err(|e| format!("cannot read the working directory: {e}"))?,
     };

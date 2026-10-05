@@ -2299,7 +2299,10 @@ impl StrataStore {
         let mut paths = Vec::new();
         for entry in std::fs::read_dir(&self.log_dir)? {
             let path = entry?.path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("seg") {
+            let hidden = path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with('.'));
+            if !hidden && path.extension().and_then(|ext| ext.to_str()) == Some("seg") {
                 paths.push(path);
             }
         }

@@ -2573,6 +2573,13 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
         );
     }
 
+    if success_count < total {
+        anyhow::bail!(
+            "{} of {} memories were not restored (see the FAIL lines above)",
+            total - success_count,
+            total
+        );
+    }
     Ok(())
 }
 
@@ -3155,6 +3162,14 @@ fn run_selftest() -> anyhow::Result<()> {
     }
     println!();
     println!("{}", serde_json::to_string_pretty(&result)?);
+    let passed = if result["kind"] == "recorded_edge_walk" {
+        result["all_passed"] == true
+    } else {
+        result["hits"] == serde_json::json!(result["rounds"]) && result["gap_calibration"] == true
+    };
+    if !passed {
+        anyhow::bail!("selftest failed: not every check passed (see the result above)");
+    }
     Ok(())
 }
 

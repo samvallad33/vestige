@@ -453,6 +453,10 @@ pub(crate) fn list_segments(dir: &Path) -> Result<Vec<(u32, PathBuf)>, StrataErr
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            // a file-manager or archive sidecar (`._…seg`, `.DS_Store`), never a segment
+            continue;
+        }
         let Some(stem) = name.strip_suffix(".seg") else {
             continue;
         };

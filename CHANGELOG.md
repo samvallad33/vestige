@@ -93,6 +93,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the README and the Operator Lite README now reads 46, the number of cases
   the corpus holds.
 
+## [4.1.2] - 2026-10-05
+
+### Fixed
+
+- The HTTP `auth_token` file follows the data directory. With `--data-dir` or
+  `VESTIGE_DATA_DIR` the token was still read from and written to the platform
+  default. It now lives beside the store, a leading `~` in `VESTIGE_DATA_DIR` is
+  expanded, and a custom directory with no token yet takes over the token the
+  default location already holds, so clients set up on an earlier version keep
+  working. The directory's permissions are changed only when Vestige creates
+  it. Reported by eryngion in #434 and fixed by helenanova in #442.
+- `recall` resolves an exact memory id or tag passed as `query`. Before, a
+  handle was only read from the `handle` parameter and the same value under
+  `query` was refused as a similarity search.
+- `vestige restore` exits non-zero when any memory in the file fails to
+  restore, and `vestige selftest` exits non-zero when a check fails. Both
+  printed the failure and exited 0.
+- `project` refuses a relative `path` when no `root` is given. One server can
+  serve several agents in different projects, and a relative path was resolved
+  against the server's own working directory.
+- A hidden file ending in `.seg` in the log directory, such as the `._` sidecar
+  a copy through exFAT or a network share leaves behind, is ignored. It made
+  the store refuse to open with a message that read like corruption.
+
+### Changed
+
+- Tool descriptions, the server instructions and `--help` describe what a 4.x
+  store does: recall by exact handle, what is withheld on a Strata log, and the
+  data directory holding `log/`.
+- The README, the package descriptions and the documentation describe Vestige
+  as a causal proof engine. The default data directory on Linux and Windows is
+  stated as the code resolves it (#433).
+
 ## [4.1.1] - 2026-10-02
 
 ### Added
