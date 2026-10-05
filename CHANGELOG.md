@@ -116,6 +116,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A hidden file ending in `.seg` in the log directory, such as the `._` sidecar
   a copy through exFAT or a network share leaves behind, is ignored. It made
   the store refuse to open with a message that read like corruption.
+- `vestige export` followed by `vestige restore` keeps each memory in its
+  scope. The export wrote no scope and the restore put every memory into
+  `user`. Each exported memory now carries a `scope` field beside its other
+  fields, in both JSON and JSONL, and restore ingests it into that scope. A
+  file from an earlier version has no `scope` and restores into `user` as
+  before. A memory whose scope is not a valid name fails on its own line.
 
 ### Changed
 

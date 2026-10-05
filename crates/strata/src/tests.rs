@@ -1195,3 +1195,44 @@ fn full_disk_during_open_leaves_no_residue_that_blocks_the_next_open() {
     assert_eq!(log.append(1, b"one").unwrap().seq, 1);
     fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A copy through exFAT or a network share leaves a `._<name>` sidecar beside
+/// each file. One next to a segment ends in `.seg` but is not a segment: the
+/// log opens with it there and reads back every frame.
+#[test]
+fn a_hidden_sidecar_named_like_a_segment_does_not_stop_the_log_opening() {
+    let _serial = serialize();
+    reset_failpoints();
+    let dir = test_dir("hidden-sidecar");
+    {
+        let log = StrataLog::open(&dir).unwrap();
+        append_many(&log, 3);
+    }
+    let segment = only_segment(&dir);
+    let name = segment.file_name().unwrap().to_string_lossy().into_owned();
+    fs::write(dir.join(format!("._{name}")), b"\x00\x05\x16\x07sidecar").unwrap();
+    fs::write(
+        dir.join(format!("._00000000-{}.seg", "ab".repeat(16))),
+        b"not a segment",
+    )
+    .unwrap();
+    fs::write(dir.join(".DS_Store"), b"finder").unwrap();
+
+    assert_eq!(
+        segments(&dir),
+        vec![segment],
+        "hidden files are not segments"
+    );
+    let log = StrataLog::open(&dir).expect("the log opens beside the sidecars");
+    assert_eq!(log.read_frames(1).unwrap().len(), 3);
+    assert_eq!(log.append(1, b"after").unwrap().seq, 4);
+    drop(log);
+
+    // The same name without the leading dot is still refused as a bad segment.
+    fs::write(dir.join("stray.seg"), b"not a segment").unwrap();
+    assert!(matches!(
+        crate::log::list_segments(&dir),
+        Err(StrataError::Corrupt(_))
+    ));
+    fs::remove_dir_all(&dir).unwrap();
+}

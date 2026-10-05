@@ -379,7 +379,24 @@ pub fn secret_audit_records(storage: &Storage) -> Option<Vec<AuditRecord>> {
     live_memory(storage).map(|memory| memory.audit_records())
 }
 
+/// The scope of every retrievable memory in the open Strata log, keyed by
+/// memory id, for `vestige export`. One pass under one lock, the same set of
+/// records `get_all_nodes` pages. `None` when `storage` is not a Strata log
+/// opened in this process.
+pub fn node_scopes(storage: &Storage) -> Option<std::collections::HashMap<String, String>> {
+    live_memory(storage).map(|memory| memory.node_scopes())
+}
+
 impl StrataMemory {
+    fn node_scopes(&self) -> std::collections::HashMap<String, String> {
+        self.lock()
+            .nodes()
+            .iter()
+            .filter(|record| retrievable(record))
+            .map(|record| (record.id.clone(), record.scope.clone()))
+            .collect()
+    }
+
     fn audit_records(&self) -> Vec<AuditRecord> {
         let store = self.lock();
         let mut rows: Vec<AuditRecord> = store
