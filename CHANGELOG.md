@@ -116,6 +116,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A hidden file ending in `.seg` in the log directory, such as the `._` sidecar
   a copy through exFAT or a network share leaves behind, is ignored. It made
   the store refuse to open with a message that read like corruption.
+- A backup that runs out of disk space no longer stops the live store from
+  writing. When the segment was sealed but the next one could not be created,
+  every later write failed until the server was restarted. The seal is now
+  undone, the backup returns the error, and writes go on once there is room.
 
 ### Changed
 
