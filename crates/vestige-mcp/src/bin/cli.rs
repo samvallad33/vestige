@@ -626,6 +626,9 @@ fn main() -> anyhow::Result<()> {
         CLI_DATA_DIR
             .set(expand_tilde(data_dir))
             .map_err(|_| anyhow::anyhow!("data directory was initialized more than once"))?;
+        if let Some(dir) = CLI_DATA_DIR.get() {
+            vestige_mcp::protocol::auth::set_data_dir(dir.clone());
+        }
     }
 
     match cli.command {
