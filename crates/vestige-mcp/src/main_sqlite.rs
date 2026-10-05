@@ -413,6 +413,10 @@ async fn serve() {
         env!("CARGO_PKG_VERSION")
     );
 
+    if let Some(data_dir) = &config.data_dir {
+        protocol::auth::set_data_dir(expand_tilde(data_dir.clone()));
+    }
+
     let storage_path = match prepare_storage_path(config.data_dir) {
         Ok(path) => path,
         Err(e) => {

@@ -9,8 +9,10 @@
 //! start (via OpenOptionsExt on Unix) to prevent a TOCTOU race where another
 //! process could read the token before permissions are set.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use directories::ProjectDirs;
 use tracing::{info, warn};
@@ -18,11 +20,40 @@ use tracing::{info, warn};
 /// Minimum recommended token length when provided via env var.
 const MIN_TOKEN_LENGTH: usize = 32;
 
-/// Return the auth token file path inside the Vestige data directory.
-pub fn token_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+/// Data directory chosen with `--data-dir` (or `VESTIGE_DATA_DIR`) for this process.
+static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Record the data directory selected on the command line so the auth token
+/// file lives next to the database instead of in the platform default.
+/// Only the first call has an effect.
+pub fn set_data_dir(dir: PathBuf) {
+    let _ = DATA_DIR_OVERRIDE.set(dir);
+}
+
+/// Pick the directory that holds `auth_token`: an explicit override, then a
+/// non-empty `VESTIGE_DATA_DIR`, then the platform default.
+fn resolve_token_dir(
+    override_dir: Option<&PathBuf>,
+    env_dir: Option<OsString>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if let Some(dir) = override_dir {
+        return Ok(dir.clone());
+    }
+    if let Some(dir) = env_dir.filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(dir));
+    }
     let dirs = ProjectDirs::from("com", "vestige", "core")
         .ok_or("could not determine project directories")?;
-    Ok(dirs.data_dir().join("auth_token"))
+    Ok(dirs.data_dir().to_path_buf())
+}
+
+/// Return the auth token file path inside the Vestige data directory.
+pub fn token_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let dir = resolve_token_dir(
+        DATA_DIR_OVERRIDE.get(),
+        std::env::var_os("VESTIGE_DATA_DIR"),
+    )?;
+    Ok(dir.join("auth_token"))
 }
 
 /// The `VESTIGE_AUTH_TOKEN` override, when set and not blank.
@@ -120,4 +151,29 @@ pub fn get_or_create_auth_token() -> Result<String, Box<dyn std::error::Error>> 
 
     info!("Generated new auth token at {}", path.display());
     Ok(token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_data_dir_wins_over_env_and_default() {
+        let dir = PathBuf::from("/tmp/vestige-cli");
+        let got = resolve_token_dir(Some(&dir), Some(OsString::from("/tmp/vestige-env"))).unwrap();
+        assert_eq!(got, dir);
+    }
+
+    #[test]
+    fn env_data_dir_is_used_without_an_explicit_dir() {
+        let got = resolve_token_dir(None, Some(OsString::from("/tmp/vestige-env"))).unwrap();
+        assert_eq!(got, PathBuf::from("/tmp/vestige-env"));
+    }
+
+    #[test]
+    fn blank_env_data_dir_falls_back_to_platform_default() {
+        let blank = resolve_token_dir(None, Some(OsString::new())).unwrap();
+        let unset = resolve_token_dir(None, None).unwrap();
+        assert_eq!(blank, unset);
+    }
 }
