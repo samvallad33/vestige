@@ -839,3 +839,319 @@ fn scan_secrets_reaches_retired_memories_scopes_and_intentions() {
         "an intention must be reported: {report}"
     );
 }
+
+fn put_in(storage: &Arc<Storage>, content: &str, tags: &[&str], scope: &str) -> String {
+    storage
+        .ingest_in_scope(
+            IngestInput {
+                content: content.to_string(),
+                tags: tags.iter().map(|t| t.to_string()).collect(),
+                ..Default::default()
+            },
+            scope,
+        )
+        .expect("ingest in scope")
+        .id
+}
+
+/// The contents of every memory in `scope`, sorted.
+fn contents_in(dir: &Path, scope: &str) -> Vec<String> {
+    let mut contents: Vec<String> = open(dir)
+        .get_all_nodes_in_scope(scope, 1000, 0)
+        .expect("scope listing")
+        .into_iter()
+        .map(|node| node.content)
+        .collect();
+    contents.sort();
+    contents
+}
+
+/// One memory in `user`, two in `proj-a`, one in `proj-b`. The CLI `ingest`
+/// has no scope flag, so the scoped memories are written through the library.
+fn seed_three_scopes() -> TempDir {
+    let dir = TempDir::new().expect("temp dir");
+    let storage = open(dir.path());
+    put_in(&storage, "SCOPE_RT user note", &["rt"], "user");
+    put_in(&storage, "SCOPE_RT proj-a first", &["rt"], "proj-a");
+    put_in(&storage, "SCOPE_RT proj-a second", &[], "proj-a");
+    put_in(&storage, "SCOPE_RT proj-b only", &["rt"], "proj-b");
+    drop(storage);
+    dir
+}
+
+fn assert_three_scopes(dir: &Path) {
+    assert_eq!(contents_in(dir, "user"), ["SCOPE_RT user note"]);
+    assert_eq!(
+        contents_in(dir, "proj-a"),
+        ["SCOPE_RT proj-a first", "SCOPE_RT proj-a second"]
+    );
+    assert_eq!(contents_in(dir, "proj-b"), ["SCOPE_RT proj-b only"]);
+    assert_eq!(node_count(dir), 4);
+}
+
+fn scope_of_content(entries: &[Value]) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry["content"].as_str().expect("content").to_string(),
+                entry["scope"].as_str().expect("scope").to_string(),
+            )
+        })
+        .collect();
+    pairs.sort();
+    pairs
+}
+
+fn expected_scope_of_content() -> Vec<(String, String)> {
+    [
+        ("SCOPE_RT proj-a first", "proj-a"),
+        ("SCOPE_RT proj-a second", "proj-a"),
+        ("SCOPE_RT proj-b only", "proj-b"),
+        ("SCOPE_RT user note", "user"),
+    ]
+    .into_iter()
+    .map(|(content, scope)| (content.to_string(), scope.to_string()))
+    .collect()
+}
+
+#[test]
+fn export_then_restore_keeps_every_memory_in_its_scope() {
+    let source = seed_three_scopes();
+    assert_three_scopes(source.path());
+    let out = TempDir::new().unwrap();
+
+    let exported = out.path().join("export.json");
+    let export = vestige(source.path(), &["export", path_arg(&exported)]);
+    assert!(export.ok, "{}", export.text());
+    assert!(
+        export.stdout.contains("with its scope"),
+        "{}",
+        export.text()
+    );
+
+    let text = std::fs::read_to_string(&exported).unwrap();
+    let entries: Vec<Value> = serde_json::from_str(&text).expect("json export");
+    assert_eq!(scope_of_content(&entries), expected_scope_of_content());
+    // The fields a 4.1.1 export had are all still there, and a reader of the
+    // old shape still loads the file.
+    for entry in &entries {
+        for field in ["id", "content", "nodeType", "createdAt", "tags"] {
+            assert!(entry.get(field).is_some(), "{field} missing: {entry}");
+        }
+    }
+    let old_shape: Vec<vestige_core::KnowledgeNode> =
+        serde_json::from_str(&text).expect("the old reader still loads the file");
+    assert_eq!(old_shape.len(), 4);
+
+    let target = TempDir::new().unwrap();
+    let restored = vestige(target.path(), &["restore", path_arg(&exported)]);
+    assert!(restored.ok, "{}", restored.text());
+    assert!(
+        restored.stdout.contains("scope kept"),
+        "{}",
+        restored.text()
+    );
+    assert_three_scopes(target.path());
+    // The source store is untouched by the export.
+    assert_three_scopes(source.path());
+}
+
+#[test]
+fn jsonl_export_carries_the_scope_on_every_line() {
+    let source = seed_three_scopes();
+    let out = TempDir::new().unwrap();
+    let exported = out.path().join("export.jsonl");
+    let export = vestige(
+        source.path(),
+        &["export", path_arg(&exported), "--format", "jsonl"],
+    );
+    assert!(export.ok, "{}", export.text());
+
+    let text = std::fs::read_to_string(&exported).unwrap();
+    let entries: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one json object per line"))
+        .collect();
+    assert_eq!(scope_of_content(&entries), expected_scope_of_content());
+    for line in text.lines() {
+        serde_json::from_str::<vestige_core::KnowledgeNode>(line)
+            .expect("the old reader still loads each line");
+    }
+}
+
+#[test]
+fn restore_of_an_export_without_scope_goes_to_the_default_scope() {
+    let source = seed_three_scopes();
+    let out = TempDir::new().unwrap();
+    let exported = out.path().join("export.json");
+    assert!(vestige(source.path(), &["export", path_arg(&exported)]).ok);
+
+    // The 4.1.1 shape: the same file with no `scope` on any memory.
+    let mut entries: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(&exported).unwrap()).unwrap();
+    for entry in &mut entries {
+        entry
+            .as_object_mut()
+            .expect("memory object")
+            .remove("scope")
+            .expect("scope was exported");
+    }
+    let older = out.path().join("older.json");
+    std::fs::write(&older, serde_json::to_string(&entries).unwrap()).unwrap();
+
+    let target = TempDir::new().unwrap();
+    let restored = vestige(target.path(), &["restore", path_arg(&older)]);
+    assert!(restored.ok, "{}", restored.text());
+    assert_eq!(node_count(target.path()), 4);
+    assert_eq!(contents_in(target.path(), "user").len(), 4);
+    assert!(contents_in(target.path(), "proj-a").is_empty());
+    assert!(contents_in(target.path(), "proj-b").is_empty());
+
+    // A hand-written file and an explicit null behave the same way.
+    let minimal = out.path().join("minimal.json");
+    std::fs::write(
+        &minimal,
+        serde_json::json!([
+            {"content": "SCOPE_RT minimal"},
+            {"content": "SCOPE_RT null scope", "scope": null}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let target = TempDir::new().unwrap();
+    let restored = vestige(target.path(), &["restore", path_arg(&minimal)]);
+    assert!(restored.ok, "{}", restored.text());
+    assert_eq!(
+        contents_in(target.path(), "user"),
+        ["SCOPE_RT minimal", "SCOPE_RT null scope"]
+    );
+}
+
+#[test]
+fn restore_exits_non_zero_when_one_memory_fails() {
+    let out = TempDir::new().unwrap();
+    let file = out.path().join("one-bad.json");
+    std::fs::write(
+        &file,
+        serde_json::json!([
+            {"content": "RESTORE_EXIT first"},
+            {"content": "   "},
+            {"content": "RESTORE_EXIT third"}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let target = TempDir::new().unwrap();
+    let restored = vestige(target.path(), &["restore", path_arg(&file)]);
+    assert!(!restored.ok, "a failed memory must fail the command");
+    assert!(
+        restored.stdout.contains("[2/3] FAIL"),
+        "{}",
+        restored.text()
+    );
+    assert!(
+        restored
+            .stderr
+            .contains("1 of 3 memories were not restored"),
+        "{}",
+        restored.text()
+    );
+    // The memories that could be restored still were.
+    assert_eq!(
+        contents_in(target.path(), "user"),
+        ["RESTORE_EXIT first", "RESTORE_EXIT third"]
+    );
+
+    // The same file without the bad memory exits zero.
+    let clean = out.path().join("clean.json");
+    std::fs::write(
+        &clean,
+        serde_json::json!([{"content": "RESTORE_EXIT only"}]).to_string(),
+    )
+    .unwrap();
+    let target = TempDir::new().unwrap();
+    assert!(vestige(target.path(), &["restore", path_arg(&clean)]).ok);
+}
+
+#[test]
+fn restore_fails_a_memory_with_an_invalid_scope_and_restores_the_rest() {
+    let out = TempDir::new().unwrap();
+    let file = out.path().join("bad-scope.json");
+    std::fs::write(
+        &file,
+        serde_json::json!([
+            {"content": "BAD_SCOPE kept in proj", "scope": "proj"},
+            {"content": "BAD_SCOPE blank scope", "scope": "   "},
+            {"content": "BAD_SCOPE control character", "scope": "pro\u{7}j"},
+            {"content": "BAD_SCOPE oversized", "scope": "s".repeat(201)},
+            {"content": "BAD_SCOPE kept in user"}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let target = TempDir::new().unwrap();
+    let restored = vestige(target.path(), &["restore", path_arg(&file)]);
+    assert!(!restored.ok, "{}", restored.text());
+    assert!(!restored.text().contains("panicked"), "{}", restored.text());
+    for line in ["[2/5] FAIL", "[3/5] FAIL", "[4/5] FAIL"] {
+        let failure = restored
+            .stdout
+            .lines()
+            .find(|l| l.starts_with(line))
+            .unwrap_or_else(|| panic!("{line} missing: {}", restored.text()));
+        assert!(failure.contains("scope"), "{failure}");
+    }
+    assert!(
+        restored
+            .stderr
+            .contains("3 of 5 memories were not restored"),
+        "{}",
+        restored.text()
+    );
+    // A refused scope is never replaced by the default one.
+    assert_eq!(
+        contents_in(target.path(), "proj"),
+        ["BAD_SCOPE kept in proj"]
+    );
+    assert_eq!(
+        contents_in(target.path(), "user"),
+        ["BAD_SCOPE kept in user"]
+    );
+    assert_eq!(node_count(target.path()), 2);
+}
+
+#[test]
+fn a_hidden_sidecar_in_the_log_directory_does_not_stop_the_store_opening() {
+    let seeded = seed();
+    let log_dir = seeded.path().join("log");
+    let segment = std::fs::read_dir(&log_dir)
+        .expect("log directory")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .find(|name| name.ends_with(".seg") && !name.starts_with('.'))
+        .expect("a segment file");
+    std::fs::write(
+        log_dir.join(format!("._{segment}")),
+        b"\x00\x05\x16\x07sidecar",
+    )
+    .unwrap();
+    std::fs::write(
+        log_dir.join(format!("._00000000-{}.seg", "ab".repeat(16))),
+        b"not a segment",
+    )
+    .unwrap();
+
+    assert_eq!(node_count(seeded.path()), 3);
+    let recalled = vestige(seeded.path(), &["recall", "--handle", &seeded.alpha]);
+    assert!(recalled.ok, "{}", recalled.text());
+    assert!(
+        recalled.stdout.contains("CLI_STRATA_ALPHA"),
+        "{}",
+        recalled.text()
+    );
+    let verified = vestige(seeded.path(), &["strata-verify", path_arg(seeded.path())]);
+    assert!(verified.ok, "{}", verified.text());
+}

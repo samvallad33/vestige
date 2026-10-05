@@ -653,3 +653,98 @@ mod tests {
         assert!(out.is_ok(), "legacy lookup must keep working: {out:?}");
     }
 }
+
+/// `query` on a Strata log: there is no free-text search there, so an exact
+/// id or tag passed as `query` resolves as a handle.
+#[cfg(test)]
+mod strata_query {
+    use super::*;
+    use vestige_core::IngestInput;
+
+    fn store() -> (Arc<Storage>, tempfile::TempDir, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let put = |content: &str, tags: &[&str]| {
+            storage
+                .ingest(IngestInput {
+                    content: content.to_string(),
+                    tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+        };
+        let tagged = put(
+            "RECALL_QUERY deploy timeout is two seconds",
+            &["deploy-env"],
+        );
+        let other = put("RECALL_QUERY unrelated note", &[]);
+        (storage, dir, tagged, other)
+    }
+
+    async fn recall(storage: &Arc<Storage>, args: Value) -> Result<Value, String> {
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        execute(storage, &cognitive, &OutputConfig::default(), Some(args)).await
+    }
+
+    #[tokio::test]
+    async fn an_exact_id_passed_as_query_resolves_that_memory() {
+        let (storage, _dir, tagged, _other) = store();
+        let out = recall(&storage, serde_json::json!({ "query": tagged }))
+            .await
+            .unwrap();
+        assert_eq!(out["kind"], "memory", "{out}");
+        assert_eq!(out["exact"], true, "{out}");
+        let nodes = out["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1, "{out}");
+        assert_eq!(nodes[0]["id"], serde_json::json!(tagged));
+        // The same value under `handle` gives the same answer.
+        let by_handle = recall(&storage, serde_json::json!({ "handle": tagged }))
+            .await
+            .unwrap();
+        assert_eq!(out, by_handle);
+    }
+
+    #[tokio::test]
+    async fn an_exact_tag_passed_as_query_resolves_the_tagged_memories() {
+        let (storage, _dir, tagged, _other) = store();
+        // Surrounding whitespace is trimmed, as it is for `handle`.
+        let out = recall(&storage, serde_json::json!({ "query": "  deploy-env " }))
+            .await
+            .unwrap();
+        assert_eq!(out["kind"], "tag", "{out}");
+        assert_eq!(out["exact"], true, "{out}");
+        let nodes = out["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1, "{out}");
+        assert_eq!(nodes[0]["id"], serde_json::json!(tagged));
+        // Tags are exact and case-sensitive: another spelling is not a handle.
+        assert!(
+            handle_flow(
+                &storage,
+                &Some(serde_json::json!({ "query": "Deploy-Env" }))
+            )
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn free_text_passed_as_query_is_still_not_answered_as_a_handle() {
+        let (storage, _dir, _tagged, _other) = store();
+        let args = Some(serde_json::json!({ "query": "what is the deploy timeout" }));
+        assert!(
+            handle_flow(&storage, &args).is_none(),
+            "free text must fall through to the search path"
+        );
+        let out = recall(
+            &storage,
+            serde_json::json!({ "query": "what is the deploy timeout" }),
+        )
+        .await;
+        let text = match out {
+            Ok(value) => value.to_string(),
+            Err(err) => err,
+        };
+        assert!(text.contains("similarity_disabled"), "{text}");
+        assert!(!text.contains("RECALL_QUERY"), "{text}");
+    }
+}

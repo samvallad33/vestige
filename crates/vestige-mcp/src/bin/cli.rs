@@ -176,6 +176,10 @@ enum Commands {
     /// state. Ids, timestamps, review history and edges in the file are not
     /// restored. Portable archives import only into a legacy SQLite store.
     ///
+    /// Scope is kept: a memory with a `scope` field goes back into that
+    /// scope, and one without it (a file from 4.1.1 or earlier) goes into
+    /// `user`. The command exits non-zero when any memory fails.
+    ///
     /// A Strata backup made by `vestige backup` is a directory. Restore it by
     /// stopping Vestige and copying the backup's log/ (and store.meta, when
     /// present) into the data directory in place of its log/. This command
@@ -237,6 +241,10 @@ enum Commands {
     },
 
     /// Export memories in JSON or JSONL format
+    ///
+    /// Memories from every scope are written. On a Strata log each one
+    /// carries a `scope` field beside its other fields, and `vestige restore`
+    /// puts it back into that scope.
     Export {
         /// Output file path
         output: PathBuf,
@@ -2482,6 +2490,9 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
         node_type: Option<String>,
         tags: Option<Vec<String>>,
         source: Option<String>,
+        /// The scope `vestige export` recorded. Absent in files written
+        /// before 4.1.2, which restore into the default scope.
+        scope: Option<String>,
     }
 
     let memories = if let Ok(wrapper) = serde_json::from_str::<Vec<BackupWrapper>>(&backup_content)
@@ -2505,6 +2516,11 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
         println!(
             "{}",
             "Strata log: each memory is ingested as a new record (new id, created now, fresh review state). Ids, timestamps, review history and edges in the file are not restored."
+                .yellow()
+        );
+        println!(
+            "{}",
+            "Scope is kept: a memory goes back into the scope recorded in the file, and one with no scope goes into `user`."
                 .yellow()
         );
         println!("{}", STRATA_EXACT_RESTORE_HINT.dimmed());
@@ -2532,7 +2548,14 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
             source_envelope: None,
         };
 
-        match storage.ingest(input) {
+        // A file from 4.1.1 or earlier has no scope and restores into the
+        // default scope, as it always did. The store validates a named scope
+        // and refuses a bad one; that fails this memory only.
+        let ingested = match memory.scope.as_deref() {
+            Some(scope) => storage.ingest_in_scope(input, scope),
+            None => storage.ingest(input),
+        };
+        match ingested {
             Ok(_node) => {
                 success_count += 1;
                 println!(
@@ -2541,6 +2564,17 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
                     total,
                     "OK".green(),
                     truncate(&memory.content, 60)
+                );
+            }
+            Err(e) if memory.scope.is_some() => {
+                // The scope itself is not printed: it is the one field the
+                // store may have refused as a credential.
+                println!(
+                    "[{}/{}] {} not restored into the scope recorded in the file: {}",
+                    i + 1,
+                    total,
+                    "FAIL".red(),
+                    e
                 );
             }
             Err(e) => {
@@ -2555,9 +2589,9 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
         success_count.to_string().green().bold(),
         total,
         if strata {
-            "ingested as new records"
+            "ingested as new records (scope kept)"
         } else {
-            "restored"
+            "restored (scope kept)"
         }
     );
 
@@ -3344,16 +3378,32 @@ fn run_export(
         std::fs::create_dir_all(parent)?;
     }
 
+    // A memory's scope is not part of `KnowledgeNode`, so it is read from the
+    // log and written beside the node's own fields. A legacy SQLite store has
+    // no such map and writes the old shape.
+    let scopes = vestige_mcp::strata_memory::node_scopes(storage.as_ref());
+    let scoped = scopes.is_some();
+    let exported: Vec<ExportedMemory<'_>> = filtered
+        .iter()
+        .map(|node| ExportedMemory {
+            node,
+            scope: scopes
+                .as_ref()
+                .and_then(|scopes| scopes.get(&node.id))
+                .map(String::as_str),
+        })
+        .collect();
+
     let file = create_private_file(&output)?;
     let mut writer = BufWriter::new(file);
 
     match format.as_str() {
         "json" => {
-            serde_json::to_writer_pretty(&mut writer, &filtered)?;
+            serde_json::to_writer_pretty(&mut writer, &exported)?;
             writer.write_all(b"\n")?;
         }
         "jsonl" => {
-            for node in &filtered {
+            for node in &exported {
                 serde_json::to_writer(&mut writer, node)?;
                 writer.write_all(b"\n")?;
             }
@@ -3375,17 +3425,29 @@ fn run_export(
     println!(
         "{}",
         format!(
-            "Exported {} memories to {} ({}, {})",
+            "Exported {} memories to {} ({}, {}){}",
             filtered.len(),
             output.display(),
             format,
-            size_display
+            size_display,
+            if scoped { ", each with its scope" } else { "" }
         )
         .green()
         .bold()
     );
 
     Ok(())
+}
+
+/// One exported memory: every `KnowledgeNode` field as before, plus the
+/// scope the memory lives in. `scope` is left out when the store has none to
+/// report, so the file is then the pre-4.1.2 shape.
+#[derive(serde::Serialize)]
+struct ExportedMemory<'a> {
+    #[serde(flatten)]
+    node: &'a vestige_core::KnowledgeNode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a str>,
 }
 
 /// Run exact portable archive export.
