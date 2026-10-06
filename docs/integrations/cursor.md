@@ -10,7 +10,7 @@ Cursor has native MCP support. Add Vestige and your AI assistant remembers your 
 
 ## Setup
 
-Install Vestige first: [README → Install](../../README.md#install). Cursor's GUI does not reliably inherit that PATH and does not expand `~`. Paste the absolute path; do not guess `/usr/local/bin`.
+Install Vestige first: [Install](../REFERENCE.md#install). Cursor's GUI does not reliably inherit that PATH and does not expand `~`. Paste the absolute path; do not guess `/usr/local/bin`.
 
 ### 1. Create or edit the config file
 

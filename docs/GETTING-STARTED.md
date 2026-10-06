@@ -11,9 +11,9 @@ cloud, and nothing downloads on first start.
 ## 1. Install and connect (5 minutes)
 
 Install is two commands and connecting is one line or one JSON block. The canonical
-steps live in the README so this guide never drifts from them:
+steps live in the reference so this guide never drifts from them:
 
-- **[Install + connect →](../README.md#install)**
+- **[Install + connect →](REFERENCE.md#install)**
 - Using an editor? [Cursor](integrations/cursor.md), [VS Code](integrations/vscode.md),
   [Windsurf](integrations/windsurf.md).
 
@@ -173,7 +173,7 @@ Precedence is `--data-dir`, then `VESTIGE_DATA_DIR`, then the OS per-user defaul
 
 Point 4.x at your existing data directory and start it. The first launch imports
 `vestige.db` into a new log and leaves the v3 file untouched. Read
-**[Upgrading from v3](../README.md#upgrading-from-v3)** first: every v3 process must be
+**[Upgrading from v3](REFERENCE.md#upgrading-from-v3)** first: every v3 process must be
 stopped before the switch.
 
 ## Where to go next
@@ -181,6 +181,6 @@ stopped before the switch.
 | Want to… | Read |
 |---|---|
 | Every tool and what it returns | [Tool contracts](TOOL-CONTRACTS.md) |
-| Why recall takes a handle | [README → Recall by handle](../README.md#recall-by-handle-not-resemblance) |
-| GhostLink lenses and weaving | [README → GhostLink](../README.md#ghostlink-the-negative-space) |
-| Backups and restore | [README → Backups and export](../README.md#backups-and-export) |
+| Why recall takes a handle | [Reference → Recall by handle](REFERENCE.md#recall-by-handle-not-resemblance) |
+| GhostLink lenses and weaving | [Reference → GhostLink](REFERENCE.md#ghostlink-the-negative-space) |
+| Backups and restore | [Reference → Backups and export](REFERENCE.md#backups-and-export) |
