@@ -862,6 +862,25 @@ fn resolve_proof(
     store.latest_effect(receipt_or_node)
 }
 
+/// The edges an `eff-` receipt covers that may be shown: every edge proof
+/// citing the effect, minus the ones naming a retired memory. One for a
+/// single edge, several for a batch, none when the receipt is not an edge
+/// receipt (or every edge it covers is hidden).
+fn visible_edge_proofs(
+    store: &strata_store::StrataStore,
+    receipt_id: &str,
+) -> Result<Vec<strata_store::EffectProof>, strata_store::StoreError> {
+    let Some(seq) = parse_receipt_seq(receipt_id) else {
+        return Ok(Vec::new());
+    };
+    Ok(store
+        .effects_by_seq(seq)?
+        .into_iter()
+        .filter(|proof| proof.action == strata_store::EffectAction::Edge)
+        .filter(|proof| !edge_proof_hidden(store, proof))
+        .collect())
+}
+
 /// An edge receipt names both endpoints. When either was retired, the
 /// receipt stays hidden like the retired memory itself.
 fn edge_proof_hidden(store: &strata_store::StrataStore, proof: &strata_store::EffectProof) -> bool {
@@ -921,6 +940,38 @@ fn receipt_from_proof(proof: &strata_store::EffectProof, trust: f64) -> Receipt 
         evidence: None,
         actor: None,
     }
+}
+
+/// The receipt of an edge batch: one mutation per edge, in batch order, each
+/// with the digest and seqs of the one effect that admitted them all. The
+/// trust floor is the lowest among the edges' sources.
+fn receipt_from_edge_batch(
+    store: &strata_store::StrataStore,
+    proofs: &[strata_store::EffectProof],
+) -> Option<Receipt> {
+    let mut receipt: Option<Receipt> = None;
+    for proof in proofs {
+        let trust = store
+            .retrievability(&proof.node_id)
+            .ok()
+            .flatten()
+            .unwrap_or(0.0);
+        let one = receipt_from_proof(proof, trust);
+        match receipt.as_mut() {
+            None => receipt = Some(one),
+            Some(all) => {
+                if !all.retrieved.contains(&proof.node_id) {
+                    all.retrieved.push(proof.node_id.clone());
+                }
+                all.mutations.extend(one.mutations);
+                if trust < all.trust_floor {
+                    all.trust_floor = trust;
+                    all.decay_risk = DecayRisk::from_trust_floor(trust);
+                }
+            }
+        }
+    }
+    receipt
 }
 
 fn blocking_secrets(text: &str) -> Vec<String> {
@@ -1675,6 +1726,24 @@ impl MemoryStoreSend for StrataMemory {
             .map(|_| ())
     }
 
+    /// One gate decision, one effect and one data frame for the whole batch
+    /// (`StrataStore::save_connections`): the edges land together or not at
+    /// all, and the returned `eff-` receipt lists every one of them.
+    fn save_connections(
+        &self,
+        connections: &[VestigeEdge],
+    ) -> Result<Option<String>, StorageError> {
+        if connections.is_empty() {
+            return Ok(None);
+        }
+        let edges: Vec<strata_store::ConnectionRecord> =
+            connections.iter().map(to_strata_edge).collect();
+        self.lock()
+            .save_connections(&edges)
+            .map_err(map_store)
+            .map(|effect_seq| Some(receipt_id_for(effect_seq)))
+    }
+
     fn admit_projection(
         &self,
         memory_ids: &[String],
@@ -2015,6 +2084,12 @@ impl MemoryStoreSend for StrataMemory {
         let Some(proof) = resolve_proof(&store, receipt_id).map_err(map_store)? else {
             return Ok(None);
         };
+        if proof.action == strata_store::EffectAction::Edge {
+            // An edge receipt covers one edge or a batch of them; it lists
+            // every edge whose two memories are still live.
+            let edges = visible_edge_proofs(&store, receipt_id).map_err(map_store)?;
+            return Ok(receipt_from_edge_batch(&store, &edges));
+        }
         if edge_proof_hidden(&store, &proof) {
             return Ok(None);
         }
@@ -2043,10 +2118,17 @@ impl MemoryStoreSend for StrataMemory {
         }
         // The receipt tool replaces this with the log proof. LegacyUnsigned
         // only means "no DSSE envelope"; the effect itself is checked in get_receipt.
-        Ok(resolve_proof(&store, receipt_id)
-            .map_err(map_store)?
-            .filter(|proof| !edge_proof_hidden(&store, proof))
-            .map(|_| ReceiptAttestationStatus::LegacyUnsigned))
+        let Some(proof) = resolve_proof(&store, receipt_id).map_err(map_store)? else {
+            return Ok(None);
+        };
+        let shown = if proof.action == strata_store::EffectAction::Edge {
+            !visible_edge_proofs(&store, receipt_id)
+                .map_err(map_store)?
+                .is_empty()
+        } else {
+            !edge_proof_hidden(&store, &proof)
+        };
+        Ok(shown.then_some(ReceiptAttestationStatus::LegacyUnsigned))
     }
 
     fn create_context_ablation_replay(
@@ -2060,14 +2142,15 @@ impl MemoryStoreSend for StrataMemory {
     fn replay_receipt(&self, receipt_id: &str) -> Result<Value, StorageError> {
         let store = self.lock();
         let folded = store.refold().map_err(map_store)?;
-        if let Some(edge_proof) = parse_receipt_seq(receipt_id)
+        if parse_receipt_seq(receipt_id)
             .map(|seq| store.effect_by_seq(seq))
             .transpose()
             .map_err(map_store)?
             .flatten()
-            .filter(|proof| proof.action == strata_store::EffectAction::Edge)
+            .is_some_and(|proof| proof.action == strata_store::EffectAction::Edge)
         {
-            return replay_edge_receipt(&store, &folded, &edge_proof);
+            let edges = visible_edge_proofs(&store, receipt_id).map_err(map_store)?;
+            return replay_edge_receipt(&store, &folded, receipt_id, &edges);
         }
         let Some((node_id, seq)) = lookup_origin(&store, receipt_id) else {
             return Err(StorageError::NotFound(format!(
@@ -3302,29 +3385,37 @@ fn merge_operation(write: strata_store::NodeWrite) -> vestige_core::advanced::Me
 }
 
 /// Replay an edge receipt: the refolded log must reach the live state, and
-/// the edge the receipt names must be in it.
+/// every edge the receipt covers must be in it. `edges` is one proof for a
+/// single edge and one per edge for a batch; an empty list means every edge
+/// names a retired memory, and the receipt stays hidden like the memory.
 fn replay_edge_receipt(
     store: &strata_store::StrataStore,
     folded: &strata_store::Refold,
-    proof: &strata_store::EffectProof,
+    receipt_id: &str,
+    edges: &[strata_store::EffectProof],
 ) -> Result<Value, StorageError> {
-    let receipt_id = receipt_id_for(proof.effect_seq);
-    if edge_proof_hidden(store, proof) {
+    let Some(first) = edges.first() else {
         return Err(StorageError::NotFound(format!(
             "Receipt '{receipt_id}' was not found"
         )));
-    }
-    let (target, kind) = proof.edge.clone().unwrap_or_default();
+    };
+    let receipt_id = receipt_id_for(first.effect_seq);
     let mut mismatches = Vec::new();
     let live_digest = store.state_digest();
     if live_digest != folded.state_digest {
         mismatches.push("state_digest".to_string());
     }
-    let present = store.edges().iter().any(|edge| {
-        edge.source_id == proof.node_id && edge.target_id == target && edge.link_type == kind
-    });
-    if !present {
-        mismatches.push(format!("edge:{}:{kind}:{target}:missing", proof.node_id));
+    let live = store.edges();
+    let mut listed = Vec::with_capacity(edges.len());
+    for proof in edges {
+        let (target, kind) = proof.edge.clone().unwrap_or_default();
+        let present = live.iter().any(|edge| {
+            edge.source_id == proof.node_id && edge.target_id == target && edge.link_type == kind
+        });
+        if !present {
+            mismatches.push(format!("edge:{}:{kind}:{target}:missing", proof.node_id));
+        }
+        listed.push(json!({ "source": proof.node_id, "target": target, "kind": kind }));
     }
     mismatches.extend(folded.gate_mismatches.iter().cloned());
     mismatches.extend(folded.gaps.iter().cloned());
@@ -3335,8 +3426,11 @@ fn replay_edge_receipt(
         "kind": "strata",
         "readOnly": true,
         "receiptId": receipt_id,
-        "edge": { "source": proof.node_id, "target": target, "kind": kind },
-        "effectSeq": proof.effect_seq,
+        // The first edge, as a single-edge receipt has always shown it.
+        "edge": listed.first(),
+        // Every edge the receipt covers, in the order the write lists them.
+        "edges": listed,
+        "effectSeq": first.effect_seq,
         "matched": mismatches.is_empty(),
         "mismatches": mismatches,
         "stateDigest": hex32(&live_digest),
@@ -3820,6 +3914,138 @@ mod tests {
         .await
         .unwrap_err();
         assert!(reversed.contains("unavailable_in_4_0"), "{reversed}");
+    }
+
+    /// The edges of one write are one admitted batch: one receipt lists
+    /// every edge, replays every edge, and shows only the edges whose two
+    /// memories are still live.
+    #[tokio::test]
+    async fn an_edge_batch_has_one_receipt_that_lists_every_live_edge() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = open(dir.path()).unwrap();
+        let put = |content: &str| {
+            storage
+                .ingest_in_scope(
+                    IngestInput {
+                        content: content.to_string(),
+                        ..Default::default()
+                    },
+                    "user",
+                )
+                .unwrap()
+                .id
+        };
+        let new = put("the memory being saved");
+        let peers: Vec<String> = (0..3)
+            .map(|i| put(&format!("earlier memory {i}")))
+            .collect();
+        let now = Utc::now();
+        let touched = |source: &str, target: &str| VestigeEdge {
+            source_id: source.to_string(),
+            target_id: target.to_string(),
+            strength: 0.5,
+            link_type: "touched".to_string(),
+            created_at: now,
+            last_activated: now,
+            activation_count: 0,
+        };
+        let batch: Vec<VestigeEdge> = peers.iter().map(|peer| touched(peer, &new)).collect();
+
+        assert_eq!(storage.save_connections(&[]).unwrap(), None);
+        let receipt_id = storage
+            .save_connections(&batch)
+            .unwrap()
+            .expect("a Strata log issues one receipt for the batch");
+        assert!(receipt_id.starts_with("eff-"), "{receipt_id}");
+        assert_eq!(storage.get_connections_for_memory(&new).unwrap().len(), 3);
+
+        let receipt = storage
+            .get_receipt(&receipt_id)
+            .unwrap()
+            .expect("the batch receipt");
+        assert_eq!(receipt.receipt_id, receipt_id);
+        assert_eq!(receipt.retrieved, peers);
+        assert_eq!(receipt.mutations.len(), 3);
+        for (mutation, peer) in receipt.mutations.iter().zip(&peers) {
+            assert_eq!(&mutation.id, peer);
+            assert_eq!(mutation.kind, "edge_recorded");
+            let note = mutation.note.as_deref().unwrap();
+            assert!(
+                note.contains(&format!("edge=touched target={new}")),
+                "{note}"
+            );
+        }
+        // Every edge cites the same effect and the same data frame.
+        let notes: Vec<&str> = receipt
+            .mutations
+            .iter()
+            .map(|m| m.note.as_deref().unwrap().split(" edge=").next().unwrap())
+            .collect();
+        assert!(notes.windows(2).all(|pair| pair[0] == pair[1]), "{notes:?}");
+
+        let replay = storage.replay_receipt(&receipt_id).unwrap();
+        assert_eq!(replay["matched"], true, "{replay}");
+        assert_eq!(replay["edges"].as_array().unwrap().len(), 3, "{replay}");
+        assert_eq!(replay["edge"]["source"], peers[0], "{replay}");
+        assert_eq!(replay["edges"][2]["source"], peers[2], "{replay}");
+        assert_eq!(replay["edges"][2]["target"], new, "{replay}");
+
+        // A single edge still reads as it always did: one mutation, one edge.
+        let lone = put("a later memory");
+        let single = storage
+            .save_connections(&[touched(&new, &lone)])
+            .unwrap()
+            .expect("receipt");
+        let receipt = storage.get_receipt(&single).unwrap().expect("receipt");
+        assert_eq!(receipt.mutations.len(), 1);
+        let replay = storage.replay_receipt(&single).unwrap();
+        assert_eq!(replay["edges"].as_array().unwrap().len(), 1, "{replay}");
+        assert_eq!(replay["edge"]["target"], lone, "{replay}");
+
+        // A refused batch writes nothing: one edge names an unknown kind.
+        let mut bad = touched(&peers[0], &lone);
+        bad.link_type = "resembles".to_string();
+        let edges_before = storage.get_all_connections().unwrap().len();
+        assert!(
+            storage
+                .save_connections(&[touched(&peers[1], &lone), bad])
+                .is_err()
+        );
+        assert_eq!(storage.get_all_connections().unwrap().len(), edges_before);
+
+        // Retire one peer: its edge leaves the receipt, the other two stay.
+        let suppressed = crate::tools::suppress::execute(
+            &storage,
+            Some(serde_json::json!({ "id": peers[1], "reason": "fixture" })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(suppressed["success"], true, "{suppressed}");
+        let receipt = storage
+            .get_receipt(&receipt_id)
+            .unwrap()
+            .expect("two edges are still live");
+        let sources: Vec<&str> = receipt.mutations.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(sources, vec![peers[0].as_str(), peers[2].as_str()]);
+        let replay = storage.replay_receipt(&receipt_id).unwrap();
+        assert_eq!(replay["edges"].as_array().unwrap().len(), 2, "{replay}");
+
+        // Retire the memory every edge points at: the receipt is hidden with it.
+        let suppressed = crate::tools::suppress::execute(
+            &storage,
+            Some(serde_json::json!({ "id": new, "reason": "fixture" })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(suppressed["success"], true, "{suppressed}");
+        assert!(storage.get_receipt(&receipt_id).unwrap().is_none());
+        assert!(
+            storage
+                .receipt_attestation_status(&receipt_id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(storage.replay_receipt(&receipt_id).is_err());
     }
 
     #[tokio::test]

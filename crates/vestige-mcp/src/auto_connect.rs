@@ -119,13 +119,15 @@
 //!    Texts are tokenized only when the new memory records a reference; a
 //!    memory with tags alone is matched on tags alone.
 //! 3. Apply the hub rule and the budget, rank ([`plan_edges`]), and write
-//!    one `touched` edge per kept candidate through
-//!    [`Storage::save_connection`], exactly as the connect command writes
-//!    its edges. Pairs already joined by a recorded edge (either direction)
-//!    are left alone.
+//!    one `touched` edge per kept candidate, the same edge the connect
+//!    command writes. Pairs already joined by a recorded edge (either
+//!    direction) are left alone.
 //!
-//! Each edge is its own gated, synced write, so the cost of one ingest is
-//! the scan plus one such write per edge; [`MAX_AUTO_EDGES`] bounds it.
+//! The edges of one ingest go to the store as ONE write
+//! ([`Storage::save_connections`]): one gate decision, one effect and one
+//! synced data frame for all of them, so they land together or not at all
+//! and the cost of a save does not grow with the number of edges. The
+//! receipt of that write lists every edge ([`AutoConnectReport::receipt_id`]).
 //!
 //! Two invariants are inherited from the connect command: the older memory
 //! of a pair is the edge's source (the walk's rule for `touched`), and edges
@@ -319,6 +321,10 @@ pub struct AutoConnectReport {
     /// Ranked candidates the [`MAX_AUTO_EDGES`] budget left unlinked (always
     /// the weakest). `vestige connect` writes them.
     pub not_linked: usize,
+    /// The receipt of the one write that admitted every edge of this pass,
+    /// when the store issues one (`eff-...` on a Strata log). `None` when no
+    /// edge was written, or on a store that writes edges one by one.
+    pub receipt_id: Option<String>,
 }
 
 /// One candidate for a `touched` edge or a walk rank: the memory, and the
@@ -524,6 +530,7 @@ pub fn auto_connect_new_memory(
         .collect();
     let now = Utc::now();
     let mut shared_seen: BTreeSet<String> = BTreeSet::new();
+    let mut edges: Vec<ConnectionRecord> = Vec::new();
     for candidate in ranked.into_iter().take(MAX_AUTO_EDGES) {
         let Some(candidate_created) = created_at.get(candidate.id.as_str()) else {
             continue;
@@ -543,7 +550,7 @@ pub fn auto_connect_new_memory(
         );
         // strength 0.5: a co-touch is a moderate link, the same weight the
         // connect command writes.
-        let edge = ConnectionRecord {
+        edges.push(ConnectionRecord {
             source_id: source_id.clone(),
             target_id: target_id.clone(),
             strength: 0.5,
@@ -551,17 +558,30 @@ pub fn auto_connect_new_memory(
             created_at: now,
             last_activated: now,
             activation_count: 0,
-        };
-        storage
-            .save_connection(&edge)
-            .map_err(|err| format!("auto-connect edge {} was not admitted: {err}", candidate.id))?;
-        report.edges += 1;
+        });
         shared_seen.extend(shared.iter().cloned());
         report.pairs.push(JoinedPair {
             source_id,
             target_id,
             identities: shared,
         });
+    }
+
+    // One write for every edge of this pass: they land together or not at
+    // all, behind one gate decision and one synced append.
+    if !edges.is_empty() {
+        match storage.save_connections(&edges) {
+            Ok(receipt_id) => {
+                report.receipt_id = receipt_id;
+                report.edges = edges.len();
+            }
+            Err(err) => {
+                return Err(format!(
+                    "auto-connect: the {} edge(s) of {memory_id} were not admitted: {err}",
+                    edges.len()
+                ));
+            }
+        }
     }
 
     report.shared_identities = shared_seen.into_iter().collect();
@@ -2192,6 +2212,67 @@ mod tests {
             .map(|edge| edge.source_id)
             .collect();
         assert!(!peers.contains(&word_only));
+    }
+
+    /// The edges of one ingest are ONE write: a single receipt names all
+    /// twenty of them, each citing the same effect and the same data frame.
+    /// (The store's own tests count the frames: four for a batch of any
+    /// size, where twenty single edges were eighty.)
+    #[test]
+    fn the_edges_of_one_ingest_are_one_write_with_one_receipt() {
+        let (_dir, storage) = store();
+        for i in 0..20 {
+            put(&storage, &format!("peer {i}"), &["topic"]);
+        }
+        // Enough other memories that 21 carriers are not half the scope.
+        for i in 0..30 {
+            put(&storage, &format!("bystander {i}"), &[]);
+        }
+        assert_eq!(edges(&storage), 0);
+
+        let (new, report) = save(&storage, "the new memory", &["topic"]);
+        assert_eq!(report.edges, 20);
+        assert_eq!(report.pairs.len(), 20);
+        let receipt_id = report
+            .receipt_id
+            .clone()
+            .expect("one receipt for the write");
+        assert!(receipt_id.starts_with("eff-"), "{receipt_id}");
+        assert_eq!(edges(&storage), 20);
+
+        // The one receipt lists every edge the report lists, in its order.
+        let receipt = storage
+            .get_receipt(&receipt_id)
+            .expect("receipt")
+            .expect("the batch receipt");
+        assert_eq!(receipt.mutations.len(), 20);
+        for (mutation, pair) in receipt.mutations.iter().zip(&report.pairs) {
+            assert_eq!(mutation.id, pair.source_id);
+            assert_eq!(mutation.kind, "edge_recorded");
+            assert!(
+                mutation
+                    .note
+                    .as_deref()
+                    .unwrap()
+                    .contains(&format!("edge=touched target={new}")),
+                "{mutation:?}"
+            );
+        }
+        let cited: BTreeSet<&str> = receipt
+            .mutations
+            .iter()
+            .filter_map(|mutation| mutation.note.as_deref())
+            .filter_map(|note| note.split(" edge=").next())
+            .collect();
+        assert_eq!(cited.len(), 1, "one effect admitted all of them: {cited:?}");
+        let replay = storage.replay_receipt(&receipt_id).expect("replay");
+        assert_eq!(replay["matched"], true, "{replay}");
+        assert_eq!(replay["edges"].as_array().unwrap().len(), 20, "{replay}");
+
+        // A memory with nothing to join writes nothing and has no receipt.
+        let (_, quiet) = save(&storage, "unrelated", &["elsewhere"]);
+        assert_eq!(quiet.receipt_id, None);
+        assert_eq!(quiet.edges, 0);
     }
 
     #[test]

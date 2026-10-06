@@ -3955,6 +3955,13 @@ fn run_ingest(
                             pair.identities.join(", ")
                         );
                     }
+                    // The edges above are one write; its receipt lists them.
+                    if let Some(receipt_id) = &report.receipt_id {
+                        println!(
+                            "Auto-connect receipt: {receipt_id} (one write for the {} edge(s))",
+                            report.edges
+                        );
+                    }
                 }
                 // Every tag the pass did not join on is named with its
                 // carrier count and the reason: nothing is skipped silently.

@@ -914,6 +914,8 @@ fn auto_connect_slot(storage: &Arc<Storage>, slot: &mut Value, node_id: &str, sc
                     }))
                     .collect::<Vec<_>>(),
                 "notLinked": report.not_linked,
+                // The one write that admitted every edge above.
+                "receiptId": report.receipt_id,
                 "edge": "touched",
             });
         }

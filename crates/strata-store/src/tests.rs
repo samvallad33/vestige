@@ -683,6 +683,8 @@ fn replay_store_and_migration_frames_do_not_cross_classify() {
                 StoreOp::RecordAnchors { .. }
                 | StoreOp::ReplaceAnchors { .. }
                 | StoreOp::RecordAnchorVerdict { .. } => {}
+                // Nor an edge batch: this fixture saves its one edge alone.
+                StoreOp::SaveEdges { .. } => {}
             }
         } else if frame.kind == KIND_STORE_CHECKPOINT {
             store_checkpoints += 1;
@@ -2511,6 +2513,182 @@ fn edge_effects_prove_and_the_memory_receipt_keeps_proving() {
         Some(created)
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+fn touched(source: &str, target: &str) -> ConnectionRecord {
+    ConnectionRecord {
+        source_id: source.to_string(),
+        target_id: target.to_string(),
+        link_type: EdgeKind::Touched.as_str().to_string(),
+        strength_milli: 500,
+        created_at_ms: 1_700_000_000_000,
+        ..ConnectionRecord::default()
+    }
+}
+
+/// How many frames an open store's log holds, and how many of them are
+/// store data frames.
+fn frame_kinds(store: &StrataStore) -> (usize, usize) {
+    let frames = store.log().read_frames(1).expect("read log");
+    let store_writes = frames
+        .iter()
+        .filter(|frame| frame.kind == KIND_STORE_WRITE)
+        .count();
+    (frames.len(), store_writes)
+}
+
+#[test]
+fn an_edge_batch_is_one_admitted_write_and_every_edge_cites_it() {
+    let dir = temp_dir("edge-batch");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let new = store
+        .ingest(input("the memory being saved", &[]))
+        .expect("new");
+    let peers: Vec<String> = (0..5)
+        .map(|i| {
+            store
+                .ingest(input(&format!("earlier memory {i}"), &[]))
+                .expect("peer")
+        })
+        .collect();
+    let created = store
+        .latest_effect(&new)
+        .expect("prove")
+        .expect("create effect");
+    let batch: Vec<ConnectionRecord> = peers.iter().map(|peer| touched(peer, &new)).collect();
+
+    let (frames_before, writes_before) = frame_kinds(&store);
+    let effect = store.save_connections(&batch).expect("batch");
+    let (frames_after, writes_after) = frame_kinds(&store);
+    // One PROPOSE, one GATE, one EFFECT and one data frame for five edges.
+    assert_eq!(frames_after - frames_before, 4);
+    assert_eq!(writes_after - writes_before, 1);
+
+    // The edges are live in batch order, indexed from both ends.
+    assert_eq!(store.edges()[store.edges().len() - 5..], batch[..]);
+    assert_eq!(store.get_connections_for_memory(&new).len(), 5);
+    assert_eq!(
+        store.get_connections_for_memory(&peers[3]),
+        vec![batch[3].clone()]
+    );
+
+    // One receipt lists every edge: five proofs, all citing the one effect.
+    let proofs = store.effects_by_seq(effect).expect("prove");
+    assert_eq!(proofs.len(), 5);
+    for (proof, edge) in proofs.iter().zip(&batch) {
+        assert_eq!(proof.effect_seq, effect);
+        assert_eq!(proof.action, EffectAction::Edge);
+        assert_eq!(proof.node_id, edge.source_id);
+        assert_eq!(
+            proof.edge,
+            Some((edge.target_id.clone(), edge.link_type.clone()))
+        );
+        assert_eq!(proof.payload_digest, proofs[0].payload_digest);
+        assert_eq!(proof.data_seq, proofs[0].data_seq);
+    }
+    assert_eq!(
+        store.effect_by_seq(effect).expect("prove").as_ref(),
+        proofs.first()
+    );
+    let digest = store.state_digest();
+    drop(store);
+
+    // Reopen replays the batch to the same state, and the full scan proves
+    // the same five effects the index serves.
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(reopened.state_digest(), digest);
+    assert_eq!(reopened.orphan_write_count(), 0);
+    assert_eq!(reopened.effects_by_seq(effect).expect("prove"), proofs);
+    let scanned: Vec<crate::EffectProof> = reopened
+        .prove_effects()
+        .expect("every effect still proves")
+        .into_iter()
+        .filter(|proof| proof.effect_seq == effect)
+        .collect();
+    assert_eq!(scanned, proofs);
+    // The memory's own receipt is still its create; edges never shadow it.
+    assert_eq!(reopened.latest_effect(&new).expect("prove"), Some(created));
+    let refolded = reopened.refold().expect("refold");
+    assert_eq!(refolded.state_digest, digest);
+    assert!(
+        refolded.gate_mismatches.is_empty(),
+        "{:?}",
+        refolded.gate_mismatches
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_edge_batch_lands_whole_or_not_at_all() {
+    let dir = temp_dir("edge-batch-refused");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let a = store.ingest(input("a", &[])).expect("a");
+    let b = store.ingest(input("b", &[])).expect("b");
+    let c = store.ingest(input("c", &[])).expect("c");
+    let frames = frame_kinds(&store);
+
+    // An empty batch, an unknown edge kind, a negative strength and a source
+    // that is not a node are each refused before anything is proposed.
+    assert!(matches!(
+        store.save_connections(&[]),
+        Err(StoreError::InvalidInput(_))
+    ));
+    let mut unknown_kind = touched(&b, &a);
+    unknown_kind.link_type = "resembles".to_string();
+    let mut negative = touched(&b, &a);
+    negative.strength_milli = -1;
+    for bad in [unknown_kind, negative, touched("mem-not-recorded", &a)] {
+        let refused = store.save_connections(&[touched(&c, &a), bad]);
+        assert!(refused.is_err(), "{refused:?}");
+    }
+    assert_eq!(
+        frame_kinds(&store),
+        frames,
+        "a refused batch writes nothing"
+    );
+    assert!(store.edges().is_empty());
+
+    // A batch of one is the plain single-edge op, as every build reads it.
+    let single = store
+        .save_connections(&[touched(&b, &a)])
+        .expect("one edge");
+    let payloads: Vec<StoreOp> = store
+        .log()
+        .read_frames(1)
+        .expect("read log")
+        .iter()
+        .filter(|frame| frame.kind == KIND_STORE_WRITE)
+        .filter_map(|frame| decode_exact::<StoreOp>(&frame.payload))
+        .collect();
+    assert!(matches!(payloads.last(), Some(StoreOp::SaveEdge { .. })));
+    assert_eq!(store.effects_by_seq(single).expect("prove").len(), 1);
+    assert!(store
+        .effects_by_seq(single + 1_000)
+        .expect("prove")
+        .is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_edge_batch_op_appends_its_discriminant_after_every_existing_op() {
+    // Borsh discriminants are positional: the batch is variant 8, so every
+    // log written before it existed decodes to the same ops.
+    let op = StoreOp::SaveEdges {
+        edges: vec![touched("mem-1", "mem-2"), touched("mem-3", "mem-2")],
+    };
+    let bytes = borsh::to_vec(&op).expect("encode");
+    assert_eq!(bytes[0], 8);
+    assert_eq!(decode_exact::<StoreOp>(&bytes), Some(op));
+    assert!(matches!(
+        classify_write_payload(&bytes),
+        WritePayload::StoreOp(_)
+    ));
+    assert!(migration_node(&bytes).is_none());
+    // The single-edge op keeps its place.
+    let single = StoreOp::SaveEdge {
+        edge: touched("mem-1", "mem-2"),
+    };
+    assert_eq!(borsh::to_vec(&single).expect("encode")[0], 1);
 }
 
 #[test]

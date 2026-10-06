@@ -1267,6 +1267,16 @@ fn a_component_tag_past_the_old_cap_reaches_its_commits_and_the_walk_explains_ea
         "nothing the report carries is a hub: {}",
         ingest.text()
     );
+    // The twenty edges are one write, and its receipt is named.
+    assert!(
+        ingest
+            .stdout
+            .lines()
+            .any(|line| line.starts_with("Auto-connect receipt: eff-")
+                && line.ends_with(" (one write for the 20 edge(s))")),
+        "{}",
+        ingest.text()
+    );
     let failure = ingest
         .stdout
         .lines()

@@ -2176,6 +2176,20 @@ pub trait LocalMemoryStore: Sync + 'static {
         ))
     }
 
+    /// Persist several typed edges as one write.
+    ///
+    /// A backend that can admit a batch (one gate decision and one synced
+    /// append for all of it) overrides this, lands the edges together or not
+    /// at all, and returns the id of the one receipt that lists every edge.
+    /// The default saves them one by one, stops at the first refusal, and
+    /// returns `None`: each edge then has its own write.
+    fn save_connections(&self, connections: &[ConnectionRecord]) -> StoreResult<Option<String>> {
+        for connection in connections {
+            self.save_connection(connection)?;
+        }
+        Ok(None)
+    }
+
     /// Persist a counterfactual replay receipt.
     fn save_counterfactual_replay_receipt(
         &self,
@@ -3159,6 +3173,7 @@ pub trait MemoryStore: Send + Sync + 'static {
         outcomes: &[CompositionOutcomeRecord],
     ) -> StoreResult<()>;
     fn save_connection(&self, connection: &ConnectionRecord) -> StoreResult<()>;
+    fn save_connections(&self, connections: &[ConnectionRecord]) -> StoreResult<Option<String>>;
     fn save_counterfactual_replay_receipt(
         &self,
         replay_id: &str,
@@ -4132,6 +4147,9 @@ where
     }
     fn save_connection(&self, connection: &ConnectionRecord) -> StoreResult<()> {
         <T as MemoryStoreSend>::save_connection(self, connection)
+    }
+    fn save_connections(&self, connections: &[ConnectionRecord]) -> StoreResult<Option<String>> {
+        <T as MemoryStoreSend>::save_connections(self, connections)
     }
     fn save_counterfactual_replay_receipt(
         &self,

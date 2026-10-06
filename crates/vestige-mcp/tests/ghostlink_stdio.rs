@@ -262,6 +262,41 @@ fn smart_ingest_auto_connects_on_exact_identities_only() {
         }]),
         "{tagged}"
     );
+
+    // A third carrier of the tag joins both earlier ones in ONE write, and
+    // the response names the receipt that lists both edges.
+    let third = ingest(&mut server, "a third wording", json!(["exact-a"]));
+    let report = &third["autoConnect"];
+    assert_eq!(report["edges"], json!(2), "{third}");
+    let receipt_id = report["receiptId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("autoConnect names no receipt: {third}"));
+    assert!(receipt_id.starts_with("eff-"), "{third}");
+    let receipt = server.call_tool_ok(
+        "receipt",
+        json!({ "action": "get", "receipt_id": receipt_id }),
+    );
+    let mutations = receipt["receipt"]["mutations"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no mutations: {receipt}"));
+    let sources: Vec<&str> = mutations
+        .iter()
+        .filter_map(|mutation| mutation["id"].as_str())
+        .collect();
+    assert_eq!(
+        sources,
+        vec![
+            first["nodeId"].as_str().unwrap(),
+            tagged["nodeId"].as_str().unwrap()
+        ],
+        "one receipt lists both edges: {receipt}"
+    );
+    assert!(
+        mutations
+            .iter()
+            .all(|mutation| mutation["kind"] == "edge_recorded"),
+        "{receipt}"
+    );
     server.shutdown();
 }
 

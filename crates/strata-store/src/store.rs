@@ -262,9 +262,10 @@ pub enum EffectAction {
     /// Verification verdict cached by `RecordAnchorVerdict`, named by the
     /// anchor id. Not a card.
     AnchorVerdict,
-    /// Typed edge admitted by `SaveEdge`, named by its source id; `edge`
-    /// carries the target and kind. Not a card: it never shadows the
-    /// source's own receipt in [`StrataStore::latest_effect`].
+    /// Typed edge admitted by `SaveEdge` or `SaveEdges`, named by its source
+    /// id; `edge` carries the target and kind. A `SaveEdges` batch proves one
+    /// effect per edge, all citing the same EFFECT. Not a card: it never
+    /// shadows the source's own receipt in [`StrataStore::latest_effect`].
     Edge,
 }
 
@@ -454,6 +455,19 @@ fn effect_proofs_for_op(
             None,
             Some((edge.target_id.clone(), edge.link_type.clone())),
         ),
+        // One admitted batch: every edge cites this effect, in batch order.
+        StoreOp::SaveEdges { edges } => Ok(edges
+            .iter()
+            .map(|edge| EffectProof {
+                effect_seq,
+                data_seq,
+                node_id: edge.source_id.clone(),
+                action: EffectAction::Edge,
+                payload_digest: digest,
+                rating: None,
+                edge: Some((edge.target_id.clone(), edge.link_type.clone())),
+            })
+            .collect()),
         StoreOp::SupersedeNode { .. } => Ok(Vec::new()),
     }
 }
@@ -844,17 +858,11 @@ impl StrataStore {
                     self.fold_review(handle, INGEST_RATING, record.kernel_id, frame_seq)?;
                 }
             }
-            StoreOp::SaveEdge { edge } => {
-                let idx = self.edges.len();
-                self.edges.push(edge.clone());
-                self.forward
-                    .entry(edge.source_id.clone())
-                    .or_default()
-                    .push(idx);
-                self.reverse
-                    .entry(edge.target_id.clone())
-                    .or_default()
-                    .push(idx);
+            StoreOp::SaveEdge { edge } => self.index_edge(edge),
+            StoreOp::SaveEdges { edges } => {
+                for edge in edges {
+                    self.index_edge(edge);
+                }
             }
             StoreOp::SupersedeNode { id, superseded_by } => {
                 if let Some(record) = self.nodes.get_mut(id) {
@@ -897,6 +905,20 @@ impl StrataStore {
             } => self.anchors.verdict(anchor_id, status, *checked_at_ms),
         }
         Ok(())
+    }
+
+    /// Append one admitted edge and index both of its ends.
+    fn index_edge(&mut self, edge: &ConnectionRecord) {
+        let idx = self.edges.len();
+        self.edges.push(edge.clone());
+        self.forward
+            .entry(edge.source_id.clone())
+            .or_default()
+            .push(idx);
+        self.reverse
+            .entry(edge.target_id.clone())
+            .or_default()
+            .push(idx);
     }
 
     /// Imported node. Kind stays on the edge records; this only fills the registry.
@@ -1558,6 +1580,19 @@ impl StrataStore {
                         recorded_as: "supersedes",
                     });
                 }
+                StoreOp::SaveEdges { edges } => {
+                    for edge in edges {
+                        if edge.link_type == EdgeKind::Supersedes.as_str() {
+                            hops.push(SupersedeHop {
+                                id: edge.target_id,
+                                superseded_by: edge.source_id,
+                                frame_seq: seq,
+                                frame_hash: frame.frame_hash,
+                                recorded_as: "supersedes",
+                            });
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1625,6 +1660,59 @@ impl StrataStore {
         let (effect_seq, _) = self.admit_write(
             StoreOp::SaveEdge {
                 edge: connection.clone(),
+            },
+            action_kind::WRITE,
+            context,
+        )?;
+        Ok(effect_seq)
+    }
+
+    /// Append several typed edges as ONE admitted write: one gate decision,
+    /// one effect and one data frame for the batch, instead of one of each
+    /// per edge. Every edge is checked the way [`Self::save_connection`]
+    /// checks one, before anything is proposed, so a batch lands whole or not
+    /// at all. Returns the effect seq every edge of the batch cites
+    /// ([`Self::effects_by_seq`] lists them).
+    ///
+    /// An empty batch is refused. A batch of one is written as a plain
+    /// [`StoreOp::SaveEdge`], so a single edge reads the same in every build.
+    pub fn save_connections(
+        &mut self,
+        connections: &[ConnectionRecord],
+    ) -> Result<u64, StoreError> {
+        match connections {
+            [] => {
+                return Err(StoreError::InvalidInput(
+                    "an edge batch must hold at least one edge".into(),
+                ));
+            }
+            [only] => return self.save_connection(only),
+            _ => {}
+        }
+        let mut context: Vec<u64> = Vec::new();
+        for connection in connections {
+            if EdgeKind::parse(&connection.link_type).is_none() {
+                return Err(StoreError::InvalidInput(format!(
+                    "link_type '{}' is not in the typed-edge vocabulary",
+                    connection.link_type
+                )));
+            }
+            if connection.strength_milli < 0 {
+                return Err(StoreError::InvalidInput(
+                    "strength_milli must be >= 0".into(),
+                ));
+            }
+            self.require_node(&connection.source_id)?;
+            context.extend(self.context_for(&[&connection.source_id]));
+            if self.nodes.contains_key(&connection.target_id) {
+                context.extend(self.context_for(&[&connection.target_id]));
+            }
+        }
+        context.sort_unstable();
+        context.dedup();
+        let (effect_seq, _) = self.admit_write(
+            StoreOp::SaveEdges {
+                edges: connections.to_vec(),
             },
             action_kind::WRITE,
             context,
@@ -1980,6 +2068,24 @@ impl StrataStore {
             .by_seq
             .get(&effect_seq)
             .map(|&idx| self.effect_index.proofs[idx].clone()))
+    }
+
+    /// Every proof that cites `effect_seq`, in the order the op lists them:
+    /// one for a single write, one per row for a batch (intentions, anchors,
+    /// edges). Empty when the log admits no such effect.
+    ///
+    /// Answered from the effect index, like [`StrataStore::effect_by_seq`].
+    pub fn effects_by_seq(&self, effect_seq: u64) -> Result<Vec<EffectProof>, StoreError> {
+        self.effect_index.check()?;
+        let Some(&first) = self.effect_index.by_seq.get(&effect_seq) else {
+            return Ok(Vec::new());
+        };
+        // The proofs of one op are pushed together, so they are adjacent.
+        Ok(self.effect_index.proofs[first..]
+            .iter()
+            .take_while(|proof| proof.effect_seq == effect_seq)
+            .cloned()
+            .collect())
     }
 
     /// The latest proved effect for `node_id` (a node or an intention id).
