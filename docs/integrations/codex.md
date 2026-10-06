@@ -11,7 +11,7 @@ Codex has native MCP support through the `codex mcp` CLI. Add Vestige once and C
 ## Prerequisites
 
 - **Codex CLI** installed and authenticated
-- **vestige-mcp** binary installed ([Installation guide](../../README.md#install))
+- **vestige-mcp** binary installed ([Installation guide](../REFERENCE.md#install))
 
 ---
 

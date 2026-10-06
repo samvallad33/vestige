@@ -11,7 +11,7 @@ JetBrains IDEs (2025.2+) have built-in MCP support. Vestige integrates through t
 ## Prerequisites
 
 - **JetBrains IDE 2025.2+** (IntelliJ IDEA, WebStorm, PyCharm, GoLand, etc.)
-- **vestige-mcp** binary installed ([Installation guide](../../README.md#install))
+- **vestige-mcp** binary installed ([Installation guide](../REFERENCE.md#install))
 
 ---
 
