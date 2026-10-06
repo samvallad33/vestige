@@ -5,12 +5,12 @@
 //! Not part of CI (the clones are local and the walk is slow). Run:
 //!
 //! ```text
-//! cargo test -p vestige-mcp --lib real_repos_rank_or_miss -- --ignored --nocapture
+//! cargo test -p vestige-mcp --lib real_repos -- --ignored --nocapture --test-threads=1
 //! ```
 //!
 //! Clones live under `VESTIGE_PROOF_REPOS` (default `/tmp/vestige-proof`).
 //! The cause SHA is an oracle for scoring the walk. It is never written as an
-//! edge, a tag, or a start point.
+//! edge, a tag, or a start point. `VESTIGE_PROOF_ONLY=name,name` runs a subset.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -84,7 +84,7 @@ fn cases() -> Vec<Case> {
             pages: &[("b52d48973fe9ddb2e78b663ec48a1a68f7e7802d", 20)],
             expect: Expect::Rank(1),
             expect_revert: true,
-            note: "issue #10186 has no source path. Start is the CI run URL. Failure revision is the 0.5.12 tag. The cause touched only Cargo.lock and was git-reverted.",
+            note: "issue #10186 has no source path. Start is the CI run URL. Failure revision is the 0.5.12 tag. The cause touched only Cargo.lock; the kept path is the lockfile touched edge, and the commit was git-reverted.",
             starts: uv_starts,
         },
         Case {
@@ -99,7 +99,7 @@ fn cases() -> Vec<Case> {
             ],
             expect: Expect::Miss,
             expect_revert: true,
-            note: "revert message names Prombench and no file, test, or CI run. Parent distance from the reverted-from revision to the cause is far past depth 8.",
+            note: "revert message names Prombench and no file. This page ingests the revert before the failure revision, so the parent edge is not recorded yet, and the shallow clone does not connect the cause to that revision. The follow-up proof ingests the failure revision first and ranks the cause via corrects.",
             starts: logged_only,
         },
         Case {
@@ -112,9 +112,9 @@ fn cases() -> Vec<Case> {
                 ("3ca610757ed3e38f8a0a58798a0bdb23aebcc6bb", 1),
                 ("9edcffcde5595e8a5b1a35f88c421764e575afce", 8),
             ],
-            expect: Expect::Miss,
+            expect: Expect::Rank(1),
             expect_revert: true,
-            note: "issue #126965 logs only basenames server.go:102 and kubelet.go:1566. A bare file name is not a path. v1.31.0 is thousands of commits after the cause.",
+            note: "issue #126965 logs only basenames server.go:102 and kubelet.go:1566. A bare file name is not a path. The revert is on another branch from v1.31.0; the cause is an ancestor of v1.31.0, so the recorded corrects edge is walked and ranks first.",
             starts: kubelet_starts,
         },
         Case {
@@ -129,7 +129,7 @@ fn cases() -> Vec<Case> {
             ],
             expect: Expect::Miss,
             expect_revert: true,
-            note: "revert PR 116959 describes the dashboard break and names no file. The cause is hundreds of commits before the reverted-from revision.",
+            note: "revert describes the dashboard break and names no file. This page ingests the revert before the failure revision, so the parent edge is not recorded yet, and the shallow clone does not connect the cause to that revision. The follow-up proof ingests the failure revision first and ranks the cause via corrects.",
             starts: logged_only,
         },
     ]
@@ -560,6 +560,13 @@ fn strata_open(dir: &Path) -> Arc<Storage> {
     crate::strata_memory::open(dir).expect("open strata log")
 }
 
+fn selected(name: &str) -> bool {
+    match std::env::var("VESTIGE_PROOF_ONLY") {
+        Ok(raw) if !raw.trim().is_empty() => raw.split(',').any(|item| item.trim() == name),
+        _ => true,
+    }
+}
+
 fn render(report: &Report) -> String {
     format!(
         "PROOF {name} passed={passed} ingested={ingested} revertEdge={revert} rank={rank} of {count} truncated={truncated} empty={empty}\n  cause: {cause}\n  top: {top}\n  failureLinks: {links}\n  ingest: {ingest}\n  note: {note}\n  why: {why}",
@@ -602,6 +609,9 @@ async fn real_repos_rank_or_miss_without_hand_written_cause_links() {
     let mut rendered = Vec::new();
     let mut failed = Vec::new();
     for case in cases() {
+        if !selected(case.name) {
+            continue;
+        }
         let repo = root.join(case.repo);
         if !repo.join(".git").is_dir() {
             let why = format!("missing clone {}", repo.display());
@@ -627,4 +637,332 @@ async fn real_repos_rank_or_miss_without_hand_written_cause_links() {
         "causal proof failed:\n{}\n\n{blob}",
         failed.join("\n")
     );
+}
+
+/// Lockfile bump, first-parent range, and revert/patch-id reachability.
+/// Same inputs as the rank proof: `ingest_repo` plus one failure memory
+/// `derived_from` the observed revision. The tokio case also passes the
+/// good..bad range the regression is bounded by. No cause link is written.
+#[tokio::test]
+#[ignore = "needs local clones under VESTIGE_PROOF_REPOS; not a CI test"]
+async fn real_repos_followup_lockfile_range_and_revert() {
+    let root = repos_root();
+    let acf = "acf8a7da7a64bf08d578db9a9836a8e061765314";
+    let mut rendered = Vec::new();
+    let mut failed = Vec::new();
+    for case in followup_cases() {
+        if !selected(case.name) {
+            continue;
+        }
+        let repo = root.join(case.repo);
+        if !repo.join(".git").is_dir() {
+            let why = format!("missing clone {}", repo.display());
+            eprintln!("PROOF {} FAIL {why}", case.name);
+            failed.push(format!("{}: {why}", case.name));
+            continue;
+        }
+        let report = run_followup(&case, &root, acf).await;
+        let text = report.render();
+        eprintln!("{text}\n");
+        if !report.passed {
+            failed.push(format!("{}: {}", report.name, report.why));
+        }
+        rendered.push(text);
+    }
+    let blob = rendered.join("\n\n");
+    let out = root.join("followup-proof-report.txt");
+    if let Err(err) = std::fs::write(&out, &blob) {
+        eprintln!("could not write {}: {err}", out.display());
+    }
+    assert!(
+        failed.is_empty(),
+        "follow-up proof failed:\n{}\n\n{blob}",
+        failed.join("\n")
+    );
+}
+
+struct FollowCase {
+    name: &'static str,
+    repo: &'static str,
+    failure_sha: &'static str,
+    cause_sha: &'static str,
+    symptom: &'static str,
+    pages: &'static [(&'static str, usize)],
+    note: &'static str,
+    signal: Signal,
+}
+
+enum Signal {
+    /// Rank 1 through a lockfile `touched` edge for this package.
+    Lockfile { package: &'static str },
+    /// Cause stays; this full SHA is removed by `worked_in..broke_in`.
+    Range {
+        worked_in: &'static str,
+        broke_in: &'static str,
+        frame: &'static str,
+    },
+    /// Last hop is the recorded `corrects` edge (revert trailer or patch-id).
+    Revert,
+}
+
+fn followup_cases() -> Vec<FollowCase> {
+    vec![
+        FollowCase {
+            name: "uv-10186-lockfile",
+            repo: "uv",
+            failure_sha: "351d602d86c484a39bc537f1eb99866ea2c25fc1",
+            cause_sha: "d2f58d92991fa08b24596fcc6c6472dc5015d3bc",
+            symptom: "failure: uv publish raises `error decoding response body` on 0.5.12. 0.5.11 works. CI https://github.com/andrew000/FTL-Extract/actions/runs/12509313775/job/34898612613#step:8:12",
+            pages: &[("b52d48973fe9ddb2e78b663ec48a1a68f7e7802d", 20)],
+            note: "no source path in the issue. The cause commit changes only Cargo.lock. Rank is the lockfile touched edge, not the prose.",
+            signal: Signal::Lockfile { package: "reqwest" },
+        },
+        FollowCase {
+            name: "tokio-6714-range",
+            repo: "tokio",
+            failure_sha: "48e35c11d924ffa3a009b89fbb6d36e57b835da4",
+            cause_sha: "8480a180e6ffdd0ec0ec213a9bebcda2445fc541",
+            symptom: "failure: tokio 1.39.0 causes quinn to panic. thread 'tests::stream_id_flow_control' panicked at /home/alex/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.39.0/src/util/linked_list.rs:123:9: assertion `left != right` failed",
+            pages: &[
+                ("47210a8e6eeb82b51aa778074fdc4d757b953b8c", 100),
+                ("acf8a7da7a64bf08d578db9a9836a8e061765314", 1),
+            ],
+            note: "panic path plus tokio-1.38.0..tokio-1.39.0. The 2020 commit that also touched linked_list.rs is ingested so the range can exclude it.",
+            signal: Signal::Range {
+                worked_in: "tokio-1.38.0",
+                broke_in: "tokio-1.39.0",
+                frame: "/home/alex/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.39.0/src/util/linked_list.rs:123:9",
+            },
+        },
+        FollowCase {
+            name: "prometheus-mempostings-revert",
+            repo: "prometheus",
+            failure_sha: "9700933d18954e82155f1abed712707d66027b1e",
+            cause_sha: "50ef0dc954592666a13ff92ef20811f0127c3b49",
+            symptom: "failure: Memory allocation goes so high in Prombench that the system is unusable.",
+            pages: &[
+                ("9700933d18954e82155f1abed712707d66027b1e", 8),
+                ("2fbbfc3da800d3b33c7f7b430e403f66b781b962", 1),
+            ],
+            note: "failure revision is the revert's parent. It is ingested first so the parent edge is recorded, then the child jump follows corrects.",
+            signal: Signal::Revert,
+        },
+        FollowCase {
+            name: "kubernetes-windows-kubelet-revert",
+            repo: "kubernetes",
+            failure_sha: "9edcffcde5595e8a5b1a35f88c421764e575afce",
+            cause_sha: "4060ee60c1d2e5ba1fba1f8729adfc211cee1b6f",
+            symptom: "failure: kubelet fails to restart on Windows since v1.31.0. E0828 server.go:102 Failed to listen to socket while starting device plugin registry. E0828 kubelet.go:1566 Failed to start ContainerManager. listen unix kubelet.sock bind.",
+            pages: &[
+                ("3ca610757ed3e38f8a0a58798a0bdb23aebcc6bb", 1),
+                ("9edcffcde5595e8a5b1a35f88c421764e575afce", 8),
+            ],
+            note: "revert is not a descendant of v1.31.0. The cause is an ancestor, so the corrects edge is added without the parent chain.",
+            signal: Signal::Revert,
+        },
+        FollowCase {
+            name: "grafana-min-step-revert",
+            repo: "grafana",
+            failure_sha: "4c8d14014dd8c40fd9f41df83c3ccaf107b0d346",
+            cause_sha: "7ae2eed876fce88281ef88ba1e7edca97cfdfde6",
+            symptom: "failure: Having the minStep take precedence introduced breaking changes for existing dashboards that were using minStep with the previous logic when their series returned a lot of data points.",
+            pages: &[
+                ("4c8d14014dd8c40fd9f41df83c3ccaf107b0d346", 8),
+                ("03d43277131d4310f2de02efcf81d168b132d273", 1),
+            ],
+            note: "failure revision is the revert's parent. It is ingested first so the parent edge is recorded, then the child jump follows corrects.",
+            signal: Signal::Revert,
+        },
+    ]
+}
+
+struct FollowReport {
+    name: String,
+    passed: bool,
+    why: String,
+    text: String,
+}
+
+impl FollowReport {
+    fn render(&self) -> String {
+        self.text.clone()
+    }
+}
+
+async fn run_followup(case: &FollowCase, root: &Path, excluded_sha: &str) -> FollowReport {
+    let fail = |why: String| FollowReport {
+        name: case.name.into(),
+        passed: false,
+        why: why.clone(),
+        text: format!("PROOF {} FAIL {why}", case.name),
+    };
+    let repo = root.join(case.repo);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let storage = strata_open(dir.path());
+    let ingest = match ingest_pages(&storage, &repo, case.name, case.pages).await {
+        Ok(summary) => summary,
+        Err(why) => return fail(why),
+    };
+    let Some(revision_id) = commit_id(&storage, case.name, case.failure_sha) else {
+        return fail(format!(
+            "failure revision {} was not ingested",
+            case.failure_sha
+        ));
+    };
+    let Some(cause_id) = commit_id(&storage, case.name, case.cause_sha) else {
+        return fail(format!("cause {} was not ingested", case.cause_sha));
+    };
+    let failure_id = match link_failure(&storage, case.name, case.symptom, &revision_id) {
+        Ok(id) => id,
+        Err(why) => return fail(why),
+    };
+    if let Err(why) = only_derived_from_revision(&storage, &failure_id, &revision_id, &cause_id) {
+        return fail(why);
+    }
+    let starts = match case.signal {
+        Signal::Lockfile { .. } => json!([{
+            "kind": "ci_run",
+            "run_id": "https://github.com/andrew000/FTL-Extract/actions/runs/12509313775/job/34898612613#step:8:12",
+            "node_id": failure_id,
+        }]),
+        Signal::Range {
+            worked_in,
+            broke_in,
+            frame,
+        } => json!([
+            {"kind": "stack_frame", "frame": frame, "node_id": failure_id},
+            {
+                "kind": "version_range",
+                "worked_in": worked_in,
+                "broke_in": broke_in,
+                "repo": repo.display().to_string(),
+            }
+        ]),
+        Signal::Revert => json!([{"kind": "logged_write", "node_id": failure_id}]),
+    };
+    let walk = match causal_walk::execute(
+        &storage,
+        Some(json!({
+            "scope": case.name,
+            "scan_limit": SCAN_LIMIT,
+            "start_points": starts,
+        })),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(why) => return fail(format!("causal_walk: {why}")),
+    };
+    let causes = walk["causes"].as_array().cloned().unwrap_or_default();
+    let rank = causes.iter().position(|cause| {
+        cause["structure"]["sha"].as_str() == Some(case.cause_sha)
+            || cause["id"].as_str() == Some(cause_id.as_str())
+    });
+    let cause = rank.and_then(|index| causes.get(index));
+    let edge = cause
+        .and_then(|row| row["structure"]["edge"].as_str())
+        .unwrap_or("");
+    let package = cause
+        .and_then(|row| row["structure"]["lockfile"]["package"].as_str())
+        .unwrap_or("");
+    let brief = cause.map(row_brief).unwrap_or_else(|| "absent".into());
+    let top = causes
+        .iter()
+        .take(6)
+        .map(row_brief)
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let mut passed = true;
+    let mut why = String::new();
+    let mut extra = String::new();
+    match case.signal {
+        Signal::Lockfile { package: want } => {
+            if rank != Some(0) {
+                passed = false;
+                why = format!(
+                    "want rank 1 via lockfile, got {}",
+                    rank.map(|index| (index + 1).to_string())
+                        .unwrap_or_else(|| "miss".into())
+                );
+            }
+            if edge != "touched" || package != want {
+                passed = false;
+                let detail = format!(
+                    "want edge touched lockfile.package={want}, got edge={edge} package={package}"
+                );
+                if why.is_empty() {
+                    why = detail;
+                } else {
+                    why = format!("{why}; {detail}");
+                }
+            }
+        }
+        Signal::Range { .. } => {
+            if rank.is_none() {
+                passed = false;
+                why = "cause was not in the causes after the range filter".into();
+            }
+            let shas = walk["range"]["excludedShas"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let excluded = shas.iter().any(|sha| sha.as_str() == Some(excluded_sha));
+            if !excluded {
+                passed = false;
+                let detail = format!("excludedShas does not contain {excluded_sha}");
+                if why.is_empty() {
+                    why = detail;
+                } else {
+                    why = format!("{why}; {detail}");
+                }
+            }
+            if causes
+                .iter()
+                .any(|row| row["structure"]["sha"].as_str() == Some(excluded_sha))
+            {
+                passed = false;
+                let detail = "the 2020 blame commit is still a cause".to_string();
+                if why.is_empty() {
+                    why = detail;
+                } else {
+                    why = format!("{why}; {detail}");
+                }
+            }
+            extra = format!(
+                " range.excluded={} excludedSha={} present={} range.because={}",
+                walk["range"]["excluded"],
+                excluded_sha,
+                excluded,
+                walk["range"]["because"].as_str().unwrap_or("")
+            );
+        }
+        Signal::Revert => {
+            if rank.is_none() || edge != "corrects" {
+                passed = false;
+                why = format!(
+                    "want corrects, got {} edge={edge}",
+                    rank.map(|index| format!("rank {}", index + 1))
+                        .unwrap_or_else(|| "miss".into())
+                );
+            }
+        }
+    }
+    let rank_label = rank
+        .map(|index| (index + 1).to_string())
+        .unwrap_or_else(|| "miss".into());
+    let text = format!(
+        "PROOF {name} passed={passed} rank={rank_label} of {count} edge={edge} pkg={pkg}{extra}\n  cause: {brief}\n  top: {top}\n  ingest: {ingest}\n  note: {note}\n  why: {why_text}",
+        name = case.name,
+        count = causes.len(),
+        pkg = if package.is_empty() { "-" } else { package },
+        top = if top.is_empty() { "-" } else { top.as_str() },
+        note = case.note,
+        why_text = if why.is_empty() { "-" } else { why.as_str() },
+    );
+    FollowReport {
+        name: case.name.into(),
+        passed,
+        why,
+        text,
+    }
 }
