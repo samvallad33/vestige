@@ -179,12 +179,12 @@ mod tests {
 
     /// The health view reports `modulesActive` from `COGNITIVE_MODULE_COUNT`.
     /// Rust cannot reflect over struct fields, so this test pins the counting
-    /// convention: 16 neuroscience + 10 advanced + 1 cfg-gated search module.
+    /// convention: 16 neuroscience + 10 advanced.
     /// If a module field is added to `CognitiveEngine`, update the constant
     /// arms and this expression together.
     #[test]
     fn cognitive_module_count_is_maintained() {
-        let expected = 16 + 10 + if false { 1 } else { 0 };
+        let expected = 16 + 10;
         assert_eq!(COGNITIVE_MODULE_COUNT, expected);
     }
 

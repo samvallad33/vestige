@@ -128,33 +128,6 @@ fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) {
     let _ = stream.flush();
 }
 
-#[cfg(feature = "connectors")]
-fn redmine_issues_json(issues: &[(u64, &str)]) -> String {
-    let items: Vec<String> = issues
-        .iter()
-        .map(|(id, subject)| redmine_issue_body(*id, subject, false))
-        .collect();
-    format!(
-        r#"{{"issues": [{}], "total_count": {}}}"#,
-        items.join(","),
-        issues.len()
-    )
-}
-
-#[cfg(feature = "connectors")]
-fn redmine_issue_body(id: u64, subject: &str, detail: bool) -> String {
-    // Single line on purpose: this is a raw string, so a `\`-newline
-    // "continuation" would land in the JSON verbatim as an invalid escape.
-    let inner = format!(
-        r#"{{"id": {id}, "subject": "{subject}", "description": "Failure-case fixture issue {id}", "status": {{"id": 1, "name": "New"}}, "updated_on": "2026-09-01T10:00:00Z", "created_on": "2026-09-01T09:00:00Z"}}"#
-    );
-    if detail {
-        format!(r#"{{"issue": {inner}}}"#)
-    } else {
-        inner
-    }
-}
-
 // ============================================================================
 // A. Recall failure semantics
 // ============================================================================

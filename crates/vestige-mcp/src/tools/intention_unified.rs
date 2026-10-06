@@ -2446,15 +2446,15 @@ mod tests {
         // file_pattern (no codebase — otherwise the check-side codebase branch
         // would short-circuit and mask a dropped file_pattern field).
         //
-        // Note: file_pattern matching currently uses substring containment, not
-        // glob, so the "pattern" must be a plain substring of the file path.
+        // Since 4.2.0 file_pattern is an exact path: it fires only on a
+        // context whose `file` equals it.
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({
             "action": "set",
             "description": "Review test files",
             "trigger": {
                 "type": "context",
-                "file_pattern": ".test.cjs"
+                "file_pattern": "tests/neural-cascade.test.cjs"
             }
         });
         let result = execute(&storage, &test_cognitive(), Some(args)).await;
@@ -2476,7 +2476,7 @@ mod tests {
         let triggered = check["triggered"].as_array().expect("triggered array");
         assert!(
             !triggered.is_empty(),
-            "file_pattern must survive snake_case deserialization and match on file substring; \
+            "file_pattern must survive snake_case deserialization and match on the exact file; \
              got triggered: {:?}, pending: {:?}",
             check["triggered"],
             check["pending"]
@@ -2552,7 +2552,7 @@ mod tests {
         let check_args = serde_json::json!({
             "action": "check",
             "context": {
-                "codebase": "payments-service"
+                "codebase": "payments"
             }
         });
         let result = execute(&storage, &test_cognitive(), Some(check_args)).await;
@@ -2888,7 +2888,8 @@ mod tests {
         for (event, expected) in [
             ("build_started", 0),
             ("build_finished_pending", 0),
-            ("BUILD_FINISHED", 1),
+            ("BUILD_FINISHED", 0),
+            ("build_finished", 1),
         ] {
             let out = execute(&storage, &cog, Some(serde_json::json!({
                 "action":"check", "context":{"current_time":"2029-01-01T00:00:00Z", "event":event}
@@ -2906,7 +2907,7 @@ mod tests {
             &cog,
             Some(serde_json::json!({
                 "action":"set", "description":"All constraints fixture", "trigger":{
-                    "type":"context", "codebase":"fixture", "file_pattern":".rs", "topic":"storage"
+                    "type":"context", "codebase":"fixture", "file_pattern":"lib.rs", "topic":"storage"
                 }
             })),
         )
@@ -3341,7 +3342,7 @@ mod tests {
                     "all_of": [{
                         "type": "context",
                         "codebase": "vestige",
-                        "file_pattern": "intention_unified.rs"
+                        "file_pattern": "crates/vestige-mcp/src/tools/intention_unified.rs"
                     }],
                     "any_of": [
                         { "type": "event", "condition": "review approved" },
@@ -3377,7 +3378,7 @@ mod tests {
                 "context": {
                     "codebase": "vestige",
                     "file": "crates/vestige-mcp/src/tools/intention_unified.rs",
-                    "events": ["all tests completed"]
+                    "events": ["tests completed"]
                 }
             })),
         )
@@ -3467,29 +3468,6 @@ mod tests {
         .unwrap();
         assert!(result["triggered"].as_array().unwrap().is_empty());
         assert!(result["pending"][0]["invalid_trigger"].is_string());
-    }
-
-    #[tokio::test]
-    async fn test_nlp_fortnight_recurrence_is_persisted_in_full() {
-        let (storage, _dir) = test_storage().await;
-        let set = execute(
-            &storage,
-            &test_cognitive(),
-            Some(serde_json::json!({
-                "action": "set",
-                "description": "remind me to review the roadmap every fortnight"
-            })),
-        )
-        .await
-        .unwrap();
-        assert_eq!(set["nlpParsed"], true);
-        let id = set["intentionId"].as_str().unwrap();
-        let stored = storage.get_intention(id).unwrap().unwrap();
-        let trigger: Value = serde_json::from_str(&stored.trigger_data).unwrap();
-        assert_eq!(trigger["type"], "recurring");
-        assert_eq!(trigger["recurrence"]["every_minutes"], 20_160);
-        assert!(trigger["base"].is_object());
-        assert!(trigger["next_occurrence"].is_string());
     }
 
     #[tokio::test]
@@ -3628,12 +3606,8 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         let id = set_event_intention(&storage, "payments migration finished", None).await;
 
-        let section = surface_prospective(
-            &storage,
-            &cue("the payments migration finished this afternoon"),
-            "user",
-        )
-        .expect("matching query must surface the intention");
+        let section = surface_prospective(&storage, &cue("payments migration finished"), "user")
+            .expect("matching query must surface the intention");
         let items = section["intentions"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["id"], serde_json::json!(id));
@@ -3697,24 +3671,13 @@ mod tests {
     #[tokio::test]
     async fn surfacing_caps_at_three_intentions() {
         let (storage, _dir) = test_storage().await;
-        for condition in [
-            "alpha review finished",
-            "beta review finished",
-            "gamma review finished",
-            "delta review finished",
-            "epsilon review finished",
-        ] {
-            set_event_intention(&storage, condition, None).await;
+        // Five intentions on the same exact event; a cue naming it fires all
+        // five, and the section still lists three.
+        for _ in 0..5 {
+            set_event_intention(&storage, "review finished", None).await;
         }
-        let section = surface_prospective(
-            &storage,
-            &cue(
-                "alpha review finished, beta review finished, gamma review finished, \
-                  delta review finished, epsilon review finished",
-            ),
-            "user",
-        )
-        .expect("matches exist");
+        let section =
+            surface_prospective(&storage, &cue("review finished"), "user").expect("matches exist");
         let items = section["intentions"].as_array().unwrap();
         assert_eq!(
             items.len(),

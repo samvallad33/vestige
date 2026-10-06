@@ -4356,7 +4356,7 @@ mod prospective_resurfacing_tests {
             &storage,
             &cognitive,
             &oc,
-            Some(serde_json::json!({ "query": "the payments migration finished today" })),
+            Some(serde_json::json!({ "query": "payments migration finished" })),
         )
         .await
         .unwrap();
@@ -4382,7 +4382,7 @@ mod prospective_resurfacing_tests {
             &storage,
             &cognitive,
             &oc,
-            Some(serde_json::json!({ "query": "the payments migration finished today" })),
+            Some(serde_json::json!({ "query": "payments migration finished" })),
         )
         .await
         .unwrap();

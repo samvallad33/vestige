@@ -277,7 +277,7 @@ fn proof_carrying_write_path_over_real_stdio() {
     assert_eq!(reinforced["decision"], "reinforce", "{reinforced}");
     assert_eq!(reinforced["duplicateOf"], json!(a_node));
     assert_eq!(reinforced["canonicalHash"], json!(a_hash));
-    assert_eq!(reinforced["pipeline"], "nfc-lower-zwstrip-wscollapse-v1");
+    assert_eq!(reinforced["pipeline"], "nfc-zwstrip-wscollapse-v1");
     assert_eq!(reinforced["rawBytes"], json!(alpha.len()));
     let echo = reinforced["echoNodeId"]
         .as_str()
@@ -300,25 +300,24 @@ fn proof_carrying_write_path_over_real_stdio() {
     );
 
     // --- 3. canonically identical but byte-different bytes (B5.3) ---
-    // Zero-width characters, different case, extra whitespace: the pipeline
-    // folds all of it onto A. (A itself is ASCII-only — the pinned B5.1
+    // Zero-width characters and extra whitespace: the pipeline folds them
+    // onto A. Case is identity, so the variant keeps A's case. (A itself is ASCII-only — the pinned B5.1
     // fixture — so the NFC half of the property is exercised against its own
     // original below.)
-    let variant = "\u{200b}ALPHA   content with \u{200b}src/store.py and commit a1b2c3d   ";
+    let variant = "\u{200b}alpha   content with \u{200b}src/store.py and commit a1b2c3d   ";
     assert_ne!(variant.as_bytes(), alpha.as_bytes());
     let folded = server.tool("smart_ingest", json!({ "content": variant }));
     assert_eq!(folded["decision"], "reinforce", "{folded}");
     assert_eq!(folded["duplicateOf"], json!(a_node));
     assert_eq!(folded["canonicalHash"], json!(a_hash));
 
-    // NFC: e + combining acute vs precomposed, different case, extra
-    // whitespace — canonically identical, reinforces the precomposed
-    // original.
+    // NFC: e + combining acute vs precomposed, extra whitespace —
+    // canonically identical, reinforces the precomposed original.
     let precomposed = "the café canon fixture node";
     let cafe = server.tool("smart_ingest", json!({ "content": precomposed }));
     assert_eq!(cafe["decision"], "create", "{cafe}");
     let cafe_node = cafe["nodeId"].as_str().expect("nodeId").to_string();
-    let decomposed = "THE CAFE\u{301} CANON FIXTURE   NODE";
+    let decomposed = "the cafe\u{301} canon fixture   node";
     let folded_nfc = server.tool("smart_ingest", json!({ "content": decomposed }));
     assert_eq!(folded_nfc["decision"], "reinforce", "{folded_nfc}");
     assert_eq!(folded_nfc["duplicateOf"], json!(cafe_node));
@@ -425,7 +424,7 @@ fn proof_carrying_write_path_over_real_stdio() {
         "items": [
             { "content": "batch pair one bravo", "intent_id": "batch-pair-1" },
             { "content": "batch new charlie", "intent_id": "batch-new-1" },
-            { "content": "BATCH   PAIR ONE  BRAVO" },
+            { "content": "batch   pair one  bravo" },
             { "content": alpha },
         ]
     });

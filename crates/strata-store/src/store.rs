@@ -168,9 +168,8 @@ fn publish_backup(staging: &Path, dest: &Path, dest_is_new: bool) -> std::io::Re
 const META_NAME: &str = "store.meta";
 /// Side file for the intent index (caller idempotency): `<dir>/intent-index`.
 ///
-/// The log format is frozen (no new `StoreOp` kinds, Law 4), and an intent id
-/// is caller state the log never sees, so the `(scope, intent id)` table
-/// lives beside the log like `store.meta` does. It is borsh over a `BTreeMap`
+/// An intent id is caller state the log never sees, so the `(scope, intent
+/// id)` table lives beside the log like `store.meta` does. It is borsh over a `BTreeMap`
 /// (byte-sorted keys, deterministic bytes), written tmp-then-rename so a
 /// crash never leaves it torn, and created lazily: an existing store without
 /// the file opens with an empty index and upgrades in place.
@@ -221,6 +220,7 @@ fn store_intent_index(
     file.write_all(&bytes)?;
     file.sync_all()?;
     std::fs::rename(&tmp, dir.join(INTENT_INDEX_FILE))?;
+    sync_dir(dir)?;
     Ok(())
 }
 
@@ -804,8 +804,9 @@ pub struct StrataStore {
     /// lookups answer without re-reading the log.
     effect_index: EffectIndex,
     /// (scope, canonical content hash) -> first regular node id with that
-    /// canonical form (derived: rebuilt by replay, extended by every admitted
-    /// ingest, exactly like `effect_index`). The duplicate gate reads it.
+    /// canonical form that is still live (derived: rebuilt by replay, extended
+    /// by every admitted ingest, exactly like `effect_index`). The duplicate
+    /// gate reads it.
     ///
     /// Nodes whose `source.system` is [`DUPLICATE_SOURCE`] ("duplicate" echo
     /// nodes) are never indexed, so a duplicate of a duplicate still resolves
@@ -1024,10 +1025,18 @@ impl StrataStore {
                     // echo nodes (`source.system == "duplicate"`) never do.
                     // Later upserts of an existing id (rewrites, undos) do not
                     // re-index: identity is fixed at creation.
+                    // A target that has since been retired (edited, suppressed,
+                    // undone) gives its place to the next node with that form.
                     if !is_duplicate_echo(record) {
-                        self.node_canonical_index
-                            .entry((record.scope.clone(), canonical_hash(&record.content)))
-                            .or_insert_with(|| record.id.clone());
+                        let key = (record.scope.clone(), canonical_hash(&record.content));
+                        let held_by_live_node = self
+                            .node_canonical_index
+                            .get(&key)
+                            .and_then(|id| self.nodes.get(id))
+                            .is_some_and(NodeRecord::is_live);
+                        if !held_by_live_node {
+                            self.node_canonical_index.insert(key, record.id.clone());
+                        }
                     }
                     // Every ingest folds one ReviewEvent ("Good") into the
                     // kernel state under the record's kernel version.
@@ -1467,10 +1476,11 @@ impl StrataStore {
     /// The node a canonical duplicate resolves to: the first regular node
     /// ingested in `scope` whose canonical content hash is `hash`.
     ///
-    /// `None` when nothing regular holds that canonical form yet. Echo nodes
+    /// `None` when no live regular node holds that canonical form. Echo nodes
     /// and v3-imported nodes are never answers (see
-    /// [`Self::node_canonical_index`]). The answer names the indexed node
-    /// as-is; whether it is still live is the caller's read.
+    /// [`Self::node_canonical_index`]), and neither is a node that has been
+    /// retired: text that was edited away or suppressed can be saved again,
+    /// as a new record.
     pub fn find_node_by_canonical_hash(
         &self,
         scope: &str,
@@ -1479,6 +1489,7 @@ impl StrataStore {
         Ok(self
             .node_canonical_index
             .get(&(scope.to_string(), *hash))
+            .filter(|id| self.nodes.get(*id).is_some_and(NodeRecord::is_live))
             .cloned())
     }
 

@@ -3179,7 +3179,7 @@ fn a_second_backup_into_the_same_directory_replaces_the_first() {
 fn duplicate_echo_input(orig: &str, chex: &str, lines: usize) -> IngestInput {
     IngestInput {
         content: format!(
-            "duplicate of {orig}\ncanonical_hash: {chex}\nsubmitted_sha256_line_count: {lines}"
+            "duplicate of {orig}\ncanonical_hash: {chex}\nsubmitted_line_count: {lines}"
         ),
         source: Some(crate::types::SourceKey {
             system: crate::canonical::DUPLICATE_SOURCE.to_string(),
@@ -3211,15 +3211,22 @@ fn canonical_duplicate_lookup_finds_the_first_node_across_variants_and_reopens()
         .expect("lookup");
     assert_eq!(direct.as_deref(), Some(a.as_str()));
 
-    // NFC (decomposed accent), case, zero-width and whitespace variants all
+    // NFC (decomposed accent), zero-width and whitespace variants all
     // resolve to the same canonical hash.
-    let variant = "  caF\u{65}\u{301}  OVERRIDES\u{200D} ";
+    let variant = "  Caf\u{65}\u{301}  overrides\u{200D} ";
     assert_eq!(
         store
             .find_node_by_canonical_hash("", &crate::canonical::canonical_hash(variant))
             .expect("variant lookup"),
         Some(a.clone()),
-        "NFC, case, zero-width and whitespace variants resolve to the first node"
+        "NFC, zero-width and whitespace variants resolve to the first node"
+    );
+    // Case is identity: the same words in another case are another memory.
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("CAFÉ OVERRIDES"))
+            .expect("case lookup"),
+        None
     );
 
     // Different scope: no hit.
@@ -3239,7 +3246,7 @@ fn canonical_duplicate_lookup_finds_the_first_node_across_variants_and_reopens()
     let reopened = StrataStore::open(&dir).expect("reopen");
     assert_eq!(
         reopened
-            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("café overrides"))
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("Café overrides"))
             .expect("reopened lookup"),
         Some(a)
     );
@@ -3400,4 +3407,49 @@ fn existing_store_upgrades_in_place_without_an_intent_file() {
         Some((node, 7, "digest".to_string()))
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_retired_node_is_not_a_duplicate_target_and_the_next_one_takes_its_place() {
+    let dir = temp_dir("canonical-retired");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let hash = crate::canonical::canonical_hash("the cache ttl is 60 seconds");
+    let old = store
+        .ingest(input("the cache ttl is 60 seconds", &[]))
+        .expect("ingest old");
+    store.begin_tool_call();
+    let successor = store
+        .ingest(input("the cache ttl is 300 seconds", &[]))
+        .expect("ingest successor");
+    store
+        .retire(&old, &successor, &ctx(Some(RULE_EDIT), false))
+        .expect("retire old");
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &hash)
+            .expect("lookup"),
+        None,
+        "text that was retired can be saved again"
+    );
+
+    let again = store
+        .ingest(input("the cache ttl is 60 seconds", &[]))
+        .expect("ingest again");
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &hash)
+            .expect("lookup"),
+        Some(again.clone()),
+        "the new live node is the target now"
+    );
+
+    // Derived state: a reopen reaches the same answer from the log alone.
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_node_by_canonical_hash("", &hash)
+            .expect("lookup"),
+        Some(again)
+    );
 }

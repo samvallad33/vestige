@@ -95,16 +95,20 @@ text: `fact`, `concept`, `event`, `person`, `place`, `note`, `pattern`, `decisio
 `tags`, `source`, `scope`, `validFrom`, `validUntil`, `links`, `allowSecrets`.
 
 - **Every create carries its proof (4.2.0).** The response holds `receiptId` (the `eff-`
-  effect that wrote it), `canonicalHash` (blake3 of the content after NFC, lowercasing,
-  zero-width stripping and whitespace collapsing, pipeline `nfc-lower-zwstrip-wscollapse-v1`),
+  effect that wrote it), `canonicalHash` (blake3 of the content after NFC,
+  zero-width stripping and whitespace collapsing, pipeline `nfc-zwstrip-wscollapse-v1`;
+  case is kept, so `API_KEY` and `api_key` are different text),
   `entities` (typed spans with byte offsets, `CommitSha`, `Url`, `FilePath`, `IssueRef`,
   `Email`, `Version`, from the pinned hand scanners; the first 8, dropped when empty) and
   `importance` (`score` and `weightsVersion`, `linear-v1`; the factors are recomputable
   from the submitted bytes). Nothing in the write path uses a model or similarity.
 - **Nothing is merged. A repeat reinforces.** A write whose canonical hash already exists
-  in the scope creates no twin and never touches the original: it records a small echo
-  node (`source: "duplicate"`) linked `evidence_of` the original and answers
-  `decision: "reinforce"` with `duplicateOf`, `echoNodeId` and the echo's own receipt.
+  in the scope, on a record that is still live, creates no twin and never touches the
+  original: it records a small echo node (`source: "duplicate"`) linked `evidence_of` the
+  original and answers `decision: "reinforce"` with `duplicateOf`, `echoNodeId` and the
+  echo's own receipt. The echo carries the tags sent with the repeat, so a repeat sent
+  with a new tag is found under it, and any `links` sent with it are written from the
+  echo. Text whose record was edited away or suppressed is saved again as a new record.
   Different text is always a new record (`decision: "create"`); no gate compares anything
   by resemblance, and `predictionError` is always `1.0`.
 - **`intent_id` makes a write idempotent.** A write carrying `intent_id` (up to 128

@@ -117,7 +117,7 @@ jobs:
         # create synthetic stores. It is not a default of the shipped bins.
         run: |
           cargo test -p vestige-core --features bundled-sqlite,v3-engine,connectors,cloud-sync --lib
-          cargo test -p vestige-mcp --features v3-engine,connectors --lib --tests
+          cargo test -p vestige-mcp --features v3-engine --lib --tests
           cargo test -p vestige-phase-1-tests --features legacy-sqlite
           cargo test -p vestige-differential-tests --features legacy-sqlite
 

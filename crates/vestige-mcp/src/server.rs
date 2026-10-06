@@ -4566,7 +4566,13 @@ mod tests {
     /// about 1.3 KiB.
     #[test]
     fn tools_list_wire_payload_stays_under_22_kib() {
-        let catalog = McpServer::tool_catalog();
+        // The budget is for the catalog the release binaries ship. A build
+        // with `connectors` also advertises `source_sync`, which no release
+        // binary carries, so that one entry is left out of the count.
+        let mut catalog = serde_json::to_value(McpServer::tool_catalog()).unwrap();
+        if let Some(tools) = catalog.as_array_mut() {
+            tools.retain(|tool| tool["name"] != "source_sync");
+        }
         let payload = serde_json::to_string(&catalog).unwrap();
         assert!(
             payload.len() <= 22 * 1024,

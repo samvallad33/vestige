@@ -1,8 +1,9 @@
 //! Canonical content identity for the proof-carrying write path.
 //!
 //! Two submissions are the *same memory* when their canonical forms byte
-//! compare equal, regardless of Unicode composition, case, zero-width
-//! joinery, or whitespace run widths. The pipeline is pure: a function of
+//! compare equal, regardless of Unicode composition, zero-width joinery, or
+//! whitespace run widths. Case is identity: `API_TIMEOUT` and `api_timeout`
+//! are different text, the way `Vestige` and `vestige` are different tags. The pipeline is pure: a function of
 //! the submitted bytes only — no clock, no randomness, no network, no
 //! HashMap-iteration-order input. Same bytes in, same bytes out, forever:
 //! [`CANONICAL_PIPELINE_VERSION`] pins the behavior, and every response that
@@ -16,7 +17,7 @@ use unicode_normalization::UnicodeNormalization;
 
 /// Version stamp of the canonicalization pipeline. Change it only with a
 /// pipeline change; digests are comparable only within one version.
-pub const CANONICAL_PIPELINE_VERSION: &str = "nfc-lower-zwstrip-wscollapse-v1";
+pub const CANONICAL_PIPELINE_VERSION: &str = "nfc-zwstrip-wscollapse-v1";
 
 /// `source.system` value that marks a duplicate-echo node. Echo nodes are
 /// created by the reinforcer after a canonical duplicate was found; they are
@@ -27,27 +28,26 @@ pub const DUPLICATE_SOURCE: &str = "duplicate";
 /// Canonical form of `content`:
 ///
 /// 1. Unicode NFC (compose combining marks),
-/// 2. full Unicode lowercasing,
-/// 3. strip the zero-width/format characters `U+200B..=U+200D` and `U+FEFF`
+/// 2. strip the zero-width/format characters `U+200B..=U+200D` and `U+FEFF`
 ///    (none of them are Unicode whitespace, hence the explicit pass),
-/// 4. collapse every run of Unicode whitespace to a single ASCII space,
-/// 5. trim leading/trailing whitespace.
+/// 3. collapse every run of Unicode whitespace to a single ASCII space,
+/// 4. trim leading/trailing whitespace.
+///
+/// Case is kept. Folding it would make two memories that differ only in the
+/// case of an identifier, an environment variable or a path the same memory,
+/// and the second would never be stored.
 ///
 /// Steps run in exactly this order; the version constant above names them.
 pub fn canonicalize(content: &str) -> String {
-    // 1 + 2: NFC, then lowercase. Lowercasing after NFC means expansions
-    // (e.g. U+0130 -> "i" + U+0307) are never recomposed behind the
-    // pipeline's back.
-    let lowered: String = content.nfc().collect::<String>().to_lowercase();
-    // 3: zero-width / BOM strip.
-    let mut stripped = String::with_capacity(lowered.len());
-    for ch in lowered.chars() {
+    // 1: NFC. 2: zero-width / BOM strip.
+    let mut stripped = String::with_capacity(content.len());
+    for ch in content.nfc() {
         if matches!(ch, '\u{200B}'..='\u{200D}' | '\u{FEFF}') {
             continue;
         }
         stripped.push(ch);
     }
-    // 4: collapse whitespace runs. `char::is_whitespace` is the Unicode
+    // 3: collapse whitespace runs. `char::is_whitespace` is the Unicode
     // White_Space property (space, tab, NBSP, ideographic space, ...).
     let mut collapsed = String::with_capacity(stripped.len());
     let mut in_run = false;
@@ -62,7 +62,7 @@ pub fn canonicalize(content: &str) -> String {
             in_run = false;
         }
     }
-    // 5: after collapse only ASCII spaces can remain at the ends.
+    // 4: after collapse only ASCII spaces can remain at the ends.
     collapsed.trim().to_string()
 }
 
@@ -156,11 +156,14 @@ mod tests {
     }
 
     #[test]
-    fn case_folds_to_lowercase() {
-        assert_eq!(canonicalize("Vestige MEMORY Store"), "vestige memory store");
-        assert_eq!(canonicalize("VÉSTÍGE"), canonicalize("véstíge"));
-        // German sharp s lowercases to "ss" (full Unicode lowercasing).
-        assert_eq!(canonicalize("STRASSE"), canonicalize("strasse"));
+    fn case_is_identity() {
+        assert_eq!(canonicalize("Vestige MEMORY Store"), "Vestige MEMORY Store");
+        assert_ne!(canonicalize("VÉSTÍGE"), canonicalize("véstíge"));
+        // The pair that must never collapse: the same words, opposite meaning.
+        assert_ne!(
+            canonical_hash_hex("Set API_TIMEOUT in prod, never api_timeout."),
+            canonical_hash_hex("set api_timeout in prod, never API_TIMEOUT.")
+        );
     }
 
     #[test]
@@ -219,25 +222,25 @@ mod tests {
         // "Memory\u{200D}Store" canonicalizes to "memorystore".
         let input = "  Véstí\u{200B}ge\tMemory\u{200D}Store \u{FEFF} ";
         let canonical = canonicalize(input);
-        assert_eq!(canonical, "véstíge memorystore");
+        assert_eq!(canonical, "Véstíge MemoryStore");
         let hex = canonical_hash_hex(input);
         assert_eq!(hex, GOLDEN_CANONICAL_HEX);
         assert_eq!(hex.len(), 64);
         assert!(hex
             .chars()
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
-        // The same bytes via decomposed accents, different case, a different
-        // zero-width char and a whitespace run instead of the tab.
+        // The same text via decomposed accents, a different zero-width char
+        // and a whitespace run instead of the tab.
         assert_eq!(
-            canonical_hash_hex("V\u{65}\u{301}ST\u{69}\u{301}GE  MEMORY\u{200B}STORE"),
+            canonical_hash_hex("V\u{65}\u{301}st\u{69}\u{301}ge  Memory\u{200B}Store"),
             GOLDEN_CANONICAL_HEX
         );
     }
 
-    /// blake3("véstíge memorystore") hex, pinned so any pipeline change is
+    /// blake3("Véstíge MemoryStore") hex, pinned so any pipeline change is
     /// a visible test failure, not a silent identity migration.
     const GOLDEN_CANONICAL_HEX: &str =
-        "4b987235bce3f26d1cb9f0f710729c218cc790a02c7af358e97df2487f4d69da";
+        "2657027573014a9f9f8db96feb6ce1fc19ebf42da8b33ba896641998eef44b26";
 
     #[test]
     fn intent_digest_is_tag_order_independent_and_pinned() {

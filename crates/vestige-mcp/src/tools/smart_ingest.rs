@@ -112,8 +112,8 @@ pub fn schema() -> Value {
             "batchMergePolicy": {
                 "type": "string",
                 "enum": ["force_create", "smart"],
-                "description": "Batch only. 'force_create' (default) keeps items separate; 'smart' (legacy engine only) lets the gate merge.",
-                "default": "force_create"
+                "description": "Batch only. 'smart' (default): an item whose text already exists in the scope reinforces it with an echo. 'force_create' stores every item as a new memory.",
+                "default": "smart"
             },
             "role": {
                 "type": "string",
@@ -890,8 +890,11 @@ fn write_links(storage: &Arc<Storage>, value: &mut Value, pending: &PendingLinks
                 }),
         };
         let Some(slot) = slot else { continue };
+        // A repeat is recorded as an echo node, and the links the caller
+        // declared with it are written from that echo.
         let Some(node_id) = slot
             .get("nodeId")
+            .or_else(|| slot.get("echoNodeId"))
             .and_then(Value::as_str)
             .map(str::to_owned)
         else {
@@ -899,7 +902,17 @@ fn write_links(storage: &Arc<Storage>, value: &mut Value, pending: &PendingLinks
             continue;
         };
         match strata_memory::save_links(storage.as_ref(), &node_id, links) {
-            Ok(written) => slot["links"] = serde_json::json!(written),
+            Ok(written) => {
+                let mut all = slot
+                    .get("links")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(written) = serde_json::json!(written).as_array() {
+                    all.extend(written.iter().cloned());
+                }
+                slot["links"] = Value::Array(all);
+            }
             Err(err) => slot["linkError"] = serde_json::json!(err),
         }
     }
@@ -1159,9 +1172,18 @@ fn reinforce_duplicate(
     stored_tags: &[String],
 ) -> Result<Value, String> {
     // The echo carries ids and counters only — never a copy of the original
-    // or the submitted bytes (law 5).
+    // or the submitted bytes (law 5). It does carry the tags of this
+    // submission: a tag is the only handle a memory is found by, so a repeat
+    // sent with a new tag must be findable under it, and the echo names the
+    // original it stands for.
+    let mut echo_tags = vec!["duplicate".to_string()];
+    for tag in stored_tags {
+        if !echo_tags.contains(tag) {
+            echo_tags.push(tag.clone());
+        }
+    }
     let echo_content = format!(
-        "duplicate of {original}\ncanonical_hash: {canonical_hash}\nsubmitted_sha256_line_count: {}",
+        "duplicate of {original}\ncanonical_hash: {canonical_hash}\nsubmitted_line_count: {}",
         content.lines().count()
     );
     let echo = storage
@@ -1172,7 +1194,7 @@ fn reinforce_duplicate(
                 source: Some("duplicate".to_string()),
                 sentiment_score: 0.0,
                 sentiment_magnitude: 0.0,
-                tags: vec!["duplicate".to_string()],
+                tags: echo_tags,
                 valid_from: None,
                 valid_until: None,
                 validity_inferred: false,
@@ -1692,14 +1714,14 @@ async fn execute_verbose(
             "decision": "create",
             "nodeId": node_id,
             "scope": scope,
-            "message": "Memory created (this build makes no merge or reinforce decision)",
+            "message": "Memory created",
             "hasEmbedding": false,
             "embeddingsCompiledIn": false,
-            "dedup": "unavailable in this build",
+            "dedup": "canonical-hash",
             "predictionError": 1.0,
             "importanceScore": importance_composite,
             "synapticCapture": synaptic_capture,
-            "reason": "stored as a new memory: this build makes no merge, dedup or reinforce decision",
+            "reason": "no live memory in this scope has the same canonical text, so a new one was stored",
             "validity": validity_response(&validity),
             "tagSuggestions": tag_suggestions.suggestions,
             "tagSuggestionStatus": tag_suggestions.status,
@@ -2269,10 +2291,10 @@ async fn execute_batch(
                         "nodeId": node_id,
                         "scope": scope,
                         "embeddingsCompiledIn": false,
-                        "dedup": "unavailable in this build",
+                        "dedup": "canonical-hash",
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
-                        "reason": "stored as a new memory: this build makes no merge, dedup or reinforce decision",
+                        "reason": "no live memory in this scope has the same canonical text, so a new one was stored",
                         "validity": validity_response(&validity),
                         "tagSuggestions": tag_suggestions.suggestions,
                         "tagSuggestionStatus": tag_suggestions.status,
@@ -2849,7 +2871,7 @@ mod tests {
                 || value["reason"]
                     .as_str()
                     .unwrap()
-                    .contains("makes no merge, dedup or reinforce decision")
+                    .contains("a new one was stored")
         );
     }
 
@@ -4222,7 +4244,7 @@ mod tests {
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["mode"], "batch");
-        assert_eq!(value["batchMergePolicy"], "force_create");
+        assert_eq!(value["batchMergePolicy"], "smart");
         assert_eq!(value["summary"]["total"], 2);
     }
 
@@ -4263,7 +4285,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_batch_defaults_to_force_create_for_caller_separated_items() {
+    async fn test_batch_defaults_to_smart_for_caller_separated_items() {
         // Default policy (no explicit forceCreate) force-creates each
         // caller-separated item so they stay separate.
         let (storage, _dir) = test_storage().await;
@@ -4280,12 +4302,11 @@ mod tests {
         .await;
 
         let value = result.unwrap();
-        assert_eq!(value["batchMergePolicy"], "force_create");
+        assert_eq!(value["batchMergePolicy"], "smart");
         assert_eq!(value["summary"]["created"], 2);
         assert_eq!(value["summary"]["updated"], 0);
         for item in value["results"].as_array().unwrap() {
             assert_eq!(item["decision"], "create");
-            assert!(item["reason"].as_str().unwrap().contains("Forced creation"));
         }
     }
 

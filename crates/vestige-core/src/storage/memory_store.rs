@@ -821,7 +821,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// proceeds as a fresh create).
     ///
     /// Canonicalization is version-pinned by the Strata store
-    /// (`nfc-lower-zwstrip-wscollapse-v1`); backends without it never match.
+    /// (`nfc-zwstrip-wscollapse-v1`); backends without it never match.
     fn find_duplicate_by_canonical_hash(
         &self,
         _scope: &str,

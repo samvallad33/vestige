@@ -4997,10 +4997,10 @@ mod tests {
                 scope,
             )
             .unwrap();
-        // NFC-free variants (case, zero-width, whitespace) resolve to it.
+        // NFC-free variants (zero-width, whitespace) resolve to it.
         assert_eq!(
             storage
-                .find_duplicate_by_canonical_hash(scope, "  dup\u{200b} WIRING\tprobe ")
+                .find_duplicate_by_canonical_hash(scope, "  Dup\u{200b} Wiring\tProbe ")
                 .unwrap(),
             Some(node.id.clone())
         );

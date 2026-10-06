@@ -183,9 +183,10 @@ as orphan writes and does not see those edges until it is upgraded.
 
 - **`smart_ingest` is a proof-carrying write path.** Every create answers
   with `receiptId` (the `eff-` effect that wrote it), `canonicalHash`
-  (blake3 of the content after the `nfc-lower-zwstrip-wscollapse-v1`
-  pipeline: NFC, lowercased, zero-width characters stripped, whitespace
-  runs collapsed), `entities` (typed spans — `CommitSha`, `Url`,
+  (blake3 of the content after the `nfc-zwstrip-wscollapse-v1` pipeline:
+  NFC, zero-width characters stripped, whitespace runs collapsed; case is
+  kept, so text that differs only in the case of an identifier is a
+  different memory), `entities` (typed spans — `CommitSha`, `Url`,
   `FilePath`, `IssueRef`, `Email`, `Version` — each with byte offsets into
   the submitted content, extracted by the pinned hand scanners
   `hand-scanners-v1`, no model in the write path), and `importance`
@@ -195,14 +196,18 @@ as orphan writes and does not see those edges until it is upgraded.
   definitions).
 
 - **Duplicates reinforce, never merge.** A write whose canonical hash
-  already exists in the scope creates no twin and never touches the
-  original: it records a small echo node (`source: "duplicate"`) linked
-  `evidence_of` the original and answers `decision: "reinforce"` with
-  `duplicateOf`, `echoNodeId`, `pipeline` and the echo's own receipt. NFC,
-  case and whitespace variants of the same text reinforce to the same
-  node; echo nodes are never dedup targets. Reinforcement count is a fold
-  over the log: one node, N receipts, zero mutations.
-
+  already exists in the scope, on a record that is still live, creates no
+  twin and never touches the original: it records a small echo node
+  (`source: "duplicate"`) linked `evidence_of` the original and answers
+  `decision: "reinforce"` with `duplicateOf`, `echoNodeId`, `pipeline` and
+  the echo's own receipt. NFC and whitespace variants of the same text
+  reinforce to the same node; echo nodes are never dedup targets. The echo
+  carries the tags sent with the repeat, so a repeat sent with a new tag
+  is found under that tag, and `links` sent with a repeat are written from
+  the echo. Text whose record was edited away or suppressed is not a
+  duplicate of anything: saving it again stores a new record, which then
+  becomes the target. Reinforcement count is a fold over the log: one
+  node, N receipts, zero mutations.
 - **`intent_id` makes writes idempotent.** A write carrying `intent_id`
   is recorded once; resending it — with the same or different content —
   answers `decision: "replay"` with `replayOf` and the original

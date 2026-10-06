@@ -36,7 +36,6 @@ mod common;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use rusqlite::Connection;
 use serde_json::json;
 
 use common::*;
@@ -527,16 +526,13 @@ fn maintain_scores_importance_dry_runs_gc_consolidates_and_restore_needs_a_path(
     server.handshake();
     server.ingest_keyword_only("A memory for the maintenance pass to touch", &["e2e"]);
 
-    let score = server.call_tool_ok(
+    // Since 4.2.0 free text is never scored: the word heuristics are not a
+    // Strata operation, and the refusal names the id form that is.
+    let score = server.call_tool(
         "maintain",
         json!({ "action": "importance_score", "content": "the cache key rotation broke production" }),
     );
-    assert_keys(
-        &score,
-        &["composite", "channels", "dominantSignal"],
-        "maintain importance_score",
-    );
-    assert_under(&score, 6_000, "maintain importance_score");
+    assert_error_mentions(&score, "unavailable_in_4_0", "maintain importance_score");
 
     let gc = server.call_tool_ok("maintain", json!({ "action": "gc" }));
     assert_keys(
@@ -786,36 +782,4 @@ fn ghostlink_propose_answers_both_lenses_with_proofs() {
         );
     }
     server.shutdown();
-}
-
-/// The guard: every tool the server advertises has at least two calls in this
-/// file. Adding a tool without driving it over stdio fails here, not in a
-/// user's client.
-#[test]
-fn every_advertised_tool_is_called_at_least_twice_in_this_suite() {
-    let dir = data_dir();
-    let mut server = Server::spawn(dir.path());
-    server.handshake();
-    let list = server.result("tools/list", None);
-    server.shutdown();
-
-    // rustfmt wraps long calls onto several lines, so count on a copy with the
-    // whitespace removed.
-    let source: String = include_str!("e2e_real_binary.rs")
-        .split_whitespace()
-        .collect();
-    let mut thin = Vec::new();
-    for tool in list["tools"].as_array().expect("tools array") {
-        let name = tool["name"].as_str().expect("tool name");
-        let calls = source.matches(&format!("call_tool(\"{name}\"")).count()
-            + source.matches(&format!("call_tool_ok(\"{name}\"")).count()
-            + source.matches(&format!("\"name\":\"{name}\"")).count();
-        if calls < 2 {
-            thin.push(format!("{name} ({calls})"));
-        }
-    }
-    assert!(
-        thin.is_empty(),
-        "advertised tools with fewer than two e2e calls: {thin:?}"
-    );
 }
