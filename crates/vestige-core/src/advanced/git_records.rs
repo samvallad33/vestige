@@ -66,9 +66,15 @@ pub struct GitCommit {
     /// `Fixes: <sha>` trailers, lowercase, exactly 40 hex digits, as written.
     /// A short prefix is not a trailer and is never expanded.
     pub fixes: Vec<String>,
+    /// Valid trailers beyond [`MAX_FIXES`] (recorded as a count, so a commit
+    /// cannot turn its message into unbounded git lookups).
+    pub extra_fixes: usize,
     /// Lockfile version changes in this commit's diff. A package is included
     /// only when it loses exactly one version and gains exactly one other.
     pub lock_bumps: Vec<LockBump>,
+    /// Bumps beyond [`MAX_LOCK_BUMPS`] (recorded as a count, not edges, so a
+    /// lockfile churn cannot turn one commit into unbounded writes).
+    pub extra_lock_bumps: usize,
 }
 
 /// One package whose lockfile entry moved from `old_version` to `new_version`
@@ -515,6 +521,11 @@ const RECORD_SEP: char = '\u{1e}';
 const UNIT_SEP: char = '\u{1f}';
 const MAX_FILES: usize = 50;
 const MAX_SYMBOLS: usize = 40;
+/// Valid `Fixes:` trailers kept per commit; the overflow is counted, not
+/// resolved, so a message cannot name unbounded git lookups.
+const MAX_FIXES: usize = 16;
+/// Lockfile bumps kept per commit; the overflow is counted, not written.
+const MAX_LOCK_BUMPS: usize = 200;
 /// Hunk spans kept per commit; overflow is counted in `extra_hunks`.
 const MAX_HUNKS: usize = 200;
 /// Upper bound for the comma-joined span list on the `hunks:` content line.
@@ -657,7 +668,12 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
                 None => (file, target, false),
             });
         }
-        let lock_bumps = lock_bumps_from_diff(body);
+        let mut lock_bumps = lock_bumps_from_diff(body);
+        let extra_lock_bumps = lock_bumps.len().saturating_sub(MAX_LOCK_BUMPS);
+        lock_bumps.truncate(MAX_LOCK_BUMPS);
+        let extra_fixes = fixes.len().saturating_sub(MAX_FIXES);
+        let mut fixes = fixes;
+        fixes.truncate(MAX_FIXES);
         out.push(GitCommit {
             sha,
             time,
@@ -672,7 +688,9 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             reverts,
             cherry_picked_from,
             fixes,
+            extra_fixes,
             lock_bumps,
+            extra_lock_bumps,
         });
     }
     out
@@ -1481,6 +1499,46 @@ diff --git a/README.md b/README.md
             fixes_targets(&format!("Fixes: {fixed}")),
             vec![fixed.to_string()]
         );
+    }
+
+    #[test]
+    fn a_message_cannot_name_unbounded_fixes() {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        // Twenty valid trailers: sixteen are kept, the rest are counted.
+        let trailers: String = (0..20).map(|i| format!("Fixes: {:040x}\n", i)).collect();
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}\u{1f}batch fix\u{1f}batch fix\n\n{trailers}\u{1d}\n"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].fixes.len(), MAX_FIXES);
+        assert_eq!(commits[0].extra_fixes, 20 - MAX_FIXES);
+        assert_eq!(commits[0].fixes[0], format!("{:040x}", 0));
+        assert_eq!(
+            commits[0].fixes[MAX_FIXES - 1],
+            format!("{:040x}", MAX_FIXES - 1)
+        );
+    }
+
+    #[test]
+    fn a_lockfile_churn_cannot_name_unbounded_bumps() {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let packages = MAX_LOCK_BUMPS + 5;
+        let entries: String = (0..packages)
+            .map(|i| {
+                format!(
+                    "[[package]]\n name = \"pkg{i:03}\"\n-version = \"1.0.0\"\n+version = \"2.0.0\"\n"
+                )
+            })
+            .collect();
+        let diff = format!("diff --git a/Cargo.lock b/Cargo.lock\n{entries}");
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}\u{1f}churn\u{1f}churn\u{1d}\n{diff}"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].lock_bumps.len(), MAX_LOCK_BUMPS);
+        assert_eq!(commits[0].extra_lock_bumps, 5);
     }
 
     #[test]
