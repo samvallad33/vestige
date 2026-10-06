@@ -113,7 +113,8 @@ pub(super) fn git_fed(dir: &Path, args: &[&str], input: &[u8]) -> anyhow::Result
     Ok(child.wait().context("cannot wait for git")?.success())
 }
 
-fn is_sha(text: &str) -> bool {
+/// Whether `text` is a full object name, SHA-1 or SHA-256.
+pub(super) fn is_sha(text: &str) -> bool {
     matches!(text.len(), 40 | 64)
         && text
             .bytes()

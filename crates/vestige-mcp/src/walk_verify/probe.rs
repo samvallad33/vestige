@@ -260,7 +260,11 @@ pub(super) fn run_test(test: &Test) -> anyhow::Result<TestRun> {
     let (output, writer) = std::io::pipe().context("cannot make a pipe for the test's output")?;
     let mut command = test_command(test);
     command
-        .stdout(writer.try_clone().context("cannot share the test's output pipe")?)
+        .stdout(
+            writer
+                .try_clone()
+                .context("cannot share the test's output pipe")?,
+        )
         .stderr(writer);
     let spawned = command.spawn();
     // The command holds the writing ends; the reader sees the end of the

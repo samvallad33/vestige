@@ -18,8 +18,8 @@ use super::card::{CardFacts, Rung, Side, Strength, Why, verdict_card};
 use super::child::{ChildConfig, Replay};
 use super::git::{
     PLAIN_DIFF, ScratchGuard, commit_field, first_bad_logged, first_bad_named, git_bytes,
-    git_command, git_fed, git_ok, git_out, git_test, interrupted, parents_of, remove_worktree,
-    resolve_commit, subject_of,
+    git_command, git_fed, git_ok, git_out, git_test, interrupted, is_sha, parents_of,
+    remove_worktree, resolve_commit, subject_of,
 };
 use super::hunks::{Unit, ddmin, names_of, patch_of, split_hunks};
 use super::json::{Entry, pretty_json, protocol_hash, sha256_hex};
@@ -950,6 +950,34 @@ impl Prover<'_> {
     }
 }
 
+/// The recorded verdicts that do not fit `first_bad` being the one first
+/// bad commit: a commit before it that tested bad, or a commit after it
+/// that tested good. git bisect assumes there are none and never looks;
+/// with a test that fails only some of the time, or a bug that comes and
+/// goes, there can be. Each is returned with where it sits.
+fn contradicting<'a>(
+    repo: &Path,
+    entries: &'a [Entry],
+    first_bad: &str,
+) -> anyhow::Result<Vec<(&'a Entry, &'static str)>> {
+    let mut against = Vec::new();
+    for entry in entries {
+        let commit = text_of(entry, "commit");
+        if !is_sha(commit) || commit == first_bad {
+            continue;
+        }
+        let ancestor = |older: &str, newer: &str| {
+            git_test(repo, &["merge-base", "--is-ancestor", older, newer])
+        };
+        match text_of(entry, "verdict") {
+            "bad" if ancestor(commit, first_bad)? => against.push((entry, "before")),
+            "good" if ancestor(first_bad, commit)? => against.push((entry, "after")),
+            _ => {}
+        }
+    }
+    Ok(against)
+}
+
 /// The last `n` characters of `s`.
 fn tail(s: &str, n: usize) -> String {
     let count = s.chars().count();
@@ -1504,9 +1532,7 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             }
         }
 
-        println!(
-            "\n{b}Step 4. Bisect the leads, closest links first, then test the parent{o}"
-        );
+        println!("\n{b}Step 4. Bisect the leads, closest links first, then test the parent{o}");
         let mut ordered: Vec<(usize, Lead)> = kept
             .iter()
             .filter_map(|lead| {
@@ -1651,6 +1677,32 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             "  {y}The walk did not reach this commit. The tested result stands; the walk missed it.{o}"
         );
     }
+    let against = match &first_bad {
+        Some(first_bad) => contradicting(repo, &entries, first_bad)?,
+        None => Vec::new(),
+    };
+    for (entry, place) in &against {
+        println!(
+            "  {y}Run {} does not fit one first bad commit: {} tested {} and comes {place} this one.{o}",
+            py_display(entry.get("n")),
+            head(text_of(entry, "commit"), 10),
+            text_of(entry, "verdict").to_uppercase()
+        );
+    }
+    if !against.is_empty() {
+        println!(
+            "  {y}{}{o}",
+            if plan.flaky.is_some() {
+                "With a test that fails only some of the time a verdict can be a run of luck, so git bisect may have been led past the commit. REPEATED tests the named commit directly."
+            } else {
+                "The test does not fail on every commit after the first bad one, so there is more than one place where it starts to fail; this is the one git bisect arrived at."
+            }
+        );
+    }
+    let against_runs: Vec<u64> = against
+        .iter()
+        .map(|(entry, _)| count_of(entry, "n"))
+        .collect();
     let found_in = runs_before_bisect.saturating_sub(2);
     if agree && let Some(plain) = plain_runs.filter(|plain| *plain > 0) {
         let what = if plan.flaky.is_some() {
@@ -1746,6 +1798,7 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             parent: parents.first().map(String::as_str),
             lead: reached.map(|lead| (lead.rank, leads.len(), lead.memory.as_str())),
             window: *window,
+            against: &against_runs,
             bad_ref,
             why: why.as_ref(),
             strength: strength.as_ref(),

@@ -126,6 +126,9 @@ pub(super) struct CardFacts<'a> {
     pub lead: Option<(usize, usize, &'a str)>,
     /// Commits in `good..bad`.
     pub window: u64,
+    /// Runs whose verdict does not fit one first bad commit: bad before
+    /// this commit, or good after it.
+    pub against: &'a [u64],
     pub bad_ref: &'a str,
     pub why: Option<&'a Why>,
     pub strength: Option<&'a Strength>,
@@ -294,18 +297,40 @@ pub(super) fn verdict_card(facts: &CardFacts<'_>) -> Vec<Rung> {
     });
 
     let bisected = in_phase("bisect");
-    card.push(Rung {
-        name: "CONFIRMED",
-        holds: true,
-        statement: format!(
-            "stock git bisect over all {} commits names it",
-            facts.window
-        ),
-        proof: if bisected.is_empty() {
-            "reused runs".to_string()
+    let named = format!(
+        "stock git bisect over all {} commits names it",
+        facts.window
+    );
+    let bisect_runs = if bisected.is_empty() {
+        "reused runs".to_string()
+    } else {
+        runs(&bisected)
+    };
+    card.push(if facts.against.is_empty() {
+        Rung {
+            name: "CONFIRMED",
+            holds: true,
+            statement: named,
+            proof: bisect_runs,
+        }
+    } else {
+        // git bisect names a commit whatever the other runs say; the rung
+        // only holds when none of them says otherwise.
+        let numbers: Vec<String> = facts.against.iter().map(u64::to_string).collect();
+        let (run, does) = if numbers.len() == 1 {
+            ("run", "does")
         } else {
-            runs(&bisected)
-        },
+            ("runs", "do")
+        };
+        Rung {
+            name: "CONFIRMED",
+            holds: false,
+            statement: format!(
+                "{named}, but {run} {} {does} not fit one first bad commit",
+                numbers.join(",")
+            ),
+            proof: bisect_runs,
+        }
     });
 
     if let Some(why) = facts.why {
@@ -401,6 +426,7 @@ mod tests {
             parent: Some(PARENT),
             lead: Some((3, 7, "mem-00000000000000dd")),
             window: 12,
+            against: &[],
             bad_ref: "v2",
             why,
             strength: None,
@@ -514,6 +540,30 @@ mod tests {
             (card[2].holds, card[2].proof.as_str()),
             (true, "reused runs")
         );
+    }
+
+    #[test]
+    fn confirmed_holds_only_when_no_recorded_run_says_otherwise() {
+        let entries = entries();
+        let mut facts = facts(&entries, None);
+        facts.against = &[4];
+        let card = verdict_card(&facts);
+        assert_eq!(
+            row(&card[2]),
+            (
+                "CONFIRMED",
+                false,
+                "stock git bisect over all 12 commits names it, but run 4 does not fit one first bad commit",
+                "runs 6,7"
+            )
+        );
+        facts.against = &[4, 9];
+        assert_eq!(
+            verdict_card(&facts)[2].statement,
+            "stock git bisect over all 12 commits names it, but runs 4,9 do not fit one first bad commit"
+        );
+        // The other rungs are read from their own runs.
+        assert!(card[0].holds && card[1].holds);
     }
 
     #[test]

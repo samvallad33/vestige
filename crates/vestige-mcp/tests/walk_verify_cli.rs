@@ -308,7 +308,11 @@ fn fixture(plan: &Plan) -> Fixture {
 
     // A branch that leaves main at c2: its tip passes the test and is not
     // an ancestor of v2.
-    git(&repo, &day(4), &["checkout", "-q", "-b", "side-branch", &commits[2]]);
+    git(
+        &repo,
+        &day(4),
+        &["checkout", "-q", "-b", "side-branch", &commits[2]],
+    );
     std::fs::write(repo.join("side.txt"), "side\n").unwrap();
     git(&repo, &day(4), &["add", "-A"]);
     git(&repo, &day(4), &["commit", "-q", "-m", "A side note"]);
@@ -422,7 +426,12 @@ fn rungs(report: &Value) -> Vec<(String, bool)> {
         .as_array()
         .expect("a verdict card")
         .iter()
-        .map(|rung| (rung["rung"].as_str().unwrap().to_string(), rung["holds"] == true))
+        .map(|rung| {
+            (
+                rung["rung"].as_str().unwrap().to_string(),
+                rung["holds"] == true,
+            )
+        })
         .collect()
 }
 
@@ -493,7 +502,11 @@ fn walk_printed(store: &Path, failure: &str) -> Vec<Cause> {
             sha,
         });
     }
-    assert!(!causes.is_empty(), "the walk printed no cause: {}", ran.text());
+    assert!(
+        !causes.is_empty(),
+        "the walk printed no cause: {}",
+        ran.text()
+    );
     causes
 }
 
@@ -564,7 +577,11 @@ fn walk_verify_prove_goes_from_the_walk_to_a_checked_report() {
     let frozen: Vec<&Value> = candidates.iter().map(|lead| &lead["commit"]).collect();
     let protocol = &report["protocol"];
     assert_eq!(
-        protocol["candidates"].as_array().unwrap().iter().collect::<Vec<_>>(),
+        protocol["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>(),
         frozen
     );
 
@@ -611,12 +628,15 @@ fn walk_verify_prove_goes_from_the_walk_to_a_checked_report() {
     // boundary, so the seven two links away are never looked at. Three
     // runs: the breaking commit, the lead before it, its parent.
     assert!(
-        ran.stdout
-            .contains("leads within 1 link of the report: 3"),
+        ran.stdout.contains("leads within 1 link of the report: 3"),
         "{}",
         ran.stdout
     );
-    assert!(!ran.stdout.contains("leads within 2 links"), "{}", ran.stdout);
+    assert!(
+        !ran.stdout.contains("leads within 2 links"),
+        "{}",
+        ran.stdout
+    );
     assert!(
         ran.stdout.contains(&format!(
             "{} fails and its parent passes.",
@@ -713,7 +733,14 @@ fn walk_verify_prove_goes_from_the_walk_to_a_checked_report() {
     git(
         &fixture.repo,
         NOW,
-        &["worktree", "add", "-q", "--detach", path_arg(&scratch), "v2"],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            path_arg(&scratch),
+            "v2",
+        ],
     );
     git(&scratch, NOW, &["apply", "--check", path_arg(&patch_path)]);
     git(
@@ -768,7 +795,11 @@ fn walk_verify_prove_goes_from_the_walk_to_a_checked_report() {
         "{}",
         ran.stdout
     );
-    assert!(ran.stdout.contains("Not claimed: why the authors"), "{}", ran.stdout);
+    assert!(
+        ran.stdout.contains("Not claimed: why the authors"),
+        "{}",
+        ran.stdout
+    );
 
     // The probe log: numbered, chained, one memory per run. The bisect
     // phase holds the runs `git bisect run` made through the hidden
@@ -946,7 +977,10 @@ fn walk_verify_prove_undoes_only_the_found_lines_when_the_whole_commit_conflicts
     assert!(patch.contains("+sum=$((a + b))"), "{patch}");
     assert!(!patch.contains("CHANGES.txt"), "{patch}");
     assert!(!patch.contains("README.md"), "{patch}");
-    assert!(!patch.contains("adds two"), "the header hunk stays: {patch}");
+    assert!(
+        !patch.contains("adds two"),
+        "the header hunk stays: {patch}"
+    );
     assert_eq!(
         rung(&report, "REVERSED")["statement"],
         "undoing just those lines on v2 makes the test pass again"
@@ -1003,12 +1037,17 @@ fn walk_verify_prove_lets_bisect_decide_when_the_walk_missed_the_commit() {
         ran.stdout
     );
     assert!(
-        ran.stdout
-            .contains("The first bad commit is not among the leads; the full git bisect takes over."),
+        ran.stdout.contains(
+            "The first bad commit is not among the leads; the full git bisect takes over."
+        ),
         "{}",
         ran.stdout
     );
-    assert!(!ran.stdout.contains("fails and its parent passes"), "{}", ran.stdout);
+    assert!(
+        !ran.stdout.contains("fails and its parent passes"),
+        "{}",
+        ran.stdout
+    );
 
     // git bisect still names it; the card says the walk did not.
     assert_eq!(report["first_bad_commit"], breaking.as_str());
@@ -1042,12 +1081,83 @@ fn walk_verify_prove_lets_bisect_decide_when_the_walk_missed_the_commit() {
         "{}",
         node.content
     );
-    assert!(node.content.ends_with("Lines not searched."), "{}", node.content);
+    assert!(
+        node.content.ends_with("Lines not searched."),
+        "{}",
+        node.content
+    );
     drop(storage);
 
     let checked = fixture.check(&report_path);
     assert!(checked.ok, "{}", checked.text());
-    assert!(checked.stdout.contains("LEAD      no "), "{}", checked.stdout);
+    assert!(
+        checked.stdout.contains("LEAD      no "),
+        "{}",
+        checked.stdout
+    );
+    fixture.assert_no_worktree_left();
+}
+
+#[test]
+fn walk_verify_prove_says_when_the_recorded_runs_do_not_fit_one_first_bad_commit() {
+    // A bug that comes and goes: the test fails from c5, passes again
+    // while extra.txt has exactly two lines (c9 to c11), and fails on v2.
+    // The breaking commit has no memory, so step 4 tests later leads.
+    let fixture = fixture(&Plan {
+        remembered: (0..=12).filter(|index| *index != BREAKING).collect(),
+        ..Plan::default()
+    });
+    let breaking = &fixture.commits[BREAKING];
+    let report_path = fixture.path("report.json");
+    let test = r#"out=$(sh calc.sh 2 3); two=$(printf 'extra\nmore'); if [ "$out" != 5 ] && [ "$(cat extra.txt 2>/dev/null)" != "$two" ]; then echo "2+3=$out"; exit 1; fi; echo fine"#;
+    let ran = fixture.prove_with(&report_path, test, &["--no-why"]);
+    assert!(ran.ok, "{}", ran.text());
+    let report = read_json(&report_path);
+
+    // git bisect arrives at the breaking commit, and a later lead that
+    // was tested passes: the run says so instead of calling it confirmed.
+    assert_eq!(
+        report["first_bad_commit"],
+        breaking.as_str(),
+        "{}",
+        ran.text()
+    );
+    let passing = probe_on(&report, &fixture.commits[10]);
+    assert_eq!(passing["verdict"], "good");
+    assert!(
+        ran.stdout.contains(&format!(
+            "Run {} does not fit one first bad commit: {} tested GOOD and comes after this one.",
+            passing["n"],
+            fixture.short(10)
+        )),
+        "{}",
+        ran.stdout
+    );
+    assert!(
+        ran.stdout
+            .contains("The test does not fail on every commit after the first bad one"),
+        "{}",
+        ran.stdout
+    );
+    let confirmed = rung(&report, "CONFIRMED");
+    assert_eq!(confirmed["holds"], false);
+    assert_eq!(
+        confirmed["statement"],
+        format!(
+            "stock git bisect over all 12 commits names it, but run {} does not fit one first bad commit",
+            passing["n"]
+        )
+    );
+    // The boundary itself was tested and stands.
+    assert_eq!(rung(&report, "BOUNDARY")["holds"], true);
+    assert!(ran.stdout.contains("1 of 3 rungs hold"), "{}", ran.stdout);
+    let checked = fixture.check(&report_path);
+    assert!(checked.ok, "{}", checked.text());
+    assert!(
+        checked.stdout.contains("CONFIRMED no "),
+        "{}",
+        checked.stdout
+    );
     fixture.assert_no_worktree_left();
 }
 
@@ -1146,15 +1256,16 @@ fn walk_verify_prove_caps_the_runs_on_leads_not_the_leads() {
         "{}",
         ran.stdout
     );
-    assert!(!ran.stdout.contains("fails and its parent passes"), "{}", ran.stdout);
+    assert!(
+        !ran.stdout.contains("fails and its parent passes"),
+        "{}",
+        ran.stdout
+    );
     assert!(!ran.stdout.contains("Found in "), "{}", ran.stdout);
     assert_eq!(report["found_in_runs"], 2);
     let phases = phases(&report);
     assert_eq!(
-        phases
-            .iter()
-            .filter(|phase| **phase == "candidate")
-            .count(),
+        phases.iter().filter(|phase| **phase == "candidate").count(),
         2
     );
     assert!(!phases.contains(&"parent"), "{phases:?}");
@@ -1258,13 +1369,21 @@ out=$(sh calc.sh 2 3); echo "2+3=$out"; test "$out" = 5"#,
         .env("GIT_COMMON_DIR", &decoy_git)
         .env("GIT_PREFIX", "sub/")
         .env("GIT_OBJECT_DIRECTORY", decoy_git.join("objects"))
-        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", decoy_git.join("objects"))
+        .env(
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            decoy_git.join("objects"),
+        )
         .env("GIT_NAMESPACE", "decoy");
     let ran = ran(command);
     assert!(ran.ok, "{}", ran.text());
     let report = read_json(&report_path);
 
-    assert_eq!(report["first_bad_commit"], breaking.as_str(), "{}", ran.text());
+    assert_eq!(
+        report["first_bad_commit"],
+        breaking.as_str(),
+        "{}",
+        ran.text()
+    );
     assert_eq!(report["repo"], path_arg(&fixture.repo));
     assert_eq!(report["oracle"]["file"], "the test.sh");
     assert!(ran.stdout.contains("5 of 5 rungs hold"), "{}", ran.stdout);
@@ -1332,7 +1451,8 @@ fn walk_verify_prove_reports_a_bisect_that_aborts_instead_of_trusting_it() {
         );
         assert_eq!(ran.code, Some(255), "{mode}: {}", ran.text());
         assert!(
-            ran.stderr.contains(&format!("vestige _prove {mode} failed: ")),
+            ran.stderr
+                .contains(&format!("vestige _prove {mode} failed: ")),
             "{}",
             ran.text()
         );
@@ -1374,7 +1494,11 @@ out=$(sh calc.sh 2 3); echo "2+3=$out"; test "$out" = 5"#,
         "git's own reason is shown: {}",
         ran.stdout
     );
-    assert!(!ran.stdout.contains("is the first bad commit"), "{}", ran.stdout);
+    assert!(
+        !ran.stdout.contains("is the first bad commit"),
+        "{}",
+        ran.stdout
+    );
     assert!(!ran.stdout.contains("Verdict"), "{}", ran.stdout);
     // What was tested before the abort is still on record and checks out;
     // nothing is claimed beyond it.
@@ -1456,7 +1580,10 @@ out=$(sh calc.sh 2 3); echo "2+3=$out"; test "$out" = 5"#,
         .args(["-0", pid.trim()])
         .output()
         .expect("spawn kill");
-    assert!(!alive.status.success(), "the test's child {pid} is still running");
+    assert!(
+        !alive.status.success(),
+        "the test's child {pid} is still running"
+    );
     // It left the line-up, and the commit was found without it.
     assert_eq!(report["first_bad_commit"], breaking.as_str());
     assert!(
@@ -1522,11 +1649,17 @@ echo "2+3=$out, but run $n got lucky""#,
     assert_eq!(probes[0]["phase"], "baseline");
     assert_eq!(probes[0]["verdict"], "good");
     assert_eq!(probes[0]["oracle_said"], "failed 0 of 30 runs");
-    assert_eq!((&probes[0]["runs"], &probes[0]["fails"]), (&json!(30), &json!(0)));
+    assert_eq!(
+        (&probes[0]["runs"], &probes[0]["fails"]),
+        (&json!(30), &json!(0))
+    );
     assert_eq!(probes[1]["commit"], fixture.commits[12].as_str());
     assert_eq!(probes[1]["verdict"], "bad");
     assert_eq!(probes[1]["oracle_said"], "failed 10 of 30 runs");
-    assert_eq!((&probes[1]["runs"], &probes[1]["fails"]), (&json!(30), &json!(10)));
+    assert_eq!(
+        (&probes[1]["runs"], &probes[1]["fails"]),
+        (&json!(30), &json!(10))
+    );
     assert_eq!(probes[0]["at"], probes[1]["at"]);
     assert!(
         ran.stdout
@@ -1537,14 +1670,23 @@ echo "2+3=$out, but run $n got lucky""#,
     let stats = &report["flaky"]["stats"];
     assert_eq!(stats["p0"], json!(0.5 / 31.0));
     assert_eq!(stats["p1"], json!(10.5 / 31.0));
-    assert_eq!((&stats["alpha"], &stats["beta"]), (&json!(0.01), &json!(0.01)));
+    assert_eq!(
+        (&stats["alpha"], &stats["beta"]),
+        (&json!(0.01), &json!(0.01))
+    );
     assert_eq!(stats["max_runs"], 80);
 
     // Every later verdict is a sequential test: a commit that never fails
     // is good after 12 runs, one that fails every third run is bad within 9.
     for probe in &probes[2..] {
-        let (runs, fails) = (probe["runs"].as_u64().unwrap(), probe["fails"].as_u64().unwrap());
-        match (probe["phase"].as_str().unwrap(), probe["verdict"].as_str().unwrap()) {
+        let (runs, fails) = (
+            probe["runs"].as_u64().unwrap(),
+            probe["fails"].as_u64().unwrap(),
+        );
+        match (
+            probe["phase"].as_str().unwrap(),
+            probe["verdict"].as_str().unwrap(),
+        ) {
             ("strength", _) => assert_eq!(runs, 30, "{probe}"),
             (_, "good") => assert_eq!((runs, fails), (12, 0), "{probe}"),
             (_, "bad") => assert!((2..=9).contains(&runs) && fails >= 2, "{probe}"),
@@ -1560,7 +1702,12 @@ echo "2+3=$out, but run $n got lucky""#,
     }
 
     // The same commit, the same change, and one more rung.
-    assert_eq!(report["first_bad_commit"], breaking.as_str(), "{}", ran.text());
+    assert_eq!(
+        report["first_bad_commit"],
+        breaking.as_str(),
+        "{}",
+        ran.text()
+    );
     assert_eq!(report["found_in_runs"], 3);
     assert!(
         ran.stdout
@@ -1590,7 +1737,10 @@ echo "2+3=$out, but run $n got lucky""#,
     let strength = &report["flaky"]["strength"];
     let (with, without) = (&strength["with"], &strength["without"]);
     assert_eq!((&with["fails"], &with["runs"]), (&json!(10), &json!(30)));
-    assert_eq!((&without["fails"], &without["runs"]), (&json!(0), &json!(30)));
+    assert_eq!(
+        (&without["fails"], &without["runs"]),
+        (&json!(0), &json!(30))
+    );
     let p = strength["fisher_p"].as_f64().unwrap();
     assert!((p - 0.0003985065657050695).abs() < 1e-15, "{p}");
     let times = strength["at_least_times"].as_f64().unwrap();
@@ -1640,8 +1790,8 @@ echo "2+3=$out, but run $n got lucky""#,
     assert_eq!(hashed.len(), 1);
     assert_eq!(
         hashed["inputs.txt"],
-        // sha256 of "2 3\n"
-        "0e5b1c7a4a2cd5b3d1ea8b79b5a1e6a2e06b4d0c0c0f6a8d0a5b0f7f4d1a3c11"
+        // `printf '2 3\n' | shasum -a 256`
+        "337b794ce718a09a620090d53541c3b4640a64133bbee2188444810cd3169f81"
     );
 
     let checked = fixture.check(&report_path);
@@ -1658,7 +1808,10 @@ echo "2+3=$out, but run $n got lucky""#,
         .as_array_mut()
         .unwrap()
         .push(json!({"rung": "REPEATED", "holds": true, "statement": "s", "proof": "p"}));
-    tampered["probes"].as_array_mut().unwrap().truncate(probes.len() - 2);
+    tampered["probes"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(probes.len() - 2);
     tampered["chain_head"] = tampered["probes"][probes.len() - 3]["hash"].clone();
     let tampered_path = fixture.path("tampered.json");
     std::fs::write(
@@ -1748,7 +1901,6 @@ fn walk_verify_prove_refuses_what_it_cannot_decide_and_leaves_nothing_behind() {
     );
     refused(&test, &[("--bad", "v1")], "there is no commit in v1..v1");
     refused(&test, &[("--good", "v0")], "cannot resolve --good/--bad");
-    refused(&test, &[("--bad", "--all")], "cannot resolve --good/--bad");
     refused(
         &test,
         &[("--repo", path_arg(fixture.dir.path()))],
@@ -1797,7 +1949,12 @@ fn walk_verify_prove_refuses_what_it_cannot_decide_and_leaves_nothing_behind() {
         "--baseline-max must be from 1 to 500",
     );
     refused(
-        &["--test", TEST, "--also-hash", path_arg(&fixture.path("gone.txt"))],
+        &[
+            "--test",
+            TEST,
+            "--also-hash",
+            path_arg(&fixture.path("gone.txt")),
+        ],
         &[],
         "cannot read the --also-hash file",
     );
@@ -1814,7 +1971,8 @@ fn walk_verify_prove_refuses_what_it_cannot_decide_and_leaves_nothing_behind() {
     let ran = vestige(&fixture.store, &args);
     assert_eq!(ran.code, Some(1), "{}", ran.text());
     assert!(
-        ran.stdout.contains("the directory for --report does not exist"),
+        ran.stdout
+            .contains("the directory for --report does not exist"),
         "{}",
         ran.text()
     );
@@ -1882,9 +2040,8 @@ fn walk_verify_prove_takes_a_good_ref_that_is_not_an_ancestor() {
     // It says what git bisect will do about it, and git bisect does it:
     // the merge base, c2, is tested before anything is bisected.
     assert!(
-        ran.stdout.contains(
-            "side is not an ancestor of v2: git bisect tests their merge base first"
-        ),
+        ran.stdout
+            .contains("side is not an ancestor of v2: git bisect tests their merge base first"),
         "{}",
         ran.stdout
     );
@@ -2010,8 +2167,9 @@ fn walk_verify_prove_handles_a_merge_as_the_first_bad_commit_with_no_leads() {
         ran.stdout
     );
     assert!(
-        ran.stdout
-            .contains("The first bad commit is not among the leads; the full git bisect takes over."),
+        ran.stdout.contains(
+            "The first bad commit is not among the leads; the full git bisect takes over."
+        ),
         "{}",
         ran.stdout
     );
@@ -2065,10 +2223,7 @@ fn walk_verify_prove_handles_a_merge_as_the_first_bad_commit_with_no_leads() {
     let checked = vestige(&bare.store, &["prove", "--check", path_arg(&report_path)]);
     assert!(checked.ok, "{}", checked.text());
     assert_eq!(
-        checked
-            .stdout
-            .matches(": recorded verdict good")
-            .count(),
+        checked.stdout.matches(": recorded verdict good").count(),
         3,
         "two parents and the undo: {}",
         checked.stdout
@@ -2080,7 +2235,10 @@ fn walk_verify_prove_handles_a_merge_as_the_first_bad_commit_with_no_leads() {
         "{}",
         checked.stdout
     );
-    assert_eq!(git(&bare.repo, NOW, &["worktree", "list"]).lines().count(), 1);
+    assert_eq!(
+        git(&bare.repo, NOW, &["worktree", "list"]).lines().count(),
+        1
+    );
 }
 
 #[test]
@@ -2111,7 +2269,8 @@ fn walk_verify_prove_handles_a_root_commit_as_the_first_bad_commit() {
     );
     git(&bare.repo, NOW, &["tag", "bad"]);
 
-    let (ran, report_path) = bare.prove(r#"if [ -e poison.txt ]; then echo poisoned; exit 1; fi; echo clean"#);
+    let (ran, report_path) =
+        bare.prove(r#"if [ -e poison.txt ]; then echo poisoned; exit 1; fi; echo clean"#);
     assert!(ran.ok, "{}", ran.text());
     let report = read_json(&report_path);
     assert_eq!(report["first_bad_commit"], root.as_str(), "{}", ran.text());
@@ -2154,5 +2313,8 @@ fn walk_verify_prove_handles_a_root_commit_as_the_first_bad_commit() {
         "{}",
         checked.stdout
     );
-    assert_eq!(git(&bare.repo, NOW, &["worktree", "list"]).lines().count(), 1);
+    assert_eq!(
+        git(&bare.repo, NOW, &["worktree", "list"]).lines().count(),
+        1
+    );
 }
