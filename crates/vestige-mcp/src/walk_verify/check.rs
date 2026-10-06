@@ -26,7 +26,7 @@ use anyhow::Context;
 use chrono::DateTime;
 use serde_json::Value;
 
-use super::git::{git_test, parents_of};
+use super::git::{git_test, is_sha, parents_of};
 use super::json::{ZERO_HASH, chain_hash, protocol_hash, sha256_hex};
 use super::stats::{REPEATED_P, fisher_p};
 use super::text::{Palette, abspath, head, py_display};
@@ -159,10 +159,15 @@ pub fn check(report: &Path) -> anyhow::Result<i32> {
         if verdict != "bad" {
             fail("the first bad commit is not recorded as bad by a probe.");
         }
+        // The report is someone else's input, and a name git would read as
+        // an option (`--output=<file>`) must never reach it.
+        if !is_sha(first_bad) {
+            fail("the first bad commit is not a full commit name.");
+        }
         let repo = rep["repo"]
             .as_str()
             .map(Path::new)
-            .filter(|repo| repo.is_dir());
+            .filter(|repo| repo.is_dir() && is_sha(first_bad));
         let parents = repo.and_then(|repo| Some((repo, parents_of(repo, first_bad).ok()?)));
         match parents {
             Some((repo, parents)) => {
@@ -183,6 +188,7 @@ pub fn check(report: &Path) -> anyhow::Result<i32> {
                             // already rules out: its ancestors.
                             let implied = verdicts.iter().find(|(commit, verdict)| {
                                 **verdict == "good"
+                                    && is_sha(commit)
                                     && git_test(
                                         repo,
                                         &["merge-base", "--is-ancestor", parent, commit],
@@ -490,6 +496,53 @@ mod tests {
             report["first_bad_commit"] = Value::Null;
         });
         assert_eq!(check(&unnamed).unwrap(), 0);
+    }
+
+    /// A report is someone else's input. A first bad commit git would read
+    /// as an option (`--output=<file>`) fails the check and never reaches
+    /// git, even when a probe records it bad and the report's repo is here.
+    #[test]
+    fn check_never_hands_a_report_field_to_git_as_an_option() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+        let repo = dir.join("repo");
+        fs::create_dir(&repo).unwrap();
+        let commit = [
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ];
+        for args in [&["init", "-q"][..], &commit[..]] {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, "kept\n").unwrap();
+        let named: &'static str =
+            Box::leak(format!("--output={}", victim.display()).into_boxed_str());
+        let rows: [Row; 2] = [
+            (GOOD, "good", "baseline", None),
+            (named, "bad", "baseline", None),
+        ];
+        let report = write_report(dir, &rows, |report| {
+            report["repo"] = json!(repo);
+            report["first_bad_commit"] = json!(named);
+        });
+        assert_eq!(check(&report).unwrap(), 1);
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "kept\n");
     }
 
     #[test]

@@ -160,7 +160,17 @@ pub(super) fn resolve_commit(repo: &Path, revision: &str) -> Option<String> {
 
 /// The parents of a commit: none for a root commit, two or more for a merge.
 pub(super) fn parents_of(repo: &Path, commit: &str) -> anyhow::Result<Vec<String>> {
-    let line = git_out(repo, &["rev-list", "--parents", "-n", "1", commit])?;
+    let line = git_out(
+        repo,
+        &[
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            "--end-of-options",
+            commit,
+        ],
+    )?;
     Ok(line
         .split_whitespace()
         .skip(1)
