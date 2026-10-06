@@ -502,7 +502,7 @@ fn strip_withheld_in(
 fn describe_full_schema_for_strata(tool: &str, schema: &mut serde_json::Value) {
     let text = match tool {
         "maintain" => {
-            "Store-wide maintenance: dream and dream_compile (replay recorded edges; no memory row is rewritten), gc (lists nothing and deletes nothing on Strata), importance_score, backup, export. Inspect the selected action's schema. Export uses since; start/end are unsupported."
+            "Store-wide maintenance: dream and dream_compile (replay recorded edges; no memory row is rewritten), gc (lists nothing and deletes nothing on Strata), importance_score (id: a count of recorded edges and reviews, never a text score), backup, export. Inspect the selected action's schema. Export uses since; start/end are unsupported."
         }
         "dedup" => {
             "'scan' (default, read-only): exact-equality duplicate clusters. 'undo': reverse an operation_id, or list the reflog. 'tag_rename' / 'tag_merge': preview-token gated. 'policy': thresholds."
@@ -1128,7 +1128,7 @@ description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision'
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans through a nested command.".to_string()),
+description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans through a nested command. A trigger fires on a clock or on exact equality with a handle in the check context; descriptions are never parsed.".to_string()),
                 input_schema: tools::compact::of(&tools::intention_graph::schema()),
                 ..Default::default()
             },
@@ -2621,6 +2621,16 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
             // ================================================================
             "blast_radius" => {
                 tools::blast_radius::execute(&self.storage, request.arguments).await
+            }
+
+            // Unit tests only: wait for the cognitive engine's mutex and do
+            // nothing else, so a transport test can park a handler
+            // deterministically without leaning on a real tool's locking.
+            // No release build contains this arm.
+            #[cfg(test)]
+            "test_park_on_engine" => {
+                let _engine = self.cognitive.lock().await;
+                Ok(serde_json::json!({ "parked": false }))
             }
 
             name => {
