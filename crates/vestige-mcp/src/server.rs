@@ -1073,7 +1073,7 @@ description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / '
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions marked current or stale, and the scopes holding them), 'verify' (re-check anchors and, with a codebase, change records), 'reanchor' (replace reviewed evidence), 'ingest_repo' (a checkout's commits as anchored change records; previews unless dryRun=false).".to_string()),
+description: Some("Code memory: remember_pattern, remember_decision, get_context, verify, reanchor, ingest_repo (previews unless dryRun=false), record_runs.".to_string()),
                 input_schema: tools::compact::of(&tools::codebase_unified::schema()),
                 ..Default::default()
             },

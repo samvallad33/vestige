@@ -1881,10 +1881,11 @@ pub fn load_config(path: &str) -> Config {
             desc.ends_with("code knowledge."),
             "compact truncation must keep the whole first sentence, got: {desc}"
         );
-        // Every action itself survives as the enum, ingest_repo included.
+        // Every action itself survives as the enum, ingest_repo and record_runs included.
         let actions = compact["properties"]["action"]["enum"].as_array().unwrap();
-        assert_eq!(actions.len(), 6);
+        assert_eq!(actions.len(), 7);
         assert!(actions.contains(&serde_json::json!("ingest_repo")));
+        assert!(actions.contains(&serde_json::json!("record_runs")));
     }
 
     /// A NULL or blank `scope` on a legacy row can never be read (reads match
