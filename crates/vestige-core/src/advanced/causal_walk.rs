@@ -1348,6 +1348,8 @@ mod tests {
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],
+            parents: vec![],
+            reverts: None,
         });
         seed(storage, &content, vec![git_records::COMMIT_TAG], days_ago)
     }
@@ -1922,6 +1924,8 @@ mod tests {
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],
+            parents: vec![],
+            reverts: None,
         });
         assert_eq!(commit_sha_of(&content), Some(sha_of('1')));
         assert_eq!(commit_sha_of("not a commit record"), None);

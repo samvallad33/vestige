@@ -53,6 +53,9 @@ pub mod unavailable;
 
 // `codebase action=ingest_repo`: the repo connector (commits -> change records).
 pub mod repo_ingest;
+mod causal_frames;
+#[cfg(test)]
+mod causal_proof;
 
 // v1.3: Auto-save and dedup tools
 pub mod dedup;

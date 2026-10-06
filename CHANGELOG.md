@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `codebase ingest_repo` records the causal edges git already wrote: `derived_from`
+  each parent, `corrects` from a `git revert` trailer (`This reverts commit <sha>`)
+  to the reverted commit (fetched when it sits outside the page), and `touched`
+  from the commit to each file the diff names. A merge is kept when it carries
+  that trailer, or when it is the missing parent a recorded commit needs to
+  cross. `causal_walk` resolves `stack_frame` and `failing_test` by exact path
+  and `git blame` at the failing revision, then ranks the commits that touched
+  that path before it. `forgotten_lesson` continues through a newer record to
+  the older commit it reverted.
+
 - Operator Lite: `operator-gate upgrade` prints what the paid Operator gate adds
   (owner laws, the Board, the Letter, the onboarding wizard), its price and where
   to buy it; `--open` opens the page. `status` and `verify` end with one line that

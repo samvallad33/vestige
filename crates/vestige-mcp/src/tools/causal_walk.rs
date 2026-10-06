@@ -8,9 +8,10 @@
 //! `evidence_of` trail edges through the existing `save_connection` surface; a
 //! recorded walk has no inferred trail, so it reports promote as a no-op.
 //!
-//! On a Strata log the walk is a bounded backward BFS from each start node
-//! over recorded causal edges only. A start point of any kind names its start
-//! node with `node_id`. Shared names are not edges.
+//! On a Strata log the walk is a bounded backward BFS over recorded causal
+//! edges only. A `stack_frame` or `failing_test` whose path was ingested is
+//! resolved by that exact path and `git blame` at the failing revision; other
+//! start points name a recorded node with `node_id`. Shared names are not edges.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -26,7 +27,7 @@ use vestige_core::advanced::causal_walk::{
 fn symptom_node_id() -> Value {
     json!({
         "type": "string",
-        "description": "Optional. The id of the memory that records this symptom (what a symptom write returned). A Strata log is walked from recorded nodes, so a start point without node_id is reported unresolved in start_points instead of walked."
+        "description": "Optional. The id of the memory that records this symptom (what a symptom write returned). On a Strata log, stack_frame and failing_test resolve by exact path and git blame when an ingested commit records the checkout; any other start without node_id is reported unresolved."
     })
 }
 
@@ -42,7 +43,7 @@ pub fn schema() -> Value {
             "start_points": {
                 "type": "array",
                 "minItems": 1,
-                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). Every kind accepts node_id, the recorded symptom to walk from; on a Strata log a start point without one is reported unresolved. version_range restricts commit suspects and pairs best with a failure start point.",
+                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). stack_frame and failing_test resolve by exact path and git blame against an ingested checkout; every other kind is walked from node_id. version_range restricts commit suspects and pairs best with a failure start point.",
                 "items": {
                     "oneOf": [
                         {
@@ -139,7 +140,13 @@ struct Args {
 }
 
 /// Recorded causal vocabulary. Incoming edge: source caused target.
-const CAUSAL_LINKS: &[&str] = &["closed_by", "derived_from", "evidence_of", "touched"];
+const CAUSAL_LINKS: &[&str] = &[
+    "closed_by",
+    "corrects",
+    "derived_from",
+    "evidence_of",
+    "touched",
+];
 const MAX_DEPTH: u32 = 8;
 
 struct Reached {
@@ -272,8 +279,9 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
     let node_cap = args.scan_limit.unwrap_or(500).clamp(10, 5000) as usize;
 
     let mut rows = start_rows(&args);
+    let ranked = resolve_frames(storage, scope, &mut rows, node_cap)?;
     let starts = classify_starts(storage, scope, &mut rows)?;
-    if starts.is_empty() {
+    if starts.is_empty() && ranked.is_none() {
         let needs_report = refusal(scope, &rows);
         return Ok(walk_payload(
             storage,
@@ -299,12 +307,20 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
         walks.push((start.clone(), reached));
     }
     let (mut nodes, mut causes) = merge_walks(walks);
+    let framed = ranked.is_some();
+    if let Some(ranked) = ranked {
+        // Path + blame suspects replace the raw parent dump. Rank is structural
+        // (reverted, blame, hunk, hops), which a depth-only merge would undo.
+        causes = ranked;
+    }
     if nodes.len() > node_cap {
         nodes.truncate(node_cap);
         truncated = true;
     }
-    let kept: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
-    causes.retain(|node| kept.contains(node.id.as_str()));
+    if !framed {
+        let kept: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
+        causes.retain(|node| kept.contains(node.id.as_str()));
+    }
 
     Ok(walk_payload(
         storage,
@@ -443,6 +459,8 @@ struct StartRow {
     kind: &'static str,
     label: String,
     node_id: Option<String>,
+    /// `stack_frame` path or `failing_test` name, when the start has one.
+    locator: Option<String>,
     status: &'static str,
     reason: Option<String>,
 }
@@ -486,6 +504,7 @@ fn start_rows(args: &Args) -> Vec<StartRow> {
                 kind: "logged_write",
                 label: format!("logged_write {id}"),
                 node_id: Some(id),
+                locator: None,
                 status: "pending",
                 reason: None,
             });
@@ -497,6 +516,11 @@ fn start_rows(args: &Args) -> Vec<StartRow> {
             kind: point.kind(),
             label: point.label(),
             node_id: point.record_id().map(str::to_string),
+            locator: match point {
+                StartPoint::StackFrame { frame, .. } => Some(frame.clone()),
+                StartPoint::FailingTest { name, .. } => Some(name.clone()),
+                _ => None,
+            },
             status: "pending",
             reason: None,
         });
@@ -504,8 +528,81 @@ fn start_rows(args: &Args) -> Vec<StartRow> {
     rows
 }
 
+/// Blame `stack_frame` / `failing_test` starts against the ingested checkout.
+/// `Some` means at least one start resolved, and its hits (ranked) are the
+/// causes. `None` means no start could be resolved that way.
+fn resolve_frames(
+    storage: &Arc<Storage>,
+    scope: &str,
+    rows: &mut [StartRow],
+    node_cap: usize,
+) -> Result<Option<Vec<Reached>>, String> {
+    let mut hits: Vec<super::causal_frames::FrameHit> = Vec::new();
+    let mut resolved = false;
+    for row in rows.iter_mut() {
+        let Some(locator) = row.locator.clone() else {
+            continue;
+        };
+        let Some(resolution) = super::causal_frames::resolve_start(
+            storage,
+            scope,
+            row.kind,
+            &locator,
+            row.node_id.as_deref(),
+            node_cap,
+        )?
+        else {
+            continue;
+        };
+        resolved = true;
+        row.status = "walked";
+        row.reason = Some(resolution.detail);
+        hits.extend(resolution.hits);
+    }
+    if !resolved {
+        return Ok(None);
+    }
+    hits.sort_by(|a, b| a.rank_key().cmp(&b.rank_key()));
+    let mut seen = HashSet::new();
+    let mut reached = Vec::new();
+    for hit in hits {
+        if !seen.insert(hit.id.clone()) {
+            continue;
+        }
+        let mut path = vec![Hop {
+            source_id: hit.id.clone(),
+            target_id: hit.path_anchor.clone(),
+            link_type: "touched".to_string(),
+        }];
+        if let Some(revert) = hit.revert_id.clone() {
+            path.push(Hop {
+                source_id: revert,
+                target_id: hit.id.clone(),
+                link_type: "corrects".to_string(),
+            });
+        }
+        let from = rows
+            .iter()
+            .find(|row| row.status == "walked" && row.locator.is_some())
+            .and_then(|row| row.node_id.clone())
+            .unwrap_or_else(|| hit.path_anchor.clone());
+        reached.push(Reached {
+            id: hit.id,
+            depth: hit.hops,
+            path,
+            from: vec![from],
+        });
+        if reached.len() >= node_cap {
+            break;
+        }
+    }
+    Ok(Some(reached))
+}
+
 /// Decide the fate of each start: walk it, or say exactly why not. Returns the
-/// distinct in-scope nodes to walk, in the order given.
+/// distinct in-scope nodes to walk, in the order given. A start already marked
+/// `walked` by frame resolution keeps that status; its node is still walked
+/// when it has one.
 fn classify_starts(
     storage: &Arc<Storage>,
     scope: &str,
@@ -514,6 +611,15 @@ fn classify_starts(
     let mut seen: HashSet<String> = HashSet::new();
     let mut walkable = Vec::new();
     for row in rows.iter_mut() {
+        if row.status == "walked" {
+            if let Some(id) = row.node_id.clone()
+                && seen.insert(id.clone())
+                && in_scope(storage, &id, scope)?
+            {
+                walkable.push(id);
+            }
+            continue;
+        }
         let Some(id) = row.node_id.clone() else {
             row.status = "unresolved";
             row.reason = Some(format!(
@@ -622,7 +728,9 @@ pub(crate) fn upstream_end<'a>(
         return None;
     }
     match edge.link_type.as_str() {
-        "derived_from" if edge.source_id == node_id => Some(edge.target_id.as_str()),
+        // `A derived_from B`: A came from B. `R corrects C`: git revert R
+        // names C, so C is upstream of R.
+        "derived_from" | "corrects" if edge.source_id == node_id => Some(edge.target_id.as_str()),
         "closed_by" | "evidence_of" | "touched" if edge.target_id == node_id => {
             Some(edge.source_id.as_str())
         }
@@ -686,7 +794,7 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "nodes": walk.nodes.iter().map(&node_json).collect::<Vec<_>>(),
         "causes": walk.causes.iter().map(&node_json).collect::<Vec<_>>(),
         "needs_report": walk.needs_report,
-        "note": "Backward BFS over recorded causal edges only, from every start node: from a memory to what it is derived_from, and to the records that are evidence_of it, that it closed, or that touched it. A node_id on any start point names the recorded symptom the walk begins at; start_points reports what happened to each one.",
+        "note": "Backward walk over recorded causal edges only. stack_frame and failing_test resolve by exact path and git blame at the failing revision, then rank the commits that touched that path before it (later reverted, blame, hunk, parent hops). Other starts walk from the recorded node: derived_from and corrects run toward the earlier commit; evidence_of, closed_by and touched run from the earlier record. start_points reports what happened to each start.",
     })
 }
 
@@ -720,7 +828,7 @@ fn why_empty(storage: &Arc<Storage>, scope: &str, starts: &[String]) -> (String,
         }
     }
     let mut why = format!(
-        "no recorded causal edge (closed_by, derived_from, evidence_of, touched) leads upstream from the start node{} in scope '{scope}'",
+        "no recorded causal edge (closed_by, corrects, derived_from, evidence_of, touched) leads upstream from the start node{} in scope '{scope}'",
         if starts.len() == 1 { "" } else { "s" }
     );
     if other_scope > 0 {
@@ -865,6 +973,8 @@ mod tests {
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],
+            parents: vec![],
+            reverts: None,
         });
         seed(storage, &content, vec![git_records::COMMIT_TAG], days_ago)
     }
