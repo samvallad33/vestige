@@ -57,8 +57,11 @@
 //!
 //! Each recorded commit also gets the causal edges git itself recorded:
 //! `touched` to the file and hunk anchors it changed, `derived_from` to each
-//! parent that is already in the scope, and `corrects` from a revert to the
-//! commit named by that trailer. A reverted commit that is reachable locally
+//! parent that is in the scope, and `corrects` from a revert to the
+//! commit named by that trailer. The parent edge does not depend on ingest
+//! order: a child recorded before its parent gets `derived_from` when the
+//! parent later arrives, from `git rev-list --parents` of the commits already
+//! in the scope. A reverted commit that is reachable locally
 //! but outside this page is ingested too, so the edge has both ends.
 //! `(cherry picked from commit <sha>)` is `derived_from` the named commit.
 //! `Fixes: <sha>` is `corrects` once the prefix resolves to one local commit.
@@ -1079,7 +1082,100 @@ fn record_git_edges(
             }
         }
     }
+    backfill_prior_parent_edges(ctx, commits, started, budget, stats, &mut out);
     record_patch_identities(ctx, commits, started, budget, stats, &mut out);
+    out
+}
+
+/// Parent edges for commits already in the scope that are not on this page.
+///
+/// `record_git_edges` writes `child derived_from parent` while it walks the
+/// page. A child ingested on an earlier page has no parent edge until the
+/// parent exists. This pass asks git for those children's parents and writes
+/// the edge once both ends are recorded. `git rev-list --no-walk --parents`
+/// is the parent list; nothing is fetched and no commit message is read.
+fn backfill_prior_parent_edges(
+    ctx: &EdgeCtx<'_>,
+    commits: &[GitCommit],
+    started: Instant,
+    budget: Duration,
+    stats: &mut Stats,
+    out: &mut EdgeStats,
+) {
+    if !ctx.dry_run && started.elapsed() >= budget {
+        stats.stopped_by_budget = true;
+        return;
+    }
+    let page: HashSet<&str> = commits.iter().map(|commit| commit.sha.as_str()).collect();
+    let prior: Vec<String> = ctx
+        .sha_to_id
+        .keys()
+        .filter(|sha| !page.contains(sha.as_str()))
+        .cloned()
+        .collect();
+    if prior.is_empty() {
+        return;
+    }
+    for (child, parents) in git_parent_map(ctx.root, &prior) {
+        let Some(source) = ctx.sha_to_id.get(&child) else {
+            continue;
+        };
+        for parent in parents {
+            let Some(target) = ctx.sha_to_id.get(&parent) else {
+                continue;
+            };
+            if source == target {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                Some(source),
+                target,
+                "derived_from",
+                ctx.dry_run,
+                &mut out.parents,
+            );
+        }
+    }
+}
+
+/// `sha -> parent shas` for exactly the commits named, from
+/// `git rev-list --no-walk --parents`. A sha that is not 40 hex is not passed
+/// to git. A missing object is absent from the map.
+fn git_parent_map(root: &Path, shas: &[String]) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    for chunk in shas.chunks(64) {
+        let mut args = vec![
+            "rev-list".to_string(),
+            "--no-walk".to_string(),
+            "--parents".to_string(),
+        ];
+        for sha in chunk {
+            if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                args.push(sha.clone());
+            }
+        }
+        if args.len() == 3 {
+            continue;
+        }
+        let Ok(run) = run_git(root, &args) else {
+            continue;
+        };
+        if run.failure.is_some() {
+            continue;
+        }
+        for line in String::from_utf8_lossy(&run.stdout).lines() {
+            let mut parts = line.split_whitespace();
+            let Some(sha) = parts.next() else {
+                continue;
+            };
+            let parents: Vec<String> = parts
+                .map(|part| part.to_ascii_lowercase())
+                .filter(|part| part.len() == 40 && part.chars().all(|c| c.is_ascii_hexdigit()))
+                .collect();
+            out.insert(sha.to_ascii_lowercase(), parents);
+        }
+    }
     out
 }
 
@@ -2498,6 +2594,109 @@ pub fn parse_timeout(raw: &str) -> u32 {
         request.scope = Some("talk".into());
         let talked = ingest(&storage, request).await;
         assert_eq!(talked["edges"]["reverts"], 0, "{talked}");
+    }
+
+    /// A child ingested before its parent still gets `derived_from` once the
+    /// parent record exists. The other order records the same edge on the
+    /// child's own page. A second pass writes nothing.
+    #[tokio::test]
+    async fn parent_edge_lands_when_the_child_was_ingested_first() {
+        let mut repo = Repo::empty();
+        repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
+        repo.commit("parent", DATES[0]);
+        let parent = repo.shas[0].clone();
+        repo.write("src/a.rs", "fn a() { let _ = 2; }\n");
+        repo.commit("child", DATES[1]);
+        let child = repo.shas[1].clone();
+
+        let (storage, _dir) = strata();
+        let id_of = |store: &Arc<Storage>, sha: &str| {
+            let tag = commit_tag(sha);
+            store
+                .current_code_context_nodes("event", Some(&tag), "order", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let page = |sha: &str| {
+            let mut request = repo.request(false);
+            request.codebase = Some("order".into());
+            request.scope = Some("order".into());
+            request.rev = Some(sha.to_string());
+            request.limit = Some(1);
+            request
+        };
+
+        let child_out = ingest(&storage, page(&child)).await;
+        assert_eq!(child_out["commits"]["created"], 1, "{child_out}");
+        assert_eq!(
+            child_out["edges"]["parents"].as_u64(),
+            Some(0),
+            "{child_out}"
+        );
+        let child_id = id_of(&storage, &child);
+        let before = storage.get_connections_for_memory(&child_id).unwrap();
+        assert!(
+            !before
+                .iter()
+                .any(|edge| { edge.source_id == child_id && edge.link_type == "derived_from" }),
+            "the parent record does not exist yet: {before:?}"
+        );
+
+        let parent_out = ingest(&storage, page(&parent)).await;
+        assert_eq!(parent_out["commits"]["created"], 1, "{parent_out}");
+        assert_eq!(
+            parent_out["edges"]["parents"].as_u64(),
+            Some(1),
+            "{parent_out}"
+        );
+        let parent_id = id_of(&storage, &parent);
+        let edges = storage.get_connections_for_memory(&child_id).unwrap();
+        assert!(
+            edges.iter().any(|edge| {
+                edge.source_id == child_id
+                    && edge.target_id == parent_id
+                    && edge.link_type == "derived_from"
+            }),
+            "{edges:?}"
+        );
+
+        let again = ingest(&storage, page(&parent)).await;
+        assert_eq!(again["edges"]["parents"].as_u64(), Some(0), "{again}");
+        let third = ingest(&storage, page(&child)).await;
+        assert_eq!(third["edges"]["parents"].as_u64(), Some(0), "{third}");
+        assert_eq!(
+            storage
+                .get_connections_for_memory(&child_id)
+                .unwrap()
+                .iter()
+                .filter(|edge| {
+                    edge.source_id == child_id
+                        && edge.target_id == parent_id
+                        && edge.link_type == "derived_from"
+                })
+                .count(),
+            1
+        );
+
+        let (other, _other_dir) = strata();
+        let first = ingest(&other, page(&parent)).await;
+        assert_eq!(first["edges"]["parents"].as_u64(), Some(0), "{first}");
+        let second = ingest(&other, page(&child)).await;
+        assert_eq!(second["edges"]["parents"].as_u64(), Some(1), "{second}");
+        let other_child = id_of(&other, &child);
+        let other_parent = id_of(&other, &parent);
+        let other_edges = other.get_connections_for_memory(&other_child).unwrap();
+        assert!(
+            other_edges.iter().any(|edge| {
+                edge.source_id == other_child
+                    && edge.target_id == other_parent
+                    && edge.link_type == "derived_from"
+            }),
+            "{other_edges:?}"
+        );
     }
 
     #[tokio::test]
