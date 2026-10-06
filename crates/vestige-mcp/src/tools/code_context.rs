@@ -232,10 +232,14 @@ pub(super) fn verify_nodes_with(
     persist: bool,
 ) -> Result<std::collections::HashMap<String, (AnchorStatus, Vec<AnchorVerification>)>, String> {
     let mut out = std::collections::HashMap::new();
-    let by_node = storage
+    let mut by_node = storage
         .code_anchors_for_nodes(node_ids)
         .map_err(|e| format!("Cannot read code anchors: {e}"))?;
-    for (node_id, anchors) in by_node {
+    // Not in the map's hash order: each changed verdict below appends a frame
+    // to the log, and the same call on the same store must append them in the
+    // same order every time.
+    for node_id in verification_order(node_ids, &by_node) {
+        let anchors = by_node.remove(&node_id).unwrap_or_default();
         let mut verdicts: Vec<AnchorVerification> = Vec::with_capacity(anchors.len());
         for anchor in &anchors {
             let v = verify_anchor(anchor, repo_root);
@@ -249,6 +253,29 @@ pub(super) fn verify_nodes_with(
         out.insert(node_id, (worst_status(&verdicts), verdicts));
     }
     Ok(out)
+}
+
+/// The order memories are verified and their verdicts written in: the ids as
+/// the caller gave them (the first mention of a repeated id), then any other
+/// id the store returned, by id.
+fn verification_order<V>(
+    node_ids: &[String],
+    by_node: &std::collections::HashMap<String, V>,
+) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut order: Vec<String> = node_ids
+        .iter()
+        .filter(|id| by_node.contains_key(*id) && seen.insert(id.as_str()))
+        .cloned()
+        .collect();
+    let mut rest: Vec<String> = by_node
+        .keys()
+        .filter(|id| !seen.contains(id.as_str()))
+        .cloned()
+        .collect();
+    rest.sort();
+    order.extend(rest);
+    order
 }
 
 /// Roll the *persisted* per-anchor statuses of one memory into a single
@@ -351,4 +378,105 @@ pub(super) fn annotate_items(
         }
     }
     stale_ids
+}
+
+/// Anchor verification on a Strata log (the default build's store).
+#[cfg(test)]
+mod verification_order_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use vestige_core::IngestInput;
+
+    fn ids(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn verdicts_follow_the_order_the_ids_were_given_then_id_order() {
+        let by_node: HashMap<String, ()> = ["n3", "n1", "n4", "n2", "extra-b", "extra-a"]
+            .into_iter()
+            .map(|id| (id.to_string(), ()))
+            .collect();
+        // n9 has no anchors; n1 is asked for twice; the extras were not asked
+        // for at all and come last, by id.
+        let asked = ids(&["n4", "n9", "n1", "n3", "n1", "n2"]);
+        let expected = ids(&["n4", "n1", "n3", "n2", "extra-a", "extra-b"]);
+        for _ in 0..16 {
+            // A fresh map each time: a hash map built from the same keys can
+            // iterate in a different order, and the result must not follow it.
+            let rebuilt: HashMap<String, ()> = by_node.keys().cloned().map(|id| (id, ())).collect();
+            assert_eq!(verification_order(&asked, &rebuilt), expected);
+        }
+    }
+
+    #[test]
+    fn the_same_store_and_ids_give_the_same_verdicts_and_write_each_once() {
+        let dir = tempfile::tempdir().expect("data dir");
+        let storage = crate::strata_memory::open(dir.path()).expect("strata log");
+        let mut node_ids = Vec::new();
+        for n in 0..6 {
+            let node = storage
+                .ingest(IngestInput {
+                    content: format!("Synthetic pattern {n}"),
+                    node_type: "pattern".to_string(),
+                    ..Default::default()
+                })
+                .expect("ingest");
+            storage
+                .record_code_anchors(&[CodeAnchor {
+                    id: format!("anchor-{n}"),
+                    node_id: node.id.clone(),
+                    file_path: format!("src/file_{n}.rs"),
+                    symbol: None,
+                    symbol_kind: None,
+                    start_line: None,
+                    end_line: None,
+                    span_lines: None,
+                    // No hash: the verdict is "unverifiable", never a guess.
+                    content_hash: None,
+                    captured_at: chrono::DateTime::UNIX_EPOCH,
+                    last_verified_at: None,
+                    last_status: None,
+                }])
+                .expect("anchor");
+            node_ids.push(node.id);
+        }
+        let asked: Vec<String> = [4, 0, 5, 2, 1, 3]
+            .iter()
+            .map(|&n| node_ids[n].clone())
+            .collect();
+
+        // Honest time: when each anchor was checked. Everything else must match.
+        let render = |verified: &HashMap<String, (AnchorStatus, Vec<AnchorVerification>)>| {
+            asked
+                .iter()
+                .map(|id| {
+                    let (status, verdicts) = &verified[id];
+                    let rows: Vec<Value> = verdicts
+                        .iter()
+                        .map(|verdict| {
+                            let mut row = verification_json(verdict);
+                            row.as_object_mut().unwrap().remove("checkedAt");
+                            row
+                        })
+                        .collect();
+                    json!({"id": id, "status": status.as_str(), "anchors": rows}).to_string()
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = verify_nodes_with(&storage, dir.path(), &asked, true).expect("verify");
+        let second = verify_nodes_with(&storage, dir.path(), &asked, true).expect("verify again");
+        assert_eq!(first.len(), 6);
+        assert_eq!(render(&first), render(&second));
+
+        // The first pass recorded every verdict it returned; the second found
+        // them unchanged and wrote nothing new.
+        for id in &node_ids {
+            let anchors = storage.code_anchors_for_node(id).expect("anchors");
+            assert_eq!(anchors.len(), 1);
+            let returned = first[id].1[0].status;
+            assert_eq!(anchors[0].last_status, Some(returned), "{:?}", anchors[0]);
+            assert!(anchors[0].last_verified_at.is_some(), "{:?}", anchors[0]);
+        }
+    }
 }

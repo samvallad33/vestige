@@ -649,11 +649,14 @@ pub async fn execute(
     }
     // Only final exposure is recorded; retrieval never promotes a memory.
     let rendered = result["context"].as_str().unwrap_or("");
-    let visible: Vec<&str> = seen_ids
+    // `seen_ids` is a hash set: put the ids in id order before they reach the
+    // store, so the same response records its exposures in the same order.
+    let mut visible: Vec<&str> = seen_ids
         .iter()
         .filter(|id| rendered.contains(id.as_str()))
         .map(String::as_str)
         .collect();
+    visible.sort_unstable();
     let _ = storage.record_batch_retrieval(&visible);
     Ok(result)
 }
