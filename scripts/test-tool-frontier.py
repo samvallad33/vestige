@@ -256,7 +256,7 @@ def handler_extras(tool, action, ctx):
         ("source_sync", "github"): {"repo": "fixture-owner/fixture-repo", "max_pages": 1},
         ("source_sync", "redmine"): {"project": "fixture", "max_pages": 1},
         ("maintain", "consolidate"): {"phase": "lifecycle", "batchSize": 2},
-        ("maintain", "importance_score"): {"content": "Synthetic fixture design decision"},
+        ("maintain", "importance_score"): {"id": mem},
         ("maintain", "gc"): {"dry_run": True},
         ("maintain", "restore"): {"path": restore, "allowAnyPath": True},
         ("dedup", "plan_merge"): {"member_ids": [mem, mem2]},
@@ -850,8 +850,11 @@ def run(binary, output):
                     break
             for view in ("health", "retention", "timeline", "changelog", "stats", "coverage"):
                 tool("memory_status", {"view": view})
-            score = tool("maintain", {"action": "importance_score", "content": "Synthetic fixture design decision"})
-            assert isinstance(score.get("composite"), (int, float))
+            typed("maintain", {"action": "importance_score", "content": "Synthetic fixture design decision"},
+                  "unavailable_in_4_0")
+            score = tool("maintain", {"action": "importance_score", "id": successor})
+            assert score["basis"] == "recorded_structure" and isinstance(score["score"], int), score
+            assert tool("maintain", {"action": "importance_score", "id": successor}) == score
             gc = tool("maintain", {"action": "gc"})
             assert gc.get("dryRun", gc.get("dry_run")) is True
             assert gc.get("deleted", gc.get("candidateCount", 0)) == 0 or gc.get("candidateCount") == 0
