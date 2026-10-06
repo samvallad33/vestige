@@ -104,6 +104,10 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_GIT_OUTPUT: u64 = 256 * 1024 * 1024;
 /// Anchors kept per commit; the overflow is counted, not silently dropped.
 const MAX_ANCHORS_PER_COMMIT: usize = 24;
+/// Commits pulled from outside the page per call (revert, cherry-pick and
+/// `Fixes:` targets). The trailers that name them are capped at parse time
+/// (git_records `MAX_FIXES`), and this bounds the pulls whatever names them.
+const MAX_PULLED_COMMITS: usize = 64;
 const SAMPLE_COMMITS: usize = 5;
 const IDS_SHOWN: usize = 20;
 /// Longest value accepted for a ref, date or name handed to git or the log.
@@ -747,7 +751,8 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         }
     }
 
-    resolve_fix_shas(root, &mut commits);
+    let mut verified: HashSet<String> = HashSet::new();
+    resolve_fix_shas(root, &mut commits, &mut verified);
     let mut pulled_reverts = 0usize;
     let mut pulled_named = 0usize;
     let mut revert_targets = HashSet::new();
@@ -771,7 +776,9 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         .collect();
     pending.sort();
     pending.dedup();
-    for sha in pending {
+    // A commit message names its targets; the page is what the caller asked
+    // for. Pulls are a bonus, so they are bounded however many are named.
+    for sha in pending.into_iter().take(MAX_PULLED_COMMITS) {
         if !commit_object_exists(root, &sha) {
             continue;
         }
@@ -790,7 +797,7 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         }
         commits.push(commit);
     }
-    resolve_fix_shas(root, &mut commits);
+    resolve_fix_shas(root, &mut commits, &mut verified);
 
     // The revision the caller named is the one a failure is observed at. A
     // release commit is often a merge, and `--no-merges` would drop it.
@@ -816,18 +823,27 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
 /// `git rev-parse --verify <sha>^{commit}` returns that same sha.
 /// A shorter token is dropped. It is never expanded, so a unique 12-hex
 /// prefix cannot pull a commit that was outside the page. Nothing is fetched.
-fn resolve_fix_shas(root: &Path, commits: &mut [GitCommit]) {
+/// `verified` carries answers across commits and across the two passes of
+/// [`read_commits`], so a page of messages naming the same targets asks git
+/// once per distinct sha, not once per mention.
+fn resolve_fix_shas(root: &Path, commits: &mut [GitCommit], verified: &mut HashSet<String>) {
     for commit in commits.iter_mut() {
         let mut full = Vec::new();
         for token in commit.fixes.drain(..) {
             if !is_exact_full_sha(&token) {
                 continue;
             }
-            let Some(sha) = resolve_commit_sha(root, &token) else {
-                continue;
-            };
-            if sha == token && sha != commit.sha && !full.contains(&sha) {
-                full.push(sha);
+            if !verified.contains(&token) {
+                match resolve_commit_sha(root, &token) {
+                    Some(sha) if sha == token => {
+                        verified.insert(sha);
+                    }
+                    // not a commit object, or not the commit it names
+                    _ => continue,
+                }
+            }
+            if token != commit.sha && !full.contains(&token) {
+                full.push(token);
             }
         }
         commit.fixes = full;
@@ -1057,6 +1073,12 @@ fn record_git_edges(
         }
         let bumps = lock_bumps_with_context(ctx.root, commit);
         for bump in &bumps {
+            // The budget is checked between commits; one commit's lockfile
+            // churn must not run past it unexamined.
+            if !ctx.dry_run && started.elapsed() >= budget {
+                stats.stopped_by_budget = true;
+                break;
+            }
             let new_id =
                 git_records::package_anchor_id(&bump.ecosystem, &bump.package, &bump.new_version);
             let old_id =
@@ -2715,6 +2737,57 @@ pub fn parse_timeout(raw: &str) -> u32 {
         assert!(
             edges.iter().all(|edge| edge.link_type != "corrects"),
             "a loose Fixes: line wrote corrects: {edges:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_page_cannot_pull_unbounded_named_commits() {
+        // Seventy-four real off-page commits named by full-sha trailers:
+        // at most MAX_PULLED_COMMITS are pulled, whatever the messages name.
+        let mut repo = Repo::empty();
+        let targets = MAX_PULLED_COMMITS + 10;
+        for i in 0..targets {
+            repo.write("src/a.rs", &format!("fn a() {{ let _ = {i}; }}\n"));
+            repo.commit(&format!("base {i}"), "2024-02-01T00:00:00Z");
+        }
+        // Each fixer names sixteen of them; trailers are capped per commit,
+        // so it takes five commits to name all seventy-four.
+        let mut named = 0;
+        let mut fixers = 0;
+        while named < targets {
+            let end = (named + 16).min(targets);
+            let batch: Vec<String> = repo.shas[named..end]
+                .iter()
+                .map(|sha| format!("Fixes: {sha}"))
+                .collect();
+            named = end;
+            repo.write("src/fixer.rs", &format!("fn f{fixers}() {{}}\n"));
+            repo.git(&["add", "-A"], "2024-02-02T00:00:00Z");
+            repo.git(
+                &[
+                    "commit",
+                    "-q",
+                    "-m",
+                    &format!("fixer {fixers}"),
+                    "-m",
+                    &batch.join("\n"),
+                ],
+                "2024-02-02T00:00:00Z",
+            );
+            fixers += 1;
+        }
+        assert_eq!(named, targets);
+
+        let (storage, _dir) = strata();
+        let mut page = repo.request(false);
+        page.limit = Some(5);
+        page.codebase = Some("pull-cap".into());
+        page.scope = Some("pull-cap".into());
+        let out = ingest(&storage, page).await;
+        assert_eq!(
+            out["commits"]["pulledNamed"].as_u64().unwrap(),
+            MAX_PULLED_COMMITS as u64,
+            "{out}"
         );
     }
 
