@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 pub(super) type Entry = Map<String, Value>;
 
 /// The `prev` of the first entry of a chain.
-pub(super) const ZERO_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub(super) const ZERO_HASH: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)

@@ -10,12 +10,12 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+use vestige_core::advanced::causal_walk::git_lines;
 use vestige_core::advanced::git_records;
 use vestige_core::advanced::retroactive_backfill::{
     self, BackfillCandidate, BackfillResult, ExcludedCandidate, FailureEvent, RetroactiveBackfill,
 };
 use vestige_core::{ConnectionRecord, KnowledgeNode, Storage};
-use vestige_core::advanced::causal_walk::git_lines;
 
 pub fn schema() -> Value {
     json!({

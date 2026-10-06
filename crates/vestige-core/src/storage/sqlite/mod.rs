@@ -973,7 +973,6 @@ impl SqliteMemoryStore {
         candidates.truncate(limit.max(1) as usize);
         Ok(candidates)
     }
-
 }
 
 /// Truncate `content` to `max` chars on a char boundary, collapsing newlines.

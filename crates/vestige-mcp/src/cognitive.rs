@@ -75,7 +75,6 @@ pub struct CognitiveEngine {
     pub cross_project: CrossProjectLearner,
     pub speculative_retriever: SpeculativeRetriever,
     pub consolidation_scheduler: ConsolidationScheduler,
-
     // -- Search --
 }
 
@@ -166,7 +165,6 @@ impl CognitiveEngine {
             cross_project: CrossProjectLearner::new(),
             speculative_retriever: SpeculativeRetriever::new(),
             consolidation_scheduler: ConsolidationScheduler::new(),
-
             // Search
         }
     }
@@ -186,13 +184,7 @@ mod tests {
     /// arms and this expression together.
     #[test]
     fn cognitive_module_count_is_maintained() {
-        let expected = 16
-            + 10
-            + if false {
-                1
-            } else {
-                0
-            };
+        let expected = 16 + 10 + if false { 1 } else { 0 };
         assert_eq!(COGNITIVE_MODULE_COUNT, expected);
     }
 

@@ -690,7 +690,6 @@ impl SqliteMemoryStore {
             reason: row.get("reason").ok().flatten(),
         })
     }
-
 }
 
 #[cfg(test)]

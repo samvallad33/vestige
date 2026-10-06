@@ -1665,7 +1665,6 @@ pub struct VerifiedDisclosureErasure {
 }
 
 impl VerifiedDisclosureErasure {
-
     pub fn erasure_proof_digest(&self) -> &str {
         &self.erasure_proof_digest
     }
