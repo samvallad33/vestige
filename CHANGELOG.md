@@ -16,6 +16,25 @@ as orphan writes and does not see those edges until it is upgraded.
 
 ### Added
 
+- **`ingest_repo` records the causal edges, and `causal_walk` follows them.**
+  A parent commit is `derived_from`. A revert is `corrects` the commit it
+  undoes, including when the revert is ingested first and when it sits on
+  another branch whose target is an ancestor of the failure. A cherry-pick
+  is `derived_from` its source, a `Fixes:` trailer is `corrects`, and two
+  commits with the same patch-id are linked. A touched path is a `file:`
+  edge. A lockfile version move is a `pkg:` edge, and the old version is
+  `supersedes`. `causal_walk` resolves a `stack_frame` or `failing_test` to
+  the recorded `file:` anchor by exact path, then by a `/`-bounded suffix of
+  at least two components, then by blame of that line at the failure
+  revision. A registry path resolves to the `pkg:` anchor of that exact
+  version. `version_range` keeps the commits `git rev-list --first-parent
+  GOOD..BAD` names. Among those commits the order is structural: reverted
+  after the failure, blame of the line, the failing hunk, the hop, the edge
+  kind, then the time gap. No new log frame and no store migration: these
+  are edges the log already stores. A walk that did not resolve a frame
+  still orders by depth and by the exact identities a candidate shares with
+  its start.
+
 - **`vestige prove`: the walk proposes, the test decides.** A causal walk
   returns leads, and a lead is not a cause. `prove` runs the user's own test
   on them: the walk from the failure memory in process; a time gate that

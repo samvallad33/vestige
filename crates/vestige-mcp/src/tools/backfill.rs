@@ -871,6 +871,11 @@ mod tests {
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],
+            parents: vec![],
+            reverts: None,
+            cherry_picked_from: None,
+            fixes: vec![],
+            lock_bumps: vec![],
         })
     }
 

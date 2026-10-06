@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use vestige_core::{IngestInput, Storage};
 
@@ -332,14 +332,24 @@ fn causal_walk_on_strata_walks_recorded_edges_only_and_writes_nothing() {
     );
     assert_eq!(edge_count(dir.path()), edges_before);
 
-    let named = vestige(dir.path(), &["causal-walk", "--failing-test", "t_login"]);
-    assert!(!named.ok);
+    // A test name is not a file path and not a shared-name search. The walk
+    // runs and reports that it has no recorded node to start from.
+    let named = vestige(
+        dir.path(),
+        &["causal-walk", "--failing-test", "t_login", "--json"],
+    );
+    assert!(named.ok, "{}", named.text());
     assert!(
-        named.stderr.contains("unavailable_in_4_0"),
+        !named.stderr.contains("unavailable_in_4_0"),
         "{}",
         named.text()
     );
-    assert!(named.stderr.contains("--logged-write"), "{}", named.text());
+    let named_value: Value = serde_json::from_str(&named.stdout).unwrap();
+    assert_eq!(
+        named_value["needs_report"]["missing"],
+        json!(["node_id"]),
+        "{named_value}"
+    );
 }
 
 #[test]
@@ -375,18 +385,24 @@ fn causal_walk_node_id_makes_a_named_start_point_walkable_on_strata() {
     assert_eq!(value["start_points"][0]["status"], "walked", "{value}");
     assert_eq!(edge_count(dir.path()), edges_before, "a walk wrote edges");
 
-    // without it the frame is only a name, which a Strata log cannot walk
+    // without a recorded file anchor the frame is unresolved. It is not
+    // refused as a shared-name search.
     let bare = vestige(
         dir.path(),
         &["causal-walk", "--stack-frame", "src/auth.rs:10", "--json"],
     );
-    assert!(!bare.ok, "{}", bare.text());
+    assert!(bare.ok, "{}", bare.text());
     assert!(
-        bare.stderr.contains("unavailable_in_4_0"),
+        !bare.stderr.contains("unavailable_in_4_0"),
         "{}",
         bare.text()
     );
-    assert!(bare.stderr.contains("--node-id"), "{}", bare.text());
+    let bare_value: Value = serde_json::from_str(&bare.stdout).unwrap();
+    assert_eq!(
+        bare_value["needs_report"]["missing"],
+        json!(["file"]),
+        "{bare_value}"
+    );
 
     // half a version range is refused, not walked as something else
     let half = vestige(
@@ -403,6 +419,35 @@ fn causal_walk_node_id_makes_a_named_start_point_walkable_on_strata() {
     );
     assert!(!half.ok, "{}", half.text());
     assert!(half.stderr.contains("together"), "{}", half.text());
+
+    // a complete range is a local rev-list bound, not a shared-name refusal
+    let full = vestige(
+        dir.path(),
+        &[
+            "causal-walk",
+            "--git-repo",
+            "/no/such/range-repo",
+            "--worked-in",
+            "good",
+            "--broke-in",
+            "bad",
+            "--json",
+        ],
+    );
+    assert!(full.ok, "{}", full.text());
+    assert!(
+        !full.stderr.contains("unavailable_in_4_0"),
+        "{}",
+        full.text()
+    );
+    let full_value: Value = serde_json::from_str(&full.stdout).unwrap();
+    assert!(
+        full_value["range"]["because"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not an available directory"),
+        "{full_value}"
+    );
 }
 
 #[test]

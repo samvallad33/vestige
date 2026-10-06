@@ -213,18 +213,21 @@ fn causal_walk_stdio_walks_every_start_point_kind_that_carries_a_node_id() {
     let mut server = Server::spawn(&dir);
     server.handshake();
 
-    // A bare stack_frame cannot be walked on a Strata log. The refusal must
-    // say so, and say what to add.
+    // A bare stack_frame with no recorded file anchor cannot be walked. The
+    // refusal names the path. It is not a shared-name search.
     let bare = server.call_tool(
         "causal_walk",
         json!({"scope": "user", "start_points": [{"kind": "stack_frame", "frame": "src/auth.rs:10"}]}),
     );
-    assert_eq!(
-        bare["needs_report"]["missing"],
-        json!(["node_id"]),
+    assert_eq!(bare["needs_report"]["missing"], json!(["file"]), "{bare}");
+    assert_eq!(bare["start_points"][0]["status"], "unresolved", "{bare}");
+    assert!(
+        bare["needs_report"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("file anchor"),
         "{bare}"
     );
-    assert_eq!(bare["start_points"][0]["status"], "unresolved", "{bare}");
 
     // Adding the node_id the refusal asked for must be accepted on EVERY kind
     // (call_tool fails the test on an `unknown field` error).
