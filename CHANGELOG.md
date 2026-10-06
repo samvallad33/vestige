@@ -148,6 +148,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Auto-connect joins an exact path, sha, issue reference or URL that appears only in the two texts at ingest.** Before, only a later `vestige connect` did.
 - **The auto-connect edges of one save are one write.** One gate decision, one effect and one synced data frame for all of them (`StoreOp::SaveEdges`, a new log op), instead of one of each per edge; they land together or not at all. `autoConnect.receiptId` (and `Auto-connect receipt:` in the CLI) names the one receipt, and `receipt get` / `receipt replay` on it list every edge. A build older than this one does not decode the new op: it counts the frame as an orphan write and does not see those edges until it is upgraded.
 - **`vestige connect` compares only memories that share an identity** instead of every pair of the scope, and no longer copies both texts into every candidate pair. Its output is unchanged.
+- **`smart_ingest` is a proof-carrying write path.** Every create answers
+  with `receiptId` (the `eff-` effect that wrote it), `canonicalHash`
+  (blake3 of the content after the `nfc-lower-zwstrip-wscollapse-v1`
+  pipeline: NFC, lowercased, zero-width characters stripped, whitespace
+  runs collapsed), `entities` (typed spans — `CommitSha`, `Url`,
+  `FilePath`, `IssueRef`, `Email`, `Version` — each with byte offsets into
+  the submitted content, extracted by the pinned hand scanners
+  `hand-scanners-v1`, no model in the write path), and `importance`
+  (`linear-v1`: six named factors computed from the submitted bytes alone;
+  `score` is bit-for-bit recomputable from the published factors).
+- **Duplicates reinforce, never merge.** A write whose canonical hash
+  already exists in the scope creates no twin and never touches the
+  original: it records a small echo node (`source: "duplicate"`) linked
+  `evidence_of` the original and answers `decision: "reinforce"` with
+  `duplicateOf`, `echoNodeId`, `pipeline` and the echo's own receipt. NFC,
+  case and whitespace variants of the same text reinforce to the same
+  node; echo nodes are never dedup targets. Reinforcement count is a fold
+  over the log: one node, N receipts, zero mutations.
+- **`intent_id` makes writes idempotent.** A write carrying `intent_id`
+  is recorded once; resending it — with the same or different content —
+  answers `decision: "replay"` with `replayOf` and the original
+  `intentDigest`, writes nothing at all, and shows any divergence instead
+  of hiding it (`requestCanonicalHash` of the new submission rides
+  along). The intent index is a side file, first write wins, and it is
+  copied by backups.
+- **`supersedes` is caller-declarable.** `links: [{kind: "supersedes",
+  to: <old>}]` records `new -[supersedes]-> old`: update with a paper
+  trail on an append-only log — the old memory stays intact forever and
+  the current view is the fold over the chain. `corrects` stays
+  review-gated. This supersedes the 4.1.1 note that kept `supersedes`
+  out of the declarable kinds.
+- **Batch writes are content-ordered.** A batch processes its items
+  sorted by `(canonicalHash, original index)` and answers in the caller's
+  order, so the same batch produces byte-identical receipts and node ids
+  regardless of arrival order; identical items inside one batch create
+  once and reinforce once; the summary carries `replayed` and
+  `reinforced` beside `created`.
 
 ## [4.1.1] - 2026-10-02
 

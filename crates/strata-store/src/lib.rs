@@ -59,6 +59,7 @@
 #![warn(missing_docs)]
 
 mod anchor;
+pub mod canonical;
 mod card;
 mod error;
 mod gate_log;
@@ -74,6 +75,10 @@ mod import_tests;
 #[cfg(test)]
 mod tests;
 
+pub use canonical::{
+    canonical_hash, canonical_hash_hex, canonicalize, intent_digest, CANONICAL_PIPELINE_VERSION,
+    DUPLICATE_SOURCE,
+};
 pub use error::StoreError;
 pub use gate_log::StrataEventLog;
 pub use ghostlink::{

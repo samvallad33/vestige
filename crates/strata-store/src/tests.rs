@@ -3170,4 +3170,214 @@ fn a_second_backup_into_the_same_directory_replaces_the_first() {
     backup.log().verify_log().expect("log verifies");
     std::fs::remove_dir_all(&dir).ok();
     std::fs::remove_dir_all(&dest).ok();
+// ---------------------------------------------------------------------
+// INGEST V5: canonical duplicate index + intent index (Lane A)
+// ---------------------------------------------------------------------
+
+fn duplicate_echo_input(orig: &str, chex: &str, lines: usize) -> IngestInput {
+    IngestInput {
+        content: format!("duplicate of {orig}\ncanonical_hash: {chex}\nsubmitted_sha256_line_count: {lines}"),
+        source: Some(crate::types::SourceKey {
+            system: crate::canonical::DUPLICATE_SOURCE.to_string(),
+            project: String::new(),
+            id: String::new(),
+        }),
+        source_updated_at_ms: None,
+        node_type: String::new(),
+        tags: Vec::new(),
+        created_at_ms: Some(1_700_000_000_000),
+        valid_from_ms: None,
+        valid_until_ms: None,
+    }
+}
+
+#[test]
+fn canonical_duplicate_lookup_finds_the_first_node_across_variants_and_reopens() {
+    let dir = temp_dir("canonical-first-node");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let a = store.ingest(input("Café overrides", &[])).expect("ingest A");
+    store.ingest(input("unrelated bytes", &[])).expect("ingest B");
+
+    let direct = store
+        .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("Café overrides"))
+        .expect("lookup");
+    assert_eq!(direct.as_deref(), Some(a.as_str()));
+
+    // NFC (decomposed accent), case, zero-width and whitespace variants all
+    // resolve to the same canonical hash.
+    let variant = "  caF\u{65}\u{301}  OVERRIDES\u{200D} ";
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash(variant))
+            .expect("variant lookup"),
+        Some(a.clone()),
+        "NFC, case, zero-width and whitespace variants resolve to the first node"
+    );
+
+    // Different scope: no hit.
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("other", &crate::canonical::canonical_hash("Café overrides"))
+            .expect("scoped lookup"),
+        None,
+        "the canonical index is per scope"
+    );
+
+    // The index is derived state: reopen rebuilds it from the log alone.
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("café overrides"))
+            .expect("reopened lookup"),
+        Some(a)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn duplicate_echo_nodes_never_become_dedup_targets() {
+    let dir = temp_dir("canonical-echo");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let orig = store.ingest(input("the original fact", &[])).expect("original");
+
+    // The reinforcer's echo node: source "duplicate", content naming the
+    // original. It lands, but it must never be indexed.
+    let echo = store
+        .ingest(duplicate_echo_input(
+            &orig,
+            "deadbeef",
+            3,
+        ))
+        .expect("echo ingest");
+    assert_ne!(echo, orig, "the echo is its own node");
+
+    // The echo's own canonical form resolves to nothing...
+    let echo_record = store.get_node(&echo).expect("echo record");
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash(&echo_record.content))
+            .expect("echo lookup"),
+        None,
+        "an echo node never becomes the dedup target"
+    );
+    // ...and the original is still the answer for its canonical form.
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("the original fact"))
+            .expect("original lookup"),
+        Some(orig)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intent_record_find_roundtrip_survives_reopen_and_backup() {
+    let dir = temp_dir("intent-roundtrip");
+    let backup = temp_dir("intent-roundtrip-backup");
+    let digest = crate::canonical::intent_digest(
+        &crate::canonical::canonical_hash_hex("intent content"),
+        "mcp",
+        &["run-42".to_string()],
+    );
+    let mut store = StrataStore::open(&dir).expect("open");
+    let (node, effect_seq) = store
+        .ingest_in_scope_with_receipt(input("intent content", &[]), "user")
+        .expect("ingest");
+    store
+        .record_intent("user", "run-42", &node, effect_seq, &digest)
+        .expect("record");
+
+    assert_eq!(
+        store.find_intent("user", "run-42").expect("find"),
+        Some((node.clone(), effect_seq, digest.clone())),
+        "roundtrip in the same session"
+    );
+    assert_eq!(
+        store.find_intent("user", "other").expect("miss"),
+        None,
+        "unknown intent ids miss"
+    );
+    assert_eq!(
+        store.find_intent("elsewhere", "run-42").expect("scope miss"),
+        None,
+        "intent ids are per scope"
+    );
+
+    // The side file carries the entry across reopen...
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened.find_intent("user", "run-42").expect("reopened find"),
+        Some((node.clone(), effect_seq, digest.clone())),
+        "intent entries survive reopen"
+    );
+    // ...and across a backup restore.
+    reopened.backup_to(&backup).expect("backup");
+    let restored = StrataStore::open(&backup).expect("open backup");
+    assert_eq!(
+        restored.find_intent("user", "run-42").expect("restored find"),
+        Some((node, effect_seq, digest)),
+        "intent entries travel with backups"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&backup).ok();
+}
+
+#[test]
+fn intent_index_is_first_write_wins() {
+    let dir = temp_dir("intent-first-wins");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let (first, first_seq) = store
+        .ingest_in_scope_with_receipt(input("first write", &[]), "user")
+        .expect("first");
+    let (second, second_seq) = store
+        .ingest_in_scope_with_receipt(input("second write", &[]), "user")
+        .expect("second");
+    let digest_one = crate::canonical::intent_digest("01", "mcp", &[]);
+    let digest_two = crate::canonical::intent_digest("02", "mcp", &[]);
+
+    store
+        .record_intent("user", "idem", &first, first_seq, &digest_one)
+        .expect("first record");
+    // A second record under the same key never replaces the first.
+    store
+        .record_intent("user", "idem", &second, second_seq, &digest_two)
+        .expect("second record is a no-op, not an error");
+    assert_eq!(
+        store.find_intent("user", "idem").expect("find"),
+        Some((first.clone(), first_seq, digest_one)),
+        "the first write is the replay answer"
+    );
+    assert_ne!(first, second);
+    assert_ne!(first_seq, second_seq);
+
+    // Empty ids are refused.
+    assert!(matches!(
+        store.record_intent("user", "", &second, second_seq, &digest_two),
+        Err(StoreError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        store.record_intent("user", "idem2", "", second_seq, &digest_two),
+        Err(StoreError::InvalidInput(_))
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn existing_store_upgrades_in_place_without_an_intent_file() {
+    // A store written before this feature has no intent-index side file; it
+    // must open (empty table) and start recording without migration.
+    let dir = temp_dir("intent-upgrade");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let node = store.ingest(input("pre-feature fact", &[])).expect("ingest");
+    assert_eq!(store.find_intent("", "any").expect("empty table"), None);
+    store
+        .record_intent("", "first-after-upgrade", &node, 7, "digest")
+        .expect("record after upgrade");
+    assert_eq!(
+        store.find_intent("", "first-after-upgrade").expect("find"),
+        Some((node, 7, "digest".to_string()))
+    );
+    std::fs::remove_dir_all(&dir).ok();
 }

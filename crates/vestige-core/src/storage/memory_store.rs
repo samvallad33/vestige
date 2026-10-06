@@ -816,6 +816,33 @@ pub trait LocalMemoryStore: Sync + 'static {
         ))
     }
 
+    /// The node a canonical duplicate resolves to: the id of the first
+    /// regular node in `scope` whose canonicalized `content` matches, or
+    /// `None` when this backend keeps no canonical index (the write then
+    /// proceeds as a fresh create).
+    ///
+    /// Canonicalization is version-pinned by the Strata store
+    /// (`nfc-lower-zwstrip-wscollapse-v1`); backends without it never match.
+    fn find_duplicate_by_canonical_hash(
+        &self,
+        _scope: &str,
+        _content: &str,
+    ) -> StoreResult<Option<String>> {
+        Ok(None)
+    }
+
+    /// The recorded first write for `(scope, intent_id)` as
+    /// `(node_id, effect_seq, response_digest)`, for idempotent replay.
+    /// `None` when no write under this intent landed (or the backend keeps
+    /// no intent index).
+    fn find_intent_record(
+        &self,
+        _scope: &str,
+        _intent_id: &str,
+    ) -> StoreResult<Option<(String, u64, String)>> {
+        Ok(None)
+    }
+
     /// All open intentions across scopes.
     fn get_active_intentions(&self) -> StoreResult<Vec<IntentionRecord>> {
         Err(StorageError::Init(
@@ -1547,6 +1574,13 @@ pub trait LocalMemoryStore: Sync + 'static {
         ))
     }
 
+    /// The latest `eff-` effect-receipt id naming `node_id`, or `None` when
+    /// the backend proves no per-node effects. Pure lookup: reads nothing
+    /// else and writes nothing.
+    fn latest_receipt_id_for_node(&self, _node_id: &str) -> Option<String> {
+        None
+    }
+
     /// Attach a receipt to a run; true on new link.
     fn link_receipt_to_run(&self, _receipt_id: &str, _run_id: &str) -> StoreResult<bool> {
         Err(StorageError::Init(
@@ -1780,6 +1814,14 @@ pub trait LocalMemoryStore: Sync + 'static {
             )
             .into(),
         ))
+    }
+
+    /// Gate-space effect seq of the write that last named `node_id`, or
+    /// `None` when the backend proves no per-node effects. Companion of
+    /// [`Self::latest_receipt_id_for_node`]: the receipt id is
+    /// `eff-<effect_seq:016x>`.
+    fn node_effect_seq(&self, _node_id: &str) -> Option<u64> {
+        None
     }
 
     /// Check node membership in a project scope.
@@ -2018,6 +2060,22 @@ pub trait LocalMemoryStore: Sync + 'static {
             )
             .into(),
         ))
+    }
+
+    /// Record `(scope, intent_id) -> (node_id, effect_seq, response_digest)`
+    /// after an intented write was admitted. First write wins: backends that
+    /// keep an intent index never overwrite an existing entry. The default
+    /// is a silent no-op so backends without intent tracking still compile
+    /// and behave as if every submission were fresh.
+    fn record_intent_entry(
+        &self,
+        _scope: &str,
+        _intent_id: &str,
+        _node_id: &str,
+        _effect_seq: u64,
+        _response_digest: &str,
+    ) -> StoreResult<()> {
+        Ok(())
     }
 
     /// Endorse a reinforce mutation with provenance.
@@ -2883,6 +2941,16 @@ pub trait MemoryStore: Send + Sync + 'static {
     fn due_for_review_node_ids(&self, limit: usize) -> StoreResult<Vec<String>>;
     fn expire_stale_reconsolidation_plans(&self) -> StoreResult<Vec<String>>;
     fn export_portable_archive_to_path(&self, path: &Path) -> StoreResult<PortableArchive>;
+    fn find_duplicate_by_canonical_hash(
+        &self,
+        scope: &str,
+        content: &str,
+    ) -> StoreResult<Option<String>>;
+    fn find_intent_record(
+        &self,
+        scope: &str,
+        intent_id: &str,
+    ) -> StoreResult<Option<(String, u64, String)>>;
     fn get_active_intentions(&self) -> StoreResult<Vec<IntentionRecord>>;
     fn get_active_intentions_in_scope(&self, scope: &str) -> StoreResult<Vec<IntentionRecord>>;
     fn get_agent_run(&self, run_id: &str) -> StoreResult<Option<AgentRunSummary>>;
@@ -3029,6 +3097,7 @@ pub trait MemoryStore: Send + Sync + 'static {
     fn last_backup_timestamp(&self) -> Option<DateTime<Utc>>;
     fn last_session_failed_calls(&self, run_id: Option<&str>) -> StoreResult<Vec<FailedToolCall>>;
     fn latest_receipt_chain_entry(&self) -> StoreResult<Option<ChainEntry>>;
+    fn latest_receipt_id_for_node(&self, node_id: &str) -> Option<String>;
     fn link_receipt_to_run(&self, receipt_id: &str, run_id: &str) -> StoreResult<bool>;
     fn list_agent_runs(&self, limit: usize) -> StoreResult<Vec<AgentRunSummary>>;
     fn list_endorsement_events(
@@ -3084,6 +3153,7 @@ pub trait MemoryStore: Send + Sync + 'static {
         tag_filter: &[String],
     ) -> StoreResult<Vec<MergeCandidate>>;
     fn merge_undo(&self, op_id: &str) -> StoreResult<MergeOperation>;
+    fn node_effect_seq(&self, node_id: &str) -> Option<u64>;
     fn node_is_in_scope(&self, id: &str, scope: &str) -> StoreResult<bool>;
     fn open_failures_touching(
         &self,
@@ -3139,6 +3209,14 @@ pub trait MemoryStore: Send + Sync + 'static {
     fn record_code_anchors(&self, anchors: &[CodeAnchor]) -> StoreResult<usize>;
     fn record_composition_outcome(&self, outcome: &CompositionOutcomeRecord) -> StoreResult<()>;
     fn record_memory_access(&self, memory_id: &str) -> StoreResult<()>;
+    fn record_intent_entry(
+        &self,
+        scope: &str,
+        intent_id: &str,
+        node_id: &str,
+        effect_seq: u64,
+        response_digest: &str,
+    ) -> StoreResult<()>;
     fn record_reinforce_endorsement(
         &self,
         id: &str,
@@ -3612,6 +3690,20 @@ where
     fn export_portable_archive_to_path(&self, path: &Path) -> StoreResult<PortableArchive> {
         <T as MemoryStoreSend>::export_portable_archive_to_path(self, path)
     }
+    fn find_duplicate_by_canonical_hash(
+        &self,
+        scope: &str,
+        content: &str,
+    ) -> StoreResult<Option<String>> {
+        <T as MemoryStoreSend>::find_duplicate_by_canonical_hash(self, scope, content)
+    }
+    fn find_intent_record(
+        &self,
+        scope: &str,
+        intent_id: &str,
+    ) -> StoreResult<Option<(String, u64, String)>> {
+        <T as MemoryStoreSend>::find_intent_record(self, scope, intent_id)
+    }
     fn get_active_intentions(&self) -> StoreResult<Vec<IntentionRecord>> {
         <T as MemoryStoreSend>::get_active_intentions(self)
     }
@@ -3896,6 +3988,9 @@ where
     fn latest_receipt_chain_entry(&self) -> StoreResult<Option<ChainEntry>> {
         <T as MemoryStoreSend>::latest_receipt_chain_entry(self)
     }
+    fn latest_receipt_id_for_node(&self, node_id: &str) -> Option<String> {
+        <T as MemoryStoreSend>::latest_receipt_id_for_node(self, node_id)
+    }
     fn link_receipt_to_run(&self, receipt_id: &str, run_id: &str) -> StoreResult<bool> {
         <T as MemoryStoreSend>::link_receipt_to_run(self, receipt_id, run_id)
     }
@@ -3995,6 +4090,9 @@ where
     fn merge_undo(&self, op_id: &str) -> StoreResult<MergeOperation> {
         <T as MemoryStoreSend>::merge_undo(self, op_id)
     }
+    fn node_effect_seq(&self, node_id: &str) -> Option<u64> {
+        <T as MemoryStoreSend>::node_effect_seq(self, node_id)
+    }
     fn node_is_in_scope(&self, id: &str, scope: &str) -> StoreResult<bool> {
         <T as MemoryStoreSend>::node_is_in_scope(self, id, scope)
     }
@@ -4087,6 +4185,23 @@ where
     }
     fn record_memory_access(&self, memory_id: &str) -> StoreResult<()> {
         <T as MemoryStoreSend>::record_memory_access(self, memory_id)
+    }
+    fn record_intent_entry(
+        &self,
+        scope: &str,
+        intent_id: &str,
+        node_id: &str,
+        effect_seq: u64,
+        response_digest: &str,
+    ) -> StoreResult<()> {
+        <T as MemoryStoreSend>::record_intent_entry(
+            self,
+            scope,
+            intent_id,
+            node_id,
+            effect_seq,
+            response_digest,
+        )
     }
     fn record_reinforce_endorsement(
         &self,

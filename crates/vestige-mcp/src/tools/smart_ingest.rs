@@ -13,6 +13,15 @@
 //! v1.5.0: Enhanced with cognitive pipeline:
 //!   Pre-ingest: importance scoring (4-channel) + intent detection → auto-tag
 //!   Post-ingest: synaptic tagging + novelty model update + hippocampal indexing
+//!
+//! INGEST-V5 (feat/ingest-proof): the proof-carrying write path. Every write
+//! is gated by caller idempotency (`intent_id` replay, zero writes) and by
+//! canonical-byte identity (an exact duplicate records an echo node plus an
+//! `evidence_of` edge — decision `reinforce` — and NEVER merges or mutates
+//! the original), and every create response carries proof fields
+//! (`receiptId`, `canonicalHash`, `entities`, `importance`) derivable from
+//! log facts or the submitted bytes alone. No clock reads and no randomness
+//! decide anything on this path; see INGEST-V5-SPEC.md.
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
@@ -28,6 +37,18 @@ use vestige_core::{
     SynapticCapturePolicy, SynapticImportanceEvent, SynapticIngestRequest, SynapticSignalSnapshot,
     SynapticTag, SynapticTaggingConfig, scan_secrets,
 };
+
+/// The `intent_id` property schema, shared by the single and batch-item
+/// forms (INGEST-V5 B1). Built in its own function so the big `schema()`
+/// literal stays under `json_internal!`'s expansion depth.
+fn intent_id_property() -> Value {
+    serde_json::json!({
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9._:-]+$",
+        "description": "Idempotency key for this write. Replaying an intent_id already recorded in this scope returns the first outcome (decision 'replay', replayOf set) and performs no write of any kind, whatever the new bytes say; the response's requestCanonicalHash makes a divergent replay visible."
+    })
+}
 
 /// Input schema for smart_ingest tool
 ///
@@ -98,14 +119,15 @@ pub fn schema() -> Value {
                 "type": "string",
                 "description": "CLAIMED role for provenance (e.g. 'qa', 'architect'). Claims never override the process identity and never self-grant authority: the operator-controlled policy resolves the effective role, and unregistered claims stay neutral at 1.0. The response 'actor' block reports the resolution."
             },
+            "intent_id": intent_id_property(),
             "links": {
                 "type": "array",
                 "maxItems": 16,
-                "description": "Typed links to existing memories in the same scope, each gated with its own receipt: derived_from (this derives from it), evidence_of (this is evidence about it), closes (this closes it). Strata only.",
+                "description": "Typed links from this memory to existing memories in the same scope, each written through the gate with its own receipt. derived_from: this memory derives from it. evidence_of: this memory is evidence about it. closes: this memory closes it (an issue, a failure). supersedes: this memory fully replaces it (for corrections prefer the review-gated corrects path). Strata only.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "kind": {"type": "string", "enum": ["derived_from", "evidence_of", "closes"]},
+                        "kind": {"type": "string", "enum": ["derived_from", "evidence_of", "closes", "supersedes"]},
                         "to": {"type": "string", "description": "Exact id of an existing memory"}
                     },
                     "required": ["kind", "to"]
@@ -162,7 +184,8 @@ pub fn schema() -> Value {
                         "acceptedTagSuggestions": {
                             "type": "object",
                             "additionalProperties": { "type": "string" }
-                        }
+                        },
+                        "intent_id": intent_id_property()
                     },
                     "required": ["content"]
                 }
@@ -696,13 +719,17 @@ fn apply_accepted_tag_suggestions(
 /// memory now stored under `nodeId`, one `memory(action='get')` away.
 const MERGE_PREVIEW_CHARS: usize = 240;
 
+/// Entity spans a lean create response still carries (spec B4: keep top 8).
+const LEAN_ENTITY_SPANS: usize = 8;
+
 pub async fn execute(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
     let (args, links) = take_links(storage, args)?;
-    let mut value = execute_verbose(storage, cognitive, args).await?;
+    let (args, intents) = take_intent_ids(args)?;
+    let mut value = execute_verbose(storage, cognitive, args, &intents).await?;
     write_links(storage, &mut value, &links);
     auto_connect_saved(storage, &mut value);
     lean_response(&mut value);
@@ -785,6 +812,70 @@ fn parse_links(raw: &Value) -> Result<Vec<(strata_memory::DeclaredLink, String)>
             Ok((kind, to.to_string()))
         })
         .collect()
+}
+
+/// Caller-declared idempotency ids (`intent_id`), taken from the arguments
+/// before the ingest pipeline sees them — exactly the way [`take_links`]
+/// strips `links` — so a replayed call short-circuits to the first outcome
+/// with zero writes (INGEST-V5 spec B2.1/B2.2, B3.3).
+#[derive(Debug, Default)]
+struct TakenIntents {
+    /// The single-mode `intent_id`.
+    single: Option<String>,
+    /// Per batch-item `intent_id` by caller index; `None` where undeclared.
+    items: Vec<Option<String>>,
+}
+
+/// Take `intent_id` (preferred) or its `intentId` alias, removing BOTH
+/// spellings so neither spelling leaks past this gate.
+fn remove_intent_id(map: &mut serde_json::Map<String, Value>) -> Option<Value> {
+    let primary = map.remove("intent_id");
+    let alias = map.remove("intentId");
+    primary.or(alias)
+}
+
+/// Take and validate `intent_id` (top level and per batch item) before
+/// anything is written. An invalid pattern fails the whole call up front,
+/// the same contract `take_links` gives `links`.
+fn take_intent_ids(args: Option<Value>) -> Result<(Option<Value>, TakenIntents), String> {
+    let Some(mut args) = args else {
+        return Ok((None, TakenIntents::default()));
+    };
+    let mut intents = TakenIntents::default();
+    if let Some(raw) = args
+        .as_object_mut()
+        .and_then(|map| remove_intent_id(map))
+    {
+        intents.single = Some(validate_intent_id(raw)?);
+    }
+    if let Some(items) = args.get_mut("items").and_then(Value::as_array_mut) {
+        for item in items.iter_mut() {
+            let raw = item
+                .as_object_mut()
+                .and_then(|map| remove_intent_id(map));
+            intents.items.push(raw.map(|raw| validate_intent_id(raw)).transpose()?);
+        }
+    }
+    Ok((Some(args), intents))
+}
+
+/// `intent_id` is a capability-scoped id: 1..=128 chars of
+/// `[A-Za-z0-9._:-]` (the schema's pattern, enforced here so the store's
+/// intent index only ever sees one canonical shape).
+fn validate_intent_id(raw: Value) -> Result<String, String> {
+    let Some(id) = raw.as_str() else {
+        return Err("intent_id must be a string".to_string());
+    };
+    if id.is_empty() || id.len() > 128 {
+        return Err("intent_id must be 1 to 128 characters".to_string());
+    }
+    if !id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err("intent_id may only contain the characters [A-Za-z0-9._:-]".to_string());
+    }
+    Ok(id.to_string())
 }
 
 /// Write the declared links onto the memories the ingest just saved. The
@@ -924,6 +1015,214 @@ fn auto_connect_slot(storage: &Arc<Storage>, slot: &mut Value, node_id: &str, sc
     }
 }
 
+// ============================================================================
+// INGEST-V5: proof-carrying write path (see INGEST-V5-SPEC.md, Lane B).
+// Determinism law: nothing below reads a clock or any randomness to decide
+// anything; every response field is a log fact or a pure function of the
+// submitted bytes.
+// ============================================================================
+
+/// Most entity spans a create response carries (spec B2.4). The extractor's
+/// own cap is higher; responses trim further under [`lean_response`].
+const MAX_RESPONSE_ENTITY_SPANS: usize = 32;
+
+/// The zero-write replay response (spec B2.2). `requestCanonicalHash` is the
+/// canonical hash of the CURRENT submission, so comparing it with the
+/// `canonicalHash` the original create returned makes a divergent replay
+/// visible instead of hidden (spec B5.5) — idempotency wins, but it never
+/// pretends the bytes matched.
+fn intent_replay_response(
+    scope: &str,
+    intent_id: &str,
+    replay_of: &str,
+    effect_seq: u64,
+    digest: &str,
+    submitted: &str,
+) -> Value {
+    serde_json::json!({
+        "success": true,
+        "decision": "replay",
+        "replayed": true,
+        "replayOf": replay_of,
+        "effectSeq": effect_seq,
+        "intentDigest": digest,
+        "intentId": intent_id,
+        "requestCanonicalHash": strata_store::canonical::canonical_hash_hex(submitted),
+        "scope": scope,
+        "message": "intent_id is already recorded for this scope: the first outcome is replayed and nothing was written",
+    })
+}
+
+/// Proof enrichment for every create (spec B2.4): `receiptId` is a log fact;
+/// `canonicalHash`, `entities` and `importance` are pure functions of the
+/// submitted bytes (plus the tags actually stored, for importance).
+fn enrich_create_response(
+    storage: &Arc<Storage>,
+    response: &mut Value,
+    node_id: &str,
+    content: &str,
+    tags: &[String],
+) {
+    if let Some(receipt) = storage.latest_receipt_id_for_node(node_id) {
+        response["receiptId"] = serde_json::json!(receipt);
+    }
+    response["canonicalHash"] =
+        serde_json::json!(strata_store::canonical::canonical_hash_hex(content));
+    let spans = crate::intake::entities::extract_typed_spans(content);
+    response["entities"] = entity_spans_json(&spans, MAX_RESPONSE_ENTITY_SPANS);
+    response["importance"] = crate::intake::importance::compute_and_format(content, &spans, tags);
+}
+
+/// Entity spans serialized as `{kind, surface, byteStart, byteEnd}`, capped.
+/// Byte offsets refer to the submitted content exactly as received.
+fn entity_spans_json(spans: &[crate::intake::entities::EntitySpan], cap: usize) -> Value {
+    serde_json::Value::Array(
+        spans
+            .iter()
+            .take(cap)
+            .map(|span| {
+                serde_json::json!({
+                    "kind": span.kind.as_str(),
+                    "surface": span.surface,
+                    "byteStart": span.byte_start,
+                    "byteEnd": span.byte_end,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Record the intent entry for a node this call just created (spec B2.4 /
+/// B2.3-echo). The digest is always computed from the SUBMITTED bytes (the
+/// caller's request is what idempotency keys on), whether the node it
+/// resolves to is a regular create or a duplicate echo. The node is already
+/// admitted, so a failed recording is reported on the response
+/// (`intentError`, the same contract `write_links` gives `linkError`)
+/// instead of failing an ingest that already succeeded.
+fn attach_intent_record(
+    storage: &Arc<Storage>,
+    response: &mut Value,
+    scope: &str,
+    intent_id: Option<&str>,
+    node_id: &str,
+    effect_seq: Option<u64>,
+    submitted_content: &str,
+    submitted_source: &str,
+    stored_tags: &[String],
+) {
+    let Some(intent_id) = intent_id else {
+        return;
+    };
+    let digest = strata_store::canonical::intent_digest(
+        &strata_store::canonical::canonical_hash_hex(submitted_content),
+        submitted_source,
+        stored_tags,
+    );
+    match storage.record_intent_entry(
+        scope,
+        intent_id,
+        node_id,
+        effect_seq.unwrap_or(0),
+        &digest,
+    ) {
+        Ok(()) => response["intentId"] = serde_json::json!(intent_id),
+        Err(err) => {
+            response["intentError"] = serde_json::json!(format!(
+                "memory saved but intent {intent_id} was not recorded, so a retry will not replay: {err}"
+            ));
+        }
+    }
+}
+
+/// The canonical duplicate path (spec B2.3). Law 1 (append-only): the
+/// original is NEVER merged, mutated, or returned in full. The submission
+/// becomes a tiny echo node — `source: "duplicate"` so the store never
+/// indexes it as a dedup target — plus one `evidence_of` edge to the
+/// original, each with its own effect receipt, and the caller is told
+/// `reinforce` with proof fields for the whole pipeline.
+#[allow(clippy::too_many_arguments)]
+fn reinforce_duplicate(
+    storage: &Arc<Storage>,
+    scope: &str,
+    canonical_hash: &str,
+    content: &str,
+    intent_id: Option<&str>,
+    original: &str,
+    validity: &ValidityResolution,
+    tag_suggestions: &TagSuggestionReport,
+    accepted_tag_suggestions: &std::collections::BTreeMap<String, String>,
+    submitted_source: &str,
+    stored_tags: &[String],
+) -> Result<Value, String> {
+    // The echo carries ids and counters only — never a copy of the original
+    // or the submitted bytes (law 5).
+    let echo_content = format!(
+        "duplicate of {original}\ncanonical_hash: {canonical_hash}\nsubmitted_sha256_line_count: {}",
+        content.lines().count()
+    );
+    let echo = storage
+        .ingest_in_scope_with_secret_policy(
+            IngestInput {
+                content: echo_content,
+                node_type: "note".to_string(),
+                source: Some("duplicate".to_string()),
+                sentiment_score: 0.0,
+                sentiment_magnitude: 0.0,
+                tags: vec!["duplicate".to_string()],
+                valid_from: None,
+                valid_until: None,
+                validity_inferred: false,
+                source_envelope: None,
+            },
+            scope,
+            SecretPolicy::Reject,
+        )
+        .map_err(|e| e.to_string())?;
+    let echo_id = echo.id;
+    // Resolve the echo's own create proof BEFORE the edge lands, so
+    // `receiptId` and the intent's effect_seq name the node's create, not
+    // the edge that follows it.
+    let echo_receipt = storage.latest_receipt_id_for_node(&echo_id);
+    let echo_seq = storage.node_effect_seq(&echo_id);
+    let edge = strata_memory::save_links(
+        storage.as_ref(),
+        &echo_id,
+        &[(strata_memory::DeclaredLink::EvidenceOf, original.to_string())],
+    );
+    let mut response = serde_json::json!({
+        "success": true,
+        "decision": "reinforce",
+        "scope": scope,
+        "duplicateOf": original,
+        "echoNodeId": echo_id.clone(),
+        "canonicalHash": canonical_hash,
+        "rawBytes": content.len(),
+        "pipeline": strata_store::canonical::CANONICAL_PIPELINE_VERSION,
+        "receiptId": echo_receipt,
+        "message": "Canonically identical memory already exists: an echo node and an evidence_of edge were recorded and the original was left untouched",
+        "validity": validity_response(validity),
+        "tagSuggestions": tag_suggestions.suggestions,
+        "tagSuggestionStatus": tag_suggestions.status,
+        "acceptedTagSuggestions": accepted_tag_suggestions,
+    });
+    match edge {
+        Ok(written) => response["links"] = serde_json::json!(written),
+        Err(err) => response["linkError"] = serde_json::json!(err),
+    }
+    attach_intent_record(
+        storage,
+        &mut response,
+        scope,
+        intent_id,
+        &echo_id,
+        echo_seq,
+        content,
+        submitted_source,
+        stored_tags,
+    );
+    Ok(response)
+}
+
 /// Trim one ingest response object to what the caller can act on.
 ///
 /// On the real store an update decision echoed the full merged memory twice
@@ -967,6 +1266,31 @@ fn lean_response(value: &mut Value) {
             obj.insert("mergePreviewTruncated".to_string(), Value::Bool(true));
         }
         obj.insert("mergedContentLength".to_string(), Value::from(total));
+    }
+    // INGEST-V5 (spec B4) proof-field policy, matching how the optional
+    // fields above are treated: `receiptId` and `canonicalHash` always
+    // survive — they ARE the proof a caller verifies. `entities` trims to
+    // the first 8 spans and an emptied array is dropped like the other
+    // say-nothing collections (the full set stays derivable from the
+    // submitted bytes via the version-pinned extractor). `importance`
+    // keeps only `score` + `weightsVersion`: the factors block is
+    // recomputable from the same bytes and never acted on by a caller.
+    if let Some(entities) = obj.get_mut("entities").and_then(Value::as_array_mut) {
+        entities.truncate(LEAN_ENTITY_SPANS);
+        if entities.is_empty() {
+            obj.remove("entities");
+        }
+    }
+    if let Some(importance) = obj.get_mut("importance").and_then(Value::as_object_mut) {
+        let score = importance.get("score").cloned();
+        let weights_version = importance.get("weightsVersion").cloned();
+        importance.clear();
+        if let Some(score) = score {
+            importance.insert("score".to_string(), score);
+        }
+        if let Some(weights_version) = weights_version {
+            importance.insert("weightsVersion".to_string(), weights_version);
+        }
     }
     if obj
         .get("tagSuggestions")
@@ -1035,6 +1359,7 @@ async fn execute_verbose(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
+    intents: &TakenIntents,
 ) -> Result<Value, String> {
     if args
         .as_ref()
@@ -1063,9 +1388,14 @@ async fn execute_verbose(
 
     // Detect mode: batch (items present) vs single (content present)
     if let Some(items) = args.items {
+        // INGEST-V5: the default batch policy is "smart". The canonical gate
+        // makes it safe — a duplicate reinforces through an echo node and an
+        // evidence_of edge, never a merge — so an unspecified policy no
+        // longer skips dedup. Callers keep "force_create" (or an explicit
+        // forceCreate) to bypass the gate on purpose.
         let batch_merge_policy = args
             .batch_merge_policy
-            .unwrap_or_else(|| "force_create".to_string());
+            .unwrap_or_else(|| "smart".to_string());
         let default_force_create = match batch_merge_policy.as_str() {
             "force_create" => true,
             "smart" => false,
@@ -1088,6 +1418,7 @@ async fn execute_verbose(
             storage,
             cognitive,
             items,
+            &intents.items,
             global_force,
             &batch_merge_policy,
             &scope,
@@ -1100,6 +1431,32 @@ async fn execute_verbose(
     let content = args.content.ok_or(
         "Missing 'content' field. Provide 'content' for single mode or 'items' for batch mode.",
     )?;
+
+    // ====================================================================
+    // INGEST-V5 B2.2 — idempotent intent replay. A recorded intent_id for
+    // this scope replays the FIRST outcome and performs no write of any
+    // kind. This short-circuits before the canonical gate and before any
+    // storage write, and it outranks validation of the other fields: the
+    // same logical call must always answer the same way, so a divergent
+    // replay (different bytes) still replays — visibly, via
+    // `requestCanonicalHash`.
+    // ====================================================================
+    if let Some(intent_id) = intents.single.as_deref() {
+        if let Some((replay_of, effect_seq, digest)) = storage
+            .find_intent_record(&scope, intent_id)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(intent_replay_response(
+                &scope,
+                intent_id,
+                &replay_of,
+                effect_seq,
+                &digest,
+                &content,
+            ));
+        }
+    }
+
     let mut validity = resolve_validity_range(
         &content,
         args.valid_from.as_deref(),
@@ -1184,6 +1541,13 @@ async fn execute_verbose(
         }
     }
 
+    // INGEST-V5: the submitted source and the canonical hash of the
+    // submitted bytes feed the intent digest and the response proof fields;
+    // captured here before `input` consumes them. Pure byte functions — no
+    // clock, no randomness.
+    let submitted_source = args.source.clone().unwrap_or_default();
+    let canonical_hash = strata_store::canonical::canonical_hash_hex(&content);
+
     let input = IngestInput {
         content: content.clone(),
         node_type: args.node_type.unwrap_or_else(|| "fact".to_string()),
@@ -1213,6 +1577,9 @@ async fn execute_verbose(
         let node_content = node.content.clone();
         let node_type = node.node_type.clone();
         let has_embedding = node.has_embedding.unwrap_or(false);
+        // INGEST-V5: resolved immediately after the create so the intent
+        // entry points at THIS effect even if a post-hook records more.
+        let effect_seq = storage.node_effect_seq(&node_id);
 
         // Post-ingest cognitive side effects
         let synaptic_capture = run_post_ingest_with_snapshot(
@@ -1243,6 +1610,20 @@ async fn execute_verbose(
             "tagSuggestionStatus": tag_suggestions.status,
             "acceptedTagSuggestions": accepted_tag_suggestions,
         });
+        // INGEST-V5 (B2.4/B2.5): forceCreate skips only the canonical gate;
+        // the create still carries the proof fields and records the intent.
+        enrich_create_response(storage, &mut response, &node_id, &content, &hook_tags);
+        attach_intent_record(
+            storage,
+            &mut response,
+            &scope,
+            intents.single.as_deref(),
+            &node_id,
+            effect_seq,
+            &content,
+            &submitted_source,
+            &hook_tags,
+        );
         crate::actor_surface::attach_actor_block(&mut response, storage, claimed_role.as_deref());
         attach_failure_hooks(&mut response, failure_hooks);
         return Ok(response);
@@ -1372,12 +1753,40 @@ async fn execute_verbose(
 
     #[cfg(not(vestige_embeddings_removed))]
     {
+        // ================================================================
+        // INGEST-V5 B2.3 — canonical duplicate gate. A canonically identical
+        // memory never merges or mutates the original (law 1): the write
+        // becomes an echo node + evidence_of edge and reports `reinforce`.
+        // This branch is only reached when forceCreate is false (B2.5), so
+        // the gate is armed exactly where the caller did not opt out.
+        // ================================================================
+        if let Some(original) = storage
+            .find_duplicate_by_canonical_hash(&scope, &content)
+            .map_err(|e| e.to_string())?
+        {
+            return reinforce_duplicate(
+                storage,
+                &scope,
+                &canonical_hash,
+                &content,
+                intents.single.as_deref(),
+                &original,
+                &validity,
+                &tag_suggestions,
+                &accepted_tag_suggestions,
+                &submitted_source,
+                &hook_tags,
+            );
+        }
         let node = storage
             .ingest_in_scope_with_secret_policy(input, &scope, secret_policy)
             .map_err(|e| e.to_string())?;
         let node_id = node.id.clone();
         let node_content = node.content.clone();
         let node_type = node.node_type.clone();
+        // INGEST-V5: resolved immediately after the create so the intent
+        // entry points at THIS effect even if a post-hook records more.
+        let effect_seq = storage.node_effect_seq(&node_id);
 
         let synaptic_capture = run_post_ingest_with_snapshot(
             storage,
@@ -1409,6 +1818,19 @@ async fn execute_verbose(
             "tagSuggestionStatus": tag_suggestions.status,
             "acceptedTagSuggestions": accepted_tag_suggestions,
         });
+        // INGEST-V5 (B2.4): proof fields for the create.
+        enrich_create_response(storage, &mut response, &node_id, &content, &hook_tags);
+        attach_intent_record(
+            storage,
+            &mut response,
+            &scope,
+            intents.single.as_deref(),
+            &node_id,
+            effect_seq,
+            &content,
+            &submitted_source,
+            &hook_tags,
+        );
         crate::actor_surface::attach_actor_block(&mut response, storage, claimed_role.as_deref());
         attach_failure_hooks(&mut response, failure_hooks);
         Ok(response)
@@ -1589,6 +2011,7 @@ async fn execute_batch(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     items: Vec<BatchItem>,
+    item_intents: &[Option<String>],
     global_force_create: bool,
     batch_merge_policy: &str,
     default_scope: &str,
@@ -1601,6 +2024,29 @@ async fn execute_batch(
         return Err("Maximum 20 items per batch".to_string());
     }
 
+    // ====================================================================
+    // INGEST-V5 B3.1/B3.2 — deterministic processing order. Canonical hash
+    // per item, then indices sorted by (canonical_hash_hex, original index).
+    // Canonically identical items collapse onto the lowest original index,
+    // and intra-batch duplicates dedup against the earlier-sorted identical
+    // item because it is indexed first. Items with invalid or missing
+    // fields keep their current per-item handling; hashing them is free and
+    // keeps the order total. Results are re-sorted into caller order before
+    // returning, so the response is identical whatever order the caller
+    // used — no arrival-order dependence anywhere.
+    // ====================================================================
+    let canonical_hashes: Vec<String> = items
+        .iter()
+        .map(|item| strata_store::canonical::canonical_hash_hex(&item.content))
+        .collect();
+    let mut processing_order: Vec<usize> = (0..items.len()).collect();
+    processing_order.sort_by(|&left, &right| {
+        canonical_hashes[left]
+            .cmp(&canonical_hashes[right])
+            .then(left.cmp(&right))
+    });
+    let mut items: Vec<Option<BatchItem>> = items.into_iter().map(Some).collect();
+
     let mut results = Vec::new();
     let mut created = 0u32;
     #[cfg(vestige_embeddings_removed)]
@@ -1609,9 +2055,15 @@ async fn execute_batch(
     let updated = 0u32;
     let mut skipped = 0u32;
     let mut errors = 0u32;
+    let mut replayed = 0u32;
+    let mut reinforced = 0u32;
     let mut batch_created_node_ids: Vec<String> = Vec::new();
 
-    for (i, item) in items.into_iter().enumerate() {
+    for &i in &processing_order {
+        let Some(item) = items[i].take() else {
+            continue;
+        };
+        let intent_id = item_intents.get(i).cloned().flatten();
         let scope = item
             .scope
             .clone()
@@ -1624,6 +2076,39 @@ async fn execute_batch(
                 "reason": refusal
             }));
             continue;
+        }
+        // ====================================================================
+        // INGEST-V5 B3.3 — per-item intent replay, same flow as single mode:
+        // zero writes, first outcome returned.
+        // ====================================================================
+        if let Some(intent_id) = intent_id.as_deref() {
+            match storage.find_intent_record(&scope, intent_id) {
+                Ok(Some((replay_of, effect_seq, digest))) => {
+                    replayed += 1;
+                    let mut result = intent_replay_response(
+                        &scope,
+                        intent_id,
+                        &replay_of,
+                        effect_seq,
+                        &digest,
+                        &item.content,
+                    );
+                    result["index"] = serde_json::json!(i);
+                    result["status"] = serde_json::json!("replayed");
+                    results.push(result);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(reason) => {
+                    errors += 1;
+                    results.push(serde_json::json!({
+                        "index": i,
+                        "status": "error",
+                        "reason": reason.to_string()
+                    }));
+                    continue;
+                }
+            }
         }
         let mut validity = match resolve_validity_range(
             &item.content,
@@ -1745,6 +2230,9 @@ async fn execute_batch(
             }
         }
 
+        // INGEST-V5: submitted source (intent digest input) captured before
+        // `input` consumes it.
+        let submitted_source = item.source.clone().unwrap_or_default();
         let input = IngestInput {
             content: item.content.clone(),
             node_type: item.node_type.unwrap_or_else(|| "fact".to_string()),
@@ -1757,6 +2245,9 @@ async fn execute_batch(
             validity_inferred: validity.inferred_phrase.is_some(),
             source_envelope: None,
         };
+        // INGEST-V5: the tags as stored (post-acceptance, post-intent-tag)
+        // feed the proof enrichment and the intent digest.
+        let hook_tags: Vec<String> = input.tags.clone();
 
         // ================================================================
         // INGEST (storage lock per item)
@@ -1770,6 +2261,9 @@ async fn execute_batch(
                     let node_id = node.id.clone();
                     let node_content = node.content.clone();
                     let node_type = node.node_type.clone();
+                    // INGEST-V5: this item's create effect, resolved before
+                    // any post-hook can append more.
+                    let effect_seq = storage.node_effect_seq(&node_id);
 
                     created += 1;
                     batch_created_node_ids.push(node_id.clone());
@@ -1783,7 +2277,7 @@ async fn execute_batch(
                         importance_snapshot.clone(),
                     );
 
-                    results.push(serde_json::json!({
+                    let mut result = serde_json::json!({
                         "index": i,
                         "status": "saved",
                         "decision": "create",
@@ -1796,7 +2290,29 @@ async fn execute_batch(
                         "tagSuggestions": tag_suggestions.suggestions,
                         "tagSuggestionStatus": tag_suggestions.status,
                         "acceptedTagSuggestions": accepted_tag_suggestions,
-                    }));
+                    });
+                    // INGEST-V5 (B2.4/B2.5): forceCreate skips only the
+                    // canonical gate; proof fields and the intent entry
+                    // still apply.
+                    enrich_create_response(
+                        storage,
+                        &mut result,
+                        &node_id,
+                        &item.content,
+                        &hook_tags,
+                    );
+                    attach_intent_record(
+                        storage,
+                        &mut result,
+                        &scope,
+                        intent_id.as_deref(),
+                        &node_id,
+                        effect_seq,
+                        &item.content,
+                        &submitted_source,
+                        &hook_tags,
+                    );
+                    results.push(result);
                 }
                 Err(e) => {
                     errors += 1;
@@ -1896,11 +2412,65 @@ async fn execute_batch(
 
         #[cfg(not(vestige_embeddings_removed))]
         {
+            // ================================================================
+            // INGEST-V5 B3 — canonical duplicate gate per item (the B2.3
+            // flow). Only reached when this item is not force-created.
+            // Identical items earlier in the sorted processing order were
+            // indexed first, so intra-batch duplicates resolve to the
+            // lowest original index of the group.
+            // ================================================================
+            let duplicate_of =
+                match storage.find_duplicate_by_canonical_hash(&scope, &item.content) {
+                    Ok(found) => found,
+                    Err(reason) => {
+                        errors += 1;
+                        results.push(serde_json::json!({
+                            "index": i,
+                            "status": "error",
+                            "reason": reason.to_string()
+                        }));
+                        continue;
+                    }
+                };
+            if let Some(original) = duplicate_of {
+                reinforced += 1;
+                match reinforce_duplicate(
+                    storage,
+                    &scope,
+                    &canonical_hashes[i],
+                    &item.content,
+                    intent_id.as_deref(),
+                    &original,
+                    &validity,
+                    &tag_suggestions,
+                    &accepted_tag_suggestions,
+                    &submitted_source,
+                    &hook_tags,
+                ) {
+                    Ok(mut result) => {
+                        result["index"] = serde_json::json!(i);
+                        result["status"] = serde_json::json!("saved");
+                        results.push(result);
+                    }
+                    Err(reason) => {
+                        errors += 1;
+                        results.push(serde_json::json!({
+                            "index": i,
+                            "status": "error",
+                            "reason": reason
+                        }));
+                    }
+                }
+                continue;
+            }
             match storage.ingest_in_scope_with_secret_policy(input, &scope, secret_policy) {
                 Ok(node) => {
                     let node_id = node.id.clone();
                     let node_content = node.content.clone();
                     let node_type = node.node_type.clone();
+                    // INGEST-V5: this item's create effect, resolved before
+                    // any post-hook can append more.
+                    let effect_seq = storage.node_effect_seq(&node_id);
 
                     created += 1;
                     batch_created_node_ids.push(node_id.clone());
@@ -1914,7 +2484,7 @@ async fn execute_batch(
                         importance_snapshot.clone(),
                     );
 
-                    results.push(serde_json::json!({
+                    let mut result = serde_json::json!({
                         "index": i,
                         "status": "saved",
                         "decision": "create",
@@ -1929,7 +2499,27 @@ async fn execute_batch(
                         "tagSuggestions": tag_suggestions.suggestions,
                         "tagSuggestionStatus": tag_suggestions.status,
                         "acceptedTagSuggestions": accepted_tag_suggestions,
-                    }));
+                    });
+                    // INGEST-V5 (B2.4): proof fields for the create.
+                    enrich_create_response(
+                        storage,
+                        &mut result,
+                        &node_id,
+                        &item.content,
+                        &hook_tags,
+                    );
+                    attach_intent_record(
+                        storage,
+                        &mut result,
+                        &scope,
+                        intent_id.as_deref(),
+                        &node_id,
+                        effect_seq,
+                        &item.content,
+                        &submitted_source,
+                        &hook_tags,
+                    );
+                    results.push(result);
                 }
                 Err(e) => {
                     errors += 1;
@@ -1943,18 +2533,25 @@ async fn execute_batch(
         }
     }
 
+    // INGEST-V5 B3.2 — results return in the caller's order. Indexes are
+    // unique per item, so the sort is total and stable whatever order the
+    // items were processed in.
+    results.sort_by_key(|result| result["index"].as_u64().unwrap_or(0));
+
     let mut envelope = serde_json::json!({
         "success": errors == 0,
         "mode": "batch",
         "atomic": false,
         "batchOutcome": if errors > 0 {
-            if created + updated > 0 { "partial" } else { "failed" }
-        } else if created + updated == 0 { "no_changes" } else { "applied" },
+            if created + updated + reinforced > 0 { "partial" } else { "failed" }
+        } else if created + updated + reinforced == 0 { "no_changes" } else { "applied" },
         "batchMergePolicy": batch_merge_policy,
         "summary": {
             "total": results.len(),
             "created": created,
             "updated": updated,
+            "replayed": replayed,
+            "reinforced": reinforced,
             "skipped": skipped,
             "errors": errors
         },
@@ -2301,8 +2898,99 @@ mod tests {
     }
 
     #[test]
-    fn failure_hook_levers_parse_as_documented() {
-        use super::{flag_enabled_from, flag_opt_in_from};
+    fn lean_response_keeps_proof_fields_and_trims_entities_and_importance() {
+        // INGEST-V5 (spec B4): receiptId and canonicalHash survive whole,
+        // entities trim to the first 8 spans, importance keeps score +
+        // weightsVersion only, and a say-nothing empty entities array drops.
+        let mut create = serde_json::json!({
+            "decision": "create", "nodeId": "n1",
+            "receiptId": "eff-0000000000000001",
+            "canonicalHash": "aa".repeat(32),
+            "entities": (0..12).map(|n| serde_json::json!({
+                "kind": "url", "surface": format!("https://x.example/{n}"),
+                "byteStart": n, "byteEnd": n + 1,
+            })).collect::<Vec<_>>(),
+            "importance": {
+                "score": 0.5, "formula": "linear-v1", "weightsVersion": "linear-v1",
+                "factors": {"lengthBytes": 42}
+            },
+        });
+        super::lean_response(&mut create);
+        assert_eq!(create["receiptId"], "eff-0000000000000001");
+        assert_eq!(create["canonicalHash"], "aa".repeat(32));
+        assert_eq!(create["entities"].as_array().unwrap().len(), 8);
+        assert_eq!(create["entities"][7]["surface"], "https://x.example/7");
+        assert_eq!(create["importance"]["score"], 0.5);
+        assert_eq!(create["importance"]["weightsVersion"], "linear-v1");
+        assert!(create["importance"].as_object().unwrap().len() == 2);
+        assert!(create["importance"].get("factors").is_none());
+
+        let mut bare = serde_json::json!({
+            "decision": "create", "entities": [],
+            "importance": {"score": 0.25, "weightsVersion": "linear-v1"},
+        });
+        super::lean_response(&mut bare);
+        assert!(bare.get("entities").is_none(), "{bare}");
+        assert_eq!(bare["importance"]["score"], 0.25);
+    }
+
+    #[test]
+    fn intent_ids_validate_strip_and_reject_bad_patterns() {
+        use super::{TakenIntents, take_intent_ids, validate_intent_id};
+
+        let long = "x".repeat(128);
+        for good in ["run-42", "a", "A.b:c-d_e", long.as_str()] {
+            assert_eq!(validate_intent_id(serde_json::json!(good)).unwrap(), good);
+        }
+        for bad in [
+            serde_json::json!(""),
+            serde_json::json!("has space"),
+            serde_json::json!("sl/ash"),
+            serde_json::json!("unicode-é"),
+            serde_json::json!(&"x".repeat(129)),
+            serde_json::json!(42),
+        ] {
+            assert!(validate_intent_id(bad).is_err());
+        }
+
+        let (args, intents) = take_intent_ids(Some(serde_json::json!({
+            "content": "kept",
+            "intent_id": "single-1",
+            "intentId": "shadowed-alias-never-reached",
+            "items": [
+                {"content": "a", "intent_id": "batch-1"},
+                {"content": "b"},
+                {"content": "c", "intentId": "batch-3"},
+            ]
+        })))
+        .unwrap();
+        assert_eq!(intents.single.as_deref(), Some("single-1"));
+        assert_eq!(
+            intents.items,
+            vec![
+                Some("batch-1".to_string()),
+                None,
+                Some("batch-3".to_string())
+            ]
+        );
+        // Stripped: the pipeline args no longer carry either spelling.
+        assert!(args.as_ref().unwrap().get("intent_id").is_none());
+        assert!(args.as_ref().unwrap().get("intentId").is_none());
+        assert_eq!(args.unwrap()["content"], "kept");
+
+        // An invalid id fails the whole call before anything is written.
+        assert!(take_intent_ids(Some(serde_json::json!({
+            "content": "x", "intent_id": "not allowed"
+        })))
+        .is_err());
+        let (_, empty) = take_intent_ids(None).unwrap();
+        assert_eq!(empty.single, None);
+        assert!(empty.items.is_empty());
+        let _: TakenIntents = TakenIntents::default();
+    }
+
+    #[test]
+    fn failure_hook_levers_parse_as_documented() {        use super::{flag_enabled_from, flag_opt_in_from};
         // On-by-default lever (live backfill): unset is on, only explicit off words turn it off.
         assert!(flag_enabled_from(None));
         for off in ["0", "false", "OFF", "no", " off "] {
@@ -3677,6 +4365,31 @@ mod tests {
         assert!(schema_value["properties"]["node_type"].is_object());
         assert!(schema_value["properties"]["tags"].is_object());
         assert!(schema_value["properties"]["source"].is_object());
+    }
+
+    #[test]
+    fn schema_advertises_intent_id_and_supersedes() {
+        // INGEST-V5 B1: additions only — intent_id on single and batch item,
+        // supersedes joined to the declarable link kinds.
+        let schema_value = schema();
+        let intent = &schema_value["properties"]["intent_id"];
+        assert!(intent.is_object(), "{intent}");
+        assert_eq!(intent["type"], "string");
+        assert_eq!(intent["maxLength"], 128);
+        assert_eq!(intent["pattern"], "^[A-Za-z0-9._:-]+$");
+        let batch_intent = &schema_value["properties"]["items"]["items"]["properties"]["intent_id"];
+        assert!(batch_intent.is_object(), "{batch_intent}");
+        assert_eq!(batch_intent["pattern"], "^[A-Za-z0-9._:-]+$");
+        let kinds: Vec<&str> = schema_value["properties"]["links"]["items"]["properties"]["kind"]
+            ["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|kind| kind.as_str().unwrap())
+            .collect();
+        for still in ["derived_from", "evidence_of", "closes", "supersedes"] {
+            assert!(kinds.contains(&still), "{kinds:?} lost {still}");
+        }
     }
 
     #[tokio::test]

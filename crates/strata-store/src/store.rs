@@ -21,6 +21,7 @@ use strata_kernel::state::State;
 use strata_kernel::verify::verify_with_head;
 
 use crate::anchor::AnchorIndex;
+use crate::canonical::{canonical_hash, DUPLICATE_SOURCE};
 use crate::card::{CardEvent, ImportedCard};
 use crate::error::StoreError;
 use crate::gate_log::StrataEventLog;
@@ -160,6 +161,63 @@ fn publish_backup(staging: &Path, dest: &Path, dest_is_new: bool) -> std::io::Re
 /// Anchor file: hash of the head checkpoint (tamper-evidence for the
 /// successor-less head, per the strata-kernel verify contract).
 const META_NAME: &str = "store.meta";
+/// Side file for the intent index (caller idempotency): `<dir>/intent-index`.
+///
+/// The log format is frozen (no new `StoreOp` kinds, Law 4), and an intent id
+/// is caller state the log never sees, so the `(scope, intent id)` table
+/// lives beside the log like `store.meta` does. It is borsh over a `BTreeMap`
+/// (byte-sorted keys, deterministic bytes), written tmp-then-rename so a
+/// crash never leaves it torn, and created lazily: an existing store without
+/// the file opens with an empty index and upgrades in place.
+const INTENT_INDEX_FILE: &str = "intent-index";
+
+/// One intent-index row (see [`StrataStore::record_intent`]).
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
+struct IntentIndexEntry {
+    /// Node the intented write created.
+    node_id: String,
+    /// Gate-space effect seq of the admitting EFFECT (the `eff-` receipt).
+    effect_seq: u64,
+    /// `strata_store::canonical::intent_digest` of the recorded response.
+    response_digest: String,
+}
+
+/// Read the intent-index side file. Missing file = empty table (a store from
+/// before this feature). A present-but-undecodable file is an error: silent
+/// loss would turn every recorded intent into a fresh write.
+fn load_intent_index(dir: &Path) -> Result<BTreeMap<(String, String), IntentIndexEntry>, StoreError> {
+    let bytes = match std::fs::read(dir.join(INTENT_INDEX_FILE)) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(err) => return Err(StoreError::Io(err)),
+    };
+    borsh::from_slice(&bytes).map_err(|e| {
+        StoreError::Verify(format!("intent index side file is unreadable: {e}"))
+    })
+}
+
+/// Write the intent-index side file atomically (tmp + rename, 0600 on unix).
+fn store_intent_index(
+    dir: &Path,
+    entries: &BTreeMap<(String, String), IntentIndexEntry>,
+) -> Result<(), StoreError> {
+    let bytes = borsh::to_vec(entries).map_err(|e| StoreError::Encode(e.to_string()))?;
+    let tmp = dir.join(format!("{INTENT_INDEX_FILE}.tmp"));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
+    use std::io::Write;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, dir.join(INTENT_INDEX_FILE))?;
+    Ok(())
+}
+
 /// Rating folded for a brand-new node's ingest review ("Good").
 const INGEST_RATING: u8 = 3;
 /// Default node type when an ingest input leaves it empty.
@@ -377,6 +435,17 @@ pub fn handle_of(id: &str) -> u64 {
 
 fn hash32(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
+}
+
+/// Is this record a duplicate echo node? Echo nodes carry
+/// `source.system == "duplicate"` (see [`DUPLICATE_SOURCE`]) and never enter
+/// the canonical index, so a duplicate of a duplicate still resolves to the
+/// original.
+fn is_duplicate_echo(record: &NodeRecord) -> bool {
+    record
+        .source
+        .as_ref()
+        .is_some_and(|key| key.system == DUPLICATE_SOURCE)
 }
 
 fn borsh_vec<T: BorshSerialize>(value: &T) -> Result<Vec<u8>, StoreError> {
@@ -728,6 +797,20 @@ pub struct StrataStore {
     /// Proved effects by receipt seq and node id (derived). Lets receipt
     /// lookups answer without re-reading the log.
     effect_index: EffectIndex,
+    /// (scope, canonical content hash) -> first regular node id with that
+    /// canonical form (derived: rebuilt by replay, extended by every admitted
+    /// ingest, exactly like `effect_index`). The duplicate gate reads it.
+    ///
+    /// Nodes whose `source.system` is [`DUPLICATE_SOURCE`] ("duplicate" echo
+    /// nodes) are never indexed, so a duplicate of a duplicate still resolves
+    /// to the original. No separate backfill routine exists v1 — and none is
+    /// needed: replay rebuilds this map for every node the log admits, so an
+    /// existing store indexes itself on first open. v3-imported nodes are
+    /// deliberately not indexed (they did not pass this gate).
+    node_canonical_index: BTreeMap<(String, [u8; 32]), String>,
+    /// (scope, intent id) -> recorded first write, for idempotent replay.
+    /// Backs the [`INTENT_INDEX_FILE`] side file; see [`record_intent`].
+    intent_index: BTreeMap<(String, String), IntentIndexEntry>,
 }
 
 impl StrataStore {
@@ -764,6 +847,9 @@ impl StrataStore {
         std::fs::create_dir_all(&dir)?;
         let log = StrataLog::open(&log_dir)?;
         let gate_log = StrataEventLog::new(log.clone())?;
+        // Intent-index side file: absent on stores from before this feature,
+        // which upgrade in place with an empty table.
+        let intent_index = load_intent_index(&dir)?;
         let mut store = Self {
             dir,
             log_dir,
@@ -787,6 +873,8 @@ impl StrataStore {
             upserts: BTreeMap::new(),
             anchors: AnchorIndex::default(),
             effect_index: EffectIndex::default(),
+            node_canonical_index: BTreeMap::new(),
+            intent_index,
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -925,6 +1013,16 @@ impl StrataStore {
                     .push((frame_seq, record.clone()));
                 self.nodes.insert(record.id.clone(), record.clone());
                 if is_new {
+                    // Canonical dedup index: only the FIRST regular node for
+                    // a canonical form becomes the dedup target, and duplicate
+                    // echo nodes (`source.system == "duplicate"`) never do.
+                    // Later upserts of an existing id (rewrites, undos) do not
+                    // re-index: identity is fixed at creation.
+                    if !is_duplicate_echo(record) {
+                        self.node_canonical_index
+                            .entry((record.scope.clone(), canonical_hash(&record.content)))
+                            .or_insert_with(|| record.id.clone());
+                    }
                     // Every ingest folds one ReviewEvent ("Good") into the
                     // kernel state under the record's kernel version.
                     self.fold_review(handle, INGEST_RATING, record.kernel_id, frame_seq)?;
@@ -1358,6 +1456,91 @@ impl StrataStore {
             Vec::new(),
         )?;
         Ok((id, effect_seq))
+    }
+
+    /// The node a canonical duplicate resolves to: the first regular node
+    /// ingested in `scope` whose canonical content hash is `hash`.
+    ///
+    /// `None` when nothing regular holds that canonical form yet. Echo nodes
+    /// and v3-imported nodes are never answers (see
+    /// [`Self::node_canonical_index`]). The answer names the indexed node
+    /// as-is; whether it is still live is the caller's read.
+    pub fn find_node_by_canonical_hash(
+        &self,
+        scope: &str,
+        hash: &[u8; 32],
+    ) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .node_canonical_index
+            .get(&(scope.to_string(), *hash))
+            .cloned())
+    }
+
+    /// The recorded first write for `(scope, intent_id)`, for idempotent
+    /// replay: `(node_id, effect_seq, response_digest)`.
+    ///
+    /// `None` when no write under this intent landed yet. Entries live in
+    /// the [`INTENT_INDEX_FILE`] side file and survive reopen.
+    pub fn find_intent(
+        &self,
+        scope: &str,
+        intent_id: &str,
+    ) -> Result<Option<(String, u64, String)>, StoreError> {
+        Ok(self
+            .intent_index
+            .get(&(scope.to_string(), intent_id.to_string()))
+            .map(|entry| {
+                (
+                    entry.node_id.clone(),
+                    entry.effect_seq,
+                    entry.response_digest.clone(),
+                )
+            }))
+    }
+
+    /// Record `(scope, intent_id) -> (node_id, effect_seq, response_digest)`
+    /// after the intented write was admitted. First write wins: an existing
+    /// entry is kept untouched and the call succeeds without writing, so a
+    /// replayed submission always resolves to the FIRST write.
+    ///
+    /// The entry persists immediately (tmp + rename); an all-or-nothing
+    /// failure leaves both the map and the file unchanged.
+    pub fn record_intent(
+        &mut self,
+        scope: &str,
+        intent_id: &str,
+        node_id: &str,
+        effect_seq: u64,
+        response_digest: &str,
+    ) -> Result<(), StoreError> {
+        if intent_id.is_empty() {
+            return Err(StoreError::InvalidInput(
+                "intent id must not be empty".into(),
+            ));
+        }
+        if node_id.is_empty() {
+            return Err(StoreError::InvalidInput(
+                "intent entry must name a node".into(),
+            ));
+        }
+        let key = (scope.to_string(), intent_id.to_string());
+        if self.intent_index.contains_key(&key) {
+            // INSERT OR REPLACE never: the first write is the replay answer.
+            return Ok(());
+        }
+        // Persist first, then adopt: a failed write leaves no map mutation.
+        let mut updated = self.intent_index.clone();
+        updated.insert(
+            key,
+            IntentIndexEntry {
+                node_id: node_id.to_string(),
+                effect_seq,
+                response_digest: response_digest.to_string(),
+            },
+        );
+        store_intent_index(&self.dir, &updated)?;
+        self.intent_index = updated;
+        Ok(())
     }
 
     /// Insert or replace intentions through one admitted write.
@@ -2416,6 +2599,13 @@ impl StrataStore {
         if self.meta_path().exists() {
             copy_private_file(&self.meta_path(), &staging.join(META_NAME))?;
         }
+        // Idempotency travels with the data: without its intent table a
+        // restored backup would re-admit every already-intented write. It
+        // is staged with the log, so it is published or dropped with it.
+        let intent_index_path = self.dir.join(INTENT_INDEX_FILE);
+        if intent_index_path.exists() {
+            copy_private_file(&intent_index_path, &staging.join(INTENT_INDEX_FILE))?;
+        }
         sync_dir(&staging_log)?;
         sync_dir(staging)
     }
@@ -2495,6 +2685,10 @@ impl StrataStore {
             upserts: BTreeMap::new(),
             anchors: AnchorIndex::default(),
             effect_index: EffectIndex::default(),
+            node_canonical_index: BTreeMap::new(),
+            // Replay cannot re-derive caller intent ids; the scratch copy
+            // only needs the log-derived maps Refold reports.
+            intent_index: BTreeMap::new(),
         };
         scratch.replay()?;
         let mut retrievability = BTreeMap::new();
