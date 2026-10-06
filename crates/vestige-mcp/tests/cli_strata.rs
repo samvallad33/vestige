@@ -419,6 +419,35 @@ fn causal_walk_node_id_makes_a_named_start_point_walkable_on_strata() {
     );
     assert!(!half.ok, "{}", half.text());
     assert!(half.stderr.contains("together"), "{}", half.text());
+
+    // a complete range is a local rev-list bound, not a shared-name refusal
+    let full = vestige(
+        dir.path(),
+        &[
+            "causal-walk",
+            "--git-repo",
+            "/no/such/range-repo",
+            "--worked-in",
+            "good",
+            "--broke-in",
+            "bad",
+            "--json",
+        ],
+    );
+    assert!(full.ok, "{}", full.text());
+    assert!(
+        !full.stderr.contains("unavailable_in_4_0"),
+        "{}",
+        full.text()
+    );
+    let full_value: Value = serde_json::from_str(&full.stdout).unwrap();
+    assert!(
+        full_value["range"]["because"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not an available directory"),
+        "{full_value}"
+    );
 }
 
 #[test]

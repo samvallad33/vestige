@@ -33,7 +33,7 @@ use vestige_core::advanced::causal_walk::{
 fn symptom_node_id() -> Value {
     json!({
         "type": "string",
-        "description": "Optional. The id of the memory that records this symptom. On a Strata log, stack_frame and failing_test also resolve to recorded file anchors by exact path; node_id is the failure memory whose derived_from commit is the revision blame uses. ci_run and version_range still need node_id."
+        "description": "Optional. The id of the memory that records this symptom. On a Strata log, stack_frame and failing_test also resolve to recorded file anchors by exact path; node_id is the failure memory whose derived_from commit is the revision blame uses. version_range bounds candidates with git rev-list and does not need its own node_id. ci_run still needs node_id."
     })
 }
 
@@ -49,7 +49,7 @@ pub fn schema() -> Value {
             "start_points": {
                 "type": "array",
                 "minItems": 1,
-                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). stack_frame and failing_test resolve by exact path to file anchors ingest_repo recorded. Other kinds walk the node_id memory. version_range is not a git-name search.",
+                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). stack_frame and failing_test resolve by exact path to file anchors ingest_repo recorded. version_range limits commit candidates to git rev-list --first-parent worked_in..broke_in in the local repo. It is not a version-name search. ci_run walks the node_id memory.",
                 "items": {
                     "oneOf": [
                         {
@@ -91,9 +91,9 @@ pub fn schema() -> Value {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "version_range"},
-                                "worked_in": {"type": "string", "description": "Last-known-good tag."},
-                                "broke_in": {"type": "string", "description": "First-bad tag."},
-                                "repo": {"type": "string", "description": "Path to the git repository. Single repo per call."},
+                                "worked_in": {"type": "string", "description": "Last-known-good revision (tag or SHA). Exclusive start of git rev-list --first-parent."},
+                                "broke_in": {"type": "string", "description": "First-bad revision (tag or SHA). Inclusive end of git rev-list --first-parent."},
+                                "repo": {"type": "string", "description": "Path to the local git repository. Nothing is fetched."},
                                 "node_id": symptom_node_id()
                             },
                             "required": ["kind", "worked_in", "broke_in", "repo"]
@@ -297,6 +297,16 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
     };
     if starts.is_empty() && git.anchors.is_empty() {
         let needs_report = refusal(scope, &rows);
+        // A version range is a bound, not a start. Report whether the local
+        // rev-list resolved even when nothing was walked.
+        let mut nodes = Vec::new();
+        let mut causes = Vec::new();
+        let range = apply_version_range(
+            storage,
+            args.start_points.as_deref(),
+            &mut nodes,
+            &mut causes,
+        );
         return Ok(walk_payload(
             storage,
             scope,
@@ -304,13 +314,14 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
                 promote_requested: args.promote.unwrap_or(false),
                 starts: walked_starts,
                 rows,
-                nodes: Vec::new(),
-                causes: Vec::new(),
+                nodes,
+                causes,
                 truncated: false,
                 node_cap,
                 needs_report: Some(needs_report),
                 structure: BTreeMap::new(),
                 upstream_note: None,
+                range,
             },
         ));
     }
@@ -342,6 +353,12 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
         BTreeMap::new()
     };
     let upstream_note = upstream_note_for(storage, &rows, &causes);
+    let range = apply_version_range(
+        storage,
+        args.start_points.as_deref(),
+        &mut nodes,
+        &mut causes,
+    );
     if nodes.len() > node_cap {
         nodes.truncate(node_cap);
         truncated = true;
@@ -363,6 +380,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
             needs_report: None,
             structure,
             upstream_note,
+            range,
         },
     ))
 }
@@ -529,6 +547,8 @@ struct WalkOut {
     structure: BTreeMap<String, Value>,
     /// Why an upstream crate range was not recorded. Local files only.
     upstream_note: Option<String>,
+    /// `worked_in..broke_in` bound, including how many commits it removed.
+    range: Option<Value>,
 }
 
 /// Every start the caller gave, in order: top-level handles first (`node_id`,
@@ -780,6 +800,7 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "causes": walk.causes.iter().map(&node_json).collect::<Vec<_>>(),
         "needs_report": walk.needs_report,
         "upstreamSkipped": walk.upstream_note,
+        "range": walk.range,
         "note": "Backward BFS over recorded causal edges only. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A stack_frame or failing_test names a file anchor by exact path; blame of the line uses the failure memory's derived_from commit. Rank among those commits is structural (reverted after the failure, blame of the line, hunk, hop, edge kind), never text.",
     })
 }
@@ -1490,6 +1511,88 @@ fn upstream_note_for(
         "no local .cargo_vcs_info.json or package.json gitHead for the lockfile bump; the upstream old..new range was not recorded and nothing was fetched"
             .to_string()
     })
+}
+
+fn apply_version_range(
+    storage: &Arc<Storage>,
+    points: Option<&[StartPoint]>,
+    nodes: &mut Vec<Reached>,
+    causes: &mut Vec<Reached>,
+) -> Option<Value> {
+    let points = points?;
+    let (worked_in, broke_in, repo) = points.iter().find_map(|point| match point {
+        StartPoint::VersionRange {
+            worked_in,
+            broke_in,
+            repo,
+            ..
+        } => Some((worked_in.as_str(), broke_in.as_str(), repo.as_str())),
+        _ => None,
+    })?;
+    let window = match crate::tools::repo_ingest::first_parent_rev_list(
+        std::path::Path::new(repo),
+        worked_in,
+        broke_in,
+    ) {
+        Ok(window) => window,
+        Err(err) => {
+            return Some(json!({
+                "workedIn": worked_in,
+                "brokeIn": broke_in,
+                "repo": repo,
+                "good": Value::Null,
+                "bad": Value::Null,
+                "excluded": 0,
+                "excludedShas": [],
+                "because": err,
+            }));
+        }
+    };
+    let mut excluded = Vec::new();
+    causes.retain(|cause| match node_commit_sha(storage, &cause.id) {
+        Some(sha) if !window.shas.contains(&sha) => {
+            excluded.push(sha);
+            false
+        }
+        _ => true,
+    });
+    let dropped: HashSet<&str> = excluded.iter().map(String::as_str).collect();
+    nodes.retain(|node| match node_commit_sha(storage, &node.id) {
+        Some(sha) => !dropped.contains(sha.as_str()),
+        None => true,
+    });
+    let because = if excluded.is_empty() {
+        format!(
+            "no commit candidate was outside git rev-list --first-parent {}..{}",
+            window.good, window.bad
+        )
+    } else {
+        format!(
+            "{} commit(s) excluded: outside git rev-list --first-parent {}..{}",
+            excluded.len(),
+            window.good,
+            window.bad
+        )
+    };
+    Some(json!({
+        "workedIn": worked_in,
+        "brokeIn": broke_in,
+        "repo": repo,
+        "good": window.good,
+        "bad": window.bad,
+        "excluded": excluded.len(),
+        "excludedShas": excluded,
+        "because": because,
+    }))
+}
+
+fn node_commit_sha(storage: &Arc<Storage>, id: &str) -> Option<String> {
+    storage
+        .get_node(id)
+        .ok()
+        .flatten()
+        .as_ref()
+        .and_then(commit_sha)
 }
 
 fn registry_path_without_local_vcs(path: &str) -> bool {
@@ -2709,6 +2812,166 @@ mod strata_walk {
         assert_eq!(
             ci["causes"][0]["structure"]["lockfile"]["package"], "reqwest",
             "{ci}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_version_range_does_not_drop_a_non_commit_cause() {
+        let (storage, _dir) = open();
+        let effect = put(&storage, "user", "login handler failed");
+        let cause = put(&storage, "user", "commit flipped the auth timeout");
+        link(&storage, &effect, &cause, "derived_from");
+        let out = execute(
+            &storage,
+            Some(json!({
+                "start_points": [
+                    {"kind": "logged_write", "node_id": effect},
+                    {"kind": "version_range", "worked_in": "no-such", "broke_in": "also-missing", "repo": "/no/such/repo"}
+                ]
+            })),
+        )
+        .await
+        .unwrap();
+        assert!(
+            out["causes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["id"] == cause),
+            "{out}"
+        );
+        assert_eq!(out["range"]["excluded"], 0, "{out}");
+        let because = out["range"]["because"].as_str().unwrap();
+        assert!(
+            because.contains("not an available directory") || because.contains("could not resolve"),
+            "{because}"
+        );
+    }
+
+    #[tokio::test]
+    async fn version_range_excludes_commits_outside_first_parent() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let git = |args: &[&str], date: &str| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args([
+                    "-c",
+                    "user.email=t@example.com",
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q"], "2020-01-01T00:00:00Z");
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("src/a.rs"), "fn a() { let v = 1; }\n").unwrap();
+        git(&["add", "-A"], "2020-01-01T00:00:00Z");
+        git(&["commit", "-q", "-m", "old line"], "2020-01-01T00:00:00Z");
+        let old = git(&["rev-parse", "HEAD"], "2020-01-01T00:00:00Z");
+        git(&["tag", "good"], "2020-01-01T00:00:00Z");
+        std::fs::write(repo.path().join("src/a.rs"), "fn a() { let v = 2; }\n").unwrap();
+        git(&["add", "-A"], "2024-06-01T00:00:00Z");
+        git(&["commit", "-q", "-m", "the bump"], "2024-06-01T00:00:00Z");
+        let mid = git(&["rev-parse", "HEAD"], "2024-06-01T00:00:00Z");
+        std::fs::write(repo.path().join("src/a.rs"), "fn a() { let v = 3; }\n").unwrap();
+        git(&["add", "-A"], "2024-07-01T00:00:00Z");
+        git(
+            &["commit", "-q", "-m", "failure revision"],
+            "2024-07-01T00:00:00Z",
+        );
+        let bad = git(&["rev-parse", "HEAD"], "2024-07-01T00:00:00Z");
+        git(&["tag", "bad"], "2024-07-01T00:00:00Z");
+
+        let (storage, _log) = open();
+        let scope = "user";
+        let record = |sha: &str, when: &str| {
+            storage
+                .ingest_in_scope(
+                    IngestInput {
+                        content: format!("commit {sha}"),
+                        node_type: "event".into(),
+                        tags: vec![
+                            format!("commit:{sha}"),
+                            "git-commit".into(),
+                            format!(
+                                "{}{}",
+                                crate::tools::repo_ingest::GIT_ROOT_PREFIX,
+                                repo.path().display()
+                            ),
+                        ],
+                        valid_from: Some(when.parse().unwrap()),
+                        ..Default::default()
+                    },
+                    scope,
+                )
+                .unwrap()
+                .id
+        };
+        let old_id = record(&old, "2020-01-01T00:00:00Z");
+        let mid_id = record(&mid, "2024-06-01T00:00:00Z");
+        let bad_id = record(&bad, "2024-07-01T00:00:00Z");
+        for id in [&old_id, &mid_id, &bad_id] {
+            link(&storage, id, "file:src/a.rs", "touched");
+        }
+        let failure = put(&storage, scope, "failure at src/a.rs:1");
+        link(&storage, &failure, &bad_id, "derived_from");
+
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": scope,
+                "start_points": [
+                    {"kind": "stack_frame", "frame": "src/a.rs:1", "node_id": failure},
+                    {
+                        "kind": "version_range",
+                        "worked_in": "good",
+                        "broke_in": "bad",
+                        "repo": repo.path().display().to_string()
+                    }
+                ]
+            })),
+        )
+        .await
+        .unwrap();
+        let shas: Vec<&str> = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|row| row["structure"]["sha"].as_str())
+            .collect();
+        assert!(shas.contains(&mid.as_str()), "{out}");
+        assert!(!shas.contains(&old.as_str()), "{out}");
+        assert!(out["range"]["excluded"].as_u64().unwrap() >= 1, "{out}");
+        let excluded = out["range"]["excludedShas"].as_array().unwrap();
+        assert!(
+            excluded
+                .iter()
+                .any(|sha| sha.as_str() == Some(old.as_str())),
+            "{out}"
+        );
+        assert!(
+            out["range"]["because"]
+                .as_str()
+                .unwrap()
+                .contains("rev-list --first-parent"),
+            "{out}"
         );
     }
 }

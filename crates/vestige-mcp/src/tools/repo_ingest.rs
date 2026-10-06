@@ -1146,6 +1146,59 @@ fn edge_recorded(storage: &Arc<Storage>, source: &str, target: &str, kind: &str)
         .unwrap_or(false)
 }
 
+/// Commits in `git rev-list --first-parent GOOD..BAD` (GOOD exclusive, BAD
+/// inclusive). Both ends are resolved to full SHAs. Missing objects are an
+/// error; nothing is fetched.
+pub struct FirstParentRange {
+    pub good: String,
+    pub bad: String,
+    pub shas: HashSet<String>,
+}
+
+pub fn first_parent_rev_list(
+    root: &Path,
+    good: &str,
+    bad: &str,
+) -> Result<FirstParentRange, String> {
+    check_git_arg("worked_in", good)?;
+    check_git_arg("broke_in", bad)?;
+    if !root.is_dir() {
+        return Err(format!(
+            "version range repo {} is not an available directory",
+            root.display()
+        ));
+    }
+    let good_sha = resolve_commit_sha(root, good).ok_or_else(|| {
+        format!(
+            "could not resolve worked_in `{good}` to a commit in {}",
+            root.display()
+        )
+    })?;
+    let bad_sha = resolve_commit_sha(root, bad).ok_or_else(|| {
+        format!(
+            "could not resolve broke_in `{bad}` to a commit in {}",
+            root.display()
+        )
+    })?;
+    let spec = format!("{good_sha}..{bad_sha}");
+    let run = run_git(root, &["rev-list".into(), "--first-parent".into(), spec])?;
+    if let Some(failure) = run.failure {
+        return Err(format!("git rev-list --first-parent failed: {failure}"));
+    }
+    let mut shas = HashSet::new();
+    for line in String::from_utf8_lossy(&run.stdout).lines() {
+        let sha = line.trim().to_ascii_lowercase();
+        if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            shas.insert(sha);
+        }
+    }
+    Ok(FirstParentRange {
+        good: good_sha,
+        bad: bad_sha,
+        shas,
+    })
+}
+
 /// Blame one line at `rev` in `root`. `Ok(None)` is an unresolvable line, not
 /// a git failure the caller should guess past. The SHA is the porcelain header.
 pub fn blame_line(root: &Path, rev: &str, path: &str, line: u32) -> Result<Option<String>, String> {
