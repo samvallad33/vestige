@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, v4, release/v4.0.0-rc]
+    branches: [main, v4, release/**]
   pull_request:
-    branches: [main, v4, release/v4.0.0-rc]
+    branches: [main, v4, release/**]
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,7 +40,7 @@ jobs:
 
           # Guard 2: the retracted figures, in every phrasing seen so far.
           PATTERNS='root-cause recall@1|causal bridge recall@1|Vestige 60%|vector search 0%|on CauseBench|baselines recall@1'
-          ALLOW='^(CHANGELOG\.md|docs/launch/causal-brain-demo\.html|docs/launch/backward-trace-animation-storyboard\.md|\.github/workflows/ci\.yml)'
+          ALLOW='^(CHANGELOG\.md|\.github/workflows/ci\.yml)'
           HITS=$(grep -rInE "$PATTERNS" \
             --include='*.md' --include='*.html' --include='*.rs' \
             --include='*.ts' --include='*.svelte' --include='*.js' \
@@ -117,7 +117,7 @@ jobs:
         # create synthetic stores. It is not a default of the shipped bins.
         run: |
           cargo test -p vestige-core --features bundled-sqlite,v3-engine,connectors,cloud-sync --lib
-          cargo test -p vestige-mcp --features v3-engine --lib --tests
+          cargo test -p vestige-mcp --features v3-engine,connectors --lib --tests
           cargo test -p vestige-phase-1-tests --features legacy-sqlite
           cargo test -p vestige-differential-tests --features legacy-sqlite
 

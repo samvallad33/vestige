@@ -76,6 +76,6 @@ body:
     id: version
     attributes:
       label: Vestige version
-      placeholder: "e.g. 2.0.0 (run `vestige --version`)"
+      placeholder: "e.g. 4.1.1 (run `vestige --version`)"
     validations:
       required: true

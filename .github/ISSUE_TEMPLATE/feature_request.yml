@@ -37,10 +37,10 @@ body:
       label: Area
       options:
         - MCP Tools
-        - Cognitive Engine
+        - Strata log, receipts and replay
         - Dashboard / Visualization
-        - Search / Retrieval
-        - FSRS / Spaced Repetition
+        - Recall, causal walk and vestige prove
+        - GhostLink and intentions
         - CLI
         - Documentation
         - Performance
