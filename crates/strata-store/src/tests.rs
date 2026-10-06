@@ -1,7 +1,7 @@
 //! In-crate tests. Each test owns a unique temp directory (the log enforces
 //! a single writer per directory via `strata.lock`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use borsh::BorshDeserialize;
@@ -14,13 +14,13 @@ use strata_kernel::fsrs::{FsrsFold, ALGO_V2};
 use crate::op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 use crate::store::{
     classify_checkpoint_payload, classify_write_payload, decode_exact, handle_of, migration_edge,
-    migration_node, CheckpointPayload, WritePayload,
+    migration_node, store_intent_index, CheckpointPayload, IntentIndexEntry, WritePayload,
 };
 use crate::types::{ConnectionRecord, EdgeDirection, EdgeKind, IngestInput};
 use crate::{
     default_policy, effect_receipt_id, looks_like_failure, retire_rule_id, AdmissionContext,
-    EffectAction, RetireReceipt, StoreError, StrataStore, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE,
-    RULE_SUPPRESS,
+    EffectAction, RetireReceipt, StoreError, StrataStore, MAX_LIVE_ECHOES_PER_ORIGINAL, RULE_EDIT,
+    RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
 };
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -3386,6 +3386,252 @@ fn intent_index_is_first_write_wins() {
         store.record_intent("user", "idem2", "", second_seq, &digest_two),
         Err(StoreError::InvalidInput(_))
     ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intent_log_appends_without_rewriting_its_prefix_and_survives_reopen() {
+    let dir = temp_dir("intent-append");
+    let backup = temp_dir("intent-append-backup");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let (node, seq) = store
+        .ingest_in_scope_with_receipt(input("intent one", &[]), "user")
+        .expect("ingest");
+    store
+        .record_intent("user", "first", &node, seq, "digest-1")
+        .expect("first");
+    let log_path = dir.join("intent-index.log");
+    let prefix = std::fs::read(&log_path).expect("log");
+    assert!(!prefix.is_empty());
+    let snapshot = dir.join("intent-index");
+    assert!(
+        !snapshot.exists(),
+        "a new intent appends; it does not rewrite the legacy snapshot"
+    );
+    for n in 0..24 {
+        store
+            .record_intent("user", &format!("later-{n}"), &node, seq, "digest-n")
+            .expect("append");
+    }
+    let grown = std::fs::read(&log_path).expect("grown log");
+    assert!(
+        grown.starts_with(&prefix),
+        "appending must not rewrite the bytes already durable"
+    );
+    assert!(grown.len() > prefix.len());
+    let len_before_repeat = grown.len();
+    store
+        .record_intent("user", "first", &node, seq + 1, "digest-replaced")
+        .expect("first write wins");
+    assert_eq!(
+        std::fs::metadata(&log_path).expect("meta").len(),
+        len_before_repeat as u64,
+        "a repeated intent id appends nothing"
+    );
+    assert_eq!(
+        store.find_intent("user", "first").expect("find").unwrap().2,
+        "digest-1"
+    );
+
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_intent("user", "later-23")
+            .expect("later")
+            .unwrap()
+            .2,
+        "digest-n"
+    );
+    reopened.backup_to(&backup).expect("backup");
+    let restored = StrataStore::open(&backup).expect("restored");
+    assert_eq!(
+        restored.find_intent("user", "first").expect("backup find"),
+        Some((node, seq, "digest-1".to_string()))
+    );
+    assert!(backup.join("intent-index.log").is_file());
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&backup).ok();
+}
+
+#[test]
+fn legacy_intent_snapshot_loads_and_new_records_append_beside_it() {
+    let dir = temp_dir("intent-legacy-snapshot");
+    let mut legacy = BTreeMap::new();
+    legacy.insert(
+        ("user".to_string(), "from-snapshot".to_string()),
+        IntentIndexEntry {
+            node_id: "mem-legacy".into(),
+            effect_seq: 3,
+            response_digest: "snap".into(),
+        },
+    );
+    store_intent_index(&dir, &legacy).expect("plant snapshot");
+    let snapshot_bytes = std::fs::read(dir.join("intent-index")).expect("snapshot");
+    let mut store = StrataStore::open(&dir).expect("open");
+    assert_eq!(
+        store
+            .find_intent("user", "from-snapshot")
+            .expect("legacy")
+            .unwrap()
+            .2,
+        "snap"
+    );
+    let (node, seq) = store
+        .ingest_in_scope_with_receipt(input("after the snapshot", &[]), "user")
+        .expect("ingest");
+    store
+        .record_intent("user", "from-log", &node, seq, "appended")
+        .expect("append");
+    assert_eq!(
+        std::fs::read(dir.join("intent-index")).expect("snapshot still"),
+        snapshot_bytes,
+        "appending must not rewrite the legacy snapshot"
+    );
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_intent("user", "from-snapshot")
+            .expect("legacy survives")
+            .unwrap()
+            .2,
+        "snap"
+    );
+    assert_eq!(
+        reopened
+            .find_intent("user", "from-log")
+            .expect("log survives")
+            .unwrap()
+            .2,
+        "appended"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_torn_intent_log_tail_is_ignored_and_a_bad_checksum_is_an_error() {
+    let dir = temp_dir("intent-torn");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let (node, seq) = store
+        .ingest_in_scope_with_receipt(input("torn target", &[]), "user")
+        .expect("ingest");
+    store
+        .record_intent("user", "kept", &node, seq, "kept-digest")
+        .expect("record");
+    store
+        .record_intent("user", "also", &node, seq, "also-digest")
+        .expect("second");
+    drop(store);
+
+    let log_path = dir.join("intent-index.log");
+    let mut torn = std::fs::read(&log_path).expect("log");
+    let good = torn.clone();
+    torn.extend_from_slice(b"torn-tail");
+    std::fs::write(&log_path, &torn).expect("plant tear");
+    let reopened = StrataStore::open(&dir).expect("torn tail still opens");
+    assert_eq!(
+        reopened
+            .find_intent("user", "kept")
+            .expect("kept")
+            .unwrap()
+            .2,
+        "kept-digest"
+    );
+    assert_eq!(
+        reopened
+            .find_intent("user", "also")
+            .expect("also")
+            .unwrap()
+            .2,
+        "also-digest"
+    );
+    let after_open = std::fs::read(&log_path).expect("truncated");
+    assert_eq!(after_open, good, "open drops the torn tail");
+    drop(reopened);
+
+    let mut corrupt = good.clone();
+    corrupt[4] ^= 0xff;
+    std::fs::write(&log_path, &corrupt).expect("plant checksum miss");
+    let err = match StrataStore::open(&dir) {
+        Err(err) => err,
+        Ok(_) => panic!("bad checksum must not open"),
+    };
+    let message = err.to_string();
+    assert!(
+        message.contains("checksum"),
+        "checksum failure is reported: {message}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn duplicate_echoes_reuse_an_exact_match_and_cap_per_original() {
+    let dir = temp_dir("echo-reuse");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let original = store
+        .ingest_in_scope(input("the original", &[]), "user")
+        .expect("original");
+    let content = format!("duplicate of {original}\ncanonical_hash: ab\nsubmitted_line_count: 1");
+    let tags = vec!["duplicate".to_string(), "cache".to_string()];
+    assert!(
+        store
+            .reuse_duplicate_echo("user", &original, &content, &tags)
+            .is_none(),
+        "nothing to reuse yet"
+    );
+    let mut earliest = String::new();
+    let mut cache_echo = String::new();
+    for n in 0..MAX_LIVE_ECHOES_PER_ORIGINAL {
+        let tags = if n == 1 {
+            vec!["duplicate".to_string(), "cache".to_string()]
+        } else {
+            vec!["duplicate".to_string(), format!("t{n:02}")]
+        };
+        let echo = store
+            .ingest_in_scope(
+                IngestInput {
+                    content: content.clone(),
+                    source: Some(crate::types::SourceKey {
+                        system: crate::canonical::DUPLICATE_SOURCE.to_string(),
+                        project: String::new(),
+                        id: String::new(),
+                    }),
+                    source_updated_at_ms: None,
+                    node_type: "note".into(),
+                    tags,
+                    created_at_ms: Some(1),
+                    valid_from_ms: None,
+                    valid_until_ms: None,
+                },
+                "user",
+            )
+            .expect("echo");
+        if n == 0 {
+            earliest = echo;
+        } else if n == 1 {
+            cache_echo = echo;
+        }
+    }
+    let exact = store
+        .reuse_duplicate_echo(
+            "user",
+            &original,
+            &content,
+            &["cache".into(), "duplicate".into()],
+        )
+        .expect("exact match wins over the cap");
+    assert_eq!(exact, cache_echo);
+    let capped = store
+        .reuse_duplicate_echo(
+            "user",
+            &original,
+            &content,
+            &["duplicate".into(), "brand-new".into()],
+        )
+        .expect("at the cap a new fingerprint reuses the earliest echo");
+    assert_eq!(capped, earliest);
+    assert_ne!(exact, capped);
     std::fs::remove_dir_all(&dir).ok();
 }
 

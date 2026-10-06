@@ -1291,6 +1291,68 @@ fn ingest_auto_connects_an_exact_tag_then_causal_walk_reaches_the_earlier_memory
     assert_eq!(edge_count(dir.path()), 1);
 }
 
+/// The CLI write goes through the same canonical gate as `smart_ingest`.
+/// Whitespace that folds to the same text reinforces; a different case is a
+/// new memory. A second identical reinforce reuses the echo.
+#[test]
+fn ingest_reinforces_a_canonical_duplicate_and_keeps_case() {
+    let dir = TempDir::new().expect("temp dir");
+    let first = vestige(
+        dir.path(),
+        &["ingest", "the cache ttl is 60 seconds", "--tags", "cache"],
+    );
+    assert!(first.ok, "{}", first.text());
+    assert!(
+        first.stdout.contains("Decision: create"),
+        "{}",
+        first.text()
+    );
+    let original = first
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Node ID: "))
+        .expect("node id")
+        .trim()
+        .to_string();
+
+    let second = vestige(dir.path(), &["ingest", "  the   cache ttl is 60 seconds  "]);
+    assert!(second.ok, "{}", second.text());
+    assert!(
+        second.stdout.contains("Decision: reinforce"),
+        "{}",
+        second.text()
+    );
+    let echo = second
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Node ID: "))
+        .expect("echo id")
+        .trim()
+        .to_string();
+    assert_ne!(echo, original);
+    assert_eq!(node_count(dir.path()), 2, "original plus one echo");
+
+    let third = vestige(dir.path(), &["ingest", "  the   cache ttl is 60 seconds  "]);
+    assert!(third.ok, "{}", third.text());
+    let reused = third
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Node ID: "))
+        .expect("reused echo")
+        .trim();
+    assert_eq!(reused, echo);
+    assert_eq!(node_count(dir.path()), 2, "the same echo is reused");
+
+    let other_case = vestige(dir.path(), &["ingest", "THE CACHE TTL IS 60 SECONDS"]);
+    assert!(other_case.ok, "{}", other_case.text());
+    assert!(
+        other_case.stdout.contains("Decision: create"),
+        "{}",
+        other_case.text()
+    );
+    assert_eq!(node_count(dir.path()), 3);
+}
+
 /// Auto-connect speaks only when it writes: a memory with no peer ingests
 /// with the plain output, a later memory sharing a tag says so, and a third
 /// joining two earlier memories adds exactly two edges — the edge between

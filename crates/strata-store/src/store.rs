@@ -151,10 +151,15 @@ fn publish_backup(staging: &Path, dest: &Path, dest_is_new: bool) -> std::io::Re
     if staged_meta.exists() {
         std::fs::rename(&staged_meta, dest.join(META_NAME))?;
     }
-    // The intent index travels with the log (see `stage_backup`).
+    // The intent index travels with the log (see `stage_backup`): the
+    // legacy snapshot and the append log, each only when this backup has it.
     let staged_intents = staging.join(INTENT_INDEX_FILE);
     if staged_intents.exists() {
         std::fs::rename(&staged_intents, dest.join(INTENT_INDEX_FILE))?;
+    }
+    let staged_intent_log = staging.join(INTENT_INDEX_LOG);
+    if staged_intent_log.exists() {
+        std::fs::rename(&staged_intent_log, dest.join(INTENT_INDEX_LOG))?;
     }
     sync_dir(dest)?;
     // Everything is in place and durable; the emptied staging directory is
@@ -166,24 +171,54 @@ fn publish_backup(staging: &Path, dest: &Path, dest_is_new: bool) -> std::io::Re
 /// Anchor file: hash of the head checkpoint (tamper-evidence for the
 /// successor-less head, per the strata-kernel verify contract).
 const META_NAME: &str = "store.meta";
-/// Side file for the intent index (caller idempotency): `<dir>/intent-index`.
+/// Legacy snapshot of the intent index: `<dir>/intent-index`.
 ///
 /// An intent id is caller state the log never sees, so the `(scope, intent
-/// id)` table lives beside the log like `store.meta` does. It is borsh over a `BTreeMap`
-/// (byte-sorted keys, deterministic bytes), written tmp-then-rename so a
-/// crash never leaves it torn, and created lazily: an existing store without
-/// the file opens with an empty index and upgrades in place.
+/// id)` table lives beside the log like `store.meta` does. Stores written
+/// before the append log keep this borsh `BTreeMap` (byte-sorted keys). It
+/// is still read on open. New records append to [`INTENT_INDEX_LOG`] and do
+/// not rewrite this file.
 const INTENT_INDEX_FILE: &str = "intent-index";
+/// Append-only intent log: `<dir>/intent-index.log`.
+///
+/// Each record is a frame: `u32` little-endian payload length, borsh
+/// [`IntentLogRecord`], then the first 16 bytes of `blake3(payload)`. A torn
+/// tail (a short final frame) is ignored. A complete frame whose checksum
+/// fails is an error: silent loss would turn a recorded intent into a fresh
+/// write. First write wins across the legacy snapshot and the log.
+const INTENT_INDEX_LOG: &str = "intent-index.log";
+/// blake3 prefix stored after each intent-log payload.
+const INTENT_LOG_CHECKSUM_LEN: usize = 16;
+/// Largest accepted intent-log payload. A longer length that still fits in
+/// the file is corruption; a longer length that runs past the end is a tear.
+const MAX_INTENT_FRAME: usize = 64 * 1024;
 
 /// One intent-index row (see [`StrataStore::record_intent`]).
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
-struct IntentIndexEntry {
+pub(crate) struct IntentIndexEntry {
     /// Node the intented write created.
-    node_id: String,
+    pub(crate) node_id: String,
     /// Gate-space effect seq of the admitting EFFECT (the `eff-` receipt).
-    effect_seq: u64,
+    pub(crate) effect_seq: u64,
     /// `strata_store::canonical::intent_digest` of the recorded response.
+    pub(crate) response_digest: String,
+}
+
+/// One appended intent-log record. The key is `(scope, intent_id)`.
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
+struct IntentLogRecord {
+    scope: String,
+    intent_id: String,
+    node_id: String,
+    effect_seq: u64,
     response_digest: String,
+}
+
+/// Intent table plus the durable prefix of the append log.
+struct IntentDurable {
+    index: BTreeMap<(String, String), IntentIndexEntry>,
+    /// Bytes of `intent-index.log` that form complete, checksummed frames.
+    log_len: u64,
 }
 
 /// Read the intent-index side file. Missing file = empty table (a store from
@@ -202,7 +237,8 @@ fn load_intent_index(
 }
 
 /// Write the intent-index side file atomically (tmp + rename, 0600 on unix).
-fn store_intent_index(
+#[cfg(test)]
+pub(crate) fn store_intent_index(
     dir: &Path,
     entries: &BTreeMap<(String, String), IntentIndexEntry>,
 ) -> Result<(), StoreError> {
@@ -222,6 +258,132 @@ fn store_intent_index(
     std::fs::rename(&tmp, dir.join(INTENT_INDEX_FILE))?;
     sync_dir(dir)?;
     Ok(())
+}
+
+/// Read the legacy snapshot, then replay the append log. First write wins:
+/// a log record whose key is already in the snapshot is kept as the snapshot
+/// wrote it. A torn tail is dropped. A checksum failure anywhere a complete
+/// frame was claimed is an error.
+fn load_intent_state(dir: &Path) -> Result<IntentDurable, StoreError> {
+    let mut index = load_intent_index(dir)?;
+    let path = dir.join(INTENT_INDEX_LOG);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(IntentDurable { index, log_len: 0 });
+        }
+        Err(err) => return Err(StoreError::Io(err)),
+    };
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let rest = bytes.len() - offset;
+        if rest < 4 {
+            break;
+        }
+        let len =
+            u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("4 bytes")) as usize;
+        let Some(total) = 4usize
+            .checked_add(len)
+            .and_then(|n| n.checked_add(INTENT_LOG_CHECKSUM_LEN))
+        else {
+            break;
+        };
+        if len == 0 || len > MAX_INTENT_FRAME {
+            if total <= rest {
+                return Err(StoreError::Verify(format!(
+                    "intent log frame at byte {offset} claims {len} payload bytes"
+                )));
+            }
+            break;
+        }
+        if total > rest {
+            break;
+        }
+        let payload = &bytes[offset + 4..offset + 4 + len];
+        let checksum = &bytes[offset + 4 + len..offset + total];
+        let actual = blake3::hash(payload);
+        if &actual.as_bytes()[..INTENT_LOG_CHECKSUM_LEN] != checksum {
+            return Err(StoreError::Verify(format!(
+                "intent log checksum failed at byte {offset}"
+            )));
+        }
+        let record: IntentLogRecord = borsh::from_slice(payload).map_err(|e| {
+            StoreError::Verify(format!(
+                "intent log frame at byte {offset} is unreadable: {e}"
+            ))
+        })?;
+        index
+            .entry((record.scope, record.intent_id))
+            .or_insert(IntentIndexEntry {
+                node_id: record.node_id,
+                effect_seq: record.effect_seq,
+                response_digest: record.response_digest,
+            });
+        offset += total;
+    }
+    // A torn tail is not durable. Drop it so the next append (and a backup)
+    // continues from the last good frame. Failure to truncate leaves the
+    // tail in place; the next `record_intent` truncates before it appends.
+    if (bytes.len() as u64) > offset as u64 {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true);
+        if let Ok(file) = options.open(&path) {
+            let _ = file.set_len(offset as u64);
+            let _ = file.sync_all();
+        }
+    }
+    Ok(IntentDurable {
+        index,
+        log_len: offset as u64,
+    })
+}
+
+/// Append one intent frame and return the new durable length. The map is
+/// not touched here: the caller inserts only after this returns `Ok`.
+fn append_intent_record(
+    dir: &Path,
+    valid_len: u64,
+    record: &IntentLogRecord,
+) -> Result<u64, StoreError> {
+    let payload = borsh::to_vec(record).map_err(|e| StoreError::Encode(e.to_string()))?;
+    if payload.is_empty() || payload.len() > MAX_INTENT_FRAME {
+        return Err(StoreError::InvalidInput(
+            "intent log record does not fit one frame".into(),
+        ));
+    }
+    let digest = blake3::hash(&payload);
+    let mut frame = Vec::with_capacity(4 + payload.len() + INTENT_LOG_CHECKSUM_LEN);
+    frame.extend_from_slice(&(u32::try_from(payload.len()).expect("frame cap")).to_le_bytes());
+    frame.extend_from_slice(&payload);
+    frame.extend_from_slice(&digest.as_bytes()[..INTENT_LOG_CHECKSUM_LEN]);
+
+    let path = dir.join(INTENT_INDEX_LOG);
+    let created = !path.exists();
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path)?;
+    use std::io::{Seek, SeekFrom, Write};
+    let on_disk = file.metadata()?.len();
+    if on_disk < valid_len {
+        return Err(StoreError::Verify(
+            "intent log is shorter than its last durable prefix".into(),
+        ));
+    }
+    if on_disk > valid_len {
+        file.set_len(valid_len)?;
+    }
+    file.seek(SeekFrom::Start(valid_len))?;
+    file.write_all(&frame)?;
+    file.sync_all()?;
+    if created {
+        sync_dir(dir)?;
+    }
+    Ok(valid_len + frame.len() as u64)
 }
 
 /// Rating folded for a brand-new node's ingest review ("Good").
@@ -452,6 +614,29 @@ fn is_duplicate_echo(record: &NodeRecord) -> bool {
         .source
         .as_ref()
         .is_some_and(|key| key.system == DUPLICATE_SOURCE)
+}
+
+/// Live echo nodes kept per original. Past this, a new reinforce reuses the
+/// earliest live echo and writes nothing. Exact content+tag matches reuse
+/// even when the original is still under the cap.
+pub const MAX_LIVE_ECHOES_PER_ORIGINAL: usize = 16;
+
+/// One duplicate echo, keyed under `(scope, original id)`.
+#[derive(Clone, Debug)]
+struct EchoSlot {
+    id: String,
+    content: String,
+    tags: Vec<String>,
+}
+
+/// Original id from an echo's first line: `duplicate of {id}`.
+fn echo_original(content: &str) -> Option<&str> {
+    let line = content.lines().next()?;
+    let id = line.strip_prefix("duplicate of ")?;
+    if id.is_empty() || id.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(id)
 }
 
 fn borsh_vec<T: BorshSerialize>(value: &T) -> Result<Vec<u8>, StoreError> {
@@ -816,8 +1001,15 @@ pub struct StrataStore {
     /// deliberately not indexed (they did not pass this gate).
     node_canonical_index: BTreeMap<(String, [u8; 32]), String>,
     /// (scope, intent id) -> recorded first write, for idempotent replay.
-    /// Backs the [`INTENT_INDEX_FILE`] side file; see [`record_intent`].
+    /// Loaded from the legacy snapshot plus [`INTENT_INDEX_LOG`]; see
+    /// [`record_intent`].
     intent_index: BTreeMap<(String, String), IntentIndexEntry>,
+    /// Durable prefix of [`INTENT_INDEX_LOG`], in bytes. The next record
+    /// appends here. A torn tail is not included.
+    intent_log_len: u64,
+    /// `(scope, original id)` -> echo nodes in log order. Rebuilt by replay.
+    /// Reads filter to live nodes, so a supersede does not edit the vec.
+    echo_index: BTreeMap<(String, String), Vec<EchoSlot>>,
 }
 
 impl StrataStore {
@@ -854,9 +1046,9 @@ impl StrataStore {
         std::fs::create_dir_all(&dir)?;
         let log = StrataLog::open(&log_dir)?;
         let gate_log = StrataEventLog::new(log.clone())?;
-        // Intent-index side file: absent on stores from before this feature,
-        // which upgrade in place with an empty table.
-        let intent_index = load_intent_index(&dir)?;
+        // Intent index: legacy snapshot, then the append log. Absent on
+        // stores from before this feature, which upgrade in place.
+        let intents = load_intent_state(&dir)?;
         let mut store = Self {
             dir,
             log_dir,
@@ -881,7 +1073,9 @@ impl StrataStore {
             anchors: AnchorIndex::default(),
             effect_index: EffectIndex::default(),
             node_canonical_index: BTreeMap::new(),
-            intent_index,
+            intent_index: intents.index,
+            intent_log_len: intents.log_len,
+            echo_index: BTreeMap::new(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -1037,6 +1231,15 @@ impl StrataStore {
                         if !held_by_live_node {
                             self.node_canonical_index.insert(key, record.id.clone());
                         }
+                    } else if let Some(original) = echo_original(&record.content) {
+                        self.echo_index
+                            .entry((record.scope.clone(), original.to_string()))
+                            .or_default()
+                            .push(EchoSlot {
+                                id: record.id.clone(),
+                                content: record.content.clone(),
+                                tags: record.tags.clone(),
+                            });
                     }
                     // Every ingest folds one ReviewEvent ("Good") into the
                     // kernel state under the record's kernel version.
@@ -1520,8 +1723,9 @@ impl StrataStore {
     /// entry is kept untouched and the call succeeds without writing, so a
     /// replayed submission always resolves to the FIRST write.
     ///
-    /// The entry persists immediately (tmp + rename); an all-or-nothing
-    /// failure leaves both the map and the file unchanged.
+    /// The entry is appended to [`INTENT_INDEX_LOG`] and fsynced. A failed
+    /// append leaves both the map and the durable prefix unchanged. The
+    /// legacy snapshot is not rewritten.
     pub fn record_intent(
         &mut self,
         scope: &str,
@@ -1546,18 +1750,61 @@ impl StrataStore {
             return Ok(());
         }
         // Persist first, then adopt: a failed write leaves no map mutation.
-        let mut updated = self.intent_index.clone();
-        updated.insert(
+        let record = IntentLogRecord {
+            scope: scope.to_string(),
+            intent_id: intent_id.to_string(),
+            node_id: node_id.to_string(),
+            effect_seq,
+            response_digest: response_digest.to_string(),
+        };
+        let log_len = append_intent_record(&self.dir, self.intent_log_len, &record)?;
+        self.intent_log_len = log_len;
+        self.intent_index.insert(
             key,
             IntentIndexEntry {
-                node_id: node_id.to_string(),
-                effect_seq,
-                response_digest: response_digest.to_string(),
+                node_id: record.node_id,
+                effect_seq: record.effect_seq,
+                response_digest: record.response_digest,
             },
         );
-        store_intent_index(&self.dir, &updated)?;
-        self.intent_index = updated;
         Ok(())
+    }
+
+    /// A live echo to reuse for `original`, or `None` when a new echo should
+    /// be written.
+    ///
+    /// An echo whose content and tags both match (tags compared sorted and
+    /// deduplicated) wins, including when this original is already at
+    /// [`MAX_LIVE_ECHOES_PER_ORIGINAL`]. Otherwise, at the cap, the earliest
+    /// live echo id is returned and the caller writes nothing.
+    pub fn reuse_duplicate_echo(
+        &self,
+        scope: &str,
+        original: &str,
+        content: &str,
+        tags: &[String],
+    ) -> Option<String> {
+        let slots = self
+            .echo_index
+            .get(&(scope.to_string(), original.to_string()))?;
+        let mut tags = tags.to_vec();
+        tags.sort_unstable();
+        tags.dedup();
+        let mut live: Vec<&EchoSlot> = slots
+            .iter()
+            .filter(|slot| self.nodes.get(&slot.id).is_some_and(NodeRecord::is_live))
+            .collect();
+        live.sort_by(|left, right| left.id.cmp(&right.id));
+        if let Some(exact) = live
+            .iter()
+            .find(|slot| slot.content == content && slot.tags == tags)
+        {
+            return Some(exact.id.clone());
+        }
+        if live.len() >= MAX_LIVE_ECHOES_PER_ORIGINAL {
+            return live.first().map(|slot| slot.id.clone());
+        }
+        None
     }
 
     /// Insert or replace intentions through one admitted write.
@@ -2623,6 +2870,10 @@ impl StrataStore {
         if intent_index_path.exists() {
             copy_private_file(&intent_index_path, &staging.join(INTENT_INDEX_FILE))?;
         }
+        let intent_log_path = self.dir.join(INTENT_INDEX_LOG);
+        if intent_log_path.exists() {
+            copy_private_file(&intent_log_path, &staging.join(INTENT_INDEX_LOG))?;
+        }
         sync_dir(&staging_log)?;
         sync_dir(staging)
     }
@@ -2706,6 +2957,8 @@ impl StrataStore {
             // Replay cannot re-derive caller intent ids; the scratch copy
             // only needs the log-derived maps Refold reports.
             intent_index: BTreeMap::new(),
+            intent_log_len: 0,
+            echo_index: BTreeMap::new(),
         };
         scratch.replay()?;
         let mut retrievability = BTreeMap::new();

@@ -99,6 +99,23 @@ pub(crate) fn register_open(memory: &Arc<StrataMemory>) {
     open.push((memory.log_dir.clone(), Arc::downgrade(memory)));
 }
 
+/// A live duplicate echo to reuse for `original`, when this process holds
+/// the Strata log. `None` means write a new echo (no log here, or the
+/// original is still under the cap and nothing stored matches).
+pub fn reuse_duplicate_echo(
+    storage: &Storage,
+    scope: &str,
+    original: &str,
+    content: &str,
+    tags: &[String],
+) -> Option<String> {
+    live_memory(storage).and_then(|memory| {
+        memory
+            .lock()
+            .reuse_duplicate_echo(scope, original, content, tags)
+    })
+}
+
 fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
     if !is_strata_backend(storage) {
         return None;
