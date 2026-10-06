@@ -12,7 +12,7 @@ VS Code supports MCP servers through GitHub Copilot's agent mode. Vestige plugs 
 
 - **VS Code 1.99+** (or latest stable)
 - **GitHub Copilot** extension installed and active
-- **vestige-mcp** binary installed ([Installation guide](../../README.md#install))
+- **vestige-mcp** binary installed ([Installation guide](../REFERENCE.md#install))
 
 ---
 

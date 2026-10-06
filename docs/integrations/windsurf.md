@@ -32,7 +32,7 @@ open -e ~/.codeium/windsurf/mcp_config.json
 
 ### 2. Add Vestige
 
-Install Vestige first: [README → Install](../../README.md#install). Run `which vestige-mcp` and paste what it prints; the README install puts the binary in `~/.local/bin`.
+Install Vestige first: [Install](../REFERENCE.md#install). Run `which vestige-mcp` and paste what it prints; the install puts the binary in `~/.local/bin`.
 
 ```json
 {
