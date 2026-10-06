@@ -527,7 +527,15 @@ impl Prover<'_> {
     }
 
     /// Start a bisect in the worktree. The error is git's own.
+    ///
+    /// `git bisect start` checks out the first midpoint, and git refuses
+    /// that checkout when a tracked file differs from HEAD. The end runs
+    /// may have left exactly that behind (a test that rewrites a lockfile
+    /// or a generated source), so the worktree is put back first: it is
+    /// this run's own, and nothing in it is anyone's uncommitted work.
     fn bisect_start(&self, good: &str, bad: &str) -> Result<(), String> {
+        git_ok(&self.test.worktree, &["reset", "-q", "--hard"]);
+        git_ok(&self.test.worktree, &["clean", "-fdq"]);
         let output = git_command(&self.test.worktree)
             .args(["bisect", "start", bad, good])
             .output()
