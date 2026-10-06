@@ -438,13 +438,12 @@ enum Commands {
     /// Successor to `backfill`. It refuses with a needs_report instead of
     /// guessing when no start point is given.
     ///
-    /// On a Strata log (4.0) the walk starts at a recorded memory: a bounded
-    /// backward walk over recorded causal edges (closed_by, derived_from,
-    /// evidence_of, touched). It writes nothing. --logged-write names that
-    /// memory directly; --node-id attaches it to a --failing-test,
-    /// --stack-frame, --ci-run or version range. Those start points resolve
-    /// through shared names, which are not recorded edges, so a Strata log
-    /// refuses them unless --node-id says which recorded memory they are.
+    /// On a Strata log (4.0) the walk follows recorded causal edges
+    /// (closed_by, corrects, derived_from, evidence_of, touched) and writes
+    /// nothing. --stack-frame and --failing-test resolve to file anchors
+    /// ingest_repo recorded, by exact path and blame. --ci-run and a version
+    /// range still need --node-id; they are not name searches. --logged-write
+    /// walks one memory directly.
     ///
     /// A legacy SQLite store walks every start point through shared exact
     /// anchors to change records and, unless --no-promote, records
@@ -4292,6 +4291,8 @@ fn run_backfill(
 /// Run a causal walk from the CLI: explicit start points -> exact mechanism
 /// edges -> ranked suspect change records. Mirrors the MCP `causal_walk`
 /// tool (same core engine); `--json` prints the raw result for tooling.
+/// `--git-repo` with `--worked-in` and `--broke-in` limits commit candidates
+/// to `git rev-list --first-parent worked_in..broke_in`.
 #[allow(clippy::too_many_arguments)]
 fn run_causal_walk(
     failing_test: Option<String>,
@@ -4314,17 +4315,22 @@ fn run_causal_walk(
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty());
     if is_strata(&storage) {
-        // These start points resolve through shared names (a test's file, a
-        // frame's path, a run's anchors, a tag range's commits), which are not
-        // recorded edges. On their own they are refused; with --node-id naming
-        // the recorded memory they describe, the walk starts at that memory.
+        // ci_run is not a recorded edge. stack_frame and failing_test resolve
+        // by exact path once ingest_repo has recorded the file. A complete
+        // version range is a local `git rev-list --first-parent`, not a name
+        // search, so it is not refused for lack of --node-id.
+        let version_flags = [git_repo.is_some(), worked_in.is_some(), broke_in.is_some()];
+        if version_flags.iter().any(|given| *given) && !version_flags.iter().all(|given| *given) {
+            anyhow::bail!(
+                "causal-walk: a version range needs --git-repo, --worked-in and --broke-in together"
+            );
+        }
+        let complete_range = version_flags.iter().all(|given| *given);
         let name_based: Vec<&str> = [
-            ("--failing-test", failing_test.is_some()),
-            ("--stack-frame", stack_frame.is_some()),
             ("--ci-run", ci_run.is_some()),
-            ("--git-repo", git_repo.is_some()),
-            ("--worked-in", worked_in.is_some()),
-            ("--broke-in", broke_in.is_some()),
+            ("--git-repo", git_repo.is_some() && !complete_range),
+            ("--worked-in", worked_in.is_some() && !complete_range),
+            ("--broke-in", broke_in.is_some() && !complete_range),
         ]
         .into_iter()
         .filter_map(|(flag, given)| given.then_some(flag))
@@ -4333,12 +4339,6 @@ fn run_causal_walk(
             anyhow::bail!(
                 "unavailable_in_4_0: causal-walk {} resolves through shared names, which are not recorded edges, so a Strata log cannot walk it by itself. Add --node-id <memory-id> (the memory that records this symptom) to walk from that memory, or pass --logged-write <memory-id> to walk a memory directly.",
                 name_based.join(", ")
-            );
-        }
-        let version_flags = [git_repo.is_some(), worked_in.is_some(), broke_in.is_some()];
-        if version_flags.iter().any(|given| *given) && !version_flags.iter().all(|given| *given) {
-            anyhow::bail!(
-                "causal-walk: a version range needs --git-repo, --worked-in and --broke-in together"
             );
         }
         let mut start_points: Vec<serde_json::Value> = Vec::new();
@@ -4529,7 +4529,7 @@ fn run_causal_walk_strata(
 
     println!("{}", "=== Causal Walk ===".magenta().bold());
     println!(
-        "  {} backward over recorded causal edges only (closed_by, derived_from, evidence_of, touched); hypotheses, not proven causes",
+        "  {} backward over recorded causal edges only (closed_by, corrects, derived_from, evidence_of, touched); hypotheses, not proven causes",
         "note:".dimmed()
     );
     println!();
