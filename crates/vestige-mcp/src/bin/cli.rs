@@ -438,13 +438,12 @@ enum Commands {
     /// Successor to `backfill`. It refuses with a needs_report instead of
     /// guessing when no start point is given.
     ///
-    /// On a Strata log (4.0) the walk starts at a recorded memory: a bounded
-    /// backward walk over recorded causal edges (closed_by, derived_from,
-    /// evidence_of, touched). It writes nothing. --logged-write names that
-    /// memory directly; --node-id attaches it to a --failing-test,
-    /// --stack-frame, --ci-run or version range. Those start points resolve
-    /// through shared names, which are not recorded edges, so a Strata log
-    /// refuses them unless --node-id says which recorded memory they are.
+    /// On a Strata log (4.0) the walk follows recorded causal edges
+    /// (closed_by, corrects, derived_from, evidence_of, touched) and writes
+    /// nothing. --stack-frame and --failing-test resolve to file anchors
+    /// ingest_repo recorded, by exact path and blame. --ci-run and a version
+    /// range still need --node-id; they are not name searches. --logged-write
+    /// walks one memory directly.
     ///
     /// A legacy SQLite store walks every start point through shared exact
     /// anchors to change records and, unless --no-promote, records
@@ -4314,13 +4313,10 @@ fn run_causal_walk(
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty());
     if is_strata(&storage) {
-        // These start points resolve through shared names (a test's file, a
-        // frame's path, a run's anchors, a tag range's commits), which are not
-        // recorded edges. On their own they are refused; with --node-id naming
-        // the recorded memory they describe, the walk starts at that memory.
+        // ci_run and version ranges are not recorded edges. stack_frame and
+        // failing_test resolve by exact path once ingest_repo has recorded
+        // the file, so they are not refused here.
         let name_based: Vec<&str> = [
-            ("--failing-test", failing_test.is_some()),
-            ("--stack-frame", stack_frame.is_some()),
             ("--ci-run", ci_run.is_some()),
             ("--git-repo", git_repo.is_some()),
             ("--worked-in", worked_in.is_some()),
@@ -4529,7 +4525,7 @@ fn run_causal_walk_strata(
 
     println!("{}", "=== Causal Walk ===".magenta().bold());
     println!(
-        "  {} backward over recorded causal edges only (closed_by, derived_from, evidence_of, touched); hypotheses, not proven causes",
+        "  {} backward over recorded causal edges only (closed_by, corrects, derived_from, evidence_of, touched); hypotheses, not proven causes",
         "note:".dimmed()
     );
     println!();

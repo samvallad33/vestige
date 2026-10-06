@@ -8,13 +8,18 @@
 //! `evidence_of` trail edges through the existing `save_connection` surface; a
 //! recorded walk has no inferred trail, so it reports promote as a no-op.
 //!
-//! On a Strata log the walk is a bounded backward BFS from each start node
-//! over recorded causal edges only. A start point of any kind names its start
-//! node with `node_id`. Shared names are not edges.
+//! On a Strata log the walk is a bounded backward BFS over recorded causal
+//! edges only. `stack_frame` (`path:line`) and `failing_test` (a test file
+//! path) resolve to `file:` anchors `ingest_repo` recorded, by exact path
+//! identity, then blame the line at the failure revision. `node_id` still
+//! names the failure memory. `ci_run` and `version_range` do not resolve by
+//! name. Shared names are not edges.
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use vestige_core::Storage;
@@ -26,7 +31,7 @@ use vestige_core::advanced::causal_walk::{
 fn symptom_node_id() -> Value {
     json!({
         "type": "string",
-        "description": "Optional. The id of the memory that records this symptom (what a symptom write returned). A Strata log is walked from recorded nodes, so a start point without node_id is reported unresolved in start_points instead of walked."
+        "description": "Optional. The id of the memory that records this symptom. On a Strata log, stack_frame and failing_test also resolve to recorded file anchors by exact path; node_id is the failure memory whose derived_from commit is the revision blame uses. ci_run and version_range still need node_id."
     })
 }
 
@@ -42,14 +47,14 @@ pub fn schema() -> Value {
             "start_points": {
                 "type": "array",
                 "minItems": 1,
-                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). Every kind accepts node_id, the recorded symptom to walk from; on a Strata log a start point without one is reported unresolved. version_range restricts commit suspects and pairs best with a failure start point.",
+                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). stack_frame and failing_test resolve by exact path to file anchors ingest_repo recorded. Other kinds walk the node_id memory. version_range is not a git-name search.",
                 "items": {
                     "oneOf": [
                         {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "failing_test"},
-                                "name": {"type": "string", "description": "Failing test name; walked to its file's co-touch commits."},
+                                "name": {"type": "string", "description": "Test file path (repo-relative). Resolved to a recorded file anchor by exact path identity. A bare test name is not matched to a file."},
                                 "node_id": symptom_node_id()
                             },
                             "required": ["kind", "name"]
@@ -58,7 +63,7 @@ pub fn schema() -> Value {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "stack_frame"},
-                                "frame": {"type": "string", "description": "\"file:line\" or \"file\"; the last pre-failure toucher is the prime suspect (SZZ-lite)."},
+                                "frame": {"type": "string", "description": "\"file:line\" or \"file:line:col\". Resolved to a recorded file anchor by exact path identity; the line is blamed at the failure revision."},
                                 "node_id": symptom_node_id()
                             },
                             "required": ["kind", "frame"]
@@ -138,8 +143,17 @@ struct Args {
     logged_write: Option<String>,
 }
 
-/// Recorded causal vocabulary. Incoming edge: source caused target.
-const CAUSAL_LINKS: &[&str] = &["closed_by", "derived_from", "evidence_of", "touched"];
+/// Recorded causal vocabulary.
+///
+/// `corrects` is included so a git revert (source = revert, target = reverted)
+/// is an upstream edge. The same kind also stores a lesson as source = earlier.
+const CAUSAL_LINKS: &[&str] = &[
+    "closed_by",
+    "corrects",
+    "derived_from",
+    "evidence_of",
+    "touched",
+];
 const MAX_DEPTH: u32 = 8;
 
 struct Reached {
@@ -273,32 +287,57 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
 
     let mut rows = start_rows(&args);
     let starts = classify_starts(storage, scope, &mut rows)?;
-    if starts.is_empty() {
+    let git = resolve_git_frames(storage, scope, &starts, &mut rows)?;
+    let walked_starts = if starts.is_empty() {
+        git.anchors.clone()
+    } else {
+        starts.clone()
+    };
+    if starts.is_empty() && git.anchors.is_empty() {
         let needs_report = refusal(scope, &rows);
         return Ok(walk_payload(
             storage,
             scope,
             WalkOut {
                 promote_requested: args.promote.unwrap_or(false),
-                starts,
+                starts: walked_starts,
                 rows,
                 nodes: Vec::new(),
                 causes: Vec::new(),
                 truncated: false,
                 node_cap,
                 needs_report: Some(needs_report),
+                structure: BTreeMap::new(),
             },
         ));
     }
 
-    let mut walks = Vec::with_capacity(starts.len());
+    let mut walks = Vec::with_capacity(starts.len() + git.anchors.len());
     let mut truncated = false;
-    for start in &starts {
+    for start in starts.iter().chain(git.anchors.iter()) {
         let (reached, cut) = walk_from(storage, scope, start, node_cap)?;
         truncated |= cut;
         walks.push((start.clone(), reached));
     }
     let (mut nodes, mut causes) = merge_walks(walks);
+    let structure = if git.active {
+        let admissible: HashSet<String> = causes
+            .iter()
+            .filter(|cause| git_admissible(storage, &cause.id, &git))
+            .map(|cause| cause.id.clone())
+            .collect();
+        causes.retain(|cause| admissible.contains(&cause.id));
+        nodes.retain(|node| node.depth == 0 || admissible.contains(&node.id));
+        let structure = git_structure(storage, &causes, &git);
+        causes.sort_by(|a, b| {
+            git_rank(storage, a, &git)
+                .cmp(&git_rank(storage, b, &git))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        structure
+    } else {
+        BTreeMap::new()
+    };
     if nodes.len() > node_cap {
         nodes.truncate(node_cap);
         truncated = true;
@@ -311,13 +350,14 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
         scope,
         WalkOut {
             promote_requested: args.promote.unwrap_or(false),
-            starts,
+            starts: walked_starts,
             rows,
             nodes,
             causes,
             truncated,
             node_cap,
             needs_report: None,
+            structure,
         },
     ))
 }
@@ -445,6 +485,14 @@ struct StartRow {
     node_id: Option<String>,
     status: &'static str,
     reason: Option<String>,
+    /// Repo-relative path a `stack_frame` or `failing_test` named.
+    locator: Option<PathLoc>,
+}
+
+#[derive(Clone)]
+struct PathLoc {
+    path: String,
+    line: Option<u32>,
 }
 
 impl StartRow {
@@ -472,6 +520,8 @@ struct WalkOut {
     truncated: bool,
     node_cap: usize,
     needs_report: Option<Value>,
+    /// Structural rank facts for git-resolved causes, keyed by node id.
+    structure: BTreeMap<String, Value>,
 }
 
 /// Every start the caller gave, in order: top-level handles first (`node_id`,
@@ -488,6 +538,7 @@ fn start_rows(args: &Args) -> Vec<StartRow> {
                 node_id: Some(id),
                 status: "pending",
                 reason: None,
+                locator: None,
             });
         }
     }
@@ -499,6 +550,7 @@ fn start_rows(args: &Args) -> Vec<StartRow> {
             node_id: point.record_id().map(str::to_string),
             status: "pending",
             reason: None,
+            locator: locator_of(point),
         });
     }
     rows
@@ -515,6 +567,11 @@ fn classify_starts(
     let mut walkable = Vec::new();
     for row in rows.iter_mut() {
         let Some(id) = row.node_id.clone() else {
+            if row.locator.is_some() {
+                // Exact path resolution runs after this pass.
+                row.status = "pending";
+                continue;
+            }
             row.status = "unresolved";
             row.reason = Some(format!(
                 "this {} start point carries no node_id; the walk begins at a recorded node, so add node_id (the id of the memory that records this symptom)",
@@ -539,15 +596,27 @@ fn classify_starts(
 /// The `needs_report` for a walk with nothing to start from. It names the
 /// single thing missing and lists every start point with its reason.
 fn refusal(scope: &str, rows: &[StartRow]) -> Value {
+    let file_miss = rows.iter().any(|row| {
+        row.reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("no recorded file anchor"))
+    });
     let (missing, detail) = if rows.is_empty() {
         (
             "node_id",
             "no start point given; causal_walk does not guess. Pass start_points with a node_id on at least one start point (any kind), or a logged_write start point".to_string(),
         )
+    } else if file_miss && rows.iter().all(|row| row.node_id.is_none()) {
+        (
+            "file",
+            rows.iter()
+                .find_map(|row| row.reason.clone())
+                .unwrap_or_else(|| "no recorded file anchor matches the path".to_string()),
+        )
     } else if rows.iter().all(|row| row.node_id.is_none()) {
         (
             "node_id",
-            "no start point carries a node_id. The walk begins at a recorded node, so add node_id (the id of the memory that records the symptom) to any start point, for example {\"kind\":\"stack_frame\",\"frame\":\"src/a.rs:10\",\"node_id\":\"mem-...\"}".to_string(),
+            "no start point carries a node_id. The walk begins at a recorded node, so add node_id (the id of the memory that records the symptom) to any start point, for example {\"kind\":\"stack_frame\",\"frame\":\"src/a.rs:10\",\"node_id\":\"mem-...\"}. A stack_frame or failing_test that names a repo-relative path resolves without node_id once ingest_repo has recorded that file.".to_string(),
         )
     } else {
         (
@@ -623,6 +692,10 @@ pub(crate) fn upstream_end<'a>(
     }
     match edge.link_type.as_str() {
         "derived_from" if edge.source_id == node_id => Some(edge.target_id.as_str()),
+        // Git revert: source is the revert, target is the older commit.
+        // Lesson: source is the earlier record, target is the failure.
+        "corrects" if edge.source_id == node_id => Some(edge.target_id.as_str()),
+        "corrects" if edge.target_id == node_id => Some(edge.source_id.as_str()),
         "closed_by" | "evidence_of" | "touched" if edge.target_id == node_id => {
             Some(edge.source_id.as_str())
         }
@@ -652,7 +725,7 @@ fn upstream_causal(
 
 fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
     let node_json = |node: &Reached| {
-        json!({
+        let mut row = json!({
             "id": node.id,
             "depth": node.depth,
             "content": content_of(storage, &node.id),
@@ -662,7 +735,11 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
                 "link_type": hop.link_type,
             })).collect::<Vec<_>>(),
             "from": node.from,
-        })
+        });
+        if let Some(structure) = walk.structure.get(&node.id) {
+            row["structure"] = structure.clone();
+        }
+        row
     };
     let empty = (walk.needs_report.is_none() && walk.causes.is_empty())
         .then(|| why_empty(storage, scope, &walk.starts));
@@ -686,7 +763,7 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "nodes": walk.nodes.iter().map(&node_json).collect::<Vec<_>>(),
         "causes": walk.causes.iter().map(&node_json).collect::<Vec<_>>(),
         "needs_report": walk.needs_report,
-        "note": "Backward BFS over recorded causal edges only, from every start node: from a memory to what it is derived_from, and to the records that are evidence_of it, that it closed, or that touched it. A node_id on any start point names the recorded symptom the walk begins at; start_points reports what happened to each one.",
+        "note": "Backward BFS over recorded causal edges only. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A stack_frame or failing_test names a file anchor by exact path; blame of the line uses the failure memory's derived_from commit. Rank among those commits is structural (reverted after the failure, blame of the line, hunk, hop, edge kind), never text.",
     })
 }
 
@@ -720,7 +797,7 @@ fn why_empty(storage: &Arc<Storage>, scope: &str, starts: &[String]) -> (String,
         }
     }
     let mut why = format!(
-        "no recorded causal edge (closed_by, derived_from, evidence_of, touched) leads upstream from the start node{} in scope '{scope}'",
+        "no recorded causal edge (closed_by, corrects, derived_from, evidence_of, touched) leads upstream from the start node{} in scope '{scope}'",
         if starts.len() == 1 { "" } else { "s" }
     );
     if other_scope > 0 {
@@ -752,6 +829,477 @@ fn why_empty(storage: &Arc<Storage>, scope: &str, starts: &[String]) -> (String,
             "nonCausal": non_causal,
         }),
     )
+}
+
+struct GitQuery {
+    anchors: Vec<String>,
+    files: Vec<String>,
+    line: Option<u32>,
+    failure_commit_id: Option<String>,
+    failure_time: Option<DateTime<Utc>>,
+    blame_shas: HashSet<String>,
+    active: bool,
+}
+
+struct Revision {
+    id: String,
+    sha: String,
+    time: DateTime<Utc>,
+    root: Option<PathBuf>,
+}
+
+/// Resolve `stack_frame` / `failing_test` paths to recorded `file:` anchors and,
+/// when a walked memory is `derived_from` a commit, the failure revision.
+fn resolve_git_frames(
+    storage: &Arc<Storage>,
+    scope: &str,
+    starts: &[String],
+    rows: &mut [StartRow],
+) -> Result<GitQuery, String> {
+    let recorded = file_anchors_in_scope(storage, scope)?;
+    let mut anchors = Vec::new();
+    let mut anchor_seen = HashSet::new();
+    let mut files = Vec::new();
+    let mut file_seen = HashSet::new();
+    let mut line = None;
+    for row in rows.iter_mut() {
+        let Some(loc) = row.locator.clone() else {
+            continue;
+        };
+        let matched = match_paths(&loc.path, &recorded);
+        if matched.is_empty() {
+            if row.status == "pending" {
+                row.status = "unresolved";
+                row.reason = Some(file_miss_reason(&loc));
+            }
+            continue;
+        }
+        if row.status == "pending" {
+            row.status = "walked";
+            row.reason = None;
+        }
+        if line.is_none() {
+            line = loc.line;
+        }
+        for (anchor, path) in matched {
+            if file_seen.insert(path.clone()) {
+                files.push(path);
+            }
+            if anchor_seen.insert(anchor.clone()) {
+                anchors.push(anchor);
+            }
+        }
+    }
+
+    let mut revision: Option<Revision> = None;
+    for id in starts {
+        if let Some(rev) = failure_revision(storage, id)? {
+            let replace = match &revision {
+                None => true,
+                Some(have) => rev.time >= have.time,
+            };
+            if replace {
+                revision = Some(rev);
+            }
+        }
+    }
+    let (failure_commit_id, failure_time, failure_sha, mut root) = match revision {
+        Some(rev) => (Some(rev.id), Some(rev.time), Some(rev.sha), rev.root),
+        None => (None, None, None, None),
+    };
+    if root.is_none() && !files.is_empty() {
+        root = git_root_from_touchers(storage, scope, &files)?;
+    }
+    let mut blame_shas = HashSet::new();
+    if let (Some(line), Some(sha), Some(root)) = (line, failure_sha.as_deref(), root.as_ref()) {
+        for file in &files {
+            if let Ok(Some(blamed)) = crate::tools::repo_ingest::blame_line(root, sha, file, line) {
+                blame_shas.insert(blamed);
+            }
+        }
+    }
+    let active = !files.is_empty() || failure_sha.is_some();
+    Ok(GitQuery {
+        anchors,
+        files,
+        line,
+        failure_commit_id,
+        failure_time,
+        blame_shas,
+        active,
+    })
+}
+
+fn file_miss_reason(loc: &PathLoc) -> String {
+    let shown = match loc.line {
+        Some(line) => format!("{}:{line}", loc.path),
+        None => loc.path.clone(),
+    };
+    format!(
+        "no recorded file anchor matches `{shown}` by exact path (a bare file name does not match). ingest_repo records file:<repo-relative path> from the diff; add node_id to walk a memory instead"
+    )
+}
+
+fn file_anchors_in_scope(
+    storage: &Arc<Storage>,
+    scope: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let edges = storage
+        .get_all_connections()
+        .map_err(|err| err.to_string())?;
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for edge in edges {
+        if edge.link_type != "touched" {
+            continue;
+        }
+        let Some(path) = edge.target_id.strip_prefix("file:") else {
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+        if !in_scope(storage, &edge.source_id, scope)? {
+            continue;
+        }
+        if seen.insert(edge.target_id.clone()) {
+            out.push((edge.target_id.clone(), path.to_string()));
+        }
+    }
+    Ok(out)
+}
+
+fn match_paths(reported: &str, recorded: &[(String, String)]) -> Vec<(String, String)> {
+    let reported = normalize_path(reported);
+    let exact: Vec<(String, String)> = recorded
+        .iter()
+        .filter(|(_, path)| path == &reported)
+        .cloned()
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    recorded
+        .iter()
+        .filter(|(_, path)| paths_identify(&reported, path))
+        .cloned()
+        .collect()
+}
+
+/// Exact path, or a shared `/`-bounded suffix of at least two components.
+///
+/// `.../tokio-1.39.0/src/util/linked_list.rs` matches
+/// `tokio/src/util/linked_list.rs` because both end in `src/util/linked_list.rs`.
+/// `server.go` does not match `pkg/kubelet/server.go`: one component is a
+/// basename, not a directory path.
+fn paths_identify(reported: &str, recorded: &str) -> bool {
+    if reported == recorded {
+        return true;
+    }
+    let reported: Vec<&str> = reported
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let recorded: Vec<&str> = recorded
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let mut common = 0usize;
+    for (left, right) in reported.iter().rev().zip(recorded.iter().rev()) {
+        if left != right {
+            break;
+        }
+        common += 1;
+    }
+    common >= 2
+}
+
+fn normalize_path(path: &str) -> String {
+    path.trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string()
+}
+
+fn split_frame(frame: &str) -> (String, Option<u32>) {
+    let frame = frame.trim();
+    let Some((rest, last)) = frame.rsplit_once(':') else {
+        return (frame.to_string(), None);
+    };
+    if parse_line(last).is_none() || rest.is_empty() {
+        return (frame.to_string(), None);
+    }
+    if let Some((path, mid)) = rest.rsplit_once(':')
+        && parse_line(mid).is_some()
+        && !path.is_empty()
+    {
+        return (path.to_string(), parse_line(mid));
+    }
+    (rest.to_string(), parse_line(last))
+}
+
+fn parse_line(text: &str) -> Option<u32> {
+    if text.is_empty() || !text.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    text.parse::<u32>().ok().filter(|line| *line > 0)
+}
+
+fn locator_of(point: &StartPoint) -> Option<PathLoc> {
+    match point {
+        StartPoint::StackFrame { frame, .. } => {
+            let (path, line) = split_frame(frame);
+            let path = normalize_path(&path);
+            if path.is_empty() {
+                None
+            } else {
+                Some(PathLoc { path, line })
+            }
+        }
+        StartPoint::FailingTest { name, .. } => failing_test_path(name).map(|path| PathLoc {
+            path: normalize_path(&path),
+            line: None,
+        }),
+        _ => None,
+    }
+}
+
+fn failing_test_path(name: &str) -> Option<String> {
+    let file = name
+        .trim()
+        .split("::")
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    if file.contains('/') || file.contains('\\') || file.contains('.') {
+        Some(file.to_string())
+    } else {
+        None
+    }
+}
+
+fn full_sha(sha: &str) -> bool {
+    sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn commit_sha(node: &vestige_core::KnowledgeNode) -> Option<String> {
+    node.tags.iter().find_map(|tag| {
+        let sha = tag.strip_prefix("commit:")?;
+        full_sha(sha).then(|| sha.to_ascii_lowercase())
+    })
+}
+
+fn git_root_of(node: &vestige_core::KnowledgeNode) -> Option<PathBuf> {
+    node.tags.iter().find_map(|tag| {
+        tag.strip_prefix(crate::tools::repo_ingest::GIT_ROOT_PREFIX)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+fn failure_revision(storage: &Arc<Storage>, id: &str) -> Result<Option<Revision>, String> {
+    let edges = storage
+        .get_connections_for_memory(id)
+        .map_err(|err| err.to_string())?;
+    let mut best: Option<Revision> = None;
+    for edge in edges {
+        if edge.link_type != "derived_from" || edge.source_id != id {
+            continue;
+        }
+        let Some(node) = storage
+            .get_node(&edge.target_id)
+            .map_err(|err| err.to_string())?
+        else {
+            continue;
+        };
+        let Some(sha) = commit_sha(&node) else {
+            continue;
+        };
+        let Some(time) = node.valid_from else {
+            continue;
+        };
+        let rev = Revision {
+            id: node.id.clone(),
+            sha,
+            time,
+            root: git_root_of(&node),
+        };
+        let replace = match &best {
+            None => true,
+            Some(have) => rev.time >= have.time,
+        };
+        if replace {
+            best = Some(rev);
+        }
+    }
+    Ok(best)
+}
+
+fn git_root_from_touchers(
+    storage: &Arc<Storage>,
+    scope: &str,
+    files: &[String],
+) -> Result<Option<PathBuf>, String> {
+    let edges = storage
+        .get_all_connections()
+        .map_err(|err| err.to_string())?;
+    for edge in edges {
+        if edge.link_type != "touched" {
+            continue;
+        }
+        let Some(path) = edge.target_id.strip_prefix("file:") else {
+            continue;
+        };
+        if !files.iter().any(|file| file == path) {
+            continue;
+        }
+        if !in_scope(storage, &edge.source_id, scope)? {
+            continue;
+        }
+        if let Some(node) = storage
+            .get_node(&edge.source_id)
+            .map_err(|err| err.to_string())?
+            && let Some(root) = git_root_of(&node)
+        {
+            return Ok(Some(root));
+        }
+    }
+    Ok(None)
+}
+
+fn git_admissible(storage: &Arc<Storage>, id: &str, git: &GitQuery) -> bool {
+    if id.starts_with("file:") || id.starts_with("hunk:") {
+        return false;
+    }
+    if git.failure_commit_id.as_deref() == Some(id) {
+        return false;
+    }
+    if let Some(failure_time) = git.failure_time
+        && let Ok(Some(node)) = storage.get_node(id)
+        && node.valid_from.is_some_and(|valid| valid > failure_time)
+    {
+        return false;
+    }
+    true
+}
+
+fn reverted_after(storage: &Arc<Storage>, id: &str, failure_time: Option<DateTime<Utc>>) -> bool {
+    let Some(failure_time) = failure_time else {
+        return false;
+    };
+    let Ok(edges) = storage.get_connections_for_memory(id) else {
+        return false;
+    };
+    for edge in edges {
+        if edge.link_type != "corrects" || edge.target_id != id {
+            continue;
+        }
+        let Ok(Some(revert)) = storage.get_node(&edge.source_id) else {
+            continue;
+        };
+        if revert.valid_from.is_some_and(|valid| valid > failure_time) {
+            return true;
+        }
+    }
+    false
+}
+
+fn touched_line(storage: &Arc<Storage>, id: &str, files: &[String], line: Option<u32>) -> bool {
+    let Some(line) = line else {
+        return false;
+    };
+    let Ok(edges) = storage.get_connections_for_memory(id) else {
+        return false;
+    };
+    for edge in edges {
+        if edge.link_type != "touched" || edge.source_id != id {
+            continue;
+        }
+        let Some(rest) = edge.target_id.strip_prefix("hunk:") else {
+            continue;
+        };
+        let Some((file, span)) = rest.rsplit_once(':') else {
+            continue;
+        };
+        if !files.iter().any(|candidate| candidate == file) {
+            continue;
+        }
+        let Some((start, len)) = span.split_once('+') else {
+            continue;
+        };
+        let (Ok(start), Ok(len)) = (start.parse::<u32>(), len.parse::<u32>()) else {
+            continue;
+        };
+        if len > 0 && line >= start && line < start.saturating_add(len) {
+            return true;
+        }
+    }
+    false
+}
+
+fn edge_rank(path: &[Hop]) -> u8 {
+    match path.last().map(|hop| hop.link_type.as_str()) {
+        Some("corrects") => 0,
+        Some("touched") => 1,
+        Some("derived_from") => 2,
+        _ => 3,
+    }
+}
+
+fn git_rank(
+    storage: &Arc<Storage>,
+    cause: &Reached,
+    git: &GitQuery,
+) -> (u8, u8, u8, u32, u8, i64, String) {
+    let node = storage.get_node(&cause.id).ok().flatten();
+    let sha = node.as_ref().and_then(commit_sha);
+    let reverted = u8::from(!reverted_after(storage, &cause.id, git.failure_time));
+    let blame = u8::from(!sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)));
+    let hunk = u8::from(!touched_line(storage, &cause.id, &git.files, git.line));
+    let gap = match (
+        git.failure_time,
+        node.as_ref().and_then(|node| node.valid_from),
+    ) {
+        (Some(failure), Some(commit)) if commit <= failure => {
+            (failure - commit).num_milliseconds().max(0)
+        }
+        _ => i64::MAX,
+    };
+    (
+        reverted,
+        blame,
+        hunk,
+        cause.depth,
+        edge_rank(&cause.path),
+        gap,
+        cause.id.clone(),
+    )
+}
+
+fn git_structure(
+    storage: &Arc<Storage>,
+    causes: &[Reached],
+    git: &GitQuery,
+) -> BTreeMap<String, Value> {
+    let mut out = BTreeMap::new();
+    for cause in causes {
+        let node = storage.get_node(&cause.id).ok().flatten();
+        let sha = node.as_ref().and_then(commit_sha);
+        out.insert(
+            cause.id.clone(),
+            json!({
+                "sha": sha,
+                "revertedAfterFailure": reverted_after(storage, &cause.id, git.failure_time),
+                "blameOfLine": sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)),
+                "touchedFailingHunk": touched_line(storage, &cause.id, &git.files, git.line),
+                "hop": cause.depth,
+                "edge": cause.path.last().map(|hop| hop.link_type.as_str()),
+            }),
+        );
+    }
+    out
 }
 
 fn content_of(storage: &Arc<Storage>, id: &str) -> String {
@@ -865,6 +1413,8 @@ mod tests {
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],
+            parents: vec![],
+            reverts: None,
         });
         seed(storage, &content, vec![git_records::COMMIT_TAG], days_ago)
     }
@@ -1245,13 +1795,15 @@ mod strata_walk {
         let cause = put(&storage, "user", "commit touched src/auth.rs");
         link(&storage, &cause, &symptom, "touched");
 
-        // 1. the bare start point is refused, and the refusal says why
+        // 1. a bare frame with no recorded file anchor is refused, and the
+        //    refusal names the path rather than a missing memory id.
         let bare = json!({"kind": "stack_frame", "frame": "src/auth.rs:10"});
         let refused = execute(&storage, Some(json!({"start_points": [bare.clone()]})))
             .await
             .unwrap();
-        assert_eq!(refused["needs_report"]["missing"], json!(["node_id"]));
+        assert_eq!(refused["needs_report"]["missing"], json!(["file"]));
         let detail = refused["needs_report"]["detail"].as_str().unwrap();
+        assert!(detail.contains("file anchor"), "{detail}");
         assert!(detail.contains("node_id"), "{detail}");
         assert_eq!(statuses(&refused), vec!["unresolved"], "{refused}");
         assert_eq!(
@@ -1629,5 +2181,220 @@ mod strata_walk {
         assert_eq!(causes_of(&found), vec![(cause, 1)]);
         assert!(found["emptyBecause"].is_null(), "{found}");
         assert!(found["incomingEdges"].is_null());
+    }
+
+    #[test]
+    fn path_identity_rejects_a_bare_basename() {
+        assert!(super::paths_identify(
+            "src/util/linked_list.rs",
+            "tokio/src/util/linked_list.rs"
+        ));
+        assert!(super::paths_identify(
+            "/checkout/tokio/src/util/linked_list.rs",
+            "tokio/src/util/linked_list.rs"
+        ));
+        assert!(!super::paths_identify(
+            "linked_list.rs",
+            "tokio/src/util/linked_list.rs"
+        ));
+        assert!(!super::paths_identify("server.go", "pkg/kubelet/server.go"));
+        assert!(super::paths_identify("src/a.rs", "src/a.rs"));
+        assert!(super::paths_identify(
+            "/home/alex/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.39.0/src/util/linked_list.rs",
+            "tokio/src/util/linked_list.rs"
+        ));
+        let (path, line) = super::split_frame("tokio/src/util/linked_list.rs:123:9");
+        assert_eq!(path, "tokio/src/util/linked_list.rs");
+        assert_eq!(line, Some(123));
+        assert!(super::failing_test_path("test_login").is_none());
+        assert_eq!(
+            super::failing_test_path("src/a.rs::test_login").as_deref(),
+            Some("src/a.rs")
+        );
+    }
+
+    #[tokio::test]
+    async fn stack_frame_ranks_the_reverted_commit_above_the_blamed_line() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let git = |args: &[&str], date: &str| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args([
+                    "-c",
+                    "user.email=t@example.com",
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q"], "2024-01-01T00:00:00Z");
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/a.rs"),
+            "fn a() {\n    let introduced = 1;\n}\n",
+        )
+        .unwrap();
+        git(&["add", "-A"], "2024-01-01T00:00:00Z");
+        git(
+            &["commit", "-q", "-m", "introduce the line"],
+            "2024-01-01T00:00:00Z",
+        );
+        let introduced = git(&["rev-parse", "HEAD"], "2024-01-01T00:00:00Z");
+
+        std::fs::write(
+            dir.path().join("src/a.rs"),
+            "fn a() {\n    let introduced = 1;\n    let touched = 2;\n}\n",
+        )
+        .unwrap();
+        git(&["add", "-A"], "2024-02-01T00:00:00Z");
+        git(
+            &["commit", "-q", "-m", "touch the file"],
+            "2024-02-01T00:00:00Z",
+        );
+        let cause = git(&["rev-parse", "HEAD"], "2024-02-01T00:00:00Z");
+
+        std::fs::write(dir.path().join("README.md"), "observed\n").unwrap();
+        git(&["add", "-A"], "2024-03-01T00:00:00Z");
+        git(
+            &["commit", "-q", "-m", "failure revision"],
+            "2024-03-01T00:00:00Z",
+        );
+        let failure_rev = git(&["rev-parse", "HEAD"], "2024-03-01T00:00:00Z");
+        git(&["revert", "--no-edit", &cause], "2024-04-01T00:00:00Z");
+
+        let (storage, _store) = open();
+        let ingested = crate::tools::repo_ingest::execute(
+            &storage,
+            crate::tools::repo_ingest::Request {
+                repo_path: dir.path().to_path_buf(),
+                codebase: Some("demo".into()),
+                scope: Some("demo".into()),
+                rev: None,
+                since: None,
+                until: None,
+                limit: Some(20),
+                dry_run: false,
+                budget: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            ingested["edges"]["reverts"].as_u64().unwrap() >= 1,
+            "{ingested}"
+        );
+
+        let commit_id = |sha: &str| {
+            let tag = crate::tools::repo_ingest::commit_tag(sha);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let failure = put(&storage, "demo", "failure: panic at src/a.rs:2");
+        link(&storage, &failure, &commit_id(&failure_rev), "derived_from");
+
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{
+                    "kind": "stack_frame",
+                    "frame": "src/a.rs:2",
+                    "node_id": failure
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        let top = &out["causes"][0];
+        assert_eq!(top["structure"]["sha"], json!(cause), "{out}");
+        assert_eq!(top["structure"]["revertedAfterFailure"], true, "{out}");
+        assert_eq!(
+            top["structure"]["blameOfLine"], false,
+            "line 2 was introduced by an earlier commit: {out}"
+        );
+        let shas: Vec<String> = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|cause| cause["structure"]["sha"].as_str().map(str::to_string))
+            .collect();
+        let cause_at = shas.iter().position(|sha| sha == &cause).unwrap();
+        let introduced_at = shas
+            .iter()
+            .position(|sha| sha == &introduced)
+            .unwrap_or_else(|| panic!("blamed commit missing: {out}"));
+        assert!(cause_at < introduced_at, "{out}");
+
+        let bare = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "stack_frame", "frame": "a.rs:2"}]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bare["needs_report"]["missing"], json!(["file"]), "{bare}");
+
+        let by_test = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{
+                    "kind": "failing_test",
+                    "name": "src/a.rs",
+                    "node_id": failure
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            by_test["causes"][0]["structure"]["sha"],
+            json!(cause),
+            "{by_test}"
+        );
+
+        let frame = format!("{}:2", dir.path().join("src/a.rs").display());
+        let suffixed = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{
+                    "kind": "stack_frame",
+                    "frame": frame,
+                    "node_id": failure
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            suffixed["causes"][0]["structure"]["sha"],
+            json!(cause),
+            "{suffixed}"
+        );
     }
 }

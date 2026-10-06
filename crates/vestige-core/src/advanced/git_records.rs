@@ -58,10 +58,58 @@ pub struct GitCommit {
     /// module dirs; an unresolved target keeps the module path as written —
     /// never a guess.
     pub imports: Vec<(String, String, bool)>,
+    /// Parent SHAs, in `git log %P` order. Empty when the log format did not
+    /// carry parents.
+    pub parents: Vec<String>,
+    /// The 40-hex SHA from a `This reverts commit <sha>.` line git revert
+    /// writes. Anything else in the message is not a revert.
+    pub reverts: Option<String>,
+}
+
+/// `git log --pretty=format:` that carries parents and the body (where the
+/// revert trailer lives) and ends the header before the diff.
+pub const GIT_LOG_PRETTY: &str = "%x1e%H%x1f%aI%x1f%P%x1f%s%x1f%b%x1d";
+
+/// The exact trailer line `git revert` writes. The SHA is 40 hex digits and
+/// the line ends with a period. No other wording counts.
+pub fn revert_target(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let line = line.trim_end_matches('\r').trim();
+        let Some(rest) = line.strip_prefix("This reverts commit ") else {
+            continue;
+        };
+        let Some(sha) = rest.strip_suffix('.') else {
+            continue;
+        };
+        if is_full_sha(sha) {
+            return Some(sha.to_ascii_lowercase());
+        }
+    }
+    None
 }
 
 fn is_full_sha(s: &str) -> bool {
     s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn parent_shas(field: &str) -> Vec<String> {
+    field
+        .split_whitespace()
+        .filter(|sha| is_full_sha(sha))
+        .map(|sha| sha.to_ascii_lowercase())
+        .collect()
+}
+
+/// `(header, diff, new_format)`. New format ends the header at `\x1d` so the
+/// body can contain newlines. The older format is one header line, then the diff.
+fn split_log_chunk(chunk: &str) -> (&str, &str, bool) {
+    if let Some((header, diff)) = chunk.split_once('\u{1d}') {
+        (header, diff, true)
+    } else if let Some((head, diff)) = chunk.split_once('\n') {
+        (head, diff, false)
+    } else {
+        (chunk, "", false)
+    }
 }
 
 const RECORD_SEP: char = '\u{1e}';
@@ -90,7 +138,10 @@ enum ImportKind {
     Include,
 }
 
-/// Parse `git log -p --unified=0 --no-color --pretty=format:%x1e%H%x1f%aI%x1f%s`.
+/// Parse `git log -p` output produced with [`GIT_LOG_PRETTY`].
+///
+/// Also accepts the older three-field header (`sha`, author time, subject)
+/// so fixtures written before parents and the body were recorded still parse.
 /// Files come from `diff --git a/X b/Y` lines (the b/ side wins, so renames
 /// land under the new name); symbols from hunk-header trailing context.
 pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
@@ -99,11 +150,10 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
         if chunk.is_empty() {
             continue;
         }
-        let (head, body) = match chunk.split_once('\n') {
-            Some((h, b)) => (h, b),
-            None => (chunk, ""),
-        };
-        let mut fields = head.split(UNIT_SEP);
+        let (head, diff, new_format) = split_log_chunk(chunk);
+        // Body is the remainder, so a unit separator inside a message cannot
+        // shift the subject onto the next field.
+        let mut fields = head.splitn(5, UNIT_SEP);
         let sha = fields.next().unwrap_or("").trim().to_string();
         // A full 40-hex sha or nothing: subjects are not sanitized for \x1e/\x1f,
         // so a control char in a message can fabricate a phantom record header.
@@ -116,7 +166,16 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             .trim()
             .parse::<DateTime<Utc>>()
             .unwrap_or_default();
-        let subject = fields.next().unwrap_or("").trim().to_string();
+        let (parents, subject, reverts) = if new_format {
+            let parents = parent_shas(fields.next().unwrap_or(""));
+            let subject = fields.next().unwrap_or("").trim().to_string();
+            let message = fields.next().unwrap_or("");
+            (parents, subject, revert_target(message))
+        } else {
+            let subject = fields.next().unwrap_or("").trim().to_string();
+            (Vec::new(), subject, None)
+        };
+        let body = diff;
 
         let mut files: Vec<String> = Vec::new();
         let mut extra_files = 0usize;
@@ -222,6 +281,8 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             hunks,
             extra_hunks,
             imports,
+            parents,
+            reverts,
         });
     }
     out
@@ -993,5 +1054,23 @@ diff --git a/README.md b/README.md
 
         let shas = parse_rev_list("ABC111\n\n def222 ");
         assert!(shas.contains("abc111") && shas.contains("def222"));
+    }
+
+    #[test]
+    fn parents_and_the_git_revert_trailer_parse_and_nothing_else_does() {
+        let parent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let reverted = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let sha = "cccccccccccccccccccccccccccccccccccccccc";
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}{parent}\u{1f}Revert \"time wheel\"\u{1f}Revert \"time wheel\"\n\nThis reverts commit {reverted}.\r\n\nA later sentence mentions commit deadbeef but is not the trailer.\u{1d}\ndiff --git a/src/a.rs b/src/a.rs\n@@ -1 +1 @@ fn load()\n-a\n+b\n"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].parents, vec![parent]);
+        assert_eq!(commits[0].reverts.as_deref(), Some(reverted));
+        assert_eq!(commits[0].files, vec!["src/a.rs"]);
+        assert!(revert_target("this reverts commit {reverted}.").is_none());
+        assert!(revert_target("This reverts commit abc.").is_none());
+        assert!(revert_target("This reverts commit {reverted}").is_none());
     }
 }

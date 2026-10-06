@@ -181,14 +181,17 @@ fn is_earlier(node: &KnowledgeNode, failure: &KnowledgeNode) -> bool {
     }
 }
 
-/// Bounded BFS from `failure` against the reverse of recorded causal edges.
+/// Bounded BFS from `failure` over recorded causal edges.
 ///
-/// Edges are stored cause → effect (`source` caused `target`). Backward means
-/// `target == current`, predecessor `source`. Expansion order is
-/// `(link_type, source_id, target_id)`. The first path wins. Nodes outside
-/// `scope`, dangling targets, and non-causal edges are skipped. Only nodes
-/// earlier than the failure are hits, and the walk does not continue through
-/// a later node.
+/// `A derived_from B` runs from the derivative to its origin. `corrects` is
+/// followed both ways: a lesson is stored earlier→later, and a git revert is
+/// stored revert→reverted (newer→older). Every other causal kind runs from
+/// the earlier record to the later one. Expansion order is
+/// `(link_type, next_id)`. The first path wins. Nodes outside `scope`,
+/// dangling targets, and non-causal edges are skipped. Only nodes earlier
+/// than the failure are hits. A later node is not a hit, and the walk
+/// continues through it so a revert recorded after the failure still reaches
+/// the older commit.
 fn walk_recorded_causes(
     storage: &Storage,
     failure: &KnowledgeNode,
@@ -216,10 +219,8 @@ fn walk_recorded_causes(
             continue;
         }
 
-        // Each causal edge with the memory at its earlier end. An edge is
-        // stored the way its writer names it: `A derived_from B` runs from
-        // the derivative to its origin, so the earlier record is the target;
-        // every other causal kind runs from the earlier record to the later.
+        // Each causal edge leaving this node toward another record. Direction
+        // depends on the kind: see [`walk_recorded_causes`].
         let mut edges: Vec<(String, vestige_core::ConnectionRecord)> = storage
             .get_connections_for_memory(&frame.id)
             .map_err(|e| e.to_string())?
@@ -228,21 +229,25 @@ fn walk_recorded_causes(
                 if edge.source_id == edge.target_id || !is_causal_edge(&edge.link_type) {
                     return None;
                 }
-                let earlier = if edge.link_type == "derived_from" {
-                    (edge.source_id == frame.id).then(|| edge.target_id.clone())?
-                } else {
-                    (edge.target_id == frame.id).then(|| edge.source_id.clone())?
+                let next = match edge.link_type.as_str() {
+                    "derived_from" if edge.source_id == frame.id => edge.target_id.clone(),
+                    "corrects" if edge.source_id == frame.id => edge.target_id.clone(),
+                    "corrects" if edge.target_id == frame.id => edge.source_id.clone(),
+                    "closed_by" | "evidence_of" if edge.target_id == frame.id => {
+                        edge.source_id.clone()
+                    }
+                    _ => return None,
                 };
-                Some((earlier, edge))
+                Some((next, edge))
             })
             .collect();
         edges.sort_by(|a, b| a.1.link_type.cmp(&b.1.link_type).then(a.0.cmp(&b.0)));
 
-        for (earlier, edge) in edges {
-            if !seen.insert(earlier.clone()) {
+        for (next, edge) in edges {
+            if !seen.insert(next.clone()) {
                 continue;
             }
-            let Some(node) = storage.get_node(&earlier).map_err(|e| e.to_string())? else {
+            let Some(node) = storage.get_node(&next).map_err(|e| e.to_string())? else {
                 continue;
             };
             if !storage
@@ -262,17 +267,16 @@ fn walk_recorded_causes(
                 link_type: edge.link_type.clone(),
             });
             path.extend(frame.path.iter().cloned());
-            // A later node is not a cause of this failure, and the walk does
-            // not continue through it.
-            if !is_earlier(&node, failure) {
-                continue;
-            }
+            // A later node is not a cause. Keep walking: the record after the
+            // failure may be a revert whose target is the older commit.
             let id = node.id.clone();
-            hits.push(WalkHit {
-                retention: node.retrieval_strength,
-                node,
-                path: path.clone(),
-            });
+            if is_earlier(&node, failure) {
+                hits.push(WalkHit {
+                    retention: node.retrieval_strength,
+                    node,
+                    path: path.clone(),
+                });
+            }
             queue.push_back(Frame {
                 id,
                 depth: frame.depth + 1,
@@ -345,7 +349,7 @@ fn recorded_causes(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value,
         "scanned": scanned,
         "count": lessons.len(),
         "forgotten_lessons": lessons,
-        "note": "Backward walk over recorded causal edges only: from a memory to what it is derived_from, and to the records that are evidence_of it, that correct it, or that it closed. Ranked by existing FSRS retrievability, lowest first. No entity overlap, keyword or FTS search, embeddings, or inferred edges.",
+        "note": "Backward walk over recorded causal edges only: from a memory to what it is derived_from, and along corrects in either direction (a lesson, or a git revert to the commit it names), and to the records that are evidence_of it or that it closed. A newer record is not a lesson, and the walk continues through it to an older commit. Ranked by existing FSRS retrievability, lowest first. No entity overlap, keyword or FTS search, embeddings, or inferred edges.",
     }))
 }
 
@@ -923,5 +927,51 @@ mod strata_walk_tests {
             !ids.contains(&causes[14].as_str()),
             "the last cause is past the scan budget: {out}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_newer_revert_still_reaches_the_older_commit() {
+        let (storage, _dir) = open();
+        // Ingest order is creation order: the cause is older than the failure,
+        // and the revert is newer than the failure. The only path is
+        // failure → revert → cause. Stopping at the newer revert yields count 0.
+        let cause = ingest(&storage, "commit that introduced the bad change");
+        let failure = ingest(&storage, "failure observed before the revert landed");
+        let revert = ingest(&storage, "revert of the bad change");
+        link(&storage, &failure.id, &revert.id, "derived_from");
+        link(&storage, &revert.id, &cause.id, "corrects");
+
+        let out = execute(&storage, Some(json!({"failure_id": failure.id})))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = out["forgotten_lessons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["lesson_id"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids.contains(&cause.id.as_str()),
+            "the reverted commit is the lesson: {out}"
+        );
+        assert!(
+            !ids.contains(&revert.id.as_str()),
+            "the newer revert is not a lesson: {out}"
+        );
+        assert!(out["count"].as_u64().unwrap() >= 1, "{out}");
+        let path = &out["forgotten_lessons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["lesson_id"] == cause.id)
+            .unwrap()["edge_path"];
+        let kinds: Vec<&str> = path
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| step["link_type"].as_str().unwrap())
+            .collect();
+        assert!(kinds.contains(&"corrects"), "{path}");
+        assert!(kinds.contains(&"derived_from"), "{path}");
     }
 }
