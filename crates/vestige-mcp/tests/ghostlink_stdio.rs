@@ -655,7 +655,7 @@ fn links_are_checked_before_anything_is_written() {
 
     for (links, needle) in [
         (
-            json!([{ "kind": "supersedes", "to": issue }]),
+            json!([{ "kind": "touched", "to": issue }]),
             "not declarable",
         ),
         (

@@ -15,6 +15,7 @@ pub mod auto_connect;
 pub mod autopilot;
 pub mod cognitive;
 pub mod dashboard;
+pub mod intake;
 mod intention_graph_log;
 pub mod protocol;
 #[cfg(all(test, not(feature = "legacy-sqlite")))]
