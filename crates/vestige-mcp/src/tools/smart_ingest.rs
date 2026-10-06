@@ -921,6 +921,30 @@ fn write_links(storage: &Arc<Storage>, value: &mut Value, pending: &PendingLinks
 /// Most declared links one memory may carry.
 const MAX_DECLARED_LINKS: usize = 16;
 
+/// Tags an echo node may carry, including the literal `duplicate` tag.
+/// The rest are the submission's tags, trimmed, emptied, deduped, and cut
+/// in byte order so the cap does not depend on the order they were sent.
+const MAX_ECHO_TAGS: usize = 16;
+
+/// `duplicate` once, then at most [`MAX_ECHO_TAGS`] - 1 other tags, in order
+/// that is the same for every permutation of `stored`.
+fn bounded_echo_tags(stored: &[String]) -> Vec<String> {
+    let mut extras: Vec<String> = stored
+        .iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty() && tag != "duplicate")
+        .collect();
+    extras.sort_unstable();
+    extras.dedup();
+    extras.truncate(MAX_ECHO_TAGS.saturating_sub(1));
+    let mut tags = Vec::with_capacity(1 + extras.len());
+    tags.push("duplicate".to_string());
+    tags.extend(extras);
+    tags.sort_unstable();
+    tags.dedup();
+    tags
+}
+
 /// Auto-connect every memory this ingest saved: the ingest-time share of
 /// `vestige connect`, joined onto the saved nodes through the shared
 /// `crate::auto_connect` module. Walks the same response slots `write_links`
@@ -1172,52 +1196,80 @@ fn reinforce_duplicate(
     stored_tags: &[String],
 ) -> Result<Value, String> {
     // The echo carries ids and counters only — never a copy of the original
-    // or the submitted bytes (law 5). It does carry the tags of this
-    // submission: a tag is the only handle a memory is found by, so a repeat
-    // sent with a new tag must be findable under it, and the echo names the
-    // original it stands for.
-    let mut echo_tags = vec!["duplicate".to_string()];
-    for tag in stored_tags {
-        if !echo_tags.contains(tag) {
-            echo_tags.push(tag.clone());
-        }
-    }
+    // or the submitted bytes (law 5). It carries a bounded tag set: the
+    // literal `duplicate` tag once, plus the submission's tags trimmed,
+    // deduped and capped. A tag is the only handle a memory is found by, so
+    // a repeat sent with a new tag must be findable under it until the cap.
+    let echo_tags = bounded_echo_tags(stored_tags);
     let echo_content = format!(
         "duplicate of {original}\ncanonical_hash: {canonical_hash}\nsubmitted_line_count: {}",
         content.lines().count()
     );
-    let echo = storage
-        .ingest_in_scope_with_secret_policy(
-            IngestInput {
-                content: echo_content,
-                node_type: "note".to_string(),
-                source: Some("duplicate".to_string()),
-                sentiment_score: 0.0,
-                sentiment_magnitude: 0.0,
-                tags: echo_tags,
-                valid_from: None,
-                valid_until: None,
-                validity_inferred: false,
-                source_envelope: None,
-            },
-            scope,
-            SecretPolicy::Reject,
-        )
-        .map_err(|e| e.to_string())?;
-    let echo_id = echo.id;
-    // Resolve the echo's own create proof BEFORE the edge lands, so
-    // `receiptId` and the intent's effect_seq name the node's create, not
-    // the edge that follows it.
-    let echo_receipt = storage.latest_receipt_id_for_node(&echo_id);
-    let echo_seq = storage.node_effect_seq(&echo_id);
-    let edge = strata_memory::save_links(
+    // Same echo content and the same bounded tags reuse the live echo.
+    // Past the per-original cap, the earliest live echo is reused and
+    // nothing is written. Either way the original stays untouched.
+    let reused = strata_memory::reuse_duplicate_echo(
         storage.as_ref(),
-        &echo_id,
-        &[(
-            strata_memory::DeclaredLink::EvidenceOf,
-            original.to_string(),
-        )],
+        scope,
+        original,
+        &echo_content,
+        &echo_tags,
     );
+    let (echo_id, echo_receipt, echo_seq) = if let Some(echo_id) = reused {
+        (
+            echo_id.clone(),
+            storage.latest_receipt_id_for_node(&echo_id),
+            storage.node_effect_seq(&echo_id),
+        )
+    } else {
+        let echo = storage
+            .ingest_in_scope_with_secret_policy(
+                IngestInput {
+                    content: echo_content,
+                    node_type: "note".to_string(),
+                    source: Some("duplicate".to_string()),
+                    sentiment_score: 0.0,
+                    sentiment_magnitude: 0.0,
+                    tags: echo_tags,
+                    valid_from: None,
+                    valid_until: None,
+                    validity_inferred: false,
+                    source_envelope: None,
+                },
+                scope,
+                SecretPolicy::Reject,
+            )
+            .map_err(|e| e.to_string())?;
+        let echo_id = echo.id;
+        // Resolve the echo's own create proof BEFORE the edge lands, so
+        // `receiptId` and the intent's effect_seq name the node's create, not
+        // the edge that follows it.
+        let echo_receipt = storage.latest_receipt_id_for_node(&echo_id);
+        let echo_seq = storage.node_effect_seq(&echo_id);
+        (echo_id, echo_receipt, echo_seq)
+    };
+    let edge_exists = storage
+        .get_connections_for_memory(&echo_id)
+        .map(|edges| {
+            edges.iter().any(|edge| {
+                edge.link_type == "evidence_of"
+                    && edge.source_id == echo_id
+                    && edge.target_id == original
+            })
+        })
+        .unwrap_or(false);
+    let edge = if edge_exists {
+        Ok(Vec::new())
+    } else {
+        strata_memory::save_links(
+            storage.as_ref(),
+            &echo_id,
+            &[(
+                strata_memory::DeclaredLink::EvidenceOf,
+                original.to_string(),
+            )],
+        )
+    };
     let mut response = serde_json::json!({
         "success": true,
         "decision": "reinforce",
@@ -4623,5 +4675,146 @@ mod tests {
         assert_eq!(hook["causesPromoted"], 0);
         assert_eq!(hook["evidenceStatus"], "hypothesis");
         assert!(hook.get("candidatesFound").is_some());
+    }
+}
+
+#[cfg(test)]
+mod echo_bound_tests {
+    #[test]
+    fn echo_tags_are_capped_and_independent_of_input_order() {
+        let mut forward: Vec<String> = (0..100).map(|i| format!("tag-{i:03}")).collect();
+        forward.push("  duplicate  ".into());
+        forward.push("   ".into());
+        let mut backward = forward.clone();
+        backward.reverse();
+        let tags = super::bounded_echo_tags(&forward);
+        assert_eq!(tags, super::bounded_echo_tags(&backward));
+        assert_eq!(tags.len(), super::MAX_ECHO_TAGS);
+        assert_eq!(
+            tags.iter()
+                .filter(|tag| tag.as_str() == "duplicate")
+                .count(),
+            1
+        );
+        assert!(tags.iter().any(|tag| tag == "tag-000"));
+        assert!(tags.iter().any(|tag| tag == "tag-014"));
+        assert!(!tags.iter().any(|tag| tag == "tag-015"));
+    }
+}
+
+/// The duplicate gate on the default Strata opener. `legacy-sqlite` tests
+/// open a different store that does not keep the in-process echo index.
+#[cfg(all(test, not(feature = "legacy-sqlite")))]
+mod echo_reuse_tests {
+    use std::sync::Arc;
+
+    use tokio::sync::Mutex;
+
+    use crate::cognitive::CognitiveEngine;
+
+    fn test_cognitive() -> Arc<Mutex<CognitiveEngine>> {
+        Arc::new(Mutex::new(CognitiveEngine::new()))
+    }
+
+    async fn test_storage() -> (Arc<vestige_core::Storage>, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = vestige_core::open_storage(Some(dir.path().join("test.db"))).unwrap();
+        (storage, dir)
+    }
+
+    #[tokio::test]
+    async fn identical_reinforces_reuse_one_echo_and_distinct_tags_stop_at_the_cap() {
+        let (storage, _dir) = test_storage().await;
+        let created = super::execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "the cache ttl is 60 seconds",
+                "tags": ["cache"]
+            })),
+        )
+        .await
+        .unwrap();
+        let original = created["nodeId"].as_str().unwrap().to_string();
+        let mut echo = String::new();
+        for _ in 0..20 {
+            let again = super::execute(
+                &storage,
+                &test_cognitive(),
+                Some(serde_json::json!({
+                    "content": "  the   cache ttl is 60 seconds  "
+                })),
+            )
+            .await
+            .unwrap();
+            assert_eq!(again["decision"], "reinforce", "{again}");
+            assert_eq!(again["duplicateOf"], original);
+            let id = again["echoNodeId"].as_str().unwrap().to_string();
+            if echo.is_empty() {
+                echo = id.clone();
+            }
+            assert_eq!(id, echo, "the same echo content and tags reuse one node");
+        }
+        let live = storage
+            .get_all_nodes_in_scope("user", i32::MAX, 0)
+            .unwrap()
+            .len();
+        let other_case = super::execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({ "content": "THE CACHE TTL IS 60 SECONDS" })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            other_case["decision"], "create",
+            "case is a different memory: {other_case}"
+        );
+        assert_eq!(live, 2, "one original and one echo");
+        let echo_node = storage.get_node(&echo).unwrap().unwrap();
+        assert!(echo_node.tags.iter().any(|tag| tag == "duplicate"));
+        assert!(echo_node.tags.len() <= super::MAX_ECHO_TAGS);
+
+        let capped = super::execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({ "content": "cap the echo carriers" })),
+        )
+        .await
+        .unwrap();
+        let capped_original = capped["nodeId"].as_str().unwrap().to_string();
+        let mut earliest = String::new();
+        let mut last = String::new();
+        for n in 0..17 {
+            let again = super::execute(
+                &storage,
+                &test_cognitive(),
+                Some(serde_json::json!({
+                    "content": "cap the echo carriers",
+                    "tags": [format!("only-{n:02}")]
+                })),
+            )
+            .await
+            .unwrap();
+            assert_eq!(again["decision"], "reinforce");
+            assert_eq!(again["duplicateOf"], capped_original);
+            let id = again["echoNodeId"].as_str().unwrap().to_string();
+            if n == 0 {
+                earliest = id.clone();
+            }
+            last = id;
+        }
+        assert_eq!(last, earliest, "past 16 live echoes the earliest is reused");
+        let echoes = storage
+            .get_all_nodes_in_scope("user", i32::MAX, 0)
+            .unwrap()
+            .into_iter()
+            .filter(|node| node.tags.iter().any(|tag| tag == "duplicate"))
+            .count();
+        assert_eq!(
+            echoes,
+            16 + 1,
+            "the first fixture's echo plus 16 capped echoes"
+        );
     }
 }

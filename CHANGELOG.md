@@ -260,7 +260,16 @@ as orphan writes and does not see those edges until it is upgraded.
 - **Backups carry the intent index.** The side file that makes `intent_id`
   writes idempotent is staged with the log and published into the backup
   destination whether or not it already existed; a restored backup no longer
-  re-admits an already-intented write.
+  re-admits an already-intented write. New intent records append to
+  `intent-index.log` instead of rewriting the whole table; a store that
+  already has the legacy `intent-index` snapshot still loads it, and a
+  backup copies both files.
+
+- **`vestige ingest` uses the same duplicate gate as `smart_ingest`.** A
+  canonically identical submission reinforces (one echo, then reuse of that
+  echo) and leaves the original untouched. A different case is a new memory.
+  The echo's `duplicate` tag is kept once, other tags are deduped and capped
+  at 16, and a single original keeps at most 16 live echoes.
 
 - **`vestige prove` restores its worktree before `git bisect start`.** A test
   that rewrites a tracked file (a lockfile, a generated source) no longer

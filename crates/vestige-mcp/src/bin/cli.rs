@@ -25,8 +25,8 @@ use chrono::{NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 use colored::Colorize;
 use vestige_core::{
-    ConnectionRecord, IngestInput, PortableImportMode, SecretConfidence, SecretPolicy,
-    SourceEnvelope, SourceUpsertOutcome, Storage, scan_secrets,
+    ConnectionRecord, IngestInput, PortableImportMode, SecretConfidence, SourceEnvelope,
+    SourceUpsertOutcome, Storage, scan_secrets,
 };
 
 /// Vestige - Causal Proof Engine CLI
@@ -332,10 +332,12 @@ enum Commands {
     /// Ingest a memory as a new record
     ///
     /// Nothing is merged by similarity. On a Strata log the write passes the
-    /// log's gate before it is admitted, then auto-connects to earlier
-    /// memories that record the same exact identity: an exact tag, or an
-    /// exact file path, commit sha, `owner/repo#123` reference or URL. Shared
-    /// words never join (the ingest-time share of `vestige connect`).
+    /// same canonical duplicate gate as `smart_ingest`: identical text
+    /// reinforces and the original stays untouched. A new memory then
+    /// auto-connects to earlier memories that record the same exact identity:
+    /// an exact tag, or an exact file path, commit sha, `owner/repo#123`
+    /// reference or URL. Shared words never join (the ingest-time share of
+    /// `vestige connect`).
     Ingest {
         /// Content to remember
         content: String,
@@ -3924,7 +3926,8 @@ fn run_gc(
     Ok(())
 }
 
-/// Ingest a memory via CLI (routes through smart_ingest / PE Gating)
+/// Ingest a memory via CLI through `smart_ingest` (the duplicate gate, then
+/// auto-connect on a create).
 fn run_ingest(
     content: String,
     tags: Option<String>,
@@ -3960,19 +3963,6 @@ fn run_ingest(
         })
         .unwrap_or_default();
 
-    let input = IngestInput {
-        content: content.clone(),
-        node_type,
-        source,
-        sentiment_score: 0.0,
-        sentiment_magnitude: 0.0,
-        tags: tag_list,
-        valid_from: None,
-        valid_until: None,
-        validity_inferred: false,
-        source_envelope: None,
-    };
-
     let storage = open_storage()?;
     // The Strata adapter does not expose a creation-time rewrite in 4.0.
     // Refuse before ingesting, or the memory would land with the current
@@ -3982,14 +3972,35 @@ fn run_ingest(
             "unavailable_in_4_0: ingest --ago-days/--created-at is not available on Strata in Vestige 4.0: the Strata store does not expose a creation-time rewrite yet, so the memory would keep the time it was written. Nothing was written; drop the flag to ingest with the current time."
         );
     }
-    let secret_policy = if allow_secrets {
-        SecretPolicy::AllowExplicitly
-    } else {
-        SecretPolicy::Reject
-    };
+    let mut args = serde_json::json!({
+        "content": content.clone(),
+        "node_type": node_type,
+        "tags": tag_list,
+    });
+    if let Some(source) = source {
+        args["source"] = serde_json::json!(source);
+    }
+    if allow_secrets {
+        args["allowSecrets"] = serde_json::json!(true);
+    }
 
+    let rt = tokio::runtime::Runtime::new()?;
+    let cognitive = std::sync::Arc::new(tokio::sync::Mutex::new(
+        vestige_mcp::cognitive::CognitiveEngine::new(),
+    ));
+    let value = rt
+        .block_on(vestige_mcp::tools::smart_ingest::execute(
+            &storage,
+            &cognitive,
+            Some(args),
+        ))
+        .map_err(|err| anyhow::anyhow!(err))?;
+
+    // Legacy stores still accept a creation-time rewrite after the write.
+    // Strata refused above, before `execute`, so nothing was written there.
+    if !is_strata(&storage)
+        && let Some(id) = value.get("nodeId").and_then(|id| id.as_str())
     {
-        let node = storage.ingest_with_secret_policy(input, secret_policy)?;
         if let Some(days) = ago_days {
             // Duration::days panics on overflow for extreme inputs; try_days
             // returns None instead. The subtraction itself can ALSO overflow the
@@ -4003,82 +4014,129 @@ fn run_ingest(
                 .ok_or_else(|| {
                     anyhow::anyhow!("--ago-days value {days} is out of the supported range")
                 })?;
-            storage.set_created_at(&node.id, when)?;
+            storage.set_created_at(id, when)?;
         }
         if let Some(when) = created_at_ts {
-            storage.set_created_at(&node.id, when)?;
-        }
-        println!("{}", "=== Vestige Ingest ===".cyan().bold());
-        println!();
-        println!("{}: create", "Decision".white().bold());
-        println!("{}: {}", "Node ID".white().bold(), node.id);
-        println!();
-        let confirmation = if allow_secrets {
-            "Memory created with explicit credential override (content redacted)".to_string()
-        } else {
-            format!("Memory created ({})", truncate(&content, 60))
-        };
-        println!("{}", confirmation.green().bold());
-
-        // Auto-connect: the ingest-time share of `vestige connect`, run on
-        // just this memory (the write goes to the default scope, like the
-        // ingest above). The memory is already saved, so a failure here is
-        // reported, never fatal — the same rule the post-ingest hooks keep.
-        match vestige_mcp::auto_connect::auto_connect_new_memory(
-            storage.as_ref(),
-            &node.id,
-            vestige_core::DEFAULT_MEMORY_SCOPE,
-            &node.content,
-            &node.tags,
-        ) {
-            Ok(report) => {
-                if report.edges > 0 {
-                    println!(
-                        "{}",
-                        format!(
-                            "Auto-connected: {} edge(s) created on exact identities: {}",
-                            report.edges,
-                            report.shared_identities.join(", ")
-                        )
-                        .green()
-                        .bold()
-                    );
-                    for pair in &report.pairs {
-                        println!(
-                            "  {} -[touched]-> {}  joined on: {}",
-                            pair.source_id,
-                            pair.target_id,
-                            pair.identities.join(", ")
-                        );
-                    }
-                    // The edges above are one write; its receipt lists them.
-                    if let Some(receipt_id) = &report.receipt_id {
-                        println!(
-                            "Auto-connect receipt: {receipt_id} (one write for the {} edge(s))",
-                            report.edges
-                        );
-                    }
-                }
-                // Every tag the pass did not join on is named with its
-                // carrier count and the reason: nothing is skipped silently.
-                for skipped in &report.skipped {
-                    println!("Auto-connect {skipped}");
-                }
-                if report.not_linked > 0 {
-                    println!(
-                        "Auto-connect linked the {} strongest of {} candidate(s); {} not linked (the {}-edge budget of one write). `vestige connect` writes the rest.",
-                        report.edges,
-                        report.candidates,
-                        report.not_linked,
-                        vestige_mcp::auto_connect::MAX_AUTO_EDGES
-                    );
-                }
-            }
-            Err(err) => eprintln!("{} auto-connect skipped: {err}", "WARN".yellow()),
+            storage.set_created_at(id, when)?;
         }
     }
 
+    print_ingest_outcome(&value, &content, allow_secrets);
     Ok(())
+}
+
+/// CLI lines the ingest command has always printed, taken from the
+/// `smart_ingest` response so a reinforce and a create share one gate.
+fn print_ingest_outcome(value: &serde_json::Value, content: &str, allow_secrets: bool) {
+    let decision = value
+        .get("decision")
+        .and_then(|decision| decision.as_str())
+        .unwrap_or("create");
+    let node_id = value
+        .get("nodeId")
+        .or_else(|| value.get("echoNodeId"))
+        .and_then(|id| id.as_str())
+        .unwrap_or("");
+    println!("{}", "=== Vestige Ingest ===".cyan().bold());
+    println!();
+    println!("{}: {decision}", "Decision".white().bold());
+    println!("{}: {node_id}", "Node ID".white().bold());
+    println!();
+    let confirmation = if decision == "reinforce" {
+        let original = value
+            .get("duplicateOf")
+            .and_then(|id| id.as_str())
+            .unwrap_or("");
+        format!("Duplicate of {original}; the original was left untouched ({node_id})")
+    } else if allow_secrets {
+        "Memory created with explicit credential override (content redacted)".to_string()
+    } else {
+        format!("Memory created ({})", truncate(content, 60))
+    };
+    println!("{}", confirmation.green().bold());
+    print_auto_connect(value);
+}
+
+fn print_auto_connect(value: &serde_json::Value) {
+    if let Some(err) = value.get("autoConnectError").and_then(|err| err.as_str()) {
+        eprintln!("{} auto-connect skipped: {err}", "WARN".yellow());
+    }
+    let Some(report) = value.get("autoConnect") else {
+        return;
+    };
+    let edges = report
+        .get("edges")
+        .and_then(|edges| edges.as_u64())
+        .unwrap_or(0);
+    if edges > 0 {
+        let identities = report
+            .get("sharedIdentities")
+            .and_then(|ids| ids.as_array())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        println!(
+            "{}",
+            format!("Auto-connected: {edges} edge(s) created on exact identities: {identities}")
+                .green()
+                .bold()
+        );
+        if let Some(pairs) = report.get("pairs").and_then(|pairs| pairs.as_array()) {
+            for pair in pairs {
+                let source = pair.get("source").and_then(|id| id.as_str()).unwrap_or("");
+                let target = pair.get("target").and_then(|id| id.as_str()).unwrap_or("");
+                let joined = pair
+                    .get("joinedOn")
+                    .and_then(|ids| ids.as_array())
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(|id| id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                println!("  {source} -[touched]-> {target}  joined on: {joined}");
+            }
+        }
+        if let Some(receipt_id) = report.get("receiptId").and_then(|id| id.as_str()) {
+            println!("Auto-connect receipt: {receipt_id} (one write for the {edges} edge(s))");
+        }
+    }
+    if let Some(skipped) = report.get("skipped").and_then(|skipped| skipped.as_array()) {
+        for skip in skipped {
+            let tag = skip.get("tag").and_then(|tag| tag.as_str()).unwrap_or("");
+            let carriers = skip
+                .get("carriers")
+                .and_then(|count| count.as_u64())
+                .unwrap_or(0);
+            let scope_size = skip
+                .get("scopeSize")
+                .and_then(|count| count.as_u64())
+                .unwrap_or(0);
+            let reason = skip
+                .get("reason")
+                .and_then(|reason| reason.as_str())
+                .unwrap_or("");
+            println!(
+                "Auto-connect skipped tag {tag}: carried by {carriers} of {scope_size} ({reason})"
+            );
+        }
+    }
+    let not_linked = report
+        .get("notLinked")
+        .and_then(|count| count.as_u64())
+        .unwrap_or(0);
+    if not_linked > 0 {
+        let candidates = edges + not_linked;
+        println!(
+            "Auto-connect linked the {edges} strongest of {candidates} candidate(s); {not_linked} not linked (the {}-edge budget of one write). `vestige connect` writes the rest.",
+            vestige_mcp::auto_connect::MAX_AUTO_EDGES
+        );
+    }
 }
 
 /// Findings across `texts`, each (kind, fingerprint) once.
