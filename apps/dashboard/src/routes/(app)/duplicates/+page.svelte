@@ -162,7 +162,7 @@
 	<PageHeader
 		icon="duplicates"
 		title="Memory Hygiene: Duplicate Detection"
-		subtitle="Cosine-similarity clustering over embeddings. Merge previews a reversible plan and applies it only on your say-so; dedup undo reverses it. Oversized similarity components are quarantined for review because they chain through pairwise similarity and are not safe to merge. Dismissed clusters are hidden for this session only."
+		subtitle="Exact duplicates: identical content hash or identical declared source, found by the log, never by resemblance. Nothing merges on a Strata log; retire an old version with memory edit. Dismissed clusters are hidden for this session only."
 		accent="synapse"
 	>
 		<!-- The badge reports the last fetch, not a hope: Live after a successful

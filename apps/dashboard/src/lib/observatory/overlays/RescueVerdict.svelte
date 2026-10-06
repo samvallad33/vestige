@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * Demo verdict card — DOM instrument overlay (§7.3 grammar, ported from
-	 * docs/launch/causal-brain-demo.html's .verdict).
+	 * the retired causal-brain demo page's .verdict).
 	 *
 	 * Opacity is a PURE function of the frame prop (smoothstep in TS, NO CSS
 	 * transitions) so capture mode (?frame=N) renders the exact same card at

@@ -7,22 +7,21 @@
 	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import { api } from '$stores/api';
 	import { isConnected } from '$stores/websocket';
-	import type { ConsolidationResult, DreamResult, HealthCheck, RetentionDistribution, SystemStats } from '$types';
+	import type { DreamResult, HealthCheck, RetentionDistribution, SystemStats } from '$types';
 
 	let stats = $state<SystemStats | null>(null);
 	let health = $state<HealthCheck | null>(null);
 	let retention = $state<RetentionDistribution | null>(null);
-	let consolidation = $state<ConsolidationResult | null>(null);
 	let dream = $state<DreamResult | null>(null);
-	let busy = $state<null | 'consolidate' | 'dream' | 'refresh'>(null);
-	let statusLine = $state('Ready to maintain the local memory system.');
+	let busy = $state<null | 'dream' | 'refresh'>(null);
+	let statusLine = $state('Ready to maintain the store.');
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let systemField: LivingFieldPass | null = null;
 
 	const settingsScene = $derived.by<RouteSceneModel>(() => ({
 		organ: 'settings', nodes: [], edges: [], events: [], receipts: [], alive: true,
-		scalars: { memories: stats?.totalMemories ?? 0, retention: stats?.averageRetention ?? 0, coverage: stats?.embeddingCoverage ?? 0 }
+		scalars: { memories: stats?.totalMemories ?? 0, retention: stats?.averageRetention ?? 0 }
 	}));
 
 	$effect(() => {
@@ -82,21 +81,9 @@
 		try { await loadData(); if (!error) statusLine = 'Live system vitals refreshed.'; } finally { busy = null; }
 	}
 
-	async function runConsolidate() {
-		busy = 'consolidate'; consolidation = null; dream = null;
-		statusLine = 'Consolidating memory: recalculating retention and maintenance state…';
-		try {
-			consolidation = await api.consolidate();
-			await loadData();
-			statusLine = 'Consolidation complete. The receipt below is from this run.';
-		} catch (cause) {
-			error = cause instanceof Error ? cause.message : 'Consolidation failed';
-			statusLine = 'Consolidation did not complete.';
-		} finally { busy = null; }
-	}
 
 	async function runDream() {
-		busy = 'dream'; dream = null; consolidation = null;
+		busy = 'dream'; dream = null;
 		statusLine = 'Running a dream cycle: replaying memory and finding connections…';
 		try {
 			dream = await api.dream();
@@ -129,7 +116,6 @@
 		<dl class="system-vitals" aria-label="Current system metrics">
 			<div><dt>Local memories</dt><dd>{stats?.totalMemories ?? 0}</dd></div>
 			<div><dt>Average retention</dt><dd>{Math.round((stats?.averageRetention ?? 0) * 100)}%</dd></div>
-			<div><dt>Embedding coverage</dt><dd>{Math.round(stats?.embeddingCoverage ?? 0)}%</dd></div>
 			<div><dt>Running version</dt><dd>v{health?.version ?? 'unknown'}</dd></div>
 		</dl>
 
@@ -142,7 +128,6 @@
 
 			<section class="glass-panel rituals" aria-label="Memory maintenance actions">
 				<p class="eyebrow">MAINTENANCE RITUALS</p><h2>Run with intent.</h2>
-				<button type="button" disabled={busy !== null} onclick={runConsolidate}><strong>{busy === 'consolidate' ? 'Consolidating…' : 'Consolidate memory'}</strong><span>Recalculate retention, decay, embeddings and duplicates.</span></button>
 				<button type="button" disabled={busy !== null} onclick={runDream}><strong>{busy === 'dream' ? 'Dreaming…' : 'Run dream cycle'}</strong><span>Replay local memories and discover durable connections.</span></button>
 				<button type="button" class="refresh" disabled={busy !== null} onclick={runRefresh}>{busy === 'refresh' ? 'Refreshing…' : 'Refresh live vitals'}</button>
 			</section>
@@ -150,7 +135,6 @@
 	{/if}
 
 	<section class="glass-panel operation-receipt" aria-live="polite"><p class="eyebrow">OPERATION STATUS</p><output>{statusLine}</output>
-		{#if consolidation}<dl><div><dt>Processed</dt><dd>{consolidation.nodesProcessed}</dd></div><div><dt>Decayed</dt><dd>{consolidation.decayApplied}</dd></div><div><dt>Embeddings</dt><dd>{consolidation.embeddingsGenerated}</dd></div><div><dt>Merged</dt><dd>{consolidation.duplicatesMerged}</dd></div><div><dt>Duration</dt><dd>{consolidation.durationMs} ms</dd></div></dl>{/if}
 		{#if dream}<dl><div><dt>Replayed</dt><dd>{dream.memoriesReplayed}</dd></div><div><dt>Connections</dt><dd>{dream.connectionsPersisted}</dd></div><div><dt>Insights</dt><dd>{dream.insights.length}</dd></div></dl>{#if dream.insights[0]}<blockquote>{dream.insights[0].insight}</blockquote>{/if}{/if}
 	</section>
 </main>

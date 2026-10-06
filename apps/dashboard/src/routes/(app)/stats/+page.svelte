@@ -10,7 +10,7 @@
 	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
-	import type { SystemStats, RetentionDistribution, HealthCheck, ConsolidationResult } from '$types';
+	import type { SystemStats, RetentionDistribution, HealthCheck } from '$types';
 	import { getMemoryState } from '$lib/memory-state';
 
 	type VitalReceipt = RouteReceipt & {
@@ -24,16 +24,11 @@
 	let health = $state<HealthCheck | null>(null);
 	let loading = $state(true);
 	let error: string | null = $state(null);
-	let consolidation = $state<ConsolidationResult | null>(null);
-	let consolidating = $state(false);
 	let actionError: string | null = $state(null);
-	// Tracked when the user picks a vital. Selection only — no API call.
-	// Consolidation runs only from the explicit labelled button in the DOM overlay.
 	let selectedVitalId: string | null = $state(null);
 
 	const totalMemories = $derived(health?.totalMemories ?? stats?.totalMemories ?? 0);
 	const averageRetention = $derived(health?.averageRetention ?? stats?.averageRetention ?? 0);
-	const embeddingCoverage = $derived(stats?.embeddingCoverage ?? 0);
 	const dueForReview = $derived(stats?.dueForReview ?? 0);
 	const distribution = $derived(retention?.distribution ?? []);
 	const bands = $derived.by(() => {
@@ -57,7 +52,7 @@
 	const healthLabel = $derived(health?.status ?? 'unknown');
 
 	const statsScene = $derived.by<RouteSceneModel>(() => {
-		const receipts = stats ? buildReceipts(stats, consolidation) : [];
+		const receipts = stats ? buildReceipts(stats) : [];
 		const scalars = Object.fromEntries(receipts.map((r) => [r.metric, r.magnitude]));
 		return {
 			organ: 'stats',
@@ -73,9 +68,6 @@
 		statsScene.receipts.find((receipt) => `stats:${(receipt as VitalReceipt).metric}` === selectedVitalId) as
 			| VitalReceipt
 			| undefined
-	);
-	const consolidateDisabledReason = $derived(
-		loading ? 'Waiting for live vitals' : !stats ? 'Vitals unavailable' : totalMemories === 0 ? 'No memories to consolidate' : null
 	);
 
 	onMount(() => {
@@ -110,7 +102,7 @@
 	let dreamNotice = $state<string | null>(null);
 
 	async function runDream() {
-		if (dreaming || consolidating) return;
+		if (dreaming) return;
 		dreaming = true;
 		actionError = null;
 		dreamNotice = null;
@@ -125,19 +117,6 @@
 		}
 	}
 
-	async function runConsolidate() {
-		if (consolidating || consolidateDisabledReason) return;
-		consolidating = true;
-		actionError = null;
-		try {
-			consolidation = await api.consolidate();
-			await loadStats();
-		} catch (err) {
-			actionError = err instanceof Error ? err.message : 'Consolidation failed';
-		} finally {
-			consolidating = false;
-		}
-	}
 
 	function bucketColor(index: number): string {
 		const progress = distribution.length <= 1 ? 1 : index / (distribution.length - 1);
@@ -152,10 +131,8 @@
 				return 'The total durable memory population currently held by this Vestige brain.';
 			case 'averageRetention':
 				return 'The mean FSRS retrievability across memories; higher values indicate stronger expected recall.';
-			case 'embeddingCoverage':
-				return 'The share of memories with semantic embeddings available for similarity-aware recall.';
 			case 'dueForReview':
-				return 'Memories whose FSRS schedule says they are ready for maintenance in the next consolidation cycle.';
+				return 'Memories whose FSRS schedule says they are due for review.';
 			default:
 				return 'A live backend measurement represented by one of the breathing cells in the field.';
 		}
@@ -230,7 +207,7 @@
 		return FIELD_HUE.recall;
 	}
 
-	function buildReceipts(currentStats: SystemStats, currentConsolidation: ConsolidationResult | null): VitalReceipt[] {
+	function buildReceipts(currentStats: SystemStats): VitalReceipt[] {
 		const entries = Object.entries(currentStats);
 		const numericValues = entries
 			.map(([, value]) => (typeof value === 'number' && Number.isFinite(value) ? Math.abs(value) : null))
@@ -240,12 +217,6 @@
 			const magnitude = metricMagnitude(metric, rawValue, maxNumeric);
 			return makeReceipt(metric, rawValue, magnitude, index);
 		});
-		if (currentConsolidation) {
-			for (const [metric, rawValue] of Object.entries(currentConsolidation)) {
-				const prefixed = `consolidate.${metric}`;
-				receipts.push(makeReceipt(prefixed, rawValue, metricMagnitude(prefixed, rawValue, maxNumeric), receipts.length));
-			}
-		}
 		return receipts;
 	}
 
@@ -339,25 +310,13 @@
 				<div class="flex flex-col items-end gap-1">
 					<button
 						type="button"
-						onclick={runConsolidate}
-						disabled={consolidating || Boolean(consolidateDisabledReason)}
-						class="inline-flex items-center gap-2 rounded-xl border border-synapse/35 bg-synapse/15 px-3.5 py-2 text-xs font-semibold text-synapse-glow transition hover:bg-synapse/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60 disabled:cursor-not-allowed disabled:opacity-45"
-					>
-						<Icon name="pulse" size={14} />
-						{consolidating ? 'Consolidating…' : 'Consolidate memory'}
-					</button>
-					<button
-						type="button"
 						onclick={runDream}
-						disabled={dreaming || consolidating}
+						disabled={dreaming}
 						class="inline-flex items-center gap-2 rounded-xl border border-dream/35 bg-dream/15 px-3.5 py-2 text-xs font-semibold text-dream-glow transition hover:bg-dream/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-dream/60 disabled:cursor-not-allowed disabled:opacity-45"
 					>
 						<Icon name="dreams" size={14} />
 						{dreaming ? 'Dreaming…' : 'Run dream cycle'}
 					</button>
-					{#if consolidateDisabledReason && !consolidating}
-						<span class="text-[9px] text-muted">{consolidateDisabledReason}</span>
-					{/if}
 					{#if dreamNotice}
 						<span class="text-[9px] text-recall">{dreamNotice}</span>
 					{/if}
@@ -396,11 +355,6 @@
 				<div class="mt-2 text-[11px] font-medium uppercase tracking-wider text-dim">Avg retention</div>
 				<div class="mt-1 text-[10px] text-muted">Current FSRS retrievability</div>
 			</button>
-			<button type="button" aria-pressed={selectedVitalId === 'stats:embeddingCoverage'} onclick={() => (selectedVitalId = 'stats:embeddingCoverage')} use:reveal={{ delay: 120, y: 12 }} class="glass rounded-xl p-5 text-left lift transition {selectedVitalId === 'stats:embeddingCoverage' ? 'border-synapse/50 bg-synapse/10' : ''}">
-				<div class="text-3xl font-bold tabular-nums text-synapse-glow"><AnimatedNumber value={embeddingCoverage} decimals={1} /><span class="text-base">%</span></div>
-				<div class="mt-2 text-[11px] font-medium uppercase tracking-wider text-dim">Embedding coverage</div>
-				<div class="mt-1 text-[10px] text-muted">{stats?.withEmbeddings.toLocaleString() ?? 0} memories searchable by meaning</div>
-			</button>
 			<button type="button" aria-pressed={selectedVitalId === 'stats:dueForReview'} onclick={() => (selectedVitalId = 'stats:dueForReview')} use:reveal={{ delay: 180, y: 12 }} class="glass rounded-xl p-5 text-left lift transition {selectedVitalId === 'stats:dueForReview' ? 'border-warning/50 bg-warning/10' : ''}">
 				<div class="flex items-end justify-between gap-2">
 					<div>
@@ -438,12 +392,7 @@
 		{#if actionError}
 			<div class="glass pointer-events-auto flex items-center gap-2 rounded-xl border border-decay/25 px-4 py-3 text-xs text-decay" aria-live="polite">
 				<Icon name="pulse" size={14} />
-				Consolidation failed: {actionError}
-			</div>
-		{:else if consolidation}
-			<div class="glass pointer-events-auto flex items-center gap-2 rounded-xl border border-recall/25 px-4 py-3 text-xs text-recall" aria-live="polite">
-				<Icon name="sparkle" size={14} />
-				Consolidation complete. Vitals and retention bands have been refreshed.
+				{actionError}
 			</div>
 		{/if}
 

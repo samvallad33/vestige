@@ -22,7 +22,7 @@
 	let input: HTMLInputElement | null = $state(null);
 
 	let receiptSeal = $state<Receipt | null>(null);
-	const EXAMPLES = ['refund compliance exception', 'What port does the dev server use?', 'How does FSRS-6 trust scoring work?'];
+	const EXAMPLES = ['refund compliance exception', 'What port does the dev server use?', 'Why did the deploy on Tuesday fail?'];
 	const confidence = $derived(Math.round((scene?.recommended?.trust_score ?? 0) * 100));
 	const receiptUrl = $derived(receiptId ? `${base}/observatory?receipt=${encodeURIComponent(receiptId)}` : null);
 	const blackBoxUrl = $derived(runId ? `${base}/blackbox?run=${encodeURIComponent(runId)}` : `${base}/blackbox`);

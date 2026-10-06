@@ -5,7 +5,7 @@
 	//  Watch the agent think. Watch memory change. Watch the receipt prove why.
 	//
 	//  Every MCP tool call carries a runId that threads, unbroken, through the
-	//  tool output → SQLite trace rows → WebSocket → this page → the export →
+	//  tool output → trace records → WebSocket → this page → the export →
 	//  Cinema. This tab replays that exact run: a timeline scrubber, per-event
 	//  detail, the suppressed memories, trust scores, contradiction decisions,
 	//  and a one-click `.vestige-trace.json` export.
@@ -234,7 +234,7 @@
 		if (!last) return;
 		const evRunId = last.data?.run_id as string | undefined;
 		if (evRunId && evRunId === selectedRunId) {
-			// Re-fetch the open run (cheap; trace rows are local SQLite).
+			// Re-fetch the open run (cheap; trace records are local).
 			api.traces.get(selectedRunId).then((d) => {
 				detail = d;
 				// Keep the scrubber pinned to the newest event in live mode.
