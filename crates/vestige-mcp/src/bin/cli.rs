@@ -25,8 +25,8 @@ use chrono::{NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 use colored::Colorize;
 use vestige_core::{
-    IngestInput, PortableImportMode, SecretConfidence, SecretPolicy, SourceEnvelope,
-    SourceUpsertOutcome, Storage, scan_secrets,
+    ConnectionRecord, IngestInput, PortableImportMode, SecretConfidence, SecretPolicy,
+    SourceEnvelope, SourceUpsertOutcome, Storage, scan_secrets,
 };
 
 /// Vestige - Causal Proof Engine CLI
@@ -332,7 +332,10 @@ enum Commands {
     /// Ingest a memory as a new record
     ///
     /// Nothing is merged by similarity. On a Strata log the write passes the
-    /// log's gate before it is admitted.
+    /// log's gate before it is admitted, then auto-connects to earlier
+    /// memories that record the same exact identity: an exact tag, or an
+    /// exact file path, commit sha, `owner/repo#123` reference or URL. Shared
+    /// words never join (the ingest-time share of `vestige connect`).
     Ingest {
         /// Content to remember
         content: String,
@@ -382,6 +385,34 @@ enum Commands {
         /// Machine-readable output
         #[arg(long)]
         json: bool,
+    },
+
+    /// Create typed edges between memories that record the same exact identity
+    ///
+    /// Scans all memories of a scope and creates a `touched` edge between
+    /// each pair that records the same exact identity: an exact tag
+    /// (case-sensitive), an exact file path token, a whole-token commit sha
+    /// (40 hex, or 7+ hex), an `owner/repo#123` reference, or a URL. Shared
+    /// words never join two memories. A tag carried by more than 14
+    /// memories of the scope is too common to be evidence and is skipped;
+    /// file paths always join. Every pair is printed with the identities
+    /// that joined it. An edge records that two memories name the same
+    /// thing, not that one caused the other: a causal walk over these edges
+    /// returns hypotheses. Ingest auto-connects pairs as they land, and this
+    /// full scan also catches pairs that share a path only in their text.
+    Connect {
+        /// Show what edges would be created without writing them
+        #[arg(long)]
+        dry_run: bool,
+        /// Minimum distinct shared identities required (default 1)
+        #[arg(long, default_value = "1")]
+        min_shared: usize,
+        /// Maximum edges to create (safety cap)
+        #[arg(long, default_value = "100")]
+        max_edges: usize,
+        /// Project namespace to connect (default: user)
+        #[arg(long, default_value = "user")]
+        scope: String,
     },
 
     /// Read-only audit for credential-shaped values already in the local store.
@@ -625,6 +656,44 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Prove which commit broke a test: the causal walk proposes, the test decides
+    ///
+    /// Walks back from the failure memory (--logged-write) to the commits it
+    /// reaches over recorded edges, drops any committed after --reported-at
+    /// or outside good..bad, and freezes the protocol (the test's sha256,
+    /// the two ends, the leads) before any test runs. Then it runs your test
+    /// on those leads only, closest links first, and on the parent of the
+    /// earliest failing one.
+    /// Stock `git bisect run` over the whole range confirms it, reusing the
+    /// verdicts already recorded. Then it finds the smallest set of the
+    /// commit's changes that still fails, tests the commit without them, and
+    /// undoes them on the bad ref. The result is a verdict card: LEAD,
+    /// BOUNDARY, CONFIRMED, ISOLATED, REVERSED, each with whether it holds
+    /// and the runs behind it.
+    ///
+    /// With --flaky, for a bug that only shows some of the time, each commit
+    /// is tested repeatedly until the evidence is decisive, and the card
+    /// gains REPEATED.
+    ///
+    /// Output lines are labelled `[recorded link]` (a lead from the walk) or
+    /// `[tested]` (a test run). Every run is saved as an `event` memory and
+    /// written to the report, where each entry carries the sha256 of the one
+    /// before it. The test runs in a temporary git worktree, never in your
+    /// checkout. Its exit code is read as git bisect reads it: 0 good, 125
+    /// cannot test, any other code bad.
+    ///
+    /// `vestige prove --check <report.json>` re-verifies a report offline.
+    Prove(vestige_mcp::walk_verify::ProveArgs),
+
+    /// What `git bisect run` calls during `prove`
+    #[command(name = vestige_mcp::walk_verify::CHILD_COMMAND, hide = true)]
+    ProveChild {
+        /// `probe` or `sim`
+        mode: String,
+        /// The run configuration `prove` wrote
+        cfg: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -717,6 +786,12 @@ fn main() -> anyhow::Result<()> {
             max_commits,
             json,
         } => run_ingest_git(path, since, until, max_commits, json),
+        Commands::Connect {
+            dry_run,
+            min_shared,
+            max_edges,
+            scope,
+        } => run_connect(dry_run, min_shared, max_edges, scope),
         Commands::ScanSecrets {
             include_suspected,
             json,
@@ -805,6 +880,17 @@ fn main() -> anyhow::Result<()> {
             scope,
             json,
         } => run_forgotten_lesson(failure_id, scope, json),
+        Commands::Prove(args) => {
+            let code =
+                vestige_mcp::walk_verify::run(&args, || Ok((open_storage()?, cli_data_dir()?)))?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Commands::ProveChild { mode, cfg } => {
+            std::process::exit(vestige_mcp::walk_verify::child(&mode, &cfg))
+        }
     }
 }
 
@@ -3959,6 +4045,49 @@ fn run_ingest(
             format!("Memory created ({})", truncate(&content, 60))
         };
         println!("{}", confirmation.green().bold());
+
+        // Auto-connect: the ingest-time share of `vestige connect`, run on
+        // just this memory (the write goes to the default scope, like the
+        // ingest above). The memory is already saved, so a failure here is
+        // reported, never fatal — the same rule the post-ingest hooks keep.
+        match vestige_mcp::auto_connect::auto_connect_new_memory(
+            storage.as_ref(),
+            &node.id,
+            vestige_core::DEFAULT_MEMORY_SCOPE,
+            &node.content,
+            &node.tags,
+        ) {
+            Ok(report) => {
+                if report.edges > 0 {
+                    println!(
+                        "{}",
+                        format!(
+                            "Auto-connected: {} edge(s) created on exact identities: {}",
+                            report.edges,
+                            report.shared_identities.join(", ")
+                        )
+                        .green()
+                        .bold()
+                    );
+                    for pair in &report.pairs {
+                        println!(
+                            "  {} -[touched]-> {}  joined on: {}",
+                            pair.source_id,
+                            pair.target_id,
+                            pair.identities.join(", ")
+                        );
+                    }
+                }
+                if !report.skipped_common_tags.is_empty() {
+                    println!(
+                        "Auto-connect skipped tag(s) carried by more than {} memories: {}",
+                        vestige_mcp::auto_connect::MAX_TAG_CARRIERS,
+                        report.skipped_common_tags.join(", ")
+                    );
+                }
+            }
+            Err(err) => eprintln!("{} auto-connect skipped: {err}", "WARN".yellow()),
+        }
     }
 
     Ok(())
@@ -4831,6 +4960,258 @@ fn run_ingest_git(
         println!("{}: {}", "Unchanged".white().bold(), unchanged);
     }
     Ok(())
+}
+
+/// One candidate `touched` edge: the earlier memory as the source, the
+/// later one as the target, with the exact identities both record
+/// (`kind:value`).
+struct ConnectPair {
+    source_id: String,
+    target_id: String,
+    source_content: String,
+    target_content: String,
+    shared: Vec<String>,
+}
+
+/// Create typed edges between memories that record the same exact identity.
+///
+/// Memories ingested one by one used to land as isolated nodes: tags, no
+/// edges, so `causal-walk --logged-write` said no recorded causal edge leads
+/// upstream even when two memories recorded the same `src/path.py`. The
+/// ingest path now runs its share of this automatically
+/// (`vestige_mcp::auto_connect`, on the memories a save just wrote); this
+/// command remains the full-scan catch-up, joining pairs the ingest-time
+/// handles cannot see. It extracts the exact identities of every memory in
+/// the scope (`auto_connect::extract_identities`: tags, file paths, commit
+/// shas, issue references, URLs; no words, no ML, no similarity) and writes
+/// a `touched` edge for each pair sharing at least `--min-shared` of them,
+/// through `Storage::save_connection`, which on a Strata log is
+/// `StrataStore::save_connection` behind the gate. A tag carried by more
+/// than `auto_connect::MAX_TAG_CARRIERS` memories of the scope is skipped
+/// and named; every pair is printed with the identities that joined it.
+///
+/// Direction follows the walk's rule for `touched` (causal_walk.rs: the
+/// source is the earlier record, so from the target the walk goes to the
+/// source): the older memory of a pair is the source. Pairs already joined
+/// by a recorded edge — either direction — are skipped, so re-running is
+/// free.
+fn run_connect(
+    dry_run: bool,
+    min_shared: usize,
+    max_edges: usize,
+    scope: String,
+) -> anyhow::Result<()> {
+    println!("{}", "=== Vestige Connect ===".cyan().bold());
+    println!();
+
+    let storage = open_storage()?;
+    let mut nodes = fetch_nodes_in_scope(&storage, &scope)?;
+    // Oldest first, so a pair's source is its earlier memory.
+    nodes.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+
+    println!("{}: {}", "Scope".white().bold(), scope);
+    println!("{}: {}", "Memories scanned".white().bold(), nodes.len());
+
+    if nodes.len() < 2 {
+        println!();
+        println!(
+            "{}",
+            "Nothing to connect: fewer than two memories in this scope.".green()
+        );
+        return Ok(());
+    }
+
+    use vestige_mcp::auto_connect::{self, Identity};
+    let identity_sets: Vec<std::collections::BTreeSet<Identity>> = nodes
+        .iter()
+        .map(|node| {
+            auto_connect::extract_identities(&node.content, &node.tags)
+                .into_iter()
+                .collect()
+        })
+        .collect();
+
+    // The guard: a tag carried by more than MAX_TAG_CARRIERS memories of
+    // this scope joins everything to everything and is not evidence.
+    let common_tags = auto_connect::too_common_tags(nodes.iter().map(|node| node.tags.as_slice()));
+    if !common_tags.is_empty() {
+        println!(
+            "{}: {}",
+            format!(
+                "Tags skipped (carried by more than {} memories)",
+                auto_connect::MAX_TAG_CARRIERS
+            )
+            .white()
+            .bold(),
+            common_tags
+                .iter()
+                .map(|(tag, carriers)| format!("{tag} ({carriers})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    // Pairs already joined by any recorded edge (either direction) are left
+    // alone: re-running connect must not stack parallel edges.
+    let joined: HashSet<(String, String)> = storage
+        .get_all_connections()?
+        .into_iter()
+        .filter_map(|edge| {
+            (edge.source_id != edge.target_id).then(|| {
+                if edge.source_id < edge.target_id {
+                    (edge.source_id, edge.target_id)
+                } else {
+                    (edge.target_id, edge.source_id)
+                }
+            })
+        })
+        .collect();
+
+    // An edge needs at least one shared identity; --min-shared 0 is read as 1.
+    let min_shared = min_shared.max(1);
+    let mut pairs: Vec<ConnectPair> = Vec::new();
+    for (i, node) in nodes.iter().enumerate() {
+        for (later, set) in nodes.iter().zip(&identity_sets).skip(i + 1) {
+            let joining = auto_connect::joining_identities(&identity_sets[i], set, &common_tags);
+            if auto_connect::distinct_values(&joining) < min_shared {
+                continue;
+            }
+            let shared: Vec<String> = joining.iter().map(Identity::to_string).collect();
+            let key = if node.id < later.id {
+                (node.id.clone(), later.id.clone())
+            } else {
+                (later.id.clone(), node.id.clone())
+            };
+            if joined.contains(&key) {
+                continue;
+            }
+            pairs.push(ConnectPair {
+                source_id: node.id.clone(),
+                target_id: later.id.clone(),
+                source_content: node.content.clone(),
+                target_content: later.content.clone(),
+                shared,
+            });
+        }
+    }
+
+    println!("{}: {}", "Candidate pairs".white().bold(), pairs.len());
+    println!();
+
+    let capped = pairs.len() > max_edges;
+    pairs.truncate(max_edges);
+
+    if pairs.is_empty() {
+        println!(
+            "{}",
+            "No new edges: no memory pair shares an exact identity that is not already joined by a recorded edge."
+                .green()
+        );
+        return Ok(());
+    }
+
+    for pair in &pairs {
+        println!(
+            "  {} -[touched]-> {}  {}",
+            pair.source_id.dimmed(),
+            pair.target_id.dimmed(),
+            format!("joined on: {}", pair.shared.join(", ")).dimmed()
+        );
+        println!("      {}", truncate(&pair.source_content, 72).dimmed());
+        println!("      {}", truncate(&pair.target_content, 72).dimmed());
+    }
+
+    if dry_run {
+        println!();
+        println!(
+            "{}",
+            format!(
+                "Dry run: {} touched edge(s) would be created. Re-run without --dry-run to write them.",
+                pairs.len()
+            )
+            .yellow()
+            .bold()
+        );
+        return Ok(());
+    }
+
+    let now = Utc::now();
+    let mut created = 0usize;
+    let mut errors = 0usize;
+    for pair in &pairs {
+        // strength 0.5 -> strength_milli 500: a co-touch is a moderate link.
+        let edge = ConnectionRecord {
+            source_id: pair.source_id.clone(),
+            target_id: pair.target_id.clone(),
+            strength: 0.5,
+            link_type: "touched".to_string(),
+            created_at: now,
+            last_activated: now,
+            activation_count: 0,
+        };
+        match storage.save_connection(&edge) {
+            Ok(()) => created += 1,
+            Err(err) => {
+                eprintln!(
+                    "  {} Failed to connect {} -> {}: {}",
+                    "ERR".red(),
+                    pair.source_id,
+                    pair.target_id,
+                    err
+                );
+                errors += 1;
+            }
+        }
+    }
+
+    println!();
+    if capped {
+        println!(
+            "{} stopped at the --max-edges cap ({max_edges}); more candidate pairs remain.",
+            "truncated:".yellow()
+        );
+    }
+    println!(
+        "{}",
+        format!(
+            "Connect complete: {}/{} touched edge(s) created{}",
+            created,
+            pairs.len(),
+            if errors > 0 {
+                format!(" ({} errors)", errors)
+            } else {
+                String::new()
+            }
+        )
+        .green()
+        .bold()
+    );
+
+    Ok(())
+}
+
+/// Fetch every node in one scope using pagination (the scoped sibling of
+/// [`fetch_all_nodes`]; connect keeps its edges within one scope, the same
+/// invariant `check_links` enforces for declared links).
+fn fetch_nodes_in_scope(
+    storage: &Arc<Storage>,
+    scope: &str,
+) -> anyhow::Result<Vec<vestige_core::KnowledgeNode>> {
+    let mut all_nodes = Vec::new();
+    let page_size = 500;
+    let mut offset = 0;
+
+    loop {
+        let batch = storage.get_all_nodes_in_scope(scope, page_size, offset)?;
+        let batch_len = batch.len();
+        all_nodes.extend(batch);
+        if batch_len < page_size as usize {
+            break;
+        }
+        offset += page_size;
+    }
+
+    Ok(all_nodes)
 }
 
 /// Recall by exact handle (both stores), or by free text through the real
