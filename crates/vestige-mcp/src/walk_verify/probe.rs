@@ -23,7 +23,7 @@ pub(super) const CANNOT_TEST: i64 = 125;
 const MAX_SKIPS: u32 = 5;
 
 /// What a test's exit code means, as `git bisect run` reads it.
-pub fn verdict_of(exit: i64) -> &'static str {
+pub(super) fn verdict_of(exit: i64) -> &'static str {
     match exit {
         0 => "good",
         CANNOT_TEST => "skip",

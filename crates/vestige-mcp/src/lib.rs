@@ -33,5 +33,5 @@ pub mod walk_verify;
 /// valid builds, and every status surface must say "built without embeddings"
 /// where it would otherwise look like a runtime that failed to start.
 pub const fn embeddings_compiled_in() -> bool {
-    cfg!(vestige_embeddings_removed)
+    false
 }

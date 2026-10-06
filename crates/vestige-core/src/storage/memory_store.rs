@@ -252,7 +252,6 @@ pub struct ModelSignature {
 /// declared below, which adapts `MemoryStoreSend` into a boxed-future surface
 /// and is the public storage abstraction for cognitive modules and tests
 /// that want `Arc<dyn MemoryStore>`.
-#[allow(unused_variables)] // stub defaults ignore their arguments
 #[trait_variant::make(MemoryStoreSend: Send)]
 pub trait LocalMemoryStore: Sync + 'static {
     // --- Lifecycle ---

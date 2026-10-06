@@ -40,7 +40,7 @@ use serde_json::json;
 
 use super::entities::EntitySpan;
 
-pub const WEIGHTS_VERSION: &str = "linear-v1";
+const WEIGHTS_VERSION: &str = "linear-v1";
 
 // Named weights of the published linear-v1 formula (sum = 1.0).
 const W_ENTITY_DENSITY: f64 = 0.25;
@@ -64,7 +64,7 @@ pub struct ImportanceFactors {
 ///
 /// Deterministic and pure; `unique_entity_count` counts distinct
 /// `(kind, surface)` pairs (BTreeSet, so no iteration-order dependence).
-pub fn compute_factors(content: &str, spans: &[EntitySpan], tags: &[String]) -> ImportanceFactors {
+fn compute_factors(content: &str, spans: &[EntitySpan], tags: &[String]) -> ImportanceFactors {
     let mut unique: BTreeSet<(&str, &str)> = BTreeSet::new();
     for span in spans {
         unique.insert((span.kind.as_str(), span.surface.as_str()));
@@ -87,7 +87,7 @@ pub fn score(f: &ImportanceFactors) -> f64 {
 /// Recompute the score from logged factors alone. This is THE single
 /// implementation of the published formula; [`score`] is an alias for it,
 /// so the two can never drift.
-pub fn recompute_from_factors(f: &ImportanceFactors) -> f64 {
+fn recompute_from_factors(f: &ImportanceFactors) -> f64 {
     let entity_density = (f.entity_count as f64 / 16.0).min(1.0);
     let entropy_norm = clamp01((f.entropy_bits_per_byte - 3.0) / 5.0);
     let length_band =

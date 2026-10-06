@@ -1,6 +1,6 @@
 [package]
 name = "vestige-core"
-version = "4.1.1"
+version = "4.2.0"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Vestige Team"]
@@ -50,31 +50,6 @@ codebase-git = ["dep:git2"]
 # Set VESTIGE_ENCRYPTION_KEY env var to enable encryption
 encryption = ["legacy-sqlite", "rusqlite/bundled-sqlcipher"]
 
-# ---------------------------------------------------------------------------
-# DEPRECATED NO-OP STUBS (vector/embedding removal).
-#
-# The embedding generation (embeddings/, embedder/), HNSW vector index
-# (search/vector.rs), reranker, and HyDE modules were removed. These feature
-# names remain as EMPTY stubs ONLY because manifests outside this crate's
-# current change scope still forward/reference them and cargo fails workspace
-# resolution if a forwarded feature does not exist:
-#   - crates/vestige-mcp/Cargo.toml (embeddings, vector-search, ort-download,
-#     ort-dynamic, qwen3-embeddings, metal, cuda, cudnn)
-#   - tests/e2e/Cargo.toml (embeddings, vector-search)
-# They enable no code or dependencies. Rust cfg sites use the unset
-# `vestige_embeddings_removed` cfg, not these feature names, so
-# `--all-features` does not compile the deleted embedding paths.
-# Delete the stubs together with the forwarded names. See SCOPE-HANDOFF.md.
-# ---------------------------------------------------------------------------
-embeddings = []
-vector-search = []
-ort-download = []
-ort-dynamic = []
-qwen3-embeddings = []
-metal = []
-cuda = []
-cudnn = []
-
 # External-source connectors (#57). The connector *contract*, normalization,
 # and content-hashing are always compiled (pure, no network). This feature adds
 # the network-backed reference connectors (GitHub Issues, …) via `reqwest`, so
@@ -88,7 +63,6 @@ connectors = ["dep:reqwest"]
 # build stays network-free. Uses `reqwest`'s blocking client because the
 # `PortableSyncBackend` trait methods are synchronous.
 cloud-sync = ["dep:reqwest", "reqwest/blocking", "dep:chacha20poly1305", "dep:argon2"]
-
 
 [dependencies]
 # Serialization
@@ -166,4 +140,3 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(vestige_embeddings_removed)"] }

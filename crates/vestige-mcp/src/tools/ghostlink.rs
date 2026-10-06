@@ -190,12 +190,6 @@ fn default_severity() -> String {
 #[derive(Debug, Deserialize)]
 struct LawFile {
     ghostlink_invariant_laws: Vec<InvariantLaw>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    version: Option<Value>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    date: Option<Value>,
 }
 
 /// Where the seeded laws came from.

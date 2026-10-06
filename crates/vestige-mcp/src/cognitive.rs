@@ -7,8 +7,6 @@
 use std::sync::Arc;
 use vestige_core::neuroscience::predictive_retrieval::PredictiveMemory;
 use vestige_core::neuroscience::prospective_memory::{IntentionParser, ProspectiveMemory};
-#[cfg(vestige_embeddings_removed)]
-use vestige_core::search::TemporalSearcher;
 use vestige_core::{
     AccessibilityCalculator,
     // Neuroscience modules
@@ -40,14 +38,6 @@ use vestige_core::{
     SynapticTaggingSystem,
 };
 
-/// Number of cognitive modules held by [`CognitiveEngine`] in this build.
-/// These are in-process Rust structs with no runtime failure channel, so the
-/// health view reports this as the compiled-in module count, not a runtime
-/// probe. When you add a module field, update the matching arm here and
-/// `cognitive_module_count_is_maintained`.
-#[cfg(vestige_embeddings_removed)]
-pub const COGNITIVE_MODULE_COUNT: usize = 16 + 10 + 1;
-#[cfg(not(vestige_embeddings_removed))]
 pub const COGNITIVE_MODULE_COUNT: usize = 16 + 10;
 
 /// Stateful cognitive engine holding all neuroscience modules.
@@ -87,8 +77,6 @@ pub struct CognitiveEngine {
     pub consolidation_scheduler: ConsolidationScheduler,
 
     // -- Search --
-    #[cfg(vestige_embeddings_removed)]
-    pub temporal_searcher: TemporalSearcher,
 }
 
 impl Default for CognitiveEngine {
@@ -180,8 +168,6 @@ impl CognitiveEngine {
             consolidation_scheduler: ConsolidationScheduler::new(),
 
             // Search
-            #[cfg(vestige_embeddings_removed)]
-            temporal_searcher: TemporalSearcher::new(),
         }
     }
 }
@@ -202,7 +188,7 @@ mod tests {
     fn cognitive_module_count_is_maintained() {
         let expected = 16
             + 10
-            + if cfg!(vestige_embeddings_removed) {
+            + if false {
                 1
             } else {
                 0

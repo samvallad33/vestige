@@ -9,7 +9,7 @@ use super::text::split_lines;
 /// file diff for a file that is added, deleted, or has no hunks (binary,
 /// mode change, pure rename).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Unit {
+pub(super) struct Unit {
     pub file: String,
     /// The file's diff header, repeated before the hunks of one file. Empty
     /// for a whole-file unit, whose `body` carries its own header.
@@ -89,7 +89,7 @@ fn hunk_start(hunk: &[u8]) -> u64 {
 
 /// Split a unified diff into units: one per hunk, or the whole file diff for
 /// new, deleted and hunkless files.
-pub fn split_hunks(diff: &[u8]) -> Vec<Unit> {
+pub(super) fn split_hunks(diff: &[u8]) -> Vec<Unit> {
     let mut units = Vec::new();
     let files = line_starts_with(diff, b"diff --git ");
     for (index, &begin) in files.iter().enumerate() {
@@ -135,7 +135,7 @@ pub fn split_hunks(diff: &[u8]) -> Vec<Unit> {
 
 /// The patch that applies exactly these units, in diff order: each file's
 /// header once, then its hunks.
-pub fn patch_of(units: &[&Unit]) -> Vec<u8> {
+pub(super) fn patch_of(units: &[&Unit]) -> Vec<u8> {
     let mut patch = Vec::new();
     let mut last: Option<&[u8]> = None;
     for unit in units {
@@ -160,7 +160,7 @@ pub(super) fn names_of(units: &[&Unit]) -> String {
 /// Zeller's ddmin: shrink `items` to a 1-minimal subset for which `fails`
 /// still holds. `fails` spends the budget; the search stops when it is used
 /// up, and the subset returned then still fails but may shrink further.
-pub fn ddmin<T, F>(items: Vec<T>, budget: &Cell<i64>, mut fails: F) -> Vec<T>
+pub(super) fn ddmin<T, F>(items: Vec<T>, budget: &Cell<i64>, mut fails: F) -> Vec<T>
 where
     T: Clone + PartialEq,
     F: FnMut(&[T]) -> bool,

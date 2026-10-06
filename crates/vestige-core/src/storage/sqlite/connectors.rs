@@ -167,18 +167,6 @@ impl SqliteMemoryStore {
             )?;
         }
 
-        #[cfg(vestige_embeddings_removed)]
-        {
-            if let Some(index) = self.vector_index.as_ref()
-                && let Ok(mut index) = index.lock()
-            {
-                let _ = index.remove(&node_id);
-            }
-            if let Err(e) = self.generate_embedding_for_node(&node_id, &input.content) {
-                tracing::warn!("Failed to regenerate embedding for {}: {}", node_id, e);
-            }
-        }
-
         Ok(SourceUpsertResult {
             outcome: SourceUpsertOutcome::Updated,
             node_id,

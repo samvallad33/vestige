@@ -1027,45 +1027,11 @@ fn parse_sha256(text: &str) -> anyhow::Result<String> {
     Ok(hash)
 }
 
-fn sha256_from_command(command: &mut Command) -> anyhow::Result<Option<String>> {
-    match command.output() {
-        Ok(output) if output.status.success() => {
-            let text = String::from_utf8_lossy(&output.stdout);
-            Ok(Some(parse_sha256(&text)?))
-        }
-        Ok(_) => Ok(None),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).context("failed to run checksum command"),
-    }
-}
-
+/// The SHA-256 of a file, computed in process (the same digest `vestige prove`
+/// freezes into its protocol).
 fn compute_sha256(path: &Path) -> anyhow::Result<String> {
-    #[cfg(windows)]
-    {
-        if let Some(hash) = sha256_from_command(
-            Command::new("powershell")
-                .arg("-NoProfile")
-                .arg("-Command")
-                .arg("(Get-FileHash -Algorithm SHA256 -LiteralPath $args[0]).Hash.ToLowerInvariant()")
-                .arg(path),
-        )? {
-            return Ok(hash);
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        if let Some(hash) =
-            sha256_from_command(Command::new("shasum").arg("-a").arg("256").arg(path))?
-        {
-            return Ok(hash);
-        }
-        if let Some(hash) = sha256_from_command(Command::new("sha256sum").arg(path))? {
-            return Ok(hash);
-        }
-    }
-
-    anyhow::bail!("no SHA-256 command available to verify release archive");
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(vestige_mcp::walk_verify::json::sha256_hex(&bytes))
 }
 
 fn verify_release_checksum(archive_path: &Path, checksum_path: &Path) -> anyhow::Result<()> {
@@ -3501,7 +3467,7 @@ fn run_export(
                 writer.write_all(b"\n")?;
             }
         }
-        _ => unreachable!(),
+        _ => unreachable!("clap limits the format to json or jsonl"),
     }
 
     writer.flush()?;
@@ -4642,11 +4608,6 @@ fn run_causal_walk(
         && let Some(id) = node_id
     {
         start_points.push(cw::StartPoint::LoggedWrite { node_id: id });
-    }
-
-    #[cfg(vestige_embeddings_removed)]
-    {
-        let _ = storage.init_embeddings();
     }
 
     let request = cw::CausalWalkRequest {

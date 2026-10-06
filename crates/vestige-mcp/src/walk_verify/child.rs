@@ -34,7 +34,7 @@ use super::stats::Stats;
 
 /// What the subcommand exits with when it fails itself. `git bisect run`
 /// aborts on any code from 128 up.
-pub const CHILD_FAILED: i32 = 255;
+pub(super) const CHILD_FAILED: i32 = 255;
 
 // git reads 1..=127 as a verdict on the commit and aborts from 128.
 const _: () = assert!(CHILD_FAILED >= 128);

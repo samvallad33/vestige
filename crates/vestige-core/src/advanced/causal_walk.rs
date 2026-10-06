@@ -348,7 +348,6 @@ pub struct WalkRecord {
 
 /// The full sha a commit record carries (first line: `commit <sha> ...`).
 /// Same pattern as the MCP backfill tool so both sides of the wire agree.
-#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 fn commit_sha_of(content: &str) -> Option<String> {
     let mut words = content.split_whitespace();
     if words.next() != Some("commit") {
@@ -360,7 +359,6 @@ fn commit_sha_of(content: &str) -> Option<String> {
 
 /// Parse the `files:` / `symbols:` lines of a `git_records::record_content`
 /// body. `( +N more)` truncation markers are dropped, never parsed as paths.
-#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 fn parse_prefixed_line(content: &str, prefix: &str) -> Vec<String> {
     content
         .lines()
@@ -381,7 +379,6 @@ fn parse_prefixed_line(content: &str, prefix: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 fn walk_record_of(
     id: &str,
     content: &str,
@@ -1100,8 +1097,8 @@ impl Default for CausalWalkRequest {
     }
 }
 
-#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
-fn git_lines(repo: &str, git_args: &[&str]) -> Option<Vec<String>> {
+/// The stdout lines of `git -C <repo> <args>`, or `None` when git fails.
+pub fn git_lines(repo: &str, git_args: &[&str]) -> Option<Vec<String>> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(repo)

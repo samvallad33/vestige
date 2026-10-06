@@ -1324,25 +1324,6 @@ pub async fn execute(
     // ====================================================================
     // STAGE 3: Temporal boosting (recency + validity windows)
     // ====================================================================
-    #[cfg(vestige_embeddings_removed)]
-    if let Ok(cog) = cognitive.try_lock() {
-        for (index, result) in filtered_results.iter_mut().enumerate() {
-            let recency = cog.temporal_searcher.recency_boost(result.node.created_at);
-            let validity = cog.temporal_searcher.validity_boost(
-                result.node.valid_from,
-                result.node.valid_until,
-                valid_at,
-            );
-            let temporal_factor = recency * validity;
-            if rank_native {
-                fusion_signals[index].temporal = temporal_factor;
-            } else {
-                // Blend: 85% relevance + 15% temporal signal
-                result.combined_score = result.combined_score * 0.85
-                    + (result.combined_score * temporal_factor as f32) * 0.15;
-            }
-        }
-    }
 
     // ====================================================================
     // STAGE 4: Memory state accessibility filtering

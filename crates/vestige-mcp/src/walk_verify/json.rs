@@ -11,12 +11,12 @@ use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 
 /// One probe-log entry, as it is hashed and as the report stores it.
-pub type Entry = Map<String, Value>;
+pub(super) type Entry = Map<String, Value>;
 
 /// The `prev` of the first entry of a chain.
-pub const ZERO_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub(super) const ZERO_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-pub(super) fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -24,7 +24,7 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// `json.dumps(value, sort_keys=True, separators=(",", ":"))`, byte for byte.
-pub fn canonical_json(value: &Value) -> String {
+pub(super) fn canonical_json(value: &Value) -> String {
     let mut out = String::new();
     write_canonical(value, &mut out);
     out
@@ -217,7 +217,7 @@ fn write_pretty(value: &Value, depth: usize, out: &mut String) {
 
 /// The hash of one entry: `sha256(prev + canonical JSON of the entry without
 /// its "hash" field)`, hex.
-pub fn chain_hash(prev: &str, entry: &Entry) -> String {
+pub(super) fn chain_hash(prev: &str, entry: &Entry) -> String {
     let mut body = String::from(prev);
     write_object(entry, &["hash"], &mut body);
     sha256_hex(body.as_bytes())
@@ -225,7 +225,7 @@ pub fn chain_hash(prev: &str, entry: &Entry) -> String {
 
 /// The hash of a frozen protocol: sha256 over the canonical JSON of its
 /// fields, without the `sha256` and `memory` the report adds afterwards.
-pub fn protocol_hash(protocol: &Map<String, Value>) -> String {
+pub(super) fn protocol_hash(protocol: &Map<String, Value>) -> String {
     let mut body = String::new();
     write_object(protocol, &["sha256", "memory"], &mut body);
     sha256_hex(body.as_bytes())

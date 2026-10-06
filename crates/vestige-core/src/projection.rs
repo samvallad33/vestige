@@ -95,13 +95,10 @@ pub const BEGIN_MARKER: &str = "<!-- vestige:projection:begin";
 pub const END_MARKER: &str = "<!-- vestige:projection:end -->";
 
 /// Node types projected regardless of tags, in output order.
-#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 const DURABLE_TYPES: [&str; 2] = ["decision", "pattern"];
 /// Tags that make a fact or note durable enough to project.
-#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 const DURABLE_TAGS: [&str; 3] = ["rule", "preference", "convention"];
 /// How many candidates to pull per query before filtering.
-#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 const CANDIDATE_LIMIT: i32 = 500;
 /// Longest single projected line before it is cut.
 const MAX_LINE_CHARS: usize = 400;

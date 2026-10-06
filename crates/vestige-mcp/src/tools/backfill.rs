@@ -15,6 +15,7 @@ use vestige_core::advanced::retroactive_backfill::{
     self, BackfillCandidate, BackfillResult, ExcludedCandidate, FailureEvent, RetroactiveBackfill,
 };
 use vestige_core::{ConnectionRecord, KnowledgeNode, Storage};
+use vestige_core::advanced::causal_walk::git_lines;
 
 pub fn schema() -> Value {
     json!({
@@ -154,25 +155,6 @@ fn resolve_version_range(
         broke,
         git_records::parse_rev_list(&shas.join("\n")),
     )))
-}
-
-fn git_lines(repo: &str, git_args: &[&str]) -> Option<Vec<String>> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(git_args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-    )
 }
 
 /// The full sha a commit record carries (first line: `commit <sha> ...`).

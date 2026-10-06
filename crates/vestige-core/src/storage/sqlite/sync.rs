@@ -299,9 +299,6 @@ impl SqliteMemoryStore {
             tx.commit()?;
         }
 
-        #[cfg(vestige_embeddings_removed)]
-        self.load_embeddings_into_index()?;
-
         Ok(report)
     }
 

@@ -88,8 +88,8 @@ pub fn tool_guide(catalog: &Value, args: &Value) -> Result<Value, String> {
         "catalogVersion": env!("CARGO_PKG_VERSION"),
         "source": "tools/list",
         "compiledFeatures": {
-            "embeddings": cfg!(vestige_embeddings_removed),
-            "vectorSearch": cfg!(vestige_embeddings_removed),
+            "embeddings": false,
+            "vectorSearch": false,
             "connectors": cfg!(feature = "connectors"),
             "cloudSync": cfg!(feature = "cloud-sync"),
         },

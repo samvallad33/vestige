@@ -21,7 +21,7 @@
 //! the original), and every create response carries proof fields
 //! (`receiptId`, `canonicalHash`, `entities`, `importance`) derivable from
 //! log facts or the submitted bytes alone. No clock reads and no randomness
-//! decide anything on this path; see INGEST-V5-SPEC.md.
+//! decide anything on this path.
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
@@ -1011,7 +1011,7 @@ fn auto_connect_slot(storage: &Arc<Storage>, slot: &mut Value, node_id: &str, sc
 }
 
 // ============================================================================
-// INGEST-V5: proof-carrying write path (see INGEST-V5-SPEC.md, Lane B).
+// The proof-carrying write path.
 // Determinism law: nothing below reads a clock or any randomness to decide
 // anything; every response field is a log fact or a pure function of the
 // submitted bytes.
@@ -1065,6 +1065,7 @@ fn enrich_create_response(
         serde_json::json!(strata_store::canonical::canonical_hash_hex(content));
     let spans = crate::intake::entities::extract_typed_spans(content);
     response["entities"] = entity_spans_json(&spans, MAX_RESPONSE_ENTITY_SPANS);
+    response["entitiesExtractor"] = Value::from(crate::intake::entities::EXTRACTOR_VERSION);
     response["importance"] = crate::intake::importance::compute_and_format(content, &spans, tags);
 }
 
@@ -1220,12 +1221,12 @@ fn reinforce_duplicate(
         &mut response,
         scope,
         IntentRecord {
-            intent_id: intent_id,
+            intent_id,
             node_id: &echo_id,
             effect_seq: echo_seq,
             submitted_content: content,
-            submitted_source: submitted_source,
-            stored_tags: stored_tags,
+            submitted_source,
+            stored_tags,
         },
     );
     Ok(response)
@@ -1472,8 +1473,6 @@ async fn execute_verbose(
     } else {
         SecretPolicy::Reject
     };
-    #[cfg(vestige_embeddings_removed)]
-    let input_has_secret_finding = !scan_secrets(&content).is_empty();
 
     // Validate content
     if content.trim().is_empty() {
@@ -1624,7 +1623,7 @@ async fn execute_verbose(
             IntentRecord {
                 intent_id: intents.single.as_deref(),
                 node_id: &node_id,
-                effect_seq: effect_seq,
+                effect_seq,
                 submitted_content: &content,
                 submitted_source: &submitted_source,
                 stored_tags: &hook_tags,
@@ -1640,124 +1639,6 @@ async fn execute_verbose(
     // failure hooks (backfill and failure feedback).
     let hook_tags: Vec<String> = input.tags.clone();
 
-    #[cfg(vestige_embeddings_removed)]
-    {
-        // Reconsolidation handoff: snapshot the live labile set so a conflict
-        // or supersede against one of these memories is routed through a
-        // reconsolidation merge plan instead of mutating immediately.
-        let labile = current_labile_candidates(cognitive);
-        let result = storage
-            .smart_ingest_in_scope_with_secret_policy_and_labile(
-                input,
-                &scope,
-                secret_policy,
-                &labile,
-            )
-            .map_err(|e| e.to_string())?;
-        let node_id = result.node.id.clone();
-        let node_content = result.node.content.clone();
-        let node_type = result.node.node_type.clone();
-        let has_embedding = result.node.has_embedding.unwrap_or(false);
-        let previous_content = if input_has_secret_finding {
-            Some("[redacted: credential-bearing ingest]".to_string())
-        } else {
-            result.previous_content.clone()
-        };
-        let merge_preview = if input_has_secret_finding {
-            Some("[redacted: credential-bearing ingest]".to_string())
-        } else {
-            result.merge_preview.clone()
-        };
-
-        // Post-ingest cognitive side effects
-        let synaptic_capture = run_post_ingest_with_snapshot(
-            storage,
-            cognitive,
-            &node_id,
-            &node_content,
-            &node_type,
-            importance_composite,
-            importance_snapshot.clone(),
-        );
-
-        // #252 Phase A: a reinforce decision IS the caller endorsing the
-        // existing revision as already correct. With a bound process actor,
-        // the storage layer left the strength bump to this call so the
-        // mutation, evidence, and receipt commit in ONE transaction.
-        let reinforcement = if result.decision == "reinforce" {
-            match storage.record_reinforce_endorsement(
-                &node_id,
-                claimed_role.as_deref(),
-                "smart_ingest",
-            ) {
-                Ok(outcome) => Some(outcome),
-                Err(error) => {
-                    return Err(format!(
-                        "reinforcement evidence failed and the mutation was rolled back; \
-                         no memory changed: {error}"
-                    ));
-                }
-            }
-        } else {
-            None
-        };
-
-        let failure_hooks =
-            run_failure_hooks(storage, &node_id, &node_content, &hook_tags, &scope).await;
-        let mut response = serde_json::json!({
-            "success": true,
-            "decision": result.decision,
-            "nodeId": node_id,
-            "scope": scope,
-            "message": format!("Smart ingest complete: {}", result.reason),
-            "hasEmbedding": has_embedding,
-            "similarity": result.similarity,
-            "predictionError": result.prediction_error,
-            "supersededId": result.superseded_id,
-            "previousContent": previous_content,
-            "mergedFrom": result.merged_from,
-            "mergePreview": merge_preview,
-            "autoClosedUntil": result.auto_closed_until.map(|value| value.to_rfc3339()),
-            "reconsolidation": result.reconsolidation_plan_id.as_ref().map(|plan_id| {
-                reconsolidation_surface(plan_id, &result.decision)
-            }),
-            "importanceScore": importance_composite,
-            "synapticCapture": synaptic_capture,
-            "reason": result.reason,
-            "validity": validity_response(&validity),
-            "tagSuggestions": tag_suggestions.suggestions,
-            "tagSuggestionStatus": tag_suggestions.status,
-            "acceptedTagSuggestions": accepted_tag_suggestions,
-            "explanation": match result.decision.as_str() {
-                "create" => "Created new memory - content was different enough from existing memories",
-                "update" => "Updated existing memory - content was similar to an existing memory",
-                "reinforce" => "Reinforced existing memory - content was nearly identical",
-                "supersede" => "Superseded old memory - new content is an improvement/correction",
-                "reconsolidation_pending" => "Conflict with a memory inside its labile window - routed to a reconsolidation merge plan for review instead of overwriting",
-                "merge" => "Merged with related memories - content connects multiple topics",
-                "replace" => "Replaced existing memory content entirely",
-                "add_context" => "Added new content as context to existing memory",
-                _ => "Memory processed successfully"
-            }
-        });
-        match &reinforcement {
-            Some(outcome) => {
-                response["actor"] = crate::actor_surface::actor_block(&outcome.endorsement);
-                response["endorsement"] = crate::actor_surface::endorsement_block(outcome);
-            }
-            None => {
-                crate::actor_surface::attach_actor_block(
-                    &mut response,
-                    storage,
-                    claimed_role.as_deref(),
-                );
-            }
-        }
-        attach_failure_hooks(&mut response, failure_hooks);
-        Ok(response)
-    }
-
-    #[cfg(not(vestige_embeddings_removed))]
     {
         // ================================================================
         // INGEST-V5 B2.3 — canonical duplicate gate. A canonically identical
@@ -1833,7 +1714,7 @@ async fn execute_verbose(
             IntentRecord {
                 intent_id: intents.single.as_deref(),
                 node_id: &node_id,
-                effect_seq: effect_seq,
+                effect_seq,
                 submitted_content: &content,
                 submitted_source: &submitted_source,
                 stored_tags: &hook_tags,
@@ -1843,39 +1724,6 @@ async fn execute_verbose(
         attach_failure_hooks(&mut response, failure_hooks);
         Ok(response)
     }
-}
-
-/// Snapshot the live reconsolidation windows for the write-path handoff.
-///
-/// The retrieval side owns the `ReconsolidationManager`; the storage side
-/// never sees it, so the MCP layer carries the live set into each ingest call.
-/// If the cognitive engine lock is contended, an empty set is passed and the
-/// ingest behaves exactly as before — the handoff must never block a write.
-#[cfg(vestige_embeddings_removed)]
-fn current_labile_candidates(
-    cognitive: &Arc<Mutex<CognitiveEngine>>,
-) -> Vec<vestige_core::LabileCandidate> {
-    cognitive
-        .try_lock()
-        .map(|cog| cog.reconsolidation.labile_candidates())
-        .unwrap_or_default()
-}
-
-/// The reconsolidation verdict surface embedded in an ingest response: the
-/// plan id plus how to act on it through the existing `dedup` decision
-/// surface. Present only when a plan was created.
-#[cfg(vestige_embeddings_removed)]
-fn reconsolidation_surface(plan_id: &str, decision: &str) -> Value {
-    serde_json::json!({
-        "planId": plan_id,
-        "decision": decision,
-        "verdicts": {
-            "approve": "apply the plan (dedup action='verdict', verdict='approve', plan_id)",
-            "reject": "discard the plan; the target memory stays unchanged (verdict='reject')",
-            "quarantine": "suppress the target memory and close the plan (verdict='quarantine')"
-        },
-        "note": "The plan carries the memory snapshot taken when it was marked labile. Plans expire with the labile window if no verdict is given."
-    })
 }
 
 /// A kill switch read the way the other Vestige gates are: unset, empty or
@@ -2067,9 +1915,6 @@ async fn execute_batch(
 
     let mut results = Vec::new();
     let mut created = 0u32;
-    #[cfg(vestige_embeddings_removed)]
-    let mut updated = 0u32;
-    #[cfg(not(vestige_embeddings_removed))]
     let updated = 0u32;
     let mut skipped = 0u32;
     let mut errors = 0u32;
@@ -2174,8 +2019,6 @@ async fn execute_batch(
         } else {
             SecretPolicy::Reject
         };
-        #[cfg(vestige_embeddings_removed)]
-        let input_has_secret_finding = !scan_secrets(&item.content).is_empty();
 
         // ================================================================
         // COGNITIVE PRE-INGEST (per item)
@@ -2326,7 +2169,7 @@ async fn execute_batch(
                         IntentRecord {
                             intent_id: intent_id.as_deref(),
                             node_id: &node_id,
-                            effect_seq: effect_seq,
+                            effect_seq,
                             submitted_content: &item.content,
                             submitted_source: &submitted_source,
                             stored_tags: &hook_tags,
@@ -2346,91 +2189,6 @@ async fn execute_batch(
             continue;
         }
 
-        #[cfg(vestige_embeddings_removed)]
-        {
-            // Reconsolidation handoff for the batch: one snapshot of the live
-            // labile set covers the whole batch (ingest does not open windows;
-            // only retrieval does).
-            let labile = current_labile_candidates(cognitive);
-            match storage.smart_ingest_excluding_in_scope_with_secret_policy_and_labile(
-                input,
-                &scope,
-                &batch_created_node_ids,
-                secret_policy,
-                &labile,
-            ) {
-                Ok(result) => {
-                    let node_id = result.node.id.clone();
-                    let node_content = result.node.content.clone();
-                    let node_type = result.node.node_type.clone();
-                    let previous_content = if input_has_secret_finding {
-                        Some("[redacted: credential-bearing ingest]".to_string())
-                    } else {
-                        result.previous_content.clone()
-                    };
-                    let merge_preview = if input_has_secret_finding {
-                        Some("[redacted: credential-bearing ingest]".to_string())
-                    } else {
-                        result.merge_preview.clone()
-                    };
-
-                    match result.decision.as_str() {
-                        "create" | "supersede" | "merge" | "reconsolidation_pending" => {
-                            created += 1;
-                            batch_created_node_ids.push(node_id.clone());
-                        }
-                        "update" | "reinforce" | "replace" | "add_context" => updated += 1,
-                        _ => created += 1,
-                    }
-
-                    // Post-ingest cognitive side effects
-                    let synaptic_capture = run_post_ingest_with_snapshot(
-                        storage,
-                        cognitive,
-                        &node_id,
-                        &node_content,
-                        &node_type,
-                        importance_composite,
-                        importance_snapshot.clone(),
-                    );
-
-                    results.push(serde_json::json!({
-                        "index": i,
-                        "status": "saved",
-                        "decision": result.decision,
-                        "nodeId": node_id,
-                        "scope": scope,
-                        "similarity": result.similarity,
-                        "predictionError": result.prediction_error,
-                        "supersededId": result.superseded_id,
-                        "previousContent": previous_content,
-                        "mergedFrom": result.merged_from,
-                        "mergePreview": merge_preview,
-                        "autoClosedUntil": result.auto_closed_until.map(|value| value.to_rfc3339()),
-                        "reconsolidation": result.reconsolidation_plan_id.as_ref().map(|plan_id| {
-                            reconsolidation_surface(plan_id, &result.decision)
-                        }),
-                        "importanceScore": importance_composite,
-                        "synapticCapture": synaptic_capture,
-                        "reason": result.reason,
-                        "validity": validity_response(&validity),
-                        "tagSuggestions": tag_suggestions.suggestions,
-                        "tagSuggestionStatus": tag_suggestions.status,
-                        "acceptedTagSuggestions": accepted_tag_suggestions,
-                    }));
-                }
-                Err(e) => {
-                    errors += 1;
-                    results.push(serde_json::json!({
-                        "index": i,
-                        "status": if matches!(&e, StorageError::SecretDetected { .. }) { "rejected" } else { "error" },
-                        "reason": e.to_string()
-                    }));
-                }
-            }
-        }
-
-        #[cfg(not(vestige_embeddings_removed))]
         {
             // ================================================================
             // INGEST-V5 B3 — canonical duplicate gate per item (the B2.3
@@ -2535,7 +2293,7 @@ async fn execute_batch(
                         IntentRecord {
                             intent_id: intent_id.as_deref(),
                             node_id: &node_id,
-                            effect_seq: effect_seq,
+                            effect_seq,
                             submitted_content: &item.content,
                             submitted_source: &submitted_source,
                             stored_tags: &hook_tags,

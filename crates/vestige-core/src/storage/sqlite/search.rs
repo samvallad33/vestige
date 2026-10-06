@@ -812,7 +812,7 @@ mod w1b_search_collapse_tests {
     //! Regression guards for the w1b search collapse: keyword/exact retrieval
     //! is the only retrieval. These live in search.rs (not tests.rs) because
     //! tests.rs still carries vector-era helpers pending the cross-scope
-    //! cleanup tracked in SCOPE-HANDOFF.md.
+    //! cleanup still pending.
 
     use super::*;
 

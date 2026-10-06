@@ -2,13 +2,13 @@
 //!
 //! Tool implementations for the Vestige MCP server.
 //!
-//! v2.3 advertised surface is 14 tools: the v2.2 consolidated 12 plus the
+//! 4.x advertised surface is 16 tools: the v2.2 consolidated 12 plus the
 //! controlled `receipt` surface and the flagship `backfill` primitive. The
 //! unified facade modules (recall, dedup, memory_status, graph_unified, maintain, plus
 //! the earlier *_unified) dispatch on an action/mode/view discriminator and
 //! delegate to the granular handler modules below, which stay in the crate as
 //! the implementation layer and as hidden back-compat aliases (see the redirect
-//! arms in server.rs). See docs/launch/tool-consolidation-v2.2.0.md.
+//! arms in server.rs).
 
 // Wire-budget compaction for tools/list (#212); full schemas stay
 // available through memory_status view='tools'.

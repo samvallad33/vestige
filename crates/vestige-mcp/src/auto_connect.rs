@@ -159,13 +159,8 @@ pub const MAX_AUTO_EDGES: usize = 100;
 /// it is never a hub, and the full scan always joins it.
 pub const SMALL_TAG_GROUP: usize = largest_group_within(MAX_AUTO_EDGES);
 
-/// The name [`SMALL_TAG_GROUP`] had when it was a flat cap on every tag. It
-/// no longer caps anything by itself (see the module docs); it is kept so
-/// code written against that name still builds.
-pub const MAX_TAG_CARRIERS: usize = SMALL_TAG_GROUP;
-
 /// The pairs among `carriers` memories, each joined to every other.
-pub const fn pairs_among(carriers: usize) -> usize {
+const fn pairs_among(carriers: usize) -> usize {
     carriers.saturating_mul(carriers.saturating_sub(1)) / 2
 }
 
@@ -366,7 +361,7 @@ impl RankedCandidate {
 /// then rarer identities (fewer carriers), then id. Nothing but the recorded
 /// identities, their carrier counts and the id decides the order, so the
 /// same store always ranks the same way.
-pub fn rank_candidates(candidates: &mut [RankedCandidate]) {
+fn rank_candidates(candidates: &mut [RankedCandidate]) {
     candidates.sort_by_cached_key(|candidate| (candidate.strength(), candidate.id.clone()));
 }
 
@@ -592,7 +587,7 @@ pub fn auto_connect_new_memory(
 /// (the first `budget` of them are linked), and every tag it did not join
 /// on, sorted by tag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EdgePlan {
+struct EdgePlan {
     pub ranked: Vec<RankedCandidate>,
     pub skipped: Vec<SkippedTag>,
 }
@@ -623,7 +618,7 @@ pub struct EdgePlan {
 /// counts, tag names and memory ids decides it. Every tag left out is
 /// reported with the edges it still needed and the budget that was left, and
 /// the first is always more than the second.
-pub fn plan_edges(
+fn plan_edges(
     mine: &BTreeSet<Identity>,
     carriers: &BTreeMap<Identity, usize>,
     open: &[&Holder],
@@ -858,7 +853,8 @@ pub fn scan_skipped_tags<'a>(
 /// does not join on, with their carrier counts: [`scan_skipped_tags`]
 /// reduced to the map [`joining_identities`] takes. With that budget every
 /// tag on more than [`SMALL_TAG_GROUP`] memories is skipped.
-pub fn too_common_tags<'a>(
+#[cfg(test)]
+fn too_common_tags<'a>(
     tag_lists: impl IntoIterator<Item = &'a [String]>,
 ) -> BTreeMap<String, usize> {
     scan_skipped_tags(tag_lists, MAX_AUTO_EDGES)
@@ -1077,7 +1073,7 @@ fn is_commit_sha(token: &str) -> bool {
 ///
 /// Extensionless names (`Makefile`) and bare directories are not matched:
 /// by shape they are indistinguishable from words.
-pub fn is_file_path(token: &str) -> bool {
+fn is_file_path(token: &str) -> bool {
     if token.is_empty()
         || !token.bytes().all(|b| {
             b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'/' | b'+' | b'@' | b'~' | b'-')
@@ -1424,7 +1420,6 @@ mod tests {
     fn the_small_group_is_the_largest_whose_pairs_fit_one_pass() {
         assert_eq!(MAX_AUTO_EDGES, 100);
         assert_eq!(SMALL_TAG_GROUP, 14);
-        assert_eq!(MAX_TAG_CARRIERS, SMALL_TAG_GROUP);
         assert_eq!(pairs_among(SMALL_TAG_GROUP), 91);
         assert_eq!(pairs_among(SMALL_TAG_GROUP + 1), 105);
         assert_eq!(pairs_among(0), 0);
@@ -1502,21 +1497,21 @@ mod tests {
 
     #[test]
     fn too_common_tags_are_named_and_do_not_join() {
-        let lists: Vec<Vec<String>> = (0..=MAX_TAG_CARRIERS)
+        let lists: Vec<Vec<String>> = (0..=SMALL_TAG_GROUP)
             .map(|i| {
                 let mut tags = vec!["campaign".to_string(), "campaign".to_string()];
-                if i < MAX_TAG_CARRIERS {
+                if i < SMALL_TAG_GROUP {
                     tags.push("at-the-limit".to_string());
                 }
                 tags
             })
             .collect();
         let common = too_common_tags(lists.iter().map(Vec::as_slice));
-        // MAX_TAG_CARRIERS + 1 carriers is too common; exactly
-        // MAX_TAG_CARRIERS is not.
+        // SMALL_TAG_GROUP + 1 carriers is too common; exactly
+        // SMALL_TAG_GROUP is not.
         assert_eq!(
             common,
-            BTreeMap::from([("campaign".to_string(), MAX_TAG_CARRIERS + 1)])
+            BTreeMap::from([("campaign".to_string(), SMALL_TAG_GROUP + 1)])
         );
 
         let set = |tags: &[&str], content: &str| -> BTreeSet<Identity> {

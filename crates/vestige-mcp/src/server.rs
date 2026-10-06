@@ -644,7 +644,6 @@ impl Drop for ConsolidationClaim {
 }
 
 impl McpServer {
-    #[allow(dead_code)]
     pub fn new(storage: Arc<Storage>, cognitive: Arc<Mutex<CognitiveEngine>>) -> Self {
         let output_config = load_output_config(&storage);
         let actor = load_process_actor(&storage);
@@ -1378,12 +1377,12 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
     ) -> Result<serde_json::Value, JsonRpcError> {
         reject_unknown_cursor(params)?;
 
-        // v2.3: 14 advertised tools after adding the controlled `receipt`
+        // 4.x: 16 advertised tools after adding the controlled `receipt`
         // surface; v3.2 swaps the flagship `backfill` primitive for its
         // successor `causal_walk` (same count — backfill stays dispatchable
         // as a hidden redirect). 22+ deprecated/folded names still work as
         // hidden redirects in handle_tools_call. See
-        // docs/launch/tool-consolidation-v2.2.0.md.
+        // the 4.x catalog in tools/compact.rs.
         let mut tools = Self::tool_catalog();
         if crate::strata_memory::is_strata_backend(self.storage.as_ref()) {
             withhold_on_strata(&mut tools);
@@ -2616,7 +2615,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
             // BLAST RADIUS — exact downstream reach of a cause/source record.
             // Dispatched by name; advertising it in tools/list additionally
             // needs a compact.rs registry entry + the catalog-count test
-            // update (see SCOPE-HANDOFF.md). Retire routes every id through
+            // update. Retire routes every id through
             // the same pre-call Memory-PR gate as suppress/purge.
             // ================================================================
             "blast_radius" => {

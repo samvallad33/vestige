@@ -21,13 +21,13 @@
 
 /// `--baseline-max` and `--strength-runs` may not exceed this. Up to here
 /// every binomial coefficient the tests need is a finite float.
-pub const MAX_FIXED_RUNS: u64 = 500;
+pub(super) const MAX_FIXED_RUNS: u64 = 500;
 
 /// The two ends differ, or the first bad commit matters, below this p.
-pub const BASELINE_P: f64 = 0.001;
+pub(super) const BASELINE_P: f64 = 0.001;
 
 /// The REPEATED rung holds below this p.
-pub const REPEATED_P: f64 = 0.01;
+pub(super) const REPEATED_P: f64 = 0.01;
 
 /// Confidence of each one-sided rate bound: 97.5%, so the pair is a 95%
 /// statement.
@@ -62,7 +62,7 @@ impl Sum {
 
 /// The binomial coefficient C(n, k) as a float: exact (the integer, rounded
 /// once) while it fits 128 bits, a running product of floats beyond that.
-pub fn choose(n: u64, k: u64) -> f64 {
+pub(super) fn choose(n: u64, k: u64) -> f64 {
     if k > n {
         return 0.0;
     }
@@ -101,7 +101,7 @@ fn gcd(mut a: u64, mut b: u64) -> u64 {
 }
 
 /// P(X <= k) for X ~ Binomial(n, p).
-pub fn binom_cdf(k: u64, n: u64, p: f64) -> f64 {
+pub(super) fn binom_cdf(k: u64, n: u64, p: f64) -> f64 {
     let mut sum = Sum::default();
     // Terms past n are zero.
     for i in 0..=k.min(n) {
@@ -126,7 +126,7 @@ fn solve(f: impl Fn(f64) -> f64, target: f64) -> f64 {
 
 /// Exact (Clopper-Pearson) 97.5% lower bound on a failure rate after `k`
 /// failures in `n` runs.
-pub fn rate_lower(k: u64, n: u64) -> f64 {
+pub(super) fn rate_lower(k: u64, n: u64) -> f64 {
     if k == 0 {
         0.0
     } else {
@@ -136,7 +136,7 @@ pub fn rate_lower(k: u64, n: u64) -> f64 {
 
 /// Exact (Clopper-Pearson) 97.5% upper bound on a failure rate after `k`
 /// failures in `n` runs.
-pub fn rate_upper(k: u64, n: u64) -> f64 {
+pub(super) fn rate_upper(k: u64, n: u64) -> f64 {
     if k >= n {
         1.0
     } else {
@@ -151,7 +151,7 @@ pub fn rate_upper(k: u64, n: u64) -> f64 {
 /// NaN when the counts are too large for a finite binomial coefficient
 /// (beyond [`MAX_FIXED_RUNS`] a side); a NaN is below no threshold, so it
 /// can only read as "not decided".
-pub fn fisher_p(f1: u64, n1: u64, f0: u64, n0: u64) -> f64 {
+pub(super) fn fisher_p(f1: u64, n1: u64, f0: u64, n0: u64) -> f64 {
     // Saturating: the counts may come from a report someone else wrote.
     let (total, fails) = (n1.saturating_add(n0), f1.saturating_add(f0));
     let all = choose(total, n1);
