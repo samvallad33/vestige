@@ -393,13 +393,15 @@ enum Commands {
     /// each pair that records the same exact identity: an exact tag
     /// (case-sensitive), an exact file path token, a whole-token commit sha
     /// (40 hex, or 7+ hex), an `owner/repo#123` reference, or a URL. Shared
-    /// words never join two memories. A tag carried by more than 14
-    /// memories of the scope is too common to be evidence and is skipped;
-    /// file paths always join. Every pair is printed with the identities
-    /// that joined it. An edge records that two memories name the same
-    /// thing, not that one caused the other: a causal walk over these edges
-    /// returns hypotheses. Ingest auto-connects pairs as they land, and this
-    /// full scan also catches pairs that share a path only in their text.
+    /// words never join two memories. A tag joins whole or not at all: a
+    /// hub tag (more than 14 carriers and more than half the scope) is
+    /// skipped, and so is a tag on more than 14 memories whose pairs alone
+    /// exceed --max-edges; each skipped tag is printed with its carrier
+    /// count and the reason. File paths always join. Every pair is printed
+    /// with the identities that joined it. An edge records that two memories
+    /// name the same thing, not that one caused the other: a causal walk
+    /// over these edges returns hypotheses. Ingest auto-connects pairs as
+    /// they land; this full scan catches what an ingest left unlinked.
     Connect {
         /// Show what edges would be created without writing them
         #[arg(long)]
@@ -407,7 +409,8 @@ enum Commands {
         /// Minimum distinct shared identities required (default 1)
         #[arg(long, default_value = "1")]
         min_shared: usize,
-        /// Maximum edges to create (safety cap)
+        /// Maximum edges to create (safety cap; also the pair budget a tag
+        /// on more than 14 memories must fit to join)
         #[arg(long, default_value = "100")]
         max_edges: usize,
         /// Project namespace to connect (default: user)
@@ -479,7 +482,11 @@ enum Commands {
     ///
     /// On a Strata log (4.0) the walk starts at a recorded memory: a bounded
     /// backward walk over recorded causal edges (closed_by, derived_from,
-    /// evidence_of, touched). It writes nothing. --logged-write names that
+    /// evidence_of, touched). A path follows at most one touched edge: two
+    /// memories naming the same thing is a lead, and it does not chain; the
+    /// touched edges not followed are counted. Candidates are ordered by
+    /// depth, then by the exact identities each shares with the start, which
+    /// are printed. It writes nothing. --logged-write names that
     /// memory directly; --node-id attaches it to a --failing-test,
     /// --stack-frame, --ci-run or version range. Those start points resolve
     /// through shared names, which are not recorded edges, so a Strata log
@@ -4077,12 +4084,26 @@ fn run_ingest(
                             pair.identities.join(", ")
                         );
                     }
+                    // The edges above are one write; its receipt lists them.
+                    if let Some(receipt_id) = &report.receipt_id {
+                        println!(
+                            "Auto-connect receipt: {receipt_id} (one write for the {} edge(s))",
+                            report.edges
+                        );
+                    }
                 }
-                if !report.skipped_common_tags.is_empty() {
+                // Every tag the pass did not join on is named with its
+                // carrier count and the reason: nothing is skipped silently.
+                for skipped in &report.skipped {
+                    println!("Auto-connect {skipped}");
+                }
+                if report.not_linked > 0 {
                     println!(
-                        "Auto-connect skipped tag(s) carried by more than {} memories: {}",
-                        vestige_mcp::auto_connect::MAX_TAG_CARRIERS,
-                        report.skipped_common_tags.join(", ")
+                        "Auto-connect linked the {} strongest of {} candidate(s); {} not linked (the {}-edge budget of one write). `vestige connect` writes the rest.",
+                        report.edges,
+                        report.candidates,
+                        report.not_linked,
+                        vestige_mcp::auto_connect::MAX_AUTO_EDGES
                     );
                 }
             }
@@ -4777,8 +4798,36 @@ fn run_causal_walk_strata(
             "{}",
             "No recorded causal edge leads upstream from this memory.".dimmed()
         );
+    } else if let Some(order) = result["ranking"]["order"].as_str() {
+        println!(
+            "{} {} (scope: {} memories)",
+            "Order:".white().bold(),
+            order,
+            result["ranking"]["scope_size"]
+        );
+        println!();
     }
+    // `kind:value (N of M)`: an identity and how many memories of the scope
+    // record it.
+    let scope_size = &result["ranking"]["scope_size"];
+    let with_carriers = |entries: &serde_json::Value| -> Vec<String> {
+        entries
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                format!(
+                    "{} ({} of {})",
+                    entry["identity"].as_str().unwrap_or("?"),
+                    entry["carriers"],
+                    scope_size
+                )
+            })
+            .collect()
+    };
     for (rank, cause) in causes.iter().enumerate() {
+        // These two lines are parsed by other tools (`#<n> <id> depth <d>`,
+        // then the content preview). Anything new goes below them.
         println!(
             "{} {} depth {}",
             format!("#{}", rank + 1).green().bold(),
@@ -4786,6 +4835,28 @@ fn run_causal_walk_strata(
             cause["depth"]
         );
         println!("  {}", preview(&cause["content"]));
+        if cause["joined_on"].is_array() {
+            // Depth 1 is linked to the start itself; a deeper memory is only
+            // compared with it.
+            let label = if cause["depth"] == 1 {
+                "joined on:"
+            } else {
+                "shares with the start:"
+            };
+            let shared = with_carriers(&cause["joined_on"]);
+            if shared.is_empty() {
+                println!("  {label} no exact identity (reached over the recorded edge(s) below)");
+            } else {
+                println!("  {label} {}", shared.join(", "));
+            }
+            let hubs = with_carriers(&cause["not_counted_hub_tags"]);
+            if !hubs.is_empty() {
+                println!(
+                    "  not counted (hub tag, more than half the scope carries it): {}",
+                    hubs.join(", ")
+                );
+            }
+        }
         for hop in cause["path"].as_array().into_iter().flatten() {
             println!(
                 "  {} {} -[{}]-> {}",
@@ -4793,6 +4864,53 @@ fn run_causal_walk_strata(
                 hop["source_id"].as_str().unwrap_or("?"),
                 hop["link_type"].as_str().unwrap_or("?"),
                 hop["target_id"].as_str().unwrap_or("?")
+            );
+        }
+        println!();
+    }
+    // The touched edges the walk saw and did not follow, and why.
+    let held = &result["not_followed"];
+    if held.is_object() {
+        println!(
+            "  {} {} touched edge(s) lead on from the memories above to {} other memor{}. A path follows at most one touched edge: two memories naming the same thing is a lead, and it does not chain.",
+            "not followed:".yellow(),
+            held["touched_edges"],
+            held["memories"],
+            if held["memories"] == 1 { "y" } else { "ies" }
+        );
+        let shared: Vec<String> = held["shared"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                format!(
+                    "{} ({} of {}) on {} edge(s)",
+                    entry["identity"].as_str().unwrap_or("?"),
+                    entry["carriers"],
+                    held["scope_size"],
+                    entry["edges"]
+                )
+            })
+            .collect();
+        if !shared.is_empty() {
+            let more = held["shared_identities"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(shared.len() as u64);
+            println!(
+                "    the two ends of those edges share: {}{}",
+                shared.join(", "),
+                if more > 0 {
+                    format!(", and {more} more identities")
+                } else {
+                    String::new()
+                }
+            );
+        }
+        if held["no_counted_identity"].as_u64().unwrap_or(0) > 0 {
+            println!(
+                "    {} of those edges join memories that share no exact identity, or only hub tags",
+                held["no_counted_identity"]
             );
         }
         println!();
@@ -4963,13 +5081,11 @@ fn run_ingest_git(
 }
 
 /// One candidate `touched` edge: the earlier memory as the source, the
-/// later one as the target, with the exact identities both record
-/// (`kind:value`).
+/// later one as the target (positions in the scanned, oldest-first list),
+/// with the exact identities both record (`kind:value`).
 struct ConnectPair {
-    source_id: String,
-    target_id: String,
-    source_content: String,
-    target_content: String,
+    source: usize,
+    target: usize,
     shared: Vec<String>,
 }
 
@@ -4980,15 +5096,19 @@ struct ConnectPair {
 /// upstream even when two memories recorded the same `src/path.py`. The
 /// ingest path now runs its share of this automatically
 /// (`vestige_mcp::auto_connect`, on the memories a save just wrote); this
-/// command remains the full-scan catch-up, joining pairs the ingest-time
-/// handles cannot see. It extracts the exact identities of every memory in
+/// command remains the full-scan catch-up, joining the pairs an ingest left
+/// unlinked: the ones past a write's edge budget, the ones written before
+/// auto-connect existed, and the ones between memories neither of which was
+/// the one being saved. It extracts the exact identities of every memory in
 /// the scope (`auto_connect::extract_identities`: tags, file paths, commit
 /// shas, issue references, URLs; no words, no ML, no similarity) and writes
 /// a `touched` edge for each pair sharing at least `--min-shared` of them,
 /// through `Storage::save_connection`, which on a Strata log is
-/// `StrataStore::save_connection` behind the gate. A tag carried by more
-/// than `auto_connect::MAX_TAG_CARRIERS` memories of the scope is skipped
-/// and named; every pair is printed with the identities that joined it.
+/// `StrataStore::save_connection` behind the gate. A tag joins whole or not
+/// at all (`auto_connect::scan_skipped_tags`): a hub tag, carried by more
+/// than half the scope, is skipped, and so is a tag whose pairs alone exceed
+/// `--max-edges`; each is named with its carrier count and the reason. Every
+/// pair is printed with the identities that joined it.
 ///
 /// Direction follows the walk's rule for `touched` (causal_walk.rs: the
 /// source is the earlier record, so from the target the walk goes to the
@@ -5031,21 +5151,28 @@ fn run_connect(
         })
         .collect();
 
-    // The guard: a tag carried by more than MAX_TAG_CARRIERS memories of
-    // this scope joins everything to everything and is not evidence.
-    let common_tags = auto_connect::too_common_tags(nodes.iter().map(|node| node.tags.as_slice()));
-    if !common_tags.is_empty() {
+    // The guard against a quadratic blow-up: a tag on N memories joins
+    // N * (N - 1) / 2 pairs. A hub tag (more than half the scope carries it)
+    // and a tag whose pairs alone exceed this pass's --max-edges budget are
+    // skipped whole, and each is named with its carrier count and the reason.
+    let skipped_tags =
+        auto_connect::scan_skipped_tags(nodes.iter().map(|node| node.tags.as_slice()), max_edges);
+    let common_tags: std::collections::BTreeMap<String, usize> = skipped_tags
+        .iter()
+        .map(|skipped| (skipped.tag.clone(), skipped.carriers))
+        .collect();
+    if !skipped_tags.is_empty() {
         println!(
             "{}: {}",
-            format!(
-                "Tags skipped (carried by more than {} memories)",
-                auto_connect::MAX_TAG_CARRIERS
-            )
-            .white()
-            .bold(),
-            common_tags
+            "Tags skipped".white().bold(),
+            skipped_tags
                 .iter()
-                .map(|(tag, carriers)| format!("{tag} ({carriers})"))
+                .map(|skipped| {
+                    format!(
+                        "{} ({} of {}: {})",
+                        skipped.tag, skipped.carriers, skipped.scope_size, skipped.reason
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -5067,16 +5194,47 @@ fn run_connect(
         })
         .collect();
 
+    // Which memories record each identity that may join (skipped tags left
+    // out), as positions in `nodes`, ascending. Only memories that share one
+    // are compared, so the scan costs the pairs that share something, not
+    // every pair of the scope.
+    let mut recorded_by: std::collections::BTreeMap<&Identity, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (position, set) in identity_sets.iter().enumerate() {
+        for identity in set {
+            if identity.kind == auto_connect::IdentityKind::Tag
+                && common_tags.contains_key(&identity.value)
+            {
+                continue;
+            }
+            recorded_by.entry(identity).or_default().push(position);
+        }
+    }
+
     // An edge needs at least one shared identity; --min-shared 0 is read as 1.
     let min_shared = min_shared.max(1);
+    // Every candidate pair is counted; only the first --max-edges are kept,
+    // oldest source first, then oldest target.
+    let mut candidate_pairs = 0usize;
     let mut pairs: Vec<ConnectPair> = Vec::new();
     for (i, node) in nodes.iter().enumerate() {
-        for (later, set) in nodes.iter().zip(&identity_sets).skip(i + 1) {
-            let joining = auto_connect::joining_identities(&identity_sets[i], set, &common_tags);
+        let mut partners: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        for identity in &identity_sets[i] {
+            if let Some(positions) = recorded_by.get(identity) {
+                let later = positions.partition_point(|position| *position <= i);
+                partners.extend(&positions[later..]);
+            }
+        }
+        for j in partners {
+            let later = &nodes[j];
+            let joining = auto_connect::joining_identities(
+                &identity_sets[i],
+                &identity_sets[j],
+                &common_tags,
+            );
             if auto_connect::distinct_values(&joining) < min_shared {
                 continue;
             }
-            let shared: Vec<String> = joining.iter().map(Identity::to_string).collect();
             let key = if node.id < later.id {
                 (node.id.clone(), later.id.clone())
             } else {
@@ -5085,21 +5243,21 @@ fn run_connect(
             if joined.contains(&key) {
                 continue;
             }
-            pairs.push(ConnectPair {
-                source_id: node.id.clone(),
-                target_id: later.id.clone(),
-                source_content: node.content.clone(),
-                target_content: later.content.clone(),
-                shared,
-            });
+            candidate_pairs += 1;
+            if pairs.len() < max_edges {
+                pairs.push(ConnectPair {
+                    source: i,
+                    target: j,
+                    shared: joining.iter().map(Identity::to_string).collect(),
+                });
+            }
         }
     }
 
-    println!("{}: {}", "Candidate pairs".white().bold(), pairs.len());
+    println!("{}: {}", "Candidate pairs".white().bold(), candidate_pairs);
     println!();
 
-    let capped = pairs.len() > max_edges;
-    pairs.truncate(max_edges);
+    let capped = candidate_pairs > max_edges;
 
     if pairs.is_empty() {
         println!(
@@ -5111,14 +5269,15 @@ fn run_connect(
     }
 
     for pair in &pairs {
+        let (source, target) = (&nodes[pair.source], &nodes[pair.target]);
         println!(
             "  {} -[touched]-> {}  {}",
-            pair.source_id.dimmed(),
-            pair.target_id.dimmed(),
+            source.id.dimmed(),
+            target.id.dimmed(),
             format!("joined on: {}", pair.shared.join(", ")).dimmed()
         );
-        println!("      {}", truncate(&pair.source_content, 72).dimmed());
-        println!("      {}", truncate(&pair.target_content, 72).dimmed());
+        println!("      {}", truncate(&source.content, 72).dimmed());
+        println!("      {}", truncate(&target.content, 72).dimmed());
     }
 
     if dry_run {
@@ -5139,10 +5298,11 @@ fn run_connect(
     let mut created = 0usize;
     let mut errors = 0usize;
     for pair in &pairs {
+        let (source, target) = (&nodes[pair.source], &nodes[pair.target]);
         // strength 0.5 -> strength_milli 500: a co-touch is a moderate link.
         let edge = ConnectionRecord {
-            source_id: pair.source_id.clone(),
-            target_id: pair.target_id.clone(),
+            source_id: source.id.clone(),
+            target_id: target.id.clone(),
             strength: 0.5,
             link_type: "touched".to_string(),
             created_at: now,
@@ -5155,8 +5315,8 @@ fn run_connect(
                 eprintln!(
                     "  {} Failed to connect {} -> {}: {}",
                     "ERR".red(),
-                    pair.source_id,
-                    pair.target_id,
+                    source.id,
+                    target.id,
                     err
                 );
                 errors += 1;

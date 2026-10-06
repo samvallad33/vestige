@@ -90,4 +90,15 @@ pub enum StoreOp {
         /// Check time (unix ms), supplied by the caller.
         checked_at_ms: i64,
     },
+    /// Append several typed edges at once (discriminant `8`). One admitted
+    /// effect covers the batch, so the edges one write adds land together or
+    /// not at all, behind one gate decision and one data frame. Applied in
+    /// order, exactly as that many [`StoreOp::SaveEdge`] would be.
+    ///
+    /// A build older than this variant does not decode the frame: it counts
+    /// it as an orphan write and does not see these edges.
+    SaveEdges {
+        /// The edges; each `link_type` was vocabulary-validated at write time.
+        edges: Vec<ConnectionRecord>,
+    },
 }

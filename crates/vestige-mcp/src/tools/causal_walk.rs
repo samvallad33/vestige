@@ -11,12 +11,45 @@
 //! On a Strata log the walk is a bounded backward BFS from each start node
 //! over recorded causal edges only. A start point of any kind names its start
 //! node with `node_id`. Shared names are not edges.
+//!
+//! ## One `touched` edge per path
+//!
+//! `derived_from`, `evidence_of` and `closed_by` are lineage: a writer
+//! declared that one record came from, evidences or closed another, and a
+//! chain of them is a chain of declarations. `touched` is weaker. It records
+//! that two memories name the same exact thing (it is what `vestige connect`
+//! and the ingest-time auto-connect write), and naming the same thing is not
+//! transitive: a failure sharing `connection` with a commit, and that commit
+//! sharing `tests` with a second commit, says nothing about the failure and
+//! the second commit. Followed as a chain, those edges reach nearly every
+//! record of a commit window from any start (67 of 78 commits on the window
+//! this rule was written against, 17 of them one step from the failure).
+//!
+//! So a path follows lineage edges freely, up to the depth bound, and at
+//! most one `touched` edge. No count, share or name is tuned: the rule is
+//! the edge kind's meaning. The `touched` edges the walk saw and did not
+//! follow, and the memories that lie only behind them, are counted in
+//! `not_followed` with the identities their two ends share.
+//!
+//! ## Order
+//!
+//! The candidates of a recorded walk are ordered by depth, then by how many
+//! distinct exact identities each shares with the start memory its path
+//! begins at (more first), then by how rare those identities are in the
+//! scope (fewer carriers first), then by id. The identities are the ones
+//! `auto_connect::extract_identities` defines (tag, path, commit, issue,
+//! url; byte-exact, never words), and every candidate carries the ones it
+//! shares with their carrier counts (`joined_on`). A hub tag, one that more
+//! than half the scope carries (`auto_connect::is_hub_tag`), is listed apart
+//! and not counted. The order arranges hypotheses; it proves nothing.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::sync::Arc;
 
+use crate::auto_connect::{self, Identity, IdentityKind, RankedCandidate};
 use vestige_core::Storage;
 use vestige_core::advanced::causal_walk::{
     self as core_causal_walk, CausalWalkRequest, StartPoint, persist_evidence_edges, walk_storage,
@@ -141,11 +174,16 @@ struct Args {
 /// Recorded causal vocabulary. Incoming edge: source caused target.
 const CAUSAL_LINKS: &[&str] = &["closed_by", "derived_from", "evidence_of", "touched"];
 const MAX_DEPTH: u32 = 8;
+/// The co-touch kind: two memories name the same thing. Followed at most once
+/// on a path (see the module docs).
+const CO_TOUCH: &str = "touched";
 
 struct Reached {
     id: String,
     depth: u32,
     path: Vec<Hop>,
+    /// The start node `path` begins at.
+    start: String,
     /// The start nodes whose walk reached this node (filled when walks merge).
     from: Vec<String>,
 }
@@ -284,6 +322,8 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
                 rows,
                 nodes: Vec::new(),
                 causes: Vec::new(),
+                ranking: Ranking::default(),
+                not_followed: NotFollowed::default(),
                 truncated: false,
                 node_cap,
                 needs_report: Some(needs_report),
@@ -293,18 +333,30 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
 
     let mut walks = Vec::with_capacity(starts.len());
     let mut truncated = false;
+    let mut held: BTreeSet<HeldEdge> = BTreeSet::new();
     for start in &starts {
-        let (reached, cut) = walk_from(storage, scope, start, node_cap)?;
-        truncated |= cut;
-        walks.push((start.clone(), reached));
+        let walked = walk_from(storage, scope, start, node_cap)?;
+        truncated |= walked.truncated;
+        held.extend(walked.held);
+        walks.push((start.clone(), walked.reached));
     }
     let (mut nodes, mut causes) = merge_walks(walks);
+    // An edge one start did not follow hides nothing if another start's walk
+    // reached the memory behind it.
+    let reached: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
+    held.retain(|edge| !reached.contains(edge.upstream.as_str()));
+    let held_shared = shared_on(storage, &held);
     if nodes.len() > node_cap {
         nodes.truncate(node_cap);
         truncated = true;
     }
     let kept: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
     causes.retain(|node| kept.contains(node.id.as_str()));
+    // One read of the scope counts the carriers of everything reported: the
+    // starts' identities and the ones the unfollowed edges rest on.
+    let also_counted: BTreeSet<Identity> = held_shared.iter().flatten().cloned().collect();
+    let ranking = rank_causes(storage, scope, &mut causes, also_counted)?;
+    let not_followed = describe_not_followed(&held, &held_shared, &ranking);
 
     Ok(walk_payload(
         storage,
@@ -315,6 +367,8 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
             rows,
             nodes,
             causes,
+            ranking,
+            not_followed,
             truncated,
             node_cap,
             needs_report: None,
@@ -322,43 +376,86 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
     ))
 }
 
+/// A `touched` edge the walk saw and did not follow: the path it would have
+/// extended had already followed one. `upstream` is the memory behind it,
+/// `from` the reached memory it leads into.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct HeldEdge {
+    upstream: String,
+    from: String,
+}
+
+/// One start's walk: every node reached (the start first), whether a bound
+/// cut it, and the `touched` edges it did not follow whose upstream memory it
+/// did not reach another way.
+struct Walked {
+    reached: Vec<Reached>,
+    truncated: bool,
+    held: BTreeSet<HeldEdge>,
+}
+
 /// Bounded backward BFS from one start node over recorded causal edges.
-/// Returns every node reached (the start first) and whether a bound cut it.
+///
+/// A path follows lineage edges freely and at most one `touched` edge, so the
+/// search runs over `(memory, has this path used its touched edge)`. A memory
+/// reached both ways is expanded both ways, the unused state covering the
+/// used one; it is listed once, at the depth it was first reached. What is
+/// reached is therefore every memory with an admissible path of at most
+/// `MAX_DEPTH` hops, whatever order the edges are read in.
 fn walk_from(
     storage: &Arc<Storage>,
     scope: &str,
     start_id: &str,
     node_cap: usize,
-) -> Result<(Vec<Reached>, bool), String> {
+) -> Result<Walked, String> {
     let mut reached = vec![Reached {
         id: start_id.to_string(),
         depth: 0,
         path: Vec::new(),
+        start: start_id.to_string(),
         from: Vec::new(),
     }];
-    let mut visited = HashSet::from([start_id.to_string()]);
-    let mut queue = VecDeque::from([(start_id.to_string(), 0u32, Vec::new())]);
+    let mut listed = HashSet::from([start_id.to_string()]);
+    let mut expanded = HashSet::from([(start_id.to_string(), false)]);
+    let mut queue = VecDeque::from([(start_id.to_string(), 0u32, Vec::new(), false)]);
+    let mut held: BTreeSet<HeldEdge> = BTreeSet::new();
     let mut truncated = false;
 
-    while let Some((current, depth, path)) = queue.pop_front() {
+    while let Some((current, depth, path, used_touch)) = queue.pop_front() {
         if depth >= MAX_DEPTH {
-            if has_admissible_cause(storage, &current, scope, &visited)? {
+            if has_admissible_cause(storage, &current, scope, used_touch, &listed)? {
                 truncated = true;
             }
             continue;
         }
         for (upstream, edge) in upstream_causal(storage, &current)? {
-            if visited.contains(upstream.as_str()) {
+            let co_touch = edge.link_type == CO_TOUCH;
+            if co_touch && used_touch {
+                if in_scope(storage, &upstream, scope)? {
+                    held.insert(HeldEdge {
+                        upstream,
+                        from: current.clone(),
+                    });
+                }
+                continue;
+            }
+            let next_used = used_touch || co_touch;
+            // Already expanded with the touched edge unused (which covers
+            // both states), or in this same state.
+            if expanded.contains(&(upstream.clone(), false))
+                || (next_used && expanded.contains(&(upstream.clone(), true)))
+            {
                 continue;
             }
             if !in_scope(storage, &upstream, scope)? {
                 continue;
             }
-            if reached.len() >= node_cap {
+            let unlisted = !listed.contains(upstream.as_str());
+            if unlisted && reached.len() >= node_cap {
                 truncated = true;
                 break;
             }
-            visited.insert(upstream.clone());
+            expanded.insert((upstream.clone(), next_used));
             let mut next_path = path.clone();
             next_path.push(Hop {
                 source_id: edge.source_id.clone(),
@@ -366,17 +463,21 @@ fn walk_from(
                 link_type: edge.link_type.clone(),
             });
             let next_depth = depth + 1;
-            queue.push_back((upstream.clone(), next_depth, next_path.clone()));
-            reached.push(Reached {
-                id: upstream,
-                depth: next_depth,
-                path: next_path,
-                from: Vec::new(),
-            });
+            queue.push_back((upstream.clone(), next_depth, next_path.clone(), next_used));
+            if unlisted {
+                listed.insert(upstream.clone());
+                reached.push(Reached {
+                    id: upstream,
+                    depth: next_depth,
+                    path: next_path,
+                    start: start_id.to_string(),
+                    from: Vec::new(),
+                });
+            }
         }
         if reached.len() >= node_cap {
-            for (pending, _, _) in &queue {
-                if has_admissible_cause(storage, pending, scope, &visited)? {
+            for (pending, _, _, pending_used) in &queue {
+                if has_admissible_cause(storage, pending, scope, *pending_used, &listed)? {
                     truncated = true;
                     break;
                 }
@@ -384,7 +485,13 @@ fn walk_from(
             break;
         }
     }
-    Ok((reached, truncated))
+    // A held edge hides nothing if its upstream memory was reached anyway.
+    held.retain(|edge| !listed.contains(edge.upstream.as_str()));
+    Ok(Walked {
+        reached,
+        truncated,
+        held,
+    })
 }
 
 /// Union the per-start walks. `nodes` holds every node once, at its shallowest
@@ -402,6 +509,7 @@ fn merge_walks(walks: Vec<(String, Vec<Reached>)>) -> (Vec<Reached>, Vec<Reached
                 if node.depth < existing.depth {
                     existing.depth = node.depth;
                     existing.path = node.path.clone();
+                    existing.start = node.start.clone();
                 }
             }
             None => {
@@ -411,6 +519,7 @@ fn merge_walks(walks: Vec<(String, Vec<Reached>)>) -> (Vec<Reached>, Vec<Reached
                         id: node.id.clone(),
                         depth: node.depth,
                         path: node.path.clone(),
+                        start: node.start.clone(),
                         from: vec![start.to_string()],
                     },
                 );
@@ -433,6 +542,220 @@ fn merge_walks(walks: Vec<(String, Vec<Reached>)>) -> (Vec<Reached>, Vec<Reached
         rows
     };
     (order(nodes), order(causes))
+}
+
+/// What one candidate shares with the start memory its path begins at.
+struct Evidence {
+    /// The exact identities both record, each with the number of memories of
+    /// the scope that record it. Hub tags are not here. Tags first, then
+    /// sorted.
+    shared: Vec<(Identity, usize)>,
+    /// Distinct values among `shared` (a tag that is also a path counts once).
+    count: usize,
+    /// Tags both carry that more than half the scope carries too: listed,
+    /// not counted.
+    hub_tags: Vec<(Identity, usize)>,
+}
+
+/// How a walk's candidates were ordered: what each shares with its start,
+/// the size of the scope the carrier counts are out of, and the carriers of
+/// every identity the walk reports.
+#[derive(Default)]
+struct Ranking {
+    scope_size: usize,
+    evidence: BTreeMap<String, Evidence>,
+    carriers: BTreeMap<Identity, usize>,
+}
+
+impl Ranking {
+    fn carried_by(&self, identity: &Identity) -> usize {
+        self.carriers.get(identity).copied().unwrap_or(0)
+    }
+
+    /// The hub rule, on the scope as it is now.
+    fn is_hub(&self, identity: &Identity) -> bool {
+        identity.kind == IdentityKind::Tag
+            && auto_connect::is_hub_tag(self.carried_by(identity), self.scope_size)
+    }
+}
+
+/// The order, stated once in every walk that has candidates.
+const RANK_ORDER: &str = "depth, then distinct exact identities shared with the start (more first), then rarer identities first (fewer carriers in the scope), then id; hub tags are not counted";
+
+/// The exact identities one memory records. A memory that cannot be read
+/// back records nothing.
+fn identities_of(storage: &Arc<Storage>, id: &str) -> Result<BTreeSet<Identity>, String> {
+    Ok(storage
+        .get_node(id)
+        .map_err(|err| err.to_string())?
+        .map(|node| {
+            auto_connect::extract_identities(&node.content, &node.tags)
+                .into_iter()
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Order the candidates and return what each shares with its start.
+///
+/// Depth first, as the walk found them. Within a depth: more distinct exact
+/// identities shared with the start first, then the rarer identities first,
+/// then id (`RankedCandidate::strength`, the same order an ingest uses when
+/// its edge budget has to choose). The scope is read once, to count the
+/// carriers of the starts' identities (and of `also_counted`, which the
+/// caller reports) and to learn which candidate records which of them.
+fn rank_causes(
+    storage: &Arc<Storage>,
+    scope: &str,
+    causes: &mut [Reached],
+    also_counted: BTreeSet<Identity>,
+) -> Result<Ranking, String> {
+    if causes.is_empty() {
+        return Ok(Ranking::default());
+    }
+    // The identities of each start some candidate's path begins at.
+    let mut of_start: BTreeMap<String, BTreeSet<Identity>> = BTreeMap::new();
+    for cause in causes.iter() {
+        if !of_start.contains_key(&cause.start) {
+            of_start.insert(cause.start.clone(), identities_of(storage, &cause.start)?);
+        }
+    }
+    let mut wanted = also_counted;
+    wanted.extend(of_start.values().flatten().cloned());
+    let scan = auto_connect::scan_scope(storage.as_ref(), scope, &wanted)?;
+    let recorded: BTreeMap<&str, &[Identity]> = scan
+        .holders
+        .iter()
+        .map(|holder| (holder.id.as_str(), holder.identities.as_slice()))
+        .collect();
+    let mut ranking = Ranking {
+        scope_size: scan.scope_size,
+        evidence: BTreeMap::new(),
+        carriers: scan.carriers(),
+    };
+
+    let nothing = BTreeSet::new();
+    let mut strength: BTreeMap<String, (Reverse<usize>, Vec<usize>)> = BTreeMap::new();
+    for cause in causes.iter() {
+        let start = of_start.get(&cause.start).unwrap_or(&nothing);
+        let mut shared: Vec<(Identity, usize)> = Vec::new();
+        let mut hub_tags: Vec<(Identity, usize)> = Vec::new();
+        for identity in recorded.get(cause.id.as_str()).copied().unwrap_or_default() {
+            if !start.contains(identity) {
+                continue;
+            }
+            let carried_by = ranking.carried_by(identity);
+            if ranking.is_hub(identity) {
+                hub_tags.push((identity.clone(), carried_by));
+            } else {
+                shared.push((identity.clone(), carried_by));
+            }
+        }
+        let candidate = RankedCandidate {
+            id: cause.id.clone(),
+            shared,
+        };
+        let (count, rarity) = candidate.strength();
+        ranking.evidence.insert(
+            cause.id.clone(),
+            Evidence {
+                count: count.0,
+                shared: candidate.shared,
+                hub_tags,
+            },
+        );
+        strength.insert(cause.id.clone(), (count, rarity));
+    }
+    causes.sort_by(|a, b| {
+        a.depth
+            .cmp(&b.depth)
+            .then_with(|| strength.get(&a.id).cmp(&strength.get(&b.id)))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(ranking)
+}
+
+/// The `touched` edges a walk did not follow, described from what the log
+/// holds: how many there are, how many memories lie only behind them, and
+/// the exact identities the two ends of those edges share.
+#[derive(Default)]
+struct NotFollowed {
+    edges: usize,
+    memories: usize,
+    /// `(identity, its carriers in the scope, edges whose two ends both
+    /// record it)`. Most edges first, then by identity. Hub tags are left
+    /// out: they join nothing.
+    shared: Vec<(Identity, usize, usize)>,
+    /// Edges whose two ends share no exact identity, or only hub tags.
+    no_counted_identity: usize,
+}
+
+/// Most identities listed for the edges a walk did not follow. The count of
+/// the rest is reported, so nothing is dropped silently.
+const NOT_FOLLOWED_LISTED: usize = 10;
+
+/// Why a `touched` edge was not followed, stated once.
+const NOT_FOLLOWED_REASON: &str = "a touched edge records that two memories name the same exact thing, which does not carry over a second step, so a path follows at most one touched edge; these edges lead on from memories already reached over one";
+
+/// For each edge the walk did not follow, in order, the exact identities its
+/// two ends both record.
+fn shared_on(storage: &Arc<Storage>, held: &BTreeSet<HeldEdge>) -> Vec<BTreeSet<Identity>> {
+    let mut identities: BTreeMap<&str, BTreeSet<Identity>> = BTreeMap::new();
+    for id in held
+        .iter()
+        .flat_map(|edge| [edge.upstream.as_str(), edge.from.as_str()])
+    {
+        identities
+            .entry(id)
+            .or_insert_with(|| identities_of(storage, id).unwrap_or_default());
+    }
+    held.iter()
+        .map(|edge| {
+            match (
+                identities.get(edge.upstream.as_str()),
+                identities.get(edge.from.as_str()),
+            ) {
+                (Some(upstream), Some(from)) => upstream.intersection(from).cloned().collect(),
+                _ => BTreeSet::new(),
+            }
+        })
+        .collect()
+}
+
+/// Count the edges a walk did not follow and what their ends share, with
+/// the carriers `ranking` counted for those identities.
+fn describe_not_followed(
+    held: &BTreeSet<HeldEdge>,
+    held_shared: &[BTreeSet<Identity>],
+    ranking: &Ranking,
+) -> NotFollowed {
+    let mut on: BTreeMap<&Identity, usize> = BTreeMap::new();
+    let mut no_counted_identity = 0usize;
+    for shared in held_shared {
+        let mut any = false;
+        for identity in shared.iter().filter(|identity| !ranking.is_hub(identity)) {
+            *on.entry(identity).or_insert(0) += 1;
+            any = true;
+        }
+        if !any {
+            no_counted_identity += 1;
+        }
+    }
+    let mut shared: Vec<(Identity, usize, usize)> = on
+        .into_iter()
+        .map(|(identity, edges)| (identity.clone(), ranking.carried_by(identity), edges))
+        .collect();
+    shared.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    NotFollowed {
+        edges: held.len(),
+        memories: held
+            .iter()
+            .map(|edge| edge.upstream.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        shared,
+        no_counted_identity,
+    }
 }
 
 /// One start the caller gave, and what the recorded walk did with it. Every
@@ -469,6 +792,10 @@ struct WalkOut {
     rows: Vec<StartRow>,
     nodes: Vec<Reached>,
     causes: Vec<Reached>,
+    /// What each candidate shares with its start, by candidate id.
+    ranking: Ranking,
+    /// The `touched` edges the walk did not follow.
+    not_followed: NotFollowed,
     truncated: bool,
     node_cap: usize,
     needs_report: Option<Value>,
@@ -582,14 +909,18 @@ fn in_scope(storage: &Arc<Storage>, id: &str, scope: &str) -> Result<bool, Strin
         .map_err(|err| err.to_string())
 }
 
+/// Does a recorded edge the walk may still follow lead from `node_id` to a
+/// memory it has not listed? `used_touch` says whether the path to `node_id`
+/// has used its one `touched` edge.
 fn has_admissible_cause(
     storage: &Arc<Storage>,
     node_id: &str,
     scope: &str,
-    visited: &HashSet<String>,
+    used_touch: bool,
+    listed: &HashSet<String>,
 ) -> Result<bool, String> {
-    for (upstream, _) in upstream_causal(storage, node_id)? {
-        if visited.contains(upstream.as_str()) {
+    for (upstream, edge) in upstream_causal(storage, node_id)? {
+        if listed.contains(upstream.as_str()) || (used_touch && edge.link_type == CO_TOUCH) {
             continue;
         }
         if in_scope(storage, &upstream, scope)? {
@@ -664,6 +995,58 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
             "from": node.from,
         })
     };
+    // `kind:value` with the number of memories of the scope that record it.
+    let with_carriers = |entries: &[(Identity, usize)]| -> Vec<Value> {
+        entries
+            .iter()
+            .map(|(identity, carriers)| {
+                json!({ "identity": identity.to_string(), "carriers": carriers })
+            })
+            .collect()
+    };
+    let cause_json = |(index, node): (usize, &Reached)| {
+        let mut value = node_json(node);
+        value["rank"] = json!(index + 1);
+        if let Some(evidence) = walk.ranking.evidence.get(&node.id) {
+            value["start"] = json!(node.start);
+            value["shared_count"] = json!(evidence.count);
+            value["joined_on"] = json!(with_carriers(&evidence.shared));
+            value["not_counted_hub_tags"] = json!(with_carriers(&evidence.hub_tags));
+        }
+        value
+    };
+    let ranking = (!walk.causes.is_empty()).then(|| {
+        json!({
+            "order": RANK_ORDER,
+            "scope_size": walk.ranking.scope_size,
+            "joined_on": "per cause: the exact identities it records that its start records too, each with its carriers out of scope_size; a depth-1 cause is linked to the start itself, a deeper one is only compared with it",
+            "touched": "a path follows lineage edges (derived_from, evidence_of, closed_by) freely and at most one touched edge",
+            "evidence_status": "hypothesis",
+        })
+    });
+    let not_followed = (walk.not_followed.edges > 0).then(|| {
+        json!({
+            "touched_edges": walk.not_followed.edges,
+            "memories": walk.not_followed.memories,
+            "shared": walk
+                .not_followed
+                .shared
+                .iter()
+                .take(NOT_FOLLOWED_LISTED)
+                .map(|(identity, carriers, edges)| {
+                    json!({
+                        "identity": identity.to_string(),
+                        "carriers": carriers,
+                        "edges": edges,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "shared_identities": walk.not_followed.shared.len(),
+            "no_counted_identity": walk.not_followed.no_counted_identity,
+            "scope_size": walk.ranking.scope_size,
+            "reason": NOT_FOLLOWED_REASON,
+        })
+    });
     let empty = (walk.needs_report.is_none() && walk.causes.is_empty())
         .then(|| why_empty(storage, scope, &walk.starts));
     json!({
@@ -684,9 +1067,11 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "truncated": walk.truncated,
         "bounds": { "max_depth": MAX_DEPTH, "max_nodes": walk.node_cap },
         "nodes": walk.nodes.iter().map(&node_json).collect::<Vec<_>>(),
-        "causes": walk.causes.iter().map(&node_json).collect::<Vec<_>>(),
+        "causes": walk.causes.iter().enumerate().map(cause_json).collect::<Vec<_>>(),
+        "ranking": ranking,
+        "not_followed": not_followed,
         "needs_report": walk.needs_report,
-        "note": "Backward BFS over recorded causal edges only, from every start node: from a memory to what it is derived_from, and to the records that are evidence_of it, that it closed, or that touched it. A node_id on any start point names the recorded symptom the walk begins at; start_points reports what happened to each one.",
+        "note": "Backward BFS over recorded causal edges only, from every start node: from a memory to what it is derived_from, and to the records that are evidence_of it, that it closed, or that touched it. A path follows at most one touched edge; not_followed counts the rest. A node_id on any start point names the recorded symptom the walk begins at; start_points reports what happened to each one.",
     })
 }
 
@@ -1150,8 +1535,10 @@ mod strata_walk {
         for hop in 0..=MAX_DEPTH + 1 {
             chain.push(put(&storage, "user", &format!("hop {hop}")));
         }
+        // A lineage chain: each record is evidence of the one before it. (A
+        // chain of `touched` edges is followed for one edge only.)
         for hop in 0..chain.len() - 1 {
-            link(&storage, &chain[hop + 1], &chain[hop], "touched");
+            link(&storage, &chain[hop + 1], &chain[hop], "evidence_of");
         }
         let out = execute(&storage, Some(json!({"node_id": chain[0]})))
             .await
@@ -1629,5 +2016,311 @@ mod strata_walk {
         assert_eq!(causes_of(&found), vec![(cause, 1)]);
         assert!(found["emptyBecause"].is_null(), "{found}");
         assert!(found["incomingEdges"].is_null());
+    }
+
+    fn put_tagged(storage: &Arc<Storage>, content: &str, tags: &[&str]) -> String {
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: content.to_string(),
+                    tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn candidates_are_ordered_by_depth_then_shared_identities_then_rarity_then_id() {
+        let (storage, _dir) = open();
+        // Written in this order, so id order alone would list the depth-1
+        // candidates one_common, two, one_rare, declared.
+        let one_common = put_tagged(&storage, "commit a. Touched: lib/other.py", &["connection"]);
+        let two = put_tagged(&storage, "commit b. Touched: lib/conn.py", &["connection"]);
+        let one_rare = put_tagged(&storage, "commit c", &["retry"]);
+        let declared = put_tagged(&storage, "decision d", &[]);
+        let deeper = put_tagged(
+            &storage,
+            "commit e. Touched: lib/conn.py",
+            &["connection", "retry"],
+        );
+        // Two more carriers of `connection`, linked to nothing: they only
+        // make that tag less rare than `retry`.
+        put_tagged(&storage, "bystander 1", &["connection"]);
+        put_tagged(&storage, "bystander 2", &["connection"]);
+        let start = put_tagged(
+            &storage,
+            "failure: connection retry storm, trace ends at lib/conn.py:88",
+            &["connection", "retry"],
+        );
+        for cause in [&one_common, &two, &one_rare] {
+            link(&storage, cause, &start, "touched");
+        }
+        link(&storage, &start, &declared, "derived_from");
+        // Lineage behind a lead is followed: `one_common` declares what it
+        // came from.
+        link(&storage, &one_common, &deeper, "derived_from");
+
+        let args = json!({"node_id": start});
+        let out = execute(&storage, Some(args.clone())).await.unwrap();
+        assert_eq!(
+            causes_of(&out),
+            vec![
+                // Depth 1: two shared identities; then one shared, the rarer
+                // tag first; then the declared link, which shares nothing.
+                (two.clone(), 1),
+                (one_rare.clone(), 1),
+                (one_common.clone(), 1),
+                (declared.clone(), 1),
+                // Depth 2 comes after every depth-1 candidate, although it
+                // shares the most with the start.
+                (deeper.clone(), 2),
+            ],
+            "{out}"
+        );
+        assert_eq!(execute(&storage, Some(args)).await.unwrap(), out);
+
+        let causes = out["causes"].as_array().unwrap();
+        // Every candidate carries the exact identities it shares with the
+        // start, each with its carriers in the scope of 8.
+        assert_eq!(out["ranking"]["scope_size"], 8, "{out}");
+        assert_eq!(causes[0]["rank"], 1);
+        assert_eq!(causes[0]["start"], start);
+        assert_eq!(causes[0]["shared_count"], 2);
+        assert_eq!(
+            causes[0]["joined_on"],
+            json!([
+                {"identity": "tag:connection", "carriers": 6},
+                {"identity": "path:lib/conn.py", "carriers": 3},
+            ])
+        );
+        assert_eq!(
+            causes[1]["joined_on"],
+            json!([{"identity": "tag:retry", "carriers": 3}])
+        );
+        assert_eq!(
+            causes[2]["joined_on"],
+            json!([{"identity": "tag:connection", "carriers": 6}])
+        );
+        // The words `connection` and `retry` in the start's text join
+        // nothing: the declared decision shares no identity.
+        assert_eq!(causes[3]["joined_on"], json!([]));
+        assert_eq!(causes[3]["shared_count"], 0);
+        assert_eq!(causes[4]["shared_count"], 3);
+        assert_eq!(causes[4]["rank"], 5);
+        assert_eq!(causes[4]["not_counted_hub_tags"], json!([]));
+        assert!(
+            out["ranking"]["order"]
+                .as_str()
+                .unwrap()
+                .starts_with("depth, then distinct exact identities"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hub_tag_is_listed_but_not_counted() {
+        let (storage, _dir) = open();
+        let by_hub_only = put_tagged(&storage, "commit a", &["campaign"]);
+        let by_path = put_tagged(&storage, "commit b. Touched: src/gate.rs", &[]);
+        for i in 0..13 {
+            put_tagged(&storage, &format!("batch {i}"), &["campaign"]);
+        }
+        for i in 0..4 {
+            put_tagged(&storage, &format!("other {i}"), &[]);
+        }
+        let start = put_tagged(&storage, "failure at src/gate.rs:9", &["campaign"]);
+        link(&storage, &by_hub_only, &start, "touched");
+        link(&storage, &by_path, &start, "touched");
+
+        let out = execute(&storage, Some(json!({"node_id": start})))
+            .await
+            .unwrap();
+        // 15 of the 20 memories carry `campaign`: a hub. The candidate that
+        // shares only the hub tag ranks after the one sharing a path, though
+        // its id is smaller.
+        assert_eq!(
+            causes_of(&out),
+            vec![(by_path.clone(), 1), (by_hub_only.clone(), 1)],
+            "{out}"
+        );
+        assert_eq!(out["ranking"]["scope_size"], 20);
+        assert_eq!(
+            out["causes"][0]["joined_on"],
+            json!([{"identity": "path:src/gate.rs", "carriers": 2}])
+        );
+        assert_eq!(out["causes"][1]["joined_on"], json!([]));
+        assert_eq!(out["causes"][1]["shared_count"], 0);
+        assert_eq!(
+            out["causes"][1]["not_counted_hub_tags"],
+            json!([{"identity": "tag:campaign", "carriers": 15}])
+        );
+    }
+
+    /// The rule that keeps a walk a narrowing: lineage edges chain, a
+    /// `touched` edge does not. Two memories naming the same thing is a
+    /// lead; the lead of a lead shares nothing with the start.
+    #[tokio::test]
+    async fn a_path_follows_at_most_one_touched_edge() {
+        let (storage, _dir) = open();
+        // The shape of a commit window: the failure shares `connection`
+        // with two commits, and each of those shares `tests` with commits
+        // the failure shares nothing with.
+        let far_a = put_tagged(&storage, "commit far a. Touched: tests/a.py", &["tests"]);
+        let far_b = put_tagged(&storage, "commit far b. Touched: tests/b.py", &["tests"]);
+        let near_a = put_tagged(
+            &storage,
+            "commit near a. Touched: lib/conn.py tests/a.py",
+            &["connection", "tests"],
+        );
+        let near_b = put_tagged(&storage, "commit near b", &["connection", "tests"]);
+        let origin = put_tagged(&storage, "decision the near commit came from", &[]);
+        let behind_origin = put_tagged(&storage, "commit behind the decision", &["tests"]);
+        let start = put_tagged(&storage, "failure: connection storm", &["connection"]);
+        link(&storage, &near_a, &start, "touched");
+        link(&storage, &near_b, &start, "touched");
+        // What `vestige connect` writes between the commits themselves.
+        link(&storage, &far_a, &near_a, "touched");
+        link(&storage, &far_b, &near_a, "touched");
+        link(&storage, &far_a, &near_b, "touched");
+        link(&storage, &far_a, &far_b, "touched");
+        // Lineage behind a lead is still followed, but the path has used
+        // its touched edge: nothing is reached over another one.
+        link(&storage, &near_b, &origin, "derived_from");
+        link(&storage, &behind_origin, &origin, "touched");
+
+        let args = json!({"node_id": start});
+        let out = execute(&storage, Some(args.clone())).await.unwrap();
+        assert_eq!(
+            causes_of(&out),
+            vec![
+                (near_a.clone(), 1),
+                (near_b.clone(), 1),
+                (origin.clone(), 2)
+            ],
+            "{out}"
+        );
+        assert_eq!(execute(&storage, Some(args)).await.unwrap(), out);
+        for hidden in [&far_a, &far_b, &behind_origin] {
+            assert!(!node_ids(&out).contains(hidden), "{hidden} in {out}");
+        }
+        assert_eq!(out["truncated"], false, "nothing was cut by a bound: {out}");
+
+        // What was not followed is counted, with what the ends of those
+        // edges share. `far_a -> far_b` is never seen: neither end was
+        // reached.
+        let held = &out["not_followed"];
+        assert_eq!(held["touched_edges"], 4, "{out}");
+        assert_eq!(held["memories"], 3, "{out}");
+        assert_eq!(
+            held["shared"],
+            json!([
+                {"identity": "tag:tests", "carriers": 5, "edges": 3},
+                {"identity": "path:tests/a.py", "carriers": 2, "edges": 1},
+            ]),
+            "{out}"
+        );
+        assert_eq!(held["shared_identities"], 2);
+        assert_eq!(held["scope_size"], 7);
+        // `behind_origin -> origin`: the decision records no identity.
+        assert_eq!(held["no_counted_identity"], 1);
+        assert!(
+            held["reason"]
+                .as_str()
+                .unwrap()
+                .contains("at most one touched edge"),
+            "{out}"
+        );
+    }
+
+    /// One `touched` edge per PATH, not per walk: after lineage edges a
+    /// path may still follow one, and a memory reached both over a touched
+    /// edge and over lineage is expanded from the lineage side too.
+    #[tokio::test]
+    async fn a_touched_edge_is_followed_after_lineage_and_from_either_route() {
+        let (storage, _dir) = open();
+        let start = put(&storage, "user", "failure");
+        let decision = put(&storage, "user", "decision the failure derives from");
+        let both = put(&storage, "user", "record reached two ways");
+        let beyond = put(&storage, "user", "commit that touched the record");
+        let lead = put(&storage, "user", "commit that touched the decision");
+        // start -> decision -> both is lineage; both -> start is also one
+        // touched edge away.
+        link(&storage, &start, &decision, "derived_from");
+        link(&storage, &decision, &both, "derived_from");
+        link(&storage, &both, &start, "touched");
+        link(&storage, &lead, &decision, "touched");
+        link(&storage, &beyond, &both, "touched");
+
+        let out = execute(&storage, Some(json!({"node_id": start})))
+            .await
+            .unwrap();
+        assert_eq!(
+            causes_of(&out),
+            vec![
+                (decision.clone(), 1),
+                // Listed at the depth of its shortest path, the touched edge.
+                (both.clone(), 1),
+                (lead.clone(), 2),
+                // start -> decision -> both -> beyond: two lineage edges,
+                // then the path's one touched edge.
+                (beyond.clone(), 3),
+            ],
+            "{out}"
+        );
+        let beyond_row = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == beyond)
+            .unwrap();
+        let kinds: Vec<&str> = beyond_row["path"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hop| hop["link_type"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["derived_from", "derived_from", "touched"]);
+        assert!(
+            out["not_followed"].is_null(),
+            "nothing is hidden behind a touched edge: {out}"
+        );
+    }
+
+    /// A walk stopped by the depth bound says so only for edges it could
+    /// still follow: a `touched` edge behind a path that has used its own
+    /// is not "more beyond", it is not followed and counted as such.
+    #[tokio::test]
+    async fn the_depth_bound_does_not_count_touched_edges_it_would_not_follow() {
+        let (storage, _dir) = open();
+        let start = put(&storage, "user", "failure");
+        let lead = put(&storage, "user", "lead");
+        link(&storage, &lead, &start, "touched");
+        let mut last = lead.clone();
+        for hop in 1..MAX_DEPTH {
+            let next = put(&storage, "user", &format!("origin {hop}"));
+            link(&storage, &last, &next, "derived_from");
+            last = next;
+        }
+        let behind = put(&storage, "user", "behind the bound, over touched");
+        link(&storage, &behind, &last, "touched");
+
+        let out = execute(&storage, Some(json!({"node_id": start})))
+            .await
+            .unwrap();
+        assert!(node_ids(&out).contains(&last), "{out}");
+        assert!(!node_ids(&out).contains(&behind), "{out}");
+        assert_eq!(out["truncated"], false, "{out}");
+
+        // The same memory behind a lineage edge IS more beyond the bound.
+        let further = put(&storage, "user", "behind the bound, over lineage");
+        link(&storage, &last, &further, "derived_from");
+        let out = execute(&storage, Some(json!({"node_id": start})))
+            .await
+            .unwrap();
+        assert!(!node_ids(&out).contains(&further), "{out}");
+        assert_eq!(out["truncated"], true, "{out}");
     }
 }

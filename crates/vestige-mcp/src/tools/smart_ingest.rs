@@ -828,7 +828,8 @@ const MAX_DECLARED_LINKS: usize = 16;
 /// does — the single form's `nodeId`, then every batch result — so one hook
 /// covers every save path. Like declared links, a refused edge is reported on
 /// the slot (`autoConnectError`) instead of failing an ingest that already
-/// succeeded; `autoConnect` itself ships only when edges were written.
+/// succeeded; `autoConnect` itself ships only when edges were written or a
+/// tag was skipped (each skipped tag is named with its reason).
 fn auto_connect_saved(storage: &Arc<Storage>, value: &mut Value) {
     if let Some(node_id) = value
         .get("nodeId")
@@ -884,7 +885,9 @@ fn auto_connect_slot(storage: &Arc<Storage>, slot: &mut Value, node_id: &str, sc
         &node.content,
         &node.tags,
     ) {
-        Ok(report) if report.edges > 0 => {
+        // A pass that wrote nothing but skipped a tag still reports: a tag is
+        // never skipped silently.
+        Ok(report) if report.edges > 0 || !report.skipped.is_empty() => {
             slot["autoConnect"] = serde_json::json!({
                 "edges": report.edges,
                 "sharedIdentities": report.shared_identities,
@@ -898,6 +901,21 @@ fn auto_connect_slot(storage: &Arc<Storage>, slot: &mut Value, node_id: &str, sc
                     }))
                     .collect::<Vec<_>>(),
                 "skippedCommonTags": report.skipped_common_tags,
+                // Each skipped tag with its carriers, the scope size and
+                // the reason (`skipped tag X: carried by N of M (...)`).
+                "skipped": report
+                    .skipped
+                    .iter()
+                    .map(|skipped| serde_json::json!({
+                        "tag": skipped.tag,
+                        "carriers": skipped.carriers,
+                        "scopeSize": skipped.scope_size,
+                        "reason": skipped.reason.to_string(),
+                    }))
+                    .collect::<Vec<_>>(),
+                "notLinked": report.not_linked,
+                // The one write that admitted every edge above.
+                "receiptId": report.receipt_id,
                 "edge": "touched",
             });
         }

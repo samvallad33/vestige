@@ -140,6 +140,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The README, the package descriptions and the documentation describe Vestige
   as a causal proof engine. The default data directory on Linux and Windows is
   stated as the code resolves it (#433).
+### Changed
+
+- **`causal_walk` follows at most one `touched` edge on a path.** A `touched` edge records that two memories name the same exact thing (it is what `vestige connect` and the ingest-time auto-connect write), and that is not transitive. Followed as a chain, those edges reached nearly every record of a commit window from any start. `derived_from`, `evidence_of` and `closed_by` still chain to the depth bound. The response counts what was not followed in `not_followed` (edges, memories behind them, and the exact identities their two ends share with each identity's carriers), and the CLI prints it under the candidates.
+- **`causal_walk` orders candidates with proof.** Depth first, then the distinct exact identities a candidate shares with its start (more first), then the rarer identities first, then id. Each cause carries `rank`, `joined_on` (identity and carriers), `shared_count` and `not_counted_hub_tags`; `ranking` states the order and the scope size. The CLI prints the identities under each candidate. The `#<n> <id> depth <d>` line and the content line after it are unchanged.
+- **Auto-connect: the flat cap of 14 carriers per tag is gone.** A tag joins unless it is a hub (more than half the scope carries it, past a group of 14) or it does not fit whole in the 100-edge budget of one write. Candidates are ranked before the budget cuts, so a tag on two memories is not crowded out by a path a hundred memories share. Every skipped tag is reported with its carriers, the scope size and the reason: `skipped tag X: carried by N of M (...)`, in `vestige ingest`, `vestige connect` and `smart_ingest` (`autoConnect.skipped`).
+- **Auto-connect joins an exact path, sha, issue reference or URL that appears only in the two texts at ingest.** Before, only a later `vestige connect` did.
+- **The auto-connect edges of one save are one write.** One gate decision, one effect and one synced data frame for all of them (`StoreOp::SaveEdges`, a new log op), instead of one of each per edge; they land together or not at all. `autoConnect.receiptId` (and `Auto-connect receipt:` in the CLI) names the one receipt, and `receipt get` / `receipt replay` on it list every edge. A build older than this one does not decode the new op: it counts the frame as an orphan write and does not see those edges until it is upgraded.
+- **`vestige connect` compares only memories that share an identity** instead of every pair of the scope, and no longer copies both texts into every candidate pair. Its output is unchanged.
 
 ## [4.1.1] - 2026-10-02
 
