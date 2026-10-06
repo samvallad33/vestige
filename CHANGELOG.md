@@ -20,7 +20,8 @@ as orphan writes and does not see those edges until it is upgraded.
   A parent commit is `derived_from`. A revert is `corrects` the commit it
   undoes, including when the revert is ingested first and when it sits on
   another branch whose target is an ancestor of the failure. A cherry-pick
-  is `derived_from` its source, a `Fixes:` trailer is `corrects`, and two
+  is `derived_from` its source, a `Fixes: <40-hex sha>` trailer is `corrects`
+  when that object is that commit, and two
   commits with the same patch-id are linked. A touched path is a `file:`
   edge. A lockfile version move is a `pkg:` edge, and the old version is
   `supersedes`. `causal_walk` resolves a `stack_frame` or `failing_test` to
@@ -261,6 +262,13 @@ as orphan writes and does not see those edges until it is upgraded.
   writes idempotent is staged with the log and published into the backup
   destination whether or not it already existed; a restored backup no longer
   re-admits an already-intented write.
+
+- **`Fixes:` is a full sha or it is not a trailer.** `ingest_repo` used to
+  treat `Fixes: <12-40 hex>` as a commit prefix, ask `git rev-parse` to
+  expand it, and ingest that commit even when it was outside the page, then
+  write `corrects`. Only `Fixes: <40 hex>` whose object is that commit is
+  read. `This reverts commit <sha>.` and `(cherry picked from commit <sha>)`
+  are unchanged.
 
 - **`vestige prove` restores its worktree before `git bisect start`.** A test
   that rewrites a tracked file (a lockfile, a generated source) no longer

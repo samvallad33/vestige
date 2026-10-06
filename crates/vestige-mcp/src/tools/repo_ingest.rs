@@ -61,7 +61,8 @@
 //! commit named by that trailer. A reverted commit that is reachable locally
 //! but outside this page is ingested too, so the edge has both ends.
 //! `(cherry picked from commit <sha>)` is `derived_from` the named commit.
-//! `Fixes: <sha>` is `corrects` once the prefix resolves to one local commit.
+//! `Fixes: <40-hex sha>` is `corrects` only when that exact object is a
+//! commit. A shorter hex token is not read and is not expanded.
 //! A commit whose reverse diff has the same `git patch-id --stable` as an
 //! older commit's diff `corrects` that commit, and two commits with the same
 //! forward patch-id are the same change: the later `derived_from` the earlier.
@@ -711,7 +712,7 @@ struct History {
     page_len: usize,
     stopped_early: Option<String>,
     pulled_reverts: usize,
-    /// Cherry-pick and `Fixes:` targets pulled from outside the page.
+    /// Cherry-pick and full-sha `Fixes:` targets pulled from outside the page.
     pulled_named: usize,
     revert_merges: usize,
 }
@@ -811,21 +812,30 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
     })
 }
 
-/// Replace `Fixes:` prefixes with the one local commit they name. An ambiguous
-/// or missing prefix is dropped. Nothing is fetched.
+/// Keep a `Fixes:` token only when it is already a 40-hex sha and
+/// `git rev-parse --verify <sha>^{commit}` returns that same sha.
+/// A shorter token is dropped. It is never expanded, so a unique 12-hex
+/// prefix cannot pull a commit that was outside the page. Nothing is fetched.
 fn resolve_fix_shas(root: &Path, commits: &mut [GitCommit]) {
     for commit in commits.iter_mut() {
         let mut full = Vec::new();
-        for prefix in commit.fixes.drain(..) {
-            let Some(sha) = resolve_commit_sha(root, &prefix) else {
+        for token in commit.fixes.drain(..) {
+            if !is_exact_full_sha(&token) {
+                continue;
+            }
+            let Some(sha) = resolve_commit_sha(root, &token) else {
                 continue;
             };
-            if sha != commit.sha && !full.contains(&sha) {
+            if sha == token && sha != commit.sha && !full.contains(&sha) {
                 full.push(sha);
             }
         }
         commit.fixes = full;
     }
+}
+
+fn is_exact_full_sha(sha: &str) -> bool {
+    sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// `git log -p` arguments. `merges` is `--no-merges` or `--merges`.
@@ -2550,7 +2560,6 @@ pub fn parse_timeout(raw: &str) -> u32 {
         let backport = repo.shas.last().unwrap().clone();
         repo.write("src/b.rs", "fn b() {}\n");
         repo.git(&["add", "-A"], "2024-01-05T00:00:00Z");
-        let prefix = &feature[..12];
         repo.git(
             &[
                 "commit",
@@ -2558,7 +2567,9 @@ pub fn parse_timeout(raw: &str) -> u32 {
                 "-m",
                 "close the bug",
                 "-m",
-                &format!("Fixes: {prefix}\nfixes: {feature}\nFixes: {feature} and then some prose"),
+                &format!(
+                    "Fixes: {feature}\nfixes: {feature}\nFixes: {feature} and then some prose"
+                ),
             ],
             "2024-01-05T00:00:00Z",
         );
@@ -2646,6 +2657,64 @@ pub fn parse_timeout(raw: &str) -> u32 {
         let fixes_out = ingest(&pulled, fixes_page).await;
         assert_eq!(fixes_out["commits"]["pulledNamed"], 1, "{fixes_out}");
         assert_eq!(fixes_out["edges"]["fixes"], 1, "{fixes_out}");
+    }
+
+    /// A unique short hex prefix used to be `git rev-parse`d into a full sha,
+    /// then `read_one_commit` added that commit even when it sat outside the
+    /// page, and the edge writer stored `corrects`. That is how a 300-commit
+    /// page could gain an off-page target. Only an exact 40-hex `Fixes:` line
+    /// whose object is that commit may do this. `This reverts commit <sha>.`
+    /// and `(cherry picked from commit <sha>)` are unchanged.
+    #[tokio::test]
+    async fn a_short_fixes_prefix_does_not_pull_or_link_an_outside_commit() {
+        let mut repo = Repo::empty();
+        repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
+        repo.commit("base", "2024-02-01T00:00:00Z");
+        repo.write("src/a.rs", "fn a() { let _ = 2; }\n");
+        repo.commit("the feature", "2024-02-02T00:00:00Z");
+        let feature = repo.shas[1].clone();
+        let prefix = &feature[..12];
+        let seven = &feature[..7];
+        repo.write("src/b.rs", "fn b() {}\n");
+        repo.git(&["add", "-A"], "2024-02-03T00:00:00Z");
+        repo.git(
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "close the bug",
+                "-m",
+                &format!(
+                    "Fixes: {prefix}\nFixes: {seven}\nfixes: {feature}\nFixes: {feature} mentioned in a sentence"
+                ),
+            ],
+            "2024-02-03T00:00:00Z",
+        );
+        let fixer = repo.git(&["rev-parse", "HEAD"], "2024-02-03T00:00:00Z");
+
+        let (storage, _dir) = strata();
+        let mut page = repo.request(false);
+        page.rev = Some(fixer);
+        page.limit = Some(1);
+        page.codebase = Some("loose-fixes".into());
+        page.scope = Some("loose-fixes".into());
+        let out = ingest(&storage, page).await;
+        assert_eq!(out["commits"]["pulledNamed"], 0, "{out}");
+        assert_eq!(out["commits"]["pulledReverts"], 0, "{out}");
+        assert_eq!(out["edges"]["fixes"], 0, "{out}");
+        let tag = commit_tag(&feature);
+        assert!(
+            storage
+                .current_code_context_nodes("event", Some(&tag), "loose-fixes", 5)
+                .unwrap()
+                .is_empty(),
+            "the off-page commit named by a short Fixes: prefix was ingested: {out}"
+        );
+        let edges = storage.get_all_connections().unwrap();
+        assert!(
+            edges.iter().all(|edge| edge.link_type != "corrects"),
+            "a loose Fixes: line wrote corrects: {edges:?}"
+        );
     }
 
     #[tokio::test]
