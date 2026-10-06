@@ -50,7 +50,30 @@
 //! undone, so the first call says what it would write and nothing else. The
 //! records go to their own scope (the codebase name unless one is given), so a
 //! third-party repository never lands in the shared `user` scope. Merge
-//! commits are skipped: they carry no diff to anchor.
+//! commits are skipped unless the message carries git's own
+//! `This reverts commit <sha>.` trailer, which is how a merge lands a revert.
+//! The revision the caller named (`rev`) is recorded even when that commit is
+//! a merge, so a failure can be `derived_from` the revision where it was observed.
+//!
+//! Each recorded commit also gets the causal edges git itself recorded:
+//! `touched` to the file and hunk anchors it changed, `derived_from` to each
+//! parent that is already in the scope, and `corrects` from a revert to the
+//! commit named by that trailer. A reverted commit that is reachable locally
+//! but outside this page is ingested too, so the edge has both ends.
+//! `(cherry picked from commit <sha>)` is `derived_from` the named commit.
+//! `Fixes: <sha>` is `corrects` once the prefix resolves to one local commit.
+//! A commit whose reverse diff has the same `git patch-id --stable` as an
+//! older commit's diff `corrects` that commit, and two commits with the same
+//! forward patch-id are the same change: the later `derived_from` the earlier.
+//! Equality is exact. A missing object is skipped and never fetched.
+//!
+//! A lockfile diff (Cargo.lock, uv.lock, poetry.lock, package-lock.json,
+//! go.sum) that moves one package from exactly one old version to exactly one
+//! new version records `touched` on `pkg:<ecosystem>:<name>@<new>` and
+//! `supersedes` on `pkg:<ecosystem>:<name>@<old>`. When that crate's
+//! `.cargo_vcs_info.json` `sha1` or npm `gitHead` is already in the local
+//! tree at both versions, the commit also gets `anchored_to`
+//! `upstream:<oldsha>..<newsha>`. Nothing is fetched.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -64,7 +87,7 @@ use chrono::Utc;
 use serde_json::{Value, json};
 use vestige_core::advanced::git_records::{self, GitCommit};
 use vestige_core::codebase::{AnchorDraft, AnchorStatus, CodeAnchor, capture_anchor};
-use vestige_core::{IngestInput, SourceEnvelope, Storage, StorageError};
+use vestige_core::{ConnectionRecord, IngestInput, SourceEnvelope, Storage, StorageError};
 
 /// Commits read per call unless the caller says otherwise.
 pub const DEFAULT_LIMIT: usize = 100;
@@ -151,7 +174,10 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
         Some(claim_write(storage, &scope, &codebase)?)
     };
 
-    let (commits, stopped_early) = read_commits(&root, &req, limit)?;
+    let history = read_commits(&root, &req, limit)?;
+    let commits = history.commits;
+    let stopped_early = history.stopped_early;
+    let page_len = history.page_len;
     let head = run_git(&root, &["rev-parse".into(), "HEAD".into()])
         .ok()
         .filter(|run| run.failure.is_none())
@@ -159,6 +185,7 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
         .filter(|sha| !sha.is_empty());
 
     let ingested = ingested_commits(storage, &scope, &codebase)?;
+    let mut sha_to_id = ingested.clone();
     // git lists newest first; write oldest first so memory ids follow history.
     let fresh: Vec<&GitCommit> = commits
         .iter()
@@ -211,7 +238,7 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             continue;
         }
 
-        let input = change_record(commit, &codebase, now);
+        let input = change_record(commit, &codebase, &root, now);
         let node = match storage.ingest_in_scope(input, &scope) {
             Ok(node) => node,
             Err(StorageError::SecretDetected { .. }) => {
@@ -228,6 +255,7 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             }
         };
         stats.created += 1;
+        sha_to_id.insert(commit.sha.clone(), node.id.clone());
         if node_ids.len() < IDS_SHOWN {
             node_ids.push(node.id.clone());
         }
@@ -257,14 +285,26 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
         }
     }
     flush_anchors(storage, &mut queue, &mut stats, &mut failures);
+    let edges = record_git_edges(
+        &EdgeCtx {
+            storage,
+            root: &root,
+            sha_to_id: &sha_to_id,
+            dry_run: req.dry_run,
+        },
+        &commits,
+        started,
+        budget,
+        &mut stats,
+    );
     let remaining = if req.dry_run {
         0
     } else {
         fresh.len() - stats.created - stats.skipped_secret
     };
 
-    let oldest = commits.last().map(|commit| commit.sha.clone());
-    let more = commits.len() >= limit && stopped_early.is_none();
+    let oldest = (page_len > 0).then(|| commits[page_len - 1].sha.clone());
+    let more = page_len >= limit && stopped_early.is_none();
     let sample: Vec<Value> = fresh
         .iter()
         .rev()
@@ -315,7 +355,12 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             "rev": req.rev.as_deref().unwrap_or("HEAD"),
             "since": req.since,
             "until": req.until,
-            "mergeCommits": "skipped",
+            "mergeCommits": if history.revert_merges == 0 {
+                "skipped"
+            } else {
+                "revertTrailersKept"
+            },
+            "revertMerges": history.revert_merges,
         },
         "commits": {
             "seen": commits.len(),
@@ -326,6 +371,26 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             "stoppedByBudget": stats.stopped_by_budget,
             "skippedSecret": stats.skipped_secret,
             "futureDatesClamped": stats.future_dates_clamped,
+            "pulledReverts": history.pulled_reverts,
+            "pulledNamed": history.pulled_named,
+        },
+        "edges": {
+            (if req.dry_run { "wouldRecord" } else { "recorded" }): edges.touched
+                + edges.parents
+                + edges.reverts
+                + edges.packages
+                + edges.upstream
+                + edges.cherry_picks
+                + edges.fixes
+                + edges.patch_ids,
+            "touched": edges.touched,
+            "parents": edges.parents,
+            "reverts": edges.reverts,
+            "packages": edges.packages,
+            "upstream": edges.upstream,
+            "cherryPicks": edges.cherry_picks,
+            "fixes": edges.fixes,
+            "patchIds": edges.patch_ids,
         },
         "anchors": anchors,
         "sample": sample,
@@ -527,7 +592,12 @@ impl AnchorCounts {
 }
 
 /// The change record for one commit.
-fn change_record(commit: &GitCommit, codebase: &str, now: chrono::DateTime<Utc>) -> IngestInput {
+fn change_record(
+    commit: &GitCommit,
+    codebase: &str,
+    root: &Path,
+    now: chrono::DateTime<Utc>,
+) -> IngestInput {
     // non_exhaustive: default-then-mutate is the only cross-crate construction
     let mut envelope = SourceEnvelope::default();
     envelope.source_system = Some(git_records::SOURCE_SYSTEM.to_string());
@@ -545,6 +615,7 @@ fn change_record(commit: &GitCommit, codebase: &str, now: chrono::DateTime<Utc>)
             git_records::COMMIT_TAG.to_string(),
             format!("codebase:{codebase}"),
             commit_tag(&commit.sha),
+            format!("{GIT_ROOT_PREFIX}{}", root.display()),
         ],
         // A future author date would make the record "not yet valid" and hide it.
         valid_from: Some(commit.time.min(now)),
@@ -557,6 +628,20 @@ fn change_record(commit: &GitCommit, codebase: &str, now: chrono::DateTime<Utc>)
 /// The exact tag that finds one commit record.
 pub fn commit_tag(sha: &str) -> String {
     format!("commit:{sha}")
+}
+
+/// Tag prefix storing the checkout the commit was read from, so a later
+/// blame can run against that tree without the caller passing a path.
+pub const GIT_ROOT_PREFIX: &str = "git-root:";
+
+/// Stable id of the touched-file anchor a commit edge points at.
+pub fn file_anchor_id(path: &str) -> String {
+    format!("file:{path}")
+}
+
+/// Stable id of one diff hunk anchor (`file:start+len` on the new side).
+pub fn hunk_anchor_id(file: &str, start: u32, len: u32) -> String {
+    format!("hunk:{file}:{start}+{len}")
 }
 
 /// Commits already recorded in `scope` for `codebase`, by exact `commit:` tag:
@@ -617,29 +702,155 @@ fn flush_anchors(
     queue.clear();
 }
 
+/// One history read: the limited page, plus revert merges and any reverted
+/// commit the page names that was not already on the page.
+struct History {
+    /// Newest page commit first, then kept merges and pulled revert targets.
+    commits: Vec<GitCommit>,
+    /// How many of `commits` came from the limited page (not extras).
+    page_len: usize,
+    stopped_early: Option<String>,
+    pulled_reverts: usize,
+    /// Cherry-pick and `Fixes:` targets pulled from outside the page.
+    pulled_named: usize,
+    revert_merges: usize,
+}
+
 /// Commits from `git log`, newest first, and why git stopped early if it did.
-fn read_commits(
-    root: &Path,
-    req: &Request,
-    limit: usize,
-) -> Result<(Vec<GitCommit>, Option<String>), String> {
+fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, String> {
+    let run = run_git(root, &log_args(req, limit, "--no-merges", false))?;
+    let mut commits = git_records::parse_git_log(&String::from_utf8_lossy(&run.stdout));
+    let stopped_early = if let Some(failure) = run.failure {
+        // git streams commit by commit and died partway. The last record may
+        // be cut mid-diff, so it is not trusted; everything before it is whole.
+        commits.pop();
+        if commits.is_empty() {
+            return Err(git_failure(&failure));
+        }
+        Some(git_failure(&failure))
+    } else {
+        None
+    };
+    let page_len = commits.len();
+
+    let mut revert_merges = 0usize;
+    if let Ok(run) = run_git(root, &log_args(req, limit, "--merges", true))
+        && run.failure.is_none()
+    {
+        for commit in git_records::parse_git_log(&String::from_utf8_lossy(&run.stdout)) {
+            if commit.reverts.is_none() || commits.iter().any(|seen| seen.sha == commit.sha) {
+                continue;
+            }
+            revert_merges += 1;
+            commits.push(commit);
+        }
+    }
+
+    resolve_fix_shas(root, &mut commits);
+    let mut pulled_reverts = 0usize;
+    let mut pulled_named = 0usize;
+    let mut revert_targets = HashSet::new();
+    let mut named_targets = HashSet::new();
+    for commit in &commits {
+        if let Some(sha) = &commit.reverts {
+            revert_targets.insert(sha.clone());
+        }
+        if let Some(sha) = &commit.cherry_picked_from {
+            named_targets.insert(sha.clone());
+        }
+        for sha in &commit.fixes {
+            named_targets.insert(sha.clone());
+        }
+    }
+    let mut pending: Vec<String> = revert_targets
+        .iter()
+        .chain(named_targets.iter())
+        .filter(|sha| commits.iter().all(|seen| seen.sha != (*sha).as_str()))
+        .cloned()
+        .collect();
+    pending.sort();
+    pending.dedup();
+    for sha in pending {
+        if !commit_object_exists(root, &sha) {
+            continue;
+        }
+        // One commit, even if it is a merge and even if it sits outside the
+        // caller's rev/since/until window. `-m` gives a merge a diff.
+        let Some(commit) = read_one_commit(root, &sha) else {
+            continue;
+        };
+        if commits.iter().any(|seen| seen.sha == commit.sha) {
+            continue;
+        }
+        if revert_targets.contains(&sha) {
+            pulled_reverts += 1;
+        } else {
+            pulled_named += 1;
+        }
+        commits.push(commit);
+    }
+    resolve_fix_shas(root, &mut commits);
+
+    // The revision the caller named is the one a failure is observed at. A
+    // release commit is often a merge, and `--no-merges` would drop it.
+    if let Some(rev) = req.rev.as_deref()
+        && let Some(sha) = resolve_commit_sha(root, rev)
+        && commits.iter().all(|seen| seen.sha != sha)
+        && let Some(commit) = read_one_commit(root, &sha)
+    {
+        commits.push(commit);
+    }
+
+    Ok(History {
+        commits,
+        page_len,
+        stopped_early,
+        pulled_reverts,
+        pulled_named,
+        revert_merges,
+    })
+}
+
+/// Replace `Fixes:` prefixes with the one local commit they name. An ambiguous
+/// or missing prefix is dropped. Nothing is fetched.
+fn resolve_fix_shas(root: &Path, commits: &mut [GitCommit]) {
+    for commit in commits.iter_mut() {
+        let mut full = Vec::new();
+        for prefix in commit.fixes.drain(..) {
+            let Some(sha) = resolve_commit_sha(root, &prefix) else {
+                continue;
+            };
+            if sha != commit.sha && !full.contains(&sha) {
+                full.push(sha);
+            }
+        }
+        commit.fixes = full;
+    }
+}
+
+/// `git log -p` arguments. `merges` is `--no-merges` or `--merges`.
+///
+/// `--first-parent` is only for the merge pass. On the main log it would
+/// hide commits that reached the branch through a merge's second parent.
+fn log_args(req: &Request, limit: usize, merges: &str, first_parent: bool) -> Vec<String> {
     // Nothing the checkout's own config names may run: no external diff, no
     // textconv filter, and no signature check (log.showSignature would run
     // gpg.program, a path the repository chooses).
-    let mut args: Vec<String> = [
-        "log",
-        "-p",
-        "--unified=0",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-show-signature",
-        "--no-merges",
-        "--pretty=format:%x1e%H%x1f%aI%x1f%s",
-    ]
-    .iter()
-    .map(|arg| arg.to_string())
-    .collect();
+    let mut args = vec![
+        "log".to_string(),
+        "-p".into(),
+        "--unified=0".into(),
+        "--no-color".into(),
+        "--no-ext-diff".into(),
+        "--no-textconv".into(),
+        "--no-show-signature".into(),
+    ];
+    if first_parent {
+        args.push("-m".into());
+        args.push("--first-parent".into());
+    }
+    args.push(merges.to_string());
+    args.push(format!("--pretty=format:{}", git_records::GIT_LOG_PRETTY));
     args.push("-n".into());
     args.push(limit.to_string());
     if let Some(since) = &req.since {
@@ -651,18 +862,712 @@ fn read_commits(
     if let Some(rev) = &req.rev {
         args.push(rev.clone());
     }
-    let run = run_git(root, &args)?;
-    let mut commits = git_records::parse_git_log(&String::from_utf8_lossy(&run.stdout));
-    let Some(failure) = run.failure else {
-        return Ok((commits, None));
-    };
-    // git streams commit by commit and died partway. The last record may be
-    // cut mid-diff, so it is not trusted; everything before it is whole.
-    commits.pop();
-    if commits.is_empty() {
-        return Err(git_failure(&failure));
+    args
+}
+
+/// One commit by SHA, including a merge (`-m --first-parent` gives it a diff).
+fn read_one_commit(root: &Path, sha: &str) -> Option<GitCommit> {
+    let args = vec![
+        "log".into(),
+        "-1".into(),
+        "-p".into(),
+        "-m".into(),
+        "--first-parent".into(),
+        "--unified=0".into(),
+        "--no-color".into(),
+        "--no-ext-diff".into(),
+        "--no-textconv".into(),
+        "--no-show-signature".into(),
+        format!("--pretty=format:{}", git_records::GIT_LOG_PRETTY),
+        sha.to_string(),
+    ];
+    let run = run_git(root, &args).ok()?;
+    if run.failure.is_some() {
+        return None;
     }
-    Ok((commits, Some(git_failure(&failure))))
+    git_records::parse_git_log(&String::from_utf8_lossy(&run.stdout))
+        .into_iter()
+        .next()
+}
+
+fn resolve_commit_sha(root: &Path, rev: &str) -> Option<String> {
+    let run = run_git(
+        root,
+        &[
+            "rev-parse".into(),
+            "--verify".into(),
+            format!("{rev}^{{commit}}"),
+        ],
+    )
+    .ok()?;
+    if run.failure.is_some() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&run.stdout)
+        .trim()
+        .to_ascii_lowercase();
+    (sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())).then_some(sha)
+}
+
+fn commit_object_exists(root: &Path, sha: &str) -> bool {
+    run_git(
+        root,
+        &["cat-file".into(), "-e".into(), format!("{sha}^{{commit}}")],
+    )
+    .is_ok_and(|run| run.failure.is_none())
+}
+
+#[derive(Default)]
+struct EdgeStats {
+    touched: usize,
+    parents: usize,
+    reverts: usize,
+    packages: usize,
+    upstream: usize,
+    cherry_picks: usize,
+    fixes: usize,
+    patch_ids: usize,
+}
+
+struct EdgeCtx<'a> {
+    storage: &'a Arc<Storage>,
+    root: &'a Path,
+    sha_to_id: &'a HashMap<String, String>,
+    dry_run: bool,
+}
+
+/// Write (or, on a preview, count) the git-recorded edges for `commits`.
+fn record_git_edges(
+    ctx: &EdgeCtx<'_>,
+    commits: &[GitCommit],
+    started: Instant,
+    budget: Duration,
+    stats: &mut Stats,
+) -> EdgeStats {
+    let mut out = EdgeStats::default();
+    let known: HashSet<&str> = commits
+        .iter()
+        .map(|commit| commit.sha.as_str())
+        .chain(ctx.sha_to_id.keys().map(String::as_str))
+        .collect();
+    for commit in commits {
+        if !ctx.dry_run && started.elapsed() >= budget {
+            stats.stopped_by_budget = true;
+            break;
+        }
+        let source = ctx.sha_to_id.get(&commit.sha);
+        if source.is_none() && !ctx.dry_run {
+            continue;
+        }
+        for file in &commit.files {
+            note_edge(
+                ctx.storage,
+                source,
+                &file_anchor_id(file),
+                "touched",
+                ctx.dry_run,
+                &mut out.touched,
+            );
+        }
+        for hunk in &commit.hunks {
+            note_edge(
+                ctx.storage,
+                source,
+                &hunk_anchor_id(&hunk.file, hunk.start, hunk.len),
+                "touched",
+                ctx.dry_run,
+                &mut out.touched,
+            );
+        }
+        for parent in &commit.parents {
+            if !known.contains(parent.as_str()) {
+                continue;
+            }
+            let target = ctx.sha_to_id.get(parent);
+            if target.is_none() && !ctx.dry_run {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                source,
+                target.map(String::as_str).unwrap_or(parent),
+                "derived_from",
+                ctx.dry_run,
+                &mut out.parents,
+            );
+        }
+        if let Some(reverted) = &commit.reverts {
+            if !known.contains(reverted.as_str()) {
+                continue;
+            }
+            let target = ctx.sha_to_id.get(reverted);
+            if target.is_none() && !ctx.dry_run {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                source,
+                target.map(String::as_str).unwrap_or(reverted),
+                "corrects",
+                ctx.dry_run,
+                &mut out.reverts,
+            );
+        }
+        if let Some(original) = &commit.cherry_picked_from
+            && known.contains(original.as_str())
+        {
+            let target = ctx.sha_to_id.get(original);
+            if target.is_some() || ctx.dry_run {
+                note_edge(
+                    ctx.storage,
+                    source,
+                    target.map(String::as_str).unwrap_or(original),
+                    "derived_from",
+                    ctx.dry_run,
+                    &mut out.cherry_picks,
+                );
+            }
+        }
+        for fixed in &commit.fixes {
+            if !known.contains(fixed.as_str()) {
+                continue;
+            }
+            let target = ctx.sha_to_id.get(fixed);
+            if target.is_none() && !ctx.dry_run {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                source,
+                target.map(String::as_str).unwrap_or(fixed),
+                "corrects",
+                ctx.dry_run,
+                &mut out.fixes,
+            );
+        }
+        let bumps = lock_bumps_with_context(ctx.root, commit);
+        for bump in &bumps {
+            let new_id =
+                git_records::package_anchor_id(&bump.ecosystem, &bump.package, &bump.new_version);
+            let old_id =
+                git_records::package_anchor_id(&bump.ecosystem, &bump.package, &bump.old_version);
+            note_edge(
+                ctx.storage,
+                source,
+                &new_id,
+                "touched",
+                ctx.dry_run,
+                &mut out.packages,
+            );
+            note_edge(
+                ctx.storage,
+                source,
+                &old_id,
+                "supersedes",
+                ctx.dry_run,
+                &mut out.packages,
+            );
+            if let Some(range) = upstream_range(ctx.root, commit, bump) {
+                note_edge(
+                    ctx.storage,
+                    source,
+                    &range,
+                    "anchored_to",
+                    ctx.dry_run,
+                    &mut out.upstream,
+                );
+            }
+        }
+    }
+    record_patch_identities(ctx, commits, started, budget, stats, &mut out);
+    out
+}
+
+/// Exact `git patch-id --stable` matches inside this page.
+///
+/// The reverse diff is `git diff SHA PARENT` (the change undone). When that
+/// id equals an older commit's forward diff, the newer commit `corrects` the
+/// older one. Two commits with the same forward id are the same change: the
+/// later `derived_from` the earlier. A commit that already carries git's
+/// revert trailer is left to that trailer. Merges and empty diffs are skipped.
+fn record_patch_identities(
+    ctx: &EdgeCtx<'_>,
+    commits: &[GitCommit],
+    started: Instant,
+    budget: Duration,
+    stats: &mut Stats,
+    out: &mut EdgeStats,
+) {
+    struct PatchFacts {
+        index: usize,
+        forward: String,
+        reverse: String,
+    }
+    let mut facts: Vec<PatchFacts> = Vec::new();
+    for (index, commit) in commits.iter().enumerate() {
+        if !ctx.dry_run && started.elapsed() >= budget {
+            stats.stopped_by_budget = true;
+            break;
+        }
+        if commit.parents.len() != 1 || commit.files.is_empty() {
+            continue;
+        }
+        let parent = &commit.parents[0];
+        let Some(forward) = commit_patch_id(ctx.root, parent, &commit.sha) else {
+            continue;
+        };
+        let Some(reverse) = commit_patch_id(ctx.root, &commit.sha, parent) else {
+            continue;
+        };
+        facts.push(PatchFacts {
+            index,
+            forward,
+            reverse,
+        });
+    }
+    for fact in &facts {
+        let commit = &commits[fact.index];
+        if commit.reverts.is_some() {
+            continue;
+        }
+        let source = ctx.sha_to_id.get(&commit.sha);
+        if source.is_none() && !ctx.dry_run {
+            continue;
+        }
+        for other in &facts {
+            if other.index == fact.index || other.forward != fact.reverse {
+                continue;
+            }
+            if !commit_is_newer(commits, fact.index, other.index) {
+                continue;
+            }
+            let older = &commits[other.index];
+            if !known_sha(ctx, commits, &older.sha) {
+                continue;
+            }
+            let target = ctx.sha_to_id.get(&older.sha);
+            if target.is_none() && !ctx.dry_run {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                source,
+                target.map(String::as_str).unwrap_or(&older.sha),
+                "corrects",
+                ctx.dry_run,
+                &mut out.patch_ids,
+            );
+        }
+    }
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for fact in &facts {
+        groups
+            .entry(fact.forward.clone())
+            .or_default()
+            .push(fact.index);
+    }
+    for group in groups.values() {
+        if group.len() < 2 {
+            continue;
+        }
+        let oldest = group
+            .iter()
+            .copied()
+            .min_by(|&left, &right| {
+                if commit_is_newer(commits, left, right) {
+                    std::cmp::Ordering::Greater
+                } else if commit_is_newer(commits, right, left) {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .expect("group is non-empty");
+        let older = &commits[oldest];
+        if !known_sha(ctx, commits, &older.sha) {
+            continue;
+        }
+        let target = ctx.sha_to_id.get(&older.sha);
+        if target.is_none() && !ctx.dry_run {
+            continue;
+        }
+        for &index in group {
+            if index == oldest {
+                continue;
+            }
+            if !commit_is_newer(commits, index, oldest) {
+                continue;
+            }
+            let source = ctx.sha_to_id.get(&commits[index].sha);
+            if source.is_none() && !ctx.dry_run {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                source,
+                target.map(String::as_str).unwrap_or(&older.sha),
+                "derived_from",
+                ctx.dry_run,
+                &mut out.patch_ids,
+            );
+        }
+    }
+}
+
+fn known_sha(ctx: &EdgeCtx<'_>, commits: &[GitCommit], sha: &str) -> bool {
+    commits.iter().any(|commit| commit.sha == sha) || ctx.sha_to_id.contains_key(sha)
+}
+
+fn commit_is_newer(commits: &[GitCommit], newer: usize, older: usize) -> bool {
+    let left = &commits[newer];
+    let right = &commits[older];
+    if left.time != right.time {
+        return left.time > right.time;
+    }
+    newer < older
+}
+
+/// Stable patch-id of `git diff FROM TO`. `None` when the diff is empty or
+/// git cannot read it. The id is the first token; a missing commit header
+/// makes the second token zeros, which is not the id.
+fn commit_patch_id(root: &Path, from: &str, to: &str) -> Option<String> {
+    check_git_arg("from", from).ok()?;
+    check_git_arg("to", to).ok()?;
+    let run = run_git(
+        root,
+        &[
+            "diff".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "--no-color".into(),
+            from.into(),
+            to.into(),
+        ],
+    )
+    .ok()?;
+    if run.failure.is_some() || !diff_has_change(&run.stdout) {
+        return None;
+    }
+    patch_id_of(&run.stdout)
+}
+
+fn diff_has_change(diff: &[u8]) -> bool {
+    String::from_utf8_lossy(diff).lines().any(|line| {
+        (line.starts_with('+') || line.starts_with('-'))
+            && !line.starts_with("+++")
+            && !line.starts_with("---")
+    })
+}
+
+fn patch_id_of(diff: &[u8]) -> Option<String> {
+    let mut child = Command::new("git")
+        .args([
+            "--no-pager",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "log.showSignature=false",
+            "patch-id",
+            "--stable",
+        ])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    {
+        let mut stdin = child.stdin.take()?;
+        if std::io::Write::write_all(&mut stdin, diff).is_err() {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let id = text.split_whitespace().next()?.to_ascii_lowercase();
+    (id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) && id.chars().any(|c| c != '0'))
+        .then_some(id)
+}
+
+/// `git merge-base --is-ancestor ANCESTOR DESCENDANT`. `Ok(false)` is a clean
+/// "not an ancestor". `Err` means the objects are not available locally.
+pub fn git_is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool, String> {
+    check_git_arg("ancestor", ancestor)?;
+    check_git_arg("descendant", descendant)?;
+    if !root.is_dir() {
+        return Err(format!(
+            "git repo {} is not an available directory",
+            root.display()
+        ));
+    }
+    let run = run_git(
+        root,
+        &[
+            "merge-base".into(),
+            "--is-ancestor".into(),
+            ancestor.into(),
+            descendant.into(),
+        ],
+    )?;
+    match run.failure {
+        None => Ok(true),
+        Some(err) if err.trim().is_empty() => Ok(false),
+        Some(err) => Err(err),
+    }
+}
+
+/// The history log is `--unified=0`, so a lockfile version line has no
+/// `name =` context. Re-read just those paths with context. No network.
+fn lock_bumps_with_context(root: &Path, commit: &GitCommit) -> Vec<git_records::LockBump> {
+    if !touches_lockfile(commit) {
+        return commit.lock_bumps.clone();
+    }
+    let Some(diff) = lockfile_diff(root, commit) else {
+        return commit.lock_bumps.clone();
+    };
+    let parsed = git_records::lock_bumps_from_diff(&diff);
+    if parsed.is_empty() {
+        commit.lock_bumps.clone()
+    } else {
+        parsed
+    }
+}
+
+fn touches_lockfile(commit: &GitCommit) -> bool {
+    commit.extra_files > 0 || commit.files.iter().any(|path| is_lock_path(path))
+}
+
+fn is_lock_path(path: &str) -> bool {
+    matches!(
+        path.rsplit(['/', '\\']).next(),
+        Some("Cargo.lock" | "uv.lock" | "poetry.lock" | "package-lock.json" | "go.sum")
+    )
+}
+
+fn lockfile_diff(root: &Path, commit: &GitCommit) -> Option<String> {
+    let paths = [
+        "Cargo.lock",
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "go.sum",
+    ];
+    let mut args = vec![
+        "diff".to_string(),
+        "--unified=8".into(),
+        "--no-ext-diff".into(),
+        "--no-textconv".into(),
+        "--no-color".into(),
+    ];
+    if let Some(parent) = commit.parents.first() {
+        check_git_arg("parent", parent).ok()?;
+        check_git_arg("rev", &commit.sha).ok()?;
+        args.push(parent.clone());
+        args.push(commit.sha.clone());
+    } else {
+        check_git_arg("rev", &commit.sha).ok()?;
+        args.push(format!("{}^", commit.sha));
+        args.push(commit.sha.clone());
+    }
+    args.push("--".into());
+    args.extend(paths.into_iter().map(str::to_string));
+    let run = run_git(root, &args).ok()?;
+    if run.failure.is_some() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&run.stdout).into_owned())
+}
+
+/// `upstream:<oldsha>..<newsha>` when both published commits are already in
+/// the local tree. A missing file skips the edge; it is never fetched.
+fn upstream_range(root: &Path, commit: &GitCommit, bump: &git_records::LockBump) -> Option<String> {
+    let parent = commit.parents.first()?;
+    let new_sha = published_sha(root, &commit.sha, bump, &bump.new_version)?;
+    let old_sha = published_sha(root, parent, bump, &bump.old_version)?;
+    (new_sha != old_sha).then(|| format!("upstream:{old_sha}..{new_sha}"))
+}
+
+fn published_sha(
+    root: &Path,
+    rev: &str,
+    bump: &git_records::LockBump,
+    version: &str,
+) -> Option<String> {
+    let path = match bump.ecosystem.as_str() {
+        "cargo" => format!("vendor/{}-{version}/.cargo_vcs_info.json", bump.package),
+        "npm" => format!("node_modules/{}/package.json", bump.package),
+        _ => return None,
+    };
+    if path.starts_with('-') || path.contains('\0') {
+        return None;
+    }
+    let text = git_show_path(root, rev, &path)?;
+    match bump.ecosystem.as_str() {
+        "cargo" => json_sha(&text, "sha1"),
+        "npm" => json_sha(&text, "gitHead"),
+        _ => None,
+    }
+}
+
+fn json_sha(text: &str, key: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    let sha = value.get(key)?.as_str()?.to_ascii_lowercase();
+    (sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())).then_some(sha)
+}
+
+fn git_show_path(root: &Path, rev: &str, path: &str) -> Option<String> {
+    check_git_arg("rev", rev).ok()?;
+    let run = run_git(root, &["show".into(), format!("{rev}:{path}")]).ok()?;
+    if run.failure.is_some() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&run.stdout).into_owned())
+}
+
+fn note_edge(
+    storage: &Arc<Storage>,
+    source: Option<&String>,
+    target: &str,
+    kind: &str,
+    dry_run: bool,
+    count: &mut usize,
+) {
+    let Some(source) = source else {
+        *count += 1;
+        return;
+    };
+    if edge_recorded(storage, source, target, kind) {
+        return;
+    }
+    if dry_run {
+        *count += 1;
+        return;
+    }
+    let now = Utc::now();
+    if storage
+        .save_connection(&ConnectionRecord {
+            source_id: source.clone(),
+            target_id: target.to_string(),
+            strength: 1.0,
+            link_type: kind.to_string(),
+            created_at: now,
+            last_activated: now,
+            activation_count: 0,
+        })
+        .is_ok()
+    {
+        *count += 1;
+    }
+}
+
+fn edge_recorded(storage: &Arc<Storage>, source: &str, target: &str, kind: &str) -> bool {
+    storage
+        .get_connections_for_memory(source)
+        .map(|edges| {
+            edges.iter().any(|edge| {
+                edge.source_id == source && edge.target_id == target && edge.link_type == kind
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Commits in `git rev-list --first-parent GOOD..BAD` (GOOD exclusive, BAD
+/// inclusive). Both ends are resolved to full SHAs. Missing objects are an
+/// error; nothing is fetched.
+pub struct FirstParentRange {
+    pub good: String,
+    pub bad: String,
+    pub shas: HashSet<String>,
+}
+
+pub fn first_parent_rev_list(
+    root: &Path,
+    good: &str,
+    bad: &str,
+) -> Result<FirstParentRange, String> {
+    check_git_arg("worked_in", good)?;
+    check_git_arg("broke_in", bad)?;
+    if !root.is_dir() {
+        return Err(format!(
+            "version range repo {} is not an available directory",
+            root.display()
+        ));
+    }
+    let good_sha = resolve_commit_sha(root, good).ok_or_else(|| {
+        format!(
+            "could not resolve worked_in `{good}` to a commit in {}",
+            root.display()
+        )
+    })?;
+    let bad_sha = resolve_commit_sha(root, bad).ok_or_else(|| {
+        format!(
+            "could not resolve broke_in `{bad}` to a commit in {}",
+            root.display()
+        )
+    })?;
+    let spec = format!("{good_sha}..{bad_sha}");
+    let run = run_git(root, &["rev-list".into(), "--first-parent".into(), spec])?;
+    if let Some(failure) = run.failure {
+        return Err(format!("git rev-list --first-parent failed: {failure}"));
+    }
+    let mut shas = HashSet::new();
+    for line in String::from_utf8_lossy(&run.stdout).lines() {
+        let sha = line.trim().to_ascii_lowercase();
+        if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            shas.insert(sha);
+        }
+    }
+    Ok(FirstParentRange {
+        good: good_sha,
+        bad: bad_sha,
+        shas,
+    })
+}
+
+/// Blame one line at `rev` in `root`. `Ok(None)` is an unresolvable line, not
+/// a git failure the caller should guess past. The SHA is the porcelain header.
+pub fn blame_line(root: &Path, rev: &str, path: &str, line: u32) -> Result<Option<String>, String> {
+    if line == 0 || path.is_empty() {
+        return Ok(None);
+    }
+    check_git_arg("rev", rev)?;
+    let run = run_git(
+        root,
+        &[
+            "blame".into(),
+            "-L".into(),
+            format!("{line},{line}"),
+            "--porcelain".into(),
+            rev.into(),
+            "--".into(),
+            path.into(),
+        ],
+    )?;
+    if run.failure.is_some() {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&run.stdout);
+    let Some(sha) = text.split_whitespace().next() else {
+        return Ok(None);
+    };
+    let sha = sha.to_ascii_lowercase();
+    if sha.len() == 40
+        && sha.chars().all(|c| c.is_ascii_hexdigit())
+        && sha.chars().any(|c| c != '0')
+    {
+        Ok(Some(sha))
+    } else {
+        Ok(None)
+    }
 }
 
 /// What a git run produced. A non-zero exit is `failure` (stderr), not an
@@ -1478,6 +2383,319 @@ pub fn parse_timeout(raw: &str) -> u32 {
     }
 
     #[tokio::test]
+    async fn a_named_merge_revision_is_recorded() {
+        let mut repo = Repo::standard();
+        repo.git(&["switch", "-q", "-c", "side"], DATES[3]);
+        repo.write("side.txt", "side\n");
+        repo.commit("on a side branch", DATES[3]);
+        repo.git(&["switch", "-q", "-"], DATES[3]);
+        repo.git(
+            &["merge", "-q", "--no-ff", "side", "-m", "merge side"],
+            DATES[3],
+        );
+        let merge = repo.git(&["rev-parse", "HEAD"], DATES[3]);
+
+        let (storage, _dir) = strata();
+        let mut request = repo.request(false);
+        request.rev = Some(merge.clone());
+        let out = ingest(&storage, request).await;
+        assert_eq!(out["commits"]["seen"], 6, "the named merge is kept: {out}");
+        assert_eq!(out["repo"]["mergeCommits"], "skipped", "{out}");
+        let tag = commit_tag(&merge);
+        let recorded = storage
+            .current_code_context_nodes("event", Some(&tag), "demo", 5)
+            .unwrap();
+        assert_eq!(recorded.len(), 1, "{out}");
+        let edges = storage.get_connections_for_memory(&recorded[0].id).unwrap();
+        assert!(
+            edges.iter().any(|edge| edge.link_type == "derived_from"),
+            "the merge records an edge to a parent that is on the page: {edges:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_records_parent_revert_and_touched_edges_once() {
+        let mut repo = Repo::empty();
+        repo.write("src/a.rs", "fn a() {\n    let _ = 1;\n}\n");
+        repo.commit("add a", DATES[0]);
+        repo.write("src/a.rs", "fn a() {\n    let _ = 2;\n}\n");
+        repo.commit("change a", DATES[1]);
+        repo.write("README.md", "x\n");
+        repo.commit("docs", DATES[2]);
+        let changed = repo.shas[1].clone();
+        repo.git(&["revert", "--no-edit", &changed], DATES[3]);
+        let revert = repo.git(&["rev-parse", "HEAD"], DATES[3]);
+
+        let (storage, _dir) = strata();
+        let out = ingest(&storage, repo.request(false)).await;
+        assert!(out["edges"]["parents"].as_u64().unwrap() >= 2, "{out}");
+        assert_eq!(out["edges"]["reverts"], 1, "{out}");
+        assert!(out["edges"]["touched"].as_u64().unwrap() >= 1, "{out}");
+        assert_eq!(out["commits"]["pulledReverts"], 0, "{out}");
+
+        let id_of = |sha: &str| {
+            let tag = commit_tag(sha);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let revert_id = id_of(&revert);
+        let cause_id = id_of(&changed);
+        let edges = storage.get_connections_for_memory(&revert_id).unwrap();
+        assert!(
+            edges.iter().any(|edge| {
+                edge.source_id == revert_id
+                    && edge.target_id == cause_id
+                    && edge.link_type == "corrects"
+            }),
+            "{edges:?}"
+        );
+        let cause_edges = storage.get_connections_for_memory(&cause_id).unwrap();
+        assert!(
+            cause_edges.iter().any(|edge| {
+                edge.source_id == cause_id
+                    && edge.target_id == file_anchor_id("src/a.rs")
+                    && edge.link_type == "touched"
+            }),
+            "{cause_edges:?}"
+        );
+        assert!(
+            cause_edges
+                .iter()
+                .any(|edge| edge.link_type == "touched"
+                    && edge.target_id.starts_with("hunk:src/a.rs:")),
+            "{cause_edges:?}"
+        );
+        let parent = repo.git(&["rev-parse", &format!("{changed}^")], DATES[0]);
+        let parent_id = id_of(&parent);
+        assert!(
+            cause_edges.iter().any(|edge| {
+                edge.source_id == cause_id
+                    && edge.target_id == parent_id
+                    && edge.link_type == "derived_from"
+            }),
+            "{cause_edges:?}"
+        );
+
+        let again = ingest(&storage, repo.request(false)).await;
+        assert_eq!(again["edges"]["reverts"], 0, "{again}");
+        assert_eq!(again["edges"]["parents"], 0, "{again}");
+        assert_eq!(again["edges"]["touched"], 0, "{again}");
+        let edge_count = storage.get_all_connections().unwrap().len();
+        let third = ingest(&storage, repo.request(false)).await;
+        assert_eq!(third["edges"]["reverts"], 0, "{third}");
+        assert_eq!(storage.get_all_connections().unwrap().len(), edge_count);
+
+        let mut talk = Repo::empty();
+        talk.write("src/b.rs", "fn b() {}\n");
+        talk.commit("This reverts the bad idea", DATES[0]);
+        let mut request = talk.request(false);
+        request.codebase = Some("talk".into());
+        request.scope = Some("talk".into());
+        let talked = ingest(&storage, request).await;
+        assert_eq!(talked["edges"]["reverts"], 0, "{talked}");
+    }
+
+    #[tokio::test]
+    async fn a_reverted_commit_outside_the_page_is_pulled() {
+        let mut repo = Repo::empty();
+        repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
+        repo.commit("add", DATES[0]);
+        repo.write("src/a.rs", "fn a() { let _ = 2; }\n");
+        repo.commit("change", DATES[1]);
+        repo.write("README.md", "docs\n");
+        repo.commit("docs", DATES[2]);
+        let changed = repo.shas[1].clone();
+        repo.git(&["revert", "--no-edit", &changed], DATES[3]);
+        let revert = repo.git(&["rev-parse", "HEAD"], DATES[3]);
+
+        let (storage, _dir) = strata();
+        let mut request = repo.request(false);
+        request.rev = Some(revert);
+        request.limit = Some(1);
+        let out = ingest(&storage, request).await;
+        assert_eq!(out["commits"]["pulledReverts"], 1, "{out}");
+        assert_eq!(out["edges"]["reverts"], 1, "{out}");
+        let tag = commit_tag(&changed);
+        assert_eq!(
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .len(),
+            1,
+            "the reverted commit was ingested: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cherry_pick_fixes_and_patch_id_are_exact_edges() {
+        let mut repo = Repo::empty();
+        repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
+        repo.commit("base", "2024-01-01T00:00:00Z");
+        let main = repo.git(&["branch", "--show-current"], "2024-01-01T00:00:00Z");
+        let base = repo.shas[0].clone();
+        repo.write("src/a.rs", "fn a() { let _ = 2; }\n");
+        repo.commit("the feature", "2024-01-02T00:00:00Z");
+        let feature = repo.shas[1].clone();
+
+        repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
+        repo.commit("undo the change", "2024-01-03T00:00:00Z");
+        let undo = repo.shas.last().unwrap().clone();
+        repo.write("src/a.rs", "fn a() { let _ = 2; }\n");
+        repo.commit("same change, no trailer", "2024-01-04T00:00:00Z");
+        let backport = repo.shas.last().unwrap().clone();
+        repo.write("src/b.rs", "fn b() {}\n");
+        repo.git(&["add", "-A"], "2024-01-05T00:00:00Z");
+        let prefix = &feature[..12];
+        repo.git(
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "close the bug",
+                "-m",
+                &format!("Fixes: {prefix}\nfixes: {feature}\nFixes: {feature} and then some prose"),
+            ],
+            "2024-01-05T00:00:00Z",
+        );
+        let fixer = repo.git(&["rev-parse", "HEAD"], "2024-01-05T00:00:00Z");
+        repo.shas.push(fixer.clone());
+
+        repo.git(
+            &["switch", "-q", "-c", "side", &base],
+            "2024-01-06T00:00:00Z",
+        );
+        repo.git(
+            &["cherry-pick", "-x", "--no-edit", &feature],
+            "2024-01-06T00:00:00Z",
+        );
+        let cherry = repo.git(&["rev-parse", "HEAD"], "2024-01-06T00:00:00Z");
+        repo.shas.push(cherry.clone());
+        repo.git(&["switch", "-q", &main], "2024-01-06T00:00:00Z");
+
+        let (storage, _dir) = strata();
+        let out = ingest(&storage, repo.request(false)).await;
+        assert_eq!(out["edges"]["reverts"], 0, "{out}");
+        assert_eq!(out["edges"]["fixes"], 1, "{out}");
+        assert!(
+            out["edges"]["patchIds"].as_u64().unwrap() >= 2,
+            "inverse diff and the same forward diff are both recorded: {out}"
+        );
+        let mut side = repo.request(false);
+        side.rev = Some(cherry.clone());
+        let side_out = ingest(&storage, side).await;
+        assert!(
+            side_out["edges"]["cherryPicks"].as_u64().unwrap() >= 1,
+            "{side_out}"
+        );
+
+        let id_of = |sha: &str| {
+            let tag = commit_tag(sha);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let feature_id = id_of(&feature);
+        let cherry_id = id_of(&cherry);
+        let backport_id = id_of(&backport);
+        let fixer_id = id_of(&fixer);
+        let undo_id = id_of(&undo);
+        let has = |source: &str, target: &str, kind: &str| {
+            storage.get_all_connections().unwrap().iter().any(|edge| {
+                edge.source_id == source && edge.target_id == target && edge.link_type == kind
+            })
+        };
+        assert!(has(&cherry_id, &feature_id, "derived_from"), "{out}");
+        assert!(has(&backport_id, &feature_id, "derived_from"), "{out}");
+        assert!(has(&fixer_id, &feature_id, "corrects"), "{out}");
+        assert!(
+            has(&undo_id, &feature_id, "corrects"),
+            "a trailer-less inverse diff is a revert: {out}"
+        );
+        assert!(
+            !has(&undo_id, &fixer_id, "corrects"),
+            "a different diff is not a revert: {out}"
+        );
+
+        let (pulled, _dir) = strata();
+        let mut cherry_page = repo.request(false);
+        cherry_page.rev = Some(cherry);
+        cherry_page.limit = Some(1);
+        cherry_page.codebase = Some("pull-cherry".into());
+        cherry_page.scope = Some("pull-cherry".into());
+        let cherry_out = ingest(&pulled, cherry_page).await;
+        assert_eq!(cherry_out["commits"]["pulledNamed"], 1, "{cherry_out}");
+        assert!(
+            cherry_out["edges"]["cherryPicks"].as_u64().unwrap() >= 1,
+            "{cherry_out}"
+        );
+
+        let mut fixes_page = repo.request(false);
+        fixes_page.rev = Some(fixer);
+        fixes_page.limit = Some(1);
+        fixes_page.codebase = Some("pull-fixes".into());
+        fixes_page.scope = Some("pull-fixes".into());
+        let fixes_out = ingest(&pulled, fixes_page).await;
+        assert_eq!(fixes_out["commits"]["pulledNamed"], 1, "{fixes_out}");
+        assert_eq!(fixes_out["edges"]["fixes"], 1, "{fixes_out}");
+    }
+
+    #[tokio::test]
+    async fn a_merge_is_kept_only_when_it_carries_the_git_revert_trailer() {
+        let mut repo = Repo::standard();
+        repo.git(&["switch", "-q", "-c", "side"], DATES[3]);
+        repo.write("side.txt", "side\n");
+        repo.commit("on a side branch", DATES[3]);
+        let side = repo.shas.last().unwrap().clone();
+        repo.git(&["switch", "-q", "-"], DATES[3]);
+        let message = format!("Merge branch 'side'\n\nThis reverts commit {side}.");
+        repo.git(
+            &["merge", "-q", "--no-ff", "side", "-m", &message],
+            DATES[3],
+        );
+
+        let (storage, _dir) = strata();
+        let out = ingest(&storage, repo.request(true)).await;
+        assert_eq!(out["repo"]["mergeCommits"], "revertTrailersKept", "{out}");
+        assert!(out["repo"]["revertMerges"].as_u64().unwrap() >= 1, "{out}");
+        assert!(out["edges"]["reverts"].as_u64().unwrap() >= 1, "{out}");
+    }
+
+    #[test]
+    fn blame_names_the_commit_that_last_touched_the_line() {
+        let mut repo = Repo::empty();
+        repo.write("src/a.rs", "fn a() {\n    let introduced = 1;\n}\n");
+        repo.commit("introduce", DATES[0]);
+        let introduced = repo.shas[0].clone();
+        repo.write(
+            "src/a.rs",
+            "fn a() {\n    let introduced = 1;\n    let touched = 2;\n}\n",
+        );
+        repo.commit("touch elsewhere", DATES[1]);
+        let head = repo.shas[1].clone();
+        let root = repo.dir.path();
+        let line = blame_line(root, &head, "src/a.rs", 2).unwrap();
+        assert_eq!(line.as_deref(), Some(introduced.as_str()));
+        assert_eq!(
+            blame_line(root, &head, "src/a.rs", 3).unwrap().as_deref(),
+            Some(head.as_str())
+        );
+        assert!(
+            blame_line(root, &head, "src/missing.rs", 1)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn the_codebase_name_defaults_to_the_checkout_directory() {
         let repo = Repo::standard();
         let (storage, _dir) = strata();
@@ -1619,16 +2837,13 @@ pub fn parse_timeout(raw: &str) -> u32 {
         let (storage, _dir) = strata();
         // as if a run died between the record write and the anchor write
         let now = Utc::now();
-        let commits = read_commits(
-            &std::fs::canonicalize(repo.dir.path()).unwrap(),
-            &repo.request(true),
-            10,
-        )
-        .unwrap()
-        .0;
+        let root = std::fs::canonicalize(repo.dir.path()).unwrap();
+        let commits = read_commits(&root, &repo.request(true), 10)
+            .unwrap()
+            .commits;
         for commit in commits.iter().filter(|c| c.subject != "docs") {
             storage
-                .ingest_in_scope(change_record(commit, "demo", now), "demo")
+                .ingest_in_scope(change_record(commit, "demo", &root, now), "demo")
                 .unwrap();
         }
         assert_eq!(nodes(&storage, "demo").len(), 3);
@@ -2057,5 +3272,72 @@ pub fn parse_timeout(raw: &str) -> u32 {
             !full["message"].as_str().unwrap().contains("not checked"),
             "{full}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_lockfile_bump_records_the_package_edge_and_a_local_upstream_range() {
+        let old_sha = "1111111111111111111111111111111111111111";
+        let new_sha = "2222222222222222222222222222222222222222";
+        let lock = |version: &str| {
+            format!(
+                "\
+# This file is automatically @generated by Cargo.
+version = 3
+
+[[package]]
+name = \"reqwest\"
+version = \"{version}\"
+source = \"registry+https://github.com/rust-lang/crates.io-index\"
+checksum = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"
+
+[[package]]
+name = \"libc\"
+version = \"0.2.155\"
+"
+            )
+        };
+        let vcs =
+            |sha: &str| format!(r#"{{"git":"https://github.com/example/reqwest","sha1":"{sha}"}}"#);
+        let mut repo = Repo::empty();
+        repo.write("Cargo.lock", &lock("0.12.8"));
+        repo.write("vendor/reqwest-0.12.8/.cargo_vcs_info.json", &vcs(old_sha));
+        repo.commit("add reqwest 0.12.8", DATES[0]);
+        repo.write("Cargo.lock", &lock("0.12.9"));
+        repo.write("vendor/reqwest-0.12.9/.cargo_vcs_info.json", &vcs(new_sha));
+        repo.commit(
+            "bump serde from 1.0.0 to 9.9.9 in the message only",
+            DATES[1],
+        );
+        let (storage, _dir) = strata();
+        let out = ingest(&storage, repo.request(false)).await;
+        assert_eq!(out["edges"]["packages"], 2, "{out}");
+        assert_eq!(out["edges"]["upstream"], 1, "{out}");
+        let bump = repo.shas.last().unwrap();
+        let id = storage
+            .current_code_context_nodes("event", Some(&commit_tag(bump)), "demo", 5)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .id;
+        let edges = storage.get_connections_for_memory(&id).unwrap();
+        let has = |target: &str, kind: &str| {
+            edges.iter().any(|edge| {
+                edge.source_id == id && edge.target_id == target && edge.link_type == kind
+            })
+        };
+        assert!(has("pkg:cargo:reqwest@0.12.9", "touched"), "{edges:?}");
+        assert!(has("pkg:cargo:reqwest@0.12.8", "supersedes"), "{edges:?}");
+        assert!(
+            has(&format!("upstream:{old_sha}..{new_sha}"), "anchored_to"),
+            "{edges:?}"
+        );
+        assert!(
+            !edges.iter().any(|edge| edge.target_id.contains("serde")),
+            "the commit message is not a lockfile edge: {edges:?}"
+        );
+        let again = ingest(&storage, repo.request(false)).await;
+        assert_eq!(again["edges"]["packages"], 0, "{again}");
+        assert_eq!(again["edges"]["upstream"], 0, "{again}");
     }
 }
