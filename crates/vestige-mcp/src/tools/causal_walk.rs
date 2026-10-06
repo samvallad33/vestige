@@ -1537,8 +1537,15 @@ fn git_admissible(storage: &Arc<Storage>, id: &str, git: &GitQuery) -> bool {
     true
 }
 
-fn reverted_after(storage: &Arc<Storage>, id: &str, failure_time: Option<DateTime<Utc>>) -> bool {
-    let Some(failure_time) = failure_time else {
+/// A recorded `corrects` edge counts as after the failure when the revert
+/// commit is a git descendant of the failure revision.
+///
+/// Author time is not the order. A revert can be authored before the parent
+/// it sits on (prometheus `2fbbfc3d` is authored before `9700933d` and is
+/// still its child). Missing objects are not a later time: nothing is fetched
+/// and the bit stays false.
+fn reverted_after(storage: &Arc<Storage>, id: &str, git: &GitQuery) -> bool {
+    let (Some(root), Some(failure_sha)) = (git.root.as_ref(), git.failure_sha.as_deref()) else {
         return false;
     };
     let Ok(edges) = storage.get_connections_for_memory(id) else {
@@ -1551,7 +1558,10 @@ fn reverted_after(storage: &Arc<Storage>, id: &str, failure_time: Option<DateTim
         let Ok(Some(revert)) = storage.get_node(&edge.source_id) else {
             continue;
         };
-        if revert.valid_from.is_some_and(|valid| valid > failure_time) {
+        let Some(revert_sha) = commit_sha(&revert) else {
+            continue;
+        };
+        if crate::tools::repo_ingest::git_is_ancestor(root, failure_sha, &revert_sha) == Ok(true) {
             return true;
         }
     }
@@ -1641,7 +1651,7 @@ fn git_rank(
 ) -> (u8, u8, u8, u32, u8, i64, String) {
     let node = storage.get_node(&cause.id).ok().flatten();
     let sha = node.as_ref().and_then(commit_sha);
-    let reverted = u8::from(!reverted_after(storage, &cause.id, git.failure_time));
+    let reverted = u8::from(!reverted_after(storage, &cause.id, git));
     let blame = u8::from(!sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)));
     let hunk = u8::from(!touched_line(storage, &cause.id, &git.files, git.line));
     let gap = match (
@@ -1676,7 +1686,7 @@ fn git_structure(
         out.insert(cause.id.clone(), {
             let mut row = json!({
                 "sha": sha,
-                "revertedAfterFailure": reverted_after(storage, &cause.id, git.failure_time),
+                "revertedAfterFailure": reverted_after(storage, &cause.id, git),
                 "blameOfLine": sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)),
                 "touchedFailingHunk": touched_line(storage, &cause.id, &git.files, git.line),
                 "hop": cause.depth,
@@ -3470,6 +3480,130 @@ mod strata_walk {
         assert_eq!(top["id"], cause_id, "{out}");
         assert_eq!(top["structure"]["edge"], "corrects", "{out}");
         assert_eq!(top["structure"]["revertedAfterFailure"], true, "{out}");
+    }
+
+    /// Prometheus authors the revert before the failure revision it is a child
+    /// of. The bit follows `git merge-base --is-ancestor`, not `valid_from`.
+    #[tokio::test]
+    async fn a_revert_authored_before_the_failure_is_still_after_it() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let root = repo.path();
+        let day = |n: u32| format!("2024-11-{n:02}T00:00:00Z");
+        git_at(root, &["init", "-q"], &day(1));
+        std::fs::write(root.join("cause.rs"), "fn cause() { let x = 1; }\n").unwrap();
+        git_at(root, &["add", "-A"], &day(1));
+        git_at(root, &["commit", "-q", "-m", "cause"], &day(1));
+        let cause = git_at(root, &["rev-parse", "HEAD"], &day(1));
+        std::fs::write(root.join("README.md"), "observed\n").unwrap();
+        git_at(root, &["add", "-A"], &day(10));
+        git_at(root, &["commit", "-q", "-m", "failure revision"], &day(10));
+        let failure_rev = git_at(root, &["rev-parse", "HEAD"], &day(10));
+        git_at(root, &["revert", "--no-edit", &cause], &day(3));
+        let revert = git_at(root, &["rev-parse", "HEAD"], &day(3));
+
+        let (storage, _log) = open();
+        let ingested = ingest_repo(&storage, root, "HEAD", 20).await;
+        assert!(
+            ingested["edges"]["reverts"].as_u64().unwrap() >= 1,
+            "{ingested}"
+        );
+        let id_of = |sha: &str| {
+            let tag = crate::tools::repo_ingest::commit_tag(sha);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let failure_node = storage.get_node(&id_of(&failure_rev)).unwrap().unwrap();
+        let revert_node = storage.get_node(&id_of(&revert)).unwrap().unwrap();
+        assert!(
+            revert_node.valid_from.unwrap() < failure_node.valid_from.unwrap(),
+            "author time of the revert is before the failure, which is the case this guards"
+        );
+        let failure = put(&storage, "demo", "failure: prombench memory");
+        link(&storage, &failure, &id_of(&failure_rev), "derived_from");
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "logged_write", "node_id": failure}]
+            })),
+        )
+        .await
+        .unwrap();
+        let row = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["structure"]["sha"] == json!(cause))
+            .unwrap_or_else(|| panic!("cause missing: {out}"));
+        assert_eq!(row["structure"]["revertedAfterFailure"], true, "{out}");
+    }
+
+    /// A later author date on a revert that does not descend from the failure
+    /// is not "after". The side branch names the cause and is dated after the
+    /// failure; the failure is not its ancestor.
+    #[tokio::test]
+    async fn a_later_revert_on_another_branch_is_not_after_the_failure() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let root = repo.path();
+        let day = |n: u32| format!("2024-08-{n:02}T00:00:00Z");
+        git_at(root, &["init", "-q"], &day(1));
+        std::fs::write(root.join("cause.rs"), "fn cause() { let x = 1; }\n").unwrap();
+        git_at(root, &["add", "-A"], &day(1));
+        git_at(root, &["commit", "-q", "-m", "cause"], &day(1));
+        let cause = git_at(root, &["rev-parse", "HEAD"], &day(1));
+        let main = git_at(root, &["rev-parse", "--abbrev-ref", "HEAD"], &day(1));
+        git_at(root, &["branch", "side"], &day(1));
+        std::fs::write(root.join("README.md"), "observed\n").unwrap();
+        git_at(root, &["add", "-A"], &day(10));
+        git_at(root, &["commit", "-q", "-m", "failure revision"], &day(10));
+        let failure_rev = git_at(root, &["rev-parse", "HEAD"], &day(10));
+        git_at(root, &["checkout", "-q", "side"], &day(1));
+        git_at(root, &["revert", "--no-edit", &cause], &day(20));
+        let side_revert = git_at(root, &["rev-parse", "HEAD"], &day(20));
+        git_at(root, &["checkout", "-q", &main], &day(10));
+
+        let (storage, _log) = open();
+        ingest_repo(&storage, root, "side", 10).await;
+        ingest_repo(&storage, root, "HEAD", 10).await;
+        let id_of = |sha: &str| {
+            let tag = crate::tools::repo_ingest::commit_tag(sha);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let failure_node = storage.get_node(&id_of(&failure_rev)).unwrap().unwrap();
+        let revert_node = storage.get_node(&id_of(&side_revert)).unwrap().unwrap();
+        assert!(
+            revert_node.valid_from.unwrap() > failure_node.valid_from.unwrap(),
+            "author time would call this revert later"
+        );
+        let failure = put(&storage, "demo", "failure observed on main");
+        link(&storage, &failure, &id_of(&failure_rev), "derived_from");
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "logged_write", "node_id": failure}]
+            })),
+        )
+        .await
+        .unwrap();
+        let row = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["structure"]["sha"] == json!(cause))
+            .unwrap_or_else(|| panic!("cause missing: {out}"));
+        assert_eq!(row["structure"]["revertedAfterFailure"], false, "{out}");
     }
 
     #[tokio::test]
