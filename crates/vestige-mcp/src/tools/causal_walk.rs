@@ -15,7 +15,9 @@
 //! vendor path that names `crate-version` resolves to the `pkg:` anchor of
 //! that exact version, and a lockfile bump is reached from that anchor.
 //! `node_id` still names the failure memory. `ci_run` and `version_range` do
-//! not resolve by name. Shared names are not edges.
+//! not resolve by name. Shared names are not edges. A child of a visited
+//! commit that `corrects` an older commit contributes that older commit, and
+//! a revert that git can prove is a descendant of the failure does too.
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -321,6 +323,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
                 needs_report: Some(needs_report),
                 structure: BTreeMap::new(),
                 upstream_note: None,
+                ancestry_note: None,
                 range,
             },
         ));
@@ -334,6 +337,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
         walks.push((start.clone(), reached));
     }
     let (mut nodes, mut causes) = merge_walks(walks);
+    let ancestry_note = extend_revert_ancestry(storage, scope, &git, &mut nodes, &mut causes);
     let structure = if git.active {
         let admissible: HashSet<String> = causes
             .iter()
@@ -380,6 +384,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
             needs_report: None,
             structure,
             upstream_note,
+            ancestry_note,
             range,
         },
     ))
@@ -410,7 +415,19 @@ fn walk_from(
             }
             continue;
         }
+        let mut steps = Vec::new();
         for (upstream, edge) in upstream_causal(storage, &current)? {
+            steps.push((
+                upstream,
+                Hop {
+                    source_id: edge.source_id,
+                    target_id: edge.target_id,
+                    link_type: edge.link_type,
+                },
+            ));
+        }
+        steps.extend(child_corrections(storage, &current)?);
+        for (upstream, hop) in steps {
             if visited.contains(upstream.as_str()) {
                 continue;
             }
@@ -423,11 +440,7 @@ fn walk_from(
             }
             visited.insert(upstream.clone());
             let mut next_path = path.clone();
-            next_path.push(Hop {
-                source_id: edge.source_id.clone(),
-                target_id: edge.target_id.clone(),
-                link_type: edge.link_type.clone(),
-            });
+            next_path.push(hop);
             let next_depth = depth + 1;
             queue.push_back((upstream.clone(), next_depth, next_path.clone()));
             reached.push(Reached {
@@ -549,6 +562,8 @@ struct WalkOut {
     upstream_note: Option<String>,
     /// `worked_in..broke_in` bound, including how many commits it removed.
     range: Option<Value>,
+    /// Why a revert's ancestry was not checked. Local objects only.
+    ancestry_note: Option<String>,
 }
 
 /// Every start the caller gave, in order: top-level handles first (`node_id`,
@@ -692,7 +707,57 @@ fn has_admissible_cause(
             return Ok(true);
         }
     }
+    for (upstream, _) in child_corrections(storage, node_id)? {
+        if visited.contains(upstream.as_str()) {
+            continue;
+        }
+        if in_scope(storage, &upstream, scope)? {
+            return Ok(true);
+        }
+    }
     Ok(false)
+}
+
+/// The commit a child of `node_id` reverts. The child itself is not a cause:
+/// the hop is the recorded `corrects` edge, from the revert to the older commit.
+fn child_corrections(storage: &Arc<Storage>, node_id: &str) -> Result<Vec<(String, Hop)>, String> {
+    let edges = storage
+        .get_connections_for_memory(node_id)
+        .map_err(|err| err.to_string())?;
+    let mut children = Vec::new();
+    for edge in &edges {
+        if edge.link_type == "derived_from"
+            && edge.target_id == node_id
+            && edge.source_id != node_id
+        {
+            children.push(edge.source_id.clone());
+        }
+    }
+    children.sort();
+    children.dedup();
+    let mut out = Vec::new();
+    for child in children {
+        let child_edges = storage
+            .get_connections_for_memory(&child)
+            .map_err(|err| err.to_string())?;
+        for edge in child_edges {
+            if edge.link_type != "corrects" || edge.source_id != child || edge.target_id == node_id
+            {
+                continue;
+            }
+            out.push((
+                edge.target_id.clone(),
+                Hop {
+                    source_id: edge.source_id,
+                    target_id: edge.target_id,
+                    link_type: edge.link_type,
+                },
+            ));
+        }
+    }
+    out.sort_by(|left, right| left.0.cmp(&right.0));
+    out.dedup_by(|left, right| left.0 == right.0);
+    Ok(out)
 }
 
 /// Which end of a recorded causal edge is upstream of `node_id`, if the edge
@@ -775,9 +840,15 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
     };
     let empty = (walk.needs_report.is_none() && walk.causes.is_empty())
         .then(|| why_empty(storage, scope, &walk.starts));
-    let empty_because = empty.as_ref().map(|(why, _)| match &walk.upstream_note {
-        Some(note) => format!("{why}. {note}"),
-        None => why.clone(),
+    let empty_because = empty.as_ref().map(|(why, _)| {
+        let mut text = match &walk.upstream_note {
+            Some(note) => format!("{why}. {note}"),
+            None => why.clone(),
+        };
+        if let Some(note) = &walk.ancestry_note {
+            text = format!("{text}. {note}");
+        }
+        text
     });
     json!({
         "tool": "causal_walk",
@@ -800,6 +871,7 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "causes": walk.causes.iter().map(&node_json).collect::<Vec<_>>(),
         "needs_report": walk.needs_report,
         "upstreamSkipped": walk.upstream_note,
+        "ancestrySkipped": walk.ancestry_note,
         "range": walk.range,
         "note": "Backward BFS over recorded causal edges only. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A stack_frame or failing_test names a file anchor by exact path; blame of the line uses the failure memory's derived_from commit. Rank among those commits is structural (reverted after the failure, blame of the line, hunk, hop, edge kind), never text.",
     })
@@ -876,6 +948,8 @@ struct GitQuery {
     failure_commit_id: Option<String>,
     failure_time: Option<DateTime<Utc>>,
     blame_shas: HashSet<String>,
+    failure_sha: Option<String>,
+    root: Option<PathBuf>,
     active: bool,
 }
 
@@ -980,6 +1054,8 @@ fn resolve_git_frames(
         failure_commit_id,
         failure_time,
         blame_shas,
+        failure_sha,
+        root,
         active,
     })
 }
@@ -1513,6 +1589,100 @@ fn upstream_note_for(
     })
 }
 
+/// When a recorded `corrects` edge's revert is a descendant of the failure
+/// revision and its target is an ancestor, add that target. This reaches a
+/// revert whose parent was not ingested. Missing git objects are reported;
+/// nothing is fetched. A cause already reached by the walk is left as it is.
+fn extend_revert_ancestry(
+    storage: &Arc<Storage>,
+    scope: &str,
+    git: &GitQuery,
+    nodes: &mut Vec<Reached>,
+    causes: &mut Vec<Reached>,
+) -> Option<String> {
+    let (Some(failure_sha), Some(root), Some(failure_id)) = (
+        git.failure_sha.as_deref(),
+        git.root.as_ref(),
+        git.failure_commit_id.as_deref(),
+    ) else {
+        return None;
+    };
+    if !git.active || !root.is_dir() {
+        return None;
+    }
+    let edges = storage.get_all_connections().ok()?;
+    let mut missing_objects = false;
+    let mut added = Vec::new();
+    for edge in edges {
+        if edge.link_type != "corrects" || edge.source_id == edge.target_id {
+            continue;
+        }
+        if edge.target_id == failure_id || causes.iter().any(|cause| cause.id == edge.target_id) {
+            continue;
+        }
+        if !in_scope(storage, &edge.source_id, scope).unwrap_or(false)
+            || !in_scope(storage, &edge.target_id, scope).unwrap_or(false)
+        {
+            continue;
+        }
+        let Ok(Some(revert)) = storage.get_node(&edge.source_id) else {
+            continue;
+        };
+        let Ok(Some(cause)) = storage.get_node(&edge.target_id) else {
+            continue;
+        };
+        let (Some(revert_sha), Some(cause_sha)) = (commit_sha(&revert), commit_sha(&cause)) else {
+            continue;
+        };
+        if revert_sha == failure_sha || cause_sha == failure_sha {
+            continue;
+        }
+        match (
+            crate::tools::repo_ingest::git_is_ancestor(root, failure_sha, &revert_sha),
+            crate::tools::repo_ingest::git_is_ancestor(root, &cause_sha, failure_sha),
+        ) {
+            (Ok(true), Ok(true)) => added.push((edge.target_id, edge.source_id)),
+            (Err(_), _) | (_, Err(_)) => missing_objects = true,
+            _ => {}
+        }
+    }
+    let from = nodes
+        .iter()
+        .find(|node| node.id == failure_id)
+        .map(|node| node.from.clone())
+        .unwrap_or_default();
+    let depth = nodes
+        .iter()
+        .find(|node| node.id == failure_id)
+        .map(|node| node.depth.saturating_add(1))
+        .unwrap_or(1);
+    for (cause_id, revert_id) in added {
+        if nodes.iter().any(|node| node.id == cause_id) {
+            continue;
+        }
+        let reached = Reached {
+            id: cause_id.clone(),
+            depth,
+            path: vec![Hop {
+                source_id: revert_id,
+                target_id: cause_id.clone(),
+                link_type: "corrects".into(),
+            }],
+            from: from.clone(),
+        };
+        nodes.push(Reached {
+            id: reached.id.clone(),
+            depth: reached.depth,
+            path: reached.path.clone(),
+            from: reached.from.clone(),
+        });
+        causes.push(reached);
+    }
+    missing_objects.then(|| {
+        "a revert's ancestry could not be checked because a commit object is not in the local repository; nothing was fetched".to_string()
+    })
+}
+
 fn apply_version_range(
     storage: &Arc<Storage>,
     points: Option<&[StartPoint]>,
@@ -1749,6 +1919,8 @@ mod tests {
             imports: vec![],
             parents: vec![],
             reverts: None,
+            cherry_picked_from: None,
+            fixes: vec![],
             lock_bumps: vec![],
         });
         seed(storage, &content, vec![git_records::COMMIT_TAG], days_ago)
@@ -2973,5 +3145,215 @@ mod strata_walk {
                 .contains("rev-list --first-parent"),
             "{out}"
         );
+    }
+
+    fn git_at(root: &std::path::Path, args: &[&str], date: &str) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args([
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "user.name=t",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    async fn ingest_repo(
+        storage: &Arc<Storage>,
+        root: &std::path::Path,
+        rev: &str,
+        limit: usize,
+    ) -> Value {
+        crate::tools::repo_ingest::execute(
+            storage,
+            crate::tools::repo_ingest::Request {
+                repo_path: root.to_path_buf(),
+                codebase: Some("demo".into()),
+                scope: Some("demo".into()),
+                rev: Some(rev.to_string()),
+                since: None,
+                until: None,
+                limit: Some(limit),
+                dry_run: false,
+                budget: None,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_revert_child_reaches_the_corrected_commit_past_the_parent_gap() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let root = repo.path();
+        let day = |n: u32| format!("2024-01-{n:02}T00:00:00Z");
+        git_at(root, &["init", "-q"], &day(1));
+        std::fs::write(root.join("cause.rs"), "fn cause() {}\n").unwrap();
+        git_at(root, &["add", "-A"], &day(1));
+        git_at(root, &["commit", "-q", "-m", "cause"], &day(1));
+        let cause = git_at(root, &["rev-parse", "HEAD"], &day(1));
+        for n in 2..=10 {
+            std::fs::write(root.join(format!("f{n}.rs")), format!("fn f{n}() {{}}\n")).unwrap();
+            git_at(root, &["add", "-A"], &day(n));
+            git_at(
+                root,
+                &["commit", "-q", "-m", &format!("filler {n}")],
+                &day(n),
+            );
+        }
+        let failure_rev = git_at(root, &["rev-parse", "HEAD"], &day(10));
+        git_at(root, &["revert", "--no-edit", &cause], &day(11));
+
+        let (storage, _log) = open();
+        let ingested = crate::tools::repo_ingest::execute(
+            &storage,
+            crate::tools::repo_ingest::Request {
+                repo_path: root.to_path_buf(),
+                codebase: Some("demo".into()),
+                scope: Some("demo".into()),
+                rev: None,
+                since: None,
+                until: None,
+                limit: Some(30),
+                dry_run: false,
+                budget: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            ingested["edges"]["reverts"].as_u64().unwrap() >= 1,
+            "{ingested}"
+        );
+        let cause_id = {
+            let tag = crate::tools::repo_ingest::commit_tag(&cause);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .id
+        };
+        let failure_id = {
+            let tag = crate::tools::repo_ingest::commit_tag(&failure_rev);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .id
+        };
+        let failure = put(&storage, "demo", "failure observed with no path");
+        link(&storage, &failure, &failure_id, "derived_from");
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "logged_write", "node_id": failure}]
+            })),
+        )
+        .await
+        .unwrap();
+        let top = &out["causes"][0];
+        assert_eq!(top["structure"]["sha"], json!(cause), "{out}");
+        assert_eq!(top["id"], cause_id, "{out}");
+        assert_eq!(top["structure"]["edge"], "corrects", "{out}");
+        assert_eq!(top["structure"]["revertedAfterFailure"], true, "{out}");
+    }
+
+    #[tokio::test]
+    async fn revert_ancestry_reaches_a_cause_whose_parent_was_not_ingested() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let root = repo.path();
+        let day = |n: u32| format!("2024-02-{n:02}T00:00:00Z");
+        git_at(root, &["init", "-q"], &day(1));
+        std::fs::write(root.join("cause.rs"), "fn cause() {}\n").unwrap();
+        git_at(root, &["add", "-A"], &day(1));
+        git_at(root, &["commit", "-q", "-m", "cause"], &day(1));
+        let cause = git_at(root, &["rev-parse", "HEAD"], &day(1));
+        std::fs::write(root.join("between.rs"), "fn between() {}\n").unwrap();
+        git_at(root, &["add", "-A"], &day(2));
+        git_at(root, &["commit", "-q", "-m", "between"], &day(2));
+        std::fs::write(root.join("README.md"), "observed\n").unwrap();
+        git_at(root, &["add", "-A"], &day(3));
+        git_at(root, &["commit", "-q", "-m", "failure revision"], &day(3));
+        let failure_rev = git_at(root, &["rev-parse", "HEAD"], &day(3));
+        std::fs::write(root.join("b.rs"), "fn b() {}\n").unwrap();
+        git_at(root, &["add", "-A"], &day(4));
+        git_at(root, &["commit", "-q", "-m", "later"], &day(4));
+        std::fs::write(root.join("c.rs"), "fn c() {}\n").unwrap();
+        git_at(root, &["add", "-A"], &day(5));
+        git_at(
+            root,
+            &["commit", "-q", "-m", "parent of the revert"],
+            &day(5),
+        );
+        git_at(root, &["revert", "--no-edit", &cause], &day(6));
+        let revert = git_at(root, &["rev-parse", "HEAD"], &day(6));
+
+        let (storage, _log) = open();
+        ingest_repo(&storage, root, &cause, 1).await;
+        ingest_repo(&storage, root, &failure_rev, 1).await;
+        let pulled = ingest_repo(&storage, root, &revert, 1).await;
+        assert!(
+            pulled["edges"]["reverts"].as_u64().unwrap() >= 1,
+            "{pulled}"
+        );
+
+        let id_of = |sha: &str| {
+            let tag = crate::tools::repo_ingest::commit_tag(sha);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let failure = put(&storage, "demo", "failure observed with no path");
+        link(&storage, &failure, &id_of(&failure_rev), "derived_from");
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "logged_write", "node_id": failure}]
+            })),
+        )
+        .await
+        .unwrap();
+        let shas: Vec<&str> = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|row| row["structure"]["sha"].as_str())
+            .collect();
+        assert!(shas.contains(&cause.as_str()), "{out}");
+        let cause_row = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["structure"]["sha"] == cause)
+            .unwrap();
+        assert_eq!(cause_row["structure"]["edge"], "corrects", "{out}");
     }
 }

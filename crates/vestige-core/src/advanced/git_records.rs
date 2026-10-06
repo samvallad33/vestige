@@ -64,6 +64,12 @@ pub struct GitCommit {
     /// The 40-hex SHA from a `This reverts commit <sha>.` line git revert
     /// writes. Anything else in the message is not a revert.
     pub reverts: Option<String>,
+    /// The 40-hex SHA from a `(cherry picked from commit <sha>)` line.
+    /// Anything else in the message is not a cherry-pick.
+    pub cherry_picked_from: Option<String>,
+    /// `Fixes: <sha>` trailers, lowercase, 12 to 40 hex digits, as written.
+    /// A short prefix is resolved to a commit later, and only if it is unique.
+    pub fixes: Vec<String>,
     /// Lockfile version changes in this commit's diff. A package is included
     /// only when it loses exactly one version and gains exactly one other.
     pub lock_bumps: Vec<LockBump>,
@@ -438,6 +444,52 @@ pub fn revert_target(body: &str) -> Option<String> {
     None
 }
 
+/// The exact trailer line `git cherry-pick -x` writes. The SHA is 40 hex
+/// digits and the parentheses are part of the line. No other wording counts.
+pub fn cherry_picked_from(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let line = line.trim_end_matches('\r').trim();
+        let Some(rest) = line.strip_prefix("(cherry picked from commit ") else {
+            continue;
+        };
+        let Some(sha) = rest.strip_suffix(')') else {
+            continue;
+        };
+        if is_full_sha(sha) {
+            return Some(sha.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+/// `Fixes: <hex>` trailers. The token is 12 to 40 hex digits and the only
+/// thing on the line after the prefix. `fixes:` and a SHA inside a sentence
+/// are not trailers.
+pub fn fixes_targets(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        let line = line.trim_end_matches('\r').trim();
+        let Some(rest) = line.strip_prefix("Fixes:") else {
+            continue;
+        };
+        let rest = rest.trim();
+        let mut tokens = rest.split_whitespace();
+        let Some(sha) = tokens.next() else {
+            continue;
+        };
+        if tokens.next().is_some() {
+            continue;
+        }
+        if (12..=40).contains(&sha.len()) && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            let sha = sha.to_ascii_lowercase();
+            if !out.contains(&sha) {
+                out.push(sha);
+            }
+        }
+    }
+    out
+}
+
 fn is_full_sha(s: &str) -> bool {
     s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -516,14 +568,20 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             .trim()
             .parse::<DateTime<Utc>>()
             .unwrap_or_default();
-        let (parents, subject, reverts) = if new_format {
+        let (parents, subject, reverts, cherry_picked_from, fixes) = if new_format {
             let parents = parent_shas(fields.next().unwrap_or(""));
             let subject = fields.next().unwrap_or("").trim().to_string();
             let message = fields.next().unwrap_or("");
-            (parents, subject, revert_target(message))
+            (
+                parents,
+                subject,
+                revert_target(message),
+                cherry_picked_from(message),
+                fixes_targets(message),
+            )
         } else {
             let subject = fields.next().unwrap_or("").trim().to_string();
-            (Vec::new(), subject, None)
+            (Vec::new(), subject, None, None, Vec::new())
         };
         let body = diff;
 
@@ -634,6 +692,8 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             imports,
             parents,
             reverts,
+            cherry_picked_from,
+            fixes,
             lock_bumps,
         });
     }
@@ -1424,6 +1484,24 @@ diff --git a/README.md b/README.md
         assert!(revert_target("this reverts commit {reverted}.").is_none());
         assert!(revert_target("This reverts commit abc.").is_none());
         assert!(revert_target("This reverts commit {reverted}").is_none());
+    }
+
+    #[test]
+    fn cherry_pick_and_fixes_trailers_are_exact_shas() {
+        let original = "dddddddddddddddddddddddddddddddddddddddd";
+        let fixed = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let short = "abcdef123456";
+        let sha = "ffffffffffffffffffffffffffffffffffffffff";
+        let parent = "1111111111111111111111111111111111111111";
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}{parent}\u{1f}backport\u{1f}backport\n\n(cherry picked from commit {original})\r\nFixes: {short}\nfixes: {fixed}\nFixes: {fixed} and more\nFixes: abc\n\u{1d}\n"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits[0].cherry_picked_from.as_deref(), Some(original));
+        assert_eq!(commits[0].fixes, vec![short]);
+        assert!(cherry_picked_from("(cherry picked from commit abc)").is_none());
+        assert!(fixes_targets("fixes: {fixed}").is_empty());
+        assert!(fixes_targets("Fixes: {fixed} extra").is_empty());
     }
 
     #[test]

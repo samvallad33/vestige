@@ -60,6 +60,12 @@
 //! parent that is already in the scope, and `corrects` from a revert to the
 //! commit named by that trailer. A reverted commit that is reachable locally
 //! but outside this page is ingested too, so the edge has both ends.
+//! `(cherry picked from commit <sha>)` is `derived_from` the named commit.
+//! `Fixes: <sha>` is `corrects` once the prefix resolves to one local commit.
+//! A commit whose reverse diff has the same `git patch-id --stable` as an
+//! older commit's diff `corrects` that commit, and two commits with the same
+//! forward patch-id are the same change: the later `derived_from` the earlier.
+//! Equality is exact. A missing object is skipped and never fetched.
 //!
 //! A lockfile diff (Cargo.lock, uv.lock, poetry.lock, package-lock.json,
 //! go.sum) that moves one package from exactly one old version to exactly one
@@ -366,18 +372,25 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             "skippedSecret": stats.skipped_secret,
             "futureDatesClamped": stats.future_dates_clamped,
             "pulledReverts": history.pulled_reverts,
+            "pulledNamed": history.pulled_named,
         },
         "edges": {
             (if req.dry_run { "wouldRecord" } else { "recorded" }): edges.touched
                 + edges.parents
                 + edges.reverts
                 + edges.packages
-                + edges.upstream,
+                + edges.upstream
+                + edges.cherry_picks
+                + edges.fixes
+                + edges.patch_ids,
             "touched": edges.touched,
             "parents": edges.parents,
             "reverts": edges.reverts,
             "packages": edges.packages,
             "upstream": edges.upstream,
+            "cherryPicks": edges.cherry_picks,
+            "fixes": edges.fixes,
+            "patchIds": edges.patch_ids,
         },
         "anchors": anchors,
         "sample": sample,
@@ -698,6 +711,8 @@ struct History {
     page_len: usize,
     stopped_early: Option<String>,
     pulled_reverts: usize,
+    /// Cherry-pick and `Fixes:` targets pulled from outside the page.
+    pulled_named: usize,
     revert_merges: usize,
 }
 
@@ -731,13 +746,31 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         }
     }
 
+    resolve_fix_shas(root, &mut commits);
     let mut pulled_reverts = 0usize;
-    let targets: Vec<String> = commits
+    let mut pulled_named = 0usize;
+    let mut revert_targets = HashSet::new();
+    let mut named_targets = HashSet::new();
+    for commit in &commits {
+        if let Some(sha) = &commit.reverts {
+            revert_targets.insert(sha.clone());
+        }
+        if let Some(sha) = &commit.cherry_picked_from {
+            named_targets.insert(sha.clone());
+        }
+        for sha in &commit.fixes {
+            named_targets.insert(sha.clone());
+        }
+    }
+    let mut pending: Vec<String> = revert_targets
         .iter()
-        .filter_map(|commit| commit.reverts.clone())
-        .filter(|sha| commits.iter().all(|seen| &seen.sha != sha))
+        .chain(named_targets.iter())
+        .filter(|sha| commits.iter().all(|seen| seen.sha != (*sha).as_str()))
+        .cloned()
         .collect();
-    for sha in targets {
+    pending.sort();
+    pending.dedup();
+    for sha in pending {
         if !commit_object_exists(root, &sha) {
             continue;
         }
@@ -749,9 +782,14 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         if commits.iter().any(|seen| seen.sha == commit.sha) {
             continue;
         }
-        pulled_reverts += 1;
+        if revert_targets.contains(&sha) {
+            pulled_reverts += 1;
+        } else {
+            pulled_named += 1;
+        }
         commits.push(commit);
     }
+    resolve_fix_shas(root, &mut commits);
 
     // The revision the caller named is the one a failure is observed at. A
     // release commit is often a merge, and `--no-merges` would drop it.
@@ -768,8 +806,26 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         page_len,
         stopped_early,
         pulled_reverts,
+        pulled_named,
         revert_merges,
     })
+}
+
+/// Replace `Fixes:` prefixes with the one local commit they name. An ambiguous
+/// or missing prefix is dropped. Nothing is fetched.
+fn resolve_fix_shas(root: &Path, commits: &mut [GitCommit]) {
+    for commit in commits.iter_mut() {
+        let mut full = Vec::new();
+        for prefix in commit.fixes.drain(..) {
+            let Some(sha) = resolve_commit_sha(root, &prefix) else {
+                continue;
+            };
+            if sha != commit.sha && !full.contains(&sha) {
+                full.push(sha);
+            }
+        }
+        commit.fixes = full;
+    }
 }
 
 /// `git log -p` arguments. `merges` is `--no-merges` or `--merges`.
@@ -868,6 +924,9 @@ struct EdgeStats {
     reverts: usize,
     packages: usize,
     upstream: usize,
+    cherry_picks: usize,
+    fixes: usize,
+    patch_ids: usize,
 }
 
 struct EdgeCtx<'a> {
@@ -954,6 +1013,38 @@ fn record_git_edges(
                 &mut out.reverts,
             );
         }
+        if let Some(original) = &commit.cherry_picked_from
+            && known.contains(original.as_str())
+        {
+            let target = ctx.sha_to_id.get(original);
+            if target.is_some() || ctx.dry_run {
+                note_edge(
+                    ctx.storage,
+                    source,
+                    target.map(String::as_str).unwrap_or(original),
+                    "derived_from",
+                    ctx.dry_run,
+                    &mut out.cherry_picks,
+                );
+            }
+        }
+        for fixed in &commit.fixes {
+            if !known.contains(fixed.as_str()) {
+                continue;
+            }
+            let target = ctx.sha_to_id.get(fixed);
+            if target.is_none() && !ctx.dry_run {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                source,
+                target.map(String::as_str).unwrap_or(fixed),
+                "corrects",
+                ctx.dry_run,
+                &mut out.fixes,
+            );
+        }
         let bumps = lock_bumps_with_context(ctx.root, commit);
         for bump in &bumps {
             let new_id =
@@ -988,7 +1079,250 @@ fn record_git_edges(
             }
         }
     }
+    record_patch_identities(ctx, commits, started, budget, stats, &mut out);
     out
+}
+
+/// Exact `git patch-id --stable` matches inside this page.
+///
+/// The reverse diff is `git diff SHA PARENT` (the change undone). When that
+/// id equals an older commit's forward diff, the newer commit `corrects` the
+/// older one. Two commits with the same forward id are the same change: the
+/// later `derived_from` the earlier. A commit that already carries git's
+/// revert trailer is left to that trailer. Merges and empty diffs are skipped.
+fn record_patch_identities(
+    ctx: &EdgeCtx<'_>,
+    commits: &[GitCommit],
+    started: Instant,
+    budget: Duration,
+    stats: &mut Stats,
+    out: &mut EdgeStats,
+) {
+    struct PatchFacts {
+        index: usize,
+        forward: String,
+        reverse: String,
+    }
+    let mut facts: Vec<PatchFacts> = Vec::new();
+    for (index, commit) in commits.iter().enumerate() {
+        if !ctx.dry_run && started.elapsed() >= budget {
+            stats.stopped_by_budget = true;
+            break;
+        }
+        if commit.parents.len() != 1 || commit.files.is_empty() {
+            continue;
+        }
+        let parent = &commit.parents[0];
+        let Some(forward) = commit_patch_id(ctx.root, parent, &commit.sha) else {
+            continue;
+        };
+        let Some(reverse) = commit_patch_id(ctx.root, &commit.sha, parent) else {
+            continue;
+        };
+        facts.push(PatchFacts {
+            index,
+            forward,
+            reverse,
+        });
+    }
+    for fact in &facts {
+        let commit = &commits[fact.index];
+        if commit.reverts.is_some() {
+            continue;
+        }
+        let source = ctx.sha_to_id.get(&commit.sha);
+        if source.is_none() && !ctx.dry_run {
+            continue;
+        }
+        for other in &facts {
+            if other.index == fact.index || other.forward != fact.reverse {
+                continue;
+            }
+            if !commit_is_newer(commits, fact.index, other.index) {
+                continue;
+            }
+            let older = &commits[other.index];
+            if !known_sha(ctx, commits, &older.sha) {
+                continue;
+            }
+            let target = ctx.sha_to_id.get(&older.sha);
+            if target.is_none() && !ctx.dry_run {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                source,
+                target.map(String::as_str).unwrap_or(&older.sha),
+                "corrects",
+                ctx.dry_run,
+                &mut out.patch_ids,
+            );
+        }
+    }
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for fact in &facts {
+        groups
+            .entry(fact.forward.clone())
+            .or_default()
+            .push(fact.index);
+    }
+    for group in groups.values() {
+        if group.len() < 2 {
+            continue;
+        }
+        let oldest = group
+            .iter()
+            .copied()
+            .min_by(|&left, &right| {
+                if commit_is_newer(commits, left, right) {
+                    std::cmp::Ordering::Greater
+                } else if commit_is_newer(commits, right, left) {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .expect("group is non-empty");
+        let older = &commits[oldest];
+        if !known_sha(ctx, commits, &older.sha) {
+            continue;
+        }
+        let target = ctx.sha_to_id.get(&older.sha);
+        if target.is_none() && !ctx.dry_run {
+            continue;
+        }
+        for &index in group {
+            if index == oldest {
+                continue;
+            }
+            if !commit_is_newer(commits, index, oldest) {
+                continue;
+            }
+            let source = ctx.sha_to_id.get(&commits[index].sha);
+            if source.is_none() && !ctx.dry_run {
+                continue;
+            }
+            note_edge(
+                ctx.storage,
+                source,
+                target.map(String::as_str).unwrap_or(&older.sha),
+                "derived_from",
+                ctx.dry_run,
+                &mut out.patch_ids,
+            );
+        }
+    }
+}
+
+fn known_sha(ctx: &EdgeCtx<'_>, commits: &[GitCommit], sha: &str) -> bool {
+    commits.iter().any(|commit| commit.sha == sha) || ctx.sha_to_id.contains_key(sha)
+}
+
+fn commit_is_newer(commits: &[GitCommit], newer: usize, older: usize) -> bool {
+    let left = &commits[newer];
+    let right = &commits[older];
+    if left.time != right.time {
+        return left.time > right.time;
+    }
+    newer < older
+}
+
+/// Stable patch-id of `git diff FROM TO`. `None` when the diff is empty or
+/// git cannot read it. The id is the first token; a missing commit header
+/// makes the second token zeros, which is not the id.
+fn commit_patch_id(root: &Path, from: &str, to: &str) -> Option<String> {
+    check_git_arg("from", from).ok()?;
+    check_git_arg("to", to).ok()?;
+    let run = run_git(
+        root,
+        &[
+            "diff".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "--no-color".into(),
+            from.into(),
+            to.into(),
+        ],
+    )
+    .ok()?;
+    if run.failure.is_some() || !diff_has_change(&run.stdout) {
+        return None;
+    }
+    patch_id_of(&run.stdout)
+}
+
+fn diff_has_change(diff: &[u8]) -> bool {
+    String::from_utf8_lossy(diff).lines().any(|line| {
+        (line.starts_with('+') || line.starts_with('-'))
+            && !line.starts_with("+++")
+            && !line.starts_with("---")
+    })
+}
+
+fn patch_id_of(diff: &[u8]) -> Option<String> {
+    let mut child = Command::new("git")
+        .args([
+            "--no-pager",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "log.showSignature=false",
+            "patch-id",
+            "--stable",
+        ])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    {
+        let mut stdin = child.stdin.take()?;
+        if std::io::Write::write_all(&mut stdin, diff).is_err() {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let id = text.split_whitespace().next()?.to_ascii_lowercase();
+    (id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) && id.chars().any(|c| c != '0'))
+        .then_some(id)
+}
+
+/// `git merge-base --is-ancestor ANCESTOR DESCENDANT`. `Ok(false)` is a clean
+/// "not an ancestor". `Err` means the objects are not available locally.
+pub fn git_is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool, String> {
+    check_git_arg("ancestor", ancestor)?;
+    check_git_arg("descendant", descendant)?;
+    if !root.is_dir() {
+        return Err(format!(
+            "git repo {} is not an available directory",
+            root.display()
+        ));
+    }
+    let run = run_git(
+        root,
+        &[
+            "merge-base".into(),
+            "--is-ancestor".into(),
+            ancestor.into(),
+            descendant.into(),
+        ],
+    )?;
+    match run.failure {
+        None => Ok(true),
+        Some(err) if err.trim().is_empty() => Ok(false),
+        Some(err) => Err(err),
+    }
 }
 
 /// The history log is `--unified=0`, so a lockfile version line has no
@@ -2195,6 +2529,123 @@ pub fn parse_timeout(raw: &str) -> u32 {
             1,
             "the reverted commit was ingested: {out}"
         );
+    }
+
+    #[tokio::test]
+    async fn cherry_pick_fixes_and_patch_id_are_exact_edges() {
+        let mut repo = Repo::empty();
+        repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
+        repo.commit("base", "2024-01-01T00:00:00Z");
+        let main = repo.git(&["branch", "--show-current"], "2024-01-01T00:00:00Z");
+        let base = repo.shas[0].clone();
+        repo.write("src/a.rs", "fn a() { let _ = 2; }\n");
+        repo.commit("the feature", "2024-01-02T00:00:00Z");
+        let feature = repo.shas[1].clone();
+
+        repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
+        repo.commit("undo the change", "2024-01-03T00:00:00Z");
+        let undo = repo.shas.last().unwrap().clone();
+        repo.write("src/a.rs", "fn a() { let _ = 2; }\n");
+        repo.commit("same change, no trailer", "2024-01-04T00:00:00Z");
+        let backport = repo.shas.last().unwrap().clone();
+        repo.write("src/b.rs", "fn b() {}\n");
+        repo.git(&["add", "-A"], "2024-01-05T00:00:00Z");
+        let prefix = &feature[..12];
+        repo.git(
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "close the bug",
+                "-m",
+                &format!("Fixes: {prefix}\nfixes: {feature}\nFixes: {feature} and then some prose"),
+            ],
+            "2024-01-05T00:00:00Z",
+        );
+        let fixer = repo.git(&["rev-parse", "HEAD"], "2024-01-05T00:00:00Z");
+        repo.shas.push(fixer.clone());
+
+        repo.git(
+            &["switch", "-q", "-c", "side", &base],
+            "2024-01-06T00:00:00Z",
+        );
+        repo.git(
+            &["cherry-pick", "-x", "--no-edit", &feature],
+            "2024-01-06T00:00:00Z",
+        );
+        let cherry = repo.git(&["rev-parse", "HEAD"], "2024-01-06T00:00:00Z");
+        repo.shas.push(cherry.clone());
+        repo.git(&["switch", "-q", &main], "2024-01-06T00:00:00Z");
+
+        let (storage, _dir) = strata();
+        let out = ingest(&storage, repo.request(false)).await;
+        assert_eq!(out["edges"]["reverts"], 0, "{out}");
+        assert_eq!(out["edges"]["fixes"], 1, "{out}");
+        assert!(
+            out["edges"]["patchIds"].as_u64().unwrap() >= 2,
+            "inverse diff and the same forward diff are both recorded: {out}"
+        );
+        let mut side = repo.request(false);
+        side.rev = Some(cherry.clone());
+        let side_out = ingest(&storage, side).await;
+        assert!(
+            side_out["edges"]["cherryPicks"].as_u64().unwrap() >= 1,
+            "{side_out}"
+        );
+
+        let id_of = |sha: &str| {
+            let tag = commit_tag(sha);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let feature_id = id_of(&feature);
+        let cherry_id = id_of(&cherry);
+        let backport_id = id_of(&backport);
+        let fixer_id = id_of(&fixer);
+        let undo_id = id_of(&undo);
+        let has = |source: &str, target: &str, kind: &str| {
+            storage.get_all_connections().unwrap().iter().any(|edge| {
+                edge.source_id == source && edge.target_id == target && edge.link_type == kind
+            })
+        };
+        assert!(has(&cherry_id, &feature_id, "derived_from"), "{out}");
+        assert!(has(&backport_id, &feature_id, "derived_from"), "{out}");
+        assert!(has(&fixer_id, &feature_id, "corrects"), "{out}");
+        assert!(
+            has(&undo_id, &feature_id, "corrects"),
+            "a trailer-less inverse diff is a revert: {out}"
+        );
+        assert!(
+            !has(&undo_id, &fixer_id, "corrects"),
+            "a different diff is not a revert: {out}"
+        );
+
+        let (pulled, _dir) = strata();
+        let mut cherry_page = repo.request(false);
+        cherry_page.rev = Some(cherry);
+        cherry_page.limit = Some(1);
+        cherry_page.codebase = Some("pull-cherry".into());
+        cherry_page.scope = Some("pull-cherry".into());
+        let cherry_out = ingest(&pulled, cherry_page).await;
+        assert_eq!(cherry_out["commits"]["pulledNamed"], 1, "{cherry_out}");
+        assert!(
+            cherry_out["edges"]["cherryPicks"].as_u64().unwrap() >= 1,
+            "{cherry_out}"
+        );
+
+        let mut fixes_page = repo.request(false);
+        fixes_page.rev = Some(fixer);
+        fixes_page.limit = Some(1);
+        fixes_page.codebase = Some("pull-fixes".into());
+        fixes_page.scope = Some("pull-fixes".into());
+        let fixes_out = ingest(&pulled, fixes_page).await;
+        assert_eq!(fixes_out["commits"]["pulledNamed"], 1, "{fixes_out}");
+        assert_eq!(fixes_out["edges"]["fixes"], 1, "{fixes_out}");
     }
 
     #[tokio::test]

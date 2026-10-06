@@ -891,6 +891,8 @@ mod tests {
             imports: vec![],
             parents: vec![],
             reverts: None,
+            cherry_picked_from: None,
+            fixes: vec![],
             lock_bumps: vec![],
         })
     }
