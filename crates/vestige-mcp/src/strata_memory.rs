@@ -703,10 +703,11 @@ fn q32(q: i64) -> f64 {
 }
 
 /// A link a caller declares when it saves a memory, named from the new
-/// memory's side. Only provenance-style kinds are offered: `supersedes` and
-/// `corrects` are review-gated and can retire a memory, and `touched` /
-/// `anchored_to` / `projected_to` are recorded by the code and projection
-/// paths themselves.
+/// memory's side. `supersedes` is caller-declarable on Strata (INGEST V5):
+/// it records a full-replacement trail — for a correction that keeps the
+/// old memory in play, use `corrects` via the review path instead. The
+/// remaining provenance kinds stay closed: `touched` / `anchored_to` /
+/// `projected_to` are recorded by the code and projection paths themselves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclaredLink {
     /// The new memory derives from the target: `new -derived_from-> target`.
@@ -715,16 +716,22 @@ pub enum DeclaredLink {
     EvidenceOf,
     /// The new memory closes the target: `target -closed_by-> new`.
     Closes,
+    /// The new memory fully replaces the target:
+    /// `new -supersedes-> target`. Caller-declared; unlike a review-gated
+    /// `corrects` correction, the old memory is a full replacement, and the
+    /// edge alone retires nothing — retiring stays a RETIRE.
+    Supersedes,
 }
 
 impl DeclaredLink {
-    pub const NAMES: [&'static str; 3] = ["derived_from", "evidence_of", "closes"];
+    pub const NAMES: [&'static str; 4] = ["derived_from", "evidence_of", "closes", "supersedes"];
 
     pub fn parse(kind: &str) -> Option<Self> {
         match kind {
             "derived_from" => Some(Self::DerivedFrom),
             "evidence_of" => Some(Self::EvidenceOf),
             "closes" => Some(Self::Closes),
+            "supersedes" => Some(Self::Supersedes),
             _ => None,
         }
     }
@@ -734,6 +741,7 @@ impl DeclaredLink {
             Self::DerivedFrom => "derived_from",
             Self::EvidenceOf => "evidence_of",
             Self::Closes => "closes",
+            Self::Supersedes => "supersedes",
         }
     }
 
@@ -754,6 +762,14 @@ impl DeclaredLink {
                 strata_store::EdgeKind::ClosedBy,
                 target.to_string(),
                 new_id.to_string(),
+            ),
+            // Caller target is the OLD memory: the edge reads
+            // `new -supersedes-> old`, the same direction `recorded_origin`
+            // already walks for typed supersession hops.
+            Self::Supersedes => (
+                strata_store::EdgeKind::Supersedes,
+                new_id.to_string(),
+                target.to_string(),
             ),
         }
     }
@@ -1613,6 +1629,58 @@ impl MemoryStoreSend for StrataMemory {
             .get_node(&id)
             .ok_or_else(|| StorageError::NotFound(id.clone()))?;
         Ok(project_node(&store, &record))
+    }
+
+    fn find_duplicate_by_canonical_hash(
+        &self,
+        scope: &str,
+        content: &str,
+    ) -> Result<Option<String>, StorageError> {
+        let store = self.lock();
+        store
+            .find_node_by_canonical_hash(scope, &strata_store::canonical_hash(content))
+            .map_err(map_store)
+    }
+
+    fn find_intent_record(
+        &self,
+        scope: &str,
+        intent_id: &str,
+    ) -> Result<Option<(String, u64, String)>, StorageError> {
+        self.lock()
+            .find_intent(scope, intent_id)
+            .map_err(map_store)
+    }
+
+    fn record_intent_entry(
+        &self,
+        scope: &str,
+        intent_id: &str,
+        node_id: &str,
+        effect_seq: u64,
+        response_digest: &str,
+    ) -> Result<(), StorageError> {
+        self.lock()
+            .record_intent(scope, intent_id, node_id, effect_seq, response_digest)
+            .map_err(map_store)
+    }
+
+    /// Latest `eff-` receipt naming `node_id`, via the same effect-index
+    /// resolution `get_receipt` uses. `None` when no admitted effect names it.
+    fn latest_receipt_id_for_node(&self, node_id: &str) -> Option<String> {
+        let store = self.lock();
+        resolve_proof(&store, node_id)
+            .ok()
+            .flatten()
+            .map(|proof| receipt_id_for(proof.effect_seq))
+    }
+
+    fn node_effect_seq(&self, node_id: &str) -> Option<u64> {
+        let store = self.lock();
+        resolve_proof(&store, node_id)
+            .ok()
+            .flatten()
+            .map(|proof| proof.effect_seq)
     }
 
     fn get_node(&self, id: &str) -> Result<Option<KnowledgeNode>, StorageError> {
@@ -4564,5 +4632,157 @@ mod tests {
         assert!(hit(&scoped_id), "a scope name is scanned");
         assert!(hit("int-audit"), "an intention is scanned");
         assert_eq!(find("int-audit").kind, AuditKind::Intention);
+    }
+
+    // -----------------------------------------------------------------
+    // INGEST V5 (Lane A): declarable supersedes, canonical duplicate
+    // lookup, intent idempotency, node receipt resolution.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn supersedes_declared_link_parses_and_records_new_to_old() {
+        assert!(DeclaredLink::NAMES.contains(&"supersedes"));
+        assert_eq!(DeclaredLink::parse("supersedes"), Some(DeclaredLink::Supersedes));
+        assert_eq!(DeclaredLink::parse("nonsense"), None);
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = open(dir.path()).unwrap();
+        let scope = "user";
+        let old = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "the old truth".into(),
+                    ..IngestInput::default()
+                },
+                scope,
+            )
+            .unwrap();
+        let new = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "the full replacement".into(),
+                    ..IngestInput::default()
+                },
+                scope,
+            )
+            .unwrap();
+
+        // Caller target = the OLD memory.
+        let links = vec![(DeclaredLink::Supersedes, old.id.clone())];
+        check_links(storage.as_ref(), scope, &links).expect("target checks");
+        let written = save_links(storage.as_ref(), &new.id, &links).expect("link written");
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0]["kind"], "supersedes");
+        assert_eq!(written[0]["edge"], "supersedes");
+        assert_eq!(written[0]["source"], json!(new.id));
+        assert_eq!(written[0]["target"], json!(old.id));
+        assert!(
+            written[0]["receiptId"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("eff-")),
+            "each link carries its own effect receipt"
+        );
+
+        // The edge is persisted with direction new -supersedes-> old, and
+        // the old memory stays live (an edge retires nothing).
+        let edges = storage.get_connections_for_memory(&old.id).unwrap();
+        let edge = edges
+            .iter()
+            .find(|edge| edge.link_type == "supersedes")
+            .expect("supersedes edge persisted");
+        assert_eq!(edge.source_id, new.id);
+        assert_eq!(edge.target_id, old.id);
+        assert!(storage.get_node(&old.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn latest_receipt_id_for_node_and_node_effect_seq_resolve_the_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let memory = StrataMemory::open(dir.path()).unwrap();
+        let (id, effect_seq) = {
+            let mut store = memory.lock();
+            store
+                .ingest_in_scope_with_receipt(
+                    strata_store::IngestInput {
+                        content: "receipt resolution fixture".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "fact".into(),
+                        tags: Vec::new(),
+                        created_at_ms: Some(0),
+                        valid_from_ms: None,
+                        valid_until_ms: None,
+                    },
+                    "user",
+                )
+                .unwrap()
+        };
+        assert_eq!(
+            memory.latest_receipt_id_for_node(&id),
+            Some(format!("eff-{effect_seq:016x}")),
+            "the receipt id is eff- plus the admitting effect seq"
+        );
+        assert_eq!(memory.node_effect_seq(&id), Some(effect_seq));
+        assert_eq!(memory.latest_receipt_id_for_node("mem-does-not-exist"), None);
+        assert_eq!(memory.node_effect_seq("mem-does-not-exist"), None);
+    }
+
+    #[test]
+    fn canonical_duplicate_and_intent_surface_answer_through_the_storage_trait() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = open(dir.path()).unwrap();
+        let scope = "user";
+        // Before any write: no duplicate, no intent record.
+        assert_eq!(
+            storage
+                .find_duplicate_by_canonical_hash(scope, "dup wiring probe")
+                .unwrap(),
+            None
+        );
+        assert_eq!(storage.find_intent_record(scope, "run-42").unwrap(), None);
+
+        let node = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "Dup Wiring Probe".into(),
+                    ..IngestInput::default()
+                },
+                scope,
+            )
+            .unwrap();
+        // NFC-free variants (case, zero-width, whitespace) resolve to it.
+        assert_eq!(
+            storage
+                .find_duplicate_by_canonical_hash(scope, "  dup\u{200b} WIRING\tprobe ")
+                .unwrap(),
+            Some(node.id.clone())
+        );
+        // Another scope stays clean.
+        assert_eq!(
+            storage.find_duplicate_by_canonical_hash("other", "Dup Wiring Probe").unwrap(),
+            None
+        );
+
+        // Intent entries roundtrip through the same surface and are
+        // first-write-wins.
+        let seq = storage.node_effect_seq(&node.id).expect("effect seq");
+        storage
+            .record_intent_entry(scope, "run-42", &node.id, seq, "digest-one")
+            .unwrap();
+        storage
+            .record_intent_entry(scope, "run-42", &node.id, seq + 9, "digest-two")
+            .unwrap();
+        assert_eq!(
+            storage.find_intent_record(scope, "run-42").unwrap(),
+            Some((node.id.clone(), seq, "digest-one".to_string()))
+        );
+
+        // And they survive a reopen of the same directory.
+        drop(storage);
+        let reopened = open(dir.path()).unwrap();
+        assert_eq!(
+            reopened.find_intent_record(scope, "run-42").unwrap(),
+            Some((node.id, seq, "digest-one".to_string()))
+        );
     }
 }

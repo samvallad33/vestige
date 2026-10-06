@@ -2377,6 +2377,7 @@ dependencies = [
  "strata-gate",
  "strata-kernel",
  "strata-migrate",
+ "unicode-normalization",
 ]
 
 [[package]]
