@@ -1,6 +1,8 @@
 # Tool contracts and progressive discovery
 
 > **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+>
+> On a Strata log, `recall(handle=...)` resolves from recorded structure only: a memory id, a unique `mem-` id prefix of 8 or more characters, an exact tag, a file path, `path#symbol`, a commit sha (full 40 hex or a unique prefix of 7 or more hex characters), a test id (`classname::name`), or a run id. Typed prefixes `file:`, `sym:`, `commit:`, `test:`, and `run:` search only that table. A bare path shared by two repositories lists both qualified handles and picks neither. There is no case folding, no snake/camel normalization, and no read of node content. Each hit carries a proof: an anchor id and `eff-` receipt, a commit's creating frame seq and hash plus its effect receipt, a run's `eff-` receipt, or an edge (source, target, link type, `meta_sha`) and its frame seq. `codebase(action="record_runs")` admits those run records, including a JUnit document, and an empty call records zero.
 
 Vestige advertises sixteen MCP tools. Most are action multiplexers: `recall`
 uses `mode`, `memory_status` uses `view`, and tools such as `memory` and `dedup`

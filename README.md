@@ -247,7 +247,7 @@ If you installed v3 with npm, make sure your agents now run the 4.x binary: `ves
 <a id="recall-by-handle-not-resemblance"></a>
 ## Recall by handle, not resemblance
 
-Since 4.0, Vestige does not rank text that resembles your query. There are no embeddings, no BM25 and no keyword search in the default binaries. `recall` takes a handle: a memory id, a unique id prefix of 8 or more characters, or an exact tag. A free-text query returns `similarity_disabled` and asks for a handle.
+Since 4.0, Vestige does not rank text that resembles your query. There are no embeddings, no BM25 and no keyword search in the default binaries. `recall` takes a handle: a memory id, a unique id prefix of 8 or more characters, an exact tag, a file path, a `path#symbol`, a commit sha, a test id, or a run id, resolved from recorded anchors, edges, commits, and runs. A free-text query returns `similarity_disabled` and asks for a handle.
 
 | | Resemblance search | Vestige 4.x |
 |---|---|---|

@@ -390,7 +390,7 @@ fn withhold_on_strata(tools: &mut Vec<ToolDescription>) {
         } else if tool.name == "recall" {
             // The v3 text sold keyword search and similarity modes, which a
             // Strata log answers with similarity_disabled.
-            tool.description = Some("Find memories by exact handle: a memory id, a unique id prefix of 8+ characters, or an exact tag. In 4.0 free text and the 'reason' / 'contradictions' modes return similarity_disabled.".to_string());
+            tool.description = Some("Find memories by exact handle: a memory id, a unique id prefix of 8+ characters, an exact tag, a file path, a path#symbol, a commit sha, a test id, or a run id. Resolution uses recorded structure. In 4.0 free text and the 'reason' / 'contradictions' modes return similarity_disabled.".to_string());
         } else if tool.name == "smart_ingest" {
             tool.description = Some("Save one memory ('content') or up to 20 ('items'); each write passes the gate and returns a receipt. Secret-shaped content is refused unless allowSecrets is set.".to_string());
         } else if tool.name == "receipt" {
@@ -1073,7 +1073,7 @@ description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / '
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions marked current or stale, and the scopes holding them), 'verify' (re-check anchors and, with a codebase, change records), 'reanchor' (replace reviewed evidence), 'ingest_repo' (a checkout's commits as anchored change records; previews unless dryRun=false).".to_string()),
+description: Some("Code memory: remember_pattern, remember_decision, get_context, verify, reanchor, ingest_repo (previews unless dryRun=false), record_runs.".to_string()),
                 input_schema: tools::compact::of(&tools::codebase_unified::schema()),
                 ..Default::default()
             },

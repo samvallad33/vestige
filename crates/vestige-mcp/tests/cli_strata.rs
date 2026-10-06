@@ -592,9 +592,16 @@ fn ingest_backdating_ingest_git_and_gc_refuse_before_writing() {
     assert!(plain.ok, "{}", plain.text());
     assert_eq!(node_count(dir), 4);
 
+    let before_git = node_count(dir);
     let git = vestige(dir, &["ingest-git", path_arg(dir)]);
     assert!(!git.ok);
-    assert!(git.stderr.contains("unavailable_in_4_0"), "{}", git.text());
+    assert!(
+        !git.stderr.contains("unavailable_in_4_0"),
+        "{}",
+        git.text()
+    );
+    assert!(git.stderr.contains("git log failed"), "{}", git.text());
+    assert_eq!(node_count(dir), before_git, "a failed ingest-git wrote");
 
     let gc = vestige(dir, &["gc", "--yes", "--min-retention", "1.1"]);
     assert!(!gc.ok);
@@ -883,4 +890,154 @@ fn scan_secrets_reaches_retired_memories_scopes_and_intentions() {
         hit_ids.contains(&"int-audit"),
         "an intention must be reported: {report}"
     );
+}
+
+/// Falsifier for #409: `vestige ingest-git` on a Strata log records `touched`
+/// edges and new-side hunk anchors, and the bridge lens walks the file handle.
+#[test]
+fn ingest_git_records_touched_edges_and_hunk_anchors() {
+    let data = TempDir::new().unwrap();
+    let repo = TempDir::new().unwrap();
+    let git = |args: &[&str], date: &str| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args([
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "user.name=t",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"], "2024-06-01T00:00:00+00:00");
+    let file = repo.path().join("src/a.rs");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "fn parse() {\n    let _ = 1;\n}\n").unwrap();
+    git(&["add", "-A"], "2024-06-01T00:00:00+00:00");
+    git(&["commit", "-q", "-m", "add parse"], "2024-06-01T00:00:00+00:00");
+    std::fs::write(&file, "fn parse() {\n    let _ = 2;\n}\n").unwrap();
+    git(&["add", "-A"], "2024-06-02T00:00:00+00:00");
+    git(
+        &["commit", "-q", "-m", "edit parse"],
+        "2024-06-02T00:00:00+00:00",
+    );
+
+    let logged = Command::new("git")
+        .arg("-C")
+        .arg(repo.path())
+        .args([
+            "-c",
+            "core.quotepath=off",
+            "-c",
+            "diff.renames=true",
+            "log",
+            "-p",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "-n",
+            "10",
+            "--pretty=format:%x1e%H%x1f%aI%x1f%P%x1f%s%x1f%b%x1d",
+        ])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(logged.status.success(), "{}", String::from_utf8_lossy(&logged.stderr));
+    let mut git_commits = vestige_core::advanced::git_records::parse_git_log(
+        &String::from_utf8_lossy(&logged.stdout),
+    );
+    git_commits.reverse();
+
+    let first = vestige(
+        data.path(),
+        &["ingest-git", "--json", path_arg(repo.path())],
+    );
+    assert!(first.ok, "{}", first.text());
+    let report: Value = serde_json::from_str(&first.stdout).expect("json");
+    assert_eq!(report["status"], "recorded", "{report}");
+    assert_eq!(report["created"], 2, "{report}");
+    let rows = report["commits"].as_array().unwrap();
+    assert_eq!(rows.len(), git_commits.len(), "{report}");
+    let store = strata_store::StrataStore::open(data.path()).expect("reopen");
+    for (row, git_commit) in rows.iter().zip(&git_commits) {
+        assert_eq!(row["sha"], git_commit.sha, "{row}");
+        let id = row["id"].as_str().unwrap();
+        let edges = store.get_edges_for(
+            id,
+            strata_store::EdgeDirection::Outgoing,
+            Some(strata_store::EdgeKind::Touched),
+        );
+        assert_eq!(edges.len(), git_commit.files.len(), "{row}");
+        for edge in &edges {
+            assert_eq!(edge.meta_sha.as_deref(), Some(git_commit.sha.as_str()), "{edge:?}");
+            assert_eq!(edge.link_type, "touched");
+            assert!(
+                row["edges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|listed| listed["target"] == edge.target_id && listed["meta_sha"] == git_commit.sha),
+                "{row}"
+            );
+        }
+        let anchors = store.anchors_for(id);
+        let wanted: Vec<_> = git_commit.hunks.iter().filter(|hunk| hunk.len > 0).collect();
+        assert_eq!(anchors.len(), wanted.len(), "{anchors:?}");
+        for hunk in wanted {
+            assert!(
+                anchors.iter().any(|anchor| {
+                    anchor.file_path == hunk.file
+                        && anchor.start_line == Some(hunk.start)
+                        && anchor.end_line == Some(hunk.start + hunk.len - 1)
+                        && anchor.symbol == hunk.symbol
+                        && anchor.content_hash.is_none()
+                        && anchor.span_lines.is_none()
+                }),
+                "missing {hunk:?} in {anchors:?}"
+            );
+        }
+    }
+    drop(store);
+
+    let human = vestige(data.path(), &["ingest-git", path_arg(repo.path())]);
+    assert!(human.ok, "{}", human.text());
+    assert!(
+        human.stdout.contains("unchanged") && human.stdout.contains("no new frames"),
+        "{}",
+        human.text()
+    );
+    assert_eq!(node_count(data.path()), 2);
+    assert_eq!(edge_count(data.path()), 2);
+
+    let bridge = vestige(
+        data.path(),
+        &["compose", "--lens", "bridge", "--limit", "10", "--json"],
+    );
+    assert!(bridge.ok, "{}", bridge.text());
+    let pairs: Value = serde_json::from_str(&bridge.stdout).expect("pairs");
+    let pairs = pairs.as_array().unwrap();
+    assert_eq!(pairs.len(), 1, "{pairs:?}");
+    assert_eq!(pairs[0]["proof"]["hops"], 2, "{pairs:?}");
+    let path = pairs[0]["proof"]["path"].to_string();
+    let handle = rows[0]["edges"][0]["target"].as_str().unwrap();
+    assert!(path.contains(handle), "{path}");
+    assert!(path.contains("touched"), "{path}");
 }

@@ -27,7 +27,7 @@ use crate::gate_log::StrataEventLog;
 use crate::op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 use crate::types::{
     AnchorRecord, ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, IntentionRecord,
-    NodeRecord, VALID_FOREVER_MS,
+    NodeRecord, RunRecord, VALID_FOREVER_MS,
 };
 
 /// Subdirectory holding the durable log.
@@ -266,6 +266,19 @@ pub enum EffectAction {
     /// carries the target and kind. Not a card: it never shadows the
     /// source's own receipt in [`StrataStore::latest_effect`].
     Edge,
+    /// Run record admitted by `RecordRuns`, named by `run_id`. Not a card.
+    Run,
+}
+
+/// What [`StrataStore::record_runs`] admitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunAdmission {
+    /// Effect seq of the frame this call appended. `None` when nothing was new.
+    pub effect_seq: Option<u64>,
+    /// Run ids written by this call.
+    pub written: Vec<String>,
+    /// Run ids already stored with equal fields, and their existing effect seq.
+    pub unchanged: Vec<(String, Option<u64>)>,
 }
 
 /// One node, intention or anchor effect proved from the log: covering
@@ -332,6 +345,24 @@ struct StateDigest<'a> {
     intentions: Vec<(&'a str, &'a IntentionRecord)>,
     /// Code anchors in (node id, anchor id) order.
     anchors: Vec<&'a AnchorRecord>,
+}
+
+/// Same projection as [`StateDigest`], plus run records.
+///
+/// Used only when [`StrataStore::runs`] is non-empty. An empty registry keeps
+/// hashing [`StateDigest`] so existing digests stay byte-identical.
+#[derive(BorshSerialize)]
+struct StateDigestWithRuns<'a> {
+    nodes: Vec<(&'a str, &'a NodeRecord)>,
+    origins: Vec<(&'a str, u64)>,
+    edges: &'a [ConnectionRecord],
+    fsrs_root: [u8; 32],
+    checkpoints: Vec<[u8; 32]>,
+    orphan_writes: u64,
+    reviewed_at: Vec<(u64, i64)>,
+    intentions: Vec<(&'a str, &'a IntentionRecord)>,
+    anchors: Vec<&'a AnchorRecord>,
+    runs: Vec<(&'a str, &'a RunRecord)>,
 }
 
 /// A payload is this type only when borsh consumes it exactly. Kind bytes
@@ -454,6 +485,18 @@ fn effect_proofs_for_op(
             None,
             Some((edge.target_id.clone(), edge.link_type.clone())),
         ),
+        StoreOp::RecordRuns { runs } => Ok(runs
+            .iter()
+            .map(|run| EffectProof {
+                effect_seq,
+                data_seq,
+                node_id: run.run_id.clone(),
+                action: EffectAction::Run,
+                payload_digest: digest,
+                rating: None,
+                edge: None,
+            })
+            .collect()),
         StoreOp::SupersedeNode { .. } => Ok(Vec::new()),
     }
 }
@@ -639,6 +682,10 @@ pub struct StrataStore {
     /// Code anchors (derived). Rows of a retired node stay here; reads
     /// filter them out.
     anchors: AnchorIndex,
+    /// Run records by `run_id` (derived). Not FSRS cards. Absent from
+    /// [`StrataStore::state_digest`] when the map is empty, so a log with
+    /// no `RecordRuns` frame keeps the digest it had before runs existed.
+    runs: BTreeMap<String, RunRecord>,
     /// Proved effects by receipt seq and node id (derived). Lets receipt
     /// lookups answer without re-reading the log.
     effect_index: EffectIndex,
@@ -700,6 +747,7 @@ impl StrataStore {
             retire_rules: BTreeMap::new(),
             upserts: BTreeMap::new(),
             anchors: AnchorIndex::default(),
+            runs: BTreeMap::new(),
             effect_index: EffectIndex::default(),
         };
         store.replay()?;
@@ -895,6 +943,12 @@ impl StrataStore {
                 status,
                 checked_at_ms,
             } => self.anchors.verdict(anchor_id, status, *checked_at_ms),
+            StoreOp::RecordRuns { runs } => {
+                for run in runs {
+                    self.origins.insert(run.run_id.clone(), gate_effect_seq);
+                    self.runs.insert(run.run_id.clone(), run.clone());
+                }
+            }
         }
         Ok(())
     }
@@ -1339,6 +1393,83 @@ impl StrataStore {
             self.require_live_node(&anchor.node_id)?;
         }
         Ok(())
+    }
+
+    /// Admit run records.
+    ///
+    /// An empty batch appends nothing. A run whose stored row already equals
+    /// the input appends nothing and keeps its existing receipt. Any other
+    /// row is inserted or replaced by one admitted frame. Runs are not cards.
+    pub fn record_runs(&mut self, runs: Vec<RunRecord>) -> Result<RunAdmission, StoreError> {
+        if runs.is_empty() {
+            return Ok(RunAdmission {
+                effect_seq: None,
+                written: Vec::new(),
+                unchanged: Vec::new(),
+            });
+        }
+        let mut seen = BTreeSet::new();
+        let mut fresh = Vec::new();
+        let mut unchanged = Vec::new();
+        for run in runs {
+            if run.run_id.is_empty() || run.subject.is_empty() {
+                return Err(StoreError::InvalidInput(
+                    "run id and subject must not be empty".into(),
+                ));
+            }
+            if !seen.insert(run.run_id.clone()) {
+                let id = &run.run_id;
+                return Err(StoreError::InvalidInput(format!("duplicate run id {id}")));
+            }
+            if self.runs.get(&run.run_id) == Some(&run) {
+                let seq = self
+                    .latest_effect(&run.run_id)
+                    .ok()
+                    .flatten()
+                    .map(|proof| proof.effect_seq);
+                unchanged.push((run.run_id, seq));
+            } else {
+                fresh.push(run);
+            }
+        }
+        if fresh.is_empty() {
+            return Ok(RunAdmission {
+                effect_seq: None,
+                written: Vec::new(),
+                unchanged,
+            });
+        }
+        let ids: Vec<&str> = fresh.iter().map(|run| run.run_id.as_str()).collect();
+        let context = self.context_for(&ids);
+        let written: Vec<String> = fresh.iter().map(|run| run.run_id.clone()).collect();
+        let (effect_seq, _) = self.admit_write(
+            StoreOp::RecordRuns { runs: fresh },
+            action_kind::WRITE,
+            context,
+        )?;
+        Ok(RunAdmission {
+            effect_seq: Some(effect_seq),
+            written,
+            unchanged,
+        })
+    }
+
+    /// One run by id.
+    pub fn run(&self, run_id: &str) -> Option<RunRecord> {
+        self.runs.get(run_id).cloned()
+    }
+
+    /// Every run, in id order.
+    pub fn runs(&self) -> Vec<RunRecord> {
+        self.runs.values().cloned().collect()
+    }
+
+    pub(crate) fn run_map(&self) -> &BTreeMap<String, RunRecord> {
+        &self.runs
+    }
+
+    pub(crate) fn each_anchor(&self) -> impl Iterator<Item = &AnchorRecord> {
+        self.anchors.iter()
     }
 
     /// Insert or replace code anchors by anchor id through one admitted
@@ -1985,6 +2116,8 @@ impl StrataStore {
     /// The latest proved effect for `node_id` (a node or an intention id).
     ///
     /// Answered from the effect index, like [`StrataStore::effect_by_seq`].
+    /// Edge effects are excluded: they must not hide the source node's own
+    /// receipt. Use [`Self::edge_proofs`] for those.
     pub fn latest_effect(&self, node_id: &str) -> Result<Option<EffectProof>, StoreError> {
         self.effect_index.check()?;
         Ok(self
@@ -1992,6 +2125,35 @@ impl StrataStore {
             .latest
             .get(node_id)
             .map(|&idx| self.effect_index.proofs[idx].clone()))
+    }
+
+    /// Proved `SaveEdge` effects from `source` to `target` of `link_type`,
+    /// oldest first.
+    ///
+    /// The effect index keeps edge proofs out of [`Self::latest_effect`].
+    /// This scans that index. Replay rebuilds it, so the answer matches a
+    /// full log read.
+    pub fn edge_proofs(
+        &self,
+        source: &str,
+        target: &str,
+        link_type: &str,
+    ) -> Result<Vec<EffectProof>, StoreError> {
+        self.effect_index.check()?;
+        Ok(self
+            .effect_index
+            .proofs
+            .iter()
+            .filter(|proof| {
+                proof.action == EffectAction::Edge
+                    && proof.node_id == source
+                    && proof
+                        .edge
+                        .as_ref()
+                        .is_some_and(|(got_target, kind)| got_target == target && kind == link_type)
+            })
+            .cloned()
+            .collect())
     }
 
     /// Review clock recorded on the latest explicit review of `id`.
@@ -2220,23 +2382,53 @@ impl StrataStore {
     /// (nodes, origins, edges, FSRS state root, checkpoint hashes, orphan
     /// count, explicit review clocks, intentions, code anchors). Two stores
     /// replaying the same log produce the same digest.
+    ///
+    /// A log with no run records hashes the projection that predates
+    /// `RecordRuns`, byte for byte. Runs join the projection only when the
+    /// registry is non-empty.
     pub fn state_digest(&self) -> [u8; 32] {
-        let digest = StateDigest {
-            nodes: self.nodes.iter().map(|(k, v)| (k.as_str(), v)).collect(),
-            origins: self.origins.iter().map(|(k, v)| (k.as_str(), *v)).collect(),
-            edges: &self.edges,
-            fsrs_root: strata_kernel::checkpoint::state_root(&self.fsrs),
-            checkpoints: self.checkpoints.iter().map(checkpoint_hash).collect(),
-            orphan_writes: self.orphan_writes,
-            reviewed_at: self.reviewed_at.iter().map(|(k, v)| (*k, *v)).collect(),
-            intentions: self
-                .intentions
+        let nodes: Vec<_> = self.nodes.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        let origins: Vec<_> = self.origins.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let checkpoints: Vec<_> = self.checkpoints.iter().map(checkpoint_hash).collect();
+        let reviewed_at: Vec<_> = self.reviewed_at.iter().map(|(k, v)| (*k, *v)).collect();
+        let intentions: Vec<_> = self
+            .intentions
+            .iter()
+            .map(|(id, record)| (id.as_str(), record))
+            .collect();
+        let anchors: Vec<_> = self.anchors.iter().collect();
+        let bytes = if self.runs.is_empty() {
+            borsh_vec(&StateDigest {
+                nodes,
+                origins,
+                edges: &self.edges,
+                fsrs_root: strata_kernel::checkpoint::state_root(&self.fsrs),
+                checkpoints,
+                orphan_writes: self.orphan_writes,
+                reviewed_at,
+                intentions,
+                anchors,
+            })
+        } else {
+            let runs: Vec<_> = self
+                .runs
                 .iter()
-                .map(|(id, record)| (id.as_str(), record))
-                .collect(),
-            anchors: self.anchors.iter().collect(),
+                .map(|(id, run)| (id.as_str(), run))
+                .collect();
+            borsh_vec(&StateDigestWithRuns {
+                nodes,
+                origins,
+                edges: &self.edges,
+                fsrs_root: strata_kernel::checkpoint::state_root(&self.fsrs),
+                checkpoints,
+                orphan_writes: self.orphan_writes,
+                reviewed_at,
+                intentions,
+                anchors,
+                runs,
+            })
         };
-        hash32(&borsh_vec(&digest).expect("state digest serialization is infallible"))
+        hash32(&bytes.expect("state digest serialization is infallible"))
     }
 
     /// Re-read the log, refuse a broken frame, and fold a fresh copy of the
@@ -2272,6 +2464,7 @@ impl StrataStore {
             retire_rules: BTreeMap::new(),
             upserts: BTreeMap::new(),
             anchors: AnchorIndex::default(),
+            runs: BTreeMap::new(),
             effect_index: EffectIndex::default(),
         };
         scratch.replay()?;

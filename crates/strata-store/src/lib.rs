@@ -63,6 +63,8 @@ mod card;
 mod error;
 mod gate_log;
 mod ghostlink;
+mod handles;
+mod junit;
 mod op;
 mod store;
 mod types;
@@ -83,13 +85,20 @@ pub use ghostlink::{
     COMPOSITION_NODE_TYPE, DIVERGENT_RADIUS, GHOSTLINK_TAG, LEGACY_INFERRED, LENS_TAG_PREFIX,
     MEASURED_MEMBER_CAP, OUTCOME_TAG_PREFIX, WEAVE_SOURCE_PREFIX, WEAVE_TAG,
 };
+pub use handles::{
+    hunk_anchor_id, parse_qualified_file_handle, percent_decode, percent_encode,
+    qualified_file_handle, resolve_structure, structure_snapshot, StructureKind, StructureProof,
+    StructureResolution,
+};
+pub use junit::parse_junit;
 pub use op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 pub use store::{
     default_policy, effect_receipt_id, permissive_policy, retire_rule_id, AdmissionContext,
-    EffectAction, EffectProof, NodeWrite, RecordedOrigin, Refold, RetireReceipt, StrataStore,
-    SupersedeHop, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
+    EffectAction, EffectProof, NodeWrite, RecordedOrigin, Refold, RetireReceipt, RunAdmission,
+    StrataStore, SupersedeHop, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
 };
 pub use types::{
     looks_like_failure, AnchorRecord, ConnectionRecord, EdgeDirection, EdgeKind, IngestInput,
-    IntentionRecord, NodeRecord, SourceKey, TYPED_EDGE_VOCABULARY, VALID_FOREVER_MS,
+    IntentionRecord, NodeRecord, RunKind, RunRecord, RunStatus, SourceKey, TYPED_EDGE_VOCABULARY,
+    VALID_FOREVER_MS,
 };

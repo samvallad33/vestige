@@ -3,7 +3,7 @@
 //! frame whose payload is `borsh(StoreOp)` and whose blake3 digest equals the
 //! admitting `EFFECT.payload_digest`.
 
-use crate::types::{AnchorRecord, ConnectionRecord, IntentionRecord, NodeRecord};
+use crate::types::{AnchorRecord, ConnectionRecord, IntentionRecord, NodeRecord, RunRecord};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Frame kind: a store data frame (payload = `borsh(StoreOp)`).
@@ -89,5 +89,14 @@ pub enum StoreOp {
         status: String,
         /// Check time (unix ms), supplied by the caller.
         checked_at_ms: i64,
+    },
+    /// Insert or replace run records by `run_id` (discriminant `8`).
+    ///
+    /// One admitted effect covers the batch. Runs are not memory cards:
+    /// applying this op folds no review. Appended after every earlier
+    /// variant so logs written before runs existed still decode.
+    RecordRuns {
+        /// Records keyed by `run_id`.
+        runs: Vec<RunRecord>,
     },
 }

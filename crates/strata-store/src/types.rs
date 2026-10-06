@@ -403,6 +403,101 @@ fn contains_marker_word(hay: &str, marker: &str) -> bool {
     false
 }
 
+/// What a run record is.
+///
+/// Discriminants are positional. Do not reorder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum RunKind {
+    /// One testcase.
+    Test,
+    /// One CI workflow.
+    Ci,
+    /// One agent run.
+    Agent,
+}
+
+impl RunKind {
+    /// Canonical name stored by callers. Exact bytes, no case folding.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunKind::Test => "test",
+            RunKind::Ci => "ci",
+            RunKind::Agent => "agent",
+        }
+    }
+
+    /// Parse a canonical name. Anything else, including a different case, is
+    /// `None`.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "test" => Some(RunKind::Test),
+            "ci" => Some(RunKind::Ci),
+            "agent" => Some(RunKind::Agent),
+            _ => None,
+        }
+    }
+}
+
+/// How a run finished.
+///
+/// Discriminants are positional. Do not reorder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum RunStatus {
+    /// The run passed.
+    Passed,
+    /// The run failed an assertion.
+    Failed,
+    /// The run was skipped.
+    Skipped,
+    /// The run errored before a result.
+    Errored,
+}
+
+impl RunStatus {
+    /// Canonical name. Exact bytes, no case folding.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunStatus::Passed => "passed",
+            RunStatus::Failed => "failed",
+            RunStatus::Skipped => "skipped",
+            RunStatus::Errored => "errored",
+        }
+    }
+
+    /// Parse a canonical name. Anything else, including a different case, is
+    /// `None`.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "passed" => Some(RunStatus::Passed),
+            "failed" => Some(RunStatus::Failed),
+            "skipped" => Some(RunStatus::Skipped),
+            "errored" => Some(RunStatus::Errored),
+            _ => None,
+        }
+    }
+}
+
+/// One admitted test, CI, or agent run.
+///
+/// Not an FSRS card and not a memory. The registry key is `run_id`.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct RunRecord {
+    /// Stable id. A JUnit testcase uses `{suite}::{classname}::{name}`.
+    pub run_id: String,
+    /// Which kind of run this is.
+    pub kind: RunKind,
+    /// Exact test id (`classname::name`) or workflow name.
+    pub subject: String,
+    /// Commit the run observed, exact bytes. Empty when the caller had none.
+    pub commit: String,
+    /// How it finished.
+    pub status: RunStatus,
+    /// Start time, unix milliseconds. `0` when the source had no clock.
+    pub started_ms: i64,
+    /// Finish time, unix milliseconds. `0` when the source had no clock.
+    pub finished_ms: i64,
+}
+
 /// Does this content/tags pair read like a failure? Compatible with
 /// vestige-core's `looks_like_failure` so failure detection does not drift
 /// between the SQLite store and this store.

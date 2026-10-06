@@ -32,6 +32,9 @@ enum Expect {
     /// Ground-truth cause is this 1-based rank.
     Rank(usize),
     /// Cause was ingested and is still not reachable from the reported frame.
+    ///
+    /// Kept so a later page can expect a miss. Every current page ranks.
+    #[allow(dead_code)]
     Miss,
 }
 
@@ -97,9 +100,9 @@ fn cases() -> Vec<Case> {
                 ("2fbbfc3da800d3b33c7f7b430e403f66b781b962", 1),
                 ("9700933d18954e82155f1abed712707d66027b1e", 8),
             ],
-            expect: Expect::Miss,
+            expect: Expect::Rank(1),
             expect_revert: true,
-            note: "revert message names Prombench and no file. This page ingests the revert before the failure revision, so the parent edge is not recorded yet, and the shallow clone does not connect the cause to that revision. The follow-up proof ingests the failure revision first and ranks the cause via corrects.",
+            note: "revert message names Prombench and no file. The revert is ingested before the failure revision; the parent edge is recorded when that parent arrives, and the walk ranks the cause via corrects. The follow-up proof ingests the failure revision first and ranks the same cause.",
             starts: logged_only,
         },
         Case {
@@ -127,9 +130,9 @@ fn cases() -> Vec<Case> {
                 ("03d43277131d4310f2de02efcf81d168b132d273", 1),
                 ("4c8d14014dd8c40fd9f41df83c3ccaf107b0d346", 8),
             ],
-            expect: Expect::Miss,
+            expect: Expect::Rank(1),
             expect_revert: true,
-            note: "revert describes the dashboard break and names no file. This page ingests the revert before the failure revision, so the parent edge is not recorded yet, and the shallow clone does not connect the cause to that revision. The follow-up proof ingests the failure revision first and ranks the cause via corrects.",
+            note: "revert describes the dashboard break and names no file. The revert is ingested before the failure revision; the parent edge is recorded when that parent arrives, and the walk ranks the cause via corrects. The follow-up proof ingests the failure revision first and ranks the same cause.",
             starts: logged_only,
         },
     ]

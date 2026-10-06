@@ -47,6 +47,7 @@ impl HandleResolution {
             exact: false,
             candidates: Vec::new(),
             handle_required: Some(HANDLE_REQUIRED_DETAIL.to_string()),
+            proofs: Vec::new(),
         }
     }
 
@@ -57,6 +58,7 @@ impl HandleResolution {
             exact,
             candidates: Vec::new(),
             handle_required: None,
+            proofs: Vec::new(),
         }
     }
 
@@ -67,6 +69,7 @@ impl HandleResolution {
             exact: false,
             candidates,
             handle_required: None,
+            proofs: Vec::new(),
         }
     }
 }

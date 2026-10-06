@@ -66,7 +66,7 @@ pub fn schema() -> Value {
                 "handle".to_string(),
                 serde_json::json!({
                     "type": "string",
-                    "description": "[handle mode] Exact or unique-prefix handle: memory id (uuid), commit sha (40-hex or >=7-char prefix), file path, symbol (snake/camel), test name, run id, tool-call id, or tag. No fuzzy or lexical matching. Passing this key (even empty) switches recall to handle mode: a resolvable handle returns the node payloads plus one-hop connection neighbors; anything else returns the handle_required error with exact/prefix candidates."
+                    "description": "[handle mode] Exact handle: memory id, unique id prefix of 8+ characters, commit sha (full 40-hex or a unique prefix of 7+ hex characters), file path, path#symbol, test id, run id, or exact tag. Typed prefixes file:, sym:, commit:, test:, and run: search only that table. No fuzzy matching, no case folding, and no snake/camel normalization. On a Strata log the handle is resolved from recorded anchors, edges, commit records, and run records; node content is not read. Passing this key (even empty) switches recall to handle mode: a resolvable handle returns the node payloads, one-hop connection neighbors, and the proof of each recorded row; anything else returns the handle_required error with exact candidates."
                 }),
             );
             props.insert(
@@ -278,6 +278,7 @@ fn handle_resolution_payload(
             "exact": resolution.exact,
             "nodes": nodes,
             "neighbors": neighbors,
+            "proofs": resolution.proofs,
         });
     }
     if !resolution.candidates.is_empty() {

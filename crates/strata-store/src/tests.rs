@@ -682,7 +682,8 @@ fn replay_store_and_migration_frames_do_not_cross_classify() {
                 // Nor any code anchors.
                 StoreOp::RecordAnchors { .. }
                 | StoreOp::ReplaceAnchors { .. }
-                | StoreOp::RecordAnchorVerdict { .. } => {}
+                | StoreOp::RecordAnchorVerdict { .. }
+                | StoreOp::RecordRuns { .. } => {}
             }
         } else if frame.kind == KIND_STORE_CHECKPOINT {
             store_checkpoints += 1;
@@ -2163,6 +2164,20 @@ fn anchor_ops_append_discriminants_after_every_existing_op() {
                 checked_at_ms: 1_700_000_000_001,
             },
             7,
+        ),
+        (
+            StoreOp::RecordRuns {
+                runs: vec![crate::RunRecord {
+                    run_id: "suite::mod::keeps".into(),
+                    kind: crate::RunKind::Test,
+                    subject: "mod::keeps".into(),
+                    commit: "abc".into(),
+                    status: crate::RunStatus::Passed,
+                    started_ms: 1,
+                    finished_ms: 2,
+                }],
+            },
+            8,
         ),
     ];
     for (op, tag) in appended {

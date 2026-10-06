@@ -16,8 +16,8 @@ use vestige_core::codebase::{AnchorStatus, CodeAnchor};
 use vestige_core::intention_graph::Command;
 use vestige_core::storage::{
     CompositionEventRecord, ConnectionRecord as VestigeEdge, ConsolidationHistoryRecord,
-    CoverageSnapshot, HANDLE_REQUIRED_DETAIL, HandleKind, HandleResolution, HealthStatus,
-    HygieneNodeSummary, HygieneSnapshot, MAX_CANDIDATES, MemoryEdge, MemoryRecord,
+    CoverageSnapshot, HANDLE_REQUIRED_DETAIL, HandleKind, HandleProof, HandleResolution,
+    HealthStatus, HygieneNodeSummary, HygieneSnapshot, MAX_CANDIDATES, MemoryEdge, MemoryRecord,
     MemoryStoreError, MemoryStoreResult, MemoryStoreSend, ModelSignature, NeverComposedCandidate,
     ReceiptAttestationStatus, SchedulingState, SearchQuery, StateTransitionRecord, Storage,
     StorageError, StoreStats, WalCheckpointMode, WalCheckpointStatus,
@@ -99,7 +99,7 @@ pub(crate) fn register_open(memory: &Arc<StrataMemory>) {
     open.push((memory.log_dir.clone(), Arc::downgrade(memory)));
 }
 
-fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
+pub(crate) fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
     if !is_strata_backend(storage) {
         return None;
     }
@@ -343,6 +343,15 @@ impl StrataMemory {
         self.store
             .lock()
             .unwrap_or_else(|err| panic!("strata memory lock poisoned: {err}"))
+    }
+
+    /// Run `body` with the open log. The guard is held for the call.
+    pub(crate) fn with_store_mut<T>(
+        &self,
+        body: impl FnOnce(&mut strata_store::StrataStore) -> T,
+    ) -> T {
+        let mut store = self.lock();
+        body(&mut store)
     }
 
     fn nodes(&self) -> Vec<strata_store::NodeRecord> {
@@ -887,6 +896,7 @@ fn mutation_kind(proof: &strata_store::EffectProof) -> &'static str {
         (strata_store::EffectAction::Anchor, _) => "anchor_recorded",
         (strata_store::EffectAction::AnchorVerdict, _) => "anchor_verified",
         (strata_store::EffectAction::Edge, _) => "edge_recorded",
+        (strata_store::EffectAction::Run, _) => "run_recorded",
     }
 }
 
@@ -1115,6 +1125,139 @@ fn apply_store_provenance(node: &mut KnowledgeNode, record: &strata_store::NodeR
         (!key.id.is_empty()).then(|| key.id.clone()),
         updated,
     ));
+}
+
+fn unresolved_handle() -> HandleResolution {
+    HandleResolution {
+        kind: HandleKind::Unknown,
+        ids: Vec::new(),
+        exact: false,
+        candidates: Vec::new(),
+        handle_required: Some(HANDLE_REQUIRED_DETAIL.to_string()),
+        proofs: Vec::new(),
+    }
+}
+
+fn is_pure_hex(query: &str) -> bool {
+    !query.is_empty() && query.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_typed_handle(query: &str) -> bool {
+    if let Some(rest) = query.strip_prefix("file://") {
+        return rest.contains('/');
+    }
+    ["file:", "sym:", "commit:", "test:", "run:"]
+        .iter()
+        .any(|prefix| query.starts_with(prefix))
+}
+
+fn empty_structure() -> strata_store::StructureResolution {
+    strata_store::StructureResolution {
+        kind: strata_store::StructureKind::Unknown,
+        ids: Vec::new(),
+        exact: false,
+        candidates: Vec::new(),
+        proofs: Vec::new(),
+        handle_required: None,
+    }
+}
+
+fn memory_resolution(
+    store: &strata_store::StrataStore,
+    ids: Vec<String>,
+    exact: bool,
+) -> HandleResolution {
+    let proofs = ids
+        .iter()
+        .map(|id| HandleProof::Memory {
+            id: id.clone(),
+            receipt: store.origin_seq(id).map(strata_store::effect_receipt_id),
+        })
+        .collect();
+    HandleResolution {
+        kind: HandleKind::Memory,
+        ids,
+        exact,
+        candidates: Vec::new(),
+        handle_required: None,
+        proofs,
+    }
+}
+
+fn map_kind(kind: strata_store::StructureKind) -> HandleKind {
+    match kind {
+        strata_store::StructureKind::File => HandleKind::File,
+        strata_store::StructureKind::Symbol => HandleKind::Symbol,
+        strata_store::StructureKind::Commit => HandleKind::Commit,
+        strata_store::StructureKind::Test => HandleKind::Test,
+        strata_store::StructureKind::Run => HandleKind::Run,
+        strata_store::StructureKind::Unknown => HandleKind::Unknown,
+    }
+}
+
+fn map_proof(proof: strata_store::StructureProof) -> HandleProof {
+    match proof {
+        strata_store::StructureProof::Anchor {
+            id,
+            anchor_id,
+            receipt,
+        } => HandleProof::Anchor {
+            id,
+            anchor_id,
+            receipt,
+        },
+        strata_store::StructureProof::Commit {
+            id,
+            frame_seq,
+            frame_hash,
+            receipt,
+        } => HandleProof::Commit {
+            id,
+            frame_seq,
+            frame_hash,
+            receipt,
+        },
+        strata_store::StructureProof::Run { id, receipt } => HandleProof::Run { id, receipt },
+        strata_store::StructureProof::Edge {
+            id,
+            source,
+            target,
+            link_type,
+            meta_sha,
+            frame_seq,
+        } => HandleProof::Edge {
+            id,
+            source,
+            target,
+            link_type,
+            meta_sha,
+            frame_seq,
+        },
+    }
+}
+
+fn map_structure(structure: strata_store::StructureResolution) -> HandleResolution {
+    let handle_required = if structure.ids.is_empty() && structure.candidates.is_empty() {
+        Some(
+            structure
+                .handle_required
+                .unwrap_or_else(|| HANDLE_REQUIRED_DETAIL.to_string()),
+        )
+    } else {
+        structure.handle_required
+    };
+    HandleResolution {
+        kind: map_kind(structure.kind),
+        ids: structure.ids,
+        exact: structure.exact,
+        candidates: structure
+            .candidates
+            .into_iter()
+            .map(|(id, kind)| (id, map_kind(kind)))
+            .collect(),
+        handle_required,
+        proofs: structure.proofs.into_iter().map(map_proof).collect(),
+    }
 }
 
 fn retrievable(record: &strata_store::NodeRecord) -> bool {
@@ -1448,49 +1591,30 @@ impl MemoryStoreSend for StrataMemory {
 
     fn resolve_handle(&self, query: &str) -> HandleResolution {
         let query = query.trim();
-        let store = self.lock();
-        // Every live node, native or imported from v3: origins only list
-        // natively admitted writes, so an upgraded store's memories were
-        // unreachable by handle. Retired nodes stay out.
-        let ids: Vec<String> = store.node_ids_where(retrievable);
-        // Exact tag handle (case-sensitive, like the SQLite resolver): every
-        // live node carrying exactly this tag. No prefix or fuzzy matching.
-        let tagged: Vec<String> = if query.is_empty() {
-            Vec::new()
-        } else {
-            store.node_ids_where(|record| {
-                retrievable(record) && record.tags.iter().any(|tag| tag == query)
-            })
-        };
-        drop(store);
         if query.is_empty() {
-            return HandleResolution {
-                kind: HandleKind::Unknown,
-                ids: Vec::new(),
-                exact: false,
-                candidates: Vec::new(),
-                handle_required: Some(HANDLE_REQUIRED_DETAIL.to_string()),
-            };
+            return unresolved_handle();
         }
-        if let Some(id) = ids.iter().find(|id| id.as_str() == query) {
-            return HandleResolution {
-                kind: HandleKind::Memory,
-                ids: vec![id.clone()],
-                exact: true,
-                candidates: Vec::new(),
-                handle_required: None,
-            };
+        let store = self.lock();
+        // A typed prefix searches only that table. It does not fall through
+        // to a memory id or a tag that happens to share the bytes.
+        if is_typed_handle(query) {
+            return map_structure(
+                strata_store::resolve_structure(&store, query).unwrap_or_else(empty_structure),
+            );
         }
-        if query.len() >= 8 {
-            let hits: Vec<&String> = ids.iter().filter(|id| id.starts_with(query)).collect();
+        // Exact memory id first. Retired nodes never resolve.
+        if store.get_node(query).is_some_and(|record| record.is_live()) {
+            return memory_resolution(&store, vec![query.to_string()], true);
+        }
+        // Unique id prefix of 8 or more characters. A pure hex query is a
+        // commit handle, not a memory-id prefix, so a sha cannot collide
+        // with an imported id that happens to share a hex prefix. `mem-`
+        // ids contain a hyphen, so their prefixes still resolve here.
+        if query.len() >= 8 && !is_pure_hex(query) {
+            let hits =
+                store.node_ids_where(|record| record.is_live() && record.id.starts_with(query));
             if hits.len() == 1 {
-                return HandleResolution {
-                    kind: HandleKind::Memory,
-                    ids: vec![hits[0].clone()],
-                    exact: false,
-                    candidates: Vec::new(),
-                    handle_required: None,
-                };
+                return memory_resolution(&store, hits, false);
             }
             if hits.len() > 1 {
                 return HandleResolution {
@@ -1500,28 +1624,34 @@ impl MemoryStoreSend for StrataMemory {
                     candidates: hits
                         .into_iter()
                         .take(MAX_CANDIDATES)
-                        .map(|id| (id.clone(), HandleKind::Memory))
+                        .map(|id| (id, HandleKind::Memory))
                         .collect(),
                     handle_required: None,
+                    proofs: Vec::new(),
                 };
             }
         }
+        if let Some(structure) = strata_store::resolve_structure(&store, query) {
+            return map_structure(structure);
+        }
+        // Exact tag, case-sensitive. No prefix and no case folding.
+        let tagged = store.node_ids_where(|record| {
+            record.is_live() && record.tags.iter().any(|tag| tag == query)
+        });
         if !tagged.is_empty() {
             return HandleResolution {
                 kind: HandleKind::Tag,
-                ids: tagged,
+                ids: tagged.clone(),
                 exact: true,
                 candidates: Vec::new(),
                 handle_required: None,
+                proofs: tagged
+                    .into_iter()
+                    .map(|id| HandleProof::Tag { id })
+                    .collect(),
             };
         }
-        HandleResolution {
-            kind: HandleKind::Unknown,
-            ids: Vec::new(),
-            exact: false,
-            candidates: Vec::new(),
-            handle_required: Some(HANDLE_REQUIRED_DETAIL.to_string()),
-        }
+        unresolved_handle()
     }
 
     fn retire_affected(
