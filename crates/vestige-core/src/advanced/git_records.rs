@@ -67,8 +67,8 @@ pub struct GitCommit {
     /// The 40-hex SHA from a `(cherry picked from commit <sha>)` line.
     /// Anything else in the message is not a cherry-pick.
     pub cherry_picked_from: Option<String>,
-    /// `Fixes: <sha>` trailers, lowercase, 12 to 40 hex digits, as written.
-    /// A short prefix is resolved to a commit later, and only if it is unique.
+    /// `Fixes: <sha>` trailers, lowercase, exactly 40 hex digits, as written.
+    /// A short prefix is not a trailer and is never expanded.
     pub fixes: Vec<String>,
     /// Lockfile version changes in this commit's diff. A package is included
     /// only when it loses exactly one version and gains exactly one other.
@@ -462,9 +462,10 @@ pub fn cherry_picked_from(body: &str) -> Option<String> {
     None
 }
 
-/// `Fixes: <hex>` trailers. The token is 12 to 40 hex digits and the only
-/// thing on the line after the prefix. `fixes:` and a SHA inside a sentence
-/// are not trailers.
+/// `Fixes: <sha>` when the token is a full 40-hex commit id and the only
+/// thing on the line after the prefix. A 7–39 hex prefix, `fixes:`, and a
+/// SHA inside a sentence are not trailers. Nothing here asks git to expand
+/// a prefix.
 pub fn fixes_targets(body: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in body.lines() {
@@ -480,7 +481,7 @@ pub fn fixes_targets(body: &str) -> Vec<String> {
         if tokens.next().is_some() {
             continue;
         }
-        if (12..=40).contains(&sha.len()) && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        if is_full_sha(sha) {
             let sha = sha.to_ascii_lowercase();
             if !out.contains(&sha) {
                 out.push(sha);
@@ -1494,14 +1495,19 @@ diff --git a/README.md b/README.md
         let sha = "ffffffffffffffffffffffffffffffffffffffff";
         let parent = "1111111111111111111111111111111111111111";
         let raw = format!(
-            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}{parent}\u{1f}backport\u{1f}backport\n\n(cherry picked from commit {original})\r\nFixes: {short}\nfixes: {fixed}\nFixes: {fixed} and more\nFixes: abc\n\u{1d}\n"
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}{parent}\u{1f}backport\u{1f}backport\n\n(cherry picked from commit {original})\r\nFixes: {fixed}\nFixes: {short}\nfixes: {fixed}\nFixes: {fixed} and more\nFixes: abc\n\u{1d}\n"
         );
         let commits = parse_git_log(&raw);
         assert_eq!(commits[0].cherry_picked_from.as_deref(), Some(original));
-        assert_eq!(commits[0].fixes, vec![short]);
+        assert_eq!(commits[0].fixes, vec![fixed.to_string()]);
         assert!(cherry_picked_from("(cherry picked from commit abc)").is_none());
-        assert!(fixes_targets("fixes: {fixed}").is_empty());
-        assert!(fixes_targets("Fixes: {fixed} extra").is_empty());
+        assert!(fixes_targets(&format!("Fixes: {short}")).is_empty());
+        assert!(fixes_targets(&format!("fixes: {fixed}")).is_empty());
+        assert!(fixes_targets(&format!("Fixes: {fixed} extra")).is_empty());
+        assert_eq!(
+            fixes_targets(&format!("Fixes: {fixed}")),
+            vec![fixed.to_string()]
+        );
     }
 
     #[test]
