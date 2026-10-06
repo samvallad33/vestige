@@ -10,7 +10,7 @@ Linux or macOS, with `git`, `cargo`, and `python3`. Run setup once:
 bash demo/marcelo/setup.sh
 ```
 
-The last line is `ready`. The default folder is `$HOME/vestige-demo`. Set `DEMO_HOME` to use another one.
+The last line is `ready`. The default folder is `$HOME/vestige-demo`. Set `DEMO_HOME` to use another one. Leave `DEMO_HISTORY` unset for the test page of 20 commits. `DEMO_HISTORY=300` ingests 300 commits ending at the same parent; run setup with that variable set so the checkout holds them.
 
 Then, in this order:
 

@@ -32,6 +32,19 @@ FIX_SHA="b52d48973fe9ddb2e78b663ec48a1a68f7e7802d"
 FAILURE_SHA="351d602d86c484a39bc537f1eb99866ea2c25fc1"
 CAUSE_SHA="d2f58d92991fa08b24596fcc6c6472dc5015d3bc"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Unset keeps the test page: 20 commits, fetched with depth 40.
+# DEMO_HISTORY=n ingests n commits and fetches n+100 so that page has parents.
+FETCH_DEPTH=40
+if [[ -n "${DEMO_HISTORY:-}" ]]; then
+  case "$DEMO_HISTORY" in
+    [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;;
+    *) die "DEMO_HISTORY must be a positive integer" ;;
+  esac
+  if [[ "$DEMO_HISTORY" -gt 500 ]]; then
+    die "DEMO_HISTORY is above 500"
+  fi
+  FETCH_DEPTH=$((DEMO_HISTORY + 100))
+fi
 
 export HF_HOME="$DEMO_HOME/hf-cache"
 export HUGGINGFACE_HUB_CACHE="$DEMO_HOME/hf-cache/hub"
@@ -67,15 +80,23 @@ else
 fi
 [[ -x "$VESTIGE/target/debug/vestige" && -x "$VESTIGE/target/debug/vestige-mcp" ]] || die "binaries were not produced"
 
-if ! git -C "$UV" cat-file -e "${CAUSE_SHA}^{commit}" >/dev/null 2>&1; then
-  printf 'Fetching the uv checkout.\n'
+HAVE=0
+if [[ -d "$UV/.git" ]]; then
+  HAVE="$(git -C "$UV" rev-list --count "$FIX_SHA" 2>/dev/null || printf '0')"
+fi
+if ! git -C "$UV" cat-file -e "${CAUSE_SHA}^{commit}" >/dev/null 2>&1 || [[ "$HAVE" -lt "$FETCH_DEPTH" ]]; then
+  if [[ -n "${DEMO_HISTORY:-}" ]]; then
+    printf 'Fetching the uv checkout, depth %s.\n' "$FETCH_DEPTH"
+  else
+    printf 'Fetching the uv checkout.\n'
+  fi
   if [[ ! -d "$UV/.git" ]]; then
     git init "$UV"
   fi
   if ! git -C "$UV" remote get-url origin >/dev/null 2>&1; then
     git -C "$UV" remote add origin https://github.com/astral-sh/uv.git
   fi
-  git -C "$UV" fetch --depth=40 origin "$FIX_SHA"
+  git -C "$UV" fetch --depth="$FETCH_DEPTH" origin "$FIX_SHA"
   git -C "$UV" checkout --detach FETCH_HEAD
 fi
 git -C "$UV" cat-file -e "${FIX_SHA}^{commit}" >/dev/null 2>&1 || die "uv is missing the named revision"

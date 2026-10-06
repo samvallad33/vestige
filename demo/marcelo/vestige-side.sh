@@ -53,8 +53,26 @@ export DEMO_SCOPE="uv-10186"
 export DEMO_FIX_SHA="b52d48973fe9ddb2e78b663ec48a1a68f7e7802d"
 export DEMO_FAILURE_SHA="351d602d86c484a39bc537f1eb99866ea2c25fc1"
 export DEMO_CAUSE_SHA="d2f58d92991fa08b24596fcc6c6472dc5015d3bc"
-export DEMO_LIMIT="20"
 export DEMO_SYMPTOM='failure: uv publish raises `error decoding response body` on 0.5.12. 0.5.11 works. CI https://github.com/andrew000/FTL-Extract/actions/runs/12509313775/job/34898612613#step:8:12'
+# Unset keeps the test page of 20. DEMO_HISTORY=n reads n commits, still ending at the parent.
+if [[ -n "${DEMO_HISTORY:-}" ]]; then
+  case "$DEMO_HISTORY" in
+    [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;;
+    *) die "DEMO_HISTORY must be a positive integer" ;;
+  esac
+  if [[ "$DEMO_HISTORY" -gt 500 ]]; then
+    die "DEMO_HISTORY is above 500"
+  fi
+  export DEMO_LIMIT="$DEMO_HISTORY"
+  export DEMO_ROUNDS=40
+else
+  export DEMO_LIMIT="20"
+  export DEMO_ROUNDS=8
+fi
+HAVE="$(git -C "$UV" rev-list --count "$DEMO_FIX_SHA")"
+if [[ "$HAVE" -lt $((DEMO_LIMIT + 1)) ]]; then
+  die "the uv checkout does not hold this much history. Run setup.sh with the same DEMO_HISTORY."
+fi
 
 DEMO_REV="$(git -C "$UV" rev-parse "${DEMO_FIX_SHA}^")"
 export DEMO_REV
@@ -90,6 +108,7 @@ FIX_SHA = os.environ["DEMO_FIX_SHA"]
 FAILURE_SHA = os.environ["DEMO_FAILURE_SHA"]
 CAUSE_SHA = os.environ["DEMO_CAUSE_SHA"]
 LIMIT = int(os.environ["DEMO_LIMIT"])
+ROUNDS = int(os.environ["DEMO_ROUNDS"])
 SYMPTOM = os.environ["DEMO_SYMPTOM"]
 RUN_ID = SYMPTOM.split("CI ", 1)[1]
 ALLOWED = ("closed_by", "derived_from", "evidence_of", "touched", "corrects")
@@ -259,7 +278,7 @@ try:
     finished = False
     seen = None
     created_total = 0
-    for round_no in range(1, 9):
+    for round_no in range(1, ROUNDS + 1):
         out = server.tool(
             "codebase",
             {

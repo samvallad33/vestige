@@ -14,6 +14,23 @@ DEMO_HOME="$(cd "$DEMO_HOME" && pwd)"
 [[ -f "$DEMO_HOME/ingested-commits.txt" ]] || die "run demo/marcelo/vestige-side.sh first"
 [[ -x "$DEMO_HOME/rag-venv/bin/python" ]] || die "run demo/marcelo/setup.sh first"
 
+# The corpus is the commit list the Vestige side wrote. DEMO_HISTORY only
+# checks that this checkout holds that much history.
+if [[ -n "${DEMO_HISTORY:-}" ]]; then
+  case "$DEMO_HISTORY" in
+    [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;;
+    *) die "DEMO_HISTORY must be a positive integer" ;;
+  esac
+  if [[ "$DEMO_HISTORY" -gt 500 ]]; then
+    die "DEMO_HISTORY is above 500"
+  fi
+  FIX_SHA="b52d48973fe9ddb2e78b663ec48a1a68f7e7802d"
+  HAVE="$(git -C "$DEMO_HOME/uv" rev-list --count "$FIX_SHA")"
+  if [[ "$HAVE" -lt $((DEMO_HISTORY + 1)) ]]; then
+    die "the uv checkout does not hold this much history. Run setup.sh with the same DEMO_HISTORY."
+  fi
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 export HF_HUB_OFFLINE=1
