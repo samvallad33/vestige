@@ -1,6 +1,6 @@
 # Evidence-aware intentions
 
-> Written for Vestige 4.1.1. Intentions, graph journals and snapshots are stored in the Strata log.
+> Written for Vestige 4.2.0. Intentions, graph journals and snapshots are stored in the Strata log.
 
 Vestige intentions connect a future plan to the premises and observations that
 support it. The first implementation is a deterministic, local evaluator: it

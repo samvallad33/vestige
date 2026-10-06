@@ -1,6 +1,6 @@
 # Cognitive Sandwich
 
-> Written for Vestige 4.1.1. The Sandwich is an optional set of Claude Code hook files that predates 4.0. Most of its layers call v3 tools and endpoints that a Strata log does not serve. Read [What works on 4.x](#what-works-on-4x) before you enable a layer.
+> Written for Vestige 4.2.0. The Sandwich is an optional set of Claude Code hook files that predates 4.0. Most of its layers call v3 tools and endpoints that a Strata log does not serve. Read [What works on 4.x](#what-works-on-4x) before you enable a layer.
 
 **An optional defense-in-depth hook set for Claude Code.**
 

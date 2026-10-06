@@ -1,6 +1,6 @@
 # Android (Termux) Installation
 
-> Written for Vestige 4.1.1. Build from source: there is no Android release archive and no Android npm package. CI builds this target but nothing in CI runs it on a phone. Progress is on issue #145.
+> Written for Vestige 4.2.0. Build from source: there is no Android release archive and no Android npm package. CI builds this target but nothing in CI runs it on a phone. Progress is on issue #145.
 
 Vestige can run on Android inside [Termux](https://termux.dev). The 4.x engine has no embedding model, no ONNX Runtime and no vector index on any platform, so the only thing a Termux build leaves out is git history for the `codebase` tool.
 

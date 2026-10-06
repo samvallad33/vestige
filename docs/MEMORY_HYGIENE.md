@@ -1,6 +1,6 @@
 # Hygiene and tag maintenance
 
-> Written for Vestige 4.1.1.
+> Written for Vestige 4.2.0.
 
 Vestige finds a record by an exact handle: its id, a unique id prefix of 8 or more characters, or an exact tag. So hygiene comes down to three habits: spell tags the same way every time, give time-bound facts a validity window, and look at the counts now and then. Ordinary operations default to the `user` scope. Cross-scope maintenance is always explicit.
 

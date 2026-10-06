@@ -25,7 +25,7 @@ Left alone, agents re-learn the same lessons. They recommend a change you alread
 [![Binary](https://img.shields.io/badge/platforms-5_release_targets-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
-[How it fits](#how-it-fits-together) · [What's new](#whats-new-in-411) · [Install](#install) · [The gate](#operator-lite) · [Recall by handle](#recall-by-handle-not-resemblance) · [GhostLink](#ghostlink-the-negative-space) · [The science](#the-science) · [System calls](#the-tools) · [Upgrading from v3](#upgrading-from-v3) · [Docs](#go-deeper)
+[How it fits](#how-it-fits-together) · [What's new](#whats-new-in-420) · [Install](#install) · [The gate](#operator-lite) · [Recall by handle](#recall-by-handle-not-resemblance) · [GhostLink](#ghostlink-the-negative-space) · [The science](#the-science) · [System calls](#the-tools) · [Upgrading from v3](#upgrading-from-v3) · [Docs](#go-deeper)
 
 <a id="how-it-fits-together"></a>
 ## How it fits together
@@ -38,7 +38,7 @@ Every layer is part of one system, and each does a job an agent cannot do for it
 | **Proof** | Receipts, typed edges, `receipt replay` | Every output names what justifies it. A link counts only if the log recorded it: a typed edge, a woven outcome, or a receipt |
 | **Admission** | The gate on every write | A write is proposed, checked and admitted as an effect, and returns a receipt you can replay |
 | **Addressing** | Exact handles: an id, a unique prefix, or an exact tag | An agent finds what it saved by name, not by lookalike wording |
-| **Debugger** | `causal_walk`, `forgotten_lesson`, `selftest` | Walks a failure backward along recorded links to the decision behind it |
+| **Debugger** | `causal_walk`, `forgotten_lesson`, `selftest`, `vestige prove` | Walks a failure backward along recorded links to the decision behind it, and proves a lead with your own test |
 | **Lifecycle** | FSRS scheduling, `dream`, `suppress` | Records strengthen with use and fade without it. Dreaming replays recorded edges. Suppress takes a record out of every read |
 | **Discovery** | GhostLink | Finds pairs of records nobody has combined, each with its proof |
 | **Commitments** | `intention` and `session_start` | Deadlines and triggers surface when a session opens |
@@ -47,36 +47,25 @@ Every layer is part of one system, and each does a job an agent cannot do for it
 | **Shell** | `vestige dashboard` | See the store, its timeline and its receipts in a browser on `127.0.0.1` |
 | **Snapshots** | `vestige backup`, `maintain` `export` | Owner-only copies, taken while your agents are running |
 
-<a id="whats-new-in-411"></a>
-## What's new in 4.1.1
+<a id="whats-new-in-420"></a>
+## What's new in 4.2.0
 
-4.1.1 makes the system more trustworthy at every layer. The debugger's walk now points the right way, a cause can be declared when it is saved, your git history becomes part of the system, and a call that cannot do something says so instead of returning zeros. Full list in the [changelog](CHANGELOG.md).
+4.2.0 is the proof engine with its full machinery. Every write carries its proof, every link is an exact identity, the walk ranks what it reaches and names what it held back, and `vestige prove` turns a lead into a tested verdict. No store migration: a 4.1.x log opens unchanged. Full list in the [changelog](CHANGELOG.md).
 
-**Fixed: walks now go toward the cause.** A link written as `new derived_from existing` is stored in that direction, and GhostLink weaves write it too. `causal_walk` and `forgotten_lesson` followed it the wrong way, so from a symptom they returned the memories *derived from it* as its causes and never reached what the symptom itself derives from. They now go from a memory to what it derives from, to the records that are `evidence_of` it, that it closed, or that touched it. If you wove pairs on 4.1.0, walks across those edges now answer differently.
+**New: `vestige prove`. The walk proposes, the test decides.** A causal walk returns leads; a lead is not a cause. `prove` runs your own test on them and prints a tested answer: the protocol is frozen before any run (the test's sha256, the two ends, the leads in order), the leads are bisected closest links first, stock `git bisect run` confirms over the whole range, the smallest set of the commit's changes that still fails is found and the rest is shown to pass, an undo on the bad ref is tested, and `--flaky` handles a bug that fails only some of the time. Every run is saved as a memory and chained by sha256; the verdict card (LEAD, BOUNDARY, CONFIRMED, ISOLATED, REVERSED, REPEATED) cites the runs behind each rung, and `vestige prove --check report.json` re-verifies a report offline with no store and no re-run. Your checkout is never touched: tests run in a temporary worktree.
 
-**New: declare the cause when you save.**
-- `smart_ingest` takes typed `links` to existing memories: `derived_from`, `evidence_of` or `closes`. Each link is a recorded edge with its own receipt, checked before anything is written, and one bad link refuses the whole save. Those edges are what `causal_walk` follows and what GhostLink's bridge lens walks.
-- `ghostlink` `weave` can carry up to 8 `evidence` findings from outside (URL, sha256 of what was fetched, time), tagged `evidence:<sha256>`. Vestige never fetches the URL, and the release binary stays offline.
+```bash
+vestige prove --logged-write mem-0000000000000dd5 --repo ~/src/winston \
+  --good 1.0.0 --bad 2.1.1 --test './repro.sh' --reported-at 2016-02-04T00:00:00Z \
+  --report winston-800.json --flaky
+vestige prove --check winston-800.json
+```
 
-**New: your git history becomes part of the system.** `codebase` action `ingest_repo` turns each non-merge commit of a local checkout into a change record in its own scope, anchored to every symbol and file it touched. `verify` then re-checks those records against your working tree, so you see which past changes the code has since drifted from. It previews first, skips anything the secret gate refuses, and re-running skips commits already recorded.
+**New: every write carries its proof.** A `smart_ingest` create answers with its receipt, the canonical hash of its content, the typed entities it names (commit shas, paths, issue references, URLs) with byte offsets, and an importance score recomputable from the bytes. A repeat of the same text reinforces the original with an echo instead of making a twin; `intent_id` makes a write idempotent; `supersedes` records an update with a paper trail.
 
-**Better walks.**
-- `causal_walk` takes `node_id` on every start point (failing test, stack frame, CI run, version range). Several start points walk together, and `start_points` reports what happened to each one with a reason. The CLI gains `--node-id`.
-- An empty walk says why: how many causal edges arrive from another scope, and how many incoming edges are not causal, by link type.
-- `codebase` `get_context` lists every scope that holds a codebase's memories. `verify` says exactly what `limit` left unchecked. `session_start` names the scopes that hold code memories when the requested one has none.
+**Changed: links are exact identities, and the walk ranks them.** `vestige connect` and the auto-connect at ingest join memories only on the same exact tag, path, sha, issue reference or URL, never on a shared word, and all of one save's edges land as one receipted write. `causal_walk` follows at most one such edge per path, orders its candidates by depth, shared identities and rarity, and lists the memories it held behind unfollowed edges so `prove` can test them too.
 
-**Honest responses.**
-- A capability this build lacks says so. `maintain` `consolidate`, a no-op on Strata, is refused with `unavailable_in_4_0` instead of an all-zero "completed pass". The dashboard's Consolidate button answers the same. `dedup scan` and `dream` report `unavailable` with a reason.
-- A successful `smart_ingest` no longer carries fields that read as a failure. A demote explains its own numbers: the memory is not deleted, and it fades faster.
-
-**Security.**
-- The credential gate now blocks Anthropic, OpenAI and Stripe live keys (`sk-ant-`, `sk-proj-`, `sk_live_` and the rest), in every stored field. `vestige scan-secrets` reports any already in the log. Stripe test keys are left alone.
-- A hostile checkout's own git config can no longer make `ingest_repo` run a program.
-- The credential scanner no longer aborts a save that ends within a few bytes of a key prefix such as `ghp_` or `AKIA`.
-
-**Releases.** Binaries are built only for `vX.Y.Z` tags, and a check after every release fails the run if `releases/latest` could not serve the install URL below.
-
-**Came with 4.1.0.** [GhostLink](#ghostlink-the-negative-space) proposes pairs of memories nobody has combined yet, each with its proof. The dashboard API now checks who is calling: before, any web page open in your browser could POST to it while it ran. A full disk is an error to the caller instead of a process abort, and a crashed owner can no longer block the store.
+**Deterministic only.** Intention triggers fire on exact handles, importance is scored from recorded structure, and free-text recall never looks for a tag inside the text.
 
 <a id="install"></a>
 ## Install
@@ -103,7 +92,7 @@ Use the archive for your machine:
 Check it:
 
 ```bash
-vestige-mcp --version    # vestige-mcp 4.1.1
+vestige-mcp --version    # vestige-mcp 4.2.0
 ```
 
 If the shell says command not found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (or `~/.bashrc`) and open a new terminal. If it prints an older version, an older install comes first on your PATH; `which -a vestige-mcp` lists them. A running Vestige server keeps its old build until its app restarts, so restart every agent after an upgrade.
@@ -114,7 +103,7 @@ On a Mac, download with `curl` as above rather than a browser: a browser quarant
 
 **Homebrew** (macOS and Linux): `brew install samvallad33/tap/vestige`.
 
-Every archive has a `.sha256` file beside it on the release page. **npm** also works: `npm install -g vestige-mcp-server` (4.1.1 is published). Its installer downloads the same release archive for your platform and checks the `.sha256` before installing.
+Every archive has a `.sha256` file beside it on the release page. **npm** also works: `npm install -g vestige-mcp-server` (4.2.0 is published), or run it without installing: `npx -y vestige-mcp-server`. Its installer downloads the same release archive for your platform and checks the `.sha256` before installing.
 
 **Connect your agents.** The MCP command is `vestige-mcp`:
 
@@ -234,7 +223,7 @@ Vestige is built on memory research, and says plainly where it is inspired by it
 
 | Tool | Purpose |
 |---|---|
-| `causal_walk` | Walk a failure backward from explicit start points over recorded edges |
+| `causal_walk` | Walk a failure backward from explicit start points over recorded edges; candidates ranked by depth, shared identities and rarity, with the edges it held back listed |
 | `codebase` | Remember a pattern or decision with code anchors, fetch context marked current or stale, `verify` anchors against source, `reanchor`, and `ingest_repo` (commits as anchored change records) |
 | `dedup` | `scan` for duplicates, `undo` a recorded operation, `tag_rename` and `tag_merge` with a preview, `policy` |
 | `forgotten_lesson` | Faded fix or lesson memories behind a failure, over recorded edges |
@@ -248,7 +237,7 @@ Vestige is built on memory research, and says plainly where it is inspired by it
 | `receipt` | `get` a receipt, or `replay` it against the log |
 | `selftest` | Plant a known cause in a throwaway copy and check the walk finds it |
 | `session_start` | Status, open intentions, backup and dream needs, and codebase context under one budget. It writes nothing |
-| `smart_ingest` | Store one memory, or up to 20 with `items`. `links` declares typed edges to existing memories. Secrets are refused unless you say otherwise |
+| `smart_ingest` | Store one memory, or up to 20 with `items`, each answered with its receipt, canonical hash, entities and importance. A repeat reinforces, `intent_id` replays, `links` declares typed edges. Secrets are refused unless you say otherwise |
 | `suppress` | Take a memory out of every read. The log keeps its bytes, and on Strata it cannot be undone |
 
 **Withheld since 4.0.** `purge`, `memory` action `purge` or `delete`, and `delete_knowledge` return `unavailable_in_4_0`. On an append-only signed log a purge could hide a memory but not erase its bytes, and a tool called purge must not pretend otherwise. Real erasure is planned as crypto-erasure ([#402](https://github.com/samvallad33/vestige/issues/402)).

@@ -1,6 +1,6 @@
 # GhostLink compositions
 
-> Written for Vestige 4.1.1. ComposedGraph was the v3 name for the composition ledger. In 4.x the `ghostlink` tool replaces it. `composed_graph` and `graph` are still dispatched as hidden aliases.
+> Written for Vestige 4.2.0. ComposedGraph was the v3 name for the composition ledger. In 4.x the `ghostlink` tool replaces it. `composed_graph` and `graph` are still dispatched as hidden aliases.
 
 `ghostlink` finds pairs of records that no one has composed yet, and it records what came of the ones you test. Every pair carries its proof, built only from what the log recorded: ids, exact tags and types, typed edges, woven outcomes and FSRS state. Nothing is admitted, ranked, paired or explained by text, embeddings or keyword overlap. The `proof` object of each candidate lists what the lens never uses.
 

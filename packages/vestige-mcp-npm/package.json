@@ -1,6 +1,6 @@
 {
   "name": "vestige-mcp-server",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "mcpName": "io.github.samvallad33/vestige",
   "description": "Vestige: the Causal Proof Engine and operating system for AI agents. A signed log, zero vectors, and every answer carries its proof.",
   "bin": {

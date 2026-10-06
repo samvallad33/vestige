@@ -1,6 +1,6 @@
 {
   "name": "vestige-strata",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "description": "Strata for OpenClaw: the Causal Proof Engine's signed append-only log. Every write is gated and returns a replayable receipt; exact-handle recall and causal root-cause walks carry their proof. Local-first.",
   "type": "module",
   "license": "MIT",
@@ -22,7 +22,9 @@
     "typebox": "^1.0.0"
   },
   "openclaw": {
-    "extensions": ["./index.js"],
+    "extensions": [
+      "./index.js"
+    ],
     "compat": {
       "pluginApi": ">=2026.1.0"
     },

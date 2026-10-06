@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "vestige",
   "display_name": "Vestige",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "description": "The Causal Proof Engine and operating system for AI agents. Strata, a signed append-only log, is the kernel. Zero vectors, zero RAG: a failure is traced back to its cause along recorded links, and every answer carries its proof. Runs on your machine.",
   "author": {
     "name": "Sam Valladares",

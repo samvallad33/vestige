@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> Environment variables, CLI commands, and setup options for Vestige 4.1.1
+> Environment variables, CLI commands, and setup options for Vestige 4.2.0
 
 ---
 
@@ -213,6 +213,10 @@ vestige ingest "<text>" --tags a,b    # Save a record through the gate (--node-t
 vestige recall --handle <handle>      # Find by id, unique prefix, or exact tag
 vestige compose --lens bridge         # GhostLink propose (or --lens divergent)
 vestige causal-walk --logged-write <id>   # Walk back over recorded edges (or --node-id)
+vestige connect --dry-run             # Join memories that record the same exact identity (touched edges)
+vestige prove --logged-write <id> --repo <dir> --good <ref> --bad <ref> --test '<cmd>' --reported-at <rfc3339> --report out.json
+                                      # Run your test on the walk's leads: frozen protocol, bisect, why, verdict card
+vestige prove --check out.json        # Re-verify a report offline
 vestige forgotten-lesson <failure-id> # Faded fix or lesson records behind a failure
 vestige selftest                      # Planted-cause check on a throwaway copy
 vestige project --out CLAUDE.md       # Preview the projected fence; --write applies it

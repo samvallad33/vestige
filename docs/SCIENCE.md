@@ -211,7 +211,8 @@ by resemblance. The code still exists behind the `legacy-sqlite` and `v3-engine`
 for the harnesses that test it, and none of it runs on a Strata log:
 
 - **Prediction-error gating** (create, merge or reinforce by similarity thresholds):
-  needs embeddings. A 4.x save never merges, and `smart_ingest` reports the gate as unavailable.
+  needs embeddings. A 4.x save never merges; the only reinforcement is an exact repeat of
+  the same text, found by its canonical hash, never by resemblance.
 - **Spreading activation** (Collins & Loftus, 1975) over embedding similarity: needs
   embeddings. 4.x follows only recorded edges.
 - **Hybrid search with reciprocal rank fusion**, BM25 and FTS5 keyword search, the Nomic

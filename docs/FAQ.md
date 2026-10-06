@@ -171,8 +171,10 @@ labeled implemented, inspired by, or v3 only.
 <summary><b>"What happened to Prediction Error Gating?"</b></summary>
 
 It compared each new save to existing records by similarity and created, merged or
-reinforced. That needs embeddings, which 4.x does not ship. A 4.x save always creates a
-record, and the response says `"dedup": "unavailable in this build"`.
+reinforced. That needs embeddings, which 4.x does not ship. A 4.x save never merges. Since
+4.2.0 a save whose text already exists in the scope (after NFC, case and whitespace
+normalization) reinforces the original with a small echo record and answers
+`decision: "reinforce"`; different text is always a new record.
 
 What you have instead: `dedup` action `scan` lists **exact** duplicates (identical content
 hash or identical declared source), and `memory` action `edit` retires an old version in

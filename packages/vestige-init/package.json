@@ -1,6 +1,6 @@
 {
   "name": "@vestige/init",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "description": "Set up Vestige, the Causal Proof Engine and operating system for AI agents, in your MCP client",
   "bin": {
     "vestige-init": "bin/init.js"

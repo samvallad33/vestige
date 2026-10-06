@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes ship in the latest 4.x release (4.1.1 at the time of writing). Older releases are not patched. Upgrade to the newest 4.x release before you report a problem that may already be fixed.
+Security fixes ship in the latest 4.x release (4.2.0 at the time of writing). Older releases are not patched. Upgrade to the newest 4.x release before you report a problem that may already be fixed.
 
 ## Reporting a Vulnerability
 

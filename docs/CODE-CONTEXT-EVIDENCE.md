@@ -1,6 +1,6 @@
 # Code context evidence
 
-> Written for Vestige 4.1.1.
+> Written for Vestige 4.2.0.
 
 `codebase.get_context` and `session_start` share current-record selection and
 source-anchor evaluation. Startup retains each code record's ID, actionable

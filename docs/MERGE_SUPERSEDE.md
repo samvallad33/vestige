@@ -1,6 +1,6 @@
 # Duplicates, Supersession and Undo
 
-> Written for Vestige 4.1.1. v3 had a merge and supersede workflow scored by embedding similarity. A Strata log withholds it. This page says what `dedup` does now and why the rest is refused.
+> Written for Vestige 4.2.0. v3 had a merge and supersede workflow scored by embedding similarity. A Strata log withholds it. This page says what `dedup` does now and why the rest is refused.
 
 Records pile up: copies, near-copies and facts that are out of date. The fixes that go wrong are the ones that guess. A guess that merges two records destroys the audit trail, and a guess that deletes on a contradiction loses information. Vestige 4.x does not guess. It lists only records that are identical, it never merges, and every change it does make is a recorded write that you can undo.
 

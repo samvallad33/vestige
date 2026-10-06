@@ -1,14 +1,14 @@
 # Tool contracts
 
-> The 16 tools a Vestige 4.1.1 server advertises, what each action takes, returns and writes
+> The 16 tools a Vestige 4.2.0 server advertises, what each action takes, returns and writes
 
 Vestige advertises sixteen MCP tools, sorted by name. Most are action multiplexers:
 `memory`, `codebase`, `maintain` and `dedup` take an `action`, `memory_status` takes a
 `view`, and `ghostlink` takes a `mode`. An agent should choose the action its task needs.
 There is no requirement to call every tool in every session.
 
-Statements here come from the 4.1.1 code under `crates/` and from running the 4.1.1
-release binaries against a scratch store. Where an older doc and the code differ, the
+Statements here come from the 4.2.0 code under `crates/` and from running the 4.2.0
+binaries against a scratch store. Where an older doc and the code differ, the
 code wins.
 
 ## Discover the installed contract
@@ -94,18 +94,43 @@ Save one record (`content`) or up to 20 (`items`), never both. Fields: `node_typ
 text: `fact`, `concept`, `event`, `person`, `place`, `note`, `pattern`, `decision`),
 `tags`, `source`, `scope`, `validFrom`, `validUntil`, `links`, `allowSecrets`.
 
-- **Nothing is merged by similarity.** The same text twice is two records. The response
-  says `"dedup": "unavailable in this build"` and `predictionError` is always `1.0`
-  because no gate compares anything.
-- **`links` (4.1.1).** Up to 16 typed edges from the new record to existing records in
-  the same scope: `derived_from` (this record derives from it), `evidence_of` (this
-  record is evidence about it), `closes` (this record closes it, stored as `closed_by`).
-  Each link is written through the gate with its own receipt, and batch `items` carry
-  their own. Every link is checked before anything is written: the kind, that the target
-  is a live record, that it is in the same scope, and that no link repeats. One refused
-  link refuses the whole save. `supersedes` and `corrects` are not declarable because they
-  can retire a record. These edges are what `causal_walk` follows and what GhostLink's
+- **Every create carries its proof (4.2.0).** The response holds `receiptId` (the `eff-`
+  effect that wrote it), `canonicalHash` (blake3 of the content after NFC, lowercasing,
+  zero-width stripping and whitespace collapsing, pipeline `nfc-lower-zwstrip-wscollapse-v1`),
+  `entities` (typed spans with byte offsets, `CommitSha`, `Url`, `FilePath`, `IssueRef`,
+  `Email`, `Version`, from the pinned hand scanners; the first 8, dropped when empty) and
+  `importance` (`score` and `weightsVersion`, `linear-v1`; the factors are recomputable
+  from the submitted bytes). Nothing in the write path uses a model or similarity.
+- **Nothing is merged. A repeat reinforces.** A write whose canonical hash already exists
+  in the scope creates no twin and never touches the original: it records a small echo
+  node (`source: "duplicate"`) linked `evidence_of` the original and answers
+  `decision: "reinforce"` with `duplicateOf`, `echoNodeId` and the echo's own receipt.
+  Different text is always a new record (`decision: "create"`); no gate compares anything
+  by resemblance, and `predictionError` is always `1.0`.
+- **`intent_id` makes a write idempotent.** A write carrying `intent_id` (up to 128
+  characters of `A-Za-z0-9._:-`) is recorded once; sending it again, with the same or
+  different content, answers `decision: "replay"` with `replayOf` and the original
+  `intentDigest`, writes nothing, and reports `requestCanonicalHash` so a divergence is
+  visible. The intent index is a side file in the data directory; backups carry it.
+- **Auto-connect.** The new record is joined by `touched` edges to the records of its
+  scope that record the same exact identity (a tag, a file path, a commit sha, an issue
+  reference, a URL; never a word). All of one save's edges land as one write behind one
+  receipt. The response's `autoConnect` block lists the edges with the identity each is
+  joined on, `receiptId`, and `skipped`: every tag that did not join, its carriers out of
+  the scope and the reason (a hub tag more than half the scope carries, or more pairs than
+  the 100-edge budget of one write).
+- **`links`.** Up to 16 typed edges from the new record to existing records in the same
+  scope: `derived_from` (this record derives from it), `evidence_of` (this record is
+  evidence about it), `closes` (this record closes it, stored as `closed_by`) and, since
+  4.2.0, `supersedes` (this record fully replaces it; the old record stays intact and the
+  edge is the paper trail). Each link is written through the gate with its own receipt, and
+  batch `items` carry their own. Every link is checked before anything is written: the
+  kind, that the target is a live record, that it is in the same scope, and that no link
+  repeats. One refused link refuses the whole save. `corrects` is not declarable because
+  it can retire a record. These edges are what `causal_walk` follows and what GhostLink's
   bridge lens walks.
+- **Batches are content-ordered.** A batch of `items` processes them in canonical-hash
+  order, so the same batch produces the same ids whatever order the items arrive in.
 - **Validity.** `validFrom` and `validUntil` are exact RFC 3339 times, and `validUntil`
   must be after `validFrom`. Two defaults are applied when you pass none, and the
   response's `validity.source` names which one fired. A record of type `state` gets a
@@ -181,7 +206,9 @@ token budget (default 1000, counted as UTF-8 bytes divided by four). It writes n
 the mutations, and an attestation that recomputes the hash chain and the signed trailers
 before it attests. `replay` re-derives the state from the log and compares it to the
 receipt: `matched`, `mismatches`, `stateDigest`, `replayedDigest`. Replay is read-only
-and makes no claim about the world. `save_walk` is withheld.
+and makes no claim about the world. The receipt of one save's auto-connect edges
+(`autoConnect.receiptId`) lists every edge it wrote as an `edge_recorded` mutation, and
+`replay` re-derives them all. `save_walk` is withheld.
 
 ### `causal_walk`
 
@@ -204,6 +231,20 @@ Walk a failure backward from explicit start points.
   (`closed_by`), or that `touched` it. A record derived from the start is downstream and
   is never reported as a cause. This is the 4.1.1 fix. On 4.1.0 the walk followed
   `derived_from` the wrong way.
+- **One touched edge per path (4.2.0).** A `touched` edge records that two records name
+  the same exact thing, and that does not carry over a second step, so a path follows at
+  most one of them; `derived_from`, `evidence_of` and `closed_by` chain to the depth
+  bound. `not_followed` counts the touched edges the walk saw and did not follow, the
+  records behind them, and the identities their two ends share (hub tags left out), and
+  `not_followed.held` lists those records one per record: `memory`, the reached record
+  it hangs `from`, the `depth` it would have, the `shared` identities and the content.
+  They are not causes and are not ranked with them; a tool that tests hypotheses
+  (`vestige prove`) takes them as its farther tier.
+- **Order with proof (4.2.0).** Causes are ordered by depth, then by the distinct exact
+  identities a cause shares with its start (more first), then by the rarer identity
+  first (fewer carriers in the scope), then by id. Each cause carries `rank`, `joined_on`
+  (identity and carriers), `shared_count` and `not_counted_hub_tags`; `ranking` states
+  the order and `scope_size`. The order arranges hypotheses; it proves nothing.
 - **Bounds.** At most 8 hops and 500 nodes. Results are hypotheses, not proven causes.
 - **No start point** returns `needs_report` and names what is missing.
 - **An empty walk says why.** `emptyBecause` and `incomingEdges` count the causal edges
@@ -215,7 +256,10 @@ Walk a failure backward from explicit start points.
 - The camelCase spellings `startPoints`, `nodeId`, `loggedWrite`, `scanLimit` and
   `lookbackDays` are read like their snake_case names.
 
-CLI: `vestige causal-walk --logged-write <id>` or `--node-id <id>`. Writes nothing.
+CLI: `vestige causal-walk --logged-write <id>` or `--node-id <id>`. Writes nothing. The
+causes print as `#<n> <id> depth <d>` with the content on the next line, then the
+not-followed summary and the held records numbered on; `--json` prints the response.
+`vestige prove --logged-write <id> ...` runs the user's test on the leads (see README).
 
 ### `forgotten_lesson`
 

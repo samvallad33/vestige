@@ -7,13 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-06
+
+4.1.2 was prepared on 2026-10-05 and never tagged; its fixes ship here. No
+store migration: a 4.1.x log opens unchanged in 4.2.0. A 4.1.x build that opens
+a 4.2.0 log counts the batched auto-connect edge frames (`StoreOp::SaveEdges`)
+as orphan writes and does not see those edges until it is upgraded.
+
 ### Added
+
+- **`vestige prove`: the walk proposes, the test decides.** A causal walk
+  returns leads, and a lead is not a cause. `prove` runs the user's own test
+  on them: the walk from the failure memory in process; a time gate that
+  drops leads committed after the report or outside `good..bad`; a protocol
+  frozen before any test runs (the test's sha256, extra files named with
+  `--also-hash`, the two ends, the leads in order and the limits, hashed and
+  saved as a memory); the test must pass on `--good` and fail on `--bad`; a
+  bisect over the leads closest links first, widening to farther leads only
+  when the closer tier holds no boundary, under `--max-candidates`; stock
+  `git bisect run` over the whole range as confirmation, reusing every
+  recorded verdict, and a replay that counts the runs plain bisect needs;
+  why: the smallest set of the commit's changes that still fails on its
+  parent (ddmin), the rest of the commit without them (must pass) and an
+  undo on the bad ref (must pass, written as `undo.patch`); `--flaky` for a
+  bug that fails some of the time (Fisher exact baseline, Wald's sequential
+  test against the exact 97.5% lower bound of the bad end's rate, a fixed
+  strength step with Clopper-Pearson bounds, the REPEATED rung); `--timeout`
+  per run with the process group killed; git's own variables stripped from
+  every test run; recorded verdicts held against each other after the bisect,
+  a contradiction turning CONFIRMED to no. Every test run is appended to a
+  probe log where each entry carries the sha256 of the one before it and
+  saved as an `event` memory. The result is a verdict card, LEAD, BOUNDARY,
+  CONFIRMED, ISOLATED, REVERSED and REPEATED, each with whether it holds and
+  the runs that back it, and `vestige prove --check <report>` re-verifies a
+  report offline with no store and no re-run; a tampered copy fails. The
+  user's checkout, index, branches and bisect state are never touched. The
+  reports are byte-compatible with the `walk-verify.py` reference tool.
+
+- **`vestige connect`, and auto-connect at ingest.** `vestige connect` writes
+  `touched` edges between memories that record the same exact identity (a
+  tag, a file path, a commit sha, an issue reference, a URL) and names the
+  identity on every edge; `--dry-run`, `--min-shared` and `--max-edges`
+  bound it. `vestige ingest` and `smart_ingest` do the same for a new memory
+  against the ones already in its scope, and answer with an `autoConnect`
+  block: the edges written, the identity each is joined on, the one receipt
+  that covers them, and every tag skipped with its carriers and the reason.
+  Words never join: a prose word is not an identity.
 
 - Operator Lite: `operator-gate upgrade` prints what the paid Operator gate adds
   (owner laws, the Board, the Letter, the onboarding wizard), its price and where
   to buy it; `--open` opens the page. `status` and `verify` end with one line that
   points to it, printed only to a person at a terminal: never to an agent, a pipe
   or a script, and never inside a stop message. Verdicts are unchanged.
+
 - Operator Lite: `operator-gate replay` runs the Claude Code history on this
   machine through the gate's classifier. It prints a scoreboard, the most recent
   commands a built-in rule would have stopped (date, project, rule, reason and
@@ -26,20 +72,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window and the output. `install` runs it once at the end (`--no-replay` skips
   it); the terminal-only hint on `status` and `verify`, and `upgrade`, then show
   what the last replay drafted. It reads Claude Code transcripts only.
+
 - Operator Lite: `test_parser.py` and `test_replay.py`, and a CI job that runs
   them and the corpus on Linux and macOS.
+
 - Operator Lite: `status` is now the log. It shows the mode, whether the hook is
   registered, the last call checked, the counts for the last 7 days, and the most
   recent commands the gate stopped or, in shadow mode, would have stopped, each
   with its project, rule and reason. `status --rules` prints the rule table.
+
 - Operator Lite: `upgrade --install <archive>` unpacks the paid Operator archive
   a buyer downloaded into `~/vestige-operator` and starts its wizard. It prints
   the archive's SHA-256 first, refuses any entry outside `vestige-operator/`,
   and is an owner command: it needs an interactive terminal.
+
 - Operator Lite: `mode enforce|shadow|off`, an owner command, replaces writing
   into the mode file by hand. `install` places an `operator-gate` command on
   PATH when a user bin directory is already on it and never edits a shell init
   file; every hint the gate prints names a command that works when pasted.
+
 - Operator Lite 0.3.7 runs on Windows. It used to import a Unix-only module and
   could not start there. Paths are read in one spelling (Git Bash `/c/...`,
   `C:\...` and `C:/...` are the same place), comparisons ignore case, an 8.3
@@ -51,11 +102,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows CI runner. Not yet on Windows: the parser, replay and corpus test
   suites.
 
+### Changed
+
+- **`causal_walk` lists the memories it held behind unfollowed touched edges.**
+  `not_followed.held` names, one per memory, the memories one touched edge
+  beyond a reached memory, hung from the closest reached memory and ordered
+  the way the causes are, with the exact identities the two share; the CLI
+  prints them after the not-followed summary, numbered on from the causes,
+  in the same two parsed lines a cause uses. They are not causes and are not
+  ranked with them. `vestige prove` takes them as its farther tier, marks
+  them `held` in its report and card, and tests them only when no closer
+  tier holds the boundary.
+
+- Operator Lite: `install` on a machine where Claude Code has never run creates
+  `~/.claude/settings.json` and registers the hook. It printed manual steps before.
+
+- Vestige Operator is sold once: $149, with every later version included. The gate's
+  `upgrade` text, the replay report and the README carry the new price and link.
+
+- README: Operator Lite installs with one command. The four-line block it
+  replaces copied the file and never registered the hook, and its corpus line
+  could not work from a single downloaded file; `corpus` now says where the
+  corpus lives.
+
+- README: a section on Vestige Operator, the paid tier, with what it adds, the
+  price, how it is delivered and what it does not do. The GuardFall corpus count
+  in the README and the Operator Lite README now reads 46, the number of cases
+  the corpus holds.
+
+- Intention triggers are exact. A trigger fires on a clock, or when its stored
+  value equals a handle the check declares, byte for byte: an event or activity
+  key against `context.event` and `context.events`, a codebase against
+  `context.codebase`, a file path against `context.file`, a topic against
+  `context.topics`. An activity or context trigger used to fire on a
+  case-insensitive substring, and an event trigger ignored case. A trigger
+  written for that is still stored and still listed; it fires only on the
+  exact value, and `list` and `check` show that value in
+  `triggerMatching.firesOn`.
+
+- `intention set` stores the description as written and no longer parses it.
+  A description such as "in 30 minutes" or "when the build finishes" used to
+  become a trigger, and "urgent" a priority. Pass `trigger`, `deadline` and
+  `priority`. With no trigger and no deadline the response says the intention
+  will not fire on its own. No `intent:` tag is added, and `nlpParsed` is gone
+  from the response.
+
+- `maintain` `importance_score` takes `id` and scores a memory from its
+  recorded structure: `edges.total + reviews.count - reviews.lapses`, with
+  every input returned in `computedFrom`. Free-text `content`, which the v3
+  word heuristics scored, is refused with `unavailable_in_4_0`. The word
+  scorer is compiled out of the default build, so `smart_ingest` reports
+  `importanceScore` `0.0`.
+
+- `recall` with an empty `handle` and a sentence in `query` no longer looks up
+  each word of the sentence as a tag or an id. Only the whole string is tried.
+
+- Intentions that resurface in a retrieval call carry `match: "exact"` and no
+  `confidence`. `intention list` returns one order on every backend and names
+  it in `order`.
+
+- Tool descriptions, the server instructions and `--help` describe what a 4.x
+  store does: recall by exact handle, what is withheld on a Strata log, and the
+  data directory holding `log/`.
+
+- The README, the package descriptions and the documentation describe Vestige
+  as a causal proof engine. The default data directory on Linux and Windows is
+  stated as the code resolves it (#433).
+
+- **`causal_walk` follows at most one `touched` edge on a path.** A `touched` edge records that two memories name the same exact thing (it is what `vestige connect` and the ingest-time auto-connect write), and that is not transitive. Followed as a chain, those edges reached nearly every record of a commit window from any start. `derived_from`, `evidence_of` and `closed_by` still chain to the depth bound. The response counts what was not followed in `not_followed` (edges, memories behind them, and the exact identities their two ends share with each identity's carriers), and the CLI prints it under the candidates.
+
+- **`causal_walk` orders candidates with proof.** Depth first, then the distinct exact identities a candidate shares with its start (more first), then the rarer identities first, then id. Each cause carries `rank`, `joined_on` (identity and carriers), `shared_count` and `not_counted_hub_tags`; `ranking` states the order and the scope size. The CLI prints the identities under each candidate. The `#<n> <id> depth <d>` line and the content line after it are unchanged.
+
+- **Auto-connect: the flat cap of 14 carriers per tag is gone.** A tag joins unless it is a hub (more than half the scope carries it, past a group of 14) or it does not fit whole in the 100-edge budget of one write. Candidates are ranked before the budget cuts, so a tag on two memories is not crowded out by a path a hundred memories share. Every skipped tag is reported with its carriers, the scope size and the reason: `skipped tag X: carried by N of M (...)`, in `vestige ingest`, `vestige connect` and `smart_ingest` (`autoConnect.skipped`).
+
+- **Auto-connect joins an exact path, sha, issue reference or URL that appears only in the two texts at ingest.** Before, only a later `vestige connect` did.
+
+- **The auto-connect edges of one save are one write.** One gate decision, one effect and one synced data frame for all of them (`StoreOp::SaveEdges`, a new log op), instead of one of each per edge; they land together or not at all. `autoConnect.receiptId` (and `Auto-connect receipt:` in the CLI) names the one receipt, and `receipt get` / `receipt replay` on it list every edge. A build older than this one does not decode the new op: it counts the frame as an orphan write and does not see those edges until it is upgraded.
+
+- **`vestige connect` compares only memories that share an identity** instead of every pair of the scope, and no longer copies both texts into every candidate pair. Its output is unchanged.
+
+- **`smart_ingest` is a proof-carrying write path.** Every create answers
+  with `receiptId` (the `eff-` effect that wrote it), `canonicalHash`
+  (blake3 of the content after the `nfc-lower-zwstrip-wscollapse-v1`
+  pipeline: NFC, lowercased, zero-width characters stripped, whitespace
+  runs collapsed), `entities` (typed spans — `CommitSha`, `Url`,
+  `FilePath`, `IssueRef`, `Email`, `Version` — each with byte offsets into
+  the submitted content, extracted by the pinned hand scanners
+  `hand-scanners-v1`, no model in the write path), and `importance`
+  (`linear-v1`: six named factors computed from the submitted bytes alone;
+  the response carries `score` and `weightsVersion`; the factors are
+  recomputable from the submitted bytes with the published `linear-v1`
+  definitions).
+
+- **Duplicates reinforce, never merge.** A write whose canonical hash
+  already exists in the scope creates no twin and never touches the
+  original: it records a small echo node (`source: "duplicate"`) linked
+  `evidence_of` the original and answers `decision: "reinforce"` with
+  `duplicateOf`, `echoNodeId`, `pipeline` and the echo's own receipt. NFC,
+  case and whitespace variants of the same text reinforce to the same
+  node; echo nodes are never dedup targets. Reinforcement count is a fold
+  over the log: one node, N receipts, zero mutations.
+
+- **`intent_id` makes writes idempotent.** A write carrying `intent_id`
+  is recorded once; resending it — with the same or different content —
+  answers `decision: "replay"` with `replayOf` and the original
+  `intentDigest`, writes nothing at all, and shows any divergence instead
+  of hiding it (`requestCanonicalHash` of the new submission rides
+  along). The intent index is a side file, first write wins, and it is
+  copied by backups.
+
+- **`supersedes` is caller-declarable.** `links: [{kind: "supersedes",
+  to: <old>}]` records `new -[supersedes]-> old`: update with a paper
+  trail on an append-only log — the old memory stays intact forever and
+  the current view is the fold over the chain. `corrects` stays
+  review-gated. This supersedes the 4.1.1 note that kept `supersedes`
+  out of the declarable kinds.
+
+- **Batch writes are content-ordered.** A batch processes its items
+  sorted by `(canonicalHash, original index)` and answers in the caller's
+  order, so the same batch produces byte-identical receipts and node ids
+  regardless of arrival order; identical items inside one batch create
+  once and reinforce once; the summary carries `replayed` and
+  `reinforced` beside `created`.
+
 ### Fixed
+
+- **`npx -y vestige-mcp-server` starts the server.** The npm package declared
+  four bins and none was named after the package, so npx could not pick one
+  and printed "could not determine executable to run"; the package now has a
+  `vestige-mcp-server` bin, and its keywords carry the terms people search
+  for (memory, agent-memory, long-term-memory, persistent-memory, llm-memory).
+
+- **Backups carry the intent index.** The side file that makes `intent_id`
+  writes idempotent is staged with the log and published into the backup
+  destination whether or not it already existed; a restored backup no longer
+  re-admits an already-intented write.
+
+- **`vestige prove` restores its worktree before `git bisect start`.** A test
+  that rewrites a tracked file (a lockfile, a generated source) no longer
+  stops the bisect with "Your local changes ... would be overwritten".
 
 - Operator Lite: a call no rule matched was recorded as `SHADOW_STOP` with no
   rule; it is now recorded as `PASS`. `ALLOW` still means the owner's permit. The text of rule OP-006 and three hints named
   things that exist only on the author's machine; they are reworded.
+
 - Operator Lite 0.3.6, the parser:
   - A command written after a leading redirection (`>log rm -rf x`,
     `2>/dev/null rm -rf x`) was not seen as that command. It is now.
@@ -77,54 +267,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - OP-S05 no longer records an inline write whose target cannot be resolved.
     An unresolved inline delete is still recorded, and either one fails closed
     when the code names a gate path.
+
 - `codebase` `get_context` and `verify` write their anchor verdicts to the log
   in the order the memories were asked for. The order came from a hash map and
   changed from run to run.
-
-### Changed
-
-- Operator Lite: `install` on a machine where Claude Code has never run creates
-  `~/.claude/settings.json` and registers the hook. It printed manual steps before.
-- Vestige Operator is sold once: $149, with every later version included. The gate's
-  `upgrade` text, the replay report and the README carry the new price and link.
-- README: Operator Lite installs with one command. The four-line block it
-  replaces copied the file and never registered the hook, and its corpus line
-  could not work from a single downloaded file; `corpus` now says where the
-  corpus lives.
-- README: a section on Vestige Operator, the paid tier, with what it adds, the
-  price, how it is delivered and what it does not do. The GuardFall corpus count
-  in the README and the Operator Lite README now reads 46, the number of cases
-  the corpus holds.
-- Intention triggers are exact. A trigger fires on a clock, or when its stored
-  value equals a handle the check declares, byte for byte: an event or activity
-  key against `context.event` and `context.events`, a codebase against
-  `context.codebase`, a file path against `context.file`, a topic against
-  `context.topics`. An activity or context trigger used to fire on a
-  case-insensitive substring, and an event trigger ignored case. A trigger
-  written for that is still stored and still listed; it fires only on the
-  exact value, and `list` and `check` show that value in
-  `triggerMatching.firesOn`.
-- `intention set` stores the description as written and no longer parses it.
-  A description such as "in 30 minutes" or "when the build finishes" used to
-  become a trigger, and "urgent" a priority. Pass `trigger`, `deadline` and
-  `priority`. With no trigger and no deadline the response says the intention
-  will not fire on its own. No `intent:` tag is added, and `nlpParsed` is gone
-  from the response.
-- `maintain` `importance_score` takes `id` and scores a memory from its
-  recorded structure: `edges.total + reviews.count - reviews.lapses`, with
-  every input returned in `computedFrom`. Free-text `content`, which the v3
-  word heuristics scored, is refused with `unavailable_in_4_0`. The word
-  scorer is compiled out of the default build, so `smart_ingest` reports
-  `importanceScore` `0.0`.
-- `recall` with an empty `handle` and a sentence in `query` no longer looks up
-  each word of the sentence as a tag or an id. Only the whole string is tried.
-- Intentions that resurface in a retrieval call carry `match: "exact"` and no
-  `confidence`. `intention list` returns one order on every backend and names
-  it in `order`.
-
-## [4.1.2] - 2026-10-05
-
-### Fixed
 
 - The HTTP `auth_token` file follows the data directory. With `--data-dir` or
   `VESTIGE_DATA_DIR` the token was still read from and written to the platform
@@ -133,87 +279,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default location already holds, so clients set up on an earlier version keep
   working. The directory's permissions are changed only when Vestige creates
   it. Reported by eryngion in #434 and fixed by helenanova in #442.
+
 - `recall` resolves an exact memory id or tag passed as `query`. Before, a
   handle was only read from the `handle` parameter and the same value under
   `query` was refused as a similarity search.
+
 - `vestige restore` exits non-zero when any memory in the file fails to
   restore, and `vestige selftest` exits non-zero when a check fails. Both
   printed the failure and exited 0.
+
 - `project` refuses a relative `path` when no `root` is given. One server can
   serve several agents in different projects, and a relative path was resolved
   against the server's own working directory.
+
 - A hidden file ending in `.seg` in the log directory, such as the `._` sidecar
   a copy through exFAT or a network share leaves behind, is ignored. It made
   the store refuse to open with a message that read like corruption.
+
 - `vestige export` followed by `vestige restore` keeps each memory in its
   scope. The export wrote no scope and the restore put every memory into
   `user`. Each exported memory now carries a `scope` field beside its other
   fields, in both JSON and JSONL, and restore ingests it into that scope. A
   file from an earlier version has no `scope` and restores into `user` as
   before. A memory whose scope is not a valid name fails on its own line.
+
 - A backup that runs out of disk space no longer stops the live store from
   writing. When the segment was sealed but the next one could not be created,
   every later write failed until the server was restarted. The seal is now
   undone, the backup returns the error, and writes go on once there is room.
+
 - A backup is copied under a temporary name, synced to disk and only then
   moved to its destination. Before, files were copied straight into the
   destination without a sync, so a copy that failed halfway left a directory
   that looked like a backup, and a power loss just after "Backup complete"
   could leave short or empty segments.
 
-### Changed
+### Removed
 
-- Tool descriptions, the server instructions and `--help` describe what a 4.x
-  store does: recall by exact handle, what is withheld on a Strata log, and the
-  data directory holding `log/`.
-- The README, the package descriptions and the documentation describe Vestige
-  as a causal proof engine. The default data directory on Linux and Windows is
-  stated as the code resolves it (#433).
-### Changed
-
-- **`causal_walk` follows at most one `touched` edge on a path.** A `touched` edge records that two memories name the same exact thing (it is what `vestige connect` and the ingest-time auto-connect write), and that is not transitive. Followed as a chain, those edges reached nearly every record of a commit window from any start. `derived_from`, `evidence_of` and `closed_by` still chain to the depth bound. The response counts what was not followed in `not_followed` (edges, memories behind them, and the exact identities their two ends share with each identity's carriers), and the CLI prints it under the candidates.
-- **`causal_walk` orders candidates with proof.** Depth first, then the distinct exact identities a candidate shares with its start (more first), then the rarer identities first, then id. Each cause carries `rank`, `joined_on` (identity and carriers), `shared_count` and `not_counted_hub_tags`; `ranking` states the order and the scope size. The CLI prints the identities under each candidate. The `#<n> <id> depth <d>` line and the content line after it are unchanged.
-- **Auto-connect: the flat cap of 14 carriers per tag is gone.** A tag joins unless it is a hub (more than half the scope carries it, past a group of 14) or it does not fit whole in the 100-edge budget of one write. Candidates are ranked before the budget cuts, so a tag on two memories is not crowded out by a path a hundred memories share. Every skipped tag is reported with its carriers, the scope size and the reason: `skipped tag X: carried by N of M (...)`, in `vestige ingest`, `vestige connect` and `smart_ingest` (`autoConnect.skipped`).
-- **Auto-connect joins an exact path, sha, issue reference or URL that appears only in the two texts at ingest.** Before, only a later `vestige connect` did.
-- **The auto-connect edges of one save are one write.** One gate decision, one effect and one synced data frame for all of them (`StoreOp::SaveEdges`, a new log op), instead of one of each per edge; they land together or not at all. `autoConnect.receiptId` (and `Auto-connect receipt:` in the CLI) names the one receipt, and `receipt get` / `receipt replay` on it list every edge. A build older than this one does not decode the new op: it counts the frame as an orphan write and does not see those edges until it is upgraded.
-- **`vestige connect` compares only memories that share an identity** instead of every pair of the scope, and no longer copies both texts into every candidate pair. Its output is unchanged.
-- **`smart_ingest` is a proof-carrying write path.** Every create answers
-  with `receiptId` (the `eff-` effect that wrote it), `canonicalHash`
-  (blake3 of the content after the `nfc-lower-zwstrip-wscollapse-v1`
-  pipeline: NFC, lowercased, zero-width characters stripped, whitespace
-  runs collapsed), `entities` (typed spans — `CommitSha`, `Url`,
-  `FilePath`, `IssueRef`, `Email`, `Version` — each with byte offsets into
-  the submitted content, extracted by the pinned hand scanners
-  `hand-scanners-v1`, no model in the write path), and `importance`
-  (`linear-v1`: six named factors computed from the submitted bytes alone;
-  `score` is bit-for-bit recomputable from the published factors).
-- **Duplicates reinforce, never merge.** A write whose canonical hash
-  already exists in the scope creates no twin and never touches the
-  original: it records a small echo node (`source: "duplicate"`) linked
-  `evidence_of` the original and answers `decision: "reinforce"` with
-  `duplicateOf`, `echoNodeId`, `pipeline` and the echo's own receipt. NFC,
-  case and whitespace variants of the same text reinforce to the same
-  node; echo nodes are never dedup targets. Reinforcement count is a fold
-  over the log: one node, N receipts, zero mutations.
-- **`intent_id` makes writes idempotent.** A write carrying `intent_id`
-  is recorded once; resending it — with the same or different content —
-  answers `decision: "replay"` with `replayOf` and the original
-  `intentDigest`, writes nothing at all, and shows any divergence instead
-  of hiding it (`requestCanonicalHash` of the new submission rides
-  along). The intent index is a side file, first write wins, and it is
-  copied by backups.
-- **`supersedes` is caller-declarable.** `links: [{kind: "supersedes",
-  to: <old>}]` records `new -[supersedes]-> old`: update with a paper
-  trail on an append-only log — the old memory stays intact forever and
-  the current view is the fold over the chain. `corrects` stays
-  review-gated. This supersedes the 4.1.1 note that kept `supersedes`
-  out of the declarable kinds.
-- **Batch writes are content-ordered.** A batch processes its items
-  sorted by `(canonicalHash, original index)` and answers in the caller's
-  order, so the same batch produces byte-identical receipts and node ids
-  regardless of arrival order; identical items inside one batch create
-  once and reinforce once; the summary carries `replayed` and
-  `reinforced` beside `created`.
+- **Files nothing current referenced.** Three demo recordings (43 MB) and
+  their evidence packs under `benchmarks/the-*-that-got-rewritten/`, the
+  June 2026 `blackbox-proof-2026-06-22/` pack, `docs/plans/`, `docs/prd/`,
+  `docs/adr/` (Postgres and embedding-profile plans never built), `docs/research/`,
+  `docs/launch/` (v2 launch copy), `docs/UPGRADE-PLAN-2026-08.md`, the dashboard
+  overhaul prompt, `docs/blog/xcode-memory.md`, the `SCOPE-HANDOFF.md` notes at
+  the root and in five crates, `INGEST-V5-SPEC.md`, `apps/dashboard/OBSERVATORY-SPEC.md`,
+  the npm lockfile inside the pnpm workspace, `benchmarks/agent-memory-eval/`,
+  `scripts/backfill-eval/` and four scripts no workflow or doc called,
+  `CLAUDE.md.template` (it told agents to call tools that do not exist),
+  `.agentaudit-report.json` and the 43-case `operator-lite/hf-dataset/` fork of
+  the 46-case corpus.
 
 ## [4.1.1] - 2026-10-02
 

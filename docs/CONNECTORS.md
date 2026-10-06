@@ -1,6 +1,6 @@
 # External-Source Connectors
 
-> Written for Vestige 4.1.1. **Status: source only.** `source_sync` is not in any 4.x release binary, and in 4.1.1 the Strata backend does not implement the storage calls a sync needs. Tracking issue: [#57](https://github.com/samvallad33/vestige/issues/57).
+> Written for Vestige 4.2.0. **Status: source only.** `source_sync` is not in any 4.x release binary, and in 4.1.1 the Strata backend does not implement the storage calls a sync needs. Tracking issue: [#57](https://github.com/samvallad33/vestige/issues/57).
 
 A connector turns the records of a long-lived external system (a ticket tracker, an issue board, a support queue) into source-aware records with a provenance envelope that names the canonical URL. The external system stays the source of truth. The code for GitHub Issues and Redmine is in the repository. This page says what is there and what is not.
 

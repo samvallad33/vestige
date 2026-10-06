@@ -1,6 +1,6 @@
 # Receipts and replay
 
-> Written for Vestige 4.1.1.
+> Written for Vestige 4.2.0.
 
 On a Strata log every write is proposed, checked by the gate, and admitted as an effect. The write returns, or can be resolved to, a receipt. `receipt` `get` shows what the write did. `receipt` `replay` re-derives the state from the log and reports any mismatch.
 

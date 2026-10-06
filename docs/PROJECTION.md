@@ -1,6 +1,6 @@
 # Markdown projection
 
-> Written for Vestige 4.1.1.
+> Written for Vestige 4.2.0.
 
 Vestige stays the source of truth. `project` renders the durable subset of a scope into the rule files other agent clients already read, inside a fenced region the store owns. Everything outside the fence is the human's and is never touched.
 

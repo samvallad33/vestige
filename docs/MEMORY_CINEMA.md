@@ -1,6 +1,6 @@
 # Memory Cinema: Complete Feature Reference
 
-> Written for Vestige 4.1.1.
+> Written for Vestige 4.2.0.
 
 Memory Cinema turns the graph of your records into a directed, narrated,
 infinitely-diving cinematic experience rendered as a 150,000-particle WebGPU

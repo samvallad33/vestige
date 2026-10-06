@@ -54,8 +54,10 @@ back as `mem-0000000000000001` and `mem-0000000000000005`.
 Vestige also does not record everything you type. A record is written when you ask
 your agent to save something, when your agent decides a fact is worth keeping, or
 when you ingest from the terminal. Nothing is merged or dropped as a near duplicate
-in 4.x: saving the same text twice makes two records. `dedup scan` lists exact
-duplicates (identical content hash or identical declared source) and nothing more.
+in 4.x. Saving the same text twice reinforces the first record with an echo (the
+response says `decision: "reinforce"`) and never creates a twin; different text is
+always a new record. `dedup scan` lists exact duplicates (identical content hash or
+identical declared source) and nothing more.
 
 ---
 
