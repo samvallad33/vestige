@@ -11,12 +11,24 @@
 //! On a Strata log the walk is a bounded backward BFS from each start node
 //! over recorded causal edges only. A start point of any kind names its start
 //! node with `node_id`. Shared names are not edges.
+//!
+//! The candidates of a recorded walk are ordered by depth, then by how many
+//! distinct exact identities each shares with the start memory its path
+//! begins at (more first), then by how rare those identities are in the
+//! scope (fewer carriers first), then by id. The identities are the ones
+//! `auto_connect::extract_identities` defines (tag, path, commit, issue,
+//! url; byte-exact, never words), and every candidate carries the ones it
+//! shares with their carrier counts (`joined_on`). A hub tag, one that more
+//! than half the scope carries (`auto_connect::is_hub_tag`), is listed apart
+//! and not counted. The order arranges hypotheses; it proves nothing.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::sync::Arc;
 
+use crate::auto_connect::{self, Identity, IdentityKind, RankedCandidate};
 use vestige_core::Storage;
 use vestige_core::advanced::causal_walk::{
     self as core_causal_walk, CausalWalkRequest, StartPoint, persist_evidence_edges, walk_storage,
@@ -146,6 +158,8 @@ struct Reached {
     id: String,
     depth: u32,
     path: Vec<Hop>,
+    /// The start node `path` begins at.
+    start: String,
     /// The start nodes whose walk reached this node (filled when walks merge).
     from: Vec<String>,
 }
@@ -284,6 +298,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
                 rows,
                 nodes: Vec::new(),
                 causes: Vec::new(),
+                ranking: Ranking::default(),
                 truncated: false,
                 node_cap,
                 needs_report: Some(needs_report),
@@ -305,6 +320,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
     }
     let kept: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
     causes.retain(|node| kept.contains(node.id.as_str()));
+    let ranking = rank_causes(storage, scope, &mut causes)?;
 
     Ok(walk_payload(
         storage,
@@ -315,6 +331,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
             rows,
             nodes,
             causes,
+            ranking,
             truncated,
             node_cap,
             needs_report: None,
@@ -334,6 +351,7 @@ fn walk_from(
         id: start_id.to_string(),
         depth: 0,
         path: Vec::new(),
+        start: start_id.to_string(),
         from: Vec::new(),
     }];
     let mut visited = HashSet::from([start_id.to_string()]);
@@ -371,6 +389,7 @@ fn walk_from(
                 id: upstream,
                 depth: next_depth,
                 path: next_path,
+                start: start_id.to_string(),
                 from: Vec::new(),
             });
         }
@@ -402,6 +421,7 @@ fn merge_walks(walks: Vec<(String, Vec<Reached>)>) -> (Vec<Reached>, Vec<Reached
                 if node.depth < existing.depth {
                     existing.depth = node.depth;
                     existing.path = node.path.clone();
+                    existing.start = node.start.clone();
                 }
             }
             None => {
@@ -411,6 +431,7 @@ fn merge_walks(walks: Vec<(String, Vec<Reached>)>) -> (Vec<Reached>, Vec<Reached
                         id: node.id.clone(),
                         depth: node.depth,
                         path: node.path.clone(),
+                        start: node.start.clone(),
                         from: vec![start.to_string()],
                     },
                 );
@@ -433,6 +454,122 @@ fn merge_walks(walks: Vec<(String, Vec<Reached>)>) -> (Vec<Reached>, Vec<Reached
         rows
     };
     (order(nodes), order(causes))
+}
+
+/// What one candidate shares with the start memory its path begins at.
+struct Evidence {
+    /// The exact identities both record, each with the number of memories of
+    /// the scope that record it. Hub tags are not here. Tags first, then
+    /// sorted.
+    shared: Vec<(Identity, usize)>,
+    /// Distinct values among `shared` (a tag that is also a path counts once).
+    count: usize,
+    /// Tags both carry that more than half the scope carries too: listed,
+    /// not counted.
+    hub_tags: Vec<(Identity, usize)>,
+}
+
+/// How a walk's candidates were ordered: what each shares with its start,
+/// and the size of the scope the carrier counts are out of.
+#[derive(Default)]
+struct Ranking {
+    scope_size: usize,
+    evidence: BTreeMap<String, Evidence>,
+}
+
+/// The order, stated once in every walk that has candidates.
+const RANK_ORDER: &str = "depth, then distinct exact identities shared with the start (more first), then rarer identities first (fewer carriers in the scope), then id; hub tags are not counted";
+
+/// Order the candidates and return what each shares with its start.
+///
+/// Depth first, as the walk found them. Within a depth: more distinct exact
+/// identities shared with the start first, then the rarer identities first,
+/// then id (`RankedCandidate::strength`, the same order an ingest uses when
+/// its edge budget has to choose). The scope is read once, to count the
+/// carriers of the starts' identities and to learn which candidate records
+/// which of them.
+fn rank_causes(
+    storage: &Arc<Storage>,
+    scope: &str,
+    causes: &mut [Reached],
+) -> Result<Ranking, String> {
+    if causes.is_empty() {
+        return Ok(Ranking::default());
+    }
+    // The identities of each start some candidate's path begins at.
+    let mut of_start: BTreeMap<String, BTreeSet<Identity>> = BTreeMap::new();
+    for cause in causes.iter() {
+        if of_start.contains_key(&cause.start) {
+            continue;
+        }
+        let identities: BTreeSet<Identity> = storage
+            .get_node(&cause.start)
+            .map_err(|err| err.to_string())?
+            .map(|node| {
+                auto_connect::extract_identities(&node.content, &node.tags)
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default();
+        of_start.insert(cause.start.clone(), identities);
+    }
+    let wanted: BTreeSet<Identity> = of_start.values().flatten().cloned().collect();
+    let scan = auto_connect::scan_scope(storage.as_ref(), scope, &wanted)?;
+    let carriers = scan.carriers();
+    let recorded: BTreeMap<&str, &[Identity]> = scan
+        .holders
+        .iter()
+        .map(|holder| (holder.id.as_str(), holder.identities.as_slice()))
+        .collect();
+
+    let mut evidence: BTreeMap<String, Evidence> = BTreeMap::new();
+    let mut strength: BTreeMap<String, (Reverse<usize>, Vec<usize>)> = BTreeMap::new();
+    for cause in causes.iter() {
+        let start = &of_start[&cause.start];
+        let mut shared: Vec<(Identity, usize)> = Vec::new();
+        let mut hub_tags: Vec<(Identity, usize)> = Vec::new();
+        for identity in recorded
+            .get(cause.id.as_str())
+            .copied()
+            .unwrap_or_default()
+        {
+            if !start.contains(identity) {
+                continue;
+            }
+            let carried_by = carriers.get(identity).copied().unwrap_or(0);
+            if identity.kind == IdentityKind::Tag
+                && auto_connect::is_hub_tag(carried_by, scan.scope_size)
+            {
+                hub_tags.push((identity.clone(), carried_by));
+            } else {
+                shared.push((identity.clone(), carried_by));
+            }
+        }
+        let candidate = RankedCandidate {
+            id: cause.id.clone(),
+            shared,
+        };
+        let (count, rarity) = candidate.strength();
+        evidence.insert(
+            cause.id.clone(),
+            Evidence {
+                count: count.0,
+                shared: candidate.shared,
+                hub_tags,
+            },
+        );
+        strength.insert(cause.id.clone(), (count, rarity));
+    }
+    causes.sort_by(|a, b| {
+        a.depth
+            .cmp(&b.depth)
+            .then_with(|| strength[&a.id].cmp(&strength[&b.id]))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(Ranking {
+        scope_size: scan.scope_size,
+        evidence,
+    })
 }
 
 /// One start the caller gave, and what the recorded walk did with it. Every
@@ -469,6 +606,8 @@ struct WalkOut {
     rows: Vec<StartRow>,
     nodes: Vec<Reached>,
     causes: Vec<Reached>,
+    /// What each candidate shares with its start, by candidate id.
+    ranking: Ranking,
     truncated: bool,
     node_cap: usize,
     needs_report: Option<Value>,
@@ -664,6 +803,34 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
             "from": node.from,
         })
     };
+    // `kind:value` with the number of memories of the scope that record it.
+    let with_carriers = |entries: &[(Identity, usize)]| -> Vec<Value> {
+        entries
+            .iter()
+            .map(|(identity, carriers)| {
+                json!({ "identity": identity.to_string(), "carriers": carriers })
+            })
+            .collect()
+    };
+    let cause_json = |(index, node): (usize, &Reached)| {
+        let mut value = node_json(node);
+        value["rank"] = json!(index + 1);
+        if let Some(evidence) = walk.ranking.evidence.get(&node.id) {
+            value["start"] = json!(node.start);
+            value["shared_count"] = json!(evidence.count);
+            value["joined_on"] = json!(with_carriers(&evidence.shared));
+            value["not_counted_hub_tags"] = json!(with_carriers(&evidence.hub_tags));
+        }
+        value
+    };
+    let ranking = (!walk.causes.is_empty()).then(|| {
+        json!({
+            "order": RANK_ORDER,
+            "scope_size": walk.ranking.scope_size,
+            "joined_on": "per cause: the exact identities it records that its start records too, each with its carriers out of scope_size; a depth-1 cause is linked to the start itself, a deeper one is only compared with it",
+            "evidence_status": "hypothesis",
+        })
+    });
     let empty = (walk.needs_report.is_none() && walk.causes.is_empty())
         .then(|| why_empty(storage, scope, &walk.starts));
     json!({
@@ -684,7 +851,8 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "truncated": walk.truncated,
         "bounds": { "max_depth": MAX_DEPTH, "max_nodes": walk.node_cap },
         "nodes": walk.nodes.iter().map(&node_json).collect::<Vec<_>>(),
-        "causes": walk.causes.iter().map(&node_json).collect::<Vec<_>>(),
+        "causes": walk.causes.iter().enumerate().map(cause_json).collect::<Vec<_>>(),
+        "ranking": ranking,
         "needs_report": walk.needs_report,
         "note": "Backward BFS over recorded causal edges only, from every start node: from a memory to what it is derived_from, and to the records that are evidence_of it, that it closed, or that touched it. A node_id on any start point names the recorded symptom the walk begins at; start_points reports what happened to each one.",
     })
@@ -1629,5 +1797,148 @@ mod strata_walk {
         assert_eq!(causes_of(&found), vec![(cause, 1)]);
         assert!(found["emptyBecause"].is_null(), "{found}");
         assert!(found["incomingEdges"].is_null());
+    }
+
+    fn put_tagged(storage: &Arc<Storage>, content: &str, tags: &[&str]) -> String {
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: content.to_string(),
+                    tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn candidates_are_ordered_by_depth_then_shared_identities_then_rarity_then_id() {
+        let (storage, _dir) = open();
+        // Written in this order, so id order alone would list the depth-1
+        // candidates one_common, two, one_rare, declared.
+        let one_common = put_tagged(
+            &storage,
+            "commit a. Touched: lib/other.py",
+            &["connection"],
+        );
+        let two = put_tagged(&storage, "commit b. Touched: lib/conn.py", &["connection"]);
+        let one_rare = put_tagged(&storage, "commit c", &["retry"]);
+        let declared = put_tagged(&storage, "decision d", &[]);
+        let deeper = put_tagged(
+            &storage,
+            "commit e. Touched: lib/conn.py",
+            &["connection", "retry"],
+        );
+        // Two more carriers of `connection`, linked to nothing: they only
+        // make that tag less rare than `retry`.
+        put_tagged(&storage, "bystander 1", &["connection"]);
+        put_tagged(&storage, "bystander 2", &["connection"]);
+        let start = put_tagged(
+            &storage,
+            "failure: connection retry storm, trace ends at lib/conn.py:88",
+            &["connection", "retry"],
+        );
+        for cause in [&one_common, &two, &one_rare] {
+            link(&storage, cause, &start, "touched");
+        }
+        link(&storage, &start, &declared, "derived_from");
+        link(&storage, &deeper, &one_common, "touched");
+
+        let args = json!({"node_id": start});
+        let out = execute(&storage, Some(args.clone())).await.unwrap();
+        assert_eq!(
+            causes_of(&out),
+            vec![
+                // Depth 1: two shared identities; then one shared, the rarer
+                // tag first; then the declared link, which shares nothing.
+                (two.clone(), 1),
+                (one_rare.clone(), 1),
+                (one_common.clone(), 1),
+                (declared.clone(), 1),
+                // Depth 2 comes after every depth-1 candidate, although it
+                // shares the most with the start.
+                (deeper.clone(), 2),
+            ],
+            "{out}"
+        );
+        assert_eq!(execute(&storage, Some(args)).await.unwrap(), out);
+
+        let causes = out["causes"].as_array().unwrap();
+        // Every candidate carries the exact identities it shares with the
+        // start, each with its carriers in the scope of 8.
+        assert_eq!(out["ranking"]["scope_size"], 8, "{out}");
+        assert_eq!(causes[0]["rank"], 1);
+        assert_eq!(causes[0]["start"], start);
+        assert_eq!(causes[0]["shared_count"], 2);
+        assert_eq!(
+            causes[0]["joined_on"],
+            json!([
+                {"identity": "tag:connection", "carriers": 6},
+                {"identity": "path:lib/conn.py", "carriers": 3},
+            ])
+        );
+        assert_eq!(
+            causes[1]["joined_on"],
+            json!([{"identity": "tag:retry", "carriers": 3}])
+        );
+        assert_eq!(
+            causes[2]["joined_on"],
+            json!([{"identity": "tag:connection", "carriers": 6}])
+        );
+        // The words `connection` and `retry` in the start's text join
+        // nothing: the declared decision shares no identity.
+        assert_eq!(causes[3]["joined_on"], json!([]));
+        assert_eq!(causes[3]["shared_count"], 0);
+        assert_eq!(causes[4]["shared_count"], 3);
+        assert_eq!(causes[4]["rank"], 5);
+        assert_eq!(causes[4]["not_counted_hub_tags"], json!([]));
+        assert!(
+            out["ranking"]["order"]
+                .as_str()
+                .unwrap()
+                .starts_with("depth, then distinct exact identities"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hub_tag_is_listed_but_not_counted() {
+        let (storage, _dir) = open();
+        let by_hub_only = put_tagged(&storage, "commit a", &["campaign"]);
+        let by_path = put_tagged(&storage, "commit b. Touched: src/gate.rs", &[]);
+        for i in 0..13 {
+            put_tagged(&storage, &format!("batch {i}"), &["campaign"]);
+        }
+        for i in 0..4 {
+            put_tagged(&storage, &format!("other {i}"), &[]);
+        }
+        let start = put_tagged(&storage, "failure at src/gate.rs:9", &["campaign"]);
+        link(&storage, &by_hub_only, &start, "touched");
+        link(&storage, &by_path, &start, "touched");
+
+        let out = execute(&storage, Some(json!({"node_id": start})))
+            .await
+            .unwrap();
+        // 15 of the 20 memories carry `campaign`: a hub. The candidate that
+        // shares only the hub tag ranks after the one sharing a path, though
+        // its id is smaller.
+        assert_eq!(
+            causes_of(&out),
+            vec![(by_path.clone(), 1), (by_hub_only.clone(), 1)],
+            "{out}"
+        );
+        assert_eq!(out["ranking"]["scope_size"], 20);
+        assert_eq!(
+            out["causes"][0]["joined_on"],
+            json!([{"identity": "path:src/gate.rs", "carriers": 2}])
+        );
+        assert_eq!(out["causes"][1]["joined_on"], json!([]));
+        assert_eq!(out["causes"][1]["shared_count"], 0);
+        assert_eq!(
+            out["causes"][1]["not_counted_hub_tags"],
+            json!([{"identity": "tag:campaign", "carriers": 15}])
+        );
     }
 }

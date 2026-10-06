@@ -385,13 +385,15 @@ enum Commands {
     /// each pair that records the same exact identity: an exact tag
     /// (case-sensitive), an exact file path token, a whole-token commit sha
     /// (40 hex, or 7+ hex), an `owner/repo#123` reference, or a URL. Shared
-    /// words never join two memories. A tag carried by more than 14
-    /// memories of the scope is too common to be evidence and is skipped;
-    /// file paths always join. Every pair is printed with the identities
-    /// that joined it. An edge records that two memories name the same
-    /// thing, not that one caused the other: a causal walk over these edges
-    /// returns hypotheses. Ingest auto-connects pairs as they land, and this
-    /// full scan also catches pairs that share a path only in their text.
+    /// words never join two memories. A tag joins whole or not at all: a
+    /// hub tag (more than 14 carriers and more than half the scope) is
+    /// skipped, and so is a tag on more than 14 memories whose pairs alone
+    /// exceed --max-edges; each skipped tag is printed with its carrier
+    /// count and the reason. File paths always join. Every pair is printed
+    /// with the identities that joined it. An edge records that two memories
+    /// name the same thing, not that one caused the other: a causal walk
+    /// over these edges returns hypotheses. Ingest auto-connects pairs as
+    /// they land; this full scan catches what an ingest left unlinked.
     Connect {
         /// Show what edges would be created without writing them
         #[arg(long)]
@@ -399,7 +401,8 @@ enum Commands {
         /// Minimum distinct shared identities required (default 1)
         #[arg(long, default_value = "1")]
         min_shared: usize,
-        /// Maximum edges to create (safety cap)
+        /// Maximum edges to create (safety cap; also the pair budget a tag
+        /// on more than 14 memories must fit to join)
         #[arg(long, default_value = "100")]
         max_edges: usize,
         /// Project namespace to connect (default: user)
@@ -3949,11 +3952,18 @@ fn run_ingest(
                         );
                     }
                 }
-                if !report.skipped_common_tags.is_empty() {
+                // Every tag the pass did not join on is named with its
+                // carrier count and the reason: nothing is skipped silently.
+                for skipped in &report.skipped {
+                    println!("Auto-connect {skipped}");
+                }
+                if report.not_linked > 0 {
                     println!(
-                        "Auto-connect skipped tag(s) carried by more than {} memories: {}",
-                        vestige_mcp::auto_connect::MAX_TAG_CARRIERS,
-                        report.skipped_common_tags.join(", ")
+                        "Auto-connect linked the {} strongest of {} candidate(s); {} not linked (the {}-edge budget of one write). `vestige connect` writes the rest.",
+                        report.edges,
+                        report.candidates,
+                        report.not_linked,
+                        vestige_mcp::auto_connect::MAX_AUTO_EDGES
                     );
                 }
             }
@@ -4648,8 +4658,36 @@ fn run_causal_walk_strata(
             "{}",
             "No recorded causal edge leads upstream from this memory.".dimmed()
         );
+    } else if let Some(order) = result["ranking"]["order"].as_str() {
+        println!(
+            "{} {} (scope: {} memories)",
+            "Order:".white().bold(),
+            order,
+            result["ranking"]["scope_size"]
+        );
+        println!();
     }
+    // `kind:value (N of M)`: an identity and how many memories of the scope
+    // record it.
+    let scope_size = &result["ranking"]["scope_size"];
+    let with_carriers = |entries: &serde_json::Value| -> Vec<String> {
+        entries
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                format!(
+                    "{} ({} of {})",
+                    entry["identity"].as_str().unwrap_or("?"),
+                    entry["carriers"],
+                    scope_size
+                )
+            })
+            .collect()
+    };
     for (rank, cause) in causes.iter().enumerate() {
+        // These two lines are parsed by other tools (`#<n> <id> depth <d>`,
+        // then the content preview). Anything new goes below them.
         println!(
             "{} {} depth {}",
             format!("#{}", rank + 1).green().bold(),
@@ -4657,6 +4695,28 @@ fn run_causal_walk_strata(
             cause["depth"]
         );
         println!("  {}", preview(&cause["content"]));
+        if cause["joined_on"].is_array() {
+            // Depth 1 is linked to the start itself; a deeper memory is only
+            // compared with it.
+            let label = if cause["depth"] == 1 {
+                "joined on:"
+            } else {
+                "shares with the start:"
+            };
+            let shared = with_carriers(&cause["joined_on"]);
+            if shared.is_empty() {
+                println!("  {label} no exact identity (reached over the recorded edge(s) below)");
+            } else {
+                println!("  {label} {}", shared.join(", "));
+            }
+            let hubs = with_carriers(&cause["not_counted_hub_tags"]);
+            if !hubs.is_empty() {
+                println!(
+                    "  not counted (hub tag, more than half the scope carries it): {}",
+                    hubs.join(", ")
+                );
+            }
+        }
         for hop in cause["path"].as_array().into_iter().flatten() {
             println!(
                 "  {} {} -[{}]-> {}",
@@ -4857,9 +4917,11 @@ struct ConnectPair {
 /// shas, issue references, URLs; no words, no ML, no similarity) and writes
 /// a `touched` edge for each pair sharing at least `--min-shared` of them,
 /// through `Storage::save_connection`, which on a Strata log is
-/// `StrataStore::save_connection` behind the gate. A tag carried by more
-/// than `auto_connect::MAX_TAG_CARRIERS` memories of the scope is skipped
-/// and named; every pair is printed with the identities that joined it.
+/// `StrataStore::save_connection` behind the gate. A tag joins whole or not
+/// at all (`auto_connect::scan_skipped_tags`): a hub tag, carried by more
+/// than half the scope, is skipped, and so is a tag whose pairs alone exceed
+/// `--max-edges`; each is named with its carrier count and the reason. Every
+/// pair is printed with the identities that joined it.
 ///
 /// Direction follows the walk's rule for `touched` (causal_walk.rs: the
 /// source is the earlier record, so from the target the walk goes to the
@@ -4902,21 +4964,28 @@ fn run_connect(
         })
         .collect();
 
-    // The guard: a tag carried by more than MAX_TAG_CARRIERS memories of
-    // this scope joins everything to everything and is not evidence.
-    let common_tags = auto_connect::too_common_tags(nodes.iter().map(|node| node.tags.as_slice()));
-    if !common_tags.is_empty() {
+    // The guard against a quadratic blow-up: a tag on N memories joins
+    // N * (N - 1) / 2 pairs. A hub tag (more than half the scope carries it)
+    // and a tag whose pairs alone exceed this pass's --max-edges budget are
+    // skipped whole, and each is named with its carrier count and the reason.
+    let skipped_tags =
+        auto_connect::scan_skipped_tags(nodes.iter().map(|node| node.tags.as_slice()), max_edges);
+    let common_tags: std::collections::BTreeMap<String, usize> = skipped_tags
+        .iter()
+        .map(|skipped| (skipped.tag.clone(), skipped.carriers))
+        .collect();
+    if !skipped_tags.is_empty() {
         println!(
             "{}: {}",
-            format!(
-                "Tags skipped (carried by more than {} memories)",
-                auto_connect::MAX_TAG_CARRIERS
-            )
-            .white()
-            .bold(),
-            common_tags
+            "Tags skipped".white().bold(),
+            skipped_tags
                 .iter()
-                .map(|(tag, carriers)| format!("{tag} ({carriers})"))
+                .map(|skipped| {
+                    format!(
+                        "{} ({} of {}: {})",
+                        skipped.tag, skipped.carriers, skipped.scope_size, skipped.reason
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         );

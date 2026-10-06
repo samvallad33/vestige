@@ -1143,13 +1143,14 @@ fn connect_joins_an_exact_file_path_and_names_it() {
     assert!(!causes.contains(&unrelated.as_str()), "{value}");
 }
 
-/// The too-common-tag guard: a tag carried by more than MAX_TAG_CARRIERS
-/// memories of the scope (a campaign tag) joins nothing, in the full scan
-/// and at ingest, and is named as skipped. A selective tag on two of the
-/// same memories still joins them.
+/// The hub rule: a tag carried by more than half the scope (a campaign tag,
+/// here on every memory, one past the small group) joins nothing, in the
+/// full scan and at ingest, whatever the edge budget, and is named with its
+/// carriers out of the scope's memories. A selective tag on two of the same
+/// memories still joins them.
 #[test]
-fn a_tag_carried_by_too_many_memories_joins_nothing() {
-    let limit = vestige_mcp::auto_connect::MAX_TAG_CARRIERS;
+fn a_hub_tag_joins_nothing_and_is_named_with_its_carriers() {
+    let limit = vestige_mcp::auto_connect::SMALL_TAG_GROUP;
     let dir = TempDir::new().expect("temp dir");
     let storage = open(dir.path());
     let mut ids = Vec::new();
@@ -1167,8 +1168,8 @@ fn a_tag_carried_by_too_many_memories_joins_nothing() {
     assert!(run.ok, "{}", run.text());
     assert!(
         run.stdout.contains(&format!(
-            "Tags skipped (carried by more than {limit} memories): campaign ({})",
-            limit + 1
+            "Tags skipped: campaign ({n} of {n}: more than half the scope carries it)\n",
+            n = limit + 1
         )),
         "{}",
         run.text()
@@ -1198,10 +1199,216 @@ fn a_tag_carried_by_too_many_memories_joins_nothing() {
     );
     assert!(
         ingest.stdout.contains(&format!(
-            "Auto-connect skipped tag(s) carried by more than {limit} memories: campaign"
+            "Auto-connect skipped tag campaign: carried by {n} of {n} (more than half the scope carries it)\n",
+            n = limit + 2
         )),
         "{}",
         ingest.text()
     );
     assert_eq!(edge_count(dir.path()), 1, "{}", ingest.text());
+}
+
+/// Build the shape of a commit window: `total` commit records all tagged
+/// `chal-commit`, of which every `component_every`-th also carries the
+/// component tag and touches `redis/connection.py`. Returns the ids of the
+/// component's commits, oldest record first.
+fn commit_window(dir: &Path, total: usize, component_every: usize) -> Vec<String> {
+    let storage = open(dir);
+    let mut component = Vec::new();
+    for i in 0..total {
+        if i % component_every == 0 {
+            component.push(put(
+                &storage,
+                &format!("Commit c0ffee{i:02}: change {i}. Touched: redis/connection.py"),
+                &["chal-commit", "redis", "connection.py", "connection"],
+            ));
+        } else {
+            put(
+                &storage,
+                &format!("Commit c0ffee{i:02}: change {i}. Touched: docs/page{i}.rst"),
+                &["chal-commit", "docs"],
+            );
+        }
+    }
+    component
+}
+
+/// Reach on a full window. A failure report tagged with a component that 20
+/// of 78 commit records carry used to reach none of them: the flat cap of 14
+/// carriers skipped the tag. 21 of 79 is not a hub and 20 edges fit one
+/// write, so the ingest itself joins the report to every one of them, the
+/// walk lists all 20 at depth 1, and each candidate prints the identity it
+/// was joined on. The two line shapes other tools parse are unchanged.
+#[test]
+fn a_component_tag_past_the_old_cap_reaches_its_commits_and_the_walk_explains_each() {
+    let dir = TempDir::new().expect("temp dir");
+    let component = commit_window(dir.path(), 78, 4);
+    assert_eq!(component.len(), 20);
+
+    let ingest = vestige(
+        dir.path(),
+        &[
+            "ingest",
+            "Challenge failure: connecting takes very long since the upgrade, retry and backoff were added",
+            "--tags",
+            "challenge,failure,connection,retry,backoff",
+        ],
+    );
+    assert!(ingest.ok, "{}", ingest.text());
+    assert!(
+        ingest
+            .stdout
+            .contains("Auto-connected: 20 edge(s) created on exact identities: tag:connection\n"),
+        "{}",
+        ingest.text()
+    );
+    assert!(
+        !ingest.stdout.contains("Auto-connect skipped"),
+        "nothing the report carries is a hub: {}",
+        ingest.text()
+    );
+    let failure = ingest
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Node ID: "))
+        .expect("node id")
+        .trim()
+        .to_string();
+    assert_eq!(edge_count(dir.path()), 20, "{}", ingest.text());
+
+    let walk = vestige(dir.path(), &["causal-walk", "--logged-write", &failure]);
+    assert!(walk.ok, "{}", walk.text());
+    let lines: Vec<&str> = walk.stdout.lines().collect();
+    // `#<n> mem-<hex> depth <d>`, then two spaces and the content preview,
+    // then the identities the candidate was joined on.
+    for (rank, id) in component.iter().enumerate() {
+        let at = lines
+            .iter()
+            .position(|line| *line == format!("#{} {id} depth 1", rank + 1))
+            .unwrap_or_else(|| panic!("no line for rank {} ({id}):\n{}", rank + 1, walk.text()));
+        assert!(
+            lines[at + 1].starts_with("  Commit c0ffee"),
+            "{}",
+            lines[at + 1]
+        );
+        assert_eq!(lines[at + 2], "  joined on: tag:connection (21 of 79)");
+        assert_eq!(lines[at + 3], format!("  -> {id} -[touched]-> {failure}"));
+    }
+    assert_eq!(
+        lines.iter().filter(|line| line.starts_with('#')).count(),
+        20,
+        "{}",
+        walk.text()
+    );
+    assert!(
+        walk.stdout.contains(
+            "Order: depth, then distinct exact identities shared with the start (more first), then rarer identities first (fewer carriers in the scope), then id; hub tags are not counted (scope: 79 memories)\n"
+        ),
+        "{}",
+        walk.text()
+    );
+
+    // The full scan agrees with the ingest: with a budget that holds the
+    // component's pairs, it has nothing left to add for the report, and it
+    // names the hub with both counts.
+    let scan = vestige(
+        dir.path(),
+        &["connect", "--dry-run", "--max-edges", "1000000"],
+    );
+    assert!(scan.ok, "{}", scan.text());
+    assert!(
+        scan.stdout
+            .contains("chal-commit (78 of 79: more than half the scope carries it)"),
+        "{}",
+        scan.text()
+    );
+    assert!(
+        !scan.stdout.contains(&failure),
+        "the ingest left no pair of the report unlinked: {}",
+        scan.text()
+    );
+
+    // The default budget says why the component tag is not joined by the
+    // scan: its pairs, counted, against the budget.
+    let default_scan = vestige(dir.path(), &["connect", "--dry-run"]);
+    assert!(default_scan.ok, "{}", default_scan.text());
+    assert!(
+        default_scan.stdout.contains(
+            "connection (21 of 79: its 210 pairs exceed the 100-edge budget of this pass)"
+        ),
+        "{}",
+        default_scan.text()
+    );
+}
+
+/// Ingest-time path joins. The failure names a file by its full path; no
+/// memory carries that path as a tag (commits are tagged with folder
+/// segments and file names). The ingest itself writes the joins, names the
+/// path on each, and a full scan then finds nothing left for the failure.
+#[test]
+fn ingest_joins_a_full_path_named_only_in_the_texts() {
+    let dir = TempDir::new().expect("temp dir");
+    let storage = open(dir.path());
+    let mut touching = Vec::new();
+    for i in 0..15 {
+        let own_tag = format!("only-{i}");
+        touching.push(put(
+            &storage,
+            &format!("Commit ab12cd{i:02}: mono fix {i}. Touched: modules/mono/csharp_script.cpp"),
+            &[own_tag.as_str()],
+        ));
+    }
+    let elsewhere = put(
+        &storage,
+        "Commit ab12cdff: other module. Touched: modules/gdscript/csharp_script.cpp",
+        &["only-x"],
+    );
+    drop(storage);
+
+    let ingest = vestige(
+        dir.path(),
+        &[
+            "ingest",
+            "Challenge failure: crash on reload at modules/mono/csharp_script.cpp:2345",
+            "--tags",
+            "challenge,failure",
+        ],
+    );
+    assert!(ingest.ok, "{}", ingest.text());
+    assert!(
+        ingest.stdout.contains(
+            "Auto-connected: 15 edge(s) created on exact identities: path:modules/mono/csharp_script.cpp\n"
+        ),
+        "{}",
+        ingest.text()
+    );
+    let failure = ingest
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Node ID: "))
+        .expect("node id")
+        .trim()
+        .to_string();
+    for commit in &touching {
+        assert!(
+            ingest.stdout.contains(&format!(
+                "  {commit} -[touched]-> {failure}  joined on: path:modules/mono/csharp_script.cpp\n"
+            )),
+            "{}",
+            ingest.text()
+        );
+    }
+    assert!(!ingest.stdout.contains(&elsewhere), "{}", ingest.text());
+    assert_eq!(edge_count(dir.path()), 15);
+
+    let scan = vestige(
+        dir.path(),
+        &["connect", "--dry-run", "--max-edges", "1000000"],
+    );
+    assert!(scan.ok, "{}", scan.text());
+    assert!(
+        !scan.stdout.contains(&failure),
+        "no pair of the failure is left for the scan: {}",
+        scan.text()
+    );
 }
