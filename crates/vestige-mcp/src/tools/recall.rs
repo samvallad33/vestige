@@ -319,21 +319,28 @@ fn handle_resolution_payload(
     })
 }
 
-/// The `handle_required` payload for free text: candidates mined from the
-/// text's identifier-shaped tokens via the resolver (exact/prefix only).
+/// The `handle_required` payload for free text.
+///
+/// On a Strata log the candidates are what the whole string resolves to as a
+/// handle, and nothing else: the text is never split into words to look for a
+/// tag or an id inside it, because a word that happens to equal a tag is a
+/// keyword match, not a handle the caller declared. The legacy engine also
+/// tries each identifier-shaped token through its resolver.
 fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
     let mut candidates: Vec<(String, HandleKind)> = Vec::new();
     let text = free_text.trim();
     if !text.is_empty() {
-        // Whole string first, then each identifier-shaped token (bounded).
         let mut queries: Vec<&str> = vec![text];
-        queries.extend(
-            text.split(|c: char| {
-                !(c.is_alphanumeric() || c == '_' || c == '.' || c == '/' || c == '-')
-            })
-            .filter(|t| t.len() >= 3)
-            .take(8),
-        );
+        if !crate::strata_memory::is_strata_backend(storage.as_ref()) {
+            // Legacy engine: each identifier-shaped token too (bounded).
+            queries.extend(
+                text.split(|c: char| {
+                    !(c.is_alphanumeric() || c == '_' || c == '.' || c == '/' || c == '-')
+                })
+                .filter(|t| t.len() >= 3)
+                .take(8),
+            );
+        }
         for q in queries {
             let r = storage.resolve_handle(q);
             for id in &r.ids {
@@ -725,6 +732,38 @@ mod strata_query {
             )
             .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn free_text_is_never_split_into_words_to_find_a_tag_inside_it() {
+        let (storage, _dir, tagged, _other) = store();
+        // One word of this sentence equals a stored tag. Before 4.2.0 that
+        // word was looked up on its own and the tagged memory came back as a
+        // candidate: a keyword match.
+        let sentence = serde_json::json!({
+            "handle": "", "query": "what changed in deploy-env yesterday",
+        });
+        let out = recall(&storage, sentence.clone()).await.unwrap();
+        assert_eq!(out["error"], "handle_required", "{out}");
+        assert_eq!(out["candidates"], serde_json::json!([]), "{out}");
+        assert!(!out.to_string().contains(&tagged), "{out}");
+
+        // The whole string as an exact tag is a declared handle.
+        let whole = recall(
+            &storage,
+            serde_json::json!({"handle": "", "query": " deploy-env "}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            whole["candidates"],
+            serde_json::json!([{"id": tagged, "kind": "tag"}]),
+            "{whole}"
+        );
+
+        // Same store, same call, same bytes.
+        let again = recall(&storage, sentence).await.unwrap();
+        assert_eq!(out.to_string(), again.to_string());
     }
 
     #[tokio::test]

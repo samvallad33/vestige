@@ -77,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - OP-S05 no longer records an inline write whose target cannot be resolved.
     An unresolved inline delete is still recorded, and either one fails closed
     when the code names a gate path.
+- `codebase` `get_context` and `verify` write their anchor verdicts to the log
+  in the order the memories were asked for. The order came from a hash map and
+  changed from run to run.
 
 ### Changed
 
@@ -92,6 +95,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   price, how it is delivered and what it does not do. The GuardFall corpus count
   in the README and the Operator Lite README now reads 46, the number of cases
   the corpus holds.
+- Intention triggers are exact. A trigger fires on a clock, or when its stored
+  value equals a handle the check declares, byte for byte: an event or activity
+  key against `context.event` and `context.events`, a codebase against
+  `context.codebase`, a file path against `context.file`, a topic against
+  `context.topics`. An activity or context trigger used to fire on a
+  case-insensitive substring, and an event trigger ignored case. A trigger
+  written for that is still stored and still listed; it fires only on the
+  exact value, and `list` and `check` show that value in
+  `triggerMatching.firesOn`.
+- `intention set` stores the description as written and no longer parses it.
+  A description such as "in 30 minutes" or "when the build finishes" used to
+  become a trigger, and "urgent" a priority. Pass `trigger`, `deadline` and
+  `priority`. With no trigger and no deadline the response says the intention
+  will not fire on its own. No `intent:` tag is added, and `nlpParsed` is gone
+  from the response.
+- `maintain` `importance_score` takes `id` and scores a memory from its
+  recorded structure: `edges.total + reviews.count - reviews.lapses`, with
+  every input returned in `computedFrom`. Free-text `content`, which the v3
+  word heuristics scored, is refused with `unavailable_in_4_0`. The word
+  scorer is compiled out of the default build, so `smart_ingest` reports
+  `importanceScore` `0.0`.
+- `recall` with an empty `handle` and a sentence in `query` no longer looks up
+  each word of the sentence as a tag or an id. Only the whole string is tried.
+- Intentions that resurface in a retrieval call carry `match: "exact"` and no
+  `confidence`. `intention list` returns one order on every backend and names
+  it in `order`.
 
 ## [4.1.2] - 2026-10-05
 

@@ -80,7 +80,9 @@ or an exact tag. Lookup order is exact id, then unique prefix, then exact tag.
   one-hop recorded `neighbors` (direction, `link_type`, strength; at most 20 edges). It
   ignores `limit`.
 - An ambiguous prefix is refused as `ambiguous`, with its `candidates`.
-- A miss is `handle_required` (with `candidates: []`), not an empty list.
+- A miss is `handle_required` (with `candidates: []`), not an empty list. Free text is
+  never split into words to look for a tag or an id inside it (4.2.0): only the whole
+  string is tried as a handle.
 - `query`, `mode: "reason"` and `mode: "contradictions"` return `similarity_disabled`.
 - A read never changes strength. Promote what helped with `memory`.
 
@@ -315,17 +317,28 @@ Reminders and plans. Actions: `set`, `check`, `update`, `list`, `graph`. A `set`
 receipt. `list` and `check` honor `scope`.
 
 - Triggers: `time` (`at`, `in_minutes`), `context` (`codebase`, `file_pattern`, `topic`),
-  `event` (`condition`), plus recurring and compound (`all_of`, `any_of`). Priorities are
-  `low`, `normal`, `high`, `critical`. Statuses are `active`, `fulfilled`, `cancelled`,
-  `snoozed`.
+  `event` (`condition`), `activity`, plus recurring and compound (`all_of`, `any_of`).
+  Priorities are `low`, `normal`, `high`, `critical`. Statuses are `active`, `fulfilled`,
+  `cancelled`, `snoozed`.
+- `set` stores the `description` as written and never parses it (4.2.0). The trigger,
+  deadline and priority are the ones you pass. With no `trigger` and no `deadline` the
+  intention is manual, never fires on its own, and the response says so in `note`. No tag
+  is added that you did not pass.
 - `check` takes `context.current_time` (RFC 3339 with a timezone) and uses that clock for
   trigger, deadline and snooze comparisons. `include_snoozed=true` shows snoozed records
   but does not let them fire before `snoozedUntil`.
-- **Matching is the one place text containment decides anything.** A context trigger
-  fires when its `codebase`, `file_pattern` or `topic` is a case-insensitive substring of
-  what `check` is given. An event trigger fires only on an exact, case-sensitive event key
-  such as `build_finished`. This matches a rule you wrote against the context you pass. It
-  does not retrieve or rank records.
+- **Matching is exact (4.2.0).** A trigger fires on a clock, or when a stored value equals
+  a handle the check declares, byte for byte: `condition` or `activity` against
+  `context.event` and each entry of `context.events`, `codebase` against
+  `context.codebase`, `file_pattern` against `context.file` (an exact path, not a glob),
+  `topic` against each entry of `context.topics`. No substring, no case folding. Before
+  4.2.0 a context or activity trigger fired on a case-insensitive substring; one written
+  for that is still stored and listed, and fires only on the exact value. `list` and
+  `check` put `triggerMatching` on every text-keyed trigger: `firesOn` names the context
+  field and the value to pass. A trigger that cannot be evaluated carries
+  `invalid_trigger` and is never dropped from the list.
+- `list` returns one documented order, echoed as `order`: priority high to low, creation
+  time old to new, then id.
 - Dates, trigger types, priorities, statuses and duration bounds validate before anything
   is written. A completed or cancelled intention cannot be snoozed back to active.
 - `graph` evaluates evidence-aware plans through a nested `command`: `plan`, `revise`,
@@ -356,9 +369,14 @@ Actions on a Strata log: `dream`, `dream_compile`, `gc`, `importance_score`, `ba
 - **`gc`** is a stub on the MCP tool. It always reports zero candidates and deletes
   nothing, because the log is append-only. The CLI `vestige gc --dry-run` lists records
   below a retention threshold, and `vestige gc` without `--dry-run` is refused.
-- **`importance_score`** scores the `content` you pass with the v3 four-channel importance
-  heuristics. They read the words. It keeps its novelty state in the running process and
-  writes nothing to the log, and nothing else in 4.x uses it.
+- **`importance_score`** takes `id`, a full record id, and scores that record from its
+  recorded structure (4.2.0): `score` is `edges.total + reviews.count - reviews.lapses`,
+  and `computedFrom` returns every input, the typed edges that touch the record (`total`,
+  `incoming`, `outgoing`, `byKind`) and its FSRS reviews (`count`, `lapses`; a demote is a
+  lapse). It reads no content, tag or name, writes nothing, and returns the same bytes for
+  the same store and id. Passing free-text `content`, which the v3 word heuristics scored,
+  is refused with `unavailable_in_4_0` and names `id`. The word scorer is compiled out of
+  the default build, so `smart_ingest`'s `importanceScore` is `0.0` there.
 - **`backup`** writes a `vestige-<time>.strata` folder into `<data-dir>/backups/` and
   reports its path and size. **`export`** writes `memories-<time>.json` or `.jsonl`
   (`format`, `since`) into `<data-dir>/exports/`. Format `portable` is withheld.
@@ -416,6 +434,7 @@ Each of these is absent from the advertised schema and refused with the reason.
 | `purge`, `delete_knowledge`, `memory` `purge` / `delete` | On an append-only signed log they could hide a record but not erase its bytes. Real erasure is planned as crypto-erasure ([#402](https://github.com/samvallad33/vestige/issues/402)) |
 | `maintain` `consolidate` (4.1.1) | Every phase is a no-op on Strata, and an all-zero reply read as a completed pass |
 | `maintain` `restore` | Restore a backup by copying its `log/` back |
+| `maintain` `importance_score` with free-text `content` (4.2.0) | Scoring text needs word heuristics. Pass `id` to score a record from its recorded edges and reviews |
 | `maintain` `export` format `portable` | Not written from a Strata log |
 | `dedup` `plan_merge`, `plan_supersede`, `apply`, `verdict` | They need embeddings |
 | `dedup` `protect` | The log has no protect flag yet |
