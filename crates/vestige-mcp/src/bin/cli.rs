@@ -653,18 +653,26 @@ enum Commands {
     ///
     /// Walks back from the failure memory (--logged-write) to the commits it
     /// reaches over recorded edges, drops any committed after --reported-at
-    /// or outside good..bad, then runs your test on those leads only and on
-    /// the parent of the earliest failing one. Stock `git bisect run` over
-    /// the whole range confirms it, reusing the verdicts already recorded.
-    /// Then it finds the smallest set of the commit's changes that still
-    /// fails, tests the commit without them, and undoes them on the bad ref.
+    /// or outside good..bad, and freezes the protocol (the test's sha256,
+    /// the two ends, the leads) before any test runs. Then it runs your test
+    /// on those leads only and on the parent of the earliest failing one.
+    /// Stock `git bisect run` over the whole range confirms it, reusing the
+    /// verdicts already recorded. Then it finds the smallest set of the
+    /// commit's changes that still fails, tests the commit without them, and
+    /// undoes them on the bad ref. The result is a verdict card: LEAD,
+    /// BOUNDARY, CONFIRMED, ISOLATED, REVERSED, each with whether it holds
+    /// and the runs behind it.
+    ///
+    /// With --flaky, for a bug that only shows some of the time, each commit
+    /// is tested repeatedly until the evidence is decisive, and the card
+    /// gains REPEATED.
     ///
     /// Output lines are labelled `[recorded link]` (a lead from the walk) or
     /// `[tested]` (a test run). Every run is saved as an `event` memory and
     /// written to the report, where each entry carries the sha256 of the one
     /// before it. The test runs in a temporary git worktree, never in your
-    /// checkout. Exit codes follow git bisect: 0 good, 125 cannot test, any
-    /// other 1..127 bad.
+    /// checkout. Its exit code is read as git bisect reads it: 0 good, 125
+    /// cannot test, any other code bad.
     ///
     /// `vestige prove --check <report.json>` re-verifies a report offline.
     Prove(vestige_mcp::walk_verify::ProveArgs),
