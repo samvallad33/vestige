@@ -32,7 +32,7 @@
 //!   tokens that look like a Url (contain `://`) or like a whole-token
 //!   Version are rejected (checker order Url > Email > CommitSha > IssueRef
 //!   > Version > FilePath). Trailing punctuation is NOT trimmed from paths —
-//!   only the Url scanner trims.
+//!   > only the Url scanner trims.
 //!
 //! Selection: all candidates are merged and sorted by
 //! `(byte_start asc, length desc, kind precedence asc)`, then swept
@@ -112,10 +112,10 @@ pub fn extract_typed_spans(content: &str) -> Vec<EntitySpan> {
     // kept spans are pairwise non-overlapping).
     let mut selected: Vec<EntitySpan> = Vec::new();
     for span in candidates {
-        if let Some(last) = selected.last() {
-            if span.byte_start < last.byte_end {
-                continue; // overlaps an already-selected leftmost-longest span
-            }
+        if let Some(last) = selected.last()
+            && span.byte_start < last.byte_end
+        {
+            continue; // overlaps an already-selected leftmost-longest span
         }
         selected.push(span);
         if selected.len() >= MAX_SPANS {

@@ -842,18 +842,13 @@ fn take_intent_ids(args: Option<Value>) -> Result<(Option<Value>, TakenIntents),
         return Ok((None, TakenIntents::default()));
     };
     let mut intents = TakenIntents::default();
-    if let Some(raw) = args
-        .as_object_mut()
-        .and_then(|map| remove_intent_id(map))
-    {
+    if let Some(raw) = args.as_object_mut().and_then(remove_intent_id) {
         intents.single = Some(validate_intent_id(raw)?);
     }
     if let Some(items) = args.get_mut("items").and_then(Value::as_array_mut) {
         for item in items.iter_mut() {
-            let raw = item
-                .as_object_mut()
-                .and_then(|map| remove_intent_id(map));
-            intents.items.push(raw.map(|raw| validate_intent_id(raw)).transpose()?);
+            let raw = item.as_object_mut().and_then(remove_intent_id);
+            intents.items.push(raw.map(validate_intent_id).transpose()?);
         }
     }
     Ok((Some(args), intents))
@@ -1092,6 +1087,17 @@ fn entity_spans_json(spans: &[crate::intake::entities::EntitySpan], cap: usize) 
     )
 }
 
+/// What one admitted write recorded, as [`attach_intent_record`] needs it
+/// to register the write's `intent_id`.
+struct IntentRecord<'a> {
+    intent_id: Option<&'a str>,
+    node_id: &'a str,
+    effect_seq: Option<u64>,
+    submitted_content: &'a str,
+    submitted_source: &'a str,
+    stored_tags: &'a [String],
+}
+
 /// Record the intent entry for a node this call just created (spec B2.4 /
 /// B2.3-echo). The digest is always computed from the SUBMITTED bytes (the
 /// caller's request is what idempotency keys on), whether the node it
@@ -1103,13 +1109,16 @@ fn attach_intent_record(
     storage: &Arc<Storage>,
     response: &mut Value,
     scope: &str,
-    intent_id: Option<&str>,
-    node_id: &str,
-    effect_seq: Option<u64>,
-    submitted_content: &str,
-    submitted_source: &str,
-    stored_tags: &[String],
+    record: IntentRecord<'_>,
 ) {
+    let IntentRecord {
+        intent_id,
+        node_id,
+        effect_seq,
+        submitted_content,
+        submitted_source,
+        stored_tags,
+    } = record;
     let Some(intent_id) = intent_id else {
         return;
     };
@@ -1118,13 +1127,7 @@ fn attach_intent_record(
         submitted_source,
         stored_tags,
     );
-    match storage.record_intent_entry(
-        scope,
-        intent_id,
-        node_id,
-        effect_seq.unwrap_or(0),
-        &digest,
-    ) {
+    match storage.record_intent_entry(scope, intent_id, node_id, effect_seq.unwrap_or(0), &digest) {
         Ok(()) => response["intentId"] = serde_json::json!(intent_id),
         Err(err) => {
             response["intentError"] = serde_json::json!(format!(
@@ -1187,7 +1190,10 @@ fn reinforce_duplicate(
     let edge = strata_memory::save_links(
         storage.as_ref(),
         &echo_id,
-        &[(strata_memory::DeclaredLink::EvidenceOf, original.to_string())],
+        &[(
+            strata_memory::DeclaredLink::EvidenceOf,
+            original.to_string(),
+        )],
     );
     let mut response = serde_json::json!({
         "success": true,
@@ -1213,12 +1219,14 @@ fn reinforce_duplicate(
         storage,
         &mut response,
         scope,
-        intent_id,
-        &echo_id,
-        echo_seq,
-        content,
-        submitted_source,
-        stored_tags,
+        IntentRecord {
+            intent_id: intent_id,
+            node_id: &echo_id,
+            effect_seq: echo_seq,
+            submitted_content: content,
+            submitted_source: submitted_source,
+            stored_tags: stored_tags,
+        },
     );
     Ok(response)
 }
@@ -1419,9 +1427,11 @@ async fn execute_verbose(
             cognitive,
             items,
             &intents.items,
-            global_force,
-            &batch_merge_policy,
-            &scope,
+            BatchSettings {
+                force_create: global_force,
+                merge_policy: &batch_merge_policy,
+                default_scope: &scope,
+            },
             claimed_role.as_deref(),
         )
         .await;
@@ -1441,20 +1451,14 @@ async fn execute_verbose(
     // replay (different bytes) still replays — visibly, via
     // `requestCanonicalHash`.
     // ====================================================================
-    if let Some(intent_id) = intents.single.as_deref() {
-        if let Some((replay_of, effect_seq, digest)) = storage
+    if let Some(intent_id) = intents.single.as_deref()
+        && let Some((replay_of, effect_seq, digest)) = storage
             .find_intent_record(&scope, intent_id)
             .map_err(|e| e.to_string())?
-        {
-            return Ok(intent_replay_response(
-                &scope,
-                intent_id,
-                &replay_of,
-                effect_seq,
-                &digest,
-                &content,
-            ));
-        }
+    {
+        return Ok(intent_replay_response(
+            &scope, intent_id, &replay_of, effect_seq, &digest, &content,
+        ));
     }
 
     let mut validity = resolve_validity_range(
@@ -1617,12 +1621,14 @@ async fn execute_verbose(
             storage,
             &mut response,
             &scope,
-            intents.single.as_deref(),
-            &node_id,
-            effect_seq,
-            &content,
-            &submitted_source,
-            &hook_tags,
+            IntentRecord {
+                intent_id: intents.single.as_deref(),
+                node_id: &node_id,
+                effect_seq: effect_seq,
+                submitted_content: &content,
+                submitted_source: &submitted_source,
+                stored_tags: &hook_tags,
+            },
         );
         crate::actor_surface::attach_actor_block(&mut response, storage, claimed_role.as_deref());
         attach_failure_hooks(&mut response, failure_hooks);
@@ -1824,12 +1830,14 @@ async fn execute_verbose(
             storage,
             &mut response,
             &scope,
-            intents.single.as_deref(),
-            &node_id,
-            effect_seq,
-            &content,
-            &submitted_source,
-            &hook_tags,
+            IntentRecord {
+                intent_id: intents.single.as_deref(),
+                node_id: &node_id,
+                effect_seq: effect_seq,
+                submitted_content: &content,
+                submitted_source: &submitted_source,
+                stored_tags: &hook_tags,
+            },
         );
         crate::actor_surface::attach_actor_block(&mut response, storage, claimed_role.as_deref());
         attach_failure_hooks(&mut response, failure_hooks);
@@ -2002,6 +2010,13 @@ fn attach_failure_hooks(response: &mut Value, hooks: Option<Value>) {
     }
 }
 
+/// The settings one `items` batch shares across all of its items.
+struct BatchSettings<'a> {
+    force_create: bool,
+    merge_policy: &'a str,
+    default_scope: &'a str,
+}
+
 /// Execute batch mode: process up to 20 items, each with full cognitive pipeline.
 ///
 /// Unlike the old `session_checkpoint` tool, batch mode runs the full cognitive
@@ -2012,11 +2027,14 @@ async fn execute_batch(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     items: Vec<BatchItem>,
     item_intents: &[Option<String>],
-    global_force_create: bool,
-    batch_merge_policy: &str,
-    default_scope: &str,
+    settings: BatchSettings<'_>,
     claimed_role: Option<&str>,
 ) -> Result<Value, String> {
+    let BatchSettings {
+        force_create: global_force_create,
+        merge_policy: batch_merge_policy,
+        default_scope,
+    } = settings;
     if items.is_empty() {
         return Err("Items array cannot be empty".to_string());
     }
@@ -2305,12 +2323,14 @@ async fn execute_batch(
                         storage,
                         &mut result,
                         &scope,
-                        intent_id.as_deref(),
-                        &node_id,
-                        effect_seq,
-                        &item.content,
-                        &submitted_source,
-                        &hook_tags,
+                        IntentRecord {
+                            intent_id: intent_id.as_deref(),
+                            node_id: &node_id,
+                            effect_seq: effect_seq,
+                            submitted_content: &item.content,
+                            submitted_source: &submitted_source,
+                            stored_tags: &hook_tags,
+                        },
                     );
                     results.push(result);
                 }
@@ -2419,19 +2439,19 @@ async fn execute_batch(
             // indexed first, so intra-batch duplicates resolve to the
             // lowest original index of the group.
             // ================================================================
-            let duplicate_of =
-                match storage.find_duplicate_by_canonical_hash(&scope, &item.content) {
-                    Ok(found) => found,
-                    Err(reason) => {
-                        errors += 1;
-                        results.push(serde_json::json!({
-                            "index": i,
-                            "status": "error",
-                            "reason": reason.to_string()
-                        }));
-                        continue;
-                    }
-                };
+            let duplicate_of = match storage.find_duplicate_by_canonical_hash(&scope, &item.content)
+            {
+                Ok(found) => found,
+                Err(reason) => {
+                    errors += 1;
+                    results.push(serde_json::json!({
+                        "index": i,
+                        "status": "error",
+                        "reason": reason.to_string()
+                    }));
+                    continue;
+                }
+            };
             if let Some(original) = duplicate_of {
                 reinforced += 1;
                 match reinforce_duplicate(
@@ -2512,12 +2532,14 @@ async fn execute_batch(
                         storage,
                         &mut result,
                         &scope,
-                        intent_id.as_deref(),
-                        &node_id,
-                        effect_seq,
-                        &item.content,
-                        &submitted_source,
-                        &hook_tags,
+                        IntentRecord {
+                            intent_id: intent_id.as_deref(),
+                            node_id: &node_id,
+                            effect_seq: effect_seq,
+                            submitted_content: &item.content,
+                            submitted_source: &submitted_source,
+                            stored_tags: &hook_tags,
+                        },
                     );
                     results.push(result);
                 }
@@ -2979,10 +3001,12 @@ mod tests {
         assert_eq!(args.unwrap()["content"], "kept");
 
         // An invalid id fails the whole call before anything is written.
-        assert!(take_intent_ids(Some(serde_json::json!({
-            "content": "x", "intent_id": "not allowed"
-        })))
-        .is_err());
+        assert!(
+            take_intent_ids(Some(serde_json::json!({
+                "content": "x", "intent_id": "not allowed"
+            })))
+            .is_err()
+        );
         let (_, empty) = take_intent_ids(None).unwrap();
         assert_eq!(empty.single, None);
         assert!(empty.items.is_empty());
@@ -2990,7 +3014,8 @@ mod tests {
     }
 
     #[test]
-    fn failure_hook_levers_parse_as_documented() {        use super::{flag_enabled_from, flag_opt_in_from};
+    fn failure_hook_levers_parse_as_documented() {
+        use super::{flag_enabled_from, flag_opt_in_from};
         // On-by-default lever (live backfill): unset is on, only explicit off words turn it off.
         assert!(flag_enabled_from(None));
         for off in ["0", "false", "OFF", "no", " off "] {
@@ -4380,13 +4405,13 @@ mod tests {
         let batch_intent = &schema_value["properties"]["items"]["items"]["properties"]["intent_id"];
         assert!(batch_intent.is_object(), "{batch_intent}");
         assert_eq!(batch_intent["pattern"], "^[A-Za-z0-9._:-]+$");
-        let kinds: Vec<&str> = schema_value["properties"]["links"]["items"]["properties"]["kind"]
-            ["enum"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|kind| kind.as_str().unwrap())
-            .collect();
+        let kinds: Vec<&str> =
+            schema_value["properties"]["links"]["items"]["properties"]["kind"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|kind| kind.as_str().unwrap())
+                .collect();
         for still in ["derived_from", "evidence_of", "closes", "supersedes"] {
             assert!(kinds.contains(&still), "{kinds:?} lost {still}");
         }

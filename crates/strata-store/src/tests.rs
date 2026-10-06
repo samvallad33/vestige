@@ -3170,13 +3170,17 @@ fn a_second_backup_into_the_same_directory_replaces_the_first() {
     backup.log().verify_log().expect("log verifies");
     std::fs::remove_dir_all(&dir).ok();
     std::fs::remove_dir_all(&dest).ok();
+}
+
 // ---------------------------------------------------------------------
 // INGEST V5: canonical duplicate index + intent index (Lane A)
 // ---------------------------------------------------------------------
 
 fn duplicate_echo_input(orig: &str, chex: &str, lines: usize) -> IngestInput {
     IngestInput {
-        content: format!("duplicate of {orig}\ncanonical_hash: {chex}\nsubmitted_sha256_line_count: {lines}"),
+        content: format!(
+            "duplicate of {orig}\ncanonical_hash: {chex}\nsubmitted_sha256_line_count: {lines}"
+        ),
         source: Some(crate::types::SourceKey {
             system: crate::canonical::DUPLICATE_SOURCE.to_string(),
             project: String::new(),
@@ -3195,8 +3199,12 @@ fn duplicate_echo_input(orig: &str, chex: &str, lines: usize) -> IngestInput {
 fn canonical_duplicate_lookup_finds_the_first_node_across_variants_and_reopens() {
     let dir = temp_dir("canonical-first-node");
     let mut store = StrataStore::open(&dir).expect("open");
-    let a = store.ingest(input("Café overrides", &[])).expect("ingest A");
-    store.ingest(input("unrelated bytes", &[])).expect("ingest B");
+    let a = store
+        .ingest(input("Café overrides", &[]))
+        .expect("ingest A");
+    store
+        .ingest(input("unrelated bytes", &[]))
+        .expect("ingest B");
 
     let direct = store
         .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("Café overrides"))
@@ -3217,7 +3225,10 @@ fn canonical_duplicate_lookup_finds_the_first_node_across_variants_and_reopens()
     // Different scope: no hit.
     assert_eq!(
         store
-            .find_node_by_canonical_hash("other", &crate::canonical::canonical_hash("Café overrides"))
+            .find_node_by_canonical_hash(
+                "other",
+                &crate::canonical::canonical_hash("Café overrides")
+            )
             .expect("scoped lookup"),
         None,
         "the canonical index is per scope"
@@ -3239,16 +3250,14 @@ fn canonical_duplicate_lookup_finds_the_first_node_across_variants_and_reopens()
 fn duplicate_echo_nodes_never_become_dedup_targets() {
     let dir = temp_dir("canonical-echo");
     let mut store = StrataStore::open(&dir).expect("open");
-    let orig = store.ingest(input("the original fact", &[])).expect("original");
+    let orig = store
+        .ingest(input("the original fact", &[]))
+        .expect("original");
 
     // The reinforcer's echo node: source "duplicate", content naming the
     // original. It lands, but it must never be indexed.
     let echo = store
-        .ingest(duplicate_echo_input(
-            &orig,
-            "deadbeef",
-            3,
-        ))
+        .ingest(duplicate_echo_input(&orig, "deadbeef", 3))
         .expect("echo ingest");
     assert_ne!(echo, orig, "the echo is its own node");
 
@@ -3256,7 +3265,10 @@ fn duplicate_echo_nodes_never_become_dedup_targets() {
     let echo_record = store.get_node(&echo).expect("echo record");
     assert_eq!(
         store
-            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash(&echo_record.content))
+            .find_node_by_canonical_hash(
+                "",
+                &crate::canonical::canonical_hash(&echo_record.content)
+            )
             .expect("echo lookup"),
         None,
         "an echo node never becomes the dedup target"
@@ -3299,7 +3311,9 @@ fn intent_record_find_roundtrip_survives_reopen_and_backup() {
         "unknown intent ids miss"
     );
     assert_eq!(
-        store.find_intent("elsewhere", "run-42").expect("scope miss"),
+        store
+            .find_intent("elsewhere", "run-42")
+            .expect("scope miss"),
         None,
         "intent ids are per scope"
     );
@@ -3308,7 +3322,9 @@ fn intent_record_find_roundtrip_survives_reopen_and_backup() {
     drop(store);
     let reopened = StrataStore::open(&dir).expect("reopen");
     assert_eq!(
-        reopened.find_intent("user", "run-42").expect("reopened find"),
+        reopened
+            .find_intent("user", "run-42")
+            .expect("reopened find"),
         Some((node.clone(), effect_seq, digest.clone())),
         "intent entries survive reopen"
     );
@@ -3316,7 +3332,9 @@ fn intent_record_find_roundtrip_survives_reopen_and_backup() {
     reopened.backup_to(&backup).expect("backup");
     let restored = StrataStore::open(&backup).expect("open backup");
     assert_eq!(
-        restored.find_intent("user", "run-42").expect("restored find"),
+        restored
+            .find_intent("user", "run-42")
+            .expect("restored find"),
         Some((node, effect_seq, digest)),
         "intent entries travel with backups"
     );
@@ -3370,7 +3388,9 @@ fn existing_store_upgrades_in_place_without_an_intent_file() {
     // must open (empty table) and start recording without migration.
     let dir = temp_dir("intent-upgrade");
     let mut store = StrataStore::open(&dir).expect("open");
-    let node = store.ingest(input("pre-feature fact", &[])).expect("ingest");
+    let node = store
+        .ingest(input("pre-feature fact", &[]))
+        .expect("ingest");
     assert_eq!(store.find_intent("", "any").expect("empty table"), None);
     store
         .record_intent("", "first-after-upgrade", &node, 7, "digest")

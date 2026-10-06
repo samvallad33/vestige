@@ -151,6 +151,11 @@ fn publish_backup(staging: &Path, dest: &Path, dest_is_new: bool) -> std::io::Re
     if staged_meta.exists() {
         std::fs::rename(&staged_meta, dest.join(META_NAME))?;
     }
+    // The intent index travels with the log (see `stage_backup`).
+    let staged_intents = staging.join(INTENT_INDEX_FILE);
+    if staged_intents.exists() {
+        std::fs::rename(&staged_intents, dest.join(INTENT_INDEX_FILE))?;
+    }
     sync_dir(dest)?;
     // Everything is in place and durable; the emptied staging directory is
     // only litter, so failing to remove it does not fail the backup.
@@ -185,15 +190,16 @@ struct IntentIndexEntry {
 /// Read the intent-index side file. Missing file = empty table (a store from
 /// before this feature). A present-but-undecodable file is an error: silent
 /// loss would turn every recorded intent into a fresh write.
-fn load_intent_index(dir: &Path) -> Result<BTreeMap<(String, String), IntentIndexEntry>, StoreError> {
+fn load_intent_index(
+    dir: &Path,
+) -> Result<BTreeMap<(String, String), IntentIndexEntry>, StoreError> {
     let bytes = match std::fs::read(dir.join(INTENT_INDEX_FILE)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(err) => return Err(StoreError::Io(err)),
     };
-    borsh::from_slice(&bytes).map_err(|e| {
-        StoreError::Verify(format!("intent index side file is unreadable: {e}"))
-    })
+    borsh::from_slice(&bytes)
+        .map_err(|e| StoreError::Verify(format!("intent index side file is unreadable: {e}")))
 }
 
 /// Write the intent-index side file atomically (tmp + rename, 0600 on unix).
