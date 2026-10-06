@@ -379,6 +379,24 @@ enum Commands {
         json: bool,
     },
 
+    /// Admit test, CI, or agent runs onto the Strata log
+    ///
+    /// A JUnit file records one run per testcase. The run id is
+    /// `{suite}::{classname}::{name}` and the subject is `{classname}::{name}`.
+    /// The same id with the same fields appends nothing. With no file, nothing
+    /// is written.
+    RecordRuns {
+        /// JUnit XML file.
+        #[arg(long)]
+        junit: Option<PathBuf>,
+        /// Commit copied onto each imported run. Exact bytes.
+        #[arg(long)]
+        commit: Option<String>,
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Read-only audit for credential-shaped values already in the local store.
     ScanSecrets {
         /// Include high-entropy review candidates as well as blocking matches.
@@ -501,11 +519,16 @@ enum Commands {
     /// Recall memories by exact handle (--handle), or by free text on a legacy
     /// SQLite store
     ///
-    /// On a Strata log (4.0) recall is by exact handle only: a memory id, a
-    /// unique id prefix of 8 or more characters, or an exact tag. It prints
-    /// the matching memories and their one-hop recorded edges, like the MCP
-    /// recall tool's `handle` argument. A free-text QUERY is refused there,
-    /// with any handles found in the text.
+    /// On a Strata log (4.0) recall is by exact handle: a memory id, a unique
+    /// id prefix of 8 or more characters, an exact tag, a file path, a
+    /// path#symbol, a commit sha (full or a unique prefix of 7 or more hex
+    /// characters), a test id, or a run id. Typed prefixes file:, sym:,
+    /// commit:, test:, and run: search only that table. Resolution uses
+    /// recorded anchors, edges, commit records, and run records. Node content
+    /// is not read. There is no case folding and no snake/camel normalization.
+    /// It prints the matching memories, their one-hop recorded edges, and the
+    /// proof of each row, like the MCP recall tool's `handle` argument. A
+    /// free-text QUERY is refused there, with any handles found in the text.
     ///
     /// On a legacy SQLite store a QUERY runs the v3 deep_reference engine
     /// (keyword search, FSRS-6 trust, spreading activation, supersession and
@@ -514,7 +537,10 @@ enum Commands {
         /// Free-text query or claim to reason about (legacy SQLite stores)
         #[arg(required_unless_present = "handle", conflicts_with = "handle")]
         query: Option<String>,
-        /// Exact handle: memory id, unique id prefix (8+ chars), or exact tag
+        /// Exact handle: memory id, unique id prefix (8+ chars), exact tag,
+        /// file path, path#symbol, commit sha (full or unique 7+ hex prefix),
+        /// test id, or run id. Prefixes file:, sym:, commit:, test:, and run:
+        /// search only that table. No fuzzy matching and no case folding.
         #[arg(long)]
         handle: Option<String>,
         /// How many memories to analyze for a QUERY (candidate depth)
@@ -711,6 +737,11 @@ fn main() -> anyhow::Result<()> {
             max_commits,
             json,
         } => run_ingest_git(path, since, until, max_commits, json),
+        Commands::RecordRuns {
+            junit,
+            commit,
+            json,
+        } => run_record_runs(junit, commit, json),
         Commands::ScanSecrets {
             include_suspected,
             json,
@@ -4636,6 +4667,38 @@ fn git_repo_identity(path: &Path) -> Option<String> {
     Some(stripped)
 }
 
+fn run_record_runs(
+    junit: Option<PathBuf>,
+    commit: Option<String>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let storage = open_storage()?;
+    let junit_xml = match junit {
+        Some(path) => Some(
+            std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?,
+        ),
+        None => None,
+    };
+    let report = vestige_mcp::tools::record_runs::execute(
+        storage.as_ref(),
+        vestige_mcp::tools::record_runs::Request {
+            runs: Vec::new(),
+            junit_xml,
+            commit: commit.unwrap_or_default(),
+        },
+    )
+    .map_err(anyhow::Error::msg)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", "=== Vestige Record Runs ===".cyan().bold());
+        println!();
+        println!("{}", vestige_mcp::tools::record_runs::render_human(&report));
+    }
+    Ok(())
+}
+
 /// Ingest git commits as memory records. A Strata log records `touched` edges
 /// and hunk anchors. A legacy SQLite store still upserts on
 /// `(git, "<repo>#<sha>")` and dates the row to the commit time.
@@ -4663,10 +4726,7 @@ fn run_ingest_git(
         } else {
             println!("{}", "=== Vestige Ingest Git ===".cyan().bold());
             println!();
-            println!(
-                "{}",
-                vestige_mcp::tools::ingest_git::render_human(&report)
-            );
+            println!("{}", vestige_mcp::tools::ingest_git::render_human(&report));
         }
         return Ok(());
     }
@@ -4821,7 +4881,7 @@ fn run_recall(
             format!("Handles in your text: {}.", suggestions.join("; "))
         };
         anyhow::bail!(
-            "similarity_disabled: free-text recall is not a Strata operation in Vestige 4.0 (no embeddings, BM25, FTS or keyword matching). Recall by exact handle instead: vestige recall --handle <memory id | unique id prefix of 8+ chars | exact tag>. {found}"
+            "similarity_disabled: free-text recall is not a Strata operation in Vestige 4.0 (no embeddings, BM25, FTS or keyword matching). Recall by exact handle instead: vestige recall --handle <memory id | unique id prefix of 8+ chars | exact tag | file path | path#symbol | commit sha | test id | run id>. {found}"
         );
     }
 
@@ -4950,7 +5010,7 @@ fn print_handle_recall(handle: &str, value: &serde_json::Value, json: bool) -> a
             candidates.join(", ")
         ),
         Some(error) => anyhow::bail!(
-            "{error}: nothing matches handle '{handle}'. A handle is a memory id, a unique id prefix of 8+ characters, or an exact tag (case-sensitive); legacy SQLite stores also resolve commit shas, files, symbols, tests and run ids."
+            "{error}: nothing matches handle '{handle}'. A handle is a memory id, a unique id prefix of 8+ characters, an exact tag, a file path, a path#symbol, a commit sha, a test id, or a run id (case-sensitive, from recorded rows)."
         ),
         None => {}
     }
@@ -4968,6 +5028,14 @@ fn print_handle_recall(handle: &str, value: &serde_json::Value, json: bool) -> a
         nodes.len(),
         if nodes.len() == 1 { "y" } else { "ies" }
     );
+    if let Some(proofs) = value["proofs"].as_array()
+        && !proofs.is_empty()
+    {
+        println!("  proofs: {}", proofs.len());
+        for proof in proofs.iter().take(HANDLE_PRINT_LIMIT) {
+            println!("  {}", proof);
+        }
+    }
     for node in nodes.iter().take(HANDLE_PRINT_LIMIT) {
         let tags: Vec<&str> = node["tags"]
             .as_array()

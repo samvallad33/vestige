@@ -644,25 +644,88 @@ impl HandleKind {
     }
 }
 
+/// One recorded row behind a resolved id.
+///
+/// The `table` tag names the registry the hit came from. Nothing in a proof
+/// is inferred from node content.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "table", rename_all = "snake_case")]
+pub enum HandleProof {
+    /// Anchor row and the effect that admitted it.
+    Anchor {
+        /// Memory the anchor belongs to.
+        id: String,
+        /// Anchor id.
+        anchor_id: String,
+        /// `eff-` receipt of the admitting effect.
+        receipt: String,
+    },
+    /// Commit record: creating frame plus its effect receipt.
+    Commit {
+        /// Commit memory id.
+        id: String,
+        /// Log seq of the creating `UpsertNode` frame.
+        frame_seq: u64,
+        /// Chain hash of that frame, lowercase hex.
+        frame_hash: String,
+        /// `eff-` receipt of the creating effect.
+        receipt: String,
+    },
+    /// Run record and the effect that admitted it.
+    Run {
+        /// Run id.
+        id: String,
+        /// `eff-` receipt of the admitting effect.
+        receipt: String,
+    },
+    /// Typed edge and the data frame that admitted it.
+    Edge {
+        /// Source memory id.
+        id: String,
+        source: String,
+        target: String,
+        link_type: String,
+        meta_sha: Option<String>,
+        /// Log seq of the `SaveEdge` frame.
+        frame_seq: u64,
+    },
+    /// Memory id (exact or unique prefix).
+    Memory {
+        /// Memory id.
+        id: String,
+        /// `eff-` receipt of the creating effect, when the log has one.
+        receipt: Option<String>,
+    },
+    /// Exact tag carried by a live memory.
+    Tag {
+        /// Memory id.
+        id: String,
+    },
+}
+
 /// Outcome of resolving one query against the store.
 ///
 /// - `ids` non-empty: resolved. When `exact` is false the match was a unique
-///   prefix (only sha/symbol can get here).
-/// - `ids` empty and `candidates` non-empty: prefix-ambiguous — the caller
-///   must disambiguate (or supply a longer prefix).
+///   prefix (only a commit sha can get here).
+/// - `ids` empty and `candidates` non-empty: ambiguous — the caller must
+///   disambiguate (or supply a longer prefix).
 /// - both empty: no handle matched; `handle_required` carries the message the
 ///   handle-based recall flow reports (including the too-short-sha error).
+///
+/// `proofs` names the recorded row behind each resolved id.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HandleResolution {
     pub kind: HandleKind,
     pub ids: Vec<String>,
     pub exact: bool,
-    /// `(id, kind)` pairs shown when a prefix is ambiguous. Capped at
+    /// `(id, kind)` pairs shown when a query is ambiguous. Capped at
     /// [`MAX_CANDIDATES`].
     pub candidates: Vec<(String, HandleKind)>,
     /// Set when nothing resolved: the handle_required guidance (or the
     /// specific ambiguity error for a too-short sha).
     pub handle_required: Option<String>,
+    /// Recorded rows behind `ids`. Empty when nothing resolved.
+    pub proofs: Vec<HandleProof>,
 }
 
 // ----------------------------------------------------------------------------

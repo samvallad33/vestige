@@ -56,6 +56,7 @@ pub mod repo_ingest;
 
 // `vestige ingest-git` on a Strata log: touched edges and hunk anchors.
 pub mod ingest_git;
+pub mod record_runs;
 
 // v1.3: Auto-save and dedup tools
 pub mod dedup;

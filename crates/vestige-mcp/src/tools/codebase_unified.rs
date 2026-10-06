@@ -28,8 +28,8 @@ pub fn schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["remember_pattern", "remember_decision", "get_context", "verify", "reanchor", "ingest_repo"],
-                "description": "Save, list, and re-check code knowledge. 'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' checks a bounded set of anchored memories (with a codebase, its change records too), 'reanchor' explicitly replaces reviewed source anchors for memoryId, 'ingest_repo' turns the commits of a local checkout (repoPath) into anchored change records in their own scope; it previews unless dryRun=false"
+                "enum": ["remember_pattern", "remember_decision", "get_context", "verify", "reanchor", "ingest_repo", "record_runs"],
+                "description": "Save, list, and re-check code knowledge. 'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' checks a bounded set of anchored memories (with a codebase, its change records too), 'reanchor' explicitly replaces reviewed source anchors for memoryId, 'ingest_repo' turns the commits of a local checkout (repoPath) into anchored change records in their own scope; it previews unless dryRun=false. 'record_runs' admits run records (or a JUnit document) onto the Strata log; an empty call records nothing."
             },
             // remember_pattern fields
             "name": {
@@ -118,6 +118,19 @@ pub fn schema() -> Value {
             "until": {
                 "type": "string",
                 "description": "ingest_repo: only commits before this date (git date syntax)."
+            },
+            "runs": {
+                "type": "array",
+                "description": "record_runs: run records to admit. Each item has runId, kind (test|ci|agent), subject, commit, status (passed|failed|skipped|errored), startedMs, finishedMs.",
+                "items": { "type": "object" }
+            },
+            "junitXml": {
+                "type": "string",
+                "description": "record_runs: JUnit XML. One run per testcase, id {suite}::{classname}::{name}, subject {classname}::{name}."
+            },
+            "commit": {
+                "type": "string",
+                "description": "record_runs: commit copied onto each JUnit run. Exact bytes."
             }
         },
         "required": ["action"]
@@ -155,6 +168,22 @@ struct CodebaseArgs {
     rev: Option<String>,
     since: Option<String>,
     until: Option<String>,
+    // record_runs
+    runs: Option<Vec<RunArg>>,
+    junit_xml: Option<String>,
+    commit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunArg {
+    run_id: String,
+    kind: String,
+    subject: String,
+    commit: Option<String>,
+    status: String,
+    started_ms: Option<i64>,
+    finished_ms: Option<i64>,
 }
 
 /// Structured anchor as it arrives over MCP.
@@ -187,8 +216,9 @@ pub async fn execute(
         "verify" => execute_verify(storage, &args).await,
         "reanchor" => execute_reanchor(storage, &args),
         "ingest_repo" => execute_ingest_repo(storage, &args).await,
+        "record_runs" => execute_record_runs(storage, &args),
         _ => Err(format!(
-            "Invalid action '{}'. Must be one of: remember_pattern, remember_decision, get_context, verify, reanchor, ingest_repo",
+            "Invalid action '{}'. Must be one of: remember_pattern, remember_decision, get_context, verify, reanchor, ingest_repo, record_runs",
             args.action
         )),
     }
@@ -400,6 +430,35 @@ async fn execute_remember_decision(
 // exactly the same confidence as one that was still true. The fix is not to
 // delete rotted memories - the user values that memories are preserved - it is
 // to make rot *visible* at retrieval time.
+
+/// Admit run records, or a JUnit document, onto the Strata log.
+///
+/// An empty call records nothing. The same run id with equal fields appends
+/// nothing.
+fn execute_record_runs(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<Value, String> {
+    let runs = args
+        .runs
+        .iter()
+        .flatten()
+        .map(|run| super::record_runs::RunInput {
+            run_id: run.run_id.clone(),
+            kind: run.kind.clone(),
+            subject: run.subject.clone(),
+            commit: run.commit.clone().unwrap_or_default(),
+            status: run.status.clone(),
+            started_ms: run.started_ms.unwrap_or(0),
+            finished_ms: run.finished_ms.unwrap_or(0),
+        })
+        .collect();
+    super::record_runs::execute(
+        storage.as_ref(),
+        super::record_runs::Request {
+            runs,
+            junit_xml: args.junit_xml.clone(),
+            commit: args.commit.clone().unwrap_or_default(),
+        },
+    )
+}
 
 /// Turn the commits of a local checkout into anchored change records. Previews
 /// unless `dryRun=false`: the log is append-only, so a bulk write is opt-in.
