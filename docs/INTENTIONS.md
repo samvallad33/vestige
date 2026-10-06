@@ -372,8 +372,8 @@ coordination. The journal does not claim those properties.
 The ordinary `set` and `check` path also supports the core trigger forms that
 were previously lost or only partly evaluated by the public adapter:
 
-- `activity` matches an explicit activity or condition against supplied context
-  events;
+- `activity` fires when a supplied context event equals its key exactly (the
+  `condition` when one is stored, otherwise the `activity`);
 - `recurring` accepts a named recurrence such as `daily`, `weekly`, or
   `fortnightly`, an `every ...` expression, or a bounded interval object, and
   can wrap a base trigger;
@@ -404,16 +404,48 @@ not infer a local time zone or daylight-saving policy.
 
 For `time`, provide exactly one RFC 3339 `at` or positive `in_minutes` value.
 For `context`, provide at least one of `codebase`, `file_pattern`, or `topic`;
-all supplied fields must match. A `compound` trigger recursively combines
+all supplied fields must match exactly. A `compound` trigger recursively combines
 `all_of` and `any_of`; each nonempty list retains its usual all/any meaning,
 and both lists cannot be empty.
 
-Triggers are rules over strings you pass in `check.context`. They are not recall
-and they rank nothing. A `context` field or an `activity` trigger fires when its
-stored value appears, ignoring case, inside a supplied string. `event.condition`
-fires when it equals an entry of `check.context.events`, ignoring case. These
-comparisons are between your own supplied strings and your own stored trigger.
-None of them reads the content of a record.
+Triggers are exact rules over handles you declare in `check.context`. They are
+not recall, they rank nothing, and nothing is matched by substring, by case
+folding or by pattern. A trigger fires on a clock (`time`, `recurring`, a
+deadline) or when a stored value equals a declared one byte for byte:
+
+| Stored trigger field | Fires when |
+| --- | --- |
+| `condition` (an `event` trigger) | `context.event`, or an entry of `context.events`, equals it |
+| `activity` (or its `condition`) | `context.event`, or an entry of `context.events`, equals it |
+| `codebase` | `context.codebase` equals it |
+| `file_pattern` | `context.file` equals it (an exact path; the field keeps its old name and is not a glob) |
+| `topic` | an entry of `context.topics` equals it |
+
+So an `activity` of `deploy` fires on the event `deploy`. It does not fire on
+`Deploy` or on `deploy finished on prod`. Use short keys such as
+`build_finished`, not sentences. `session_start` applies the same rules to its
+`context`, and a retrieval call that resurfaces intentions compares the handle
+it was asked for with the stored value in the same way. None of these reads the
+content of a record.
+
+Before 4.2.0 a `context` field or an `activity` trigger fired when its stored
+value appeared, ignoring case, anywhere inside a supplied string, and an
+`event.condition` matched ignoring case. A trigger written for that still exists
+and is still listed, but it fires only on the exact value. `list` and `check`
+say so for every text-keyed trigger: each carries `triggerMatching`, whose
+`firesOn` rows name the context field and the exact value to pass.
+
+A description is stored as written and never parsed. Before 4.2.0, `set` with
+no `trigger` read the description for phrases such as "in 30 minutes", "when
+..." or "urgent" and inferred a trigger and a priority from them. It no longer
+does: with no `trigger` and no `deadline` the intention is manual, never fires
+on its own, and the response says so. Triggers that were inferred that way
+earlier are kept as stored and marked `inferredFromText` when listed. No tag is
+added to an intention that the caller did not pass.
+
+`list` returns intentions in one documented order, echoed as `order`: priority
+high to low, then creation time old to new, then id. With `filter_status:
+"all"` the status groups come first (active, fulfilled, cancelled, snoozed).
 
 Trigger trees are limited to depth 5 and 32 nodes, with at most 16 entries in
 each compound list. Duration, recurrence, and snooze intervals are 1 through
