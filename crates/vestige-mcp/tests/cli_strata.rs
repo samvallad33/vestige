@@ -1341,6 +1341,121 @@ fn a_component_tag_past_the_old_cap_reaches_its_commits_and_the_walk_explains_ea
     );
 }
 
+/// A walk is a narrowing: it follows one `touched` edge, not a chain of
+/// them. The failure shares `connection` with ten commits. Four of those
+/// also share `asyncio` with eight older commits the failure shares nothing
+/// with, and `vestige connect` joins them. The walk lists the ten, leaves
+/// the eight out, and says so: how many edges it did not follow, to how many
+/// memories, and the exact identity those edges rest on with its carriers.
+/// The hub tag every commit carries is not named as a reason.
+#[test]
+fn a_walk_follows_one_touched_edge_and_counts_the_ones_it_did_not() {
+    let dir = TempDir::new().expect("temp dir");
+    let storage = open(dir.path());
+    let mut unrelated = Vec::new();
+    for i in 0..8 {
+        unrelated.push(put(
+            &storage,
+            &format!("Commit a51c{i:03}: async change {i}. Touched: redis/asyncio/client.py"),
+            &["chal-commit", "asyncio"],
+        ));
+    }
+    let mut component = Vec::new();
+    for i in 0..10 {
+        let tags: &[&str] = if i < 4 {
+            &["chal-commit", "connection", "asyncio"]
+        } else {
+            &["chal-commit", "connection"]
+        };
+        component.push(put(
+            &storage,
+            &format!("Commit c0ffee{i:02}: connection change {i}. Touched: redis/connection.py"),
+            tags,
+        ));
+    }
+    drop(storage);
+
+    let ingest = vestige(
+        dir.path(),
+        &[
+            "ingest",
+            "Challenge failure: connecting takes very long since the upgrade",
+            "--tags",
+            "challenge,failure,connection",
+        ],
+    );
+    assert!(ingest.ok, "{}", ingest.text());
+    assert!(
+        ingest
+            .stdout
+            .contains("Auto-connected: 10 edge(s) created on exact identities: tag:connection\n"),
+        "{}",
+        ingest.text()
+    );
+    let failure = ingest
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Node ID: "))
+        .expect("node id")
+        .trim()
+        .to_string();
+
+    // The full scan joins the commits among themselves: the 12 that carry
+    // `asyncio`, and the 10 that touch redis/connection.py.
+    let scan = vestige(dir.path(), &["connect", "--max-edges", "1000000"]);
+    assert!(scan.ok, "{}", scan.text());
+    assert!(
+        scan.stdout.contains(
+            "Tags skipped: chal-commit (18 of 19: more than half the scope carries it)\n"
+        ),
+        "{}",
+        scan.text()
+    );
+    assert!(
+        scan.stdout.contains("Candidate pairs: 105\n"),
+        "{}",
+        scan.text()
+    );
+    assert_eq!(edge_count(dir.path()), 115, "{}", scan.text());
+
+    let walk = vestige(dir.path(), &["causal-walk", "--logged-write", &failure]);
+    assert!(walk.ok, "{}", walk.text());
+    let ranked: Vec<&str> = walk
+        .stdout
+        .lines()
+        .filter(|line| line.starts_with('#'))
+        .collect();
+    let expected: Vec<String> = component
+        .iter()
+        .enumerate()
+        .map(|(rank, id)| format!("#{} {id} depth 1", rank + 1))
+        .collect();
+    assert_eq!(ranked, expected, "{}", walk.text());
+    for id in &unrelated {
+        assert!(!walk.stdout.contains(id), "{id} is listed: {}", walk.text());
+    }
+    assert!(
+        walk.stdout.contains(
+            "  not followed: 32 touched edge(s) lead on from the memories above to 8 other memories. A path follows at most one touched edge: two memories naming the same thing is a lead, and it does not chain.\n    the two ends of those edges share: tag:asyncio (12 of 19) on 32 edge(s)\n"
+        ),
+        "{}",
+        walk.text()
+    );
+    assert!(!walk.stdout.contains("truncated:"), "{}", walk.text());
+
+    let json = vestige(
+        dir.path(),
+        &["causal-walk", "--logged-write", &failure, "--json"],
+    );
+    assert!(json.ok, "{}", json.text());
+    let value: Value = serde_json::from_str(&json.stdout).unwrap();
+    assert_eq!(value["causes"].as_array().unwrap().len(), 10, "{value}");
+    assert_eq!(value["not_followed"]["touched_edges"], 32, "{value}");
+    assert_eq!(value["not_followed"]["memories"], 8, "{value}");
+    assert_eq!(value["not_followed"]["no_counted_identity"], 0, "{value}");
+    assert_eq!(value["truncated"], false, "{value}");
+}
+
 /// Ingest-time path joins. The failure names a file by its full path; no
 /// memory carries that path as a tag (commits are tagged with folder
 /// segments and file names). The ingest itself writes the joins, names the

@@ -48,9 +48,14 @@
 //!    principled way to pick some of a tag's carriers, so a tag is never
 //!    joined to a subset of them.
 //!    - At ingest the new memory may receive at most [`MAX_AUTO_EDGES`]
-//!      edges. Its exact references are counted first; then its tags are
-//!      taken **fewest carriers first**, and each joins only if every edge
-//!      it adds still fits what is left of the budget.
+//!      edges. Every candidate is ranked (next section) and the strongest
+//!      are linked. A tag stays in play only if every memory carrying it
+//!      makes that cut. While some tag does not, the one with the **most
+//!      carriers** (the least specific) is taken out and the rest are
+//!      ranked again; a tag taken out is put back when the final cut has
+//!      room for all of its carriers ([`plan_edges`]). So a tag on two
+//!      memories is never crowded out by a path a hundred memories share,
+//!      and a tag that does not fit costs the budget nothing.
 //!    - In the full scan (`vestige connect`) a tag on `N` memories joins
 //!      `N * (N - 1) / 2` pairs, which is the quadratic blow-up the scan
 //!      guards against: a tag on more than [`SMALL_TAG_GROUP`] memories
@@ -74,13 +79,25 @@
 //!
 //! ## Strongest first, before the budget
 //!
-//! When the budget cannot hold every candidate (only exact references can
-//! overflow it, since tags join whole), candidates are ranked before the cut
-//! ([`rank_candidates`]): most distinct shared identities first, then the
-//! rarer identities first (fewer carriers in the scope), then id. The same
-//! order ranks the candidates of a causal walk, so the edges an ingest
-//! writes are the ones the walk would list first. What the cut leaves
-//! unlinked is counted in the report, and `vestige connect` writes it.
+//! Candidates are ranked before the cut ([`rank_candidates`]): most distinct
+//! shared identities first, then the rarer identities first (fewer carriers
+//! in the scope), then id. The same order ranks the candidates of a causal
+//! walk, so the edges an ingest writes are the ones the walk would list
+//! first. Once the tags are settled only exact references can still overflow
+//! the budget; what that cut leaves unlinked is counted in the report, and
+//! `vestige connect` writes it.
+//!
+//! ## What an edge is good for: one step
+//!
+//! A `touched` edge says two memories record the same exact identity. That
+//! is not transitive: a failure that shares `connection` with a commit, and
+//! that commit sharing `tests` with another commit, says nothing about the
+//! failure and the second commit. In a window of 78 commits the pairs sharing
+//! some folder tag are close to half of all pairs, so chaining these edges
+//! reaches nearly every commit from anywhere. The causal walk therefore
+//! follows at most one `touched` edge on a path (`tools::causal_walk`); the
+//! edges written here are leads one step from a memory, not a graph to
+//! traverse.
 //!
 //! ## Explainable edges
 //!
@@ -99,10 +116,16 @@
 //!    extraction runs on both sides, so a path that appears only in the two
 //!    texts joins exactly as one recorded as a tag does. The pass is linear
 //!    in the scope and yields `N` for every identity and `M` for the scope.
-//! 3. Apply the hub rule and the budget, rank, and write one `touched` edge
-//!    per kept candidate through [`Storage::save_connection`], exactly as
-//!    the connect command writes its edges. Pairs already joined by a
-//!    recorded edge (either direction) are left alone.
+//!    Texts are tokenized only when the new memory records a reference; a
+//!    memory with tags alone is matched on tags alone.
+//! 3. Apply the hub rule and the budget, rank ([`plan_edges`]), and write
+//!    one `touched` edge per kept candidate through
+//!    [`Storage::save_connection`], exactly as the connect command writes
+//!    its edges. Pairs already joined by a recorded edge (either direction)
+//!    are left alone.
+//!
+//! Each edge is its own gated, synced write, so the cost of one ingest is
+//! the scan plus one such write per edge; [`MAX_AUTO_EDGES`] bounds it.
 //!
 //! Two invariants are inherited from the connect command: the older memory
 //! of a pair is the edge's source (the walk's rule for `touched`), and edges
@@ -222,8 +245,9 @@ pub struct JoinedPair {
 pub enum SkipReason {
     /// The hub rule: more than half the scope carries the tag.
     Hub,
-    /// At ingest: joining the tag whole would add `needed` edges to the new
-    /// memory, and only `left` of the write's `budget` remain.
+    /// At ingest: `needed` memories carrying the tag are not linked by this
+    /// write, and only `left` of the write's `budget` remain once the
+    /// stronger candidates are in. Always `needed > left`.
     OverWriteBudget {
         needed: usize,
         left: usize,
@@ -391,8 +415,18 @@ pub fn scan_scope(
         scope_size: nodes.len(),
         holders: Vec::new(),
     };
+    // A text token is never a tag identity, so when no reference is wanted
+    // no text can match and only the tags are read.
+    let references_wanted = wanted
+        .iter()
+        .any(|identity| identity.kind != IdentityKind::Tag);
     for node in nodes {
-        let identities: Vec<Identity> = extract_identities(&node.content, &node.tags)
+        let content = if references_wanted {
+            node.content.as_str()
+        } else {
+            ""
+        };
+        let identities: Vec<Identity> = extract_identities(content, &node.tags)
             .into_iter()
             .filter(|identity| wanted.contains(identity))
             .collect();
@@ -450,21 +484,15 @@ pub fn auto_connect_new_memory(
     // One pass over the scope. Edges stay within one scope, the invariant
     // the connect command and declared links both keep, so memories of
     // other scopes are neither candidates nor counted.
-    let scan = scan_scope(storage, scope, &mine)
-        .map_err(|err| format!("auto-connect {err}"))?;
+    let scan = scan_scope(storage, scope, &mine).map_err(|err| format!("auto-connect {err}"))?;
     // `N` and `M` count the new memory too: it is one of the scope's
     // memories and records every one of its own identities, whether or not
     // the scan listed it.
     let listed = scan.holders.iter().any(|holder| holder.id == memory_id);
     let scope_size = scan.scope_size + usize::from(!listed);
-    let others: Vec<&Holder> = scan
-        .holders
-        .iter()
-        .filter(|holder| holder.id != memory_id)
-        .collect();
     let mut carriers: BTreeMap<Identity, usize> =
         mine.iter().map(|identity| (identity.clone(), 1)).collect();
-    for other in &others {
+    for other in scan.holders.iter().filter(|holder| holder.id != memory_id) {
         for identity in &other.identities {
             if let Some(count) = carriers.get_mut(identity) {
                 *count += 1;
@@ -472,95 +500,21 @@ pub fn auto_connect_new_memory(
         }
     }
 
-    // The memories an edge could still be written to.
-    let open: Vec<&Holder> = others
+    // The memories an edge could still be written to, in id order.
+    let open: Vec<&Holder> = scan
+        .holders
         .iter()
-        .copied()
         .filter(|holder| pair_key(memory_id, &holder.id).is_some_and(|key| !joined.contains(&key)))
         .collect();
 
-    // What the new memory may join on. Exact references (path, commit,
-    // issue, URL) always count; every memory sharing one is a candidate.
-    let mut evidence: BTreeSet<Identity> = mine
-        .iter()
-        .filter(|identity| identity.kind != IdentityKind::Tag)
-        .cloned()
-        .collect();
-    let mut selected: BTreeSet<&str> = open
-        .iter()
-        .filter(|holder| holder.identities.iter().any(|i| evidence.contains(i)))
-        .map(|holder| holder.id.as_str())
-        .collect();
-
-    // Tags: fewest carriers first, each whole or not at all. A hub is
-    // skipped; so is a tag whose every new edge no longer fits the budget.
-    let mut own_tags: Vec<&Identity> = mine
-        .iter()
-        .filter(|identity| identity.kind == IdentityKind::Tag)
-        .collect();
-    own_tags.sort_by(|a, b| {
-        carriers[*a]
-            .cmp(&carriers[*b])
-            .then_with(|| a.value.cmp(&b.value))
-    });
-    for tag in own_tags {
-        let carried_by = carriers[tag];
-        if is_hub_tag(carried_by, scope_size) {
-            report.skipped.push(SkippedTag {
-                tag: tag.value.clone(),
-                carriers: carried_by,
-                scope_size,
-                reason: SkipReason::Hub,
-            });
-            continue;
-        }
-        let fresh: Vec<&str> = open
-            .iter()
-            .filter(|holder| {
-                !selected.contains(holder.id.as_str()) && holder.identities.contains(tag)
-            })
-            .map(|holder| holder.id.as_str())
-            .collect();
-        let left = MAX_AUTO_EDGES.saturating_sub(selected.len());
-        if fresh.len() > left {
-            report.skipped.push(SkippedTag {
-                tag: tag.value.clone(),
-                carriers: carried_by,
-                scope_size,
-                reason: SkipReason::OverWriteBudget {
-                    needed: fresh.len(),
-                    left,
-                    budget: MAX_AUTO_EDGES,
-                },
-            });
-            continue;
-        }
-        evidence.insert(tag.clone());
-        selected.extend(fresh);
-    }
-    report.skipped.sort_by(|a, b| a.tag.cmp(&b.tag));
+    let plan = plan_edges(&mine, &carriers, &open, scope_size, MAX_AUTO_EDGES);
+    report.skipped = plan.skipped;
     report.skipped_common_tags = report
         .skipped
         .iter()
         .map(|skipped| skipped.tag.clone())
         .collect();
-
-    // Rank before the budget: each candidate with the counted identities it
-    // shares, strongest first.
-    let mut ranked: Vec<RankedCandidate> = open
-        .iter()
-        .filter(|holder| selected.contains(holder.id.as_str()))
-        .map(|holder| RankedCandidate {
-            id: holder.id.clone(),
-            shared: holder
-                .identities
-                .iter()
-                .filter(|identity| evidence.contains(*identity))
-                .map(|identity| (identity.clone(), carriers[identity]))
-                .collect(),
-        })
-        .collect();
-    rank_candidates(&mut ranked);
+    let ranked = plan.ranked;
     report.candidates = ranked.len();
     report.not_linked = ranked.len().saturating_sub(MAX_AUTO_EDGES);
 
@@ -598,12 +552,9 @@ pub fn auto_connect_new_memory(
             last_activated: now,
             activation_count: 0,
         };
-        storage.save_connection(&edge).map_err(|err| {
-            format!(
-                "auto-connect edge {} was not admitted: {err}",
-                candidate.id
-            )
-        })?;
+        storage
+            .save_connection(&edge)
+            .map_err(|err| format!("auto-connect edge {} was not admitted: {err}", candidate.id))?;
         report.edges += 1;
         shared_seen.extend(shared.iter().cloned());
         report.pairs.push(JoinedPair {
@@ -615,6 +566,202 @@ pub fn auto_connect_new_memory(
 
     report.shared_identities = shared_seen.into_iter().collect();
     Ok(report)
+}
+
+/// What one write joins the new memory on: its candidates, strongest first
+/// (the first `budget` of them are linked), and every tag it did not join
+/// on, sorted by tag.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EdgePlan {
+    pub ranked: Vec<RankedCandidate>,
+    pub skipped: Vec<SkippedTag>,
+}
+
+/// Decide what a new memory is joined on, from counts alone.
+///
+/// - `mine`: the new memory's identities.
+/// - `carriers`: for each of them, the memories of the scope recording it
+///   (the new memory included).
+/// - `open`: the memories an edge could be written to, each with the
+///   identities it shares with the new memory, in id order.
+/// - `scope_size`: the memories of the scope; `budget`: the edges one write
+///   may add.
+///
+/// Exact references always count. A hub tag never does. Every other tag
+/// joins whole or not at all, and the ranking decides which:
+///
+/// 1. Rank the candidates on everything still in play and cut at `budget`.
+/// 2. A tag is whole when every open memory carrying it made the cut. While
+///    some tag is not, take out the one with the most carriers (ties: the
+///    later name) and rank again. A tag with more open carriers than
+///    `budget` can never be whole and is taken out before the first ranking.
+/// 3. Put a tag back when the final cut holds all of its carriers: the ones
+///    it would add fit what is left, and the ones other identities already
+///    brought in were kept. Fewest carriers first.
+///
+/// What comes out is the same for the same counts: nothing but carrier
+/// counts, tag names and memory ids decides it. Every tag left out is
+/// reported with the edges it still needed and the budget that was left, and
+/// the first is always more than the second.
+pub fn plan_edges(
+    mine: &BTreeSet<Identity>,
+    carriers: &BTreeMap<Identity, usize>,
+    open: &[&Holder],
+    scope_size: usize,
+    budget: usize,
+) -> EdgePlan {
+    let carried_by = |identity: &Identity| carriers.get(identity).copied().unwrap_or(0);
+    // The open memories carrying each tag, as positions in `open`.
+    let mut open_carriers: BTreeMap<&Identity, Vec<usize>> = BTreeMap::new();
+    for (position, holder) in open.iter().enumerate() {
+        for identity in &holder.identities {
+            if identity.kind == IdentityKind::Tag {
+                open_carriers.entry(identity).or_default().push(position);
+            }
+        }
+    }
+    let carrying = |tag: &Identity| -> &[usize] {
+        open_carriers
+            .get(tag)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    };
+
+    let mut skipped: Vec<SkippedTag> = Vec::new();
+    // In play: every reference, and each tag that is neither a hub nor wider
+    // than the whole budget.
+    let mut in_play: BTreeSet<&Identity> = BTreeSet::new();
+    let mut taken_out: Vec<&Identity> = Vec::new();
+    for identity in mine {
+        if identity.kind != IdentityKind::Tag {
+            in_play.insert(identity);
+        } else if is_hub_tag(carried_by(identity), scope_size) {
+            skipped.push(SkippedTag {
+                tag: identity.value.clone(),
+                carriers: carried_by(identity),
+                scope_size,
+                reason: SkipReason::Hub,
+            });
+        } else if carrying(identity).len() > budget {
+            taken_out.push(identity);
+        } else {
+            in_play.insert(identity);
+        }
+    }
+
+    let (ranked, kept) = loop {
+        let ranked = rank_open(open, &in_play, carriers);
+        let kept: BTreeSet<&str> = ranked
+            .iter()
+            .take(budget)
+            .map(|candidate| candidate.id.as_str())
+            .collect();
+        let all_kept = |tag: &Identity| {
+            carrying(tag)
+                .iter()
+                .all(|position| kept.contains(open[*position].id.as_str()))
+        };
+
+        // 2. The least specific tag some carrier of which missed the cut.
+        let split = in_play
+            .iter()
+            .copied()
+            .filter(|identity| identity.kind == IdentityKind::Tag && !all_kept(identity))
+            .max_by(|a, b| {
+                carried_by(a)
+                    .cmp(&carried_by(b))
+                    .then_with(|| a.value.cmp(&b.value))
+            });
+        if let Some(tag) = split {
+            in_play.remove(tag);
+            taken_out.push(tag);
+            continue;
+        }
+
+        // 3. The most specific tag taken out that the settled cut can hold
+        //    whole: its carriers already ranked were all kept, and the ones
+        //    it would add fit what is left.
+        let in_ranking: BTreeSet<&str> = ranked
+            .iter()
+            .map(|candidate| candidate.id.as_str())
+            .collect();
+        let left = budget.saturating_sub(ranked.len());
+        taken_out.sort_by(|a, b| {
+            carried_by(a)
+                .cmp(&carried_by(b))
+                .then_with(|| a.value.cmp(&b.value))
+        });
+        let fits = taken_out.iter().position(|tag| {
+            let mut added = 0usize;
+            for position in carrying(tag) {
+                let id = open[*position].id.as_str();
+                if !in_ranking.contains(id) {
+                    added += 1;
+                } else if !kept.contains(id) {
+                    return false;
+                }
+            }
+            added <= left
+        });
+        if let Some(position) = fits {
+            in_play.insert(taken_out.remove(position));
+            continue;
+        }
+
+        let kept: BTreeSet<String> = kept.into_iter().map(str::to_string).collect();
+        break (ranked, kept);
+    };
+
+    let left = budget.saturating_sub(ranked.len());
+    for tag in taken_out {
+        let needed = carrying(tag)
+            .iter()
+            .filter(|position| !kept.contains(open[**position].id.as_str()))
+            .count();
+        skipped.push(SkippedTag {
+            tag: tag.value.clone(),
+            carriers: carried_by(tag),
+            scope_size,
+            reason: SkipReason::OverWriteBudget {
+                needed,
+                left,
+                budget,
+            },
+        });
+    }
+    skipped.sort_by(|a, b| a.tag.cmp(&b.tag));
+    EdgePlan { ranked, skipped }
+}
+
+/// The open memories that share an identity in play, each with those
+/// identities and their carrier counts, strongest first.
+fn rank_open(
+    open: &[&Holder],
+    in_play: &BTreeSet<&Identity>,
+    carriers: &BTreeMap<Identity, usize>,
+) -> Vec<RankedCandidate> {
+    let mut ranked: Vec<RankedCandidate> = open
+        .iter()
+        .filter_map(|holder| {
+            let shared: Vec<(Identity, usize)> = holder
+                .identities
+                .iter()
+                .filter(|identity| in_play.contains(identity))
+                .map(|identity| {
+                    (
+                        identity.clone(),
+                        carriers.get(identity).copied().unwrap_or(0),
+                    )
+                })
+                .collect();
+            (!shared.is_empty()).then(|| RankedCandidate {
+                id: holder.id.clone(),
+                shared,
+            })
+        })
+        .collect();
+    rank_candidates(&mut ranked);
+    ranked
 }
 
 /// A normalized, order-independent pair key, `None` for a self-pair.
@@ -632,8 +779,8 @@ fn pair_key(left: &str, right: &str) -> Option<(String, String)> {
 /// record first: creation time, then id, the same order the connect command
 /// sorts by.
 fn earlier_first(left: (&str, DateTime<Utc>), right: (&str, DateTime<Utc>)) -> (String, String) {
-    let left_first = left.1.cmp(&right.1).then_with(|| left.0.cmp(right.0))
-        == std::cmp::Ordering::Less;
+    let left_first =
+        left.1.cmp(&right.1).then_with(|| left.0.cmp(right.0)) == std::cmp::Ordering::Less;
     if left_first {
         (left.0.to_string(), right.0.to_string())
     } else {
@@ -1307,8 +1454,7 @@ mod tests {
                 ("group", 14),
             ],
         );
-        let skipped =
-            |max_edges| scan_skipped_tags(lists.iter().map(Vec::as_slice), max_edges);
+        let skipped = |max_edges| scan_skipped_tags(lists.iter().map(Vec::as_slice), max_edges);
 
         // Default budget: 19 carriers are 171 pairs, more than 100.
         let rendered: Vec<String> = skipped(MAX_AUTO_EDGES)
@@ -1424,57 +1570,245 @@ mod tests {
         assert_eq!(again, order);
     }
 
-    #[test]
-    #[ignore]
-    fn tmp_probe_scan_cost() {
-        // TEMPORARY measurement, removed before commit.
-        let words = [
-            "the", "connection", "retry", "was", "added", "when", "server", "timeout",
-            "regression", "since", "version", "tests", "stopped", "passing", "handler",
-            "smart_ingest", "causal_walk", "ConnectionPool", "note:", "(see", "below).",
-        ];
-        let mut memories: Vec<(String, Vec<String>)> = Vec::new();
-        for i in 0..10_000usize {
-            let mut text = String::with_capacity(2200);
-            let mut n = i;
-            while text.len() < 2000 {
-                n = n.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                let pick = (n >> 33) as usize;
-                if pick % 40 == 0 {
-                    text.push_str(&format!("crates/mod{}/src/file{}.rs:{} ", pick % 50, pick % 300, pick % 900));
-                } else if pick % 97 == 0 {
-                    text.push_str(&format!("https://example.com/a/{} ", pick % 1000));
-                } else {
-                    text.push_str(words[pick % words.len()]);
-                    text.push(' ');
-                }
-            }
-            memories.push((text, vec!["vestige".to_string(), format!("topic-{}", i % 400)]));
-        }
-        let bytes: usize = memories.iter().map(|(t, _)| t.len()).sum();
-        let wanted: BTreeSet<Identity> = extract_identities(&memories[17].0, &memories[17].1)
-            .into_iter()
+    // ---- the edge plan, from counts alone ----
+
+    fn holder(id: &str, identities: &[(IdentityKind, &str)]) -> Holder {
+        let mut identities: Vec<Identity> = identities
+            .iter()
+            .map(|(kind, value)| Identity::new(*kind, *value))
             .collect();
-        for round in 0..3 {
-            let started = std::time::Instant::now();
-            let mut holders = 0usize;
-            let mut total = 0usize;
-            for (text, tags) in &memories {
-                let found = extract_identities(text, tags);
-                total += found.len();
-                if found.iter().any(|identity| wanted.contains(identity)) {
-                    holders += 1;
-                }
-            }
-            eprintln!(
-                "round {round}: {} memories, {} MB, {} identities, {} holders, {:?}",
-                memories.len(),
-                bytes / 1_000_000,
-                total,
-                holders,
-                started.elapsed()
-            );
+        identities.sort();
+        Holder {
+            id: id.to_string(),
+            created_at: DateTime::<Utc>::UNIX_EPOCH,
+            identities,
         }
+    }
+
+    /// `count` holders `prefix-000`, `prefix-001`, ... all recording the
+    /// same identities.
+    fn holders(prefix: &str, count: usize, identities: &[(IdentityKind, &str)]) -> Vec<Holder> {
+        (0..count)
+            .map(|i| holder(&format!("{prefix}-{i:03}"), identities))
+            .collect()
+    }
+
+    /// Plan the edges of a new memory recording `mine` against `others`
+    /// (every one of them open), with the carriers counted from `others`
+    /// plus the new memory itself.
+    fn plan(
+        mine: &[(IdentityKind, &str)],
+        others: &[Holder],
+        scope_size: usize,
+        budget: usize,
+    ) -> EdgePlan {
+        let mine: BTreeSet<Identity> = mine
+            .iter()
+            .map(|(kind, value)| Identity::new(*kind, *value))
+            .collect();
+        let mut carriers: BTreeMap<Identity, usize> =
+            mine.iter().map(|identity| (identity.clone(), 1)).collect();
+        for other in others {
+            for identity in &other.identities {
+                *carriers.get_mut(identity).expect("a wanted identity") += 1;
+            }
+        }
+        let mut open: Vec<&Holder> = others.iter().collect();
+        open.sort_by(|a, b| a.id.cmp(&b.id));
+        plan_edges(&mine, &carriers, &open, scope_size, budget)
+    }
+
+    fn joined_on(candidate: &RankedCandidate) -> Vec<String> {
+        candidate
+            .shared
+            .iter()
+            .map(|(identity, _)| identity.to_string())
+            .collect()
+    }
+
+    /// A path more memories share than one write may link does not crowd
+    /// out a tag two memories carry: the tag's carriers are the stronger
+    /// candidates (rarer), so they are linked first and the tag is not
+    /// skipped. Counting references before tags would have spent the whole
+    /// budget on the path and skipped the tag.
+    #[test]
+    fn a_rare_tag_is_not_crowded_out_by_a_path_many_memories_share() {
+        use IdentityKind::{Path, Tag};
+        let mut others = holders("doc", 150, &[(Path, "README.md")]);
+        // The highest ids, so id order cannot be what saves them.
+        others.extend(holders("topic", 2, &[(Tag, "ghostlink")]));
+        let plan = plan(
+            &[(Tag, "ghostlink"), (Path, "README.md")],
+            &others,
+            500,
+            100,
+        );
+
+        assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+        assert_eq!(plan.ranked.len(), 152);
+        assert_eq!(plan.ranked[0].id, "topic-000");
+        assert_eq!(plan.ranked[1].id, "topic-001");
+        assert_eq!(joined_on(&plan.ranked[0]), vec!["tag:ghostlink"]);
+        // Then the path's carriers in id order; the cut falls among them.
+        assert_eq!(plan.ranked[2].id, "doc-000");
+        assert_eq!(plan.ranked[99].id, "doc-097");
+        assert_eq!(joined_on(&plan.ranked[99]), vec!["path:README.md"]);
+    }
+
+    /// A tag joins whole or not at all, and the ranking decides which. Here
+    /// a hundred memories share two identities with the new one and fill the
+    /// budget, so none of the thirty carriers of the rarer tag makes the cut:
+    /// that tag is taken out and named with what it needed and what was
+    /// left, and it is not listed on any edge.
+    #[test]
+    fn a_tag_whose_carriers_miss_the_cut_is_taken_out_whole() {
+        use IdentityKind::{Path, Tag};
+        let mut others = holders("both", 100, &[(Path, "src/hot.rs"), (Tag, "wide")]);
+        others.extend(holders("path", 50, &[(Path, "src/hot.rs")]));
+        others.extend(holders("rare", 30, &[(Tag, "rare")]));
+        let plan = plan(
+            &[(Tag, "rare"), (Tag, "wide"), (Path, "src/hot.rs")],
+            &others,
+            1000,
+            100,
+        );
+
+        assert_eq!(
+            plan.skipped,
+            vec![SkippedTag {
+                tag: "rare".to_string(),
+                carriers: 31,
+                scope_size: 1000,
+                reason: SkipReason::OverWriteBudget {
+                    needed: 30,
+                    left: 0,
+                    budget: 100,
+                },
+            }]
+        );
+        // The budget goes to the hundred that share two identities; the
+        // path-only carriers follow, and no `rare` carrier is a candidate.
+        assert_eq!(plan.ranked.len(), 150);
+        for candidate in &plan.ranked[..100] {
+            assert!(candidate.id.starts_with("both-"), "{}", candidate.id);
+            assert_eq!(joined_on(candidate), vec!["tag:wide", "path:src/hot.rs"]);
+        }
+        assert!(plan.ranked.iter().all(|c| !c.id.starts_with("rare-")));
+    }
+
+    /// The least specific tag is taken out first, and a tag taken out is put
+    /// back when the settled cut has room for all of it. Budget 10: eight
+    /// memories share two paths and the tag `big`; a ninth carries `big`
+    /// alone; five carry `mid`. With everything in play both tags are split,
+    /// `big` (10 carriers) goes first, `mid` is still split and goes too.
+    /// Eight edges are then settled and two are left: `big` needs one more
+    /// and fits, `mid` needs five and does not.
+    #[test]
+    fn a_tag_taken_out_is_put_back_when_the_final_cut_has_room_for_it() {
+        use IdentityKind::{Path, Tag};
+        let mut others = holders("q", 8, &[(Path, "a/q.rs"), (Path, "a/r.rs"), (Tag, "big")]);
+        others.extend(holders("x", 1, &[(Tag, "big")]));
+        others.extend(holders("m", 5, &[(Tag, "mid")]));
+        let plan = plan(
+            &[
+                (Tag, "big"),
+                (Tag, "mid"),
+                (Path, "a/q.rs"),
+                (Path, "a/r.rs"),
+            ],
+            &others,
+            1000,
+            10,
+        );
+
+        assert_eq!(
+            plan.skipped,
+            vec![SkippedTag {
+                tag: "mid".to_string(),
+                carriers: 6,
+                scope_size: 1000,
+                reason: SkipReason::OverWriteBudget {
+                    needed: 5,
+                    left: 1,
+                    budget: 10,
+                },
+            }]
+        );
+        let ids: Vec<&str> = plan.ranked.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "q-000", "q-001", "q-002", "q-003", "q-004", "q-005", "q-006", "q-007", "x-000"
+            ]
+        );
+        assert_eq!(
+            joined_on(&plan.ranked[0]),
+            vec!["tag:big", "path:a/q.rs", "path:a/r.rs"]
+        );
+        assert_eq!(joined_on(&plan.ranked[8]), vec!["tag:big"]);
+    }
+
+    /// A tag with more open carriers than the whole budget can never be
+    /// whole; a hub is skipped before the budget is asked. Each is named
+    /// with its own reason, and what a skipped tag needed is always more
+    /// than what was left.
+    #[test]
+    fn a_plan_names_every_tag_it_leaves_out_with_a_true_reason() {
+        use IdentityKind::Tag;
+        let mut others = holders("w", 150, &[(Tag, "campaign"), (Tag, "wider-than-a-write")]);
+        others.extend(holders("n", 3, &[(Tag, "campaign"), (Tag, "narrow")]));
+        others.extend(holders("c", 60, &[(Tag, "campaign")]));
+        // 214 of 400 carry `campaign` (a hub); 151 of 400 carry the wide tag
+        // (not a hub, but 150 edges are more than one write may add).
+        let plan = plan(
+            &[
+                (Tag, "campaign"),
+                (Tag, "narrow"),
+                (Tag, "wider-than-a-write"),
+            ],
+            &others,
+            400,
+            100,
+        );
+        let rendered: Vec<String> = plan.skipped.iter().map(SkippedTag::to_string).collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "skipped tag campaign: carried by 214 of 400 (more than half the scope carries it)",
+                "skipped tag wider-than-a-write: carried by 151 of 400 (joining it whole needs 150 more edge(s), 97 left of the 100-edge budget of one write)",
+            ]
+        );
+        for skipped in &plan.skipped {
+            if let SkipReason::OverWriteBudget { needed, left, .. } = skipped.reason {
+                assert!(needed > left, "{skipped}");
+            }
+        }
+        let ids: Vec<&str> = plan.ranked.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["n-000", "n-001", "n-002"]);
+        // The hub tag is not a reason on any edge.
+        assert_eq!(joined_on(&plan.ranked[0]), vec!["tag:narrow"]);
+    }
+
+    /// The same counts always give the same plan: equal tags are told apart
+    /// by name, equal candidates by id, and nothing else enters.
+    #[test]
+    fn a_plan_is_decided_by_counts_names_and_ids_alone() {
+        use IdentityKind::Tag;
+        // Two tags with the same number of carriers, 60 each, disjoint: both
+        // cannot fit a budget of 100, and the later name is the one left out.
+        let mut others = holders("a", 60, &[(Tag, "alpha")]);
+        others.extend(holders("b", 60, &[(Tag, "beta")]));
+        let first = plan(&[(Tag, "alpha"), (Tag, "beta")], &others, 1000, 100);
+        others.reverse();
+        let second = plan(&[(Tag, "beta"), (Tag, "alpha")], &others, 1000, 100);
+        assert_eq!(first, second);
+        assert_eq!(first.skipped.len(), 1);
+        assert_eq!(
+            first.skipped[0].to_string(),
+            "skipped tag beta: carried by 61 of 1000 (joining it whole needs 60 more edge(s), 40 left of the 100-edge budget of one write)"
+        );
+        assert_eq!(first.ranked.len(), 60);
+        assert!(first.ranked.iter().all(|c| c.id.starts_with("a-")));
     }
 
     #[test]
@@ -1586,7 +1920,13 @@ mod tests {
         let (commit, _) = save(
             &storage,
             "Commit 1a2b3c4: fix script reload. Touched: modules/mono/csharp_script.cpp modules/mono/csharp_script.h",
-            &["chal-commit", "modules", "mono", "csharp_script.cpp", "csharp_script"],
+            &[
+                "chal-commit",
+                "modules",
+                "mono",
+                "csharp_script.cpp",
+                "csharp_script",
+            ],
         );
         let (same_name_elsewhere, _) = save(
             &storage,
@@ -1706,11 +2046,7 @@ mod tests {
         // One more commit record: the campaign tag is on 79 of 80 and is
         // skipped by name with both counts; the component tag joins it to
         // its 19 other carriers.
-        let (_, report) = save(
-            &storage,
-            "commit record 78",
-            &["chal-commit", "connection"],
-        );
+        let (_, report) = save(&storage, "commit record 78", &["chal-commit", "connection"]);
         assert_eq!(report.edges, 19, "{report:?}");
         assert_eq!(report.shared_identities, vec!["tag:connection"]);
         assert_eq!(report.skipped_common_tags, vec!["chal-commit"]);
@@ -1765,11 +2101,12 @@ mod tests {
         assert_eq!(report.skipped_common_tags, vec!["campaign"]);
     }
 
-    /// The budget of one write is spent on the tags with the fewest carriers
-    /// first, and a tag joins whole or not at all: the widest tag no longer
-    /// fits and is named with what it needed and what was left. Taken in
-    /// name order instead, the widest tag would have used the budget and the
-    /// middle one would have been dropped.
+    /// The budget of one write goes to the rarest tags first, and a tag
+    /// joins whole or not at all: with all three in play the widest tag is
+    /// the one whose carriers miss the cut, so it is taken out and named
+    /// with what it needed and what was left. Taken in name order instead,
+    /// the widest tag would have used the budget and the middle one would
+    /// have been dropped.
     #[test]
     fn ingest_takes_tags_with_the_fewest_carriers_first_under_the_edge_budget() {
         let (_dir, storage) = store();
@@ -1812,6 +2149,49 @@ mod tests {
         assert_eq!(report.pairs[1].identities, vec!["tag:c-rare".to_string()]);
         assert_eq!(report.pairs[2].identities, vec!["tag:b-mid".to_string()]);
         assert_eq!(edges(&storage), 52);
+    }
+
+    /// Texts are read only when the new memory records a reference. A tag
+    /// that spells a path IS a reference, so a memory carrying only that
+    /// tag still joins a memory naming the path only in its text; a memory
+    /// with plain tags joins on tags and never on a word of another text.
+    #[test]
+    fn a_tags_only_memory_is_matched_on_tags_and_a_path_shaped_tag_on_texts() {
+        let (_dir, storage) = store();
+        let in_text = put(
+            &storage,
+            "panic in worktree.go after checkout",
+            &["failure"],
+        );
+        let word_only = put(&storage, "the checkout tag is only a word here", &[]);
+        let tagged = put(&storage, "release notes", &["checkout"]);
+
+        let (commit, report) = save(&storage, "fix", &["worktree.go"]);
+        assert_eq!(
+            report.pairs,
+            vec![JoinedPair {
+                source_id: in_text,
+                target_id: commit,
+                identities: vec!["path:worktree.go".to_string()],
+            }]
+        );
+
+        let (note, report) = save(&storage, "a note with no reference", &["checkout"]);
+        assert_eq!(
+            report.pairs,
+            vec![JoinedPair {
+                source_id: tagged,
+                target_id: note.clone(),
+                identities: vec!["tag:checkout".to_string()],
+            }]
+        );
+        let peers: Vec<String> = storage
+            .get_connections_for_memory(&note)
+            .expect("edges")
+            .into_iter()
+            .map(|edge| edge.source_id)
+            .collect();
+        assert!(!peers.contains(&word_only));
     }
 
     #[test]
