@@ -8,7 +8,7 @@
 //! extractor picks them up as join keys with no schema change.
 
 use chrono::{DateTime, Utc};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Tag marking a commit record. Deliberately not identifier-shaped, so it
 /// never becomes a causal join key itself.
@@ -64,6 +64,356 @@ pub struct GitCommit {
     /// The 40-hex SHA from a `This reverts commit <sha>.` line git revert
     /// writes. Anything else in the message is not a revert.
     pub reverts: Option<String>,
+    /// Lockfile version changes in this commit's diff. A package is included
+    /// only when it loses exactly one version and gains exactly one other.
+    pub lock_bumps: Vec<LockBump>,
+}
+
+/// One package whose lockfile entry moved from `old_version` to `new_version`
+/// in a single commit. Parsed from the lockfile diff, not from the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockBump {
+    /// `cargo`, `uv`, `poetry`, `npm`, or `go`.
+    pub ecosystem: String,
+    pub package: String,
+    pub old_version: String,
+    pub new_version: String,
+}
+
+/// Dangling anchor for one resolved package version.
+/// `pkg:<ecosystem>:<name>@<version>`. The name may itself contain `@`
+/// (`@scope/pkg`); the version is the span after the last `@`.
+pub fn package_anchor_id(ecosystem: &str, name: &str, version: &str) -> String {
+    format!("pkg:{ecosystem}:{name}@{version}")
+}
+
+/// `ecosystem`, package name, version from a registry or vendor path.
+///
+/// `.../.cargo/registry/.../tokio-1.39.0/src/lib.rs` is
+/// `(cargo, tokio, 1.39.0)`. A source path with no registry, vendor,
+/// `node_modules`, or `pkg/mod` marker is not a package path.
+pub fn registry_package(path: &str) -> Option<(String, String, String)> {
+    let path = path.trim().replace('\\', "/");
+    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let ecosystem = registry_ecosystem(&parts)?;
+    let dirs = &parts[..parts.len() - 1];
+    if ecosystem == "go" {
+        return go_module_from_path(dirs).map(|(name, version)| ("go".into(), name, version));
+    }
+    for component in dirs.iter().rev() {
+        if let Some((name, version)) = split_name_version(component) {
+            return Some((ecosystem.into(), name, version));
+        }
+    }
+    None
+}
+
+fn registry_ecosystem(parts: &[&str]) -> Option<&'static str> {
+    if parts.windows(2).any(|pair| pair == ["pkg", "mod"]) {
+        return Some("go");
+    }
+    if parts.contains(&"node_modules") {
+        return Some("npm");
+    }
+    let joined = parts.join("/");
+    if parts.contains(&"vendor")
+        || joined.contains(".cargo/")
+        || joined.contains("/registry/src/")
+        || joined.contains(".cargo/registry")
+    {
+        return Some("cargo");
+    }
+    None
+}
+
+/// `github.com/stretchr/testify@v1.8.0` under `pkg/mod`.
+fn go_module_from_path(dirs: &[&str]) -> Option<(String, String)> {
+    let mod_at = dirs.iter().position(|part| *part == "mod")?;
+    let rest = &dirs[mod_at + 1..];
+    let at = rest.iter().position(|part| part.contains("@v"))?;
+    let (leaf, version) = split_go_version(rest[at])?;
+    let mut name: Vec<&str> = rest[..=at].to_vec();
+    name[at] = leaf;
+    let name = name.join("/");
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, version))
+}
+
+fn split_go_version(component: &str) -> Option<(&str, String)> {
+    let (name, version) = component.rsplit_once("@v")?;
+    if name.is_empty() || !is_semver(version) {
+        return None;
+    }
+    Some((name, version.to_string()))
+}
+
+/// `{name}-{semver}`, with `name` allowed to contain hyphens.
+/// `tokio-util-0.7.10` → (`tokio-util`, `0.7.10`).
+/// `tokio-1.39.0-alpha.1` → (`tokio`, `1.39.0-alpha.1`).
+fn split_name_version(component: &str) -> Option<(String, String)> {
+    let mut start = component.len();
+    while let Some(rel) = component[..start].rfind('-') {
+        let version = &component[rel + 1..];
+        if rel > 0 && is_semver(version) {
+            return Some((component[..rel].to_string(), version.to_string()));
+        }
+        if rel == 0 {
+            break;
+        }
+        start = rel;
+    }
+    None
+}
+
+fn is_semver(version: &str) -> bool {
+    let core = if let Some((core, pre)) = version.split_once('-') {
+        if pre.is_empty()
+            || !pre
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        {
+            return false;
+        }
+        core
+    } else {
+        version
+    };
+    let mut parts = core.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    let Some(minor) = parts.next() else {
+        return false;
+    };
+    let Some(patch) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    numeric_id(major) && numeric_id(minor) && numeric_id(patch)
+}
+
+fn numeric_id(part: &str) -> bool {
+    !part.is_empty()
+        && part.chars().all(|c| c.is_ascii_digit())
+        && (part == "0" || !part.starts_with('0'))
+}
+
+fn lock_kind(path: &str) -> Option<&'static str> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    match name {
+        "Cargo.lock" => Some("cargo"),
+        "uv.lock" => Some("uv"),
+        "poetry.lock" => Some("poetry"),
+        "package-lock.json" => Some("npm"),
+        "go.sum" => Some("go"),
+        _ => None,
+    }
+}
+
+/// Version moves in a `git log -p` diff. A package counts only when the diff
+/// removes exactly one of its versions and adds exactly one different version.
+pub fn lock_bumps_from_diff(diff: &str) -> Vec<LockBump> {
+    let mut bumps = Vec::new();
+    let mut ecosystem: Option<&str> = None;
+    let mut removed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut added: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut toml_name: Option<String> = None;
+    let mut npm_name: Option<String> = None;
+
+    let flush = |ecosystem: Option<&str>,
+                 removed: &mut BTreeMap<String, BTreeSet<String>>,
+                 added: &mut BTreeMap<String, BTreeSet<String>>,
+                 bumps: &mut Vec<LockBump>| {
+        let Some(ecosystem) = ecosystem else {
+            removed.clear();
+            added.clear();
+            return;
+        };
+        let mut names: BTreeSet<String> = BTreeSet::new();
+        names.extend(removed.keys().cloned());
+        names.extend(added.keys().cloned());
+        for name in names {
+            let old = removed.get(&name).filter(|versions| versions.len() == 1);
+            let new = added.get(&name).filter(|versions| versions.len() == 1);
+            if let (Some(old), Some(new)) = (old, new) {
+                let old_version = old.iter().next().map(String::as_str).unwrap_or("");
+                let new_version = new.iter().next().map(String::as_str).unwrap_or("");
+                if !old_version.is_empty()
+                    && old_version != new_version
+                    && acceptable_package(&name)
+                    && is_semver(old_version)
+                    && is_semver(new_version)
+                {
+                    bumps.push(LockBump {
+                        ecosystem: ecosystem.to_string(),
+                        package: name.to_string(),
+                        old_version: old_version.to_string(),
+                        new_version: new_version.to_string(),
+                    });
+                }
+            }
+        }
+        removed.clear();
+        added.clear();
+    };
+
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git a/") {
+            flush(ecosystem, &mut removed, &mut added, &mut bumps);
+            toml_name = None;
+            npm_name = None;
+            ecosystem = rest
+                .split_once(" b/")
+                .map(|(_, path)| path.trim().trim_matches('"'))
+                .and_then(lock_kind);
+            continue;
+        }
+        let Some(ecosystem_now) = ecosystem else {
+            continue;
+        };
+        let Some((marker, payload)) = diff_payload(line) else {
+            continue;
+        };
+        if ecosystem_now == "go" {
+            if marker == ' ' {
+                continue;
+            }
+            if let Some((module, version)) = go_sum_line(payload) {
+                let slot = if marker == '+' {
+                    &mut added
+                } else {
+                    &mut removed
+                };
+                slot.entry(module).or_default().insert(version);
+            }
+            continue;
+        }
+        if ecosystem_now == "npm" {
+            if let Some(name) = npm_package_key(payload) {
+                npm_name = Some(name);
+            }
+            if marker != ' '
+                && let Some(version) = json_string_field(payload, "version")
+                && let Some(name) = npm_name.clone()
+            {
+                let slot = if marker == '+' {
+                    &mut added
+                } else {
+                    &mut removed
+                };
+                slot.entry(name).or_default().insert(version);
+            }
+            continue;
+        }
+        if let Some(name) = toml_string_field(payload, "name") {
+            toml_name = Some(name);
+        }
+        if marker != ' '
+            && let Some(version) = toml_string_field(payload, "version")
+            && let Some(name) = toml_name.clone()
+        {
+            let slot = if marker == '+' {
+                &mut added
+            } else {
+                &mut removed
+            };
+            slot.entry(name).or_default().insert(version);
+        }
+    }
+    flush(ecosystem, &mut removed, &mut added, &mut bumps);
+    bumps
+}
+
+fn acceptable_package(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 200
+        && !name.chars().any(|c| c.is_whitespace() || c.is_control())
+        && !name.contains("..")
+}
+
+fn diff_payload(line: &str) -> Option<(char, &str)> {
+    if line.is_empty()
+        || line.starts_with("diff ")
+        || line.starts_with("index ")
+        || line.starts_with("@@")
+        || line.starts_with("+++")
+        || line.starts_with("---")
+        || line.starts_with("new file")
+        || line.starts_with("deleted file")
+        || line.starts_with("similarity ")
+        || line.starts_with("rename ")
+        || line.starts_with("old mode")
+        || line.starts_with("new mode")
+        || line.starts_with("Binary ")
+    {
+        return None;
+    }
+    let marker = line.as_bytes()[0] as char;
+    if marker == '+' || marker == '-' || marker == ' ' {
+        Some((marker, &line[1..]))
+    } else {
+        None
+    }
+}
+
+fn toml_string_field(line: &str, key: &str) -> Option<String> {
+    let line = line.trim();
+    let rest = line.strip_prefix(key)?.trim_start();
+    let rest = rest.strip_prefix('=')?.trim_start();
+    quoted(rest)
+}
+
+fn json_string_field(line: &str, key: &str) -> Option<String> {
+    let line = line.trim().trim_end_matches(',').trim();
+    let needle = format!("\"{key}\"");
+    let rest = line.strip_prefix(&needle)?.trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    quoted(rest)
+}
+
+fn quoted(text: &str) -> Option<String> {
+    let rest = text.trim_start().strip_prefix('"')?;
+    let (value, _) = rest.split_once('"')?;
+    if value.is_empty() || value.chars().any(|c| c.is_control() || c == '\\') {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn npm_package_key(line: &str) -> Option<String> {
+    let line = line
+        .trim()
+        .trim_end_matches('{')
+        .trim()
+        .trim_end_matches(',')
+        .trim();
+    let line = line.strip_suffix(':')?.trim();
+    let key = quoted(line)?;
+    if !key.starts_with("node_modules/") && !key.contains("/node_modules/") {
+        return None;
+    }
+    let name = key.rsplit("/node_modules/").next().unwrap_or(key.as_str());
+    let name = name.trim_start_matches("node_modules/");
+    acceptable_package(name).then(|| name.to_string())
+}
+
+fn go_sum_line(payload: &str) -> Option<(String, String)> {
+    let mut parts = payload.split_whitespace();
+    let module = parts.next()?;
+    let raw = parts.next()?;
+    let raw = raw.strip_suffix("/go.mod").unwrap_or(raw);
+    let version = raw.strip_prefix('v')?;
+    if !acceptable_package(module) || !is_semver(version) {
+        return None;
+    }
+    Some((module.to_string(), version.to_string()))
 }
 
 /// `git log --pretty=format:` that carries parents and the body (where the
@@ -270,6 +620,7 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
                 None => (file, target, false),
             });
         }
+        let lock_bumps = lock_bumps_from_diff(body);
         out.push(GitCommit {
             sha,
             time,
@@ -283,6 +634,7 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             imports,
             parents,
             reverts,
+            lock_bumps,
         });
     }
     out
@@ -1072,5 +1424,122 @@ diff --git a/README.md b/README.md
         assert!(revert_target("this reverts commit {reverted}.").is_none());
         assert!(revert_target("This reverts commit abc.").is_none());
         assert!(revert_target("This reverts commit {reverted}").is_none());
+    }
+
+    #[test]
+    fn lockfile_diffs_record_exact_version_moves_and_ignore_prose() {
+        let diff = "\
+diff --git a/Cargo.lock b/Cargo.lock
+index 111..222 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1,6 +1,6 @@
+ [[package]]
+ name = \"reqwest\"
+-version = \"0.12.8\"
++version = \"0.12.9\"
+ source = \"registry+https://github.com/rust-lang/crates.io-index\"
+@@ -20,6 +20,9 @@ checksum = \"aa\"
++[[package]]
++name = \"added-only\"
++version = \"1.0.0\"
+ [[package]]
+ name = \"libc\"
+-version = \"0.2.1\"
+-version = \"0.2.2\"
++version = \"0.2.3\"
++version = \"0.2.4\"
+diff --git a/uv.lock b/uv.lock
+@@ -1,3 +1,3 @@
+ name = \"httpx\"
+-version = \"0.27.0\"
++version = \"0.28.1\"
+diff --git a/poetry.lock b/poetry.lock
+@@ -1,3 +1,3 @@
+ name = \"requests\"
+-version = \"2.31.0\"
++version = \"2.32.3\"
+diff --git a/package-lock.json b/package-lock.json
+@@ -10,3 +10,3 @@
+     \"node_modules/@scope/left-pad\": {
+-      \"version\": \"1.0.0\",
++      \"version\": \"1.0.1\",
+     \"node_modules/a/node_modules/bar\": {
+-      \"version\": \"2.0.0\",
++      \"version\": \"2.0.1\",
+diff --git a/go.sum b/go.sum
+@@ -1,2 +1,2 @@
+-github.com/foo/bar v1.2.3 h1:aaa
+-github.com/foo/bar v1.2.3/go.mod h1:bbb
++github.com/foo/bar v1.2.4 h1:ccc
++github.com/foo/bar v1.2.4/go.mod h1:ddd
+diff --git a/README.md b/README.md
+@@ -1 +1 @@
+-bumped serde from 1.0.0 to 9.9.9
++The message says reqwest 0.12.8 -> 0.12.9 but this file is not a lockfile.
+";
+        let bumps = lock_bumps_from_diff(diff);
+        let got: Vec<String> = bumps
+            .iter()
+            .map(|bump| {
+                format!(
+                    "{} {} {} {}",
+                    bump.ecosystem, bump.package, bump.old_version, bump.new_version
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "cargo reqwest 0.12.8 0.12.9",
+                "uv httpx 0.27.0 0.28.1",
+                "poetry requests 2.31.0 2.32.3",
+                "npm @scope/left-pad 1.0.0 1.0.1",
+                "npm bar 2.0.0 2.0.1",
+                "go github.com/foo/bar 1.2.3 1.2.4",
+            ]
+        );
+        assert!(
+            !got.iter().any(|row| row.contains("serde")
+                || row.contains("added-only")
+                || row.contains("libc")),
+            "prose, adds, and ambiguous multi-version edits are not bumps: {got:?}"
+        );
+    }
+
+    #[test]
+    fn registry_paths_name_the_crate_and_version_exactly() {
+        let path = "/home/alex/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.39.0/src/util/linked_list.rs";
+        assert_eq!(
+            registry_package(path),
+            Some(("cargo".into(), "tokio".into(), "1.39.0".into()))
+        );
+        assert_eq!(
+            registry_package("vendor/tokio-util-0.7.10/src/lib.rs"),
+            Some(("cargo".into(), "tokio-util".into(), "0.7.10".into()))
+        );
+        assert_eq!(
+            registry_package("vendor/tokio-1.39.0-alpha.1/src/lib.rs"),
+            Some(("cargo".into(), "tokio".into(), "1.39.0-alpha.1".into()))
+        );
+        assert_eq!(
+            registry_package("/go/pkg/mod/github.com/stretchr/testify@v1.8.0/assert/assertions.go"),
+            Some((
+                "go".into(),
+                "github.com/stretchr/testify".into(),
+                "1.8.0".into()
+            ))
+        );
+        assert_eq!(
+            package_anchor_id("cargo", "tokio", "1.39.0"),
+            "pkg:cargo:tokio@1.39.0"
+        );
+        assert_eq!(
+            package_anchor_id("npm", "@scope/left-pad", "1.0.1"),
+            "pkg:npm:@scope/left-pad@1.0.1"
+        );
+        assert_eq!(registry_package("tokio/src/util/linked_list.rs"), None);
+        assert_eq!(registry_package("pkg/kubelet/server.go"), None);
+        assert_eq!(registry_package("server.go"), None);
     }
 }

@@ -11,9 +11,11 @@
 //! On a Strata log the walk is a bounded backward BFS over recorded causal
 //! edges only. `stack_frame` (`path:line`) and `failing_test` (a test file
 //! path) resolve to `file:` anchors `ingest_repo` recorded, by exact path
-//! identity, then blame the line at the failure revision. `node_id` still
-//! names the failure memory. `ci_run` and `version_range` do not resolve by
-//! name. Shared names are not edges.
+//! identity, then blame the line at the failure revision. A registry or
+//! vendor path that names `crate-version` resolves to the `pkg:` anchor of
+//! that exact version, and a lockfile bump is reached from that anchor.
+//! `node_id` still names the failure memory. `ci_run` and `version_range` do
+//! not resolve by name. Shared names are not edges.
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -308,6 +310,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
                 node_cap,
                 needs_report: Some(needs_report),
                 structure: BTreeMap::new(),
+                upstream_note: None,
             },
         ));
     }
@@ -338,6 +341,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
     } else {
         BTreeMap::new()
     };
+    let upstream_note = upstream_note_for(storage, &rows, &causes);
     if nodes.len() > node_cap {
         nodes.truncate(node_cap);
         truncated = true;
@@ -358,6 +362,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
             node_cap,
             needs_report: None,
             structure,
+            upstream_note,
         },
     ))
 }
@@ -522,6 +527,8 @@ struct WalkOut {
     needs_report: Option<Value>,
     /// Structural rank facts for git-resolved causes, keyed by node id.
     structure: BTreeMap<String, Value>,
+    /// Why an upstream crate range was not recorded. Local files only.
+    upstream_note: Option<String>,
 }
 
 /// Every start the caller gave, in order: top-level handles first (`node_id`,
@@ -699,6 +706,11 @@ pub(crate) fn upstream_end<'a>(
         "closed_by" | "evidence_of" | "touched" if edge.target_id == node_id => {
             Some(edge.source_id.as_str())
         }
+        // Package anchors are not memories. `commit supersedes pkg@old` is the
+        // lockfile's old version; only that anchor walks back to the commit.
+        "supersedes" if edge.target_id == node_id && node_id.starts_with("pkg:") => {
+            Some(edge.source_id.as_str())
+        }
         _ => None,
     }
 }
@@ -743,12 +755,16 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
     };
     let empty = (walk.needs_report.is_none() && walk.causes.is_empty())
         .then(|| why_empty(storage, scope, &walk.starts));
+    let empty_because = empty.as_ref().map(|(why, _)| match &walk.upstream_note {
+        Some(note) => format!("{why}. {note}"),
+        None => why.clone(),
+    });
     json!({
         "tool": "causal_walk",
         "status": "completed",
         "scope": scope,
         "direction": "backward",
-        "emptyBecause": empty.as_ref().map(|(why, _)| why.clone()),
+        "emptyBecause": empty_because,
         "incomingEdges": empty.map(|(_, edges)| edges),
         "promote": {
             "requested": walk.promote_requested,
@@ -763,6 +779,7 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "nodes": walk.nodes.iter().map(&node_json).collect::<Vec<_>>(),
         "causes": walk.causes.iter().map(&node_json).collect::<Vec<_>>(),
         "needs_report": walk.needs_report,
+        "upstreamSkipped": walk.upstream_note,
         "note": "Backward BFS over recorded causal edges only. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A stack_frame or failing_test names a file anchor by exact path; blame of the line uses the failure memory's derived_from commit. Rank among those commits is structural (reverted after the failure, blame of the line, hunk, hop, edge kind), never text.",
     })
 }
@@ -857,6 +874,7 @@ fn resolve_git_frames(
     rows: &mut [StartRow],
 ) -> Result<GitQuery, String> {
     let recorded = file_anchors_in_scope(storage, scope)?;
+    let recorded_packages = package_anchors_in_scope(storage, scope)?;
     let mut anchors = Vec::new();
     let mut anchor_seen = HashSet::new();
     let mut files = Vec::new();
@@ -866,8 +884,9 @@ fn resolve_git_frames(
         let Some(loc) = row.locator.clone() else {
             continue;
         };
+        let package = recorded_package(&loc.path, &recorded_packages);
         let matched = match_paths(&loc.path, &recorded);
-        if matched.is_empty() {
+        if matched.is_empty() && package.is_none() {
             if row.status == "pending" {
                 row.status = "unresolved";
                 row.reason = Some(file_miss_reason(&loc));
@@ -880,6 +899,11 @@ fn resolve_git_frames(
         }
         if line.is_none() {
             line = loc.line;
+        }
+        if let Some(package) = package
+            && anchor_seen.insert(package.clone())
+        {
+            anchors.push(package);
         }
         for (anchor, path) in matched {
             if file_seen.insert(path.clone()) {
@@ -918,7 +942,16 @@ fn resolve_git_frames(
             }
         }
     }
-    let active = !files.is_empty() || failure_sha.is_some();
+    if files.is_empty()
+        && let Some(failure_id) = failure_commit_id.as_deref()
+    {
+        for package in packages_on_parent_chain(storage, failure_id, MAX_DEPTH)? {
+            if anchor_seen.insert(package.clone()) {
+                anchors.push(package);
+            }
+        }
+    }
+    let active = !files.is_empty() || failure_sha.is_some() || !anchors.is_empty();
     Ok(GitQuery {
         anchors,
         files,
@@ -928,6 +961,69 @@ fn resolve_git_frames(
         blame_shas,
         active,
     })
+}
+
+fn recorded_package(path: &str, recorded: &HashSet<String>) -> Option<String> {
+    let (ecosystem, name, version) = vestige_core::advanced::git_records::registry_package(path)?;
+    let id = vestige_core::advanced::git_records::package_anchor_id(&ecosystem, &name, &version);
+    recorded.contains(&id).then_some(id)
+}
+
+fn package_anchors_in_scope(
+    storage: &Arc<Storage>,
+    scope: &str,
+) -> Result<HashSet<String>, String> {
+    let edges = storage
+        .get_all_connections()
+        .map_err(|err| err.to_string())?;
+    let mut out = HashSet::new();
+    for edge in edges {
+        if edge.link_type != "touched" && edge.link_type != "supersedes" {
+            continue;
+        }
+        if !edge.target_id.starts_with("pkg:") {
+            continue;
+        }
+        if in_scope(storage, &edge.source_id, scope)? {
+            out.insert(edge.target_id);
+        }
+    }
+    Ok(out)
+}
+
+/// Package versions touched by `start` or by its recorded parents, within
+/// `max_depth`. Used when the failure names no source file, so the lockfile
+/// bump is the only recorded path to the changing commit.
+fn packages_on_parent_chain(
+    storage: &Arc<Storage>,
+    start: &str,
+    max_depth: u32,
+) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut seen_nodes = HashSet::new();
+    let mut seen_pkg = HashSet::new();
+    let mut queue = VecDeque::from([(start.to_string(), 0u32)]);
+    while let Some((id, depth)) = queue.pop_front() {
+        if !seen_nodes.insert(id.clone()) || depth > max_depth {
+            continue;
+        }
+        let edges = storage
+            .get_connections_for_memory(&id)
+            .map_err(|err| err.to_string())?;
+        for edge in edges {
+            if edge.link_type == "touched"
+                && edge.source_id == id
+                && edge.target_id.starts_with("pkg:")
+                && seen_pkg.insert(edge.target_id.clone())
+            {
+                out.push(edge.target_id.clone());
+            }
+            if edge.link_type == "derived_from" && edge.source_id == id && depth < max_depth {
+                queue.push_back((edge.target_id.clone(), depth + 1));
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn file_miss_reason(loc: &PathLoc) -> String {
@@ -1170,7 +1266,11 @@ fn git_root_from_touchers(
 }
 
 fn git_admissible(storage: &Arc<Storage>, id: &str, git: &GitQuery) -> bool {
-    if id.starts_with("file:") || id.starts_with("hunk:") {
+    if id.starts_with("file:")
+        || id.starts_with("hunk:")
+        || id.starts_with("pkg:")
+        || id.starts_with("upstream:")
+    {
         return false;
     }
     if git.failure_commit_id.as_deref() == Some(id) {
@@ -1296,10 +1396,141 @@ fn git_structure(
                 "touchedFailingHunk": touched_line(storage, &cause.id, &git.files, git.line),
                 "hop": cause.depth,
                 "edge": cause.path.last().map(|hop| hop.link_type.as_str()),
+                "lockfile": lockfile_of(storage, &cause.id),
             }),
         );
     }
     out
+}
+
+fn lockfile_of(storage: &Arc<Storage>, id: &str) -> Option<Value> {
+    let edges = storage.get_connections_for_memory(id).ok()?;
+    let mut touched = Vec::new();
+    let mut replaced = Vec::new();
+    for edge in edges {
+        if edge.source_id != id {
+            continue;
+        }
+        let Some(package) = parse_package_anchor(&edge.target_id) else {
+            continue;
+        };
+        if edge.link_type == "touched" {
+            touched.push(package);
+        } else if edge.link_type == "supersedes" {
+            replaced.push(package);
+        }
+    }
+    for new in &touched {
+        if let Some(old) = replaced.iter().find(|old| {
+            old.ecosystem == new.ecosystem && old.name == new.name && old.version != new.version
+        }) {
+            return Some(json!({
+                "ecosystem": new.ecosystem,
+                "package": new.name,
+                "from": old.version,
+                "to": new.version,
+            }));
+        }
+    }
+    None
+}
+
+struct PackageAnchor {
+    ecosystem: String,
+    name: String,
+    version: String,
+}
+
+fn parse_package_anchor(id: &str) -> Option<PackageAnchor> {
+    let rest = id.strip_prefix("pkg:")?;
+    let (head, version) = rest.rsplit_once('@')?;
+    let (ecosystem, name) = head.split_once(':')?;
+    if ecosystem.is_empty() || name.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some(PackageAnchor {
+        ecosystem: ecosystem.to_string(),
+        name: name.to_string(),
+        version: version.to_string(),
+    })
+}
+
+fn upstream_note_for(
+    storage: &Arc<Storage>,
+    rows: &[StartRow],
+    causes: &[Reached],
+) -> Option<String> {
+    if rows.iter().any(|row| {
+        row.locator
+            .as_ref()
+            .is_some_and(|loc| registry_path_without_local_vcs(&loc.path))
+    }) {
+        return Some(
+            "no local .cargo_vcs_info.json or package.json gitHead for the registry path; the upstream commit range was not recorded and nothing was fetched"
+                .to_string(),
+        );
+    }
+    let lockfile_cause = causes.iter().any(|cause| {
+        storage
+            .get_connections_for_memory(&cause.id)
+            .ok()
+            .is_some_and(|edges| {
+                edges.iter().any(|edge| {
+                    edge.source_id == cause.id
+                        && edge.link_type == "touched"
+                        && edge.target_id.starts_with("pkg:")
+                }) && !edges.iter().any(|edge| {
+                    edge.source_id == cause.id
+                        && edge.link_type == "anchored_to"
+                        && edge.target_id.starts_with("upstream:")
+                })
+            })
+    });
+    lockfile_cause.then(|| {
+        "no local .cargo_vcs_info.json or package.json gitHead for the lockfile bump; the upstream old..new range was not recorded and nothing was fetched"
+            .to_string()
+    })
+}
+
+fn registry_path_without_local_vcs(path: &str) -> bool {
+    if vestige_core::advanced::git_records::registry_package(path).is_none() {
+        return false;
+    }
+    local_crate_sha(path).is_none()
+}
+
+/// sha1 or gitHead from a crate directory that is already on disk.
+/// Walks up from the frame's file. Does not search the network.
+fn local_crate_sha(path: &str) -> Option<String> {
+    let mut dir = std::path::Path::new(path).parent()?.to_path_buf();
+    for _ in 0..8 {
+        let vcs = dir.join(".cargo_vcs_info.json");
+        if let Some(sha) = std::fs::read_to_string(&vcs)
+            .ok()
+            .as_deref()
+            .and_then(|text| json_object_sha(text, "sha1"))
+        {
+            return Some(sha);
+        }
+        let package = dir.join("package.json");
+        if let Some(sha) = std::fs::read_to_string(&package)
+            .ok()
+            .as_deref()
+            .and_then(|text| json_object_sha(text, "gitHead"))
+        {
+            return Some(sha);
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+fn json_object_sha(text: &str, key: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    let sha = value.get(key)?.as_str()?.to_ascii_lowercase();
+    (sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())).then_some(sha)
 }
 
 fn content_of(storage: &Arc<Storage>, id: &str) -> String {
@@ -1415,6 +1646,7 @@ mod tests {
             imports: vec![],
             parents: vec![],
             reverts: None,
+            lock_bumps: vec![],
         });
         seed(storage, &content, vec![git_records::COMMIT_TAG], days_ago)
     }
@@ -2395,6 +2627,88 @@ mod strata_walk {
             suffixed["causes"][0]["structure"]["sha"],
             json!(cause),
             "{suffixed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lockfile_bump_ranks_through_the_package_anchor() {
+        let (storage, _dir) = open();
+        let scope = "user";
+        let commit = |sha: &str, days: i64| {
+            storage
+                .ingest_in_scope(
+                    IngestInput {
+                        content: format!("commit {sha}"),
+                        node_type: "event".into(),
+                        tags: vec![format!("commit:{sha}"), "git-commit".into()],
+                        valid_from: Some(Utc::now() - chrono::Duration::days(days)),
+                        ..Default::default()
+                    },
+                    scope,
+                )
+                .unwrap()
+                .id
+        };
+        let observed_sha = "a".repeat(40);
+        let bump_sha = "b".repeat(40);
+        let other_sha = "c".repeat(40);
+        let observed = commit(&observed_sha, 1);
+        let bump = commit(&bump_sha, 2);
+        let other = commit(&other_sha, 8);
+        let failure = put(&storage, scope, "failure: error decoding response body");
+        link(&storage, &failure, &observed, "derived_from");
+        link(&storage, &observed, &bump, "derived_from");
+        link(&storage, &observed, &other, "derived_from");
+        link(&storage, &bump, "pkg:cargo:reqwest@0.12.9", "touched");
+        link(&storage, &bump, "pkg:cargo:reqwest@0.12.8", "supersedes");
+        link(&storage, &other, "pkg:cargo:serde@1.0.1", "touched");
+        link(&storage, &other, "pkg:cargo:serde@1.0.0", "supersedes");
+
+        let frame = "/home/alex/.cargo/registry/src/index.crates.io-6f17d22bba15001f/reqwest-0.12.9/src/lib.rs:10";
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": scope,
+                "start_points": [{
+                    "kind": "stack_frame",
+                    "frame": frame,
+                    "node_id": failure
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        let top = &out["causes"][0];
+        assert_eq!(top["id"], bump, "{out}");
+        assert_eq!(top["structure"]["edge"], "touched", "{out}");
+        assert_eq!(top["structure"]["lockfile"]["package"], "reqwest", "{out}");
+        assert_eq!(top["structure"]["lockfile"]["from"], "0.12.8", "{out}");
+        assert_eq!(top["structure"]["lockfile"]["to"], "0.12.9", "{out}");
+        assert_ne!(top["id"], other, "an older lockfile bump is not the cause");
+        let note = out["upstreamSkipped"].as_str().unwrap_or("");
+        assert!(
+            note.contains("nothing was fetched"),
+            "missing local upstream metadata must be reported: {out}"
+        );
+
+        let ci = execute(
+            &storage,
+            Some(json!({
+                "scope": scope,
+                "start_points": [{
+                    "kind": "ci_run",
+                    "run_id": "https://example.test/actions/runs/1#step:8:12",
+                    "node_id": failure
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ci["causes"][0]["id"], bump, "{ci}");
+        assert_eq!(ci["causes"][0]["structure"]["edge"], "touched", "{ci}");
+        assert_eq!(
+            ci["causes"][0]["structure"]["lockfile"]["package"], "reqwest",
+            "{ci}"
         );
     }
 }

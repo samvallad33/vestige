@@ -60,6 +60,14 @@
 //! parent that is already in the scope, and `corrects` from a revert to the
 //! commit named by that trailer. A reverted commit that is reachable locally
 //! but outside this page is ingested too, so the edge has both ends.
+//!
+//! A lockfile diff (Cargo.lock, uv.lock, poetry.lock, package-lock.json,
+//! go.sum) that moves one package from exactly one old version to exactly one
+//! new version records `touched` on `pkg:<ecosystem>:<name>@<new>` and
+//! `supersedes` on `pkg:<ecosystem>:<name>@<old>`. When that crate's
+//! `.cargo_vcs_info.json` `sha1` or npm `gitHead` is already in the local
+//! tree at both versions, the commit also gets `anchored_to`
+//! `upstream:<oldsha>..<newsha>`. Nothing is fetched.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -272,10 +280,13 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
     }
     flush_anchors(storage, &mut queue, &mut stats, &mut failures);
     let edges = record_git_edges(
-        storage,
+        &EdgeCtx {
+            storage,
+            root: &root,
+            sha_to_id: &sha_to_id,
+            dry_run: req.dry_run,
+        },
         &commits,
-        &sha_to_id,
-        req.dry_run,
         started,
         budget,
         &mut stats,
@@ -357,10 +368,16 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             "pulledReverts": history.pulled_reverts,
         },
         "edges": {
-            (if req.dry_run { "wouldRecord" } else { "recorded" }): edges.touched + edges.parents + edges.reverts,
+            (if req.dry_run { "wouldRecord" } else { "recorded" }): edges.touched
+                + edges.parents
+                + edges.reverts
+                + edges.packages
+                + edges.upstream,
             "touched": edges.touched,
             "parents": edges.parents,
             "reverts": edges.reverts,
+            "packages": edges.packages,
+            "upstream": edges.upstream,
         },
         "anchors": anchors,
         "sample": sample,
@@ -849,14 +866,21 @@ struct EdgeStats {
     touched: usize,
     parents: usize,
     reverts: usize,
+    packages: usize,
+    upstream: usize,
+}
+
+struct EdgeCtx<'a> {
+    storage: &'a Arc<Storage>,
+    root: &'a Path,
+    sha_to_id: &'a HashMap<String, String>,
+    dry_run: bool,
 }
 
 /// Write (or, on a preview, count) the git-recorded edges for `commits`.
 fn record_git_edges(
-    storage: &Arc<Storage>,
+    ctx: &EdgeCtx<'_>,
     commits: &[GitCommit],
-    sha_to_id: &HashMap<String, String>,
-    dry_run: bool,
     started: Instant,
     budget: Duration,
     stats: &mut Stats,
@@ -865,34 +889,34 @@ fn record_git_edges(
     let known: HashSet<&str> = commits
         .iter()
         .map(|commit| commit.sha.as_str())
-        .chain(sha_to_id.keys().map(String::as_str))
+        .chain(ctx.sha_to_id.keys().map(String::as_str))
         .collect();
     for commit in commits {
-        if !dry_run && started.elapsed() >= budget {
+        if !ctx.dry_run && started.elapsed() >= budget {
             stats.stopped_by_budget = true;
             break;
         }
-        let source = sha_to_id.get(&commit.sha);
-        if source.is_none() && !dry_run {
+        let source = ctx.sha_to_id.get(&commit.sha);
+        if source.is_none() && !ctx.dry_run {
             continue;
         }
         for file in &commit.files {
             note_edge(
-                storage,
+                ctx.storage,
                 source,
                 &file_anchor_id(file),
                 "touched",
-                dry_run,
+                ctx.dry_run,
                 &mut out.touched,
             );
         }
         for hunk in &commit.hunks {
             note_edge(
-                storage,
+                ctx.storage,
                 source,
                 &hunk_anchor_id(&hunk.file, hunk.start, hunk.len),
                 "touched",
-                dry_run,
+                ctx.dry_run,
                 &mut out.touched,
             );
         }
@@ -900,16 +924,16 @@ fn record_git_edges(
             if !known.contains(parent.as_str()) {
                 continue;
             }
-            let target = sha_to_id.get(parent);
-            if target.is_none() && !dry_run {
+            let target = ctx.sha_to_id.get(parent);
+            if target.is_none() && !ctx.dry_run {
                 continue;
             }
             note_edge(
-                storage,
+                ctx.storage,
                 source,
                 target.map(String::as_str).unwrap_or(parent),
                 "derived_from",
-                dry_run,
+                ctx.dry_run,
                 &mut out.parents,
             );
         }
@@ -917,21 +941,162 @@ fn record_git_edges(
             if !known.contains(reverted.as_str()) {
                 continue;
             }
-            let target = sha_to_id.get(reverted);
-            if target.is_none() && !dry_run {
+            let target = ctx.sha_to_id.get(reverted);
+            if target.is_none() && !ctx.dry_run {
                 continue;
             }
             note_edge(
-                storage,
+                ctx.storage,
                 source,
                 target.map(String::as_str).unwrap_or(reverted),
                 "corrects",
-                dry_run,
+                ctx.dry_run,
                 &mut out.reverts,
             );
         }
+        let bumps = lock_bumps_with_context(ctx.root, commit);
+        for bump in &bumps {
+            let new_id =
+                git_records::package_anchor_id(&bump.ecosystem, &bump.package, &bump.new_version);
+            let old_id =
+                git_records::package_anchor_id(&bump.ecosystem, &bump.package, &bump.old_version);
+            note_edge(
+                ctx.storage,
+                source,
+                &new_id,
+                "touched",
+                ctx.dry_run,
+                &mut out.packages,
+            );
+            note_edge(
+                ctx.storage,
+                source,
+                &old_id,
+                "supersedes",
+                ctx.dry_run,
+                &mut out.packages,
+            );
+            if let Some(range) = upstream_range(ctx.root, commit, bump) {
+                note_edge(
+                    ctx.storage,
+                    source,
+                    &range,
+                    "anchored_to",
+                    ctx.dry_run,
+                    &mut out.upstream,
+                );
+            }
+        }
     }
     out
+}
+
+/// The history log is `--unified=0`, so a lockfile version line has no
+/// `name =` context. Re-read just those paths with context. No network.
+fn lock_bumps_with_context(root: &Path, commit: &GitCommit) -> Vec<git_records::LockBump> {
+    if !touches_lockfile(commit) {
+        return commit.lock_bumps.clone();
+    }
+    let Some(diff) = lockfile_diff(root, commit) else {
+        return commit.lock_bumps.clone();
+    };
+    let parsed = git_records::lock_bumps_from_diff(&diff);
+    if parsed.is_empty() {
+        commit.lock_bumps.clone()
+    } else {
+        parsed
+    }
+}
+
+fn touches_lockfile(commit: &GitCommit) -> bool {
+    commit.extra_files > 0 || commit.files.iter().any(|path| is_lock_path(path))
+}
+
+fn is_lock_path(path: &str) -> bool {
+    matches!(
+        path.rsplit(['/', '\\']).next(),
+        Some("Cargo.lock" | "uv.lock" | "poetry.lock" | "package-lock.json" | "go.sum")
+    )
+}
+
+fn lockfile_diff(root: &Path, commit: &GitCommit) -> Option<String> {
+    let paths = [
+        "Cargo.lock",
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "go.sum",
+    ];
+    let mut args = vec![
+        "diff".to_string(),
+        "--unified=8".into(),
+        "--no-ext-diff".into(),
+        "--no-textconv".into(),
+        "--no-color".into(),
+    ];
+    if let Some(parent) = commit.parents.first() {
+        check_git_arg("parent", parent).ok()?;
+        check_git_arg("rev", &commit.sha).ok()?;
+        args.push(parent.clone());
+        args.push(commit.sha.clone());
+    } else {
+        check_git_arg("rev", &commit.sha).ok()?;
+        args.push(format!("{}^", commit.sha));
+        args.push(commit.sha.clone());
+    }
+    args.push("--".into());
+    args.extend(paths.into_iter().map(str::to_string));
+    let run = run_git(root, &args).ok()?;
+    if run.failure.is_some() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&run.stdout).into_owned())
+}
+
+/// `upstream:<oldsha>..<newsha>` when both published commits are already in
+/// the local tree. A missing file skips the edge; it is never fetched.
+fn upstream_range(root: &Path, commit: &GitCommit, bump: &git_records::LockBump) -> Option<String> {
+    let parent = commit.parents.first()?;
+    let new_sha = published_sha(root, &commit.sha, bump, &bump.new_version)?;
+    let old_sha = published_sha(root, parent, bump, &bump.old_version)?;
+    (new_sha != old_sha).then(|| format!("upstream:{old_sha}..{new_sha}"))
+}
+
+fn published_sha(
+    root: &Path,
+    rev: &str,
+    bump: &git_records::LockBump,
+    version: &str,
+) -> Option<String> {
+    let path = match bump.ecosystem.as_str() {
+        "cargo" => format!("vendor/{}-{version}/.cargo_vcs_info.json", bump.package),
+        "npm" => format!("node_modules/{}/package.json", bump.package),
+        _ => return None,
+    };
+    if path.starts_with('-') || path.contains('\0') {
+        return None;
+    }
+    let text = git_show_path(root, rev, &path)?;
+    match bump.ecosystem.as_str() {
+        "cargo" => json_sha(&text, "sha1"),
+        "npm" => json_sha(&text, "gitHead"),
+        _ => None,
+    }
+}
+
+fn json_sha(text: &str, key: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    let sha = value.get(key)?.as_str()?.to_ascii_lowercase();
+    (sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())).then_some(sha)
+}
+
+fn git_show_path(root: &Path, rev: &str, path: &str) -> Option<String> {
+    check_git_arg("rev", rev).ok()?;
+    let run = run_git(root, &["show".into(), format!("{rev}:{path}")]).ok()?;
+    if run.failure.is_some() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&run.stdout).into_owned())
 }
 
 fn note_edge(
@@ -2603,5 +2768,72 @@ pub fn parse_timeout(raw: &str) -> u32 {
             !full["message"].as_str().unwrap().contains("not checked"),
             "{full}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_lockfile_bump_records_the_package_edge_and_a_local_upstream_range() {
+        let old_sha = "1111111111111111111111111111111111111111";
+        let new_sha = "2222222222222222222222222222222222222222";
+        let lock = |version: &str| {
+            format!(
+                "\
+# This file is automatically @generated by Cargo.
+version = 3
+
+[[package]]
+name = \"reqwest\"
+version = \"{version}\"
+source = \"registry+https://github.com/rust-lang/crates.io-index\"
+checksum = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"
+
+[[package]]
+name = \"libc\"
+version = \"0.2.155\"
+"
+            )
+        };
+        let vcs =
+            |sha: &str| format!(r#"{{"git":"https://github.com/example/reqwest","sha1":"{sha}"}}"#);
+        let mut repo = Repo::empty();
+        repo.write("Cargo.lock", &lock("0.12.8"));
+        repo.write("vendor/reqwest-0.12.8/.cargo_vcs_info.json", &vcs(old_sha));
+        repo.commit("add reqwest 0.12.8", DATES[0]);
+        repo.write("Cargo.lock", &lock("0.12.9"));
+        repo.write("vendor/reqwest-0.12.9/.cargo_vcs_info.json", &vcs(new_sha));
+        repo.commit(
+            "bump serde from 1.0.0 to 9.9.9 in the message only",
+            DATES[1],
+        );
+        let (storage, _dir) = strata();
+        let out = ingest(&storage, repo.request(false)).await;
+        assert_eq!(out["edges"]["packages"], 2, "{out}");
+        assert_eq!(out["edges"]["upstream"], 1, "{out}");
+        let bump = repo.shas.last().unwrap();
+        let id = storage
+            .current_code_context_nodes("event", Some(&commit_tag(bump)), "demo", 5)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .id;
+        let edges = storage.get_connections_for_memory(&id).unwrap();
+        let has = |target: &str, kind: &str| {
+            edges.iter().any(|edge| {
+                edge.source_id == id && edge.target_id == target && edge.link_type == kind
+            })
+        };
+        assert!(has("pkg:cargo:reqwest@0.12.9", "touched"), "{edges:?}");
+        assert!(has("pkg:cargo:reqwest@0.12.8", "supersedes"), "{edges:?}");
+        assert!(
+            has(&format!("upstream:{old_sha}..{new_sha}"), "anchored_to"),
+            "{edges:?}"
+        );
+        assert!(
+            !edges.iter().any(|edge| edge.target_id.contains("serde")),
+            "the commit message is not a lockfile edge: {edges:?}"
+        );
+        let again = ingest(&storage, repo.request(false)).await;
+        assert_eq!(again["edges"]["packages"], 0, "{again}");
+        assert_eq!(again["edges"]["upstream"], 0, "{again}");
     }
 }

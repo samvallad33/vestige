@@ -891,6 +891,7 @@ mod tests {
             imports: vec![],
             parents: vec![],
             reverts: None,
+            lock_bumps: vec![],
         })
     }
 
