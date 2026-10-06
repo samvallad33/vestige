@@ -2470,3 +2470,45 @@ fn walk_verify_prove_handles_a_root_commit_as_the_first_bad_commit() {
         1
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn walk_verify_prove_runs_none_of_the_repositorys_hooks() {
+    // A worktree shares its repository's hooks, so every checkout prove and
+    // `git bisect` make would fire the user's post-checkout hook (husky,
+    // dependency installs, anything). prove must not run them: the user's
+    // checkout is never touched, and neither is anything their hooks touch.
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = fixture(&Plan::default());
+    let marker = fixture.path("hook-ran");
+    let hooks = fixture.repo.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    for name in [
+        "post-checkout",
+        "post-commit",
+        "pre-commit",
+        "post-merge",
+        "post-rewrite",
+    ] {
+        let hook = hooks.join(name);
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\necho {name} >> '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let report_path = fixture.path("report.json");
+    let ran = fixture.prove(&report_path, &[]);
+    assert!(ran.ok, "{}", ran.text());
+    assert!(
+        !marker.exists(),
+        "prove ran the repository's hooks: {}",
+        std::fs::read_to_string(&marker).unwrap_or_default()
+    );
+    assert_eq!(
+        read_json(&report_path)["first_bad_commit"],
+        fixture.commits[BREAKING].as_str()
+    );
+    fixture.assert_no_worktree_left();
+}

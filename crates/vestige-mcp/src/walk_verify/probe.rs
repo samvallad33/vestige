@@ -230,6 +230,7 @@ fn test_command(test: &Test) -> Command {
     for name in REPO_ENV {
         command.env_remove(name);
     }
+    command.env_remove(super::git::CONFIG_ENV);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

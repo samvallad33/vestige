@@ -18,6 +18,10 @@ use anyhow::Context;
 
 use super::text::{head, stop, strip};
 
+/// The variable git passes `-c` settings to its own subprocesses in. The
+/// test is not one of them: it runs with the configuration the user has.
+pub(super) const CONFIG_ENV: &str = "GIT_CONFIG_PARAMETERS";
+
 /// The variables that tell git which repository, worktree, index or object
 /// store to act on. `git bisect run` exports them to its command; inherited
 /// from a hook or an alias they would turn `git -C <worktree> checkout -f`
@@ -34,10 +38,26 @@ pub(super) const REPO_ENV: [&str; 8] = [
     "GIT_NAMESPACE",
 ];
 
-/// `git -C <dir>`, reading nothing from stdin.
+/// Where `core.hooksPath` points for every git call of `prove`: nowhere.
+#[cfg(not(windows))]
+const NO_HOOKS: &str = "core.hooksPath=/dev/null";
+#[cfg(windows)]
+const NO_HOOKS: &str = "core.hooksPath=NUL";
+
+/// `git -C <dir>`, reading nothing from stdin and running no hook.
+///
+/// A worktree shares its repository's hooks, so every checkout made here or
+/// by `git bisect` would fire the user's `post-checkout` (and an undo their
+/// commit hooks). The setting travels to the git processes `git bisect run`
+/// starts through `GIT_CONFIG_PARAMETERS`; the user's test does not see it
+/// (see [`CONFIG_ENV`]).
 pub(super) fn git_command(dir: &Path) -> Command {
     let mut command = Command::new("git");
-    command.arg("-C").arg(dir).stdin(Stdio::null());
+    command
+        .args(["-c", NO_HOOKS])
+        .arg("-C")
+        .arg(dir)
+        .stdin(Stdio::null());
     for name in REPO_ENV {
         command.env_remove(name);
     }
