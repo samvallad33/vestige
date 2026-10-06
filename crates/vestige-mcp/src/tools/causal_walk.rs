@@ -11,7 +11,11 @@
 //! On a Strata log the walk is a bounded backward BFS over recorded causal
 //! edges only. `stack_frame` (`path:line`) and `failing_test` (a test file
 //! path) resolve to `file:` anchors `ingest_repo` recorded, by exact path
-//! identity, then blame the line at the failure revision. A registry or
+//! identity, and to repository-qualified `file://` handles the resolver
+//! finds for that same path. A `failing_test` with no path starts at the
+//! commit of an exact test or run record. The line annotates hunk rank and
+//! never adds or drops a commit. Blame of a matched path still uses the
+//! failure revision. A registry or
 //! vendor path that names `crate-version` resolves to the `pkg:` anchor of
 //! that exact version, and a lockfile bump is reached from that anchor.
 //! `node_id` still names the failure memory. `ci_run` and `version_range` do
@@ -53,14 +57,14 @@ pub fn schema() -> Value {
             "start_points": {
                 "type": "array",
                 "minItems": 1,
-                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). stack_frame and failing_test resolve by exact path to file anchors ingest_repo recorded. version_range limits commit candidates to git rev-list --first-parent worked_in..broke_in in the local repo. It is not a version-name search. ci_run walks the node_id memory.",
+                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). stack_frame and failing_test resolve by exact path to recorded file anchors, including repository-qualified handles. A failing_test with no path resolves an exact test or run record and starts at that run's commit. version_range limits commit candidates to git rev-list --first-parent worked_in..broke_in in the local repo. It is not a version-name search. ci_run walks the node_id memory.",
                 "items": {
                     "oneOf": [
                         {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "failing_test"},
-                                "name": {"type": "string", "description": "Test file path (repo-relative). Resolved to a recorded file anchor by exact path identity. A bare test name is not matched to a file."},
+                                "name": {"type": "string", "description": "Repo-relative test file path, resolved by exact path identity, or an exact recorded test id or run id when the name has no path. A bare name is not matched to a file."},
                                 "node_id": symptom_node_id()
                             },
                             "required": ["kind", "name"]
@@ -69,7 +73,7 @@ pub fn schema() -> Value {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "stack_frame"},
-                                "frame": {"type": "string", "description": "\"file:line\" or \"file:line:col\". Resolved to a recorded file anchor by exact path identity; the line is blamed at the failure revision."},
+                                "frame": {"type": "string", "description": "\"file:line\" or \"file:line:col\". The file is resolved by exact path to a recorded file: anchor or a repository-qualified file:// handle. The line annotates hunk rank and does not add or drop a commit."},
                                 "node_id": symptom_node_id()
                             },
                             "required": ["kind", "frame"]
@@ -525,6 +529,8 @@ struct StartRow {
     reason: Option<String>,
     /// Repo-relative path a `stack_frame` or `failing_test` named.
     locator: Option<PathLoc>,
+    /// Failing-test name with no path. Resolved only as an exact test or run id.
+    exact_query: Option<String>,
 }
 
 #[derive(Clone)]
@@ -583,6 +589,7 @@ fn start_rows(args: &Args) -> Vec<StartRow> {
                 status: "pending",
                 reason: None,
                 locator: None,
+                exact_query: None,
             });
         }
     }
@@ -595,6 +602,7 @@ fn start_rows(args: &Args) -> Vec<StartRow> {
             status: "pending",
             reason: None,
             locator: locator_of(point),
+            exact_query: exact_test_query(point),
         });
     }
     rows
@@ -611,8 +619,8 @@ fn classify_starts(
     let mut walkable = Vec::new();
     for row in rows.iter_mut() {
         let Some(id) = row.node_id.clone() else {
-            if row.locator.is_some() {
-                // Exact path resolution runs after this pass.
+            if row.locator.is_some() || row.exact_query.is_some() {
+                // Exact path and exact test/run resolution run after this pass.
                 row.status = "pending";
                 continue;
             }
@@ -875,7 +883,7 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "upstreamSkipped": walk.upstream_note,
         "ancestrySkipped": walk.ancestry_note,
         "range": walk.range,
-        "note": "Backward BFS over recorded causal edges only. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A stack_frame or failing_test names a file anchor by exact path; blame of the line uses the failure memory's derived_from commit. Rank among those commits is structural (reverted after the failure, blame of the line, hunk, hop, edge kind), never text.",
+        "note": "Backward BFS over recorded causal edges only. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A stack_frame or failing_test names a file anchor by exact path, including a repository-qualified handle. A failing_test with no path starts at the commit of an exact test or run record. Blame of the line uses the failure memory's derived_from commit. The line annotates hunk rank and never adds or drops a commit. Rank among those commits is structural (reverted after the failure, blame of the line, hunk, hop, edge kind), never text.",
     })
 }
 
@@ -983,7 +991,8 @@ fn resolve_git_frames(
         };
         let package = recorded_package(&loc.path, &recorded_packages);
         let matched = match_paths(&loc.path, &recorded);
-        if matched.is_empty() && package.is_none() {
+        let qualified = qualified_file_handles(storage, scope, &loc.path)?;
+        if matched.is_empty() && package.is_none() && qualified.is_empty() {
             if row.status == "pending" {
                 row.status = "unresolved";
                 row.reason = Some(file_miss_reason(&loc));
@@ -1008,6 +1017,14 @@ fn resolve_git_frames(
             }
             if anchor_seen.insert(anchor.clone()) {
                 anchors.push(anchor);
+            }
+        }
+        for handle in qualified {
+            if file_seen.insert(loc.path.clone()) {
+                files.push(loc.path.clone());
+            }
+            if anchor_seen.insert(handle.clone()) {
+                anchors.push(handle);
             }
         }
     }
@@ -1048,6 +1065,41 @@ fn resolve_git_frames(
             }
         }
     }
+    // A file handle is already a walk start. Do not also start at the commit
+    // node the resolver named for that file. A failing test with no path has
+    // no file handle, so an exact test or run record may start at its commit.
+    if anchors.iter().any(|id| id.starts_with("file:")) {
+        for row in rows.iter_mut() {
+            if row.exact_query.is_some() && row.status == "pending" && row.node_id.is_none() {
+                row.status = "unresolved";
+                row.reason = Some(missing_node_reason(row.kind));
+            }
+        }
+    } else {
+        for row in rows.iter_mut() {
+            let Some(query) = row.exact_query.clone() else {
+                continue;
+            };
+            let commits = run_commit_ids(storage, &query)?;
+            let mut added = false;
+            for id in commits {
+                if !in_scope(storage, &id, scope)? {
+                    continue;
+                }
+                if anchor_seen.insert(id.clone()) {
+                    anchors.push(id);
+                    added = true;
+                }
+            }
+            if added && row.status == "pending" {
+                row.status = "walked";
+                row.reason = None;
+            } else if row.status == "pending" && row.node_id.is_none() {
+                row.status = "unresolved";
+                row.reason = Some(missing_node_reason(row.kind));
+            }
+        }
+    }
     let active = !files.is_empty() || failure_sha.is_some() || !anchors.is_empty();
     Ok(GitQuery {
         anchors,
@@ -1060,6 +1112,96 @@ fn resolve_git_frames(
         root,
         active,
     })
+}
+
+/// Qualified `file://` handles the resolver lists for `path` and that a
+/// commit in `scope` actually touches. Memory ids are not starts.
+fn qualified_file_handles(
+    storage: &Arc<Storage>,
+    scope: &str,
+    path: &str,
+) -> Result<Vec<String>, String> {
+    let resolution = storage.resolve_handle(path);
+    let mut handles = Vec::new();
+    for (id, kind) in &resolution.candidates {
+        if *kind == vestige_core::storage::HandleKind::File && id.starts_with("file://") {
+            push_unique(&mut handles, id);
+        }
+    }
+    for id in &resolution.ids {
+        if id.starts_with("file://") {
+            push_unique(&mut handles, id);
+        }
+    }
+    let mut kept = Vec::new();
+    for handle in handles {
+        if touched_in_scope(storage, scope, &handle)? {
+            kept.push(handle);
+        }
+    }
+    Ok(kept)
+}
+
+fn touched_in_scope(storage: &Arc<Storage>, scope: &str, handle: &str) -> Result<bool, String> {
+    let edges = storage
+        .get_connections_for_memory(handle)
+        .map_err(|err| err.to_string())?;
+    for edge in edges {
+        if edge.link_type == "touched"
+            && edge.target_id == handle
+            && in_scope(storage, &edge.source_id, scope)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Commit memories named by an exact test or run record for `query`.
+///
+/// Typed prefixes only. A miss does not fall through to tags or content.
+fn run_commit_ids(storage: &Arc<Storage>, query: &str) -> Result<Vec<String>, String> {
+    let Some(memory) = crate::strata_memory::live_memory(storage.as_ref()) else {
+        return Ok(Vec::new());
+    };
+    let mut commits = Vec::new();
+    for prefix in ["test:", "run:"] {
+        let resolution = storage.resolve_handle(&format!("{prefix}{query}"));
+        if !resolution.exact || resolution.ids.is_empty() {
+            continue;
+        }
+        if resolution.kind != vestige_core::storage::HandleKind::Test
+            && resolution.kind != vestige_core::storage::HandleKind::Run
+        {
+            continue;
+        }
+        for run_id in &resolution.ids {
+            let sha = memory.with_store_mut(|store| store.run(run_id).map(|run| run.commit));
+            let Some(sha) = sha.filter(|sha| full_sha(sha)) else {
+                continue;
+            };
+            let commit = storage.resolve_handle(&sha);
+            if !commit.exact || commit.kind != vestige_core::storage::HandleKind::Commit {
+                continue;
+            }
+            for id in &commit.ids {
+                push_unique(&mut commits, id);
+            }
+        }
+    }
+    Ok(commits)
+}
+
+fn push_unique(ids: &mut Vec<String>, id: &str) {
+    if !ids.iter().any(|kept| kept == id) {
+        ids.push(id.to_string());
+    }
+}
+
+fn missing_node_reason(kind: &str) -> String {
+    format!(
+        "this {kind} start point carries no node_id; the walk begins at a recorded node, so add node_id (the id of the memory that records this symptom)"
+    )
 }
 
 fn recorded_package(path: &str, recorded: &HashSet<String>) -> Option<String> {
@@ -1238,6 +1380,17 @@ fn parse_line(text: &str) -> Option<u32> {
         return None;
     }
     text.parse::<u32>().ok().filter(|line| *line > 0)
+}
+
+fn exact_test_query(point: &StartPoint) -> Option<String> {
+    let StartPoint::FailingTest { name, .. } = point else {
+        return None;
+    };
+    if failing_test_path(name).is_some() {
+        return None;
+    }
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 fn locator_of(point: &StartPoint) -> Option<PathLoc> {
@@ -1435,7 +1588,41 @@ fn touched_line(storage: &Arc<Storage>, id: &str, files: &[String], line: Option
             return true;
         }
     }
-    false
+    anchor_contains_line(storage, id, files, line)
+}
+
+/// Hunk anchors recorded on `id` for one of `files`. The line is inclusive
+/// of `end_line`, matching the new-side span ingest-git stores.
+fn anchor_contains_line(storage: &Arc<Storage>, id: &str, files: &[String], line: u32) -> bool {
+    let Ok(anchors) = storage.code_anchors_for_node(id) else {
+        return false;
+    };
+    anchors.iter().any(|anchor| {
+        files.iter().any(|file| file == &anchor.file_path)
+            && match (anchor.start_line, anchor.end_line) {
+                (Some(start), Some(end)) => end >= start && line >= start && line <= end,
+                _ => false,
+            }
+    })
+}
+
+fn hunk_anchors(storage: &Arc<Storage>, id: &str, files: &[String]) -> Vec<Value> {
+    let Ok(anchors) = storage.code_anchors_for_node(id) else {
+        return Vec::new();
+    };
+    anchors
+        .into_iter()
+        .filter(|anchor| files.iter().any(|file| file == &anchor.file_path))
+        .filter(|anchor| anchor.start_line.is_some() && anchor.end_line.is_some())
+        .map(|anchor| {
+            json!({
+                "id": anchor.id,
+                "file": anchor.file_path,
+                "start": anchor.start_line,
+                "end": anchor.end_line,
+            })
+        })
+        .collect()
 }
 
 fn edge_rank(path: &[Hop]) -> u8 {
@@ -1486,9 +1673,8 @@ fn git_structure(
     for cause in causes {
         let node = storage.get_node(&cause.id).ok().flatten();
         let sha = node.as_ref().and_then(commit_sha);
-        out.insert(
-            cause.id.clone(),
-            json!({
+        out.insert(cause.id.clone(), {
+            let mut row = json!({
                 "sha": sha,
                 "revertedAfterFailure": reverted_after(storage, &cause.id, git.failure_time),
                 "blameOfLine": sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)),
@@ -1496,8 +1682,13 @@ fn git_structure(
                 "hop": cause.depth,
                 "edge": cause.path.last().map(|hop| hop.link_type.as_str()),
                 "lockfile": lockfile_of(storage, &cause.id),
-            }),
-        );
+            });
+            let hunks = hunk_anchors(storage, &cause.id, &git.files);
+            if !hunks.is_empty() {
+                row["hunkAnchors"] = json!(hunks);
+            }
+            row
+        });
     }
     out
 }
@@ -3431,5 +3622,241 @@ mod strata_walk {
             .find(|row| row["structure"]["sha"] == cause)
             .unwrap_or_else(|| panic!("{out}"));
         assert_eq!(cause_row["structure"]["edge"], "corrects", "{out}");
+    }
+
+    #[tokio::test]
+    async fn qualified_file_handle_walks_touchers_and_the_line_does_not_change_the_set() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let git = |args: &[&str], date: &str| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args([
+                    "-c",
+                    "user.email=t@example.com",
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q"], "2024-01-01T00:00:00Z");
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/a.rs"),
+            "fn parse() {\n    let _ = 1;\n}\n",
+        )
+        .unwrap();
+        git(&["add", "-A"], "2024-01-01T00:00:00Z");
+        git(
+            &["commit", "-q", "-m", "introduce parse"],
+            "2024-01-01T00:00:00Z",
+        );
+        let introduced = git(&["rev-parse", "HEAD"], "2024-01-01T00:00:00Z");
+        std::fs::write(
+            dir.path().join("src/a.rs"),
+            "fn parse() {\n    let _ = 2;\n}\n",
+        )
+        .unwrap();
+        git(&["add", "-A"], "2024-02-01T00:00:00Z");
+        git(
+            &["commit", "-q", "-m", "touch parse"],
+            "2024-02-01T00:00:00Z",
+        );
+        let later = git(&["rev-parse", "HEAD"], "2024-02-01T00:00:00Z");
+        std::fs::write(dir.path().join("README.md"), "observed\n").unwrap();
+        git(&["add", "-A"], "2024-03-01T00:00:00Z");
+        git(
+            &["commit", "-q", "-m", "failure revision"],
+            "2024-03-01T00:00:00Z",
+        );
+        let failure_rev = git(&["rev-parse", "HEAD"], "2024-03-01T00:00:00Z");
+
+        let (storage, _log) = open();
+        let ingested = crate::tools::ingest_git::execute(
+            storage.as_ref(),
+            crate::tools::ingest_git::Request {
+                repo_path: dir.path().to_path_buf(),
+                since: None,
+                until: None,
+                max_commits: 20,
+            },
+        )
+        .unwrap();
+        assert!(
+            ingested["commits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(
+                    |commit| commit["edges"].as_array().unwrap().iter().any(|edge| {
+                        edge["target"].as_str().unwrap().starts_with("file://")
+                            && edge["meta_sha"].as_str().is_some()
+                    })
+                ),
+            "{ingested}"
+        );
+        let commit_id = |sha: &str| {
+            let resolved = storage.resolve_handle(sha);
+            assert_eq!(
+                resolved.kind,
+                vestige_core::storage::HandleKind::Commit,
+                "{sha}"
+            );
+            assert!(resolved.exact, "{sha}: {resolved:?}");
+            resolved.ids[0].clone()
+        };
+        let failure = put(&storage, "user", "failure: panic in src/a.rs");
+        link(&storage, &failure, &commit_id(&failure_rev), "derived_from");
+        let decoy = put(
+            &storage,
+            "user",
+            "notes mention src/a.rs and parse but record no anchor",
+        );
+
+        let shas = |out: &Value| -> Vec<String> {
+            out["causes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|row| row["structure"]["sha"].as_str().map(str::to_string))
+                .collect()
+        };
+        let with_line = execute(
+            &storage,
+            Some(json!({
+                "scope": "user",
+                "start_points": [{
+                    "kind": "stack_frame",
+                    "frame": "src/a.rs:1",
+                    "node_id": failure
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        let no_line = execute(
+            &storage,
+            Some(json!({
+                "scope": "user",
+                "start_points": [{
+                    "kind": "stack_frame",
+                    "frame": "src/a.rs",
+                    "node_id": failure
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        let mut lined = shas(&with_line);
+        let mut plain = shas(&no_line);
+        lined.sort();
+        plain.sort();
+        assert_eq!(
+            lined, plain,
+            "line must not change membership:\n{with_line}\n{no_line}"
+        );
+        assert!(lined.contains(&introduced), "{with_line}");
+        assert!(lined.contains(&later), "{with_line}");
+        assert!(!lined.contains(&failure_rev), "{with_line}");
+        assert_eq!(
+            no_line["causes"][0]["structure"]["sha"],
+            json!(later),
+            "{no_line}"
+        );
+        let top = &with_line["causes"][0];
+        assert_eq!(top["path"][0]["link_type"], "touched", "{with_line}");
+        assert!(
+            top["path"][0]["target_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("file://"),
+            "{with_line}"
+        );
+        assert!(
+            with_line["causes"].as_array().unwrap().iter().any(|row| {
+                row["structure"]["hunkAnchors"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+            }),
+            "{with_line}"
+        );
+        let body = serde_json::to_string(&with_line).unwrap();
+        assert!(!body.contains(&decoy), "{with_line}");
+
+        for frame in ["src/A.rs:1", "a.rs:1"] {
+            let missed = execute(
+                &storage,
+                Some(json!({
+                    "scope": "user",
+                    "start_points": [{"kind": "stack_frame", "frame": frame}]
+                })),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                missed["needs_report"]["missing"],
+                json!(["file"]),
+                "{frame}: {missed}"
+            );
+        }
+
+        crate::tools::record_runs::execute(
+            storage.as_ref(),
+            crate::tools::record_runs::Request {
+                runs: vec![crate::tools::record_runs::RunInput {
+                    run_id: "suite::crate::mod::touched_file".into(),
+                    kind: "test".into(),
+                    subject: "crate::mod::touched_file".into(),
+                    commit: later.clone(),
+                    status: "failed".into(),
+                    started_ms: 0,
+                    finished_ms: 0,
+                }],
+                junit_xml: None,
+                commit: String::new(),
+            },
+        )
+        .unwrap();
+        let by_test = execute(
+            &storage,
+            Some(json!({
+                "scope": "user",
+                "start_points": [{"kind": "failing_test", "name": "crate::mod::touched_file"}]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_test["starts"], json!([commit_id(&later)]), "{by_test}");
+        assert!(by_test["needs_report"].is_null(), "{by_test}");
+        let unnamed = execute(
+            &storage,
+            Some(json!({
+                "scope": "user",
+                "start_points": [{"kind": "failing_test", "name": "no_such_test"}]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            unnamed["needs_report"]["missing"],
+            json!(["node_id"]),
+            "{unnamed}"
+        );
     }
 }
