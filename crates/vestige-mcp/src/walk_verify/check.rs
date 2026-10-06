@@ -26,7 +26,7 @@ use anyhow::Context;
 use chrono::DateTime;
 use serde_json::Value;
 
-use super::git::{git_test, parents_of};
+use super::git::{git_test, is_sha, parents_of};
 use super::json::{ZERO_HASH, chain_hash, protocol_hash, sha256_hex};
 use super::stats::{REPEATED_P, fisher_p};
 use super::text::{Palette, abspath, head, py_display};
@@ -159,10 +159,15 @@ pub fn check(report: &Path) -> anyhow::Result<i32> {
         if verdict != "bad" {
             fail("the first bad commit is not recorded as bad by a probe.");
         }
+        // The report is someone else's input, and a name git would read as
+        // an option (`--output=<file>`) must never reach it.
+        if !is_sha(first_bad) {
+            fail("the first bad commit is not a full commit name.");
+        }
         let repo = rep["repo"]
             .as_str()
             .map(Path::new)
-            .filter(|repo| repo.is_dir());
+            .filter(|repo| repo.is_dir() && is_sha(first_bad));
         let parents = repo.and_then(|repo| Some((repo, parents_of(repo, first_bad).ok()?)));
         match parents {
             Some((repo, parents)) => {
@@ -183,6 +188,7 @@ pub fn check(report: &Path) -> anyhow::Result<i32> {
                             // already rules out: its ancestors.
                             let implied = verdicts.iter().find(|(commit, verdict)| {
                                 **verdict == "good"
+                                    && is_sha(commit)
                                     && git_test(
                                         repo,
                                         &["merge-base", "--is-ancestor", parent, commit],
@@ -251,9 +257,44 @@ pub fn check(report: &Path) -> anyhow::Result<i32> {
         }
     }
 
+    let listed_contradictions = rep["contradictions"]
+        .as_array()
+        .is_some_and(|lines| !lines.is_empty());
     for line in rep["contradictions"].as_array().into_iter().flatten() {
         println!("  contradiction, {}", py_display(Some(line)));
     }
+    // The recorded verdicts that contradict the named commit, recomputed
+    // from the chain the way the run computes them: a commit before it that
+    // tested bad, or one that contains it and tested good. `None` when the
+    // report's repo is not on this machine to answer the ancestry.
+    let contradicted = rep["first_bad_commit"]
+        .as_str()
+        .filter(|first_bad| is_sha(first_bad))
+        .zip(
+            rep["repo"]
+                .as_str()
+                .map(Path::new)
+                .filter(|repo| repo.is_dir()),
+        )
+        .map(|(first_bad, repo)| {
+            let ancestor = |older: &str, newer: &str| {
+                git_test(repo, &["merge-base", "--is-ancestor", older, newer]).unwrap_or(false)
+            };
+            probes
+                .iter()
+                .filter(|probe| {
+                    let commit = probe["commit"].as_str().unwrap_or_default();
+                    if !is_sha(commit) || commit == first_bad {
+                        return false;
+                    }
+                    match probe["verdict"].as_str() {
+                        Some("bad") => ancestor(commit, first_bad),
+                        Some("good") => ancestor(first_bad, commit),
+                        _ => false,
+                    }
+                })
+                .count()
+        });
     for rung in rep["verdict_card"].as_array().into_iter().flatten() {
         let name = py_display(rung.get("rung"));
         let holds = rung["holds"] == true;
@@ -266,6 +307,20 @@ pub fn check(report: &Path) -> anyhow::Result<i32> {
             fail(&format!(
                 "the card says {name} holds, but the recorded runs do not back it."
             ));
+        }
+        if holds && name == "CONFIRMED" {
+            match contradicted {
+                _ if listed_contradictions => fail(
+                    "the card says CONFIRMED holds, but the report lists runs that contradict it.",
+                ),
+                Some(0) => {}
+                Some(count) => fail(&format!(
+                    "the card says CONFIRMED holds, but {count} recorded verdict(s) contradict the first bad commit."
+                )),
+                None => println!(
+                    "    CONFIRMED not rechecked: the report's repo is not on this machine to answer the ancestry"
+                ),
+            }
         }
     }
 
@@ -490,6 +545,114 @@ mod tests {
             report["first_bad_commit"] = Value::Null;
         });
         assert_eq!(check(&unnamed).unwrap(), 0);
+    }
+
+    /// A report is someone else's input. A first bad commit git would read
+    /// as an option (`--output=<file>`) fails the check and never reaches
+    /// git, even when a probe records it bad and the report's repo is here.
+    #[test]
+    fn check_never_hands_a_report_field_to_git_as_an_option() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+        let repo = dir.join("repo");
+        fs::create_dir(&repo).unwrap();
+        let commit = [
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ];
+        for args in [&["init", "-q"][..], &commit[..]] {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, "kept\n").unwrap();
+        let named: &'static str =
+            Box::leak(format!("--output={}", victim.display()).into_boxed_str());
+        let rows: [Row; 2] = [
+            (GOOD, "good", "baseline", None),
+            (named, "bad", "baseline", None),
+        ];
+        let report = write_report(dir, &rows, |report| {
+            report["repo"] = json!(repo);
+            report["first_bad_commit"] = json!(named);
+        });
+        assert_eq!(check(&report).unwrap(), 1);
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "kept\n");
+    }
+
+    /// A forged CONFIRMED: the card says it holds and the list of runs that
+    /// contradict it is emptied, while a recorded run does. The check
+    /// recomputes the contradictions from the chain, as the run does.
+    #[test]
+    fn check_recomputes_the_contradictions_a_confirmed_card_hides() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+        let repo = dir.join("repo");
+        fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| -> String {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        let mut shas: Vec<&'static str> = Vec::new();
+        for name in ["a", "b", "c", "d"] {
+            git(&["commit", "-q", "--allow-empty", "-m", name]);
+            shas.push(Box::leak(git(&["rev-parse", "HEAD"]).into_boxed_str()));
+        }
+        let (a, b, c, d) = (shas[0], shas[1], shas[2], shas[3]);
+        let report = |rows: &[Row], listed: Value| {
+            let repo = repo.clone();
+            write_report(dir, rows, move |report| {
+                report["repo"] = json!(repo);
+                report["first_bad_commit"] = json!(c);
+                report["verdict_card"] = json!([{
+                    "rung": "CONFIRMED",
+                    "holds": true,
+                    "statement": "stock git bisect names it",
+                }]);
+                report["contradictions"] = listed;
+            })
+        };
+        let honest: [Row; 3] = [
+            (a, "good", "baseline", None),
+            (c, "bad", "baseline", None),
+            (b, "good", "bisect", None),
+        ];
+        assert_eq!(check(&report(&honest, json!([]))).unwrap(), 0);
+        // d contains c and tested good, so CONFIRMED cannot hold.
+        let contradicted: [Row; 4] = [
+            (a, "good", "baseline", None),
+            (c, "bad", "baseline", None),
+            (b, "good", "bisect", None),
+            (d, "good", "bisect", None),
+        ];
+        assert_eq!(check(&report(&contradicted, json!([]))).unwrap(), 1);
+        // A contradiction the report lists fails it too.
+        let listed = json!(["run 4: d tested GOOD but contains the named commit"]);
+        assert_eq!(check(&report(&honest, listed)).unwrap(), 1);
     }
 
     #[test]
