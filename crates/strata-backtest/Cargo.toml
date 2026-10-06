@@ -1,0 +1,20 @@
+[package]
+name = "strata-backtest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "AGPL-3.0-only"
+description = "Offline deterministic Gain x Need replay backtest over a signed Strata log"
+publish = false
+
+# Standalone on purpose (same discipline as strata-verify): an empty
+# workspace table so this crate does not join the root vestige workspace.
+# The root Cargo.toml lists it under `exclude` only.
+[workspace]
+
+[dependencies]
+blake3 = "1"
+libm = "0.2"
+strata-kernel = { path = "../strata-kernel" }
+strata-store = { path = "../strata-store" }
+tempfile = "3"
