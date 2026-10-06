@@ -14,8 +14,9 @@
 //! identity, and to repository-qualified `file://` handles the resolver
 //! finds for that same path. A `failing_test` with no path starts at the
 //! commit of an exact test or run record. The line annotates hunk rank and
-//! never adds or drops a commit. Blame of a matched path still uses the
-//! failure revision. A registry or
+//! never adds or drops a commit. The commits that changed the line are the
+//! `git log -L` history at the failure revision, and a hunk matches the line
+//! number in that commit. A registry or
 //! vendor path that names `crate-version` resolves to the `pkg:` anchor of
 //! that exact version, and a lockfile bump is reached from that anchor.
 //! `node_id` still names the failure memory. `ci_run` and `version_range` do
@@ -28,7 +29,7 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -883,7 +884,7 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "upstreamSkipped": walk.upstream_note,
         "ancestrySkipped": walk.ancestry_note,
         "range": walk.range,
-        "note": "Backward BFS over recorded causal edges only. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A stack_frame or failing_test names a file anchor by exact path, including a repository-qualified handle. A failing_test with no path starts at the commit of an exact test or run record. Blame of the line uses the failure memory's derived_from commit. The line annotates hunk rank and never adds or drops a commit. Rank among those commits is structural (reverted after the failure, blame of the line, hunk, hop, edge kind), never text.",
+        "note": "Backward BFS over recorded causal edges only. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A stack_frame or failing_test names a file anchor by exact path, including a repository-qualified handle. A failing_test with no path starts at the commit of an exact test or run record. Line history is git log -L at the failure memory's derived_from commit, and a hunk matches the line number in that commit. The line annotates hunk rank and never adds or drops a commit. Rank among those commits is structural (reverted after the failure, blame of the line, hunk, hop, edge kind), never text.",
     })
 }
 
@@ -954,10 +955,12 @@ fn why_empty(storage: &Arc<Storage>, scope: &str, starts: &[String]) -> (String,
 struct GitQuery {
     anchors: Vec<String>,
     files: Vec<String>,
-    line: Option<u32>,
     failure_commit_id: Option<String>,
     failure_time: Option<DateTime<Utc>>,
     blame_shas: HashSet<String>,
+    /// New-side line of the traced frame in the commit that changed it.
+    /// Key is `{sha}\0{file}`. A sha in `blame_shas` with no entry deleted the line.
+    traced_lines: HashMap<String, u32>,
     failure_sha: Option<String>,
     root: Option<PathBuf>,
     active: bool,
@@ -1049,10 +1052,17 @@ fn resolve_git_frames(
         root = git_root_from_touchers(storage, scope, &files)?;
     }
     let mut blame_shas = HashSet::new();
+    let mut traced_lines = HashMap::new();
     if let (Some(line), Some(sha), Some(root)) = (line, failure_sha.as_deref(), root.as_ref()) {
         for file in &files {
-            if let Ok(Some(blamed)) = crate::tools::repo_ingest::blame_line(root, sha, file, line) {
-                blame_shas.insert(blamed);
+            let Ok(traced) = crate::tools::repo_ingest::trace_line(root, sha, file, line) else {
+                continue;
+            };
+            for row in traced {
+                if let Some(at) = row.line {
+                    traced_lines.insert(trace_key(&row.sha, file), at);
+                }
+                blame_shas.insert(row.sha);
             }
         }
     }
@@ -1104,10 +1114,10 @@ fn resolve_git_frames(
     Ok(GitQuery {
         anchors,
         files,
-        line,
         failure_commit_id,
         failure_time,
         blame_shas,
+        traced_lines,
         failure_sha,
         root,
         active,
@@ -1558,47 +1568,73 @@ fn reverted_after(storage: &Arc<Storage>, id: &str, failure_time: Option<DateTim
     false
 }
 
-fn touched_line(storage: &Arc<Storage>, id: &str, files: &[String], line: Option<u32>) -> bool {
-    let Some(line) = line else {
+fn trace_key(sha: &str, file: &str) -> String {
+    format!("{sha}\0{file}")
+}
+
+/// A hunk matches when this commit changed the traced line and the line
+/// number *in this commit* falls in the recorded span.
+///
+/// The failure revision's line number is not used. A commit absent from the
+/// line history does not match, including when one of its hunks happens to
+/// cover that later line number.
+fn touched_line(
+    storage: &Arc<Storage>,
+    id: &str,
+    files: &[String],
+    traced: &HashMap<String, u32>,
+) -> bool {
+    let Ok(Some(node)) = storage.get_node(id) else {
+        return false;
+    };
+    let Some(sha) = commit_sha(&node) else {
         return false;
     };
     let Ok(edges) = storage.get_connections_for_memory(id) else {
         return false;
     };
-    for edge in edges {
-        if edge.link_type != "touched" || edge.source_id != id {
+    for file in files {
+        let Some(&line) = traced.get(&trace_key(&sha, file)) else {
             continue;
+        };
+        for edge in &edges {
+            if edge.link_type != "touched" || edge.source_id != id {
+                continue;
+            }
+            let Some(rest) = edge.target_id.strip_prefix("hunk:") else {
+                continue;
+            };
+            let Some((hunk_file, span)) = rest.rsplit_once(':') else {
+                continue;
+            };
+            if hunk_file != file {
+                continue;
+            }
+            let Some((start, len)) = span.split_once('+') else {
+                continue;
+            };
+            let (Ok(start), Ok(len)) = (start.parse::<u32>(), len.parse::<u32>()) else {
+                continue;
+            };
+            if len > 0 && line >= start && line < start.saturating_add(len) {
+                return true;
+            }
         }
-        let Some(rest) = edge.target_id.strip_prefix("hunk:") else {
-            continue;
-        };
-        let Some((file, span)) = rest.rsplit_once(':') else {
-            continue;
-        };
-        if !files.iter().any(|candidate| candidate == file) {
-            continue;
-        }
-        let Some((start, len)) = span.split_once('+') else {
-            continue;
-        };
-        let (Ok(start), Ok(len)) = (start.parse::<u32>(), len.parse::<u32>()) else {
-            continue;
-        };
-        if len > 0 && line >= start && line < start.saturating_add(len) {
+        if anchor_contains_line(storage, id, file, line) {
             return true;
         }
     }
-    anchor_contains_line(storage, id, files, line)
+    false
 }
 
-/// Hunk anchors recorded on `id` for one of `files`. The line is inclusive
-/// of `end_line`, matching the new-side span ingest-git stores.
-fn anchor_contains_line(storage: &Arc<Storage>, id: &str, files: &[String], line: u32) -> bool {
+/// Hunk anchors recorded on `id` for `file`. The line is inclusive of
+/// `end_line`, matching the new-side span ingest-git stores.
+fn anchor_contains_line(storage: &Arc<Storage>, id: &str, file: &str, line: u32) -> bool {
     let Ok(anchors) = storage.code_anchors_for_node(id) else {
         return false;
     };
     anchors.iter().any(|anchor| {
-        files.iter().any(|file| file == &anchor.file_path)
+        file == anchor.file_path
             && match (anchor.start_line, anchor.end_line) {
                 (Some(start), Some(end)) => end >= start && line >= start && line <= end,
                 _ => false,
@@ -1643,7 +1679,12 @@ fn git_rank(
     let sha = node.as_ref().and_then(commit_sha);
     let reverted = u8::from(!reverted_after(storage, &cause.id, git.failure_time));
     let blame = u8::from(!sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)));
-    let hunk = u8::from(!touched_line(storage, &cause.id, &git.files, git.line));
+    let hunk = u8::from(!touched_line(
+        storage,
+        &cause.id,
+        &git.files,
+        &git.traced_lines,
+    ));
     let gap = match (
         git.failure_time,
         node.as_ref().and_then(|node| node.valid_from),
@@ -1678,7 +1719,7 @@ fn git_structure(
                 "sha": sha,
                 "revertedAfterFailure": reverted_after(storage, &cause.id, git.failure_time),
                 "blameOfLine": sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)),
-                "touchedFailingHunk": touched_line(storage, &cause.id, &git.files, git.line),
+                "touchedFailingHunk": touched_line(storage, &cause.id, &git.files, &git.traced_lines),
                 "hop": cause.depth,
                 "edge": cause.path.last().map(|hop| hop.link_type.as_str()),
                 "lockfile": lockfile_of(storage, &cause.id),
@@ -3094,6 +3135,100 @@ mod strata_walk {
             json!(cause),
             "{suffixed}"
         );
+    }
+
+    /// Insertions above a line move it. The hunk check uses the line number
+    /// in the commit that wrote it. The failure revision's line number is
+    /// outside that commit's recorded hunk.
+    #[tokio::test]
+    async fn line_history_matches_the_hunk_recorded_on_that_commit() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let root = repo.path();
+        let day = |n: u32| format!("2024-05-{n:02}T00:00:00Z");
+        git_at(root, &["init", "-q"], &day(1));
+        let body: String = (1..=10).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(root.join("a.rs"), body).unwrap();
+        git_at(root, &["add", "-A"], &day(1));
+        git_at(root, &["commit", "-q", "-m", "introduce"], &day(1));
+        let introduced = git_at(root, &["rev-parse", "HEAD"], &day(1));
+        let shifted: String = (1..=10)
+            .map(|n| format!("pad {n}\n"))
+            .chain((1..=10).map(|n| format!("line {n}\n")))
+            .collect();
+        std::fs::write(root.join("a.rs"), shifted).unwrap();
+        git_at(root, &["add", "-A"], &day(2));
+        git_at(root, &["commit", "-q", "-m", "shift"], &day(2));
+        let failure_rev = git_at(root, &["rev-parse", "HEAD"], &day(2));
+
+        let (storage, _log) = open();
+        ingest_repo(&storage, root, "HEAD", 10).await;
+        let id_of = |sha: &str| {
+            let tag = crate::tools::repo_ingest::commit_tag(sha);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let introduced_id = id_of(&introduced);
+        let edges = storage.get_connections_for_memory(&introduced_id).unwrap();
+        let mut covers_10 = false;
+        let mut covers_20 = false;
+        for edge in &edges {
+            if edge.link_type != "touched" || edge.source_id != introduced_id {
+                continue;
+            }
+            let Some(rest) = edge.target_id.strip_prefix("hunk:a.rs:") else {
+                continue;
+            };
+            let Some((start, len)) = rest.split_once('+') else {
+                continue;
+            };
+            let (Ok(start), Ok(len)) = (start.parse::<u32>(), len.parse::<u32>()) else {
+                continue;
+            };
+            let end = start.saturating_add(len);
+            if (start..end).contains(&10) {
+                covers_10 = true;
+            }
+            if (start..end).contains(&20) {
+                covers_20 = true;
+            }
+        }
+        assert!(
+            covers_10,
+            "the introducing commit's hunk covers its own line 10: {edges:?}"
+        );
+        assert!(
+            !covers_20,
+            "line 20 is the failure revision, not this commit: {edges:?}"
+        );
+
+        let failure = put(&storage, "demo", "failure at a.rs:20");
+        link(&storage, &failure, &id_of(&failure_rev), "derived_from");
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{
+                    "kind": "stack_frame",
+                    "frame": "a.rs:20",
+                    "node_id": failure
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        let row = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["structure"]["sha"] == json!(introduced))
+            .unwrap_or_else(|| panic!("introducing commit missing: {out}"));
+        assert_eq!(row["structure"]["blameOfLine"], true, "{out}");
+        assert_eq!(row["structure"]["touchedFailingHunk"], true, "{out}");
     }
 
     #[tokio::test]

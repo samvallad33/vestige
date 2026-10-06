@@ -1666,6 +1666,127 @@ pub fn blame_line(root: &Path, rev: &str, path: &str, line: u32) -> Result<Optio
     }
 }
 
+/// One commit from `git log -L` of a single line.
+///
+/// `line` is where that line sits in this commit (the new side of the hunk).
+/// `None` means the commit deleted it (`+start,0`): the sha still changed the
+/// line, and there is no coordinate to test against a hunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TracedLine {
+    /// Full 40-hex commit id, lowercase.
+    pub sha: String,
+    /// New-side line in this commit. Absent when the commit deleted the line.
+    pub line: Option<u32>,
+}
+
+/// History of one line at `rev`. Newest commit first, as git prints it.
+///
+/// `Ok(empty)` is an unresolvable line (missing file, line 0, git error), not
+/// a guess, and nothing is fetched. The range is numeric
+/// (`{line},{line}:{path}`), so a colon in `path` is part of the path.
+pub fn trace_line(
+    root: &Path,
+    rev: &str,
+    path: &str,
+    line: u32,
+) -> Result<Vec<TracedLine>, String> {
+    if line == 0 || path.is_empty() {
+        return Ok(Vec::new());
+    }
+    check_git_arg("rev", rev)?;
+    check_git_arg("path", path)?;
+    if !root.is_dir() {
+        return Err(format!(
+            "git repo {} is not an available directory",
+            root.display()
+        ));
+    }
+    let run = run_git(
+        root,
+        &[
+            "log".into(),
+            "-L".into(),
+            format!("{line},{line}:{path}"),
+            "--no-color".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "--pretty=format:VESTIGE-LINE %H".into(),
+            rev.into(),
+        ],
+    )?;
+    if run.failure.is_some() {
+        return Ok(Vec::new());
+    }
+    Ok(parse_line_log(&String::from_utf8_lossy(&run.stdout)))
+}
+
+struct PendingLine {
+    sha: String,
+    line: Option<u32>,
+    saw_hunk: bool,
+}
+
+fn parse_line_log(text: &str) -> Vec<TracedLine> {
+    let mut out = Vec::new();
+    let mut current: Option<PendingLine> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("VESTIGE-LINE ") {
+            if let Some(done) = current.take() {
+                out.push(TracedLine {
+                    sha: done.sha,
+                    line: done.line,
+                });
+            }
+            let sha = rest.trim().to_ascii_lowercase();
+            if is_commit_sha(&sha) {
+                current = Some(PendingLine {
+                    sha,
+                    line: None,
+                    saw_hunk: false,
+                });
+            }
+            continue;
+        }
+        let Some(row) = current.as_mut() else {
+            continue;
+        };
+        if row.saw_hunk {
+            continue;
+        }
+        if let Some((start, len)) = new_side_span(line) {
+            row.saw_hunk = true;
+            if len > 0 {
+                row.line = Some(start);
+            }
+        }
+    }
+    if let Some(done) = current {
+        out.push(TracedLine {
+            sha: done.sha,
+            line: done.line,
+        });
+    }
+    out
+}
+
+fn is_commit_sha(sha: &str) -> bool {
+    sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) && sha.chars().any(|c| c != '0')
+}
+
+/// `@@ -old[,len] +new[,len] @@`. An omitted length is 1.
+fn new_side_span(line: &str) -> Option<(u32, u32)> {
+    let rest = line.strip_prefix("@@ ")?;
+    let (header, _) = rest.split_once(" @@")?;
+    let plus = header
+        .split_whitespace()
+        .find(|part| part.starts_with('+'))?;
+    let plus = plus.strip_prefix('+')?;
+    match plus.split_once(',') {
+        Some((start, len)) => Some((start.parse().ok()?, len.parse().ok()?)),
+        None => Some((plus.parse().ok()?, 1)),
+    }
+}
+
 /// What a git run produced. A non-zero exit is `failure` (stderr), not an
 /// error: git may have written whole commits before it died.
 pub(crate) struct GitRun {
@@ -2893,6 +3014,73 @@ pub fn parse_timeout(raw: &str) -> u32 {
             blame_line(root, &head, "src/missing.rs", 1)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn line_history_names_the_commit_at_the_line_number_it_wrote() {
+        let mut repo = Repo::empty();
+        let body: String = (1..=10).map(|n| format!("line {n}\n")).collect();
+        repo.write("a.rs", &body);
+        repo.commit("introduce", DATES[0]);
+        let introduced = repo.shas[0].clone();
+        let shifted: String = (1..=10)
+            .map(|n| format!("pad {n}\n"))
+            .chain((1..=10).map(|n| format!("line {n}\n")))
+            .collect();
+        repo.write("a.rs", &shifted);
+        repo.commit("shift", DATES[1]);
+        let head = repo.shas[1].clone();
+        let traced = trace_line(repo.dir.path(), &head, "a.rs", 20).unwrap();
+        assert_eq!(
+            traced,
+            vec![TracedLine {
+                sha: introduced,
+                line: Some(10),
+            }]
+        );
+        assert!(
+            trace_line(repo.dir.path(), &head, "src/missing.rs", 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            trace_line(repo.dir.path(), &head, "a.rs", 0)
+                .unwrap()
+                .is_empty()
+        );
+        repo.write("a:b.rs", "x\n");
+        repo.commit("colon", DATES[2]);
+        let colon_sha = repo.shas[2].clone();
+        let colon = trace_line(repo.dir.path(), &colon_sha, "a:b.rs", 1).unwrap();
+        assert_eq!(
+            colon,
+            vec![TracedLine {
+                sha: repo.shas[2].clone(),
+                line: Some(1),
+            }]
+        );
+    }
+
+    #[test]
+    fn line_log_parser_keeps_a_deletion_without_a_coordinate() {
+        let deleted = "a".repeat(40);
+        let edited = "b".repeat(40);
+        let text = format!(
+            "VESTIGE-LINE {deleted}\n@@ -10,1 +9,0 @@\n-gone\n\nVESTIGE-LINE {edited}\n@@ -3 +4 @@\n-old\n+new\n"
+        );
+        assert_eq!(
+            parse_line_log(&text),
+            vec![
+                TracedLine {
+                    sha: deleted,
+                    line: None,
+                },
+                TracedLine {
+                    sha: edited,
+                    line: Some(4),
+                },
+            ]
         );
     }
 
