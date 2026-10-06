@@ -356,7 +356,8 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
     // starts' identities and the ones the unfollowed edges rest on.
     let also_counted: BTreeSet<Identity> = held_shared.iter().flatten().cloned().collect();
     let ranking = rank_causes(storage, scope, &mut causes, also_counted)?;
-    let not_followed = describe_not_followed(&held, &held_shared, &ranking);
+    let mut not_followed = describe_not_followed(&held, &held_shared, &ranking);
+    not_followed.held = held_leads(&held, &held_shared, &ranking, &nodes, node_cap);
 
     Ok(walk_payload(
         storage,
@@ -688,6 +689,84 @@ struct NotFollowed {
     shared: Vec<(Identity, usize, usize)>,
     /// Edges whose two ends share no exact identity, or only hub tags.
     no_counted_identity: usize,
+    /// The memories behind those edges, one per memory, listed so a tool
+    /// that tests hypotheses (`vestige prove`) can try them after the
+    /// causes. Not ranked with the causes and not followed.
+    held: Vec<HeldLead>,
+}
+
+/// One memory behind a `touched` edge the walk did not follow: the reached
+/// memory it hangs from, that memory's depth, and the exact identities the
+/// two share (hub tags left out). Listed, never followed: nothing is said
+/// about it until a test says it.
+struct HeldLead {
+    upstream: String,
+    from: String,
+    from_depth: u32,
+    shared: Vec<(Identity, usize)>,
+}
+
+/// The held leads of a walk: for every memory behind an unfollowed edge,
+/// the edge that hangs it closest to the start (smallest depth, then most
+/// shared identities, then the id of the reached end). Ordered the way the
+/// causes are: by the depth it would have, then more shared identities
+/// first, then id. Capped at `cap`, the walk's own node bound.
+fn held_leads(
+    held: &BTreeSet<HeldEdge>,
+    held_shared: &[BTreeSet<Identity>],
+    ranking: &Ranking,
+    nodes: &[Reached],
+    cap: usize,
+) -> Vec<HeldLead> {
+    let depth_of: BTreeMap<&str, u32> = nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node.depth))
+        .collect();
+    let mut best: BTreeMap<&str, HeldLead> = BTreeMap::new();
+    for (edge, shared) in held.iter().zip(held_shared) {
+        let Some(&from_depth) = depth_of.get(edge.from.as_str()) else {
+            continue;
+        };
+        let mut shared: Vec<(Identity, usize)> = shared
+            .iter()
+            .filter(|identity| !ranking.is_hub(identity))
+            .map(|identity| (identity.clone(), ranking.carried_by(identity)))
+            .collect();
+        shared.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        let candidate = HeldLead {
+            upstream: edge.upstream.clone(),
+            from: edge.from.clone(),
+            from_depth,
+            shared,
+        };
+        let better = match best.get(edge.upstream.as_str()) {
+            None => true,
+            Some(current) => {
+                (
+                    candidate.from_depth,
+                    Reverse(candidate.shared.len()),
+                    &candidate.from,
+                ) < (
+                    current.from_depth,
+                    Reverse(current.shared.len()),
+                    &current.from,
+                )
+            }
+        };
+        if better {
+            best.insert(edge.upstream.as_str(), candidate);
+        }
+    }
+    let mut out: Vec<HeldLead> = best.into_values().collect();
+    out.sort_by(|a, b| {
+        (a.from_depth, Reverse(a.shared.len()), &a.upstream).cmp(&(
+            b.from_depth,
+            Reverse(b.shared.len()),
+            &b.upstream,
+        ))
+    });
+    out.truncate(cap);
+    out
 }
 
 /// Most identities listed for the edges a walk did not follow. The count of
@@ -755,6 +834,7 @@ fn describe_not_followed(
             .len(),
         shared,
         no_counted_identity,
+        held: Vec::new(),
     }
 }
 
@@ -1045,6 +1125,14 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
             "no_counted_identity": walk.not_followed.no_counted_identity,
             "scope_size": walk.ranking.scope_size,
             "reason": NOT_FOLLOWED_REASON,
+            "held": walk.not_followed.held.iter().map(|lead| json!({
+                "memory": lead.upstream,
+                "from": lead.from,
+                "depth": lead.from_depth + 1,
+                "shared": with_carriers(&lead.shared),
+                "content": content_of(storage, &lead.upstream),
+            })).collect::<Vec<_>>(),
+            "held_note": "the memories behind those edges, one touched edge beyond a reached memory, in the order the causes use; not ranked with them and not followed. A tool that tests hypotheses may try them after the causes",
         })
     });
     let empty = (walk.needs_report.is_none() && walk.causes.is_empty())

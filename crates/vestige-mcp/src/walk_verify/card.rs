@@ -123,7 +123,9 @@ pub(super) struct CardFacts<'a> {
     pub parent: Option<&'a str>,
     /// The lead that named the commit: its rank, the number of leads, and
     /// the memory that is the recorded link.
-    pub lead: Option<(usize, usize, &'a str)>,
+    /// `(rank, leads, memory, held)`: `held` when the walk listed the memory
+    /// behind a touched edge it did not follow, instead of reaching it.
+    pub lead: Option<(usize, usize, &'a str, bool)>,
     /// Commits in `good..bad`.
     pub window: u64,
     /// How many recorded verdicts contradict this being the first bad
@@ -270,11 +272,19 @@ pub(super) fn verdict_card(facts: &CardFacts<'_>) -> Vec<Rung> {
 
     let mut card = Vec::new();
     card.push(match facts.lead {
-        Some((rank, leads, memory)) => Rung {
+        Some((rank, leads, memory, false)) => Rung {
             name: "LEAD",
             holds: true,
             statement: format!("the walk reached it over recorded links (lead {rank} of {leads})"),
             proof: format!("recorded link {memory}"),
+        },
+        Some((rank, leads, memory, true)) => Rung {
+            name: "LEAD",
+            holds: true,
+            statement: format!(
+                "the walk held it one touched edge beyond a memory it reached, unfollowed (lead {rank} of {leads})"
+            ),
+            proof: format!("held link {memory}"),
         },
         None => Rung {
             name: "LEAD",
@@ -419,7 +429,7 @@ mod tests {
             entries,
             first_bad: FIRST_BAD,
             parent: Some(PARENT),
-            lead: Some((3, 7, "mem-00000000000000dd")),
+            lead: Some((3, 7, "mem-00000000000000dd", false)),
             window: 12,
             contradictions: 0,
             bad_ref: "v2",

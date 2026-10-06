@@ -4913,6 +4913,36 @@ fn run_causal_walk_strata(
                 held["no_counted_identity"]
             );
         }
+        // The memories behind those edges, numbered after the causes so a
+        // tool that tests hypotheses (`vestige prove`) can take them as its
+        // farther leads. Same two parsed lines as a cause.
+        let held_leads = held["held"].as_array().cloned().unwrap_or_default();
+        if !held_leads.is_empty() {
+            println!(
+                "    held, not followed: the {} memor{} behind those edges, one touched edge beyond a memory above; nothing is said about them until a test says it",
+                held_leads.len(),
+                if held_leads.len() == 1 { "y" } else { "ies" }
+            );
+            for (i, lead) in held_leads.iter().enumerate() {
+                println!(
+                    "{} {} depth {}",
+                    format!("#{}", causes.len() + i + 1).yellow().bold(),
+                    lead["memory"].as_str().unwrap_or("?"),
+                    lead["depth"]
+                );
+                println!("  {}", preview(&lead["content"]));
+                let shared = with_carriers(&lead["shared"]);
+                println!(
+                    "  held behind {}: {}",
+                    lead["from"].as_str().unwrap_or("?"),
+                    if shared.is_empty() {
+                        "no exact identity (a hub tag joins them)".to_string()
+                    } else {
+                        shared.join(", ")
+                    }
+                );
+            }
+        }
         println!();
     }
     if result["truncated"] == true {

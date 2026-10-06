@@ -1670,9 +1670,11 @@ fn a_component_tag_past_the_old_cap_reaches_its_commits_and_the_walk_explains_ea
 /// A walk is a narrowing: it follows one `touched` edge, not a chain of
 /// them. The failure shares `connection` with ten commits. Four of those
 /// also share `asyncio` with eight older commits the failure shares nothing
-/// with, and `vestige connect` joins them. The walk lists the ten, leaves
-/// the eight out, and says so: how many edges it did not follow, to how many
-/// memories, and the exact identity those edges rest on with its carriers.
+/// with, and `vestige connect` joins them. The walk ranks the ten, keeps the
+/// eight out of the causes, and says so: how many edges it did not follow,
+/// to how many memories, and the exact identity those edges rest on with its
+/// carriers. The eight are then listed after the causes as held and
+/// unfollowed, numbered on, so a tool that tests hypotheses can take them.
 /// The hub tag every commit carries is not named as a reason.
 #[test]
 fn a_walk_follows_one_touched_edge_and_counts_the_ones_it_did_not() {
@@ -1746,8 +1748,13 @@ fn a_walk_follows_one_touched_edge_and_counts_the_ones_it_did_not() {
 
     let walk = vestige(dir.path(), &["causal-walk", "--logged-write", &failure]);
     assert!(walk.ok, "{}", walk.text());
-    let ranked: Vec<&str> = walk
+    // The causes come first and are the only ranked lines before the
+    // summary; the held memories are listed after it, numbered on.
+    let (causes_text, held_text) = walk
         .stdout
+        .split_once("  not followed: ")
+        .expect("the not-followed summary");
+    let ranked: Vec<&str> = causes_text
         .lines()
         .filter(|line| line.starts_with('#'))
         .collect();
@@ -1758,12 +1765,39 @@ fn a_walk_follows_one_touched_edge_and_counts_the_ones_it_did_not() {
         .collect();
     assert_eq!(ranked, expected, "{}", walk.text());
     for id in &unrelated {
-        assert!(!walk.stdout.contains(id), "{id} is listed: {}", walk.text());
+        assert!(
+            !causes_text.contains(id),
+            "{id} is a cause: {}",
+            walk.text()
+        );
     }
     assert!(
         walk.stdout.contains(
             "  not followed: 32 touched edge(s) lead on from the memories above to 8 other memories. A path follows at most one touched edge: two memories naming the same thing is a lead, and it does not chain.\n    the two ends of those edges share: tag:asyncio (12 of 19) on 32 edge(s)\n"
         ),
+        "{}",
+        walk.text()
+    );
+    assert!(
+        held_text.contains(
+            "    held, not followed: the 8 memories behind those edges, one touched edge beyond a memory above; nothing is said about them until a test says it\n"
+        ),
+        "{}",
+        walk.text()
+    );
+    let held: Vec<&str> = held_text
+        .lines()
+        .filter(|line| line.starts_with('#'))
+        .collect();
+    let expected_held: Vec<String> = unrelated
+        .iter()
+        .enumerate()
+        .map(|(i, id)| format!("#{} {id} depth 2", component.len() + i + 1))
+        .collect();
+    assert_eq!(held, expected_held, "{}", walk.text());
+    assert!(held_text.contains("  held behind "), "{}", walk.text());
+    assert!(
+        held_text.contains(": tag:asyncio (12 of 19)\n"),
         "{}",
         walk.text()
     );
@@ -1779,6 +1813,17 @@ fn a_walk_follows_one_touched_edge_and_counts_the_ones_it_did_not() {
     assert_eq!(value["not_followed"]["touched_edges"], 32, "{value}");
     assert_eq!(value["not_followed"]["memories"], 8, "{value}");
     assert_eq!(value["not_followed"]["no_counted_identity"], 0, "{value}");
+    let held = value["not_followed"]["held"].as_array().unwrap();
+    assert_eq!(held.len(), 8, "{value}");
+    for (lead, id) in held.iter().zip(&unrelated) {
+        assert_eq!(lead["memory"], id.as_str(), "{value}");
+        assert_eq!(lead["depth"], 2, "{value}");
+        assert_eq!(lead["shared"][0]["identity"], "tag:asyncio", "{value}");
+        assert!(
+            component.contains(&lead["from"].as_str().unwrap().to_string()),
+            "{value}"
+        );
+    }
     assert_eq!(value["truncated"], false, "{value}");
 }
 

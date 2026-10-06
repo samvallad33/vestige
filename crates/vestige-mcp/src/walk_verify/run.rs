@@ -61,6 +61,10 @@ pub(super) struct Lead {
     /// The sha as the memory wrote it.
     short: String,
     commit: Option<String>,
+    /// A held lead: the walk saw the touched edge to this memory and did
+    /// not follow it (a path follows at most one), so it is listed after
+    /// the causes, at the depth it would have had. The oracle decides.
+    pub held: bool,
 }
 
 /// The sha a memory names when its text starts `Commit <sha>:` or
@@ -81,20 +85,29 @@ fn commit_named(content: &str) -> Option<String> {
     }
 }
 
-/// The leads of a recorded walk: its causes, in rank order, that name a commit.
+/// The leads of a recorded walk: its causes, in rank order, then the
+/// memories it held behind touched edges it did not follow, in the walk's
+/// order, numbered on; each that names a commit. The ranks are the ones
+/// `vestige causal-walk` prints.
 fn leads_of(walk: &Value) -> Vec<Lead> {
-    walk["causes"]
+    let causes = walk["causes"].as_array().cloned().unwrap_or_default();
+    let held = walk["not_followed"]["held"]
         .as_array()
-        .into_iter()
-        .flatten()
+        .cloned()
+        .unwrap_or_default();
+    causes
+        .iter()
+        .map(|cause| (cause, "id", false))
+        .chain(held.iter().map(|lead| (lead, "memory", true)))
         .enumerate()
-        .filter_map(|(index, cause)| {
+        .filter_map(|(index, (lead, id_key, held))| {
             Some(Lead {
                 rank: index + 1,
-                memory: cause["id"].as_str()?.to_string(),
-                depth: cause["depth"].as_u64().unwrap_or(0),
-                short: commit_named(cause["content"].as_str()?)?,
+                memory: lead[id_key].as_str()?.to_string(),
+                depth: lead["depth"].as_u64().unwrap_or(0),
+                short: commit_named(lead["content"].as_str()?)?,
                 commit: None,
+                held,
             })
         })
         .collect()
@@ -1316,9 +1329,15 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
     );
     let walk = walk_from(storage, failure)?;
     let mut leads = leads_of(&walk);
+    let held_count = leads.iter().filter(|lead| lead.held).count();
     println!(
-        "  {window} commits between {good_ref} and {bad_ref}. The walk reaches {} of them over recorded links.",
-        leads.len()
+        "  {window} commits between {good_ref} and {bad_ref}. The walk reaches {} of them over recorded links{}.",
+        leads.len() - held_count,
+        if held_count == 0 {
+            String::new()
+        } else {
+            format!(" and holds {held_count} more one touched edge beyond those, unfollowed")
+        }
     );
     if leads.is_empty()
         && let Some(reason) = walk["emptyBecause"].as_str()
@@ -1374,7 +1393,12 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
     for lead in kept.iter().take(args.show) {
         let commit = lead.commit.as_deref().unwrap_or(&lead.short);
         println!(
-            "  {d}[recorded link]{o} #{} depth {}  {c}{} {}{o}",
+            "  {d}[{}]{o} #{} depth {}  {c}{} {}{o}",
+            if lead.held {
+                "held link"
+            } else {
+                "recorded link"
+            },
             lead.rank,
             lead.depth,
             lead.short,
@@ -1806,7 +1830,7 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             entries: &entries,
             first_bad,
             parent: parents.first().map(String::as_str),
-            lead: reached.map(|lead| (lead.rank, leads.len(), lead.memory.as_str())),
+            lead: reached.map(|lead| (lead.rank, leads.len(), lead.memory.as_str(), lead.held)),
             window: *window,
             contradictions: contradictions.len(),
             bad_ref,
@@ -1956,6 +1980,7 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
                 "depth": lead.depth,
                 "commit": lead.commit,
                 "memory": lead.memory,
+                "held": lead.held,
             })).collect::<Vec<_>>(),
         },
         "flaky": flaky_report,
