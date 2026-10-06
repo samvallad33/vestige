@@ -874,7 +874,9 @@ mod tests {
             reverts: None,
             cherry_picked_from: None,
             fixes: vec![],
+            extra_fixes: 0,
             lock_bumps: vec![],
+            extra_lock_bumps: 0,
         })
     }
 
