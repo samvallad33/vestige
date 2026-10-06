@@ -157,7 +157,7 @@ fn exit_code(status: &ExitStatus) -> i64 {
     status.code().map_or_else(|| -signal_of(status), i64::from)
 }
 
-/// How much of each output stream is kept. Only the last line is used, so a
+/// How much of the test's output is kept. Only the last line is used, so a
 /// test that prints gigabytes costs a megabyte.
 const KEPT_OUTPUT: usize = 1 << 20;
 
@@ -183,18 +183,14 @@ fn keep_tail(mut stream: impl Read, kept: &Mutex<Vec<u8>>) {
 
 /// Start reading a stream on its own thread. The buffer fills as the test
 /// prints; the receiver hears when the stream has ended.
-fn tail_reader<R: Read + Send + 'static>(
-    stream: Option<R>,
-) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
+fn tail_reader<R: Read + Send + 'static>(stream: R) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
     let kept = Arc::new(Mutex::new(Vec::new()));
     let (done, ended) = mpsc::channel();
-    if let Some(stream) = stream {
-        let kept = Arc::clone(&kept);
-        std::thread::spawn(move || {
-            keep_tail(stream, &kept);
-            let _ = done.send(());
-        });
-    }
+    let filled = Arc::clone(&kept);
+    std::thread::spawn(move || {
+        keep_tail(stream, &filled);
+        let _ = done.send(());
+    });
     (kept, ended)
 }
 
@@ -230,11 +226,7 @@ fn test_command(test: &Test) -> Command {
         command.arg(&test.oracle);
         command
     };
-    command
-        .current_dir(&test.worktree)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.current_dir(&test.worktree).stdin(Stdio::null());
     for name in REPO_ENV {
         command.env_remove(name);
     }
@@ -246,14 +238,44 @@ fn test_command(test: &Test) -> Command {
     command
 }
 
+/// A run that gave no verdict: it counts as "cannot test", and says why.
+fn cannot_test(said: String, at: String) -> TestRun {
+    TestRun {
+        exit: CANNOT_TEST,
+        said: head(&said, 160).to_string(),
+        at,
+    }
+}
+
 /// Run the test once in the worktree as it stands.
+///
+/// Only an exit code from 0 to 127 is a verdict. A test that cannot be
+/// started, runs past the time limit (it is killed, with its process
+/// group), or dies of a signal or with a code above 127 is "cannot test",
+/// with the reason as its result line. An error is returned only when the
+/// run itself cannot go on (interrupted, or the pipe cannot be made).
 pub(super) fn run_test(test: &Test) -> anyhow::Result<TestRun> {
     let at = now_stamp();
-    let mut child = test_command(test)
-        .spawn()
-        .with_context(|| format!("cannot run the test {}", test.oracle.display()))?;
-    let (stdout, stdout_ended) = tail_reader(child.stdout.take());
-    let (stderr, stderr_ended) = tail_reader(child.stderr.take());
+    // One pipe for both streams, so the last line is the last line printed.
+    let (output, writer) = std::io::pipe().context("cannot make a pipe for the test's output")?;
+    let mut command = test_command(test);
+    command
+        .stdout(writer.try_clone().context("cannot share the test's output pipe")?)
+        .stderr(writer);
+    let spawned = command.spawn();
+    // The command holds the writing ends; the reader sees the end of the
+    // stream only once they are closed here too.
+    drop(command);
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(err) => {
+            return Ok(cannot_test(
+                format!("the test could not be started: {err}"),
+                at,
+            ));
+        }
+    };
+    let (kept, ended) = tail_reader(output);
 
     let started = Instant::now();
     let mut pause = Duration::from_millis(1);
@@ -276,30 +298,33 @@ pub(super) fn run_test(test: &Test) -> anyhow::Result<TestRun> {
         pause = (pause * 2).min(Duration::from_millis(50));
     };
     super::git::interrupted()?;
-
-    // The streams end when the last process holding them exits. A process
-    // the test left running may hold them open for good; its output is not
-    // waited for past a short grace.
-    let grace = Instant::now() + Duration::from_secs(2);
-    for ended in [stdout_ended, stderr_ended] {
-        let _ = ended.recv_timeout(grace.saturating_duration_since(Instant::now()));
-    }
-    let taken = |kept: &Mutex<Vec<u8>>| {
-        std::mem::take(&mut *kept.lock().unwrap_or_else(PoisonError::into_inner))
-    };
-    let (stdout, stderr) = (taken(&stdout), taken(&stderr));
-
     if timed_out {
         let limit = test.timeout.unwrap_or_default().as_secs();
-        return Ok(TestRun {
-            exit: CANNOT_TEST,
-            said: format!("timed out after {limit}s and was killed; counted as cannot test"),
+        return Ok(cannot_test(
+            format!("timed out after {limit} seconds, counted as cannot test"),
             at,
-        });
+        ));
+    }
+
+    // The stream ends when the last process holding it exits. A process the
+    // test left running may hold it open for good; its output is not waited
+    // for past a short grace.
+    let _ = ended.recv_timeout(Duration::from_secs(2));
+    let output = std::mem::take(&mut *kept.lock().unwrap_or_else(PoisonError::into_inner));
+    let last = last_line(&output);
+    let exit = exit_code(&status);
+    if !(0..=127).contains(&exit) {
+        return Ok(cannot_test(
+            format!(
+                "the test died abnormally (exit {exit}), counted as cannot test: {}",
+                head(&last, 90)
+            ),
+            at,
+        ));
     }
     Ok(TestRun {
-        exit: exit_code(&status),
-        said: last_line(&stdout, &stderr),
+        exit,
+        said: last,
         at,
     })
 }
@@ -534,29 +559,57 @@ mod tests {
     #[test]
     fn a_run_reports_the_exit_code_and_the_last_line() {
         let dir = tempfile::tempdir().unwrap();
+        // Both streams, in the order they were printed.
         let run = run_test(&test_in(dir.path(), "echo one; echo two >&2; exit 3", None)).unwrap();
         assert_eq!((run.exit, run.said.as_str()), (3, "two"));
+        let run = run_test(&test_in(dir.path(), "echo warn >&2; echo result", None)).unwrap();
+        assert_eq!((run.exit, run.said.as_str()), (0, "result"));
         let run = run_test(&test_in(dir.path(), "pwd", None)).unwrap();
         assert_eq!(run.exit, 0);
         assert!(
             run.said
                 .ends_with(&crate::walk_verify::text::file_name(dir.path()))
         );
-        // Killed by a signal: minus the signal, which reads as bad.
-        let run = run_test(&test_in(dir.path(), "kill -9 $$", None)).unwrap();
-        assert_eq!((run.exit, verdict_of(run.exit)), (-9, "bad"));
+        let run = run_test(&test_in(dir.path(), "exit 127", None)).unwrap();
+        assert_eq!((run.exit, verdict_of(run.exit)), (127, "bad"));
         // More output than is kept does not block the test or the reader.
         let noisy =
             "i=0; while [ $i -lt 4000 ]; do printf '%01000d\\n' $i; i=$((i+1)); done; echo done";
         let run = run_test(&test_in(dir.path(), noisy, None)).unwrap();
         assert_eq!((run.exit, run.said.as_str()), (0, "done"));
-        // A test that cannot be started is an error, not a verdict.
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_an_exit_code_up_to_127_is_a_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        // Killed by a signal.
+        let run = run_test(&test_in(dir.path(), "echo dying; kill -9 $$", None)).unwrap();
+        assert_eq!((run.exit, verdict_of(run.exit)), (CANNOT_TEST, "skip"));
+        assert_eq!(
+            run.said,
+            "the test died abnormally (exit -9), counted as cannot test: dying"
+        );
+        // A code git bisect would abort on.
+        let run = run_test(&test_in(dir.path(), "exit 200", None)).unwrap();
+        assert_eq!(run.exit, CANNOT_TEST);
+        assert_eq!(
+            run.said,
+            "the test died abnormally (exit 200), counted as cannot test: "
+        );
+        // A test that cannot be started.
         let missing = Test {
             oracle: dir.path().join("no-such-test.sh"),
             worktree: dir.path().to_path_buf(),
             timeout: None,
         };
-        assert!(run_test(&missing).is_err());
+        let run = run_test(&missing).unwrap();
+        assert_eq!(run.exit, CANNOT_TEST);
+        assert!(
+            run.said.starts_with("the test could not be started: "),
+            "{}",
+            run.said
+        );
     }
 
     #[cfg(unix)]
@@ -612,7 +665,7 @@ mod tests {
         assert_eq!(verdict_of(run.exit), "skip");
         assert_eq!(
             run.said,
-            "timed out after 1s and was killed; counted as cannot test"
+            "timed out after 1 seconds, counted as cannot test"
         );
         // The child it started is gone too.
         let pid: libc::pid_t = fs::read_to_string(&pid_file)
@@ -644,11 +697,11 @@ mod tests {
     #[test]
     fn a_process_the_test_leaves_behind_does_not_hang_the_run() {
         let dir = tempfile::tempdir().unwrap();
-        // The background sleep keeps the test's stdout open after it exits.
+        // The background sleep keeps the test's output open after it exits.
         let started = Instant::now();
-        let run = run_test(&test_in(dir.path(), "sleep 30 & echo left; exit 0", None)).unwrap();
+        let run = run_test(&test_in(dir.path(), "sleep 6 & echo left; exit 0", None)).unwrap();
         assert!(
-            started.elapsed() < Duration::from_secs(15),
+            started.elapsed() < Duration::from_secs(5),
             "{:?}",
             started.elapsed()
         );

@@ -34,8 +34,8 @@ use super::text::{
 };
 use super::{CHILD_COMMAND, ProveArgs};
 
-/// Report format written here: the fields `walk-verify.py` version 6 writes.
-const TOOL: &str = "vestige prove (walk-verify 6)";
+/// Report format written here: the fields `walk-verify.py` version 7 writes.
+const TOOL: &str = "vestige prove (walk-verify 7)";
 
 /// The exit-code rule, as the frozen protocol states it.
 const PROTOCOL_RULE: &str = "exit 0 good, 125 cannot test, any other code bad";
@@ -188,6 +188,13 @@ struct Bisected {
     aborted: Option<String>,
 }
 
+/// The cap on new test runs in step 4 (`--max-candidates`).
+struct Cap {
+    most: usize,
+    spent: usize,
+    reached: bool,
+}
+
 struct Prover<'a> {
     storage: &'a Storage,
     pal: Palette,
@@ -214,7 +221,9 @@ impl Prover<'_> {
             Ok(id) => Value::String(id),
             Err(err) => {
                 self.unsaved += 1;
-                println!("  {y}warning: the next run was not saved as a memory: {err}{o}");
+                println!(
+                    "  {y}warning: this run could not be saved as a memory ({err}); it is still in the report{o}"
+                );
                 Value::Null
             }
         };
@@ -289,11 +298,11 @@ impl Prover<'_> {
         Ok(())
     }
 
-    /// Test one commit, or reuse its recorded verdict.
+    /// Test one commit, or reuse its recorded verdict. A reused verdict
+    /// prints nothing: its line is already above.
     fn probe(&mut self, sha: &str, phase: &str) -> anyhow::Result<Entry> {
-        if let Some(hit) = self.session.cached(sha).cloned() {
-            self.print_reused(&hit);
-            return Ok(hit);
+        if let Some(hit) = self.session.cached(sha) {
+            return Ok(hit.clone());
         }
         self.checkout(sha, false)?;
         let outcome = measure(&self.test, self.mode())?;
@@ -302,6 +311,106 @@ impl Prover<'_> {
         let entry = self.admit(entry, true)?;
         self.print_tested(&entry);
         Ok(entry)
+    }
+
+    /// [`Self::probe`] under the cap of step 4: `None`, with the cap
+    /// marked as reached, when the commit would need a new run and none is
+    /// left. A reused verdict costs nothing.
+    fn probe_within(
+        &mut self,
+        cap: &mut Cap,
+        sha: &str,
+        phase: &str,
+    ) -> anyhow::Result<Option<Entry>> {
+        if self.session.cached(sha).is_none() {
+            if cap.spent >= cap.most {
+                cap.reached = true;
+                return Ok(None);
+            }
+            cap.spent += 1;
+        }
+        self.probe(sha, phase).map(Some)
+    }
+
+    /// Step 4: bisect the leads, closest links first. The leads one link
+    /// from the report are bisected oldest to newest (git bisect's own
+    /// assumption: one first bad commit, everything after it bad) and the
+    /// parent of the earliest failing one is tested; "fails, parent passes"
+    /// is the boundary. Only when that tier holds no boundary are the leads
+    /// two links away added, then three, each time reusing every run
+    /// already made. `ordered` is every kept lead in the range, oldest
+    /// first.
+    fn bisect_leads(&mut self, ordered: &[Lead], most: usize) -> anyhow::Result<Option<Lead>> {
+        let Palette { d, g, y, o, .. } = self.pal;
+        let mut depths: Vec<u64> = ordered.iter().map(|lead| lead.depth).collect();
+        depths.sort_unstable();
+        depths.dedup();
+        let mut cap = Cap {
+            most,
+            spent: 0,
+            reached: false,
+        };
+        let mut boundary = None;
+        'tiers: for depth in &depths {
+            let mut line_up: Vec<&Lead> =
+                ordered.iter().filter(|lead| lead.depth <= *depth).collect();
+            if depths.len() > 1 {
+                println!(
+                    "  {d}leads within {depth} link{} of the report: {}{o}",
+                    if *depth == 1 { "" } else { "s" },
+                    line_up.len()
+                );
+            }
+            // Leads at `low..high` are still open.
+            let (mut low, mut high) = (0usize, line_up.len());
+            let mut earliest_bad: Option<&Lead> = None;
+            while low < high {
+                let middle = (low + high - 1) / 2;
+                let lead = line_up[middle];
+                let commit = lead.commit.as_deref().unwrap_or_default();
+                let Some(entry) = self.probe_within(&mut cap, commit, "candidate")? else {
+                    break 'tiers;
+                };
+                match text_of(&entry, "verdict") {
+                    "bad" => {
+                        earliest_bad = Some(lead);
+                        high = middle;
+                    }
+                    "good" => low = middle + 1,
+                    _ => {
+                        // Cannot be tested: it leaves the line-up.
+                        line_up.remove(middle);
+                        high -= 1;
+                    }
+                }
+            }
+            let Some(lead) = earliest_bad else {
+                continue;
+            };
+            let commit = lead.commit.as_deref().unwrap_or_default();
+            // A root commit has no parent to test: no boundary in this tier.
+            let Some(parent) = parents_of(&self.repo, commit)?.into_iter().next() else {
+                continue;
+            };
+            let Some(on_parent) = self.probe_within(&mut cap, &parent, "parent")? else {
+                break 'tiers;
+            };
+            if text_of(&on_parent, "verdict") == "good" {
+                println!("  {g}{} fails and its parent passes.{o}", lead.short);
+                boundary = Some(lead.clone());
+                break 'tiers;
+            }
+        }
+        if cap.reached {
+            println!(
+                "  {y}the cap of {most} test runs on leads is reached; the full git bisect takes over{o}"
+            );
+        } else if boundary.is_none() {
+            println!(
+                "  {y}The first bad commit is not among the leads; the full git bisect takes over.{o}"
+            );
+        }
+        Ok(boundary)
     }
 
     /// Test whatever is in the worktree now and record it under `label`.
@@ -495,18 +604,18 @@ impl Prover<'_> {
         interrupted()?;
         let first_bad = first_bad_logged(&log).or(named);
         let aborted = first_bad.is_none().then(|| {
+            // What git printed, then what git and the hidden subcommand
+            // wrote to stderr: the reason is in one of the two.
             let said = fs::read_to_string(&files.errors).unwrap_or_default();
-            let said = strip(&said);
             let how = match finished {
                 Ok(status) => format!("git bisect run ended with {status}"),
                 Err(err) => format!("git bisect run could not be waited for: {err}"),
             };
-            let detail = if said.is_empty() {
-                tail(strip(&transcript), 600)
-            } else {
-                tail(said, 600)
-            };
-            format!("{how}\n{detail}")
+            format!(
+                "{}\n{}\n{how}",
+                tail(strip(&transcript), 600),
+                tail(strip(&said), 400)
+            )
         });
         Ok(Bisected { first_bad, aborted })
     }
@@ -1260,7 +1369,6 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
         "max_candidates": args.max_candidates,
         "max_line_runs": args.max_line_runs,
         "also_hashed": also_hashed,
-        "timeout_seconds": plan.timeout.map(|limit| limit.as_secs()),
         "flaky": plan.flaky.map(|flaky| json!({
             "alpha": flaky.alpha,
             "max_runs_per_commit": flaky.max_runs,
@@ -1396,83 +1504,19 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             }
         }
 
-        println!("\n{b}Step 4. Bisect over the candidates only, then test the parent{o}");
-        let mut line_up: Vec<(usize, Lead)> = kept
+        println!(
+            "\n{b}Step 4. Bisect the leads, closest links first, then test the parent{o}"
+        );
+        let mut ordered: Vec<(usize, Lead)> = kept
             .iter()
             .filter_map(|lead| {
                 let at = position.get(lead.commit.as_deref()?)?;
                 Some((*at, lead.clone()))
             })
             .collect();
-        line_up.sort_by_key(|(at, _)| *at);
-        let mut line_up: Vec<Lead> = line_up.into_iter().map(|(_, lead)| lead).collect();
-        // Every lead is in the line-up; --max-candidates caps the tests
-        // this step may spend on them, not which of them it looks at.
-        let cap = args.max_candidates;
-        let mut spent = 0usize;
-        let mut capped = false;
-        let mut low = 0usize;
-        let mut high = line_up.len();
-        let mut earliest_bad: Option<Lead> = None;
-        // Leads at `low..high` are still open.
-        while low < high {
-            let middle = (low + high - 1) / 2;
-            let lead = line_up[middle].clone();
-            let commit = lead.commit.clone().unwrap_or_default();
-            if prover.session.cached(&commit).is_none() {
-                if spent >= cap {
-                    capped = true;
-                    break;
-                }
-                spent += 1;
-            }
-            let entry = prover.probe(&commit, "candidate")?;
-            match text_of(&entry, "verdict") {
-                "bad" => {
-                    earliest_bad = Some(lead);
-                    high = middle;
-                }
-                "good" => low = middle + 1,
-                _ => {
-                    // Cannot be tested: it leaves the line-up.
-                    line_up.remove(middle);
-                    high -= 1;
-                }
-            }
-        }
-        let mut boundary = None;
-        if let Some(lead) = earliest_bad.as_ref().filter(|_| !capped) {
-            let commit = lead.commit.clone().unwrap_or_default();
-            match parents_of(repo, &commit)?.first() {
-                None => println!(
-                    "  {y}{} fails and is a root commit, so there is no parent to test.{o}",
-                    lead.short
-                ),
-                Some(parent) if prover.session.cached(parent).is_none() && spent >= cap => {
-                    capped = true;
-                }
-                Some(parent) => {
-                    let on_parent = prover.probe(parent, "parent")?;
-                    if text_of(&on_parent, "verdict") == "good" {
-                        println!("  {g}{} fails and its parent passes.{o}", lead.short);
-                        boundary = Some(lead.clone());
-                    } else {
-                        println!(
-                            "  {y}The earliest failing candidate's parent also fails, so the first bad commit is not among the candidates.{o}"
-                        );
-                    }
-                }
-            }
-        }
-        if capped {
-            println!(
-                "  {y}The cap of {cap} test runs for this step (--max-candidates) was reached before the candidates were narrowed to one commit. The full git bisect below decides.{o}"
-            );
-        } else if earliest_bad.is_none() {
-            println!(
-                "  {y}No candidate fails, so the first bad commit is not among the candidates.{o}"
-            );
-        }
+        ordered.sort_by_key(|(at, _)| *at);
+        let ordered: Vec<Lead> = ordered.into_iter().map(|(_, lead)| lead).collect();
+        let boundary = prover.bisect_leads(&ordered, args.max_candidates)?;
         let runs_before_bisect = prover.session.entries.len();
 
         println!(
@@ -1577,8 +1621,8 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
         println!("           {b}{}{o}  {d}({when}){o}", head(&subject, 100));
     } else {
         println!(
-            "  {r}git bisect aborted without naming a first bad commit.{o} What it said:\n{}",
-            aborted.as_deref().unwrap_or("nothing")
+            "  {r}git bisect did not name a first bad commit.{o} Its output:\n{}",
+            aborted.as_deref().unwrap_or_default()
         );
     }
     let agree = boundary
@@ -1876,16 +1920,16 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
         );
     }
     let memories = if unsaved == 0 {
-        "Every probe is a memory in the store".to_string()
+        "Every run is a memory in the store".to_string()
     } else {
         format!(
-            "{saved} of the {} probes are memories in the store; {unsaved} could not be saved (see the warnings above)",
+            "{saved} of {} runs were saved as memories in the store",
             entries.len()
         )
     };
     let result = match (&result_memory, result_unsaved) {
         (Some(id), _) => format!(", result {id}"),
-        (None, true) => ", the result is not".to_string(),
+        (None, true) => ", the result was not".to_string(),
         (None, false) => String::new(),
     };
     println!(

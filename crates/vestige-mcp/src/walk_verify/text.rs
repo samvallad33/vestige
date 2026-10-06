@@ -146,10 +146,9 @@ pub(super) fn strip(s: &str) -> &str {
     s.trim_matches(|c: char| c.is_whitespace() || ('\x1c'..='\x1f').contains(&c))
 }
 
-/// The last line a test printed (stdout, then stderr), cut to 160 characters.
-pub(super) fn last_line(stdout: &[u8], stderr: &[u8]) -> String {
-    let mut text = String::from_utf8_lossy(stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(stderr));
+/// The last line a test printed, cut to 160 characters.
+pub(super) fn last_line(output: &[u8]) -> String {
+    let text = String::from_utf8_lossy(output);
     split_lines(strip(&text))
         .last()
         .map(|line| head(line, 160).to_string())
@@ -273,13 +272,14 @@ mod tests {
         assert_eq!(head("hi", 5), "hi");
         assert_eq!(head("", 3), "");
         assert_eq!(strip(" \t x y \x1c\n"), "x y");
-        assert_eq!(last_line(b"one\ntwo\n", b""), "two");
-        assert_eq!(last_line(b"one\n", b"warn\nlast  \n\n"), "last");
-        assert_eq!(last_line(b"progress 1\rprogress 2", b""), "progress 2");
-        assert_eq!(last_line(b"", b""), "");
-        assert_eq!(last_line("x".repeat(200).as_bytes(), b"").len(), 160);
+        assert_eq!(last_line(b"one\ntwo\n"), "two");
+        assert_eq!(last_line(b"one\nwarn\nlast  \n\n"), "last");
+        assert_eq!(last_line(b"progress 1\rprogress 2"), "progress 2");
+        assert_eq!(last_line(b""), "");
+        assert_eq!(last_line(b" \n\n"), "");
+        assert_eq!(last_line("x".repeat(200).as_bytes()).len(), 160);
         // Bytes that are not UTF-8 do not stop the run.
-        assert_eq!(last_line(b"ok \xff\xfe", b""), "ok \u{fffd}\u{fffd}");
+        assert_eq!(last_line(b"ok \xff\xfe"), "ok \u{fffd}\u{fffd}");
     }
 
     #[test]

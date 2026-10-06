@@ -164,37 +164,38 @@ fn isolated(why: &Why, boundary: (bool, &str), searched: String) -> Rung {
         )
     } else if total == 1 {
         // Nothing to take away from one change: what isolates it is that
-        // the commit fails and its parent passes.
+        // the commit fails and the commit before it passes, so the rung
+        // holds exactly when those two runs say so.
         (
             boundary.0,
-            "the commit is one change; its parent passes".to_string(),
+            "the commit is one change, and the commit before it passes".to_string(),
             boundary.1.to_string(),
         )
+    } else if count < total {
+        match why.without.as_deref() {
+            Some("good") => (
+                true,
+                format!("{found}, and the rest passes without {it}"),
+                searched,
+            ),
+            _ => (
+                false,
+                format!("{found}, but the rest was not shown to pass without {it}"),
+                searched,
+            ),
+        }
+    } else if why.complete {
+        (
+            false,
+            format!("no smaller part of its {total} changes causes it alone"),
+            searched,
+        )
     } else {
-        let (holds, statement) = match why.without.as_deref() {
-            Some("good") => (true, format!("{found}, and the rest passes without {it}")),
-            Some("bad") => (
-                false,
-                format!("{found}, but the rest still fails without {it}"),
-            ),
-            Some("does not apply") => (
-                false,
-                format!("{found}; the rest does not apply without {it}, so that was not tested"),
-            ),
-            Some(_) => (
-                false,
-                format!("{found}; the rest without {it} could not be tested"),
-            ),
-            None if why.complete => (
-                false,
-                format!("no smaller part of its {total} changes causes it alone"),
-            ),
-            None => (
-                false,
-                format!("its {total} changes were not narrowed down before the run budget ran out"),
-            ),
-        };
-        (holds, statement, searched)
+        (
+            false,
+            format!("its {total} changes were not narrowed down before the run budget ran out"),
+            searched,
+        )
     };
     Rung {
         name: "ISOLATED",
@@ -210,31 +211,35 @@ fn reversed(why: &Why, bad_ref: &str, undone: String) -> Rung {
     } else {
         "just those lines"
     };
-    let (holds, statement) = match why.revert.as_deref() {
+    let (holds, statement, proof) = match why.revert.as_deref() {
         Some("good") => (
             true,
             format!("undoing {what} on {bad_ref} makes the test pass again"),
+            undone,
         ),
         Some("bad") => (
             false,
             format!(
                 "undoing {what} on {bad_ref} does not make the test pass; something later also carries it"
             ),
+            undone,
         ),
-        Some("rewritten") => (
+        Some("skip") => (
             false,
-            "later commits rewrote these lines; no mechanical undo".to_string(),
+            format!("undoing {what} on {bad_ref} could not be tested"),
+            undone,
         ),
         _ => (
             false,
-            format!("undoing {what} on {bad_ref} could not be tested"),
+            format!("later commits rewrote these lines on {bad_ref}; there is no mechanical undo"),
+            "no run".to_string(),
         ),
     };
     Rung {
         name: "REVERSED",
         holds,
         statement,
-        proof: undone,
+        proof,
     }
 }
 
@@ -527,7 +532,7 @@ mod tests {
             isolated(&why(1, 1, None, "good")),
             (
                 true,
-                "the commit is one change; its parent passes".to_string(),
+                "the commit is one change, and the commit before it passes".to_string(),
                 "runs 3,5".to_string()
             )
         );
@@ -535,26 +540,23 @@ mod tests {
             isolated(&why(4, 2, Some("good"), "good")).1,
             "2 of its 4 changes alone causes it, and the rest passes without them"
         );
+        // The rest was tested and fails, does not apply, or could not be
+        // tested: either way it was not shown to pass.
+        for without in ["bad", "does not apply", "skip"] {
+            assert_eq!(
+                isolated(&why(4, 1, Some(without), "good")),
+                (
+                    false,
+                    "1 of its 4 changes alone causes it, but the rest was not shown to pass without it"
+                        .to_string(),
+                    "runs 8,9,10".to_string()
+                ),
+                "{without}"
+            );
+        }
         assert_eq!(
-            isolated(&why(4, 1, Some("bad"), "good")),
-            (
-                false,
-                "1 of its 4 changes alone causes it, but the rest still fails without it"
-                    .to_string(),
-                "runs 8,9,10".to_string()
-            )
-        );
-        assert_eq!(
-            isolated(&why(4, 1, Some("does not apply"), "good")),
-            (
-                false,
-                "1 of its 4 changes alone causes it; the rest does not apply without it, so that was not tested".to_string(),
-                "runs 8,9,10".to_string()
-            )
-        );
-        assert_eq!(
-            isolated(&why(4, 1, Some("skip"), "good")).1,
-            "1 of its 4 changes alone causes it; the rest without it could not be tested"
+            isolated(&why(4, 3, Some("bad"), "good")).1,
+            "3 of its 4 changes alone causes it, but the rest was not shown to pass without them"
         );
         // Every change is needed: there is no rest to test.
         assert_eq!(
@@ -591,7 +593,7 @@ mod tests {
             (
                 "ISOLATED",
                 false,
-                "the commit is one change; its parent passes",
+                "the commit is one change, and the commit before it passes",
                 "runs 3"
             )
         );
@@ -643,7 +645,7 @@ mod tests {
             (
                 "REVERSED",
                 false,
-                "later commits rewrote these lines; no mechanical undo",
+                "later commits rewrote these lines on v2; there is no mechanical undo",
                 "no run"
             )
         );

@@ -279,11 +279,13 @@ pub fn check(report: &Path) -> anyhow::Result<i32> {
             );
         }
         let without = why.get("commit_without_minimal").and_then(Value::as_str);
+        let changes = why.get("changes_in_commit").and_then(Value::as_u64);
         match without {
-            Some(verdict) => println!("the commit without it: recorded verdict {verdict}"),
-            None if why.get("changes_in_commit") == Some(&Value::from(1)) => {
-                println!("the commit without it: single change, covered by the parent run");
+            _ if changes == Some(1) => {
+                println!("the commit is a single change, covered by the parent run");
             }
+            None if changes == Some(0) => println!("the commit's changes were not searched"),
+            Some(verdict) => println!("the commit without it: recorded verdict {verdict}"),
             None => println!("the commit without it: not tested"),
         }
         if let Some(verdict) = without.filter(|verdict| is_verdict(verdict))
