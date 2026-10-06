@@ -25,6 +25,7 @@ pub mod strata_memory;
 pub mod tools;
 pub mod trace_recorder;
 pub mod v3_launch;
+pub mod walk_verify;
 
 /// Whether this binary was compiled with an embedding runtime and a vector
 /// index at all. Builds without them (the Android/Termux profile, #145) are

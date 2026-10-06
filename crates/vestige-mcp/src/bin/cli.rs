@@ -648,6 +648,35 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Prove which commit broke a test: the causal walk proposes, the test decides
+    ///
+    /// Walks back from the failure memory (--logged-write) to the commits it
+    /// reaches over recorded edges, drops any committed after --reported-at
+    /// or outside good..bad, then runs your test on those leads only and on
+    /// the parent of the earliest failing one. Stock `git bisect run` over
+    /// the whole range confirms it, reusing the verdicts already recorded.
+    /// Then it finds the smallest set of the commit's changes that still
+    /// fails, tests the commit without them, and undoes them on the bad ref.
+    ///
+    /// Output lines are labelled `[recorded link]` (a lead from the walk) or
+    /// `[tested]` (a test run). Every run is saved as an `event` memory and
+    /// written to the report, where each entry carries the sha256 of the one
+    /// before it. The test runs in a temporary git worktree, never in your
+    /// checkout. Exit codes follow git bisect: 0 good, 125 cannot test, any
+    /// other 1..127 bad.
+    ///
+    /// `vestige prove --check <report.json>` re-verifies a report offline.
+    Prove(vestige_mcp::walk_verify::ProveArgs),
+
+    /// What `git bisect run` calls during `prove`
+    #[command(name = vestige_mcp::walk_verify::CHILD_COMMAND, hide = true)]
+    ProveChild {
+        /// `probe` or `sim`
+        mode: String,
+        /// The run configuration `prove` wrote
+        cfg: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -831,6 +860,17 @@ fn main() -> anyhow::Result<()> {
             scope,
             json,
         } => run_forgotten_lesson(failure_id, scope, json),
+        Commands::Prove(args) => {
+            let code =
+                vestige_mcp::walk_verify::run(&args, || Ok((open_storage()?, cli_data_dir()?)))?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Commands::ProveChild { mode, cfg } => {
+            std::process::exit(vestige_mcp::walk_verify::child(&mode, &cfg))
+        }
     }
 }
 
