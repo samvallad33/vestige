@@ -365,7 +365,7 @@ mod tests {
     fn git_is_never_pointed_at_another_repository_by_the_environment() {
         let command = git_command(Path::new("/some where/repo"));
         let args: Vec<_> = command.get_args().collect();
-        assert_eq!(args, ["-C", "/some where/repo"]);
+        assert_eq!(args, ["-c", NO_HOOKS, "-C", "/some where/repo"]);
         let removed: Vec<_> = command
             .get_envs()
             .filter(|(_, value)| value.is_none())

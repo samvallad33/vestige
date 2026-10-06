@@ -623,9 +623,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let test = test_in(dir.path(), "true", None);
         let command = test_command(&test);
-        // Exactly these eight are removed from what the test inherits, and
-        // nothing else is set or removed. (The end-to-end test runs a test
-        // that looks for them under a real `git bisect run`.)
+        // The repository variables, plus `GIT_CONFIG_PARAMETERS` (the `-c`
+        // hooksPath setting must not reach the user's test). Nothing else
+        // is set or removed. (The end-to-end test runs a test that looks
+        // for them under a real `git bisect run`.)
         let removed: Vec<&str> = command
             .get_envs()
             .map(|(name, value)| {
@@ -638,6 +639,7 @@ mod tests {
             [
                 "GIT_ALTERNATE_OBJECT_DIRECTORIES",
                 "GIT_COMMON_DIR",
+                "GIT_CONFIG_PARAMETERS",
                 "GIT_DIR",
                 "GIT_INDEX_FILE",
                 "GIT_NAMESPACE",

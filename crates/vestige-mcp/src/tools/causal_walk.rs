@@ -678,6 +678,10 @@ const RANK_ORDER: &str = "depth, then distinct exact identities shared with the 
 /// resolved. Recorded structure only.
 const STRUCTURAL_RANK_ORDER: &str = "structural: reverted after the failure, then blame of the reported line, then the failing hunk, then depth, then edge kind (corrects, then touched, then derived_from), then the time gap to the failure, then id";
 
+/// Identity-rank key for one cause: more distinct identities first
+/// (`Reverse`), then the carrier counts of those identities, rarer first.
+type IdentityRank = (Reverse<usize>, Vec<usize>);
+
 /// The exact identities one memory records. A memory that cannot be read
 /// back records nothing.
 fn identities_of(storage: &Arc<Storage>, id: &str) -> Result<BTreeSet<Identity>, String> {
@@ -732,8 +736,7 @@ fn rank_causes(
     };
 
     let nothing = BTreeSet::new();
-    let mut strength: Option<BTreeMap<String, (Reverse<usize>, Vec<usize>)>> =
-        reorder.then(BTreeMap::new);
+    let mut strength: Option<BTreeMap<String, IdentityRank>> = reorder.then(BTreeMap::new);
     for cause in causes.iter() {
         let start = of_start.get(&cause.start).unwrap_or(&nothing);
         let mut shared: Vec<(Identity, usize)> = Vec::new();
