@@ -5,7 +5,7 @@ and computes price-derived USD per successful task. It uses only the standard
 library. It does not call a model, execute a developer task, read credentials,
 or claim that Vestige saves money.
 
-The existing `../agent-memory-eval` suite measures retrieval quality. This
+The retired agent-memory-eval suite measured retrieval quality. This
 accountant measures submitted task usage and overhead separately so retrieval
 metrics cannot be mistaken for end-to-end economics.
 

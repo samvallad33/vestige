@@ -49,7 +49,7 @@
 //! `FSRS_STATE` folds a v3 card carried from `knowledge_nodes`, both onto
 //! the node's card handle and into the checkpointed fold.
 //!
-//! ## v1 scope (documented deviations in SCOPE-HANDOFF.md)
+//! ## v1 scope
 //!
 //! Single-writer (`Send` via the gate-log mutex); reads append
 //! nothing (reads-as-writes is a later wave); one FSRS kernel version

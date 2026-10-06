@@ -581,7 +581,7 @@ fn policy_vm_first_match_wins_default_deny() {
     assert_eq!(gate_verdict(&policy, &propose, &inputs), Verdict::Allow);
 }
 
-// ---------- wire layout spot checks (documented in SCOPE-HANDOFF.md) ----------
+// ---------- wire layout spot checks (layouts documented in record.rs) ----------
 
 #[test]
 fn wire_layouts_are_exact() {

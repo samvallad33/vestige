@@ -1,5 +1,5 @@
 //! Record kinds and borsh payloads. Integers only — no strings, no floats,
-//! no clocks. Byte-exact layouts are documented in `SCOPE-HANDOFF.md`.
+//! no clocks. Byte-exact layouts are documented on each type below.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
