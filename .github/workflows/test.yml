@@ -2,9 +2,19 @@ name: Test Suite
 
 on:
   push:
-    branches: [main, v4, release/v4.0.0-rc]
+    branches:
+      - main
+      - v4
+      - release/v4.0.0-rc
+      - cursor/strata-backtest-need-a5ba
+      - cursor/strata-backtest-evb-a5ba
   pull_request:
-    branches: [main, v4, release/v4.0.0-rc]
+    branches:
+      - main
+      - v4
+      - release/v4.0.0-rc
+      - cursor/strata-backtest-floor-a5ba
+      - cursor/strata-backtest-need-a5ba
 
 env:
   CARGO_TERM_COLOR: always

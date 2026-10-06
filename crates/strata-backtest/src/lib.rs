@@ -16,6 +16,8 @@ pub mod cuts;
 pub mod events;
 pub mod manifest;
 pub mod mechanism;
+pub mod metrics;
+pub mod need;
 pub mod open;
 pub mod protocol;
 pub mod rng;

@@ -1,9 +1,19 @@
 name: v3 contracts
 on:
   pull_request:
-    branches: [main, v4, release/v4.0.0-rc]
+    branches:
+      - main
+      - v4
+      - release/v4.0.0-rc
+      - cursor/strata-backtest-floor-a5ba
+      - cursor/strata-backtest-need-a5ba
   push:
-    branches: [main, v4, release/v4.0.0-rc]
+    branches:
+      - main
+      - v4
+      - release/v4.0.0-rc
+      - cursor/strata-backtest-need-a5ba
+      - cursor/strata-backtest-evb-a5ba
 permissions:
   contents: read
 jobs:
