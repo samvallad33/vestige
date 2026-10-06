@@ -815,12 +815,14 @@ mod tests {
     /// the next request from being read and answered.
     ///
     /// The slow request is made slow deterministically rather than by timing:
-    /// `maintain { action: "importance_score" }` takes the cognitive engine's
-    /// mutex on every backend (on a Strata log `graph predict` answers from
-    /// exact handles without it), and this test holds that mutex, so request
-    /// 1's handler parks
-    /// there until the test releases it. A `ping` needs neither the engine nor
-    /// storage.
+    /// `test_park_on_engine` is a dispatch arm compiled only into unit tests
+    /// that waits for the cognitive engine's mutex and does nothing else, and
+    /// this test holds that mutex, so request 1's handler parks there until
+    /// the test releases it. No advertised tool is used for this: on a Strata
+    /// log none of them waits on the engine (`graph predict` answers from
+    /// exact handles, and `maintain importance_score` counts recorded edges),
+    /// and a transport test should not depend on which one happens to. A
+    /// `ping` needs neither the engine nor storage.
     ///
     /// With the old inline `handle_request(..).await` in the read loop, the
     /// loop itself parks on request 1 and never reads request 2, so no line
@@ -848,7 +850,7 @@ mod tests {
 
         let slow = json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": {"name": "maintain", "arguments": {"action": "importance_score", "content": "parked"}}
+            "params": {"name": "test_park_on_engine", "arguments": {}}
         })
         .to_string()
             + "\n";
@@ -1099,7 +1101,7 @@ mod tests {
         let held = cognitive.lock().await;
         let slow = json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": {"name": "maintain", "arguments": {"action": "importance_score", "content": "parked"}}
+            "params": {"name": "test_park_on_engine", "arguments": {}}
         })
         .to_string()
             + "\n";
@@ -1232,7 +1234,7 @@ mod tests {
         for id in 1..=last_id {
             load += &(json!({
                 "jsonrpc": "2.0", "id": id, "method": "tools/call",
-                "params": {"name": "maintain", "arguments": {"action": "importance_score", "content": "parked"}}
+                "params": {"name": "test_park_on_engine", "arguments": {}}
             })
             .to_string()
                 + "\n");
@@ -1292,7 +1294,7 @@ mod tests {
         for id in 1..=(MAX_PENDING + 1) {
             load += &(json!({
                 "jsonrpc": "2.0", "id": id, "method": "tools/call",
-                "params": {"name": "maintain", "arguments": {"action": "importance_score", "content": "parked"}}
+                "params": {"name": "test_park_on_engine", "arguments": {}}
             })
             .to_string()
                 + "\n");

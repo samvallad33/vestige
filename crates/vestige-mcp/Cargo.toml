@@ -1,8 +1,8 @@
 [package]
 name = "vestige-mcp"
-version = "4.1.1"
+version = "4.2.0"
 edition = "2024"
-description = "Cognitive memory MCP server for AI agents - FSRS-6, spreading activation, synaptic tagging, 3D dashboard, and 130 years of memory research"
+description = "Vestige MCP server: the Causal Proof Engine and operating system for AI agents (Strata signed log, causal walks, receipts, dashboard)"
 authors = ["samvallad33"]
 license = "AGPL-3.0-only"
 keywords = ["mcp", "ai", "memory", "fsrs", "neuroscience", "cognitive-science", "spaced-repetition"]
@@ -35,16 +35,6 @@ migrate-to-strata = ["dep:strata-migrate", "strata-migrate/sqlite-reader"]
 # restart/creation tests). Never in default; the shipped binary keeps the
 # guard + creation block armed.
 v3-engine = ["legacy-sqlite", "vestige-core/v3-engine"]
-# w1b vector removal: `embeddings` and `vector-search` no longer select any
-# dependencies. They stay declared so manifests that still forward the names
-# resolve. Code does not key off them (`vestige_embeddings_removed` is an
-# unset cfg), so `--all-features` does not compile the deleted paths.
-embeddings = []
-vector-search = []
-# Same empty stubs. Release cargo flags still name them (`ort-download` on
-# Windows, `ort-dynamic` on Intel Mac). They select no crates.
-ort-download = []
-ort-dynamic = []
 # Git history for the codebase tool (libgit2, OpenSSL, libssh2). On by default;
 # off for Android/Termux builds (#145), where the tool reports git history as
 # unavailable instead of the build failing on those C libraries.
@@ -91,7 +81,7 @@ path = "src/bin/cli.rs"
 # `legacy-sqlite` feature so `--no-default-features` builds a sqlite-free
 # crate (build/t5-legacy-isolation). `embeddings` and `vector-search` are
 # always-off stubs (w1b).
-vestige-core = { version = "4.1.1", path = "../vestige-core", default-features = false }
+vestige-core = { version = "4.2.0", path = "../vestige-core", default-features = false }
 
 # One-shot SQLite -> STRATA migration. Optional, and not in the default
 # feature set. `default-features = false` keeps `sqlite-reader` off until
@@ -220,4 +210,3 @@ name = "retire_policy_stdio"
 required-features = ["migrate-to-strata"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(vestige_embeddings_removed)"] }

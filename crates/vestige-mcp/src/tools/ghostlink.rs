@@ -61,7 +61,7 @@ pub fn schema() -> Value {
             "mode": {
                 "type": "string",
                 "enum": MODES,
-                "description": "propose: never-composed pairs with proofs (lens bridge|divergent). bounty: lanes from woven outcomes. weave: record a composition outcome (write). map: recorded subgraph. inspect: woven compositions (view). explore: typed paths (kind). predict: context-ahead memories from exact handles. harden: seed invariant laws (write)."
+                "description": "propose: never-composed pairs with proofs (lens bridge|divergent). bounty: lanes from woven outcomes. weave: record a composition outcome (write). map: recorded subgraph. inspect: woven compositions (view). explore: typed paths (kind). predict: memories anchored to an exact file path (context.current_file), ordered by FSRS retention. harden: seed invariant laws (write)."
             },
             "lens": {
                 "type": "string",
@@ -190,12 +190,6 @@ fn default_severity() -> String {
 #[derive(Debug, Deserialize)]
 struct LawFile {
     ghostlink_invariant_laws: Vec<InvariantLaw>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    version: Option<Value>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    date: Option<Value>,
 }
 
 /// Where the seeded laws came from.

@@ -1,6 +1,6 @@
 # Markdown projection
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Written for Vestige 4.2.0.
 
 Vestige stays the source of truth. `project` renders the durable subset of a scope into the rule files other agent clients already read, inside a fenced region the store owns. Everything outside the fence is the human's and is never touched.
 
@@ -8,7 +8,7 @@ Vestige stays the source of truth. `project` renders the durable subset of a sco
 
 - `decision` and `pattern` memories.
 - `fact` and `note` memories tagged `rule`, `preference` or `convention`.
-- Only memories that are currently valid (nothing superseded or expired), at or above a retention floor (default 0.3), in the requested scope (default `user`), newest first within each group, capped at `max_items` (default 60).
+- Only memories that are currently valid (nothing retired or expired), at or above a retention floor (default 0.3), in the requested scope (default `user`), newest first within each group, capped at `max_items` (default 60). Selection reads types, exact tags, validity and FSRS retention. It never reads memory text to decide.
 
 Each projected line ends with the id of the memory it came from:
 
@@ -51,8 +51,10 @@ vestige project --out CLAUDE.md --write    # apply it
 vestige project --format memory-md --out MEMORY.md --scope my-project --write
 ```
 
+Always pass `--out`: without it the target is `./CLAUDE.md` in the current directory. The CLI opens the log directly, so it runs only while no Vestige server holds the store. Use the MCP tool otherwise.
+
 ## Not yet
 
 Re-importing human edits made inside the fence back into memory (through merge or supersede review) is the second half of the roadmap item and is tracked separately. Until then, edit memories in Vestige and re-project.
 
-V3 selection filters scope, current validity, supersession and suppression before applying the candidate limit. The generated region is capped at 10,000 UTF-8 bytes (about 2,500 estimated tokens). Writes use a unique temporary file and serialize Vestige writers, rejecting changed file snapshots before replacement. External editors do not share the writer lock.
+Selection filters scope, current validity and retirement (superseded, edited or suppressed) before applying the candidate limit. The generated region is capped at 10,000 UTF-8 bytes (about 2,500 estimated tokens). Writes use a unique temporary file and serialize Vestige writers, rejecting changed file snapshots before replacement. External editors do not share the writer lock.

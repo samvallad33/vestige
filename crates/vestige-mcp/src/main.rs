@@ -1,29 +1,14 @@
-//! Vestige MCP Server - local cognitive memory for MCP agents.
+//! Vestige MCP Server - the Causal Proof Engine and operating system for AI
+//! agents, served over the Model Context Protocol.
 //!
-//! A bleeding-edge Rust MCP (Model Context Protocol) server that provides
-//! Claude and other AI assistants with long-term memory capabilities
-//! powered by 130 years of memory research.
+//! The kernel is Strata, an append-only, hash-chained, signed log. Memories
+//! are found by exact handle (a full id or an exact tag) and every result
+//! carries its proof: a memory id, an edge path or a receipt. Zero vectors,
+//! zero RAG, no lookalike text.
 //!
-//! Core Features:
-//! - FSRS-6 spaced repetition algorithm (21 parameters, 30% more efficient than SM-2)
-//! - Bjork dual-strength memory model
-//! - Keyword retrieval (FTS5/BM25; the vector/embedding runtime was removed in w1b)
-//!
-//! Neuroscience Features:
-//! - Synaptic Tagging & Capture (retroactive importance)
-//! - Spreading Activation Networks (multi-hop associations)
-//! - Hippocampal Indexing (two-phase retrieval)
-//! - Memory States (active/dormant/silent/unavailable)
-//! - Context-Dependent Memory (encoding specificity)
-//! - Multi-Channel Importance Signals
-//! - Predictive Retrieval
-//! - Prospective Memory (intentions with triggers)
-//!
-//! Advanced Features:
-//! - Memory Dreams (insight generation during consolidation)
-//! - Memory Compression
-//! - Reconsolidation (memories editable on retrieval)
-//! - Memory Chains (reasoning paths)
+//! Also in the engine: FSRS-6 scheduling, typed causal edges, causal walks,
+//! GhostLink composition over recorded edges, and intentions with triggers.
+//! Builds with the legacy-sqlite feature keep the v3 engine.
 
 // Supplies the `__isoc23_*` and `__cxa_call_terminate` symbols that the
 // statically linked ONNX Runtime archive imports from glibc >= 2.38 and
@@ -102,7 +87,12 @@ fn parse_args_from(args: Vec<OsString>, env_data_dir: Option<PathBuf>) -> Config
             "--help" | "-h" => {
                 println!("Vestige MCP Server v{}", env!("CARGO_PKG_VERSION"));
                 println!();
-                println!("FSRS-6 powered AI memory server using the Model Context Protocol.");
+                println!(
+                    "The Causal Proof Engine and operating system for AI agents, served over the Model Context Protocol."
+                );
+                println!(
+                    "Storage is Strata, an append-only, hash-chained, signed log in log/ inside the data directory."
+                );
                 println!();
                 println!("USAGE:");
                 println!("    vestige-mcp [OPTIONS]");
@@ -119,7 +109,7 @@ fn parse_args_from(args: Vec<OsString>, env_data_dir: Option<PathBuf>) -> Config
                 println!();
                 println!("ENVIRONMENT:");
                 println!(
-                    "    VESTIGE_DATA_DIR          Data directory fallback (stores vestige.db inside)"
+                    "    VESTIGE_DATA_DIR          Data directory fallback (the Strata log lives in log/ inside it)"
                 );
                 println!(
                     "    RUST_LOG                  Log level filter (e.g., debug, info, warn, error)"

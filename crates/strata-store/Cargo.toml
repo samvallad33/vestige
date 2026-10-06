@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
-description = "STRATA-native memory store: StrataLog as the append-only source of truth, gate-admitted writes, kernel-folded FSRS"
+description = "STRATA-native store: StrataLog as the append-only source of truth, gate-admitted writes, kernel-folded FSRS"
 publish = false
 
 # Standalone on purpose: this crate keeps its own (empty) workspace table so
@@ -24,6 +24,9 @@ strata-gate = { path = "../strata-gate" }
 strata-migrate = { path = "../strata-migrate", default-features = false }
 borsh = { version = "1", features = ["derive"] }
 blake3 = "1"
+# Canonical content identity (NFC pipeline) for the duplicate gate. Version
+# pinned to vestige-mcp's so both crates compose text identically.
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 # Fault injection for the full-disk tests (a simulated ENOSPC on log writes).

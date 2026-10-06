@@ -219,11 +219,7 @@ fn causal_walk_stdio_walks_every_start_point_kind_that_carries_a_node_id() {
         "causal_walk",
         json!({"scope": "user", "start_points": [{"kind": "stack_frame", "frame": "src/auth.rs:10"}]}),
     );
-    assert_eq!(
-        bare["needs_report"]["missing"],
-        json!(["file"]),
-        "{bare}"
-    );
+    assert_eq!(bare["needs_report"]["missing"], json!(["file"]), "{bare}");
     assert_eq!(bare["start_points"][0]["status"], "unresolved", "{bare}");
     assert!(
         bare["needs_report"]["detail"]

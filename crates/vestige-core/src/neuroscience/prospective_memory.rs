@@ -40,16 +40,18 @@
 //!     },
 //! ));
 //!
-//! // Event-based intention
+//! // Event-based intention: fires when a declared event key equals
+//! // "meeting_with_john" exactly. Event text is never scanned.
 //! pm.create_intention(Intention::new(
 //!     "Ask John about the API design",
 //!     IntentionTrigger::EventBased {
-//!         condition: "meeting with John".to_string(),
-//!         pattern: TriggerPattern::Contains("john".to_string()),
+//!         condition: "meeting_with_john".to_string(),
+//!         pattern: TriggerPattern::Exact("meeting_with_john".to_string()),
 //!     },
 //! ));
 //!
-//! // Context-based intention
+//! // Context-based intention: fires when the declared codebase name equals
+//! // "payments" exactly.
 //! pm.create_intention(Intention::new(
 //!     "Review the error handling in payments module",
 //!     IntentionTrigger::ContextBased {
@@ -193,14 +195,19 @@ pub enum IntentionStatus {
     Snoozed,
 }
 
-/// Pattern for matching trigger conditions
+/// Pattern for matching trigger conditions.
+///
+/// Matching is exact identity. A trigger fires on a declared event key, never
+/// on a scan of free text: no substring, no case folding, no regex.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TriggerPattern {
-    /// Exact string match
+    /// The input equals this string byte for byte.
     Exact(String),
-    /// Contains substring (case-insensitive)
+    /// Kept so stored values still deserialize. It used to fire on a
+    /// case-insensitive substring; it now fires on nothing. Use [`Self::Exact`].
     Contains(String),
-    /// Matches regex pattern
+    /// Kept so stored values still deserialize. It was never a regex (it ran
+    /// a substring scan); it now fires on nothing. Use [`Self::Exact`].
     Regex(String),
     /// Matches any of the given patterns
     AnyOf(Vec<TriggerPattern>),
@@ -209,23 +216,33 @@ pub enum TriggerPattern {
 }
 
 impl TriggerPattern {
-    /// Check if input matches this pattern
+    /// Whether `input` is exactly the declared key.
+    ///
+    /// `Exact` compares bytes. `Contains` and `Regex` never match: they
+    /// described a text scan, which is not a deterministic handle.
     pub fn matches(&self, input: &str) -> bool {
-        let input_lower = input.to_lowercase();
-
         match self {
-            Self::Exact(s) => input_lower == s.to_lowercase(),
-            Self::Contains(s) => input_lower.contains(&s.to_lowercase()),
-            Self::Regex(pattern) => {
-                // Simple regex matching (in production, use the regex crate)
-                input_lower.contains(&pattern.to_lowercase())
-            }
+            Self::Exact(s) => input == s,
+            Self::Contains(_) | Self::Regex(_) => false,
             Self::AnyOf(patterns) => patterns.iter().any(|p| p.matches(input)),
             Self::AllOf(patterns) => patterns.iter().all(|p| p.matches(input)),
         }
     }
 
-    /// Create a contains pattern
+    /// Whether this pattern can fire at all: it holds no `Contains` or `Regex`
+    /// leaf that would have to match (`AnyOf` needs one evaluable branch,
+    /// `AllOf` needs every branch evaluable).
+    pub fn can_fire(&self) -> bool {
+        match self {
+            Self::Exact(_) => true,
+            Self::Contains(_) | Self::Regex(_) => false,
+            Self::AnyOf(patterns) => patterns.iter().any(Self::can_fire),
+            Self::AllOf(patterns) => patterns.iter().all(Self::can_fire),
+        }
+    }
+
+    /// Create a pattern in the retired substring form. It never fires; see
+    /// [`Self::Contains`].
     pub fn contains(s: impl Into<String>) -> Self {
         Self::Contains(s.into())
     }
@@ -236,16 +253,20 @@ impl TriggerPattern {
     }
 }
 
-/// Pattern for matching context
+/// Pattern for matching context.
+///
+/// Every arm is exact, case-sensitive equality between the stored value and a
+/// handle the caller declared in the context. Nothing is matched by substring.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContextPattern {
-    /// Working in a specific codebase/project
+    /// The declared codebase name equals this name.
     InCodebase(String),
-    /// Working with a specific file pattern
+    /// A declared active file path equals this path. The variant keeps its
+    /// stored name; it is not a glob and not a substring.
     FilePattern(String),
-    /// Specific topic/tag is active
+    /// A declared active topic or tag equals this value.
     TopicActive(String),
-    /// User is in a specific mode (debugging, reviewing, etc.)
+    /// The declared user mode equals this value.
     UserMode(String),
     /// Multiple conditions
     Composite {
@@ -260,24 +281,10 @@ impl ContextPattern {
     /// Check if context matches this pattern
     pub fn matches(&self, context: &Context) -> bool {
         match self {
-            Self::InCodebase(name) => context
-                .project_name
-                .as_ref()
-                .map(|p| p.to_lowercase().contains(&name.to_lowercase()))
-                .unwrap_or(false),
-            Self::FilePattern(pattern) => context
-                .active_files
-                .iter()
-                .any(|f| f.to_lowercase().contains(&pattern.to_lowercase())),
-            Self::TopicActive(topic) => context
-                .active_topics
-                .iter()
-                .any(|t| t.to_lowercase().contains(&topic.to_lowercase())),
-            Self::UserMode(mode) => context
-                .user_mode
-                .as_ref()
-                .map(|m| m.to_lowercase() == mode.to_lowercase())
-                .unwrap_or(false),
+            Self::InCodebase(name) => context.project_name.as_deref() == Some(name.as_str()),
+            Self::FilePattern(path) => context.active_files.iter().any(|file| file == path),
+            Self::TopicActive(topic) => context.active_topics.iter().any(|active| active == topic),
+            Self::UserMode(mode) => context.user_mode.as_deref() == Some(mode.as_str()),
             Self::Composite { all, any } => {
                 let all_match = all.is_empty() || all.iter().all(|p| p.matches(context));
                 let any_match = any.is_empty() || any.iter().any(|p| p.matches(context));
@@ -1232,7 +1239,7 @@ impl IntentionParser {
             return Ok((
                 IntentionTrigger::EventBased {
                     condition: condition_part.clone(),
-                    pattern: TriggerPattern::contains(&condition_part),
+                    pattern: TriggerPattern::exact(&condition_part),
                 },
                 content_part,
             ));
@@ -1302,7 +1309,7 @@ impl IntentionParser {
                 return Ok((
                     IntentionTrigger::EventBased {
                         condition: format!("Meeting or conversation with {}", entity),
-                        pattern: TriggerPattern::contains(&entity),
+                        pattern: TriggerPattern::exact(&entity),
                     },
                     content,
                 ));
@@ -1911,37 +1918,72 @@ mod tests {
     }
 
     #[test]
-    fn test_trigger_pattern_matches() {
-        let pattern = TriggerPattern::contains("john");
-        assert!(pattern.matches("Meeting with John"));
-        assert!(pattern.matches("john's project"));
-        assert!(!pattern.matches("Meeting with Jane"));
+    fn an_exact_pattern_fires_on_the_declared_key_only() {
+        let pattern = TriggerPattern::exact("meeting_with_john");
+        assert!(pattern.matches("meeting_with_john"));
+        // No substring, no case folding, no surrounding text.
+        assert!(!pattern.matches("Meeting_With_John"));
+        assert!(!pattern.matches("meeting_with_john today"));
+        assert!(!pattern.matches("meeting"));
+        assert!(pattern.can_fire());
+    }
+
+    #[test]
+    fn the_retired_substring_and_regex_forms_never_fire() {
+        for pattern in [
+            TriggerPattern::contains("john"),
+            TriggerPattern::Regex("john".into()),
+        ] {
+            assert!(!pattern.matches("Meeting with John"));
+            assert!(!pattern.matches("john's project"));
+            // Not even on an input equal to the stored text: the form says
+            // "scan", and a scan is not a handle.
+            assert!(!pattern.matches("john"));
+            assert!(!pattern.can_fire());
+        }
     }
 
     #[test]
     fn test_trigger_pattern_any_of() {
         let pattern = TriggerPattern::AnyOf(vec![
-            TriggerPattern::contains("john"),
-            TriggerPattern::contains("jane"),
+            TriggerPattern::exact("john"),
+            TriggerPattern::exact("jane"),
         ]);
 
-        assert!(pattern.matches("Meeting with John"));
-        assert!(pattern.matches("Meeting with Jane"));
-        assert!(!pattern.matches("Meeting with Bob"));
+        assert!(pattern.matches("john"));
+        assert!(pattern.matches("jane"));
+        assert!(!pattern.matches("Meeting with John"));
+        assert!(!pattern.matches("bob"));
+        assert!(pattern.can_fire());
+
+        let all = TriggerPattern::AllOf(vec![
+            TriggerPattern::exact("john"),
+            TriggerPattern::contains("jo"),
+        ]);
+        assert!(!all.matches("john"));
+        assert!(!all.can_fire());
     }
 
     #[test]
-    fn test_context_pattern_matches() {
+    fn context_patterns_fire_on_exact_declared_handles_only() {
         let context = Context::new()
             .with_project("payments-service", "/code/payments")
             .with_file("/code/payments/src/auth.rs")
-            .with_topic("authentication");
+            .with_topic("authentication")
+            .with_mode("debugging");
 
-        let pattern = ContextPattern::in_codebase("payments");
-        assert!(pattern.matches(&context));
+        // A fragment of the name, path or topic is not the handle.
+        assert!(!ContextPattern::in_codebase("payments").matches(&context));
+        assert!(!ContextPattern::topic_active("auth").matches(&context));
+        assert!(!ContextPattern::file_pattern("auth.rs").matches(&context));
+        // Case is part of the handle.
+        assert!(!ContextPattern::in_codebase("Payments-Service").matches(&context));
+        assert!(!ContextPattern::UserMode("Debugging".into()).matches(&context));
 
-        let pattern = ContextPattern::topic_active("auth");
-        assert!(pattern.matches(&context));
+        assert!(ContextPattern::in_codebase("payments-service").matches(&context));
+        assert!(ContextPattern::topic_active("authentication").matches(&context));
+        assert!(ContextPattern::file_pattern("/code/payments/src/auth.rs").matches(&context));
+        assert!(ContextPattern::UserMode("debugging".into()).matches(&context));
     }
 
     #[test]
@@ -1957,7 +1999,8 @@ mod tests {
             any: Vec::new(),
         };
         assert!(!pattern.matches(&context));
-        assert!(pattern.matches(&context.with_topic("release readiness")));
+        assert!(!pattern.matches(&context.clone().with_topic("release readiness")));
+        assert!(pattern.matches(&context.with_topic("release")));
     }
 
     #[test]
@@ -1992,12 +2035,15 @@ mod tests {
 
     #[test]
     fn test_event_trigger() {
-        let trigger =
-            IntentionTrigger::on_event("Meeting with John", TriggerPattern::contains("john"));
+        let trigger = IntentionTrigger::on_event(
+            "Meeting with John",
+            TriggerPattern::exact("meeting_with_john"),
+        );
         let context = Context::new();
 
         assert!(!trigger.is_triggered(&context, &[]));
-        assert!(trigger.is_triggered(&context, &["Scheduled meeting with John".to_string()]));
+        assert!(!trigger.is_triggered(&context, &["Scheduled meeting with John".to_string()]));
+        assert!(trigger.is_triggered(&context, &["meeting_with_john".to_string()]));
     }
 
     #[test]
@@ -2043,7 +2089,7 @@ mod tests {
         let mut trigger = IntentionTrigger::Compound {
             all_of: vec![],
             any_of: vec![
-                IntentionTrigger::on_event("ping", TriggerPattern::contains("ping")),
+                IntentionTrigger::on_event("ping", TriggerPattern::exact("ping")),
                 IntentionTrigger::Compound {
                     all_of: vec![
                         IntentionTrigger::Recurring {
@@ -2199,7 +2245,7 @@ mod tests {
         let trigger = IntentionTrigger::Recurring {
             base: Box::new(IntentionTrigger::on_event(
                 "deployment completed",
-                TriggerPattern::contains("deployment completed"),
+                TriggerPattern::exact("deployment_completed"),
             )),
             recurrence: RecurrencePattern::EveryMinutes(5),
             next_occurrence: Some(now - Duration::minutes(1)),
@@ -2210,11 +2256,12 @@ mod tests {
         };
 
         assert!(!trigger.is_triggered_at(&context, &[], now));
-        assert!(trigger.is_triggered_at(
+        assert!(!trigger.is_triggered_at(
             &context,
-            &["deployment completed successfully".to_string()],
+            &["deployment_completed successfully".to_string()],
             now
         ));
+        assert!(trigger.is_triggered_at(&context, &["deployment_completed".to_string()], now));
     }
 
     #[test]

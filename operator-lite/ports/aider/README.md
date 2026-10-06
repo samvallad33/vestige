@@ -58,7 +58,7 @@ the same **11 STOP rules** every host gets:
 |---|---|
 | OP-000 | editing the gate, its rules, permits, mode or hook registrations |
 | OP-001 | deleting/moving a registered workspace root (or a parent of one) |
-| OP-002 | wiping or rewriting the Vestige memory store |
+| OP-002 | wiping or rewriting the Vestige store |
 | OP-003 | blind recursive deletes outside scratch/build dirs |
 | OP-004 | force-pushing over a shared branch; deleting `.git` |
 | OP-005 | unreviewed publishes/releases (`npm publish`, `gh release create`, repo delete) |

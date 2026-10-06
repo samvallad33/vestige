@@ -1,5 +1,7 @@
 # Vestige State And Plan
 
+> Historical. This page describes Vestige v3 and is kept for the record. For 4.x see the [README](../README.md).
+
 This document is a public, sanitized replacement for an older internal planning
 snapshot. It intentionally omits private local paths, personal operating
 context, unpublished roadmap notes, and private repository locations.

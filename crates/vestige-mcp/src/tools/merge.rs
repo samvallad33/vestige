@@ -185,66 +185,6 @@ fn obj(args: &Option<Value>) -> serde_json::Map<String, Value> {
 // ============================================================================
 
 fn merge_candidates(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    #[cfg(vestige_embeddings_removed)]
-    {
-        let a = obj(&args);
-        let limit = a.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
-        let tags: Vec<String> = a
-            .get("tags")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| t.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let policy = storage.get_merge_policy().map_err(|e| e.to_string())?;
-        let candidates = storage
-            .merge_candidates(policy, limit, &tags)
-            .map_err(|e| e.to_string())?;
-
-        let out: Vec<Value> = candidates
-            .iter()
-            .map(|c| {
-                json!({
-                    "memberIds": c.member_ids,
-                    "previews": c.previews,
-                    "survivorId": c.survivor_id,
-                    "confidence": format!("{:.3}", c.confidence),
-                    "classification": c.classification.as_str(),
-                    "hasProtectedMember": c.has_protected_member,
-                    "signals": {
-                        // NOTE: the embeddingSimilarity signal was removed with
-                        // the embedding component of score_pair; clusters are
-                        // nominated by exact equality only and these lexical
-                        // scores are tie-breakers/review labels.
-                        "tagOverlap": format!("{:.3}", c.signals.tag_overlap),
-                        "tokenOverlap": format!("{:.3}", c.signals.token_overlap),
-                        "combinedScore": format!("{:.3}", c.signals.combined_score)
-                    },
-                    "nextStep": if c.has_protected_member {
-                        "A member is protected — unprotect it or pick it as survivor before plan_merge."
-                    } else {
-                        "Call plan_merge with these memberIds to preview the combined result."
-                    }
-                })
-            })
-            .collect();
-
-        let policy = storage.get_merge_policy().map_err(|e| e.to_string())?;
-        Ok(json!({
-            "candidates": out,
-            "totalCandidates": out.len(),
-            "policy": {
-                "matchThreshold": policy.match_threshold,
-                "possibleThreshold": policy.possible_threshold,
-                "autoApply": policy.auto_apply
-            },
-            "note": "Nothing was changed. These are review candidates only."
-        }))
-    }
-    #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, args);
         // Not `{"candidates": []}`: an empty list reads as "looked and found none".
@@ -260,29 +200,6 @@ fn merge_candidates(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value
 // ============================================================================
 
 fn plan_merge(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    #[cfg(vestige_embeddings_removed)]
-    {
-        let a = obj(&args);
-        let member_ids: Vec<String> = a
-            .get("member_ids")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| t.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if member_ids.len() < 2 {
-            return Err("member_ids must contain at least 2 ids".into());
-        }
-        let survivor = a.get("survivor_id").and_then(|v| v.as_str());
-        let policy = storage.get_merge_policy().map_err(|e| e.to_string())?;
-        let plan = storage
-            .plan_merge(&member_ids, survivor, policy)
-            .map_err(|e| e.to_string())?;
-        Ok(plan_to_json(&plan, &policy))
-    }
-    #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, args);
         Err("embeddings_unavailable: merge planning needs the embedding runtime, which this build does not ship. dedup action='scan' lists exact duplicates (duplicateClusters).".into())
@@ -294,61 +211,10 @@ fn plan_merge(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
 // ============================================================================
 
 fn plan_supersede(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    #[cfg(vestige_embeddings_removed)]
-    {
-        let a = obj(&args);
-        let old_id = a
-            .get("old_id")
-            .and_then(|v| v.as_str())
-            .ok_or("old_id is required")?;
-        let new_id = a
-            .get("new_id")
-            .and_then(|v| v.as_str())
-            .ok_or("new_id is required")?;
-        let policy = storage.get_merge_policy().map_err(|e| e.to_string())?;
-        let plan = storage
-            .plan_supersede(old_id, new_id, policy)
-            .map_err(|e| e.to_string())?;
-        Ok(plan_to_json(&plan, &policy))
-    }
-    #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, args);
         Err("embeddings_unavailable: merge planning needs the embedding runtime, which this build does not ship. dedup action='scan' lists exact duplicates (duplicateClusters).".into())
     }
-}
-
-#[cfg(vestige_embeddings_removed)]
-fn plan_to_json(plan: &vestige_core::MergePlan, policy: &vestige_core::MergePolicy) -> Value {
-    let requires_confirm =
-        plan.classification != vestige_core::MatchClass::Match || !policy.auto_apply;
-    json!({
-        "planId": plan.id,
-        "kind": plan.kind.as_str(),
-        "survivorId": plan.survivor_id,
-        "memberIds": plan.member_ids,
-        "diff": {
-            "resultContent": plan.result_content,
-            "resultTags": plan.result_tags,
-            "resultSource": plan.result_source,
-            "invalidatedIds": plan.invalidated_ids
-        },
-        "confidence": format!("{:.3}", plan.confidence),
-        "classification": plan.classification.as_str(),
-        "signals": {
-            "tagOverlap": format!("{:.3}", plan.signals.tag_overlap),
-            "tokenOverlap": format!("{:.3}", plan.signals.token_overlap),
-            "combinedScore": format!("{:.3}", plan.signals.combined_score)
-        },
-        "explanation": plan.explanation,
-        "requiresConfirm": requires_confirm,
-        "nextStep": format!(
-            "Review the diff. To execute: apply_plan with plan_id='{}'{}.",
-            plan.id,
-            if requires_confirm { " and confirm=true" } else { "" }
-        ),
-        "note": "Nothing was changed. This is a preview plan — apply_plan applies it; merge_undo reverses it."
-    })
 }
 
 // ============================================================================
@@ -356,31 +222,6 @@ fn plan_to_json(plan: &vestige_core::MergePlan, policy: &vestige_core::MergePoli
 // ============================================================================
 
 fn apply_plan(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    #[cfg(vestige_embeddings_removed)]
-    {
-        let a = obj(&args);
-        let plan_id = a
-            .get("plan_id")
-            .and_then(|v| v.as_str())
-            .ok_or("plan_id is required")?;
-        let confirm = a.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
-        let op = storage
-            .apply_plan(plan_id, confirm)
-            .map_err(|e| e.to_string())?;
-        Ok(json!({
-            "operationId": op.id,
-            "opType": op.op_type,
-            "status": op.status,
-            "survivorId": op.survivor_id,
-            "affectedIds": op.affected_ids,
-            "reason": op.reason,
-            "appliedAt": op.created_at,
-            "reversible": true,
-            "nextStep": format!("To reverse this, call merge_undo with operation_id='{}'.", op.id),
-            "note": "Old memories were bitemporally invalidated (valid_until stamped), NOT deleted. They remain queryable for audit."
-        }))
-    }
-    #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, args);
         Err("embeddings_unavailable: merge planning needs the embedding runtime, which this build does not ship. dedup action='scan' lists exact duplicates (duplicateClusters).".into())
@@ -436,20 +277,6 @@ fn merge_undo(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
                 }));
             }
 
-            #[cfg(vestige_embeddings_removed)]
-            {
-                let op = storage.merge_undo(op_id).map_err(|e| e.to_string())?;
-                Ok(json!({
-                    "undoOperationId": op.id,
-                    "revertedOperationId": op.reverts_op_id,
-                    "status": "reverted",
-                    "affectedIds": op.affected_ids,
-                    "reason": op.reason,
-                    "note": "The original operation was reversed: survivor content/tags restored and invalidation cleared. The plan is re-openable."
-                }))
-            }
-
-            #[cfg(not(vestige_embeddings_removed))]
             {
                 Err("Undoing merge/supersede operations requires embeddings and vector-search features; tag operation undo is available in this build.".into())
             }

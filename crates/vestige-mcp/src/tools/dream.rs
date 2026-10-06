@@ -26,7 +26,7 @@ pub fn schema() -> serde_json::Value {
             },
             "min_similarity": {
                 "type": "number",
-                "description": "Legacy engine: minimum similarity for connection discovery. Strata (no similarity is computed): the minimum strength a RECORDED edge needs to be replayed, echoed back as edgeStrengthFloor. 0.0-1.0, default 0.5.",
+                "description": "Strata: the minimum strength a recorded edge needs to be replayed, echoed back as edgeStrengthFloor. Legacy engine: score floor for connection discovery. 0.0-1.0, default 0.5.",
                 "minimum": 0.0,
                 "maximum": 1.0,
                 "default": 0.5

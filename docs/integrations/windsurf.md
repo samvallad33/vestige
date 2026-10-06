@@ -2,9 +2,9 @@
 
 > Written for Vestige 4.x.
 
-> Give Cascade a brain that remembers between sessions.
+> Give Cascade a record of what you decided, that carries across sessions.
 
-Windsurf has native MCP support through its Cascade AI. Add Vestige and Cascade remembers your architecture, preferences, and past decisions across every session.
+Windsurf has native MCP support through its Cascade AI. Add Vestige and Cascade can reload your architecture decisions, preferences, and past fixes in every session.
 
 ---
 
@@ -12,13 +12,13 @@ Windsurf has native MCP support through its Cascade AI. Add Vestige and Cascade 
 
 ### 1. Open the config file
 
-**Option A — Via UI:**
+**Option A: Via UI:**
 
 1. Open **Windsurf > Settings > Advanced Settings**
 2. Scroll to the **"Cascade"** section
 3. Click **"view the raw JSON config file"**
 
-**Option B — Direct path:**
+**Option B: Direct path:**
 
 | Platform | Path |
 |----------|------|
@@ -101,7 +101,7 @@ It comes back, with its memory id. Vestige 4.x finds a memory by an exact handle
 
 ---
 
-## Project-Specific Memory
+## Project-Specific Data Directory
 
 ```json
 {
@@ -158,4 +158,4 @@ If you have many MCP servers and exceed 100 total tools, Cascade will ignore exc
 | Claude Code | [Setup](../CONFIGURATION.md#claude-code-one-liner) |
 | Claude Desktop | [Setup](../CONFIGURATION.md#claude-desktop-macos) |
 
-Your AI remembers everything, everywhere.
+Every agent on the machine shares one store through one writer. The first to start serves it, and the others attach.

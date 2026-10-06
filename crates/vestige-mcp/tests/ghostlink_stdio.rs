@@ -187,15 +187,117 @@ fn spawn(dir: &Path, home: &Path) -> Server {
     Server::spawn(dir, home)
 }
 
+/// Seed one memory. Each seed carries its own tag: an exact shared tag would
+/// auto-connect the pairs at save time, and these tests assert a cold log
+/// until they write their own edges. Words the seeds share never join them
+/// (see `smart_ingest_auto_connects_on_exact_identities_only`).
 fn save(server: &mut Server, content: &str, node_type: &str) -> String {
+    static SEED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let tag = format!(
+        "ghostlink-seed-{}",
+        SEED.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     let saved = server.call_tool_ok(
         "smart_ingest",
-        json!({ "content": content, "node_type": node_type, "tags": ["ghostlink-test"] }),
+        json!({ "content": content, "node_type": node_type, "tags": [tag] }),
     );
     saved["nodeId"]
         .as_str()
         .unwrap_or_else(|| panic!("smart_ingest returned no nodeId: {saved}"))
         .to_string()
+}
+
+/// smart_ingest's ingest-time auto-connect joins on exact identities only
+/// and explains each edge: memories sharing most of their words are not
+/// joined, an exact shared tag is, and the response names the pair and the
+/// identity that joined it.
+#[test]
+fn smart_ingest_auto_connects_on_exact_identities_only() {
+    let dir = data_dir();
+    let home = data_dir();
+    let mut server = spawn(dir.path(), home.path());
+
+    let ingest = |server: &mut Server, content: &str, tags: Value| {
+        server.call_tool_ok(
+            "smart_ingest",
+            json!({ "content": content, "node_type": "fact", "tags": tags }),
+        )
+    };
+
+    let first = ingest(
+        &mut server,
+        "streaming usage parser drops cached_tokens for the gateway",
+        json!(["exact-a"]),
+    );
+    assert!(first.get("autoConnect").is_none(), "{first}");
+
+    // Nearly the same words, a different tag: no identity is shared.
+    let words = ingest(
+        &mut server,
+        "streaming usage parser drops cached_tokens for the gateway again",
+        json!(["exact-b"]),
+    );
+    assert!(words.get("autoConnect").is_none(), "{words}");
+    assert!(words.get("autoConnectError").is_none(), "{words}");
+
+    // No word in common with the first memory, the same exact tag.
+    let tagged = ingest(
+        &mut server,
+        "unrelated wording entirely",
+        json!(["exact-a"]),
+    );
+    let report = &tagged["autoConnect"];
+    assert_eq!(report["edges"], json!(1), "{tagged}");
+    assert_eq!(
+        report["sharedIdentities"],
+        json!(["tag:exact-a"]),
+        "{tagged}"
+    );
+    assert_eq!(
+        report["pairs"],
+        json!([{
+            "source": first["nodeId"],
+            "target": tagged["nodeId"],
+            "joinedOn": ["tag:exact-a"],
+        }]),
+        "{tagged}"
+    );
+
+    // A third carrier of the tag joins both earlier ones in ONE write, and
+    // the response names the receipt that lists both edges.
+    let third = ingest(&mut server, "a third wording", json!(["exact-a"]));
+    let report = &third["autoConnect"];
+    assert_eq!(report["edges"], json!(2), "{third}");
+    let receipt_id = report["receiptId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("autoConnect names no receipt: {third}"));
+    assert!(receipt_id.starts_with("eff-"), "{third}");
+    let receipt = server.call_tool_ok(
+        "receipt",
+        json!({ "action": "get", "receipt_id": receipt_id }),
+    );
+    let mutations = receipt["receipt"]["mutations"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no mutations: {receipt}"));
+    let sources: Vec<&str> = mutations
+        .iter()
+        .filter_map(|mutation| mutation["id"].as_str())
+        .collect();
+    assert_eq!(
+        sources,
+        vec![
+            first["nodeId"].as_str().unwrap(),
+            tagged["nodeId"].as_str().unwrap()
+        ],
+        "one receipt lists both edges: {receipt}"
+    );
+    assert!(
+        mutations
+            .iter()
+            .all(|mutation| mutation["kind"] == "edge_recorded"),
+        "{receipt}"
+    );
+    server.shutdown();
 }
 
 fn pairs(proposal: &Value) -> Vec<(String, String)> {
@@ -646,7 +748,7 @@ fn links_are_checked_before_anything_is_written() {
 
     for (links, needle) in [
         (
-            json!([{ "kind": "supersedes", "to": issue }]),
+            json!([{ "kind": "touched", "to": issue }]),
             "not declarable",
         ),
         (

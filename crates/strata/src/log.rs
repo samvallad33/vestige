@@ -453,6 +453,10 @@ pub(crate) fn list_segments(dir: &Path) -> Result<Vec<(u32, PathBuf)>, StrataErr
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            // a file-manager or archive sidecar (`._…seg`, `.DS_Store`), never a segment
+            continue;
+        }
         let Some(stem) = name.strip_suffix(".seg") else {
             continue;
         };
@@ -1693,13 +1697,26 @@ impl StrataLog {
         ) {
             Ok(created) => created,
             Err(err) => {
-                // The trailer is durable, so the writer cannot append to this
-                // segment again. Fail-stop like any other post-write failure
-                // and wake every parked appender; reopening rolls a fresh
-                // segment forward from the sealed one.
+                // A full volume is not damage: take the trailer back off so
+                // the segment is open again and appends go on once there is
+                // room. Anything else, or an undo that cannot be shown exact,
+                // leaves the durable trailer in place and fail-stops like any
+                // other post-write failure; reopening rolls a fresh segment
+                // forward from the sealed one.
+                let still_sealed: Option<String> = if err.is_storage_full() {
+                    self.undo_seal(sealed_no, trailer_at, wm)
+                        .err()
+                        .map(|undo_err| format!(" (the seal could not be undone: {undo_err})"))
+                } else {
+                    Some(String::new())
+                };
                 let mut g = self.inner.lock_group();
                 g.flushing = false;
-                g.poisoned = Some(format!("seal could not create the next segment: {err}"));
+                if let Some(why) = still_sealed {
+                    g.poisoned = Some(format!(
+                        "seal could not create the next segment: {err}{why}"
+                    ));
+                }
                 self.inner.cv.notify_all();
                 return Err(err);
             }
@@ -1728,6 +1745,36 @@ impl StrataLog {
             merkle_root: merkle,
             segment_hash,
         })
+    }
+
+    /// Undo a seal whose trailer is durable but whose follow-on segment could
+    /// not be created: cut the trailer off so segment `sealed_no` is the open
+    /// active segment again, exactly as before the seal. The trailer was the
+    /// only thing the seal appended, and no frame can have been committed
+    /// since (the caller still holds commit leadership).
+    ///
+    /// `Err` means the undo is not known to be exact and the caller must
+    /// fail-stop. Up to the cut the trailer is still in place, and a sealed
+    /// last segment is a state `open` already recovers from.
+    fn undo_seal(&self, sealed_no: u32, trailer_at: u64, wm: u64) -> Result<(), StrataError> {
+        // An open segment followed by another file halts the next open, so
+        // nothing of the failed create may remain, now or after a crash:
+        // check for a leftover and make its removal durable before the cut.
+        let segs = list_segments(&self.inner.dir)?;
+        if segs.last().map(|(no, _)| *no) != Some(sealed_no) {
+            return Err(StrataError::Corrupt(format!(
+                "a segment file follows segment {sealed_no:08}"
+            )));
+        }
+        sync::sync_dir(&self.inner.dir)?;
+
+        let mut files = self.inner.lock_files();
+        files.file.set_len(trailer_at)?;
+        files.file.seek(SeekFrom::Start(trailer_at))?;
+        sync::sync_file(&files.file, SyncPurpose::Segment)?;
+        files.offset = trailer_at;
+        // Prove it: the bytes on disk are again exactly the committed frames.
+        check_active_segment_on_disk(&files, wm)
     }
 
     /// Read frames with `seq >= from_seq`, oldest first, from the durable log.

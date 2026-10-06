@@ -57,9 +57,9 @@ pub async fn execute(
     } else if avg_retention >= 0.6 {
         "Good memory health. Consider reviewing memories in the 0-40% range."
     } else if avg_retention >= 0.4 {
-        "Fair memory health. Many memories are decaying. Run consolidation and consider GC."
+        "Fair memory health. Many memories are decaying; promote the ones still needed."
     } else {
-        "Poor memory health. Urgent: run consolidation, then GC stale memories below 0.3."
+        "Poor memory health. Urgent: promote the memories still needed; review those below 0.3 retention."
     };
 
     Ok(serde_json::json!({

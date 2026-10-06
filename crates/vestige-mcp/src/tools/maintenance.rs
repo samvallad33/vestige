@@ -92,14 +92,14 @@ pub fn gc_schema() -> Value {
             "budgetMs":{"type":"integer","minimum":1,"maximum":10000,"default":1000},
             "min_retention": {
                 "type": "number",
-                "description": "Delete memories with retention below this threshold (default: 0.1)",
+                "description": "Legacy engine only: delete memories with retention below this threshold (default: 0.1). Strata lists no candidates and deletes nothing.",
                 "default": 0.1,
                 "minimum": 0.0,
                 "maximum": 1.0
             },
             "max_age_days": {
                 "type": "integer",
-                "description": "Only delete memories older than this many days (optional additional filter)",
+                "description": "Legacy engine only: only delete memories older than this many days (optional additional filter)",
                 "minimum": 1
             },
             "dry_run": {
@@ -183,7 +183,7 @@ pub async fn execute_system_status(
 
     let mut warnings = Vec::new();
     if stats.average_retention < 0.5 && stats.total_nodes > 0 {
-        warnings.push("Low average retention - consider running consolidation");
+        warnings.push("Low average retention - promote or review the memories still needed");
     }
     if stats.nodes_due_for_review > 10 {
         warnings.push("Many memories are due for review");
@@ -192,7 +192,7 @@ pub async fn execute_system_status(
     // coverage warnings below would read as a failure that never happened.
     if !embeddings_compiled_in {
         warnings.push(
-            "Built without embeddings - semantic recall and the prediction-error gate are unavailable in this build (keyword search only)",
+            "No embedding runtime in this build - memories are found by exact handle only (a full id or an exact tag)",
         );
     }
     if embeddings_compiled_in && stats.total_nodes > 0 && stats.nodes_with_active_embeddings == 0 {
@@ -225,6 +225,11 @@ pub async fn execute_system_status(
     // failure-tolerant: a diagnostic source failing must never fail health.
     const DIAGNOSTIC_ID_LIMIT: usize = 10;
     let mut diagnostics: Vec<Value> = Vec::new();
+    // `consolidate` is withheld on a Strata log, so a diagnostic must not point
+    // there. `dream` replays recorded edges and folds one FSRS review per
+    // endpoint, which is the maintenance pass a Strata log does run.
+    let strata = crate::strata_memory::is_strata_backend(storage.as_ref());
+    let upkeep_action = if strata { "dream" } else { "consolidate" };
 
     // Decay risk: memories below the retention floor, with the worst IDs.
     let below_30 = storage.count_memories_below_retention(0.3).unwrap_or(0);
@@ -246,7 +251,7 @@ pub async fn execute_system_status(
             "count": below_30,
             "memoryIds": worst.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
             "memoryIdsTruncated": below_30 > DIAGNOSTIC_ID_LIMIT as i64,
-            "nextAction": { "tool": "maintain", "args": { "action": "consolidate" } },
+            "nextAction": { "tool": "maintain", "args": { "action": upkeep_action } },
         }));
     }
 
@@ -265,7 +270,7 @@ pub async fn execute_system_status(
             "count": stats.nodes_due_for_review,
             "memoryIds": due_ids,
             "memoryIdsTruncated": stats.nodes_due_for_review > DIAGNOSTIC_ID_LIMIT as i64,
-            "nextAction": { "tool": "maintain", "args": { "action": "consolidate" } },
+            "nextAction": { "tool": "maintain", "args": { "action": upkeep_action } },
         }));
     }
 
@@ -312,29 +317,32 @@ pub async fn execute_system_status(
         }
     }
 
-    // Consolidation staleness: never run, or older than 7 days.
-    match last_consolidation {
-        Some(ts) => {
-            let age_days = (Utc::now() - ts).num_days();
-            if age_days > 7 {
-                diagnostics.push(serde_json::json!({
-                    "code": "stale_consolidation",
-                    "severity": "info",
-                    "detail": format!(
-                        "Last consolidation ran {age_days} days ago; FSRS decay scores go stale between runs"
-                    ),
-                    "nextAction": { "tool": "maintain", "args": { "action": "consolidate" } },
-                }));
+    // Consolidation staleness: never run, or older than 7 days. A Strata log
+    // withholds consolidation, so "never run" there is not a finding.
+    if !strata {
+        match last_consolidation {
+            Some(ts) => {
+                let age_days = (Utc::now() - ts).num_days();
+                if age_days > 7 {
+                    diagnostics.push(serde_json::json!({
+                        "code": "stale_consolidation",
+                        "severity": "info",
+                        "detail": format!(
+                            "Last consolidation ran {age_days} days ago; FSRS decay scores go stale between runs"
+                        ),
+                        "nextAction": { "tool": "maintain", "args": { "action": "consolidate" } },
+                    }));
+                }
             }
-        }
-        None => {
-            if stats.total_nodes > 0 {
-                diagnostics.push(serde_json::json!({
-                    "code": "stale_consolidation",
-                    "severity": "info",
-                    "detail": "Consolidation has never run on this store",
-                    "nextAction": { "tool": "maintain", "args": { "action": "consolidate" } },
-                }));
+            None => {
+                if stats.total_nodes > 0 {
+                    diagnostics.push(serde_json::json!({
+                        "code": "stale_consolidation",
+                        "severity": "info",
+                        "detail": "Consolidation has never run on this store",
+                        "nextAction": { "tool": "maintain", "args": { "action": "consolidate" } },
+                    }));
+                }
             }
         }
     }
@@ -361,10 +369,10 @@ pub async fn execute_system_status(
         recommendations.push("Run 'consolidate' to generate active-model embeddings.");
     }
     if stats.total_nodes > 100 && stats.average_retention < 0.7 {
-        recommendations.push("Consider running periodic consolidation.");
+        recommendations.push("Consider reviewing memories periodically.");
     }
     if status == "healthy" && recommendations.is_empty() {
-        recommendations.push("Memory system is healthy!");
+        recommendations.push("The store is healthy.");
     }
 
     // === State distribution ===

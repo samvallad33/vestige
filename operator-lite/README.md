@@ -130,7 +130,7 @@ Windows can run. On Windows it is tested by `test_windows.py` on a CI runner.
 |---|---|---|
 | OP-000 | STOP | edits to the gate itself, hook registrations, settings files |
 | OP-001 | STOP | delete/move of a workspace root (or parent) |
-| OP-002 | STOP | wiping the memory store (sqlite3 writes, `vestige gc`) |
+| OP-002 | STOP | wiping the Vestige store (its log or database files, sqlite3 writes, `vestige gc`) |
 | OP-003 | STOP | blind recursive deletes, sweeps from `/`, fork bombs |
 | OP-004 | STOP | force-push to shared branches, remote-main deletion, `.git` removal |
 | OP-005 | STOP | unreviewed publishes (npm/cargo/twine/docker/gh release) |
@@ -139,7 +139,7 @@ Windows can run. On Windows it is tested by `test_windows.py` on a CI runner.
 | OP-008 | STOP | shell-init writes (`>> ~/.zshrc` = code execution by install) |
 | OP-009 | STOP | reverse shells (`/dev/tcp`, `nc -e`, DNS-tunnel tools) |
 | OP-010 | STOP | cloud metadata endpoints (169.254.169.254, metadata.google.internal) |
-| OP-S01..S17 | SHADOW | work-loss git, comms, public mutation, secret writes, pipe-to-interpreter, persistence, env-hijack (LD_PRELOAD/PATH=), exfil shapes, invisible chars, MCP argument exfil, agent-config writes, paste/tunnel egress, new git remotes, sandbox-escape primitives |
+| OP-S01..S08 and S11..S17 | SHADOW | work-loss git, comms, public mutation, secret writes, pipe-to-interpreter, persistence, env-hijack (LD_PRELOAD/PATH=), exfil shapes, invisible chars, MCP argument exfil, agent-config writes, paste/tunnel egress, new git remotes, sandbox-escape primitives |
 
 ## What the analyzer sees through
 

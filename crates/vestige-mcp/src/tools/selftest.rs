@@ -30,7 +30,7 @@ const PLANT_SCOPE: &str = "selftest";
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "description": "Planted-cause selftest on a temp copy; read-only.",
+        "description": "Planted-cause selftest; read-only.",
         "properties": {}
     })
 }

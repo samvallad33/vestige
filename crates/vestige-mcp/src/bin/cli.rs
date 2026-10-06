@@ -1,6 +1,6 @@
 //! Vestige CLI
 //!
-//! Command-line interface for managing cognitive memory system.
+//! Command-line interface for Vestige, the Causal Proof Engine.
 
 // Supplies the `__isoc23_*` and `__cxa_call_terminate` symbols that the
 // statically linked ONNX Runtime archive imports from glibc >= 2.38 and
@@ -25,18 +25,18 @@ use chrono::{NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 use colored::Colorize;
 use vestige_core::{
-    IngestInput, PortableImportMode, SecretConfidence, SecretPolicy, SourceEnvelope,
+    ConnectionRecord, IngestInput, PortableImportMode, SecretConfidence, SourceEnvelope,
     SourceUpsertOutcome, Storage, scan_secrets,
 };
 
-/// Vestige - Cognitive Memory System CLI
+/// Vestige - Causal Proof Engine CLI
 #[derive(Parser)]
 #[command(name = "vestige")]
 #[command(author = "samvallad33")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(about = "CLI for the Vestige cognitive memory system")]
+#[command(about = "CLI for Vestige, the Causal Proof Engine and operating system for AI agents")]
 #[command(
-    long_about = "Vestige is a local-first memory system for coding agents.\n\nVestige 4.0 keeps memories in a Strata log inside the data directory: an append-only log where every write passes a gate and FSRS-6 schedules review. Recall is by exact handle (memory id, id prefix, tag); a Strata log runs no similarity search. Builds with the legacy-sqlite feature keep the v3 SQLite engine."
+    long_about = "Vestige is the Causal Proof Engine and the operating system for AI agents.\n\nIts kernel, Strata, is an append-only, hash-chained, signed log in the data directory (log/): every write passes a gate and returns a receipt, and FSRS-6 schedules review. Zero vectors, zero RAG, no lookalike text: recall is by exact handle (a full memory id or an exact tag; a unique id prefix of 8+ characters also resolves) and every result carries its proof. Builds with the legacy-sqlite feature keep the v3 SQLite engine."
 )]
 struct Cli {
     /// Use a specific Vestige data directory for this command.
@@ -107,13 +107,13 @@ enum SandwichCommands {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show memory statistics
+    /// Show store statistics
     Stats {
         /// Show tagging/retention distribution
         #[arg(long)]
         tagging: bool,
 
-        /// Show cognitive state distribution
+        /// Show memory state distribution (active, dormant, silent, unavailable)
         #[arg(long)]
         states: bool,
     },
@@ -176,6 +176,10 @@ enum Commands {
     /// state. Ids, timestamps, review history and edges in the file are not
     /// restored. Portable archives import only into a legacy SQLite store.
     ///
+    /// Scope is kept: a memory with a `scope` field goes back into that
+    /// scope, and one without it (a file from 4.1.1 or earlier) goes into
+    /// `user`. The command exits non-zero when any memory fails.
+    ///
     /// A Strata backup made by `vestige backup` is a directory. Restore it by
     /// stopping Vestige and copying the backup's log/ (and store.meta, when
     /// present) into the data directory in place of its log/. This command
@@ -237,6 +241,10 @@ enum Commands {
     },
 
     /// Export memories in JSON or JSONL format
+    ///
+    /// Memories from every scope are written. On a Strata log each one
+    /// carries a `scope` field beside its other fields, and `vestige restore`
+    /// puts it back into that scope.
     Export {
         /// Output file path
         output: PathBuf,
@@ -311,7 +319,7 @@ enum Commands {
         yes: bool,
     },
 
-    /// Launch the memory web dashboard
+    /// Launch the web dashboard
     Dashboard {
         /// Port to bind the dashboard server to
         #[arg(long, default_value = "3927")]
@@ -324,7 +332,12 @@ enum Commands {
     /// Ingest a memory as a new record
     ///
     /// Nothing is merged by similarity. On a Strata log the write passes the
-    /// log's gate before it is admitted.
+    /// same canonical duplicate gate as `smart_ingest`: identical text
+    /// reinforces and the original stays untouched. A new memory then
+    /// auto-connects to earlier memories that record the same exact identity:
+    /// an exact tag, or an exact file path, commit sha, `owner/repo#123`
+    /// reference or URL. Shared words never join (the ingest-time share of
+    /// `vestige connect`).
     Ingest {
         /// Content to remember
         content: String,
@@ -374,6 +387,37 @@ enum Commands {
         /// Machine-readable output
         #[arg(long)]
         json: bool,
+    },
+
+    /// Create typed edges between memories that record the same exact identity
+    ///
+    /// Scans all memories of a scope and creates a `touched` edge between
+    /// each pair that records the same exact identity: an exact tag
+    /// (case-sensitive), an exact file path token, a whole-token commit sha
+    /// (40 hex, or 7+ hex), an `owner/repo#123` reference, or a URL. Shared
+    /// words never join two memories. A tag joins whole or not at all: a
+    /// hub tag (more than 14 carriers and more than half the scope) is
+    /// skipped, and so is a tag on more than 14 memories whose pairs alone
+    /// exceed --max-edges; each skipped tag is printed with its carrier
+    /// count and the reason. File paths always join. Every pair is printed
+    /// with the identities that joined it. An edge records that two memories
+    /// name the same thing, not that one caused the other: a causal walk
+    /// over these edges returns hypotheses. Ingest auto-connects pairs as
+    /// they land; this full scan catches what an ingest left unlinked.
+    Connect {
+        /// Show what edges would be created without writing them
+        #[arg(long)]
+        dry_run: bool,
+        /// Minimum distinct shared identities required (default 1)
+        #[arg(long, default_value = "1")]
+        min_shared: usize,
+        /// Maximum edges to create (safety cap; also the pair budget a tag
+        /// on more than 14 memories must fit to join)
+        #[arg(long, default_value = "100")]
+        max_edges: usize,
+        /// Project namespace to connect (default: user)
+        #[arg(long, default_value = "user")]
+        scope: String,
     },
 
     /// Read-only audit for credential-shaped values already in the local store.
@@ -440,10 +484,16 @@ enum Commands {
     ///
     /// On a Strata log (4.0) the walk follows recorded causal edges
     /// (closed_by, corrects, derived_from, evidence_of, touched) and writes
-    /// nothing. --stack-frame and --failing-test resolve to file anchors
-    /// ingest_repo recorded, by exact path and blame. --ci-run and a version
-    /// range still need --node-id; they are not name searches. --logged-write
-    /// walks one memory directly.
+    /// nothing. A path follows at most one touched edge: two memories naming
+    /// the same thing is a lead, and it does not chain; the touched edges
+    /// not followed are counted. --stack-frame and --failing-test resolve to
+    /// file anchors ingest_repo recorded, by exact path, a `/`-bounded
+    /// suffix, and blame. When a frame resolves, candidates are ordered by
+    /// recorded structure (revert, blame, hunk, hop, edge kind). Otherwise
+    /// they are ordered by depth, then by the exact identities each shares
+    /// with the start, which are printed. --ci-run needs --node-id. A
+    /// complete version range is `git rev-list --first-parent` and does not
+    /// need --node-id. --logged-write walks one memory directly.
     ///
     /// A legacy SQLite store walks every start point through shared exact
     /// anchors to change records and, unless --no-promote, records
@@ -505,8 +555,8 @@ enum Commands {
     /// with any handles found in the text.
     ///
     /// On a legacy SQLite store a QUERY runs the v3 deep_reference engine
-    /// (keyword search, FSRS-6 trust, spreading activation, supersession and
-    /// contradiction analysis) and prints its answer, evidence and confidence.
+    /// (trust scoring, supersession and contradiction analysis) and prints its
+    /// answer, evidence and confidence.
     Recall {
         /// Free-text query or claim to reason about (legacy SQLite stores)
         #[arg(required_unless_present = "handle", conflicts_with = "handle")]
@@ -598,7 +648,7 @@ enum Commands {
     /// On a Strata log it plants a cause, an intermediate and a symptom with
     /// recorded derived_from edges plus distractors in a temp log, walks back
     /// over recorded causal edges, and deletes the temp log. A legacy SQLite
-    /// store runs backfill hit@1/hit@3 and gap calibration on a temp copy.
+    /// store runs the v3 backfill selftest on a temp copy.
     Selftest,
 
     /// Find decayed fix/lesson memories linked to a failure
@@ -615,6 +665,44 @@ enum Commands {
         /// Output raw JSON (same payload as the MCP tool)
         #[arg(long)]
         json: bool,
+    },
+
+    /// Prove which commit broke a test: the causal walk proposes, the test decides
+    ///
+    /// Walks back from the failure memory (--logged-write) to the commits it
+    /// reaches over recorded edges, drops any committed after --reported-at
+    /// or outside good..bad, and freezes the protocol (the test's sha256,
+    /// the two ends, the leads) before any test runs. Then it runs your test
+    /// on those leads only, closest links first, and on the parent of the
+    /// earliest failing one.
+    /// Stock `git bisect run` over the whole range confirms it, reusing the
+    /// verdicts already recorded. Then it finds the smallest set of the
+    /// commit's changes that still fails, tests the commit without them, and
+    /// undoes them on the bad ref. The result is a verdict card: LEAD,
+    /// BOUNDARY, CONFIRMED, ISOLATED, REVERSED, each with whether it holds
+    /// and the runs behind it.
+    ///
+    /// With --flaky, for a bug that only shows some of the time, each commit
+    /// is tested repeatedly until the evidence is decisive, and the card
+    /// gains REPEATED.
+    ///
+    /// Output lines are labelled `[recorded link]` (a lead from the walk) or
+    /// `[tested]` (a test run). Every run is saved as an `event` memory and
+    /// written to the report, where each entry carries the sha256 of the one
+    /// before it. The test runs in a temporary git worktree, never in your
+    /// checkout. Its exit code is read as git bisect reads it: 0 good, 125
+    /// cannot test, any other code bad.
+    ///
+    /// `vestige prove --check <report.json>` re-verifies a report offline.
+    Prove(vestige_mcp::walk_verify::ProveArgs),
+
+    /// What `git bisect run` calls during `prove`
+    #[command(name = vestige_mcp::walk_verify::CHILD_COMMAND, hide = true)]
+    ProveChild {
+        /// `probe` or `sim`
+        mode: String,
+        /// The run configuration `prove` wrote
+        cfg: PathBuf,
     },
 }
 
@@ -708,6 +796,12 @@ fn main() -> anyhow::Result<()> {
             max_commits,
             json,
         } => run_ingest_git(path, since, until, max_commits, json),
+        Commands::Connect {
+            dry_run,
+            min_shared,
+            max_edges,
+            scope,
+        } => run_connect(dry_run, min_shared, max_edges, scope),
         Commands::ScanSecrets {
             include_suspected,
             json,
@@ -796,6 +890,17 @@ fn main() -> anyhow::Result<()> {
             scope,
             json,
         } => run_forgotten_lesson(failure_id, scope, json),
+        Commands::Prove(args) => {
+            let code =
+                vestige_mcp::walk_verify::run(&args, || Ok((open_storage()?, cli_data_dir()?)))?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Commands::ProveChild { mode, cfg } => {
+            std::process::exit(vestige_mcp::walk_verify::child(&mode, &cfg))
+        }
     }
 }
 
@@ -925,45 +1030,11 @@ fn parse_sha256(text: &str) -> anyhow::Result<String> {
     Ok(hash)
 }
 
-fn sha256_from_command(command: &mut Command) -> anyhow::Result<Option<String>> {
-    match command.output() {
-        Ok(output) if output.status.success() => {
-            let text = String::from_utf8_lossy(&output.stdout);
-            Ok(Some(parse_sha256(&text)?))
-        }
-        Ok(_) => Ok(None),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).context("failed to run checksum command"),
-    }
-}
-
+/// The SHA-256 of a file, computed in process (the same digest `vestige prove`
+/// freezes into its protocol).
 fn compute_sha256(path: &Path) -> anyhow::Result<String> {
-    #[cfg(windows)]
-    {
-        if let Some(hash) = sha256_from_command(
-            Command::new("powershell")
-                .arg("-NoProfile")
-                .arg("-Command")
-                .arg("(Get-FileHash -Algorithm SHA256 -LiteralPath $args[0]).Hash.ToLowerInvariant()")
-                .arg(path),
-        )? {
-            return Ok(hash);
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        if let Some(hash) =
-            sha256_from_command(Command::new("shasum").arg("-a").arg("256").arg(path))?
-        {
-            return Ok(hash);
-        }
-        if let Some(hash) = sha256_from_command(Command::new("sha256sum").arg(path))? {
-            return Ok(hash);
-        }
-    }
-
-    anyhow::bail!("no SHA-256 command available to verify release archive");
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(vestige_mcp::walk_verify::json::sha256_hex(&bytes))
 }
 
 fn verify_release_checksum(archive_path: &Path, checksum_path: &Path) -> anyhow::Result<()> {
@@ -2481,6 +2552,9 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
         node_type: Option<String>,
         tags: Option<Vec<String>>,
         source: Option<String>,
+        /// The scope `vestige export` recorded. Absent in files written
+        /// before 4.1.2, which restore into the default scope.
+        scope: Option<String>,
     }
 
     let memories = if let Ok(wrapper) = serde_json::from_str::<Vec<BackupWrapper>>(&backup_content)
@@ -2504,6 +2578,11 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
         println!(
             "{}",
             "Strata log: each memory is ingested as a new record (new id, created now, fresh review state). Ids, timestamps, review history and edges in the file are not restored."
+                .yellow()
+        );
+        println!(
+            "{}",
+            "Scope is kept: a memory goes back into the scope recorded in the file, and one with no scope goes into `user`."
                 .yellow()
         );
         println!("{}", STRATA_EXACT_RESTORE_HINT.dimmed());
@@ -2531,7 +2610,14 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
             source_envelope: None,
         };
 
-        match storage.ingest(input) {
+        // A file from 4.1.1 or earlier has no scope and restores into the
+        // default scope, as it always did. The store validates a named scope
+        // and refuses a bad one; that fails this memory only.
+        let ingested = match memory.scope.as_deref() {
+            Some(scope) => storage.ingest_in_scope(input, scope),
+            None => storage.ingest(input),
+        };
+        match ingested {
             Ok(_node) => {
                 success_count += 1;
                 println!(
@@ -2540,6 +2626,17 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
                     total,
                     "OK".green(),
                     truncate(&memory.content, 60)
+                );
+            }
+            Err(e) if memory.scope.is_some() => {
+                // The scope itself is not printed: it is the one field the
+                // store may have refused as a credential.
+                println!(
+                    "[{}/{}] {} not restored into the scope recorded in the file: {}",
+                    i + 1,
+                    total,
+                    "FAIL".red(),
+                    e
                 );
             }
             Err(e) => {
@@ -2554,9 +2651,9 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
         success_count.to_string().green().bold(),
         total,
         if strata {
-            "ingested as new records"
+            "ingested as new records (scope kept)"
         } else {
-            "restored"
+            "restored (scope kept)"
         }
     );
 
@@ -2572,6 +2669,13 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
         );
     }
 
+    if success_count < total {
+        anyhow::bail!(
+            "{} of {} memories were not restored (see the FAIL lines above)",
+            total - success_count,
+            total
+        );
+    }
     Ok(())
 }
 
@@ -3154,6 +3258,14 @@ fn run_selftest() -> anyhow::Result<()> {
     }
     println!();
     println!("{}", serde_json::to_string_pretty(&result)?);
+    let passed = if result["kind"] == "recorded_edge_walk" {
+        result["all_passed"] == true
+    } else {
+        result["hits"] == serde_json::json!(result["rounds"]) && result["gap_calibration"] == true
+    };
+    if !passed {
+        anyhow::bail!("selftest failed: not every check passed (see the result above)");
+    }
     Ok(())
 }
 
@@ -3328,21 +3440,37 @@ fn run_export(
         std::fs::create_dir_all(parent)?;
     }
 
+    // A memory's scope is not part of `KnowledgeNode`, so it is read from the
+    // log and written beside the node's own fields. A legacy SQLite store has
+    // no such map and writes the old shape.
+    let scopes = vestige_mcp::strata_memory::node_scopes(storage.as_ref());
+    let scoped = scopes.is_some();
+    let exported: Vec<ExportedMemory<'_>> = filtered
+        .iter()
+        .map(|node| ExportedMemory {
+            node,
+            scope: scopes
+                .as_ref()
+                .and_then(|scopes| scopes.get(&node.id))
+                .map(String::as_str),
+        })
+        .collect();
+
     let file = create_private_file(&output)?;
     let mut writer = BufWriter::new(file);
 
     match format.as_str() {
         "json" => {
-            serde_json::to_writer_pretty(&mut writer, &filtered)?;
+            serde_json::to_writer_pretty(&mut writer, &exported)?;
             writer.write_all(b"\n")?;
         }
         "jsonl" => {
-            for node in &filtered {
+            for node in &exported {
                 serde_json::to_writer(&mut writer, node)?;
                 writer.write_all(b"\n")?;
             }
         }
-        _ => unreachable!(),
+        _ => unreachable!("clap limits the format to json or jsonl"),
     }
 
     writer.flush()?;
@@ -3359,17 +3487,29 @@ fn run_export(
     println!(
         "{}",
         format!(
-            "Exported {} memories to {} ({}, {})",
+            "Exported {} memories to {} ({}, {}){}",
             filtered.len(),
             output.display(),
             format,
-            size_display
+            size_display,
+            if scoped { ", each with its scope" } else { "" }
         )
         .green()
         .bold()
     );
 
     Ok(())
+}
+
+/// One exported memory: every `KnowledgeNode` field as before, plus the
+/// scope the memory lives in. `scope` is left out when the store has none to
+/// report, so the file is then the pre-4.1.2 shape.
+#[derive(serde::Serialize)]
+struct ExportedMemory<'a> {
+    #[serde(flatten)]
+    node: &'a vestige_core::KnowledgeNode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a str>,
 }
 
 /// Run exact portable archive export.
@@ -3786,7 +3926,8 @@ fn run_gc(
     Ok(())
 }
 
-/// Ingest a memory via CLI (routes through smart_ingest / PE Gating)
+/// Ingest a memory via CLI through `smart_ingest` (the duplicate gate, then
+/// auto-connect on a create).
 fn run_ingest(
     content: String,
     tags: Option<String>,
@@ -3822,19 +3963,6 @@ fn run_ingest(
         })
         .unwrap_or_default();
 
-    let input = IngestInput {
-        content: content.clone(),
-        node_type,
-        source,
-        sentiment_score: 0.0,
-        sentiment_magnitude: 0.0,
-        tags: tag_list,
-        valid_from: None,
-        valid_until: None,
-        validity_inferred: false,
-        source_envelope: None,
-    };
-
     let storage = open_storage()?;
     // The Strata adapter does not expose a creation-time rewrite in 4.0.
     // Refuse before ingesting, or the memory would land with the current
@@ -3844,14 +3972,35 @@ fn run_ingest(
             "unavailable_in_4_0: ingest --ago-days/--created-at is not available on Strata in Vestige 4.0: the Strata store does not expose a creation-time rewrite yet, so the memory would keep the time it was written. Nothing was written; drop the flag to ingest with the current time."
         );
     }
-    let secret_policy = if allow_secrets {
-        SecretPolicy::AllowExplicitly
-    } else {
-        SecretPolicy::Reject
-    };
+    let mut args = serde_json::json!({
+        "content": content.clone(),
+        "node_type": node_type,
+        "tags": tag_list,
+    });
+    if let Some(source) = source {
+        args["source"] = serde_json::json!(source);
+    }
+    if allow_secrets {
+        args["allowSecrets"] = serde_json::json!(true);
+    }
 
+    let rt = tokio::runtime::Runtime::new()?;
+    let cognitive = std::sync::Arc::new(tokio::sync::Mutex::new(
+        vestige_mcp::cognitive::CognitiveEngine::new(),
+    ));
+    let value = rt
+        .block_on(vestige_mcp::tools::smart_ingest::execute(
+            &storage,
+            &cognitive,
+            Some(args),
+        ))
+        .map_err(|err| anyhow::anyhow!(err))?;
+
+    // Legacy stores still accept a creation-time rewrite after the write.
+    // Strata refused above, before `execute`, so nothing was written there.
+    if !is_strata(&storage)
+        && let Some(id) = value.get("nodeId").and_then(|id| id.as_str())
     {
-        let node = storage.ingest_with_secret_policy(input, secret_policy)?;
         if let Some(days) = ago_days {
             // Duration::days panics on overflow for extreme inputs; try_days
             // returns None instead. The subtraction itself can ALSO overflow the
@@ -3865,25 +4014,129 @@ fn run_ingest(
                 .ok_or_else(|| {
                     anyhow::anyhow!("--ago-days value {days} is out of the supported range")
                 })?;
-            storage.set_created_at(&node.id, when)?;
+            storage.set_created_at(id, when)?;
         }
         if let Some(when) = created_at_ts {
-            storage.set_created_at(&node.id, when)?;
+            storage.set_created_at(id, when)?;
         }
-        println!("{}", "=== Vestige Ingest ===".cyan().bold());
-        println!();
-        println!("{}: create", "Decision".white().bold());
-        println!("{}: {}", "Node ID".white().bold(), node.id);
-        println!();
-        let confirmation = if allow_secrets {
-            "Memory created with explicit credential override (content redacted)".to_string()
-        } else {
-            format!("Memory created ({})", truncate(&content, 60))
-        };
-        println!("{}", confirmation.green().bold());
     }
 
+    print_ingest_outcome(&value, &content, allow_secrets);
     Ok(())
+}
+
+/// CLI lines the ingest command has always printed, taken from the
+/// `smart_ingest` response so a reinforce and a create share one gate.
+fn print_ingest_outcome(value: &serde_json::Value, content: &str, allow_secrets: bool) {
+    let decision = value
+        .get("decision")
+        .and_then(|decision| decision.as_str())
+        .unwrap_or("create");
+    let node_id = value
+        .get("nodeId")
+        .or_else(|| value.get("echoNodeId"))
+        .and_then(|id| id.as_str())
+        .unwrap_or("");
+    println!("{}", "=== Vestige Ingest ===".cyan().bold());
+    println!();
+    println!("{}: {decision}", "Decision".white().bold());
+    println!("{}: {node_id}", "Node ID".white().bold());
+    println!();
+    let confirmation = if decision == "reinforce" {
+        let original = value
+            .get("duplicateOf")
+            .and_then(|id| id.as_str())
+            .unwrap_or("");
+        format!("Duplicate of {original}; the original was left untouched ({node_id})")
+    } else if allow_secrets {
+        "Memory created with explicit credential override (content redacted)".to_string()
+    } else {
+        format!("Memory created ({})", truncate(content, 60))
+    };
+    println!("{}", confirmation.green().bold());
+    print_auto_connect(value);
+}
+
+fn print_auto_connect(value: &serde_json::Value) {
+    if let Some(err) = value.get("autoConnectError").and_then(|err| err.as_str()) {
+        eprintln!("{} auto-connect skipped: {err}", "WARN".yellow());
+    }
+    let Some(report) = value.get("autoConnect") else {
+        return;
+    };
+    let edges = report
+        .get("edges")
+        .and_then(|edges| edges.as_u64())
+        .unwrap_or(0);
+    if edges > 0 {
+        let identities = report
+            .get("sharedIdentities")
+            .and_then(|ids| ids.as_array())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        println!(
+            "{}",
+            format!("Auto-connected: {edges} edge(s) created on exact identities: {identities}")
+                .green()
+                .bold()
+        );
+        if let Some(pairs) = report.get("pairs").and_then(|pairs| pairs.as_array()) {
+            for pair in pairs {
+                let source = pair.get("source").and_then(|id| id.as_str()).unwrap_or("");
+                let target = pair.get("target").and_then(|id| id.as_str()).unwrap_or("");
+                let joined = pair
+                    .get("joinedOn")
+                    .and_then(|ids| ids.as_array())
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(|id| id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                println!("  {source} -[touched]-> {target}  joined on: {joined}");
+            }
+        }
+        if let Some(receipt_id) = report.get("receiptId").and_then(|id| id.as_str()) {
+            println!("Auto-connect receipt: {receipt_id} (one write for the {edges} edge(s))");
+        }
+    }
+    if let Some(skipped) = report.get("skipped").and_then(|skipped| skipped.as_array()) {
+        for skip in skipped {
+            let tag = skip.get("tag").and_then(|tag| tag.as_str()).unwrap_or("");
+            let carriers = skip
+                .get("carriers")
+                .and_then(|count| count.as_u64())
+                .unwrap_or(0);
+            let scope_size = skip
+                .get("scopeSize")
+                .and_then(|count| count.as_u64())
+                .unwrap_or(0);
+            let reason = skip
+                .get("reason")
+                .and_then(|reason| reason.as_str())
+                .unwrap_or("");
+            println!(
+                "Auto-connect skipped tag {tag}: carried by {carriers} of {scope_size} ({reason})"
+            );
+        }
+    }
+    let not_linked = report
+        .get("notLinked")
+        .and_then(|count| count.as_u64())
+        .unwrap_or(0);
+    if not_linked > 0 {
+        let candidates = edges + not_linked;
+        println!(
+            "Auto-connect linked the {edges} strongest of {candidates} candidate(s); {not_linked} not linked (the {}-edge budget of one write). `vestige connect` writes the rest.",
+            vestige_mcp::auto_connect::MAX_AUTO_EDGES
+        );
+    }
 }
 
 /// Findings across `texts`, each (kind, fingerprint) once.
@@ -4417,11 +4670,6 @@ fn run_causal_walk(
         start_points.push(cw::StartPoint::LoggedWrite { node_id: id });
     }
 
-    #[cfg(vestige_embeddings_removed)]
-    {
-        let _ = storage.init_embeddings();
-    }
-
     let request = cw::CausalWalkRequest {
         scope,
         start_points,
@@ -4571,8 +4819,36 @@ fn run_causal_walk_strata(
             "{}",
             "No recorded causal edge leads upstream from this memory.".dimmed()
         );
+    } else if let Some(order) = result["ranking"]["order"].as_str() {
+        println!(
+            "{} {} (scope: {} memories)",
+            "Order:".white().bold(),
+            order,
+            result["ranking"]["scope_size"]
+        );
+        println!();
     }
+    // `kind:value (N of M)`: an identity and how many memories of the scope
+    // record it.
+    let scope_size = &result["ranking"]["scope_size"];
+    let with_carriers = |entries: &serde_json::Value| -> Vec<String> {
+        entries
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                format!(
+                    "{} ({} of {})",
+                    entry["identity"].as_str().unwrap_or("?"),
+                    entry["carriers"],
+                    scope_size
+                )
+            })
+            .collect()
+    };
     for (rank, cause) in causes.iter().enumerate() {
+        // These two lines are parsed by other tools (`#<n> <id> depth <d>`,
+        // then the content preview). Anything new goes below them.
         println!(
             "{} {} depth {}",
             format!("#{}", rank + 1).green().bold(),
@@ -4580,6 +4856,38 @@ fn run_causal_walk_strata(
             cause["depth"]
         );
         println!("  {}", preview(&cause["content"]));
+        if let Some(structure) = cause.get("structure").filter(|value| value.is_object()) {
+            println!(
+                "  structure: sha {} reverted_after_failure={} blame={} hunk={} edge={}",
+                structure["sha"].as_str().unwrap_or("—"),
+                structure["revertedAfterFailure"],
+                structure["blameOfLine"],
+                structure["touchedFailingHunk"],
+                structure["edge"].as_str().unwrap_or("—")
+            );
+        }
+        if cause["joined_on"].is_array() {
+            // Depth 1 is linked to the start itself; a deeper memory is only
+            // compared with it.
+            let label = if cause["depth"] == 1 {
+                "joined on:"
+            } else {
+                "shares with the start:"
+            };
+            let shared = with_carriers(&cause["joined_on"]);
+            if shared.is_empty() {
+                println!("  {label} no exact identity (reached over the recorded edge(s) below)");
+            } else {
+                println!("  {label} {}", shared.join(", "));
+            }
+            let hubs = with_carriers(&cause["not_counted_hub_tags"]);
+            if !hubs.is_empty() {
+                println!(
+                    "  not counted (hub tag, more than half the scope carries it): {}",
+                    hubs.join(", ")
+                );
+            }
+        }
         for hop in cause["path"].as_array().into_iter().flatten() {
             println!(
                 "  {} {} -[{}]-> {}",
@@ -4588,6 +4896,83 @@ fn run_causal_walk_strata(
                 hop["link_type"].as_str().unwrap_or("?"),
                 hop["target_id"].as_str().unwrap_or("?")
             );
+        }
+        println!();
+    }
+    // The touched edges the walk saw and did not follow, and why.
+    let held = &result["not_followed"];
+    if held.is_object() {
+        println!(
+            "  {} {} touched edge(s) lead on from the memories above to {} other memor{}. A path follows at most one touched edge: two memories naming the same thing is a lead, and it does not chain.",
+            "not followed:".yellow(),
+            held["touched_edges"],
+            held["memories"],
+            if held["memories"] == 1 { "y" } else { "ies" }
+        );
+        let shared: Vec<String> = held["shared"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                format!(
+                    "{} ({} of {}) on {} edge(s)",
+                    entry["identity"].as_str().unwrap_or("?"),
+                    entry["carriers"],
+                    held["scope_size"],
+                    entry["edges"]
+                )
+            })
+            .collect();
+        if !shared.is_empty() {
+            let more = held["shared_identities"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(shared.len() as u64);
+            println!(
+                "    the two ends of those edges share: {}{}",
+                shared.join(", "),
+                if more > 0 {
+                    format!(", and {more} more identities")
+                } else {
+                    String::new()
+                }
+            );
+        }
+        if held["no_counted_identity"].as_u64().unwrap_or(0) > 0 {
+            println!(
+                "    {} of those edges join memories that share no exact identity, or only hub tags",
+                held["no_counted_identity"]
+            );
+        }
+        // The memories behind those edges, numbered after the causes so a
+        // tool that tests hypotheses (`vestige prove`) can take them as its
+        // farther leads. Same two parsed lines as a cause.
+        let held_leads = held["held"].as_array().cloned().unwrap_or_default();
+        if !held_leads.is_empty() {
+            println!(
+                "    held, not followed: the {} memor{} behind those edges, one touched edge beyond a memory above; nothing is said about them until a test says it",
+                held_leads.len(),
+                if held_leads.len() == 1 { "y" } else { "ies" }
+            );
+            for (i, lead) in held_leads.iter().enumerate() {
+                println!(
+                    "{} {} depth {}",
+                    format!("#{}", causes.len() + i + 1).yellow().bold(),
+                    lead["memory"].as_str().unwrap_or("?"),
+                    lead["depth"]
+                );
+                println!("  {}", preview(&lead["content"]));
+                let shared = with_carriers(&lead["shared"]);
+                println!(
+                    "  held behind {}: {}",
+                    lead["from"].as_str().unwrap_or("?"),
+                    if shared.is_empty() {
+                        "no exact identity (a hub tag joins them)".to_string()
+                    } else {
+                        shared.join(", ")
+                    }
+                );
+            }
         }
         println!();
     }
@@ -4754,6 +5139,300 @@ fn run_ingest_git(
         println!("{}: {}", "Unchanged".white().bold(), unchanged);
     }
     Ok(())
+}
+
+/// One candidate `touched` edge: the earlier memory as the source, the
+/// later one as the target (positions in the scanned, oldest-first list),
+/// with the exact identities both record (`kind:value`).
+struct ConnectPair {
+    source: usize,
+    target: usize,
+    shared: Vec<String>,
+}
+
+/// Create typed edges between memories that record the same exact identity.
+///
+/// Memories ingested one by one used to land as isolated nodes: tags, no
+/// edges, so `causal-walk --logged-write` said no recorded causal edge leads
+/// upstream even when two memories recorded the same `src/path.py`. The
+/// ingest path now runs its share of this automatically
+/// (`vestige_mcp::auto_connect`, on the memories a save just wrote); this
+/// command remains the full-scan catch-up, joining the pairs an ingest left
+/// unlinked: the ones past a write's edge budget, the ones written before
+/// auto-connect existed, and the ones between memories neither of which was
+/// the one being saved. It extracts the exact identities of every memory in
+/// the scope (`auto_connect::extract_identities`: tags, file paths, commit
+/// shas, issue references, URLs; no words, no ML, no similarity) and writes
+/// a `touched` edge for each pair sharing at least `--min-shared` of them,
+/// through `Storage::save_connection`, which on a Strata log is
+/// `StrataStore::save_connection` behind the gate. A tag joins whole or not
+/// at all (`auto_connect::scan_skipped_tags`): a hub tag, carried by more
+/// than half the scope, is skipped, and so is a tag whose pairs alone exceed
+/// `--max-edges`; each is named with its carrier count and the reason. Every
+/// pair is printed with the identities that joined it.
+///
+/// Direction follows the walk's rule for `touched` (causal_walk.rs: the
+/// source is the earlier record, so from the target the walk goes to the
+/// source): the older memory of a pair is the source. Pairs already joined
+/// by a recorded edge — either direction — are skipped, so re-running is
+/// free.
+fn run_connect(
+    dry_run: bool,
+    min_shared: usize,
+    max_edges: usize,
+    scope: String,
+) -> anyhow::Result<()> {
+    println!("{}", "=== Vestige Connect ===".cyan().bold());
+    println!();
+
+    let storage = open_storage()?;
+    let mut nodes = fetch_nodes_in_scope(&storage, &scope)?;
+    // Oldest first, so a pair's source is its earlier memory.
+    nodes.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+
+    println!("{}: {}", "Scope".white().bold(), scope);
+    println!("{}: {}", "Memories scanned".white().bold(), nodes.len());
+
+    if nodes.len() < 2 {
+        println!();
+        println!(
+            "{}",
+            "Nothing to connect: fewer than two memories in this scope.".green()
+        );
+        return Ok(());
+    }
+
+    use vestige_mcp::auto_connect::{self, Identity};
+    let identity_sets: Vec<std::collections::BTreeSet<Identity>> = nodes
+        .iter()
+        .map(|node| {
+            auto_connect::extract_identities(&node.content, &node.tags)
+                .into_iter()
+                .collect()
+        })
+        .collect();
+
+    // The guard against a quadratic blow-up: a tag on N memories joins
+    // N * (N - 1) / 2 pairs. A hub tag (more than half the scope carries it)
+    // and a tag whose pairs alone exceed this pass's --max-edges budget are
+    // skipped whole, and each is named with its carrier count and the reason.
+    let skipped_tags =
+        auto_connect::scan_skipped_tags(nodes.iter().map(|node| node.tags.as_slice()), max_edges);
+    let common_tags: std::collections::BTreeMap<String, usize> = skipped_tags
+        .iter()
+        .map(|skipped| (skipped.tag.clone(), skipped.carriers))
+        .collect();
+    if !skipped_tags.is_empty() {
+        println!(
+            "{}: {}",
+            "Tags skipped".white().bold(),
+            skipped_tags
+                .iter()
+                .map(|skipped| {
+                    format!(
+                        "{} ({} of {}: {})",
+                        skipped.tag, skipped.carriers, skipped.scope_size, skipped.reason
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    // Pairs already joined by any recorded edge (either direction) are left
+    // alone: re-running connect must not stack parallel edges.
+    let joined: HashSet<(String, String)> = storage
+        .get_all_connections()?
+        .into_iter()
+        .filter_map(|edge| {
+            (edge.source_id != edge.target_id).then(|| {
+                if edge.source_id < edge.target_id {
+                    (edge.source_id, edge.target_id)
+                } else {
+                    (edge.target_id, edge.source_id)
+                }
+            })
+        })
+        .collect();
+
+    // Which memories record each identity that may join (skipped tags left
+    // out), as positions in `nodes`, ascending. Only memories that share one
+    // are compared, so the scan costs the pairs that share something, not
+    // every pair of the scope.
+    let mut recorded_by: std::collections::BTreeMap<&Identity, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (position, set) in identity_sets.iter().enumerate() {
+        for identity in set {
+            if identity.kind == auto_connect::IdentityKind::Tag
+                && common_tags.contains_key(&identity.value)
+            {
+                continue;
+            }
+            recorded_by.entry(identity).or_default().push(position);
+        }
+    }
+
+    // An edge needs at least one shared identity; --min-shared 0 is read as 1.
+    let min_shared = min_shared.max(1);
+    // Every candidate pair is counted; only the first --max-edges are kept,
+    // oldest source first, then oldest target.
+    let mut candidate_pairs = 0usize;
+    let mut pairs: Vec<ConnectPair> = Vec::new();
+    for (i, node) in nodes.iter().enumerate() {
+        let mut partners: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        for identity in &identity_sets[i] {
+            if let Some(positions) = recorded_by.get(identity) {
+                let later = positions.partition_point(|position| *position <= i);
+                partners.extend(&positions[later..]);
+            }
+        }
+        for j in partners {
+            let later = &nodes[j];
+            let joining = auto_connect::joining_identities(
+                &identity_sets[i],
+                &identity_sets[j],
+                &common_tags,
+            );
+            if auto_connect::distinct_values(&joining) < min_shared {
+                continue;
+            }
+            let key = if node.id < later.id {
+                (node.id.clone(), later.id.clone())
+            } else {
+                (later.id.clone(), node.id.clone())
+            };
+            if joined.contains(&key) {
+                continue;
+            }
+            candidate_pairs += 1;
+            if pairs.len() < max_edges {
+                pairs.push(ConnectPair {
+                    source: i,
+                    target: j,
+                    shared: joining.iter().map(Identity::to_string).collect(),
+                });
+            }
+        }
+    }
+
+    println!("{}: {}", "Candidate pairs".white().bold(), candidate_pairs);
+    println!();
+
+    let capped = candidate_pairs > max_edges;
+
+    if pairs.is_empty() {
+        println!(
+            "{}",
+            "No new edges: no memory pair shares an exact identity that is not already joined by a recorded edge."
+                .green()
+        );
+        return Ok(());
+    }
+
+    for pair in &pairs {
+        let (source, target) = (&nodes[pair.source], &nodes[pair.target]);
+        println!(
+            "  {} -[touched]-> {}  {}",
+            source.id.dimmed(),
+            target.id.dimmed(),
+            format!("joined on: {}", pair.shared.join(", ")).dimmed()
+        );
+        println!("      {}", truncate(&source.content, 72).dimmed());
+        println!("      {}", truncate(&target.content, 72).dimmed());
+    }
+
+    if dry_run {
+        println!();
+        println!(
+            "{}",
+            format!(
+                "Dry run: {} touched edge(s) would be created. Re-run without --dry-run to write them.",
+                pairs.len()
+            )
+            .yellow()
+            .bold()
+        );
+        return Ok(());
+    }
+
+    let now = Utc::now();
+    let mut created = 0usize;
+    let mut errors = 0usize;
+    for pair in &pairs {
+        let (source, target) = (&nodes[pair.source], &nodes[pair.target]);
+        // strength 0.5 -> strength_milli 500: a co-touch is a moderate link.
+        let edge = ConnectionRecord {
+            source_id: source.id.clone(),
+            target_id: target.id.clone(),
+            strength: 0.5,
+            link_type: "touched".to_string(),
+            created_at: now,
+            last_activated: now,
+            activation_count: 0,
+        };
+        match storage.save_connection(&edge) {
+            Ok(()) => created += 1,
+            Err(err) => {
+                eprintln!(
+                    "  {} Failed to connect {} -> {}: {}",
+                    "ERR".red(),
+                    source.id,
+                    target.id,
+                    err
+                );
+                errors += 1;
+            }
+        }
+    }
+
+    println!();
+    if capped {
+        println!(
+            "{} stopped at the --max-edges cap ({max_edges}); more candidate pairs remain.",
+            "truncated:".yellow()
+        );
+    }
+    println!(
+        "{}",
+        format!(
+            "Connect complete: {}/{} touched edge(s) created{}",
+            created,
+            pairs.len(),
+            if errors > 0 {
+                format!(" ({} errors)", errors)
+            } else {
+                String::new()
+            }
+        )
+        .green()
+        .bold()
+    );
+
+    Ok(())
+}
+
+/// Fetch every node in one scope using pagination (the scoped sibling of
+/// [`fetch_all_nodes`]; connect keeps its edges within one scope, the same
+/// invariant `check_links` enforces for declared links).
+fn fetch_nodes_in_scope(
+    storage: &Arc<Storage>,
+    scope: &str,
+) -> anyhow::Result<Vec<vestige_core::KnowledgeNode>> {
+    let mut all_nodes = Vec::new();
+    let page_size = 500;
+    let mut offset = 0;
+
+    loop {
+        let batch = storage.get_all_nodes_in_scope(scope, page_size, offset)?;
+        let batch_len = batch.len();
+        all_nodes.extend(batch);
+        if batch_len < page_size as usize {
+            break;
+        }
+        offset += page_size;
+    }
+
+    Ok(all_nodes)
 }
 
 /// Recall by exact handle (both stores), or by free text through the real

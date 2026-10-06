@@ -57,13 +57,13 @@ export const OS_ROUTES: OsRoute[] = [
 	{ href: '/blackbox', label: 'Black Box', purpose: 'The receipt — what Vestige concluded, the evidence, and why, exportable.', group: 'Primary', shortcut: 'B', icon: 'blackbox', stage: 'route-stage', visibility: 'dock', ready: true },
 
 	// UNDERSTAND — the reasoning + exploration organs.
-	{ href: '/reasoning', label: 'Reasoning', purpose: 'Watch a live deep_reference decision trace form from evidence.', group: 'Understand', shortcut: 'R', icon: 'reasoning', stage: 'route-stage', visibility: 'nav', ready: true },
-	{ href: '/explore', label: 'Explore', purpose: 'A shareable semantic walk through memory neighborhoods.', group: 'Understand', shortcut: 'E', icon: 'explore', stage: 'observatory', visibility: 'nav', ready: true },
+	{ href: '/reasoning', label: 'Reasoning', purpose: 'Watch a decision trace form from recorded evidence.', group: 'Understand', shortcut: 'R', icon: 'reasoning', stage: 'route-stage', visibility: 'nav', ready: true },
+	{ href: '/explore', label: 'Explore', purpose: 'A shareable walk over recorded edges from one memory.', group: 'Understand', shortcut: 'E', icon: 'explore', stage: 'observatory', visibility: 'nav', ready: true },
 	{ href: '/contradictions', label: 'Contradictions', purpose: 'Trust-weighted conflict pairs — where your memory disagrees with itself.', group: 'Understand', shortcut: 'C', icon: 'contradictions', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/patterns', label: 'Patterns', purpose: 'Cross-project patterns mined from the corpus.', group: 'Understand', icon: 'patterns', stage: 'route-stage', visibility: 'hidden', ready: true },
 
 	// MAINTAIN — the memory-hygiene organs.
-	{ href: '/duplicates', label: 'Duplicates', purpose: 'Cosine-similarity clusters quarantined for review before merge.', group: 'Maintain', shortcut: 'D', icon: 'duplicates', stage: 'route-stage', visibility: 'nav', ready: true },
+	{ href: '/duplicates', label: 'Duplicates', purpose: 'Exact duplicates (same content hash or declared source) listed for review; nothing merges.', group: 'Maintain', shortcut: 'D', icon: 'duplicates', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/memory-prs', label: 'Memory PRs', purpose: 'Proposed memory changes held for review before they touch the graph.', group: 'Maintain', icon: 'memorypr', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/importance', label: 'Importance', purpose: 'Which memories rank highest by the 4-channel importance model, and why.', group: 'Maintain', icon: 'importance', stage: 'route-stage', visibility: 'hidden', ready: true },
 	{ href: '/activation', label: 'Activation', purpose: 'The activation field — which memories light up for a query.', group: 'Maintain', shortcut: 'A', icon: 'activation', stage: 'observatory', visibility: 'hidden', ready: true },
@@ -76,8 +76,7 @@ export const OS_ROUTES: OsRoute[] = [
 	{ href: '/stats', label: 'Stats', purpose: 'System vitals — retention distribution, coverage, throughput.', group: 'Reflect', shortcut: 'S', icon: 'stats', stage: 'route-stage', visibility: 'nav', ready: true },
 
 	// SYSTEM
-	{ href: '/embeddings', label: 'Embeddings', purpose: 'Own local embedding profiles: install, evaluate, migrate, activate, and roll back with receipts.', group: 'System', icon: 'embeddings', stage: 'dom', visibility: 'nav', ready: true },
-	{ href: '/settings', label: 'Settings', purpose: 'Tune the cognitive engine and run the maintenance rituals.', group: 'System', shortcut: ',', icon: 'settings', stage: 'route-stage', visibility: 'hidden', ready: true }
+	{ href: '/settings', label: 'Settings', purpose: 'Vitals and the maintenance actions a Strata log supports.', group: 'System', shortcut: ',', icon: 'settings', stage: 'route-stage', visibility: 'hidden', ready: true }
 ];
 
 // ── Derived views (every consumer uses these, never re-lists routes) ──────────

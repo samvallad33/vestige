@@ -1,99 +1,113 @@
-# Storage Configuration
+# Storage
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> The Strata log: where Vestige keeps its state, how to place it, and how to back it up
 
-> Global, per-project, and multi-agent setups
+Vestige's kernel is **Strata**, an append-only, hash-chained, signed log. Every write
+is proposed, checked by the gate, and admitted as an effect. The state you read is
+re-derived by replaying the log. Nothing in the shipped 4.x binaries links SQLite.
 
 ---
 
-## Database Location
+## Data directory
 
-All memories are stored in a **single local SQLite file**:
+All state lives in one **data directory**. The log is the `log/` folder inside it.
 
-| Platform | Database Location |
-|----------|------------------|
-| macOS | `~/Library/Application Support/com.vestige.core/vestige.db` |
-| Linux | `~/.local/share/vestige/core/vestige.db` |
-| Windows | `%APPDATA%\vestige\core\vestige.db` |
+| Platform | Default data directory |
+|----------|------------------------|
+| macOS | `~/Library/Application Support/com.vestige.core` |
+| Linux | `$XDG_DATA_HOME/core`, or `~/.local/share/core` when that is unset |
+| Windows | `%APPDATA%\vestige\core\data` |
+
+The macOS path was checked against a running 4.1.1 install. The Linux and Windows
+paths come from the `directories` crate (6.0.0) as `vestige-mcp` calls it with the
+qualifier `com`, organization `vestige` and application `core`. Older docs showed
+`~/.local/share/vestige/core` and `%APPDATA%\vestige\core`. If you are unsure, the
+server's startup log names the directory on the line that starts `Strata log
+initialized at`.
 
 Override precedence:
 
-1. `vestige-mcp --data-dir <path>`
+1. `vestige-mcp --data-dir <path>` (or `vestige <command> --data-dir <path>`)
 2. `VESTIGE_DATA_DIR=<path>`
-3. OS default shown above
+3. The OS default above
 
-`--data-dir` and `VESTIGE_DATA_DIR` both point to a **directory**, not the database file itself. Vestige creates the directory if it does not exist, expands a leading `~`, and stores the database at `<data-dir>/vestige.db`.
-
----
-
-## Moving Memories Between Devices
-
-For device-to-device migration, use a portable archive instead of the normal JSON export:
-
-```bash
-# On the source machine
-vestige portable-export ~/Desktop/vestige-portable.json
-
-# On the destination machine, before adding memories
-vestige portable-import ~/Desktop/vestige-portable.json
-```
-
-Portable archives preserve raw Vestige storage rows: memory IDs, FSRS state, graph connections, suppression state, timestamps, audit history, and embedding blobs.
-
-For one-time migration, keep the conservative empty-database import:
-
-```bash
-vestige portable-import ~/Desktop/vestige-portable.json
-```
-
-For cross-device sync, use merge mode or the file-backed sync command:
-
-```bash
-# Merge a portable archive into an existing database.
-vestige portable-import ~/Dropbox/vestige/portable.json --merge
-
-# Pull, merge, and push through a shared archive file.
-vestige sync ~/Dropbox/vestige/portable.json
-```
-
-`vestige sync` uses the same pluggable portable-sync backend interface as the core library. v2.1.1 ships a file backend, which works with Dropbox, iCloud Drive, Syncthing, Git, network shares, or any folder-sync system. The merge algorithm applies delete tombstones, keeps newer local memories on timestamp conflicts, preserves stable IDs, rebuilds FTS after import, and writes the pushed archive atomically when the filesystem supports rename. v2.1.2 also carries non-content purge tombstones so a hard purge can sync without retaining the deleted memory text.
-
-When using the MCP `export` tool with `format: "portable"`, Vestige writes the archive under the active data directory's `exports/` folder. The MCP `restore` tool only reads from that `exports/` or `backups/` folder by default; pass `allowAnyPath: true` only for a trusted local file you selected manually.
-
-The regular `vestige export` / `vestige restore` path remains useful for human-readable backups, partial exports, and older files, but it re-ingests memory content and does not preserve every storage-level relationship.
+Both point to a **directory**. Vestige creates it if it does not exist, expands a
+leading `~`, and on Unix creates it owner-only (`0700`).
 
 ---
 
-## Storage Modes
+## What is in the data directory
 
-### Option 1: Global Memory (Default)
+| Path | What it is |
+|------|------------|
+| `log/` | The Strata log: segment files (`*.seg`), `head.state`, `strata.key` (the log's verifying key) and `strata.lock`. A sealed segment ends in a signed trailer |
+| `store.meta` | Store metadata, present on some stores. `vestige backup` copies it with `log/` |
+| `actor.key` | The identity key this process signs endorsements with. Backups do not include it |
+| `receipt-signing.key` | Present after a v3 upgrade. `strata-verify` needs it beside the log to trust the migration receipt. Backups do not include it |
+| `.serve.lock` | The OS lock the process that serves the store holds. A crashed holder releases it |
+| `.serve.sock`, `.serve.endpoint` | While a server runs: the owner-only socket other agents attach to (loopback TCP on Windows) and the token file for it |
+| `backups/` | `maintain` action `backup` writes `vestige-<time>.strata` folders here |
+| `exports/` | `maintain` action `export` writes `memories-<time>.json` or `.jsonl` here |
+| `maintenance-stamps.json` | The time of the last completed backup, which `session_start` reads for `needsBackup` |
+| `vestige.toml` | Optional output defaults. See [Configuration](CONFIGURATION.md#output-configuration-vestigetoml) |
+| `vestige.db` | Only after an upgrade from v3: the old file. 4.x never opens or modifies it |
+| `upgrade.log` | Only after an upgrade from v3: what the importer did |
 
-One shared memory for all projects. Good for:
-- Personal preferences that apply everywhere
-- Cross-project learning
-- Simpler setup
+In the default per-user data directory, `auth_token` also lives here when you turn on
+the HTTP transport. See [Dashboard access](CONFIGURATION.md#dashboard-access).
+
+Check the log at any time, even while a server holds it:
+
+```bash
+vestige strata-verify "<data directory>"
+```
+
+It reads every frame, checks the hash chain and the signed trailers, and checks the
+migration receipt if there is one. It creates no files.
+
+---
+
+## How a write reaches the log
+
+1. A tool call **proposes** a write.
+2. The **gate** checks it. A write that fails the gate, such as one carrying a live
+   credential, is refused and writes nothing.
+3. The write is **admitted** as an effect, and the call returns an `eff-` receipt.
+4. State is derived by folding the log. `receipt get` shows what a write did.
+   `receipt replay` rebuilds the state from the log and reports any mismatch.
+
+Reads never append to the log. Retrievability, the FSRS value that says how far a
+record has faded, is derived on read from the record's card and the clock. It is never
+stored.
+
+---
+
+## Storage modes
+
+### Option 1: One shared store (default)
+
+One store for all projects. Good for personal preferences that apply everywhere and
+for cross-project learning.
 
 ```bash
 # Default behavior - no configuration needed
 claude mcp add vestige vestige-mcp -s user
 ```
 
-To set a global override for all MCP launches that inherit your shell environment:
+Records carry a **scope** (default `user`), so one store can still keep projects apart.
+Exact-handle reads such as an id or a prefix work across scopes. Walks and GhostLink
+proposals stay inside one scope unless you ask otherwise.
+
+To set a machine-wide data directory for every launch that inherits your shell:
 
 ```bash
-export VESTIGE_DATA_DIR="~/.vestige"
+export VESTIGE_DATA_DIR="$HOME/.vestige"
 ```
 
-### Option 2: Per-Project Memory
+### Option 2: Per-project store
 
-Separate memory per codebase. Good for:
-- Client work (keep memories isolated)
-- Different coding styles per project
-- Team environments
+A separate store per codebase. Good for client work you need to keep isolated.
 
-**MCP Client Setup:**
-
-Add an MCP server entry to your client or project config:
 ```json
 {
   "mcpServers": {
@@ -105,26 +119,22 @@ Add an MCP server entry to your client or project config:
 }
 ```
 
-This creates `.vestige/vestige.db` in your project root. Add `.vestige/` to `.gitignore`.
+This creates the log under `.vestige/` in your project root. Add `.vestige/` to
+`.gitignore`. If both `VESTIGE_DATA_DIR` and `--data-dir` are set, the flag wins.
 
-If both `VESTIGE_DATA_DIR` and `--data-dir` are set, the CLI flag wins. Use the env var for a machine-wide default and the CLI flag for per-client or per-project overrides.
-
-The `vestige` CLI also honors `VESTIGE_DATA_DIR`, so use the same directory when inspecting or exporting a custom MCP instance:
+The `vestige` CLI honors the same directory:
 
 ```bash
 VESTIGE_DATA_DIR=./.vestige vestige stats
-VESTIGE_DATA_DIR=./.vestige vestige portable-export ./vestige-portable.json
+vestige export ./memories.jsonl --format jsonl --data-dir ./.vestige
 ```
 
-**Multiple Named Instances:**
+For both a global store and a project store, run two named servers:
 
-For power users who want both global AND project memory:
 ```json
 {
   "mcpServers": {
-    "vestige-global": {
-      "command": "vestige-mcp"
-    },
+    "vestige-global": { "command": "vestige-mcp" },
     "vestige-project": {
       "command": "vestige-mcp",
       "args": ["--data-dir", "./.vestige"]
@@ -133,189 +143,145 @@ For power users who want both global AND project memory:
 }
 ```
 
-### Option 3: Multi-Agent Household
+### Option 3: Multi-agent household
 
-For setups with multiple MCP clients or agent personas:
+**Several agents, one store.** This is the default and needs no setup. Claude Code in
+three terminals, Cursor, Codex and Claude Desktop can all run `vestige-mcp` against the
+same data directory. The first process to start takes `.serve.lock` and serves the
+store. Every later one connects to it through the owner-only socket and relays its
+client's stdio there, so there is one writer. If the serving process quits, another
+takes the lock and keeps serving, replaying its client's handshake so that session
+continues. A request another agent had in flight at that moment returns an error rather
+than being resent, because it may already have taken effect.
 
-**Shared Memory (all clients share memories):**
+**Separate identities.** Give each agent its own data directory:
+
 ```json
-{
-  "mcpServers": {
-    "vestige": {
-      "command": "vestige-mcp",
-      "args": ["--data-dir", "~/shared-vestige"]
-    }
-  }
-}
+{ "mcpServers": { "vestige": { "command": "vestige-mcp", "args": ["--data-dir", "~/vestige-research"] } } }
 ```
 
-**Separate Identities (each agent has its own memory):**
-
-Client config for "Research":
 ```json
-{
-  "mcpServers": {
-    "vestige": {
-      "command": "vestige-mcp",
-      "args": ["--data-dir", "~/vestige-research"]
-    }
-  }
-}
+{ "mcpServers": { "vestige": { "command": "vestige-mcp", "args": ["--data-dir", "~/vestige-builder"] } } }
 ```
 
-Client config for "Builder":
-```json
-{
-  "mcpServers": {
-    "vestige": {
-      "command": "vestige-mcp",
-      "args": ["--data-dir", "~/vestige-builder"]
-    }
-  }
-}
+Two different data directories are two different stores with two different writers.
+
+---
+
+## One writer
+
+The log has exactly one writer. Which process that is can change over time, but at any
+moment one process holds the store.
+
+- **Agents** attach to the holder. They never open the log themselves.
+- **CLI commands that open the log directly** (`stats`, `health`, `recall`, `ingest`,
+  `export`, `compose`, `causal-walk`, `forgotten-lesson`, `selftest`, `scan-secrets`,
+  `project`, `gc`) run only while no Vestige server holds the store. If one does, they
+  exit with an error that names the process.
+- **Three commands work while a server holds the store**, because they ask the holder
+  or only read: `vestige backup`, `vestige strata-verify` and `vestige dashboard`.
+
+If a command says another process holds the store, find the holder:
+
+```bash
+lsof -p "$(lsof -t "<data directory>/.serve.lock")" | grep txt
 ```
 
 ---
 
-## Data Safety
+## Backups
 
-**Important:** Vestige stores data locally. v2.1.1 adds user-controlled file-backed sync through `vestige sync`, but Vestige does not run a hosted cloud service, background replication daemon, or automatic backup for you.
+```bash
+vestige backup ~/backups/vestige-2026-10-04
+```
 
-| Use Case | Risk Level | Recommendation |
-|----------|------------|----------------|
-| AI conversation memory | Low | Acceptable without backup—easily rebuilt |
-| Coding patterns & decisions | Medium | Periodic backups recommended |
-| Sensitive/critical data | High | **Not recommended**—use purpose-built systems |
+This seals the log and copies `log/` (plus `store.meta`, when present) into a new,
+empty folder. It works while your agents run, because it asks their server for the
+copy. In that case the server makes the copy in `<data directory>/backups/` and the
+command copies it to the folder you named, so one copy stays in `backups/`. The copy is owner-only (folders `0700`, files `0600`). A log that fails
+verification is refused rather than copied. `vestige.db` is never copied: after an
+upgrade it is the old v3 file, not the live store.
 
-**Vestige is not designed for:** medical records, financial transactions, legal documents, or any data requiring compliance guarantees.
+`maintain` action `backup` does the same into `<data directory>/backups/`.
+
+Backups do not include `actor.key` or `receipt-signing.key`. Keep those safe, because
+`strata-verify` of a backup of an upgraded store needs `receipt-signing.key` beside the
+backup's `log/`.
+
+**Restore** is a directory copy:
+
+1. Stop every Vestige client.
+2. Copy the backup's `log/` (and `store.meta`, when present) over the data directory's `log/`.
+3. Keep the data directory's own `actor.key` and `receipt-signing.key`.
+
+`vestige restore <file.json>` is not a backup restore. It re-ingests an export as new
+records with new ids, fresh review state and no edges. Portable archives, `vestige sync`
+and `maintain` action `restore` are not available on a Strata log.
+
+For a machine-wide safety net, back up the data directory with Time Machine, Windows
+Backup or `rsync` while no server runs, or schedule `vestige backup` yourself.
+
+### Export
+
+`vestige export <file> --format json|jsonl` and `maintain` action `export` write every
+live record as JSON or JSONL. An export is for reading and for re-ingesting. It does not
+carry edges, receipts or review state.
 
 ---
 
-## Backup Options
+## Data safety
 
-### Manual (one-time)
+Vestige stores data locally. There is no hosted service, no background replication
+and no automatic off-machine copy. The log is unencrypted on disk, so use full-disk
+encryption if the records are sensitive.
 
-```bash
-# macOS
-cp ~/Library/Application\ Support/com.vestige.core/vestige.db ~/vestige-backup.db
+| Use case | Risk | Recommendation |
+|----------|------|----------------|
+| Agent decisions and lessons | Medium | Take periodic backups |
+| Code decisions anchored to a repo | Medium | Backups, plus `codebase verify` after refactors |
+| Sensitive or regulated data | High | Not designed for it. Vestige gives no compliance guarantees |
 
-# Linux
-cp ~/.local/share/vestige/core/vestige.db ~/vestige-backup.db
-```
+Secrets: the gate refuses AWS, GitHub, Slack, Google, Anthropic, OpenAI and Stripe live
+keys in every stored field. `vestige scan-secrets` audits what is already in the log.
+Stripe test keys are not blocked, and a bare `password: ...` line is not blocked. The
+log is append-only, so a credential that reached it stays on disk. Rotate it.
 
-### Automated (cron job)
-
-```bash
-# Add to crontab - backs up every hour
-0 * * * * cp ~/Library/Application\ Support/com.vestige.core/vestige.db ~/.vestige-backups/vestige-$(date +\%Y\%m\%d-\%H\%M).db
-```
-
-### System Backups
-
-Just use **Time Machine** (macOS) / **Windows Backup** / **rsync** — they'll catch the file automatically.
-
-> For personal use with Claude? Don't overthink it. The memories aren't that precious.
+**Deletion.** `purge`, `memory` action `purge` or `delete`, and `delete_knowledge`
+return `unavailable_in_4_0`. `suppress` takes a record out of every read and keeps its
+bytes. Real erasure is planned as crypto-erasure ([#402](https://github.com/samvallad33/vestige/issues/402)).
 
 ---
 
-## Direct SQL Access
+## Inspecting the log
 
-The database is just SQLite. You can query it directly:
+There is no SQL to run. Use the tools or the CLI:
 
-```bash
-sqlite3 ~/Library/Application\ Support/com.vestige.core/vestige.db
-
-# Example queries
-SELECT content, retention_strength FROM knowledge_nodes ORDER BY retention_strength DESC LIMIT 10;
-SELECT content FROM knowledge_nodes WHERE tags LIKE '%identity%';
-SELECT COUNT(*) FROM knowledge_nodes WHERE retention_strength < 0.1;
-```
-
-**Caution**: Don't modify the database while Vestige is running.
+| To see | Use |
+|--------|-----|
+| Counts and health | `memory_status` views `stats`, `health`, `retention`, or `vestige stats`, `vestige health` |
+| One record and its origin frame | `memory` action `get`, `memory_status` view `provenance` with `memoryId` |
+| What a write did | `receipt` action `get` with an `eff-` id or a record id |
+| Whether the log still says what a receipt says | `receipt` action `replay` |
+| The log's integrity | `vestige strata-verify <data directory>` |
+| Records by day | `memory_status` view `timeline` |
 
 ---
 
-## Multi-Process Safety
+## Moving to another machine
 
-Vestige's SQLite configuration is tuned for **safe concurrent reads alongside a single writer**. Multiple `vestige-mcp` processes pointed at the same database file is a supported *read-heavy* pattern; concurrent heavy writes from multiple processes is **experimental** and documented here honestly.
+Copy the data directory while no Vestige process runs, or take a `vestige backup` and
+restore it as above on the other machine. Keep `actor.key` and `receipt-signing.key`
+with it if you want the same identity and a verifiable migration receipt.
 
-### What's shipped
+---
 
-Every `Storage::new()` call executes these pragmas on both the reader and writer connection (`crates/vestige-core/src/storage/sqlite.rs`):
+## v3 storage (not used by the 4.x default build)
 
-```sql
-PRAGMA journal_mode = WAL;        -- readers don't block writers, writers don't block readers
-PRAGMA synchronous  = NORMAL;     -- durable across app crashes, not across OS crashes
-PRAGMA cache_size   = -64000;     -- 64 MiB page cache per connection
-PRAGMA temp_store   = MEMORY;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;       -- wait 5s on SQLITE_BUSY before surfacing the error
-PRAGMA mmap_size    = 268435456;  -- 256 MiB memory-mapped I/O window
-PRAGMA journal_size_limit = 67108864;
-PRAGMA optimize = 0x10002;
-```
-
-Internally the `Storage` type holds **separate reader and writer connections**, each guarded by its own `Mutex<Connection>`. Within a single process this means:
-
-- Any number of concurrent readers share the read connection lock.
-- Writers serialize on the writer connection lock.
-- WAL lets readers continue while a writer commits — they don't block each other at the SQLite level.
-
-### The vector index follows peer writes
-
-Each process holds its own in-memory HNSW index, rebuilt from
-`embedding_profile_vectors` at startup. Before every semantic search it reads
-`PRAGMA data_version`, which SQLite bumps when another connection commits, so
-the check costs one pragma when nothing changed. Since schema V32 it also learns
-*what* changed: every insert, update and delete on the vector table is journaled
-by trigger into `vector_journal` (ids only, keyed by an AUTOINCREMENT sequence
-that is monotonic in commit order and never reused), and the index applies
-exactly the journaled rows past its watermark. A sibling process's new memory,
-re-embedding or purge is therefore visible on the next query without a restart.
-The consolidation cycle prunes the journal to the newest 10,000 rows plus the
-last seven days; a process whose watermark has fallen behind that horizon
-reconciles its index against the table instead of trusting the journal.
-
-### What works today
-
-| Pattern | Status | Notes |
-|---------|--------|-------|
-| One `vestige-mcp` + one MCP client | **Supported** | The default case. Zero contention. |
-| Multiple MCP clients, separate `--data-dir` | **Supported** | Each process owns its own DB file. No shared state. |
-| Multiple MCP clients, **shared** `--data-dir`, **one** `vestige-mcp` | **Supported** | Clients talk to a single MCP process that owns the DB. Recommended for multi-agent setups. |
-| CLI (`vestige` binary) reading while `vestige-mcp` runs | **Supported** | WAL makes this safe — queries see a consistent snapshot. |
-| Time Machine / `rsync` backup during writes | **Supported** | WAL journal gets copied with the main file; recovery handles it. |
-
-### What's experimental
-
-| Pattern | Status | Notes |
-|---------|--------|-------|
-| **Two `vestige-mcp` processes** writing the same DB concurrently | **Experimental** | SQLite serializes writers via a lock; if contention exceeds the 5s `busy_timeout`, writes surface `SQLITE_BUSY`. No exponential backoff or inter-process coordination layer beyond the pragma. |
-| External writers (another SQLite client holding a write transaction open) | **Experimental** | Same concern as above — the 5s window is the only safety net. |
-| Corrupted WAL recovery after hard-kill | **Supported by SQLite** | WAL is designed for crash recovery, but we do not explicitly test the `PRAGMA wal_checkpoint(RESTART)` path under load. |
-
-If you hit `database is locked` errors:
-
-```bash
-# Identify the holder
-lsof ~/Library/Application\ Support/com.vestige.core/vestige.db
-
-# Clean shutdown of all vestige processes
-pkill -INT vestige-mcp
-```
-
-### Why the "Stigmergic Swarm" story is honest
-
-Multi-agent coordination through a shared memory graph — where agents alter the graph and other agents later *sense* those changes rather than passing explicit messages — is a first-class pattern on the **shared `--data-dir` + one `vestige-mcp`** setup above. In that configuration, every write flows through a single MCP process: WAL gives readers (agents querying state) a consistent view while the writer commits atomically, and the broadcast channel in `dashboard/events.rs` surfaces each cognitive event (dream, consolidation, promotion, suppression, Rac1 cascade) to every connected client in real time. No inter-process write coordination is required because there is one writer.
-
-Running two or more `vestige-mcp` processes against the same file is where "experimental" kicks in. For the swarm narrative, point every agent at one MCP instance — that's the shipping pattern.
-
-### Roadmap
-
-Things we haven't shipped yet, tracked for a future release:
-
-1. **File-based advisory lock** (`fs2` / `fcntl`) to detect and refuse startup when another `vestige-mcp` already owns the DB, instead of failing later with a lock error.
-2. **Retry with jitter on `SQLITE_BUSY`** in addition to the pragma's blocking wait.
-3. **Load test**: two `vestige-mcp` instances hammering the same file with mixed read/write traffic, verifying zero corruption and bounded write latency.
-
-Until those land, treat "two writer processes on one file" as experimental. For everything else on this page, WAL + the 5s busy timeout is the shipping story.
+v3 kept everything in one SQLite file, `vestige.db`, with a vector index beside it,
+and moved memories between devices with portable archives and `vestige sync`. The
+4.x default build links no SQLite and has no vector index, so none of that applies
+to a Strata log. The first 4.x launch on a v3 data directory imports `vestige.db`
+into a new log through `vestige-upgrade`, verifies it against a signed migration
+receipt, and leaves the v3 file byte-identical. See
+[Migrating to Vestige 4.0](MIGRATING-v4.md) and
+[Upgrading from v3](../README.md#upgrading-from-v3).

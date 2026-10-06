@@ -53,7 +53,7 @@ pub fn schema() -> Value {
         obj.insert(
             "description".to_string(),
             serde_json::json!(
-                "Mode-specific retrieval. lookup supports the lookup schema. reason supports query, depth, limit, scope/includeCrossScope, retention/similarity/type/tag/validAt/source filters, and token_budget, while rejecting lookup-only controls. contradictions supports topic, since, min_trust, limit, and scope/includeCrossScope; it rejects token_budget and lookup/reason filters instead of silently ignoring them."
+                "Pass handle: a full memory id or an exact tag. Every other field belongs to the legacy engine's lookup, reason and contradictions modes; Strata returns similarity_disabled for them. reason takes query, depth, limit, scope/includeCrossScope, the retention/score/type/tag/validAt/source filters and token_budget, and rejects lookup-only controls. contradictions takes topic, since, min_trust, limit and scope/includeCrossScope, and rejects token_budget and the lookup/reason filters instead of silently ignoring them."
             ),
         );
         // Drop the global `query` requirement — contradictions uses `topic`.
@@ -66,7 +66,7 @@ pub fn schema() -> Value {
                 "handle".to_string(),
                 serde_json::json!({
                     "type": "string",
-                    "description": "[handle mode] Exact or unique-prefix handle: memory id (uuid), commit sha (40-hex or >=7-char prefix), file path, symbol (snake/camel), test name, run id, tool-call id, or tag. No fuzzy or lexical matching. Passing this key (even empty) switches recall to handle mode: a resolvable handle returns the node payloads plus one-hop connection neighbors; anything else returns the handle_required error with exact/prefix candidates."
+                    "description": "[handle mode] Exact handle: a full memory id or an exact tag (case-sensitive); a unique id prefix of 8+ characters also resolves. Commit sha, file path, symbol, test name, run id and tool-call id handles resolve on the legacy engine only. No fuzzy or lexical matching. Passing this key (even empty) switches recall to handle mode: a resolvable handle returns the node payloads plus one-hop recorded-edge neighbors; anything else returns the handle_required error with exact candidates."
                 }),
             );
             props.insert(
@@ -75,7 +75,7 @@ pub fn schema() -> Value {
                     "type": "string",
                     "enum": ["lookup", "reason", "contradictions"],
                     "default": "lookup",
-                    "description": "'lookup' (default): fast hybrid search. 'reason': scoped deep pass with heuristic ranking, spreading activation, supersession, and contradiction analysis; its text is assembled from computed values; needs 'query' and requires current-source verification for material claims. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories."
+                    "description": "'lookup' (default): by handle; a free-text 'query' is legacy engine only. 'reason': legacy engine only; scoped supersession and contradiction analysis of 'query'; verify material claims against current sources. 'contradictions': legacy engine only; disagreement pairs for a 'topic', or recent memories."
                 }),
             );
             // reason (deep_reference) extra field.
@@ -238,7 +238,22 @@ const MAX_NEIGHBOR_EDGES: usize = 20;
 fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Value, String>> {
     let object = args.as_ref()?.as_object()?;
     if !object.contains_key("handle") {
-        return None;
+        // A Strata log has no free-text search, so a `query` there can only be
+        // an exact handle. Resolve it as one instead of refusing an id or a tag
+        // because it arrived under the other parameter name.
+        let query = object
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or("");
+        if query.is_empty() || !crate::strata_memory::is_strata_backend(storage.as_ref()) {
+            return None;
+        }
+        let resolution = storage.resolve_handle(query);
+        if resolution.ids.is_empty() && resolution.candidates.is_empty() {
+            return None; // not a handle: the search path answers similarity_disabled as before
+        }
+        return Some(Ok(handle_resolution_payload(storage, query, resolution)));
     }
     let handle = object
         .get("handle")
@@ -304,21 +319,28 @@ fn handle_resolution_payload(
     })
 }
 
-/// The `handle_required` payload for free text: candidates mined from the
-/// text's identifier-shaped tokens via the resolver (exact/prefix only).
+/// The `handle_required` payload for free text.
+///
+/// On a Strata log the candidates are what the whole string resolves to as a
+/// handle, and nothing else: the text is never split into words to look for a
+/// tag or an id inside it, because a word that happens to equal a tag is a
+/// keyword match, not a handle the caller declared. The legacy engine also
+/// tries each identifier-shaped token through its resolver.
 fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
     let mut candidates: Vec<(String, HandleKind)> = Vec::new();
     let text = free_text.trim();
     if !text.is_empty() {
-        // Whole string first, then each identifier-shaped token (bounded).
         let mut queries: Vec<&str> = vec![text];
-        queries.extend(
-            text.split(|c: char| {
-                !(c.is_alphanumeric() || c == '_' || c == '.' || c == '/' || c == '-')
-            })
-            .filter(|t| t.len() >= 3)
-            .take(8),
-        );
+        if !crate::strata_memory::is_strata_backend(storage.as_ref()) {
+            // Legacy engine: each identifier-shaped token too (bounded).
+            queries.extend(
+                text.split(|c: char| {
+                    !(c.is_alphanumeric() || c == '_' || c == '.' || c == '/' || c == '-')
+                })
+                .filter(|t| t.len() >= 3)
+                .take(8),
+            );
+        }
         for q in queries {
             let r = storage.resolve_handle(q);
             for id in &r.ids {
@@ -636,5 +658,132 @@ mod tests {
         )
         .await;
         assert!(out.is_ok(), "legacy lookup must keep working: {out:?}");
+    }
+}
+
+/// `query` on a Strata log: there is no free-text search there, so an exact
+/// id or tag passed as `query` resolves as a handle.
+#[cfg(test)]
+mod strata_query {
+    use super::*;
+    use vestige_core::IngestInput;
+
+    fn store() -> (Arc<Storage>, tempfile::TempDir, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let put = |content: &str, tags: &[&str]| {
+            storage
+                .ingest(IngestInput {
+                    content: content.to_string(),
+                    tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+        };
+        let tagged = put(
+            "RECALL_QUERY deploy timeout is two seconds",
+            &["deploy-env"],
+        );
+        let other = put("RECALL_QUERY unrelated note", &[]);
+        (storage, dir, tagged, other)
+    }
+
+    async fn recall(storage: &Arc<Storage>, args: Value) -> Result<Value, String> {
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        execute(storage, &cognitive, &OutputConfig::default(), Some(args)).await
+    }
+
+    #[tokio::test]
+    async fn an_exact_id_passed_as_query_resolves_that_memory() {
+        let (storage, _dir, tagged, _other) = store();
+        let out = recall(&storage, serde_json::json!({ "query": tagged }))
+            .await
+            .unwrap();
+        assert_eq!(out["kind"], "memory", "{out}");
+        assert_eq!(out["exact"], true, "{out}");
+        let nodes = out["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1, "{out}");
+        assert_eq!(nodes[0]["id"], serde_json::json!(tagged));
+        // The same value under `handle` gives the same answer.
+        let by_handle = recall(&storage, serde_json::json!({ "handle": tagged }))
+            .await
+            .unwrap();
+        assert_eq!(out, by_handle);
+    }
+
+    #[tokio::test]
+    async fn an_exact_tag_passed_as_query_resolves_the_tagged_memories() {
+        let (storage, _dir, tagged, _other) = store();
+        // Surrounding whitespace is trimmed, as it is for `handle`.
+        let out = recall(&storage, serde_json::json!({ "query": "  deploy-env " }))
+            .await
+            .unwrap();
+        assert_eq!(out["kind"], "tag", "{out}");
+        assert_eq!(out["exact"], true, "{out}");
+        let nodes = out["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1, "{out}");
+        assert_eq!(nodes[0]["id"], serde_json::json!(tagged));
+        // Tags are exact and case-sensitive: another spelling is not a handle.
+        assert!(
+            handle_flow(
+                &storage,
+                &Some(serde_json::json!({ "query": "Deploy-Env" }))
+            )
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn free_text_is_never_split_into_words_to_find_a_tag_inside_it() {
+        let (storage, _dir, tagged, _other) = store();
+        // One word of this sentence equals a stored tag. Before 4.2.0 that
+        // word was looked up on its own and the tagged memory came back as a
+        // candidate: a keyword match.
+        let sentence = serde_json::json!({
+            "handle": "", "query": "what changed in deploy-env yesterday",
+        });
+        let out = recall(&storage, sentence.clone()).await.unwrap();
+        assert_eq!(out["error"], "handle_required", "{out}");
+        assert_eq!(out["candidates"], serde_json::json!([]), "{out}");
+        assert!(!out.to_string().contains(&tagged), "{out}");
+
+        // The whole string as an exact tag is a declared handle.
+        let whole = recall(
+            &storage,
+            serde_json::json!({"handle": "", "query": " deploy-env "}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            whole["candidates"],
+            serde_json::json!([{"id": tagged, "kind": "tag"}]),
+            "{whole}"
+        );
+
+        // Same store, same call, same bytes.
+        let again = recall(&storage, sentence).await.unwrap();
+        assert_eq!(out.to_string(), again.to_string());
+    }
+
+    #[tokio::test]
+    async fn free_text_passed_as_query_is_still_not_answered_as_a_handle() {
+        let (storage, _dir, _tagged, _other) = store();
+        let args = Some(serde_json::json!({ "query": "what is the deploy timeout" }));
+        assert!(
+            handle_flow(&storage, &args).is_none(),
+            "free text must fall through to the search path"
+        );
+        let out = recall(
+            &storage,
+            serde_json::json!({ "query": "what is the deploy timeout" }),
+        )
+        .await;
+        let text = match out {
+            Ok(value) => value.to_string(),
+            Err(err) => err,
+        };
+        assert!(text.contains("similarity_disabled"), "{text}");
+        assert!(!text.contains("RECALL_QUERY"), "{text}");
     }
 }

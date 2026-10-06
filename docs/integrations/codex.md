@@ -1,10 +1,10 @@
 # Codex
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../../README.md) and the [4.0.0 changelog](../../CHANGELOG.md).
+> Written for Vestige 4.x.
 
-> Give Codex a brain that remembers between sessions.
+> Give Codex a record of what you decided, that carries across sessions.
 
-Codex has native MCP support through the `codex mcp` CLI. Add Vestige once and Codex can carry project preferences, architecture decisions, and past fixes across sessions.
+Codex has native MCP support through the `codex mcp` CLI. Add Vestige once and Codex can reload project decisions, corrections and past fixes in every session.
 
 ---
 
@@ -20,10 +20,10 @@ Codex has native MCP support through the `codex mcp` CLI. Add Vestige once and C
 ### 1. Add Vestige
 
 ```bash
-codex mcp add vestige -- /usr/local/bin/vestige-mcp
+codex mcp add vestige -- "$(which vestige-mcp)"
 ```
 
-> **Use an absolute path.** Run `which vestige-mcp` to find the installed binary.
+> **Use an absolute path.** The README install puts the binaries in `~/.local/bin`, and Homebrew puts them under its own prefix. Run `which vestige-mcp` and use what it prints.
 
 ### 2. Verify
 
@@ -39,8 +39,7 @@ Start Codex and ask:
 
 > "What MCP tools do you have access to?"
 
-You should see Vestige's tools listed (`session_start`, `recall`,
-`smart_ingest`, `memory`, and others).
+You should see Vestige's 16 tools listed, including `session_start`, `recall`, `smart_ingest`, `memory` and `receipt`.
 
 ---
 
@@ -48,13 +47,13 @@ You should see Vestige's tools listed (`session_start`, `recall`,
 
 In Codex:
 
-> "Remember that this project uses Rust with Axum and SQLite"
+> "Remember that this project uses Rust with Axum. Tag it `stack`."
 
 Start a **new session**, then ask:
 
-> "What stack does this project use?"
+> "Recall the `stack` tag from Vestige."
 
-It remembers.
+It comes back, with its memory id. Vestige 4.x finds a record by an exact handle (its id or an exact tag), not by resemblance, so name the tag when you save and when you ask. See [Getting Started](../GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
 
 ---
 
@@ -66,51 +65,47 @@ Minimal config:
 
 ```toml
 [mcp_servers.vestige]
-command = "/usr/local/bin/vestige-mcp"
+command = "<absolute path from which vestige-mcp>"
 ```
 
 After saving, restart Codex or start a new session.
 
 ---
 
-## Project-Specific Memory
+## Project-Specific Data Directory
 
-Use `--data-dir` to isolate memory per repo or workspace:
+Use `--data-dir` to keep a separate store per repo or workspace:
 
 ```bash
 codex mcp remove vestige
-codex mcp add vestige -- /usr/local/bin/vestige-mcp --data-dir /Users/you/projects/my-app/.vestige
+codex mcp add vestige -- "$(which vestige-mcp)" --data-dir /Users/you/projects/my-app/.vestige
 ```
 
 Equivalent manual config:
 
 ```toml
 [mcp_servers.vestige]
-command = "/usr/local/bin/vestige-mcp"
+command = "<absolute path from which vestige-mcp>"
 args = ["--data-dir", "/Users/you/projects/my-app/.vestige"]
 ```
 
 ---
 
-## Intelligent Memory Protocol
+## Agent Protocol
 
-MCP registration makes Vestige tools available to Codex. It does not, by itself,
-force Codex to call those tools before answering.
+MCP registration makes Vestige tools available to Codex. It does not, by itself, make Codex call them before it answers.
 
-For workspaces where Codex should behave like it has persistent cognitive
-memory, add an `AGENTS.md` file at the workspace or repo root:
+For workspaces where Codex should consult Vestige, add an `AGENTS.md` file at the workspace or repo root:
 
 ```markdown
-Before answering substantive prompts, consult Vestige using the current prompt
-plus project and user context. Use `session_start` for broad context,
-`recall(mode="lookup")` for quick memory checks, and
-`recall(mode="reason"|"contradictions")` for decisions, contradictions, or
-accuracy-sensitive questions. Compose memories into actions; do not summarize
-retrievals.
+At the start of a task, call Vestige `session_start` with include_intentions and
+include_status, and with context.codebase and context.repoPath for the checkout you
+are editing. Then call `recall` with handle set to the task's narrow topic tag.
+Recall by exact tag or id only. Compose what you find into actions; do not
+summarize retrievals.
 ```
 
-Then use the full protocol in
-[`codex-intelligent-memory.md`](./codex-intelligent-memory.md).
+Then use the full protocol in [`codex-intelligent-memory.md`](./codex-intelligent-memory.md).
 
 ---
 
@@ -136,7 +131,7 @@ Then use the full protocol in
 
 ```bash
 codex mcp remove vestige
-codex mcp add vestige -- /usr/local/bin/vestige-mcp
+codex mcp add vestige -- "$(which vestige-mcp)"
 ```
 </details>
 
@@ -155,4 +150,4 @@ codex mcp add vestige -- /usr/local/bin/vestige-mcp
 | Claude Code | [Setup](../CONFIGURATION.md#claude-code-one-liner) |
 | Claude Desktop | [Setup](../CONFIGURATION.md#claude-desktop-macos) |
 
-Your AI remembers everything, everywhere.
+Every agent on the machine shares one store through one writer. The first to start serves it, and the others attach.

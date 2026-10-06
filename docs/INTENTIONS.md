@@ -1,6 +1,6 @@
 # Evidence-aware intentions
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Written for Vestige 4.2.0. Intentions, graph journals and snapshots are stored in the Strata log.
 
 Vestige intentions connect a future plan to the premises and observations that
 support it. The first implementation is a deterministic, local evaluator: it
@@ -8,10 +8,10 @@ can show which plans are affected when supplied evidence changes, reconcile a
 completion against later evidence, and explain the current evaluation without
 performing the planned action.
 
-This document describes the implementation contract introduced by the
-evidence-aware intention change. Reproducible local checks are linked below.
-The research extensions described under [Boundaries](#boundaries) are not
-implemented behavior.
+This document describes the implementation contract of the evidence-aware
+intention graph. Reproducible local checks are linked below. The research
+extensions described under [Boundaries](#boundaries) are not implemented
+behavior.
 
 ## Public interface
 
@@ -30,8 +30,9 @@ command:
 }
 ```
 
-`scope` defaults to `user`. It selects an independent local namespace; it is
-not authentication, authorization, or a tenancy boundary. Use the host's real
+`scope` defaults to `user`. It selects an independent namespace in the log; it is
+not authentication, authorization, or a tenancy boundary. A scope is 1 to 128
+ASCII letters, digits, `.`, `_`, `-` or `/`. Use the host's real
 access controls to isolate users who must not read or change each other's data.
 
 `at` is optional and normally defaults to the current time. Supply an RFC 3339
@@ -277,7 +278,8 @@ same-scope commitment first:
 The result contains a source key such as
 `memory:00000000-0000-4000-8000-000000000001`, the memory ID, and either a
 SHA-256 content commitment in `value` or `null` when no currently available
-same-scope memory can be committed. It never copies the raw memory text into
+same-scope memory can be committed. The lookup is by exact memory id (a `mem-`
+id or a UUID), never by wording. It never copies the raw memory text into
 intention history. The adapter computes a digest of its local content snapshot;
 the digest alone does not prove the read, its origin, or the remembered claim.
 Unkeyed SHA-256 also does not conceal low-entropy content from guessing.
@@ -327,49 +329,51 @@ as before evaluation or after updating a referenced memory.
 
 ## Persistence and replay
 
-Each local scope has a current JSON snapshot and an append-only command journal
-in the same SQLite database as the rest of Vestige. A command that changes state
-commits the snapshot and journal row in one immediate transaction. SQLite
-serializes writers that share that database, so concurrent local processes do
-not commit the same next sequence number. An exact idempotent observation retry
-does not append another journal row because it does not change state.
+Each scope has a current JSON snapshot and an append-only command journal.
+Both are intention rows admitted to the Strata log, and they stay out of the
+ordinary reminder lists. A command that changes state appends one journal row
+and replaces the snapshot in a single admitted batch. The log has one writer,
+so concurrent agents on the machine do not commit the same next sequence
+number. An exact idempotent observation retry does not append another journal
+row because it does not change state.
 
-Each scope is deliberately bounded to 1,024 plans, 1,024 versions per plan, 128
-requirements per plan, 4,096 sources, 16,384 observation receipts, 16,384
-evaluations, 16,384 attention events, 20,000 committed changes, and a 16 MiB
-serialized snapshot. A single recorded observation response is limited to
-256 KiB; a change exceeding a resulting-state limit fails atomically. There is
-no intention-graph archive or compaction command
-in the first implementation. Before a scope reaches a cap, preserve a full
-backup of the SQLite database and start an explicit new scope with reviewed
-current plan definitions. The old scope keeps its history; Vestige does not
-silently discard it or claim indefinite capacity.
+Each scope is deliberately bounded. The journal holds at most 20,000 committed
+changes, a snapshot at most 16 MiB, and a single command at most 128 KiB.
+Plans, versions, requirements, sources and evaluations have their own caps in
+the evaluator. A change that would pass a limit fails whole. There is no
+intention-graph archive or compaction command. Before a scope reaches a cap,
+keep a full backup (`vestige backup <new-dir>`) and start an explicit new scope
+with reviewed current plan definitions. The old scope keeps its history;
+Vestige does not silently discard it or claim indefinite capacity.
+
+A command or scope that contains a probable credential is refused before
+anything is written, and the refusal names only the kind of credential.
 
 `replay` starts with an empty graph, applies the recorded commands at their
 recorded evaluation times, and compares every output digest and state digest
 with the journal. It then compares the rebuilt graph with the current snapshot.
-A successful replay establishes deterministic reproduction of the locally
-recorded state transitions.
+A successful replay establishes deterministic reproduction of the recorded
+state transitions.
 
 Replay does not:
 
 - refetch a source or reverify an external fact;
 - prove that a caller's observation was honest or authoritative;
 - prove external delivery, purchase, completion, or cancellation;
-- provide a cryptographic signature or protect against an attacker rewriting
-  the entire database and recomputing its digests; or
-- synchronize an intention graph across devices or separate databases.
+- check the log's signatures itself (`vestige strata-verify` and `receipt`
+  verify the log, and the journal rows sit inside it); or
+- synchronize an intention graph across devices.
 
 Portable, distributed, and exactly-once external execution require additional
-coordination. The local journal does not claim those properties.
+coordination. The journal does not claim those properties.
 
 ## Existing triggers
 
 The ordinary `set` and `check` path also supports the core trigger forms that
 were previously lost or only partly evaluated by the public adapter:
 
-- `activity` matches an explicit activity or condition against supplied context
-  events;
+- `activity` fires when a supplied context event equals its key exactly (the
+  `condition` when one is stored, otherwise the `activity`);
 - `recurring` accepts a named recurrence such as `daily`, `weekly`, or
   `fortnightly`, an `every ...` expression, or a bounded interval object, and
   can wrap a base trigger;
@@ -400,10 +404,48 @@ not infer a local time zone or daylight-saving policy.
 
 For `time`, provide exactly one RFC 3339 `at` or positive `in_minutes` value.
 For `context`, provide at least one of `codebase`, `file_pattern`, or `topic`;
-all supplied fields must match. `event.condition` and `activity.activity`
-case-insensitively substring-match `check.context.events`. A `compound` trigger
-recursively combines `all_of` and `any_of`; each nonempty list retains its usual
-all/any meaning, and both lists cannot be empty.
+all supplied fields must match exactly. A `compound` trigger recursively combines
+`all_of` and `any_of`; each nonempty list retains its usual all/any meaning,
+and both lists cannot be empty.
+
+Triggers are exact rules over handles you declare in `check.context`. They are
+not recall, they rank nothing, and nothing is matched by substring, by case
+folding or by pattern. A trigger fires on a clock (`time`, `recurring`, a
+deadline) or when a stored value equals a declared one byte for byte:
+
+| Stored trigger field | Fires when |
+| --- | --- |
+| `condition` (an `event` trigger) | `context.event`, or an entry of `context.events`, equals it |
+| `activity` (or its `condition`) | `context.event`, or an entry of `context.events`, equals it |
+| `codebase` | `context.codebase` equals it |
+| `file_pattern` | `context.file` equals it (an exact path; the field keeps its old name and is not a glob) |
+| `topic` | an entry of `context.topics` equals it |
+
+So an `activity` of `deploy` fires on the event `deploy`. It does not fire on
+`Deploy` or on `deploy finished on prod`. Use short keys such as
+`build_finished`, not sentences. `session_start` applies the same rules to its
+`context`, and a retrieval call that resurfaces intentions compares the handle
+it was asked for with the stored value in the same way. None of these reads the
+content of a record.
+
+Before 4.2.0 a `context` field or an `activity` trigger fired when its stored
+value appeared, ignoring case, anywhere inside a supplied string, and an
+`event.condition` matched ignoring case. A trigger written for that still exists
+and is still listed, but it fires only on the exact value. `list` and `check`
+say so for every text-keyed trigger: each carries `triggerMatching`, whose
+`firesOn` rows name the context field and the exact value to pass.
+
+A description is stored as written and never parsed. Before 4.2.0, `set` with
+no `trigger` read the description for phrases such as "in 30 minutes", "when
+..." or "urgent" and inferred a trigger and a priority from them. It no longer
+does: with no `trigger` and no `deadline` the intention is manual, never fires
+on its own, and the response says so. Triggers that were inferred that way
+earlier are kept as stored and marked `inferredFromText` when listed. No tag is
+added to an intention that the caller did not pass.
+
+`list` returns intentions in one documented order, echoed as `order`: priority
+high to low, then creation time old to new, then id. With `filter_status:
+"all"` the status groups come first (active, fulfilled, cancelled, snoozed).
 
 Trigger trees are limited to depth 5 and 32 nodes, with at most 16 entries in
 each compound list. Duration, recurrence, and snooze intervals are 1 through
@@ -427,10 +469,11 @@ include `inMinutes`, `filePattern`, `allOf`, `anyOf`, `nextOccurrence`,
 `events`.
 
 One `check` evaluates and persists snooze, reminder-count, and recurrence
-changes as a single local SQLite compare-and-swap batch. A concurrent conflict
-rejects and rolls back the whole batch so the caller can retry. This protects
-local state consistency; it does not establish exactly-once presentation or
-delivery outside Vestige.
+changes as a single admitted batch. Each intention in the batch must still
+match what the check read. If one changed in between, the whole batch is
+refused with "changed during check; retry the check". This protects state
+consistency; it does not establish exactly-once presentation or delivery
+outside Vestige.
 
 These scheduler triggers and the evidence-aware intention graph share the
 public `intention` tool, but they remain distinct contracts in the first
@@ -440,16 +483,18 @@ and a queued graph intervention is not a delivered recurring notification.
 ## Reproducible checks
 
 The [synthetic MCP demo](../scripts/demo-intentions.py) drives the public
-`intention` tool through an isolated subprocess and temporary SQLite database.
+`intention` tool through an isolated subprocess and a temporary data directory.
 The [core intention graph tests](../crates/vestige-core/src/intention_graph.rs)
 cover selective reevaluation, optimistic definition versions, evidence
 reconciliation, absence coverage, attention state, caps, and replay. The
-[public trigger tests](../crates/vestige-mcp/src/tools/intention_unified.rs)
+[Strata journal tests](../crates/vestige-mcp/src/intention_graph_log.rs) cover
+replay across a reopen, a replaced digest, and refusal of a credential in a
+command or scope. The [public trigger tests](../crates/vestige-mcp/src/tools/intention_unified.rs)
 cover recurrence, compound and activity triggers, snooze, and duplicate checks.
-The [local intention claim tests](../crates/vestige-core/src/storage/intention_claim.rs)
-cover two-connection contention and whole-batch rollback. These checks exercise
-synthetic local behavior; they do not verify a product fact, external delivery,
-or an external action.
+The [Strata store tests](../crates/vestige-mcp/src/strata_memory.rs) cover a
+stale-snapshot check and whole-batch delivery. These checks exercise synthetic
+local behavior; they do not verify a product fact, external delivery, or an
+external action.
 
 ## Boundaries
 
@@ -459,11 +504,11 @@ completion reconciliation, explicit shared prerequisites and conflicts, local
 queue/cooldown behavior, explanations, and atomic journal replay.
 
 It does not provide autonomous connectors, real notification delivery,
-semantic opportunity inference, model-generated premise extraction, causal
-proof, purchasing, refunds, or other external actions. Those require separate
+opportunity inference, model-generated premise extraction, causal proof,
+purchasing, refunds, or other external actions. Those require separate
 adapters, authority checks, and evidence. No worldwide-first, market-uniqueness,
 performance, reliability, or outcome-improvement claim follows from this
 implementation. Establish such claims with an independently reviewed frozen
 evaluation and publish its failures as well as its successes.
 
-Event trigger conditions match an explicitly supplied `context.event` or entry in `context.events` exactly, ignoring case. Activity completion patterns retain substring matching. A zero-minute one-shot timer is immediate; recurring intervals must be positive.
+A zero-minute one-shot timer is immediate; recurring intervals must be positive.

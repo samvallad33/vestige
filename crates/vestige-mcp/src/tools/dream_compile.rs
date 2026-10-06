@@ -30,8 +30,8 @@ pub fn schema() -> Value {
         "type": "object",
         "properties": {
             "scope":{"type":"string","default":"user","description":"Namespace to dream over."},
-            "memory_count":{"type":"integer","minimum":5,"maximum":500,"default":50,"description":"Top memories by retention strength entering the dream."},
-            "max_prs":{"type":"integer","minimum":0,"maximum":50,"default":20,"description":"Review-PR budget; contradictions file first, then REM insights. No memory is written autonomously either way."}
+            "memory_count":{"type":"integer","minimum":5,"maximum":500,"default":50,"description":"Top memories by FSRS retention entering the replay."},
+            "max_prs":{"type":"integer","minimum":0,"maximum":50,"default":20,"description":"Legacy engine only: review-PR budget, contradictions first. Strata files no PRs. No memory is written autonomously either way."}
         }
     })
 }

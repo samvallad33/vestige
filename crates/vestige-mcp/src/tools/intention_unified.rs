@@ -6,6 +6,13 @@
 //! - complete_intention -> action: "update" with status: "complete"
 //! - snooze_intention -> action: "update" with status: "snooze"
 //! - list_intentions -> action: "list"
+//!
+//! Triggers are deterministic. A trigger fires on a clock (`time`,
+//! `recurring`, a deadline) or on exact, case-sensitive equality between a
+//! value stored in the trigger and a handle the caller declares in the check
+//! context: an event key, a topic or tag, a file path, a codebase name.
+//! Nothing is matched by substring, and a description is never parsed for a
+//! time or a condition.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -41,7 +48,7 @@ pub fn schema() -> Value {
         "$defs": {
             "trigger": {
                 "type": "object",
-                "description": "A simple, recurring, activity, or bounded compound trigger.",
+                "description": "A simple, recurring, activity, or bounded compound trigger. Text fields are exact handles: each fires only on exact, case-sensitive equality with a value declared in the check context. No substring or pattern matching.",
                 "properties": {
                     "type": {
                         "type": "string",
@@ -58,18 +65,30 @@ pub fn schema() -> Value {
                         "maximum": MAX_DURATION_MINUTES,
                         "description": "Minutes from creation; zero fires immediately"
                     },
-                    "codebase": { "type": "string", "maxLength": MAX_TRIGGER_TEXT_BYTES },
-                    "file_pattern": { "type": "string", "maxLength": MAX_TRIGGER_TEXT_BYTES },
-                    "topic": { "type": "string", "maxLength": MAX_TRIGGER_TEXT_BYTES },
+                    "codebase": {
+                        "type": "string",
+                        "maxLength": MAX_TRIGGER_TEXT_BYTES,
+                        "description": "Exact codebase name. Fires when context.codebase equals it."
+                    },
+                    "file_pattern": {
+                        "type": "string",
+                        "maxLength": MAX_TRIGGER_TEXT_BYTES,
+                        "description": "Exact file path (the field keeps its old name; it is not a glob or a substring). Fires when context.file equals it."
+                    },
+                    "topic": {
+                        "type": "string",
+                        "maxLength": MAX_TRIGGER_TEXT_BYTES,
+                        "description": "Exact topic or tag. Fires when an entry of context.topics equals it."
+                    },
                     "condition": {
                         "type": "string",
                         "maxLength": MAX_TRIGGER_TEXT_BYTES,
-                        "description": "Case-insensitive text matched against check context events"
+                        "description": "Event key, e.g. 'build_finished'. Fires when context.event or an entry of context.events equals it exactly (case-sensitive)."
                     },
                     "activity": {
                         "type": "string",
                         "maxLength": MAX_TRIGGER_TEXT_BYTES,
-                        "description": "Activity whose completion is matched against check context events"
+                        "description": "Activity key, e.g. 'deploy'. Fires when context.event or an entry of context.events equals it exactly; with a condition set, the condition is the key instead."
                     },
                     "recurrence": {
                         "description": "Named cadence or a bounded absolute interval. Fortnightly is exactly 20,160 minutes.",
@@ -115,7 +134,7 @@ pub fn schema() -> Value {
             // SET action parameters
             "description": {
                 "type": "string",
-                "description": "[set] What to remember to do"
+                "description": "[set] What to remember to do. Stored as written; never parsed for a time, a condition or a priority. Pass trigger, deadline and priority explicitly."
             },
             "trigger": {
                 "$ref": "#/$defs/trigger",
@@ -152,9 +171,9 @@ pub fn schema() -> Value {
             // CHECK action parameters
             "context": {
                 "type": "object",
-                "description": "[check] Current context for matching intentions",
+                "description": "[check] Declared handles for this check. A trigger fires only when one of them equals its stored value exactly (case-sensitive).",
                 "properties": {
-                    "event": {"type": "string", "description": "Observed event key; exact case-insensitive match to an event trigger condition"},
+                    "event": {"type": "string", "description": "Observed event or activity key; fires an event or activity trigger whose key equals it exactly"},
                     "current_time": {
                         "type": "string",
                         "format": "date-time",
@@ -163,24 +182,24 @@ pub fn schema() -> Value {
                     "codebase": {
                         "type": "string",
                         "maxLength": MAX_TRIGGER_TEXT_BYTES,
-                        "description": "Current codebase/project name"
+                        "description": "Current codebase name; fires a codebase trigger whose name equals it"
                     },
                     "file": {
                         "type": "string",
                         "maxLength": MAX_TRIGGER_TEXT_BYTES,
-                        "description": "Current file path"
+                        "description": "Current file path; fires a file trigger whose path equals it"
                     },
                     "topics": {
                         "type": "array",
                         "maxItems": MAX_CONTEXT_ITEMS,
                         "items": { "type": "string", "maxLength": MAX_TRIGGER_TEXT_BYTES },
-                        "description": "Current discussion topics"
+                        "description": "Current topics or tags; each fires a topic trigger whose value equals it"
                     },
                     "events": {
                         "type": "array",
                         "maxItems": MAX_CONTEXT_ITEMS,
                         "items": { "type": "string", "maxLength": MAX_TRIGGER_TEXT_BYTES },
-                        "description": "Recent event or activity descriptions for event/activity triggers"
+                        "description": "Recent event or activity keys; each fires an event or activity trigger whose key equals it. Descriptions in prose never match."
                     }
                 }
             },
@@ -614,10 +633,12 @@ impl TriggerSpec {
                     .activity
                     .clone()
                     .ok_or("Stored activity has no activity")?;
-                let match_text = self.condition.clone().unwrap_or_else(|| activity.clone());
+                // The key a check must declare: the condition when one is
+                // stored, else the activity itself. Exact, like an event.
+                let key = self.condition.clone().unwrap_or_else(|| activity.clone());
                 Ok(ProspectiveTrigger::ActivityBased {
                     activity,
-                    completion_pattern: TriggerPattern::contains(match_text),
+                    completion_pattern: TriggerPattern::exact(key.trim()),
                 })
             }
             "recurring" => {
@@ -673,9 +694,18 @@ impl TriggerSpec {
             ProspectiveTrigger::ContextBased { context_match } => {
                 Self::from_context_pattern(context_match)
             }
-            ProspectiveTrigger::ActivityBased { activity, .. } => Self {
+            ProspectiveTrigger::ActivityBased {
+                activity,
+                completion_pattern,
+            } => Self {
                 trigger_type: Some("activity".into()),
                 activity: Some(activity.clone()),
+                // Keep a key that differs from the activity, so a re-armed
+                // recurrence still fires on the same declared key.
+                condition: match completion_pattern {
+                    TriggerPattern::Exact(key) if key != activity => Some(key.clone()),
+                    _ => None,
+                },
                 ..Self::empty()
             },
             ProspectiveTrigger::Recurring {
@@ -764,16 +794,107 @@ impl TriggerSpec {
             ..Self::empty()
         }
     }
+
+    /// The exact handles this trigger fires on: one row per text-keyed leaf,
+    /// in stored order, naming the check-context field and the value it must
+    /// equal. Clock leaves add no row.
+    fn exact_handles(&self, rows: &mut Vec<Value>) {
+        let mut row = |field: &str, value: &str| {
+            rows.push(serde_json::json!({ "field": field, "equals": value.trim() }));
+        };
+        let kind = self
+            .trigger_type
+            .as_deref()
+            .unwrap_or_else(|| self.inferred_type());
+        match kind {
+            "event" => {
+                if let Some(key) = &self.condition {
+                    row(EVENT_FIELDS, key);
+                }
+            }
+            "activity" => {
+                if let Some(key) = self.condition.as_ref().or(self.activity.as_ref()) {
+                    row(EVENT_FIELDS, key);
+                }
+            }
+            "context" => {
+                if let Some(name) = &self.codebase {
+                    row("context.codebase", name);
+                }
+                if let Some(path) = &self.file_pattern {
+                    row("context.file", path);
+                }
+                if let Some(topic) = &self.topic {
+                    row("context.topics[]", topic);
+                }
+            }
+            "recurring" => {
+                if let Some(base) = &self.base {
+                    base.exact_handles(rows);
+                }
+            }
+            "compound" => {
+                for child in self.all_of.iter().chain(self.any_of.iter()) {
+                    child.exact_handles(rows);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Where a check declares an event or activity key.
+const EVENT_FIELDS: &str = "context.event or context.events[]";
+
+/// Shown beside every text-keyed trigger a `list` or `check` returns.
+const EXACT_MATCH_NOTE: &str = "Fires only when a field in firesOn equals its value exactly (case-sensitive) in an intention check context. Since 4.2.0 a trigger no longer fires on a substring or on a different case, so one written for that will not fire until the check passes the value exactly as shown.";
+
+/// Shown beside an intention whose trigger the removed text parser inferred.
+const INFERRED_TRIGGER_NOTE: &str = "This trigger was inferred from the description by the text parser removed in 4.2.0. It is kept as stored. Replace it with an explicit trigger if the stored one is not what you meant.";
+
+/// How a stored intention's trigger fires, for `list` and `check`. `None` when
+/// there is nothing to explain: a manual intention, or a clock-only trigger
+/// the caller set explicitly. An unreadable trigger is reported separately,
+/// as `invalid_trigger`.
+fn trigger_matching(intention: &IntentionRecord) -> Option<Value> {
+    if intention.trigger_type == "manual" && intention.trigger_data.trim() == "{}" {
+        return None;
+    }
+    let spec: TriggerSpec = serde_json::from_str(&intention.trigger_data).ok()?;
+    let mut rows = Vec::new();
+    spec.exact_handles(&mut rows);
+    let inferred = intention.source_type == "nlp";
+    if rows.is_empty() && !inferred {
+        return None;
+    }
+    let mut out = serde_json::Map::new();
+    if !rows.is_empty() {
+        out.insert("rule".into(), Value::String("exact".into()));
+        out.insert("firesOn".into(), Value::Array(rows));
+        out.insert("note".into(), Value::String(EXACT_MATCH_NOTE.into()));
+    }
+    if inferred {
+        out.insert("inferredFromText".into(), Value::Bool(true));
+        out.insert(
+            "inferredNote".into(),
+            Value::String(INFERRED_TRIGGER_NOTE.into()),
+        );
+    }
+    Some(Value::Object(out))
 }
 
 // ============================================================================
 // MAIN EXECUTE FUNCTION
 // ============================================================================
 
-/// Execute the unified intention tool
+/// Execute the unified intention tool.
+///
+/// The cognitive engine is accepted for the shared tool signature and not
+/// read: no intention action consults in-process state, so the same store and
+/// the same call give the same answer.
 pub async fn execute(
     storage: &Arc<Storage>,
-    cognitive: &Arc<Mutex<CognitiveEngine>>,
+    _cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
     let args: UnifiedIntentionArgs = match args {
@@ -793,8 +914,8 @@ pub async fn execute(
 
     validate_inputs(&args)?;
     match args.action.as_str() {
-        "set" => execute_set(storage, cognitive, &args).await,
-        "check" => execute_check(storage, cognitive, &args).await,
+        "set" => execute_set(storage, &args).await,
+        "check" => execute_check(storage, &args).await,
         "update" => execute_update(storage, &args).await,
         "list" => execute_list(storage, &args).await,
         _ => Err(format!(
@@ -912,11 +1033,7 @@ fn attach_write_receipt(storage: &Arc<Storage>, body: &mut Value, id: &str) {
 }
 
 /// Execute "set" action - create a new intention
-async fn execute_set(
-    storage: &Arc<Storage>,
-    cognitive: &Arc<Mutex<CognitiveEngine>>,
-    args: &UnifiedIntentionArgs,
-) -> Result<Value, String> {
+async fn execute_set(storage: &Arc<Storage>, args: &UnifiedIntentionArgs) -> Result<Value, String> {
     let description = args
         .description
         .as_ref()
@@ -933,46 +1050,11 @@ async fn execute_set(
     let now = Utc::now();
     let id = Uuid::new_v4().to_string();
 
-    // ====================================================================
-    // COGNITIVE: NLP parsing + intent auto-tagging
-    // ====================================================================
-    let mut nlp_parsed = false;
-    let mut nlp_trigger = None;
-    let mut nlp_priority = None;
-    let mut tags = Vec::new();
-
-    if let Ok(cog) = cognitive.try_lock() {
-        // 8A. Try NLP parsing when no explicit trigger is provided
-        if args.trigger.is_none()
-            && let Ok(parsed) = cog.intention_parser.parse(description)
-        {
-            nlp_parsed = true;
-            // Preserve the full parsed trigger tree, including recurrence base,
-            // cadence, next occurrence, activity, and compound branches.
-            nlp_trigger = Some(TriggerSpec::from_prospective(&parsed.trigger));
-
-            // Use NLP-detected priority if user didn't specify one
-            if args.priority.is_none() {
-                nlp_priority = Some(parsed.priority);
-            }
-        }
-
-        // Auto-tag with detected intent
-        let intent_result = cog.intent_detector.detect_intent();
-        if intent_result.confidence > 0.5 {
-            let intent_tag = format!("intent:{:?}", intent_result.primary_intent);
-            let intent_tag = if intent_tag.len() > 50 {
-                format!("{}...", &intent_tag[..intent_tag.floor_char_boundary(47)])
-            } else {
-                intent_tag
-            };
-            tags.push(intent_tag);
-        }
-    }
-
-    // Determine and validate trigger (explicit > NLP > manual). Manual
-    // intentions preserve the existing non-triggering `{}` storage shape.
-    let mut normalized_trigger = args.trigger.clone().or(nlp_trigger);
+    // The description is stored as written. It is never parsed for a time, a
+    // condition or a priority, and no tag is inferred for it: the trigger,
+    // deadline and priority are what the caller passed, and nothing else.
+    // An intention with no trigger keeps the non-triggering `{}` shape.
+    let mut normalized_trigger = args.trigger.clone();
     let (trigger_type, trigger_data, trigger_at, next_occurrence) =
         if let Some(trigger) = &mut normalized_trigger {
             let mut nodes = 0;
@@ -1004,27 +1086,12 @@ async fn execute_set(
             ("manual".to_string(), "{}".to_string(), None, None)
         };
 
-    // Parse priority (explicit > NLP > normal)
+    // Priority is the declared one, or normal.
     let priority = match args.priority.as_deref() {
         Some("low") => 1,
         Some("high") => 3,
         Some("critical") => 4,
-        Some("normal") => 2,
-        Some(_) => 2,
-        None => {
-            // Use NLP-detected priority if available
-            if let Some(nlp_p) = nlp_priority {
-                use vestige_core::neuroscience::prospective_memory::Priority;
-                match nlp_p {
-                    Priority::Low => 1,
-                    Priority::Normal => 2,
-                    Priority::High => 3,
-                    Priority::Critical => 4,
-                }
-            } else {
-                2 // normal default
-            }
-        }
+        _ => 2,
     };
 
     // Parse deadline
@@ -1056,10 +1123,10 @@ async fn execute_set(
         reminder_count: 0,
         last_reminded_at: None,
         notes: None,
-        tags,
+        tags: Vec::new(),
         related_memories: vec![],
         snoozed_until: None,
-        source_type: if nlp_parsed { "nlp" } else { "mcp" }.to_string(),
+        source_type: "mcp".to_string(),
         source_data: None,
         scope,
     };
@@ -1077,17 +1144,26 @@ async fn execute_set(
         "trigger": serde_json::from_str::<Value>(&record.trigger_data).unwrap_or(Value::Null),
         "nextOccurrence": next_occurrence.map(|dt| dt.to_rfc3339()),
         "deadline": deadline.map(|dt| dt.to_rfc3339()),
-        "nlpParsed": nlp_parsed,
         "scope": record.effective_scope(),
     });
+    if let Some(matching) = trigger_matching(&record) {
+        response["triggerMatching"] = matching;
+    }
+    if record.trigger_type == "manual" && deadline.is_none() {
+        // Said plainly, because a description such as "in 30 minutes" used to
+        // become a time trigger and no longer does.
+        response["note"] = Value::String(NO_TRIGGER_NOTE.into());
+    }
     attach_write_receipt(storage, &mut response, &id);
     Ok(response)
 }
 
+/// Returned by `set` when neither a trigger nor a deadline was passed.
+const NO_TRIGGER_NOTE: &str = "No trigger and no deadline were passed, so this intention never fires on its own; it stays in the list until it is completed or cancelled. The description is not parsed for a time or a condition: pass trigger (for example {\"type\":\"time\",\"in_minutes\":30}) or deadline.";
+
 /// Execute "check" action - find triggered intentions
 async fn execute_check(
     storage: &Arc<Storage>,
-    cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: &UnifiedIntentionArgs,
 ) -> Result<Value, String> {
     let now = args
@@ -1154,27 +1230,19 @@ async fn execute_check(
         }
     }
 
-    // ====================================================================
-    // COGNITIVE: Update prospective memory context
-    // ====================================================================
-    if args.context.is_some()
-        && let Ok(cog) = cognitive.try_lock()
-    {
-        // Update context on prospective memory (triggers internal monitoring)
-        let _ = cog
-            .prospective_memory
-            .update_context(prospective_ctx.clone());
-    }
-
     // Always inspect snoozed records so an expired snooze can wake on this
     // check. `include_snoozed` controls only whether records whose snooze is
     // still in force are returned as pending.
     let scope = requested_scope(args);
+    // Active first, then snoozed, each in `intention_order`: the order rows
+    // are evaluated, claimed and returned in.
     let mut intentions = storage.get_active_intentions().map_err(|e| e.to_string())?;
     intentions.retain(|intention| in_requested_scope(intention, scope));
-    let snoozed = storage
+    intentions.sort_by(intention_order);
+    let mut snoozed = storage
         .get_intentions_by_status("snoozed")
         .map_err(|e| e.to_string())?;
+    snoozed.sort_by(intention_order);
     use std::collections::HashSet;
     let seen: HashSet<String> = intentions.iter().map(|i| i.id.clone()).collect();
     for intention in snoozed
@@ -1284,7 +1352,7 @@ async fn execute_check(
             .as_ref()
             .and_then(|value| value.next_occurrence.clone());
 
-        let item = serde_json::json!({
+        let mut item = serde_json::json!({
             "id": intention.id,
             "description": intention.content,
             "status": intention.status,
@@ -1304,6 +1372,11 @@ async fn execute_check(
             "nextOccurrence": next_occurrence,
             "invalid_trigger": invalid_trigger,
         });
+        // The exact handles this trigger fires on, so a pending intention
+        // shows what the next check has to declare.
+        if let Some(matching) = trigger_matching(&intention) {
+            item["triggerMatching"] = matching;
+        }
 
         if should_deliver {
             triggered.push(item);
@@ -1441,32 +1514,26 @@ async fn execute_list(
 ) -> Result<Value, String> {
     let filter_status = args.filter_status.as_deref().unwrap_or("active");
 
+    // Every group is put in one total order here, whatever order the store
+    // returned it in, so the same store lists the same way every time.
+    let group = |status: &str| -> Result<Vec<IntentionRecord>, String> {
+        let mut rows = if status == "active" {
+            storage.get_active_intentions()
+        } else {
+            storage.get_intentions_by_status(status)
+        }
+        .map_err(|e| e.to_string())?;
+        rows.sort_by(intention_order);
+        Ok(rows)
+    };
     let intentions = if filter_status == "all" {
-        // Get all by combining different statuses
-        let mut all = storage.get_active_intentions().map_err(|e| e.to_string())?;
-        all.extend(
-            storage
-                .get_intentions_by_status("fulfilled")
-                .map_err(|e| e.to_string())?,
-        );
-        all.extend(
-            storage
-                .get_intentions_by_status("cancelled")
-                .map_err(|e| e.to_string())?,
-        );
-        all.extend(
-            storage
-                .get_intentions_by_status("snoozed")
-                .map_err(|e| e.to_string())?,
-        );
+        let mut all = group("active")?;
+        for status in ["fulfilled", "cancelled", "snoozed"] {
+            all.extend(group(status)?);
+        }
         all
-    } else if filter_status == "active" {
-        // Use get_active_intentions for proper priority ordering
-        storage.get_active_intentions().map_err(|e| e.to_string())?
     } else {
-        storage
-            .get_intentions_by_status(filter_status)
-            .map_err(|e| e.to_string())?
+        group(filter_status)?
     };
 
     let scope = requested_scope(args);
@@ -1487,7 +1554,7 @@ async fn execute_list(
         .take(limit)
         .map(|i| {
             let is_overdue = i.deadline.map(|d| d < now).unwrap_or(false);
-            serde_json::json!({
+            let mut item = serde_json::json!({
                 "id": i.id,
                 "description": i.content,
                 "status": i.status,
@@ -1503,7 +1570,17 @@ async fn execute_list(
                 "deadline": i.deadline.map(|d| d.to_rfc3339()),
                 "isOverdue": is_overdue,
                 "snoozedUntil": i.snoozed_until.map(|d| d.to_rfc3339()),
-            })
+            });
+            // A stored trigger is never dropped from the list. One that
+            // cannot be evaluated says why; one keyed on text says exactly
+            // what a check has to declare for it to fire.
+            if let Err(reason) = stored_prospective_trigger(&i) {
+                item["invalid_trigger"] = Value::String(reason);
+            }
+            if let Some(matching) = trigger_matching(&i) {
+                item["triggerMatching"] = matching;
+            }
+            item
         })
         .collect();
 
@@ -1512,7 +1589,21 @@ async fn execute_list(
         "intentions": items,
         "total": items.len(),
         "status": filter_status,
+        "order": if filter_status == "all" {
+            "status group (active, fulfilled, cancelled, snoozed), then priority desc, createdAt asc, id asc"
+        } else {
+            "priority desc, createdAt asc, id asc"
+        },
     }))
+}
+
+/// The one order intentions are listed and checked in: priority high to low,
+/// then creation time old to new, then id as the tiebreak.
+fn intention_order(a: &IntentionRecord, b: &IntentionRecord) -> std::cmp::Ordering {
+    b.priority
+        .cmp(&a.priority)
+        .then(a.created_at.cmp(&b.created_at))
+        .then(a.id.cmp(&b.id))
 }
 
 // ============================================================================
@@ -1546,9 +1637,10 @@ pub(crate) fn stored_prospective_trigger(
         .map_err(|error| format!("Stored trigger is not evaluable: {error}"))
 }
 
-/// The retrieval-side cues an intention can fire on: the query text (treated
-/// both as an observed event for event/activity triggers and as an active
-/// topic for context triggers), any explicit context topics, and the clock.
+/// The handles a retrieval call declares, which an intention can fire on: the
+/// handle it asked for (`query`), any context topics, the scope, and the
+/// clock. Each is compared for exact equality with a stored trigger value;
+/// none is scanned as text.
 pub(crate) struct ProspectiveCue {
     pub query: String,
     pub topics: Vec<String>,
@@ -1556,8 +1648,8 @@ pub(crate) struct ProspectiveCue {
 }
 
 impl ProspectiveCue {
-    /// All strings a `TopicActive`/`InCodebase`/`FilePattern` containment
-    /// check may match against.
+    /// The declared handles a topic trigger is compared with: the context
+    /// topics, then the handle the call asked for.
     fn context_sources(&self) -> Vec<String> {
         let mut sources = self.topics.clone();
         sources.push(self.query.clone());
@@ -1568,7 +1660,7 @@ impl ProspectiveCue {
         let mut context = ProspectiveContext::new();
         context.timestamp = self.now;
         // Scope names are project names in this system; an InCodebase
-        // trigger may legitimately fire on the namespace being queried.
+        // trigger fires when the scope queried equals its codebase name.
         context.project_name = Some(scope.to_string());
         context.active_topics = self.context_sources();
         context
@@ -1579,29 +1671,15 @@ impl ProspectiveCue {
     }
 }
 
-/// Minimum needle length for a text cue to count as evidence. A 2-3 character
-/// condition ("go", "run") is contained in half of all queries and would
-/// surface intentions on every recall — the opposite of high-confidence.
-const MIN_CUE_NEEDLE_CHARS: usize = 4;
-/// Text-cue confidence: 0.7 base + specificity up to 12 characters. The
-/// 0.75 high-confidence bar then requires needles of >= 4 characters.
-fn text_cue_confidence(needle: &str) -> Option<f64> {
-    let chars = needle.trim().chars().count();
-    if chars < MIN_CUE_NEEDLE_CHARS {
-        return None;
-    }
-    Some(0.7 + 0.3 * (chars as f64 / 12.0).min(1.0))
-}
-
-/// Best-effort citation: WHICH trigger condition fired and on WHAT cue text.
-/// The surface VERDICT is never taken from here — it comes from
-/// `is_triggered_at` — this only explains a verdict that already happened.
-/// Returns (cue_type, explanation, confidence).
+/// The citation for a trigger that fired: which stored value equalled which
+/// declared handle. The verdict is never taken from here: it comes from
+/// `is_triggered_at`, and this names the equality that verdict rests on.
+/// Returns (cue_type, explanation).
 fn trigger_cue_evidence(
     trigger: &ProspectiveTrigger,
     cue: &ProspectiveCue,
     scope: &str,
-) -> Option<(&'static str, String, f64)> {
+) -> Option<(&'static str, String)> {
     match trigger {
         ProspectiveTrigger::TimeBased { at } => {
             if cue.now < *at {
@@ -1613,7 +1691,6 @@ fn trigger_cue_evidence(
                     "scheduled time reached ({})",
                     at.format("%Y-%m-%d %H:%M UTC")
                 ),
-                1.0,
             ))
         }
         ProspectiveTrigger::DurationBased { trigger_at, .. } => {
@@ -1621,18 +1698,15 @@ fn trigger_cue_evidence(
             Some((
                 "time",
                 format!("delay elapsed ({})", at.format("%Y-%m-%d %H:%M UTC")),
-                1.0,
             ))
         }
         ProspectiveTrigger::EventBased { pattern, condition } => {
             if !pattern.matches(&cue.query) {
                 return None;
             }
-            let confidence = text_cue_confidence(condition)?;
             Some((
                 "event",
-                format!("query matches event condition '{condition}'"),
-                confidence,
+                format!("the handle asked for equals event key '{condition}'"),
             ))
         }
         ProspectiveTrigger::ActivityBased {
@@ -1642,11 +1716,9 @@ fn trigger_cue_evidence(
             if !completion_pattern.matches(&cue.query) {
                 return None;
             }
-            let confidence = text_cue_confidence(activity)?;
             Some((
                 "activity",
-                format!("query indicates activity '{activity}' was completed"),
-                confidence,
+                format!("the handle asked for equals the key of activity '{activity}'"),
             ))
         }
         ProspectiveTrigger::ContextBased { context_match } => {
@@ -1661,33 +1733,20 @@ fn trigger_cue_evidence(
             if !due {
                 return None;
             }
-            let (_, inner, confidence) = trigger_cue_evidence(base, cue, scope)?;
-            Some((
-                "recurring",
-                format!("recurring schedule due; {inner}"),
-                confidence,
-            ))
+            let (_, inner) = trigger_cue_evidence(base, cue, scope)?;
+            Some(("recurring", format!("recurring schedule due; {inner}")))
         }
         ProspectiveTrigger::Compound { all_of, any_of } => {
-            let mut cues: Vec<(&'static str, String, f64)> = Vec::new();
-            for branch in all_of.iter().chain(any_of.iter()) {
-                if let Some(evidence) = trigger_cue_evidence(branch, cue, scope) {
-                    cues.push(evidence);
-                }
-            }
+            let cues: Vec<String> = all_of
+                .iter()
+                .chain(any_of.iter())
+                .filter_map(|branch| trigger_cue_evidence(branch, cue, scope))
+                .map(|(_, text)| text)
+                .collect();
             if cues.is_empty() {
                 return None;
             }
-            let confidence = cues
-                .iter()
-                .map(|(_, _, c)| *c)
-                .fold(f64::INFINITY, f64::min);
-            let explanation = cues
-                .into_iter()
-                .map(|(_, text, _)| text)
-                .collect::<Vec<_>>()
-                .join("; ");
-            Some(("compound", explanation, confidence))
+            Some(("compound", cues.join("; ")))
         }
     }
 }
@@ -1696,112 +1755,51 @@ fn context_cue_evidence(
     pattern: &ContextPattern,
     cue: &ProspectiveCue,
     scope: &str,
-) -> Option<(&'static str, String, f64)> {
-    let project = cue.context(scope).project_name;
+) -> Option<(&'static str, String)> {
     match pattern {
-        ContextPattern::InCodebase(name) => {
-            let matched = project
-                .as_ref()
-                .map(|project| project.to_lowercase().contains(&name.to_lowercase()))
-                .unwrap_or(false);
-            if !matched {
-                return None;
-            }
-            let confidence = text_cue_confidence(name)?;
-            Some((
+        ContextPattern::InCodebase(name) => (scope == name).then(|| {
+            (
                 "context",
-                format!("query scope matches codebase '{name}'"),
-                confidence,
-            ))
-        }
-        ContextPattern::FilePattern(file_pattern) => {
-            let matched = cue
-                .context_sources()
-                .iter()
-                .any(|source| source.to_lowercase().contains(&file_pattern.to_lowercase()));
-            if !matched {
-                return None;
-            }
-            let confidence = text_cue_confidence(file_pattern)?;
-            Some((
-                "context",
-                format!("query matches file pattern '{file_pattern}'"),
-                confidence,
-            ))
-        }
-        ContextPattern::TopicActive(topic) => {
-            let matched = cue
-                .context_sources()
-                .iter()
-                .any(|source| source.to_lowercase().contains(&topic.to_lowercase()));
-            if !matched {
-                return None;
-            }
-            let confidence = text_cue_confidence(topic)?;
-            Some((
-                "context",
-                format!("query mentions topic '{topic}'"),
-                confidence,
-            ))
-        }
+                format!("the scope asked for equals codebase '{name}'"),
+            )
+        }),
+        // A retrieval call declares no file path, and the verdict matcher
+        // reads none from a cue, so a file trigger is never cited here.
+        ContextPattern::FilePattern(_) => None,
+        ContextPattern::TopicActive(topic) => cue
+            .context_sources()
+            .iter()
+            .any(|source| source == topic)
+            .then(|| {
+                (
+                    "context",
+                    format!("a declared topic or the handle asked for equals topic '{topic}'"),
+                )
+            }),
         // Recall cues carry no user mode; the verdict matcher can never fire
         // this arm against a ProspectiveCue, so it never cites one either.
         ContextPattern::UserMode(_) => None,
-        ContextPattern::Composite { all, any } => {
-            for branch in all.iter().chain(any.iter()) {
-                if let Some(evidence) = context_cue_evidence(branch, cue, scope) {
-                    return Some(evidence);
-                }
-            }
-            None
-        }
+        ContextPattern::Composite { all, any } => all
+            .iter()
+            .chain(any.iter())
+            .find_map(|branch| context_cue_evidence(branch, cue, scope)),
     }
 }
 
-/// Recall-channel input transformation. In `intention check`, an event
-/// condition is matched EXACTLY against canonical event keys supplied by the
-/// caller ("build_finished"). A recall query is prose, not an event key —
-/// the whole query never equals "payments migration finished" — so on this
-/// channel an event condition fires when the query CONTAINS it. The verdict
-/// still comes from the canonical `is_triggered_at` matcher; only the stored
-/// pattern is widened (Exact -> Contains, one condition, same specificity
-/// confidence bar). Activity triggers already match with containment, and
-/// time/context/recurring/compound semantics are untouched.
-fn recall_channel_trigger(trigger: &ProspectiveTrigger) -> ProspectiveTrigger {
-    match trigger {
-        ProspectiveTrigger::EventBased { condition, .. } => ProspectiveTrigger::EventBased {
-            pattern: TriggerPattern::contains(condition.trim()),
-            condition: condition.clone(),
-        },
-        ProspectiveTrigger::Recurring {
-            base,
-            recurrence,
-            next_occurrence,
-        } => ProspectiveTrigger::Recurring {
-            base: Box::new(recall_channel_trigger(base)),
-            recurrence: recurrence.clone(),
-            next_occurrence: *next_occurrence,
-        },
-        ProspectiveTrigger::Compound { all_of, any_of } => ProspectiveTrigger::Compound {
-            all_of: all_of.iter().map(recall_channel_trigger).collect(),
-            any_of: any_of.iter().map(recall_channel_trigger).collect(),
-        },
-        other => other.clone(),
-    }
-}
-
-/// Evaluate the active intentions of exactly one scope against the recall
-/// cues and return the `prospective` response section, or `None` when nothing
-/// fired at high confidence.
+/// Evaluate the active intentions of exactly one scope against the handles a
+/// retrieval call declared and return the `prospective` response section, or
+/// `None` when nothing fired.
 ///
 /// Contract:
 /// - Scope isolation: reads `get_active_intentions_in_scope(scope)` only —
 ///   even a cross-scope recall never resurfaces another scope's intentions.
-/// - Verdict authority: `IntentionTrigger::is_triggered_at` (the same matcher
-///   `intention action=check` uses) over the `recall_channel_trigger` view;
-///   the citation walk never flips a verdict.
-/// - High confidence only: text cues need a needle of >= 4 chars and score
-///   < 1.0 until specific; time/recurring cues score 1.0 when due.
+/// - Verdict authority: `IntentionTrigger::is_triggered_at` over the stored
+///   trigger, the same matcher and the same exact equality
+///   `intention action=check` uses. The handle asked for is compared whole;
+///   it is never scanned for a trigger value it might contain.
+/// - Proof: every surfaced intention names the equality it fired on (`why`).
+///   There is no score: a trigger fired or it did not.
+/// - Order: priority high to low, then creation time old to new, then id.
 /// - Cooldown: surfacing claims the reminder through
 ///   `commit_intention_check` — same MAX_ONE_SHOT_REMINDERS cap and
 ///   MIN_ONE_SHOT_REMINDER_INTERVAL_MINUTES spacing as check, and recurring
@@ -1812,45 +1810,39 @@ pub(crate) fn surface_prospective(
     cue: &ProspectiveCue,
     scope: &str,
 ) -> Option<Value> {
-    const HIGH_CONFIDENCE: f64 = 0.75;
     const MAX_SURFACED: usize = 3;
 
-    let intentions = storage.get_active_intentions_in_scope(scope).ok()?;
+    let mut intentions = storage.get_active_intentions_in_scope(scope).ok()?;
+    intentions.sort_by(intention_order);
     let context = cue.context(scope);
     let events = cue.events();
 
-    let mut hits: Vec<(IntentionRecord, IntentionRecord, &'static str, String, f64)> = Vec::new();
+    let mut hits: Vec<(IntentionRecord, IntentionRecord, &'static str, String)> = Vec::new();
     for intention in intentions {
-        let Ok(Some(stored)) = stored_prospective_trigger(&intention) else {
+        // The list is in delivery order, so the first MAX_SURFACED that fire
+        // are the ones returned, and no later intention is claimed unseen.
+        if hits.len() >= MAX_SURFACED {
+            break;
+        }
+        let Ok(Some(trigger)) = stored_prospective_trigger(&intention) else {
             continue;
         };
-        let trigger = recall_channel_trigger(&stored);
         if !trigger.is_triggered_at(&context, &events, cue.now) {
             continue;
         }
-        let Some((cue_type, explanation, confidence)) = trigger_cue_evidence(&trigger, cue, scope)
-        else {
+        let Some((cue_type, explanation)) = trigger_cue_evidence(&trigger, cue, scope) else {
             continue;
         };
-        if confidence < HIGH_CONFIDENCE {
-            continue;
-        }
 
         // Deliverability: identical shape to execute_check — recurring
         // triggers advance past the one-shot caps, everything else obeys
-        // them so an intention cannot resurface on every recall. The
-        // advanced trigger persisted back to storage is always derived from
-        // the UNTRANSFORMED stored trigger, so the recall channel can never
-        // silently rewrite an exact event pattern into a contains pattern.
+        // them so an intention cannot resurface on every recall.
         let mut advanced = Some(trigger.clone());
         let scheduled_recurrence = advanced
             .as_mut()
             .map(|value| value.re_arm_triggered(&context, &events, cue.now))
             .unwrap_or(false);
-        let mut persisted_advanced = Some(stored.clone());
-        let _ = persisted_advanced
-            .as_mut()
-            .map(|value| value.re_arm_triggered(&context, &events, cue.now));
+        let persisted_advanced = advanced;
         let within_one_shot_limits = intention.reminder_count < MAX_ONE_SHOT_REMINDERS
             && intention
                 .last_reminded_at
@@ -1886,23 +1878,16 @@ pub(crate) fn surface_prospective(
             );
             continue;
         }
-        hits.push((intention, claimed, cue_type, explanation, confidence));
+        hits.push((intention, claimed, cue_type, explanation));
     }
 
     if hits.is_empty() {
         return None;
     }
-    hits.sort_by(|a, b| {
-        b.0.priority
-            .cmp(&a.0.priority)
-            .then(b.4.total_cmp(&a.4))
-            .then(a.0.created_at.cmp(&b.0.created_at))
-    });
-    hits.truncate(MAX_SURFACED);
 
     let items: Vec<Value> = hits
         .into_iter()
-        .map(|(original, claimed, cue_type, explanation, confidence)| {
+        .map(|(original, claimed, cue_type, explanation)| {
             let is_overdue = original
                 .deadline
                 .map(|deadline| deadline < cue.now)
@@ -1918,7 +1903,7 @@ pub(crate) fn surface_prospective(
                 },
                 "cueType": cue_type,
                 "why": explanation,
-                "confidence": (confidence * 100.0).round() / 100.0,
+                "match": "exact",
                 "deadline": claimed.deadline.map(|dt| dt.to_rfc3339()),
                 "isOverdue": is_overdue,
             })
@@ -1927,13 +1912,347 @@ pub(crate) fn surface_prospective(
 
     Some(serde_json::json!({
         "intentions": items,
-        "notice": "Prospective memory: these intentions fired because this query matched their trigger cues. Handle them now, or complete/snooze them via intention(action=\"update\") to stop resurfacing.",
+        "order": "priority desc, createdAt asc, id asc",
+        "notice": "Prospective memory: these intentions fired because their time came, or because a handle this call declared equals their trigger value exactly. Handle them now, or complete/snooze them via intention(action=\"update\") to stop resurfacing.",
     }))
 }
 
 // ============================================================================
 // TESTS
 // ============================================================================
+
+/// Exact, deterministic triggers on a Strata log (the default build's store).
+#[cfg(test)]
+mod exact_trigger_tests {
+    use super::*;
+    use serde_json::json;
+
+    const NOW: &str = "2026-10-05T12:00:00Z";
+
+    fn store() -> (Arc<Storage>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("data dir");
+        let storage = crate::strata_memory::open(dir.path()).expect("strata log");
+        (storage, dir)
+    }
+
+    async fn call(storage: &Arc<Storage>, args: Value) -> Value {
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        execute(storage, &cognitive, Some(args))
+            .await
+            .expect("intention call")
+    }
+
+    async fn set(storage: &Arc<Storage>, description: &str, trigger: Value) -> String {
+        let created = call(
+            storage,
+            json!({"action": "set", "description": description, "trigger": trigger}),
+        )
+        .await;
+        created["intentionId"].as_str().expect("id").to_string()
+    }
+
+    async fn check(storage: &Arc<Storage>, mut context: Value) -> Value {
+        context["current_time"] = json!(NOW);
+        call(storage, json!({"action": "check", "context": context})).await
+    }
+
+    fn row<'a>(result: &'a Value, list: &str, id: &str) -> Option<&'a Value> {
+        result[list]
+            .as_array()
+            .expect("list")
+            .iter()
+            .find(|row| row["id"] == id)
+    }
+
+    fn stored(
+        id: &str,
+        trigger_type: &str,
+        trigger_data: &str,
+        source_type: &str,
+    ) -> IntentionRecord {
+        IntentionRecord {
+            id: id.to_string(),
+            content: format!("Synthetic intention {id}"),
+            trigger_type: trigger_type.to_string(),
+            trigger_data: trigger_data.to_string(),
+            priority: 2,
+            status: "active".to_string(),
+            created_at: parse_rfc3339("2026-10-01T00:00:00Z", "created").unwrap(),
+            deadline: None,
+            fulfilled_at: None,
+            reminder_count: 0,
+            last_reminded_at: None,
+            notes: None,
+            tags: Vec::new(),
+            related_memories: Vec::new(),
+            snoozed_until: None,
+            source_type: source_type.to_string(),
+            source_data: None,
+            scope: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_activity_trigger_fires_on_its_exact_key_not_on_text_containing_it() {
+        let (storage, _dir) = store();
+        let id = set(
+            &storage,
+            "Tag the release",
+            json!({"type": "activity", "activity": "deploy"}),
+        )
+        .await;
+
+        // Before 4.2.0 both of these fired: a substring, and a different case.
+        for events in [json!(["deploy finished on prod"]), json!(["Deploy"])] {
+            let result = check(&storage, json!({"events": events})).await;
+            assert!(row(&result, "triggered", &id).is_none(), "{result}");
+            let pending = row(&result, "pending", &id).expect("still listed as pending");
+            assert_eq!(pending["triggerMatching"]["rule"], "exact", "{pending}");
+            assert_eq!(
+                pending["triggerMatching"]["firesOn"],
+                json!([{"field": EVENT_FIELDS, "equals": "deploy"}]),
+                "{pending}"
+            );
+        }
+
+        let result = check(&storage, json!({"events": ["deploy"]})).await;
+        assert!(row(&result, "triggered", &id).is_some(), "{result}");
+    }
+
+    #[tokio::test]
+    async fn an_event_trigger_needs_the_whole_key_in_the_same_case() {
+        let (storage, _dir) = store();
+        let id = set(
+            &storage,
+            "Publish the notes",
+            json!({"type": "event", "condition": "build_finished"}),
+        )
+        .await;
+        for context in [
+            json!({"event": "BUILD_FINISHED"}),
+            json!({"event": "build_finished ok"}),
+            json!({"events": ["the build_finished event"]}),
+        ] {
+            let result = check(&storage, context).await;
+            assert!(row(&result, "triggered", &id).is_none(), "{result}");
+        }
+        let result = check(&storage, json!({"event": "build_finished"})).await;
+        assert!(row(&result, "triggered", &id).is_some(), "{result}");
+    }
+
+    #[tokio::test]
+    async fn context_triggers_fire_on_exact_codebase_file_and_topic_only() {
+        let (storage, _dir) = store();
+        let codebase = set(
+            &storage,
+            "c",
+            json!({"type": "context", "codebase": "vestige"}),
+        )
+        .await;
+        let file = set(
+            &storage,
+            "f",
+            json!({"type": "context", "file_pattern": "src/lib.rs"}),
+        )
+        .await;
+        let topic = set(
+            &storage,
+            "t",
+            json!({"type": "context", "topic": "ghostlink"}),
+        )
+        .await;
+
+        // Each declared handle only contains the stored value.
+        let near = check(
+            &storage,
+            json!({
+                "codebase": "vestige-mcp",
+                "file": "crates/vestige-mcp/src/lib.rs",
+                "topics": ["ghostlink-strata", "Ghostlink"],
+            }),
+        )
+        .await;
+        for id in [&codebase, &file, &topic] {
+            assert!(row(&near, "triggered", id).is_none(), "{near}");
+            assert!(row(&near, "pending", id).is_some(), "{near}");
+        }
+        assert_eq!(
+            row(&near, "pending", &file).unwrap()["triggerMatching"]["firesOn"],
+            json!([{"field": "context.file", "equals": "src/lib.rs"}])
+        );
+
+        let exact = check(
+            &storage,
+            json!({"codebase": "vestige", "file": "src/lib.rs", "topics": ["ghostlink"]}),
+        )
+        .await;
+        for id in [&codebase, &file, &topic] {
+            assert!(row(&exact, "triggered", id).is_some(), "{exact}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_description_is_never_parsed_for_a_trigger_a_priority_or_a_tag() {
+        let (storage, _dir) = store();
+        let created = call(
+            &storage,
+            json!({
+                "action": "set",
+                "description": "remind me to check email in 30 minutes, urgent, when meeting with John",
+            }),
+        )
+        .await;
+        assert_eq!(created["triggerType"], "manual", "{created}");
+        assert!(created["triggerAt"].is_null(), "{created}");
+        assert_eq!(created["priority"], 2, "{created}");
+        assert!(created.get("nlpParsed").is_none(), "{created}");
+        assert_eq!(created["note"], NO_TRIGGER_NOTE, "{created}");
+
+        let id = created["intentionId"].as_str().unwrap();
+        let record = storage.get_intention(id).unwrap().expect("stored");
+        assert_eq!(record.trigger_data, "{}");
+        assert_eq!(record.source_type, "mcp");
+        assert!(
+            record.tags.is_empty(),
+            "no tag is inferred: {:?}",
+            record.tags
+        );
+
+        // Hours later, with the words of the description offered as events,
+        // it still has not fired: nothing was inferred from the text.
+        let result = call(
+            &storage,
+            json!({"action": "check", "context": {
+                "current_time": "2026-10-06T12:00:00Z",
+                "events": ["meeting with John", "john"],
+            }}),
+        )
+        .await;
+        assert!(row(&result, "triggered", id).is_none(), "{result}");
+        assert!(row(&result, "pending", id).is_some(), "{result}");
+    }
+
+    #[tokio::test]
+    async fn a_trigger_stored_before_4_2_is_listed_with_the_exact_form_to_use() {
+        let (storage, _dir) = store();
+        // What the removed text parser stored for "... when meeting with John".
+        storage
+            .save_intention(&stored(
+                "inferred",
+                "event",
+                r#"{"type":"event","condition":"meeting with John"}"#,
+                "nlp",
+            ))
+            .unwrap();
+        storage
+            .save_intention(&stored("broken", "event", "not json", "mcp"))
+            .unwrap();
+
+        let listed = call(&storage, json!({"action": "list"})).await;
+        let inferred = row(&listed, "intentions", "inferred").expect("not dropped");
+        assert_eq!(
+            inferred["triggerMatching"]["firesOn"],
+            json!([{"field": EVENT_FIELDS, "equals": "meeting with John"}]),
+            "{inferred}"
+        );
+        assert_eq!(inferred["triggerMatching"]["note"], EXACT_MATCH_NOTE);
+        assert_eq!(inferred["triggerMatching"]["inferredFromText"], true);
+        assert_eq!(
+            inferred["triggerMatching"]["inferredNote"],
+            INFERRED_TRIGGER_NOTE
+        );
+        let broken = row(&listed, "intentions", "broken").expect("not dropped");
+        assert!(
+            broken["invalid_trigger"]
+                .as_str()
+                .unwrap()
+                .contains("Stored trigger JSON is invalid"),
+            "{broken}"
+        );
+
+        // The text it used to fire on no longer fires it; the exact form does.
+        let near = check(&storage, json!({"events": ["Scheduled meeting with John"]})).await;
+        assert!(row(&near, "triggered", "inferred").is_none(), "{near}");
+        let exact = check(&storage, json!({"events": ["meeting with John"]})).await;
+        assert!(row(&exact, "triggered", "inferred").is_some(), "{exact}");
+    }
+
+    #[tokio::test]
+    async fn list_and_check_return_the_same_bytes_for_the_same_store_and_call() {
+        let (storage, _dir) = store();
+        // Same priority and creation time, saved out of id order, so only the
+        // id tiebreak decides the order.
+        for id in ["c", "a", "b"] {
+            storage
+                .save_intention(&stored(
+                    id,
+                    "event",
+                    r#"{"type":"event","condition":"never_declared"}"#,
+                    "mcp",
+                ))
+                .unwrap();
+        }
+        let mut high = stored("z", "manual", "{}", "mcp");
+        high.priority = 4;
+        storage.save_intention(&high).unwrap();
+
+        let list = json!({"action": "list", "filter_status": "all", "limit": 50});
+        let first = call(&storage, list.clone()).await;
+        let second = call(&storage, list).await;
+        assert_eq!(first.to_string(), second.to_string());
+        let ids: Vec<&str> = first["intentions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["z", "a", "b", "c"], "priority, then time, then id");
+
+        // Nothing fires, so a check writes nothing, and with the clock passed
+        // in it has no time field of its own left to differ.
+        let first = check(&storage, json!({"events": ["something_else"]})).await;
+        let second = check(&storage, json!({"events": ["something_else"]})).await;
+        assert_eq!(first.to_string(), second.to_string());
+        assert!(first["triggered"].as_array().unwrap().is_empty(), "{first}");
+    }
+
+    #[tokio::test]
+    async fn a_retrieval_call_surfaces_an_intention_on_an_exact_handle_only() {
+        let (storage, _dir) = store();
+        let id = set(
+            &storage,
+            "Review the bridge lens",
+            json!({"type": "context", "topic": "ghostlink"}),
+        )
+        .await;
+        let now = parse_rfc3339(NOW, "now").unwrap();
+        let cue = |query: &str| ProspectiveCue {
+            query: query.to_string(),
+            topics: Vec::new(),
+            now,
+        };
+
+        // The handle only contains the topic: no scan, so nothing fires.
+        assert!(surface_prospective(&storage, &cue("notes about ghostlink"), "user").is_none());
+        assert!(surface_prospective(&storage, &cue("Ghostlink"), "user").is_none());
+
+        let surfaced = surface_prospective(&storage, &cue("ghostlink"), "user").expect("fired");
+        let item = &surfaced["intentions"][0];
+        assert_eq!(item["id"], id.as_str(), "{surfaced}");
+        assert_eq!(item["match"], "exact", "{surfaced}");
+        assert!(
+            item.get("confidence").is_none(),
+            "no text score: {surfaced}"
+        );
+        assert!(
+            item["why"]
+                .as_str()
+                .unwrap()
+                .contains("equals topic 'ghostlink'"),
+            "{surfaced}"
+        );
+    }
+}
 
 #[cfg(all(test, feature = "legacy-sqlite"))]
 mod tests {
@@ -2127,15 +2446,15 @@ mod tests {
         // file_pattern (no codebase — otherwise the check-side codebase branch
         // would short-circuit and mask a dropped file_pattern field).
         //
-        // Note: file_pattern matching currently uses substring containment, not
-        // glob, so the "pattern" must be a plain substring of the file path.
+        // Since 4.2.0 file_pattern is an exact path: it fires only on a
+        // context whose `file` equals it.
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({
             "action": "set",
             "description": "Review test files",
             "trigger": {
                 "type": "context",
-                "file_pattern": ".test.cjs"
+                "file_pattern": "tests/neural-cascade.test.cjs"
             }
         });
         let result = execute(&storage, &test_cognitive(), Some(args)).await;
@@ -2157,7 +2476,7 @@ mod tests {
         let triggered = check["triggered"].as_array().expect("triggered array");
         assert!(
             !triggered.is_empty(),
-            "file_pattern must survive snake_case deserialization and match on file substring; \
+            "file_pattern must survive snake_case deserialization and match on the exact file; \
              got triggered: {:?}, pending: {:?}",
             check["triggered"],
             check["pending"]
@@ -2233,7 +2552,7 @@ mod tests {
         let check_args = serde_json::json!({
             "action": "check",
             "context": {
-                "codebase": "payments-service"
+                "codebase": "payments"
             }
         });
         let result = execute(&storage, &test_cognitive(), Some(check_args)).await;
@@ -2569,7 +2888,8 @@ mod tests {
         for (event, expected) in [
             ("build_started", 0),
             ("build_finished_pending", 0),
-            ("BUILD_FINISHED", 1),
+            ("BUILD_FINISHED", 0),
+            ("build_finished", 1),
         ] {
             let out = execute(&storage, &cog, Some(serde_json::json!({
                 "action":"check", "context":{"current_time":"2029-01-01T00:00:00Z", "event":event}
@@ -2587,7 +2907,7 @@ mod tests {
             &cog,
             Some(serde_json::json!({
                 "action":"set", "description":"All constraints fixture", "trigger":{
-                    "type":"context", "codebase":"fixture", "file_pattern":".rs", "topic":"storage"
+                    "type":"context", "codebase":"fixture", "file_pattern":"lib.rs", "topic":"storage"
                 }
             })),
         )
@@ -3022,7 +3342,7 @@ mod tests {
                     "all_of": [{
                         "type": "context",
                         "codebase": "vestige",
-                        "file_pattern": "intention_unified.rs"
+                        "file_pattern": "crates/vestige-mcp/src/tools/intention_unified.rs"
                     }],
                     "any_of": [
                         { "type": "event", "condition": "review approved" },
@@ -3058,7 +3378,7 @@ mod tests {
                 "context": {
                     "codebase": "vestige",
                     "file": "crates/vestige-mcp/src/tools/intention_unified.rs",
-                    "events": ["all tests completed"]
+                    "events": ["tests completed"]
                 }
             })),
         )
@@ -3148,29 +3468,6 @@ mod tests {
         .unwrap();
         assert!(result["triggered"].as_array().unwrap().is_empty());
         assert!(result["pending"][0]["invalid_trigger"].is_string());
-    }
-
-    #[tokio::test]
-    async fn test_nlp_fortnight_recurrence_is_persisted_in_full() {
-        let (storage, _dir) = test_storage().await;
-        let set = execute(
-            &storage,
-            &test_cognitive(),
-            Some(serde_json::json!({
-                "action": "set",
-                "description": "remind me to review the roadmap every fortnight"
-            })),
-        )
-        .await
-        .unwrap();
-        assert_eq!(set["nlpParsed"], true);
-        let id = set["intentionId"].as_str().unwrap();
-        let stored = storage.get_intention(id).unwrap().unwrap();
-        let trigger: Value = serde_json::from_str(&stored.trigger_data).unwrap();
-        assert_eq!(trigger["type"], "recurring");
-        assert_eq!(trigger["recurrence"]["every_minutes"], 20_160);
-        assert!(trigger["base"].is_object());
-        assert!(trigger["next_occurrence"].is_string());
     }
 
     #[tokio::test]
@@ -3309,12 +3606,8 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         let id = set_event_intention(&storage, "payments migration finished", None).await;
 
-        let section = surface_prospective(
-            &storage,
-            &cue("the payments migration finished this afternoon"),
-            "user",
-        )
-        .expect("matching query must surface the intention");
+        let section = surface_prospective(&storage, &cue("payments migration finished"), "user")
+            .expect("matching query must surface the intention");
         let items = section["intentions"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["id"], serde_json::json!(id));
@@ -3378,24 +3671,13 @@ mod tests {
     #[tokio::test]
     async fn surfacing_caps_at_three_intentions() {
         let (storage, _dir) = test_storage().await;
-        for condition in [
-            "alpha review finished",
-            "beta review finished",
-            "gamma review finished",
-            "delta review finished",
-            "epsilon review finished",
-        ] {
-            set_event_intention(&storage, condition, None).await;
+        // Five intentions on the same exact event; a cue naming it fires all
+        // five, and the section still lists three.
+        for _ in 0..5 {
+            set_event_intention(&storage, "review finished", None).await;
         }
-        let section = surface_prospective(
-            &storage,
-            &cue(
-                "alpha review finished, beta review finished, gamma review finished, \
-                  delta review finished, epsilon review finished",
-            ),
-            "user",
-        )
-        .expect("matches exist");
+        let section =
+            surface_prospective(&storage, &cue("review finished"), "user").expect("matches exist");
         let items = section["intentions"].as_array().unwrap();
         assert_eq!(
             items.len(),

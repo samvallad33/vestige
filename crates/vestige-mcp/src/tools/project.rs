@@ -74,6 +74,15 @@ fn default_format() -> String {
 fn resolve_target(root: Option<&str>, path: &str) -> Result<PathBuf, String> {
     let root = match root {
         Some(dir) => PathBuf::from(dir),
+        // One server process can serve several agents in different projects,
+        // so its own working directory says nothing about the caller's.
+        None if !Path::new(path).is_absolute() => {
+            return Err(format!(
+                "path '{path}' is relative and no root was given: pass root (the absolute directory \
+                 the file belongs in) or an absolute path. A relative path would resolve against the \
+                 memory server's working directory, which may be another project."
+            ));
+        }
         None => std::env::current_dir()
             .map_err(|e| format!("cannot read the working directory: {e}"))?,
     };
@@ -1020,6 +1029,60 @@ mod strata_preview {
         let result = outcome.expect("project blocked on a FIFO target");
         let err = result.unwrap_err();
         assert!(err.contains("regular file"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn relative_path_without_a_root_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        ingest(
+            &storage,
+            "Use tabs in Makefiles",
+            "decision",
+            &[],
+            "user",
+            None,
+            None,
+        );
+        let in_cwd = std::env::current_dir().unwrap().join("CLAUDE.md");
+        let before = std::fs::read(&in_cwd).ok();
+        for action in ["preview", "write"] {
+            let err = execute(
+                &storage,
+                Some(json!({ "action": action, "path": "CLAUDE.md", "confirm": true })),
+            )
+            .await
+            .unwrap_err();
+            assert!(err.contains("relative"), "{action}: {err}");
+            assert!(err.contains("root"), "{action}: {err}");
+        }
+        assert_eq!(
+            std::fs::read(&in_cwd).ok(),
+            before,
+            "nothing may be written into the server's working directory"
+        );
+
+        // The same relative path is accepted once a root says where it belongs.
+        let root = tempfile::tempdir().unwrap();
+        let preview = execute(
+            &storage,
+            Some(json!({ "path": "CLAUDE.md", "root": root.path().to_str().unwrap() })),
+        )
+        .await;
+        assert!(preview.is_ok(), "{preview:?}");
+    }
+
+    #[test]
+    fn resolve_target_refuses_a_relative_path_only_when_no_root_is_given() {
+        let err = resolve_target(None, "CLAUDE.md").unwrap_err();
+        assert!(err.contains("relative and no root was given"), "{err}");
+        let err = resolve_target(None, "docs/../CLAUDE.md").unwrap_err();
+        assert!(err.contains("relative and no root was given"), "{err}");
+
+        let root = tempfile::tempdir().unwrap();
+        let canonical = root.path().canonicalize().unwrap();
+        let target = resolve_target(root.path().to_str(), "CLAUDE.md").unwrap();
+        assert_eq!(target, canonical.join("CLAUDE.md"));
     }
 
     #[cfg(unix)]

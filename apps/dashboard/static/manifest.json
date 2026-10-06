@@ -1,7 +1,7 @@
 {
 	"name": "Vestige Memory Dashboard",
 	"short_name": "Vestige",
-	"description": "Cognitive memory visualization for AI agents",
+	"description": "The shell for Vestige, the operating system for AI agents: the log, its receipts and causal walks",
 	"start_url": "/",
 	"display": "standalone",
 	"background_color": "#050510",

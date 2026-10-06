@@ -2,9 +2,9 @@
 
 > Written for Vestige 4.x.
 
-> Give Cursor a brain that remembers between sessions.
+> Give Cursor a record of what you decided, that carries across sessions.
 
-Cursor has native MCP support. Add Vestige and your AI assistant remembers your architecture, preferences, and past fixes across every session.
+Cursor has native MCP support. Add Vestige and your AI assistant can reload your architecture decisions, preferences, and past fixes in every session.
 
 ---
 
@@ -47,7 +47,7 @@ The README install puts the binaries in `~/.local/bin`, and Homebrew puts them u
 }
 ```
 
-**Windows:** same shape. Install from the release zip (see the README), then paste the absolute path from `where vestige-mcp`. Do not install 4.x with npm: the npm package still serves 3.0.0.
+**Windows:** same shape. Install from the release zip (see the README), then paste the absolute path from `where vestige-mcp`.
 
 ```json
 {
@@ -90,9 +90,9 @@ It comes back, with its memory id. Vestige 4.x finds a memory by an exact handle
 
 ---
 
-## Project-Specific Memory
+## Project-Specific Data Directory
 
-To isolate memory per project, pass `--data-dir` with an **absolute** directory (Cursor does not expand `~` or relative paths in `args`):
+To keep a separate store per project, pass `--data-dir` with an **absolute** directory (Cursor does not expand `~` or relative paths in `args`):
 
 ```json
 {
@@ -151,4 +151,4 @@ Cursor does not surface MCP server errors in the UI. Test by running the command
 | Claude Code | [Setup](../CONFIGURATION.md#claude-code-one-liner) |
 | Claude Desktop | [Setup](../CONFIGURATION.md#claude-desktop-macos) |
 
-Your AI remembers everything, everywhere.
+Every agent on the machine shares one store through one writer. The first to start serves it, and the others attach.

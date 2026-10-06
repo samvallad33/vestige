@@ -1,34 +1,36 @@
 # Code context evidence
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Written for Vestige 4.2.0.
 
-`codebase.get_context` and `session_start` share current-memory selection and
-source-anchor evaluation. Startup retains each code memory's ID, actionable
-summary and evidence state, including code advice found through search or
-predictions. Source-span equality does not prove a natural-language claim.
+`codebase.get_context` and `session_start` share current-record selection and
+source-anchor evaluation. Startup retains each code record's ID, actionable
+summary and evidence state. A record is found by its tags (`codebase:<name>`),
+never by wording. Source-span equality does not prove a natural-language claim.
 
 Pass an explicit checkout when reading context:
 
 ```json
 {
-  "queries": [],
   "scope": "user",
   "context": {
     "codebase": "example-project",
     "repoPath": "/path/to/checkout"
   },
-  "include_predictions": false,
   "token_budget": 2000
 }
 ```
+
+On a Strata log `session_start` ignores `queries` and `changed_files`, and says so in `notices`. Predictions are not available.
 
 Use the same `scope`, `codebase` and `repoPath` for `codebase` with
 `action: "get_context"`. Codebase writes accept `scope` too; omitted scope
 retains the `user` namespace. Project tags match exactly, so `app` does not
 select `app-extra`. The dedicated code-context query excludes future, expired and
-superseded memories before its per-type limit. Search and prediction candidates
-are also checked for scope and current eligibility before delivery. Historical storage APIs remain
-available; no memories are deleted by this selection.
+retired records before its per-type limit. Nothing is deleted by this selection.
+If the requested scope holds no code records for the codebase, the response names
+the scopes that do (`codeContext.elsewhere` and `notices`). `codebase`
+`get_context` lists every scope that holds them in `scopes`, and `allScopes: true`
+reads them all.
 
 ## Reading evidence
 
@@ -73,11 +75,11 @@ and whitespace within strings. Line endings and a final newline are normalized
 by the line-based representation. Formatting-only changes may consequently
 request rechecking. Unchanged spans can still be found after line relocation.
 
-Old unprefixed hashes remain stored but return unverifiable with a legacy-format
-explanation. They cannot be upgraded safely without reviewing the source: the
-old format discarded information. No automatic re-anchoring or database
-migration occurs. After reviewing the advice against the source, explicitly
-replace its anchors without duplicating or promoting the memory:
+Old unprefixed hashes, carried over from a v3 store, remain stored but return
+unverifiable with a legacy-format explanation. They cannot be upgraded safely
+without reviewing the source: the old format discarded information. No automatic
+re-anchoring occurs. After reviewing the advice against the source, explicitly
+replace its anchors without duplicating or promoting the record:
 
 ```json
 {
@@ -94,11 +96,10 @@ wrong-scope and incomplete requests preserve the old anchors. The memory's
 content, ID and strength do not change. The action replaces source evidence;
 it does not verify the memory's claim.
 
-A rollback to an older binary must not read newly captured v2 anchors as if they
-were its own format; an old verifier can falsely label them drifted. Preserve a
-pre-upgrade database backup before deploying and restore that backup with the
-old binary if rollback is required. This development patch does not modify the
-installed server or the live store.
+Anchors you write after the upgrade live in the Strata log. v3.1.1 reads only the
+old `vestige.db`, so a rollback to it does not see them, and an old verifier could
+label v2 anchors drifted. Keep the backup the upgrade made, and take your own
+with `vestige backup <new-dir>` before a rollback.
 
 ## Startup budgets and partial output
 
@@ -116,25 +117,33 @@ cover evaluated candidates, including candidates subsequently omitted from the
 packet. A due reminder is evaluated even with no context object, but a budget
 can still omit the entire intention section.
 
-Requests with more than sixteen search queries are rejected explicitly.
-Retrieval telemetry records only IDs in the final rendered context and does not promote their strength.
+A request with more than sixteen `queries` is rejected, even though a Strata log
+ignores them. Reading context does not change a record's strength.
+
+`codebase` `verify` with a `codebase` also checks that codebase's change records
+(the `event` records `ingest_repo` writes from git commits). `limit` applies to each
+type. The response carries `totalByType`, `uncheckedByType` and `truncated`, so a
+sweep that stopped short does not read as the whole scope.
 
 ## Verification
 
 Run the standard library-only MCP fixture with a freshly built server:
 
 ```sh
-cargo build -p vestige-mcp --no-default-features --features connectors,cloud-sync --bin vestige-mcp
+cargo build -p vestige-mcp --bin vestige-mcp
 python3 scripts/test-context-evidence.py --binary target/debug/vestige-mcp
 ```
 
-The fixture creates disposable stores and checkout directories. It covers drift,
-unrelated edits, partial coverage, namespace and project selection, checkout
-switches, legacy anchors, output accounting, repeated reads, due intentions and
-an injected anchor-storage failure. It never imports a live tracker or opens an
-existing memory database. Core anchor unit tests additionally cover significant
-whitespace in string content. The no-embeddings CI job runs the MCP fixture.
+The fixture creates a disposable data directory. It checks the argument gate (more
+than sixteen `queries`, a blank scope), an exact get of a force-created record, an
+empty code context, and that the data directory never grows a SQLite file. It does
+not check drift or anchor coverage. The anchor unit tests in
+`crates/vestige-core/src/codebase/anchor.rs` cover moved code, a rewritten body and
+significant whitespace, and the `codebase` tests in
+`crates/vestige-mcp/src/tools/codebase_unified.rs` cover remember, verify, drift and
+reanchor on a Strata log. The fixture never opens an existing data directory. CI
+runs it in its no-embeddings job.
 
-Source-sync coverage, dependency-triggered invalidation, delta handles and
-conditional failed-approach memory are subsequent extensions. This patch
-establishes consistent observed evidence on the two context tools.
+Dependency-triggered invalidation and delta handles are not implemented.
+`codebase` `ingest_repo` turns git history into anchored change records that
+`verify` re-checks. This page covers observed evidence on the two context tools.

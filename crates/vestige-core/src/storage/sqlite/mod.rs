@@ -4,18 +4,12 @@
 
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use directories::{BaseDirs, ProjectDirs};
-#[cfg(vestige_embeddings_removed)]
-use lru::LruCache;
 use rusqlite::types::{Type, Value, ValueRef};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-#[cfg(vestige_embeddings_removed)]
-use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
-#[cfg(vestige_embeddings_removed)]
-use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::fsrs::{
@@ -117,7 +111,7 @@ type TagMutationState = (
 // `HygieneNodeSummary`, `HygieneSnapshot`, and `TagVocabulary` are defined
 // in (and re-exported from) `crate::storage::types`.
 
-#[cfg(any(test, vestige_embeddings_removed))]
+#[cfg(test)]
 fn temporal_candidate_is_eligible(
     incoming_from: Option<DateTime<Utc>>,
     incoming_until: Option<DateTime<Utc>>,
@@ -426,19 +420,6 @@ pub struct EmbeddingProfileMigrationNodeCheckpoint {
     pub updated_at: DateTime<Utc>,
 }
 
-#[allow(dead_code)] // read by the embedding_profile migration path; PR 10 sweeps it
-type EmbeddingProfileMigrationRow = (
-    String,
-    String,
-    String,
-    i64,
-    i64,
-    String,
-    Option<String>,
-    String,
-    String,
-);
-
 // ============================================================================
 // STORAGE
 // ============================================================================
@@ -513,11 +494,6 @@ const DATABASE_FILE: &str = "vestige.db";
 // this gate decides whether consolidation hard-deletes near-duplicates, so a
 // process-wide flag would reach every consolidation test running at once.
 // `Some(None)` pins the variable unset; `Some(Some(v))` pins a value.
-#[cfg(all(test, vestige_embeddings_removed, vestige_embeddings_removed))]
-thread_local! {
-    static AUTO_CONSOLIDATE_MERGE_FOR_TEST: std::cell::RefCell<Option<Option<String>>> =
-        const { std::cell::RefCell::new(None) };
-}
 
 /// Immutable compatibility identity for vectors written before Embedding
 /// Profiles existed. It is deliberately explicit: raw-text vectors must never
@@ -543,75 +519,8 @@ pub struct SqliteMemoryStore {
     pub(crate) writer: Mutex<Connection>,
     pub(crate) reader: Mutex<Connection>,
     scheduler: Mutex<FSRSScheduler>,
-    #[cfg(vestige_embeddings_removed)]
-    embedding_service: EmbeddingService,
-    #[cfg(vestige_embeddings_removed)]
-    vector_index: Option<Mutex<VectorIndex>>,
-    /// LRU cache for query embeddings to avoid re-embedding repeated queries
-    #[cfg(vestige_embeddings_removed)]
-    query_cache: Option<Mutex<LruCache<String, Vec<f32>>>>,
-    /// Explicit, process-local runtime for an active optional embedding
-    /// profile.  It is never restored from disk: a caller must re-verify and
-    /// attach local artifacts in every process before Qwen retrieval can run.
-    #[cfg(vestige_embeddings_removed)]
-    attached_profile_runtime: RwLock<Option<AttachedProfileRuntime>>,
     /// Cached model signature. `None` until the first embedding is written.
     registered_model: std::sync::RwLock<Option<crate::storage::memory_store::ModelSignature>>,
-    /// Where this process's vector index stands relative to the shared
-    /// database: the last `PRAGMA data_version` it saw and the last
-    /// `vector_journal.seq` it absorbed. See `refresh_vector_index_if_stale`.
-    #[cfg(vestige_embeddings_removed)]
-    vector_index_watermark: Mutex<VectorIndexWatermark>,
-}
-
-/// Where the in-process vector index stands relative to the shared database
-/// (#181). See `SqliteMemoryStore::refresh_vector_index_if_stale`.
-#[cfg(vestige_embeddings_removed)]
-#[derive(Debug, Clone, Copy)]
-struct VectorIndexWatermark {
-    /// Last `PRAGMA data_version` observed on the reader connection.
-    ///
-    /// SQLite increments this on a connection whenever ANOTHER connection commits
-    /// to the database. It is the cheapest possible cross-process change signal:
-    /// no table scan, no file stat. It only says THAT something changed; the
-    /// journal says what. `-1` means never read.
-    data_version: i64,
-    /// Highest `vector_journal.seq` this index has absorbed. Every row past it
-    /// is a vector write this process has not seen. `-1` means unknown, which
-    /// makes the next refresh reconcile the index against the table instead of
-    /// trusting the journal.
-    journal_seq: i64,
-}
-
-#[cfg(vestige_embeddings_removed)]
-impl Default for VectorIndexWatermark {
-    fn default() -> Self {
-        Self {
-            data_version: -1,
-            journal_seq: -1,
-        }
-    }
-}
-
-/// What a refresh found in the journal past the watermark.
-#[cfg(vestige_embeddings_removed)]
-enum VectorRefreshPlan {
-    /// The journal is intact: apply exactly these per-node changes (`None` is a
-    /// removal) and move the watermark to `head`.
-    Incremental {
-        changes: Vec<(String, Option<Vec<u8>>)>,
-        head: i64,
-    },
-    /// The watermark is unknown or the journal was pruned past it: compare the
-    /// index against the table instead.
-    Reconcile,
-}
-
-#[cfg(vestige_embeddings_removed)]
-#[derive(Clone)]
-struct AttachedProfileRuntime {
-    profile_id: EmbeddingProfileId,
-    embedder: Arc<ProfiledEmbedder>,
 }
 
 /// Row-mapping errors are never dropped silently. Each unreadable row is
@@ -629,24 +538,6 @@ fn warn_skipped_row<T>(operation: &'static str) -> impl FnMut(rusqlite::Result<T
 
 // `FailureFeedbackReport` is defined in (and re-exported from)
 // `crate::storage::types`.
-
-/// Begin a READ snapshot on the reader connection.
-///
-/// A DEFERRED transaction on a connection that only reads gives several
-/// statements one consistent view of the database (WAL snapshot isolation),
-/// which is what a "rows plus the journal position that describes them" read
-/// needs. It must never be used on the writer: a DEFERRED transaction that
-/// reads and then writes can fail with `SQLITE_BUSY_SNAPSHOT`, and SQLite does
-/// not consult the busy handler for that upgrade. Writers go through
-/// [`SqliteMemoryStore::begin_write_transaction`], which begins IMMEDIATE. The
-/// `write_transaction_policy` lint enforces both halves of that split.
-#[cfg(vestige_embeddings_removed)]
-fn begin_read_snapshot(conn: &Connection) -> Result<rusqlite::Transaction<'_>> {
-    Ok(rusqlite::Transaction::new_unchecked(
-        conn,
-        rusqlite::TransactionBehavior::Deferred,
-    )?)
-}
 
 impl SqliteMemoryStore {
     /// Run an explicit SQLite WAL checkpoint and return SQLite's raw counters.
@@ -1082,46 +973,6 @@ impl SqliteMemoryStore {
         candidates.truncate(limit.max(1) as usize);
         Ok(candidates)
     }
-
-    /// Hash only mutation-relevant state. Access counters and passive decay do
-    /// not invalidate a plan; content, source identity and control state do.
-    #[cfg(vestige_embeddings_removed)]
-    fn merge_state_on(
-        conn: &Connection,
-        ids: &[String],
-    ) -> Result<std::collections::BTreeMap<String, String>> {
-        use sha2::{Digest, Sha256};
-        let mut state = std::collections::BTreeMap::new();
-        for id in ids {
-            let payload: String = conn.query_row(
-                "SELECT json_array(content, node_type, COALESCE(tags, '[]'), source,
-                    COALESCE(NULLIF(trim(scope), ''), 'user'), protected, suppression_count,
-                    valid_from, valid_until, superseded_by, source_system, source_project,
-                    source_id, source_url, source_updated_at, content_hash, source_type, source_author)
-                 FROM knowledge_nodes WHERE id = ?1", params![id], |row| row.get(0))
-                .optional()?.ok_or_else(|| StorageError::NotFound(id.clone()))?;
-            state.insert(
-                id.clone(),
-                Sha256::digest(payload.as_bytes())
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>(),
-            );
-        }
-        Ok(state)
-    }
-
-    #[cfg(vestige_embeddings_removed)]
-    fn merge_state_snapshot(
-        &self,
-        ids: &[String],
-    ) -> Result<std::collections::BTreeMap<String, String>> {
-        let reader = self
-            .reader
-            .lock()
-            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        Self::merge_state_on(&reader, ids)
-    }
 }
 
 /// Truncate `content` to `max` chars on a char boundary, collapsing newlines.
@@ -1461,16 +1312,6 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         // A supplied embedding is indexed under the active profile or the
         // insert fails; it is never accepted and silently left unsearchable.
         if let Some(vector) = &record.embedding {
-            #[cfg(vestige_embeddings_removed)]
-            {
-                self.index_supplied_embedding(
-                    &id_str,
-                    vector,
-                    supplied_model.as_deref(),
-                    &record.content,
-                )?;
-            }
-            #[cfg(not(vestige_embeddings_removed))]
             {
                 let _ = (vector, supplied_model);
                 return Err(MemoryStoreError::InvalidInput(
@@ -1496,9 +1337,6 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
             return Ok(None);
         };
         let (domains, domain_scores) = self.read_domain_columns(&id.to_string());
-        #[cfg(vestige_embeddings_removed)]
-        let embedding = self.get_node_embedding(&id.to_string()).ok().flatten();
-        #[cfg(not(vestige_embeddings_removed))]
         let embedding: Option<Vec<f32>> = None;
         let mut rec = Self::node_to_record(node, embedding);
         rec.domains = domains;
@@ -1547,31 +1385,6 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         use crate::storage::memory_store::{MemoryStoreError, SearchResult};
         // For Phase 1 we delegate to hybrid_search or keyword_search based on what is provided.
         let limit = if query.limit == 0 { 10 } else { query.limit };
-        #[cfg(vestige_embeddings_removed)]
-        {
-            if let Some(ref text) = query.text {
-                let results = self
-                    .hybrid_search(text, limit as i32, 0.3, 0.7)
-                    .map_err(MemoryStoreError::from)?;
-                let out = results
-                    .into_iter()
-                    .map(|r| {
-                        let (domains, domain_scores) = self.read_domain_columns(&r.node.id);
-                        let mut rec = Self::node_to_record(r.node, None);
-                        rec.domains = domains;
-                        rec.domain_scores = domain_scores;
-                        SearchResult {
-                            score: r.combined_score as f64,
-                            fts_score: r.keyword_score.map(|s| s as f64),
-                            vector_score: r.semantic_score.map(|s| s as f64),
-                            record: rec,
-                        }
-                    })
-                    .collect();
-                return Ok(out);
-            }
-        }
-        #[cfg(not(vestige_embeddings_removed))]
         {
             if let Some(ref text) = query.text {
                 // Use individual-term matching so multi-word queries find documents
@@ -2691,16 +2504,6 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         tag_filter: &[String],
     ) -> Result<Vec<MergeCandidate>> {
         SqliteMemoryStore::merge_candidates(self, policy, limit, tag_filter)
-    }
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    fn merge_undo(&self, op_id: &str) -> Result<MergeOperation> {
-        // The inherent implementation was embedding-gated and is gone with
-        // the vector wipe; the delegation below resolved to THIS trait method
-        // (infinite recursion, clippy-found). Fail loud instead.
-        let _ = op_id;
-        Err(StorageError::Init(
-            "merge_undo requires the embedding runtime, which 4.0 removed; supersede/correct via admission instead".to_string(),
-        ))
     }
     fn node_is_in_scope(&self, id: &str, scope: &str) -> Result<bool> {
         SqliteMemoryStore::node_is_in_scope(self, id, scope)

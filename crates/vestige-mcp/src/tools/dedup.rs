@@ -253,7 +253,7 @@ pub fn unified_schema() -> Value {
                 "type": "string",
                 "enum": ["scan", "plan_merge", "plan_supersede", "apply", "undo", "verdict", "tag_rename", "tag_merge", "protect", "policy"],
                 "default": "scan",
-                "description": "'scan' (default, read-only): duplicate clusters, merge candidates, pending reconsolidation plans. 'plan_merge' / 'plan_supersede': preview a reversible plan. 'apply': run a plan_id. 'undo': reverse an operation_id, or list the reflog. 'verdict': approve|reject|quarantine a reconsolidation plan. 'tag_rename' / 'tag_merge': preview-token gated. 'protect': pin a memory. 'policy': thresholds."
+                "description": "'scan' (default, read-only): exact-equality duplicate clusters; the legacy engine adds merge candidates and pending reconsolidation plans. 'undo': reverse an operation_id, or list the reflog. 'tag_rename' / 'tag_merge': preview-token gated. 'policy': thresholds. Legacy engine only: 'plan_merge' / 'plan_supersede' (preview a reversible plan), 'apply' (run a plan_id), 'verdict' (approve|reject|quarantine a reconsolidation plan), 'protect' (pin a memory)."
             },
             "limit": {
                 "type": "integer",
@@ -354,45 +354,8 @@ pub async fn execute_unified(
     }
 }
 
-/// Pending reconsolidation plans shaped for the scan surface. Read-only; the
-/// storage listing runs the expiry sweep first so nothing stale is offered.
-#[cfg(vestige_embeddings_removed)]
-fn reconsolidation_plan_entries(storage: &Arc<Storage>) -> Vec<Value> {
-    match storage.list_reconsolidation_plans(20) {
-        Ok(plans) => plans
-            .into_iter()
-            .map(|(plan, status)| {
-                let meta = plan.reconsolidation.as_ref();
-                serde_json::json!({
-                    "planId": plan.id,
-                    "status": status,
-                    "targetMemoryId": meta.map(|m| m.target_memory_id.clone()),
-                    "trigger": meta.map(|m| m.trigger.clone()),
-                    "windowExpiresAt": meta.map(|m| m.window_expires_at.to_rfc3339()),
-                    "survivorId": plan.survivor_id,
-                    "explanation": plan.explanation,
-                    "nextStep": "decide with action='verdict' (verdict=approve|reject|quarantine, plan_id)"
-                })
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-#[cfg(not(vestige_embeddings_removed))]
 fn reconsolidation_plan_entries(_storage: &Arc<Storage>) -> Vec<Value> {
     Vec::new()
-}
-
-/// Apply an explicit reconsolidation verdict. Approve delegates to the
-/// existing apply path (reversible via undo); reject closes the plan leaving
-/// the memory untouched; quarantine suppresses the memory through the
-/// existing suppress path and closes the in-memory labile window.
-#[cfg(vestige_embeddings_removed)]
-fn obj(args: &Option<Value>) -> serde_json::Map<String, Value> {
-    args.as_ref()
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default()
 }
 
 fn execute_verdict(
@@ -400,63 +363,6 @@ fn execute_verdict(
     cognitive: Option<&Arc<Mutex<CognitiveEngine>>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
-    #[cfg(vestige_embeddings_removed)]
-    {
-        let a = obj(&args);
-        let plan_id = a
-            .get("plan_id")
-            .and_then(|v| v.as_str())
-            .ok_or("plan_id is required for the verdict action")?;
-        let verdict = a
-            .get("verdict")
-            .and_then(|v| v.as_str())
-            .ok_or("verdict is required (approve | reject | quarantine)")?;
-        let reason = a.get("reason").and_then(|v| v.as_str());
-
-        // Capture the target before the verdict so quarantine can close the
-        // cognitive-side window afterwards.
-        let target_id = storage
-            .get_plan(plan_id)
-            .map_err(|e| e.to_string())?
-            .and_then(|plan| plan.reconsolidation.map(|meta| meta.target_memory_id));
-
-        let op = storage
-            .verdict_reconsolidation_plan(plan_id, verdict, reason)
-            .map_err(|e| e.to_string())?;
-
-        // Quarantine: the storage layer suppressed the memory; close the
-        // in-memory labile window so no further modification slips in while
-        // the memory is inhibited. Best-effort: the window also self-expires,
-        // and callers without cognitive access pass None.
-        if verdict == "quarantine"
-            && let Some(target) = target_id.as_deref()
-            && let Some(cognitive) = cognitive
-            && let Ok(mut cog) = cognitive.try_lock()
-        {
-            cog.reconsolidation.close_window(target);
-        }
-
-        Ok(serde_json::json!({
-            "action": "verdict",
-            "verdict": verdict,
-            "planId": plan_id,
-            "operationId": op.id,
-            "status": op.status,
-            "targetMemoryId": target_id,
-            "survivorId": op.survivor_id,
-            "reason": op.reason,
-            "reversible": verdict == "approve",
-            "nextStep": if verdict == "approve" {
-                format!("To reverse the approval, call merge_undo with operation_id='{}'.", op.id)
-            } else if verdict == "quarantine" {
-                "The target memory is suppressed (top-down inhibition). suppress with reverse=true within 24h un-suppresses it.".to_string()
-            } else {
-                "The plan was discarded and the target memory is unchanged.".to_string()
-            },
-            "note": "Reconsolidation verdicts are recorded in the merge_operations reflog. Expired plans cannot be verdicted; they auto-close with their labile window."
-        }))
-    }
-    #[cfg(not(vestige_embeddings_removed))]
     {
         let _ = (storage, cognitive, args);
         Err("Reconsolidation verdicts require embeddings and vector-search features.".into())

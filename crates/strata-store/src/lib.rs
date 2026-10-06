@@ -49,7 +49,7 @@
 //! `FSRS_STATE` folds a v3 card carried from `knowledge_nodes`, both onto
 //! the node's card handle and into the checkpointed fold.
 //!
-//! ## v1 scope (documented deviations in SCOPE-HANDOFF.md)
+//! ## v1 scope
 //!
 //! Single-writer (`Send` via the gate-log mutex); reads append
 //! nothing (reads-as-writes is a later wave); one FSRS kernel version
@@ -59,6 +59,7 @@
 #![warn(missing_docs)]
 
 mod anchor;
+pub mod canonical;
 mod card;
 mod error;
 mod gate_log;
@@ -74,6 +75,10 @@ mod import_tests;
 #[cfg(test)]
 mod tests;
 
+pub use canonical::{
+    canonical_hash, canonical_hash_hex, canonicalize, intent_digest, CANONICAL_PIPELINE_VERSION,
+    DUPLICATE_SOURCE,
+};
 pub use error::StoreError;
 pub use gate_log::StrataEventLog;
 pub use ghostlink::{
@@ -87,7 +92,8 @@ pub use op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 pub use store::{
     default_policy, effect_receipt_id, permissive_policy, retire_rule_id, AdmissionContext,
     EffectAction, EffectProof, NodeWrite, RecordedOrigin, Refold, RetireReceipt, StrataStore,
-    SupersedeHop, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
+    SupersedeHop, MAX_LIVE_ECHOES_PER_ORIGINAL, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE,
+    RULE_SUPPRESS,
 };
 pub use types::{
     looks_like_failure, AnchorRecord, ConnectionRecord, EdgeDirection, EdgeKind, IngestInput,

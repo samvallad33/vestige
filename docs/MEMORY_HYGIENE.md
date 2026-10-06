@@ -1,80 +1,69 @@
-# Memory hygiene and tag maintenance
+# Hygiene and tag maintenance
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Written for Vestige 4.2.0.
 
-Vestige exposes project-isolated, agent-facing hygiene workflows without requiring direct SQLite edits. Ordinary operations default to the legacy-compatible `user` scope. Cross-scope maintenance is always explicit.
+Vestige finds a record by an exact handle: its id, a unique id prefix of 8 or more characters, or an exact tag. So hygiene comes down to three habits: spell tags the same way every time, give time-bound facts a validity window, and look at the counts now and then. Ordinary operations default to the `user` scope. Cross-scope maintenance is always explicit.
+
+## Tags are the only index
+
+- A tag is an exact, case-sensitive string. `vestige` and `Vestige` are two tags. Vestige stores tags exactly as you give them. It does not normalize them or suggest a nearby one.
+- Use one project tag and one or two narrow topic tags, spelled the same way every time. A record with no tag is reachable only by its id.
+- A tag recall returns every live record under the tag, from every scope. Keep topic tags narrow, and do not recall a tag that half the store carries.
+- Before you create a tag, read the counts: `memory_status` with `view="stats"` lists record counts by exact tag.
 
 ## Dated facts at ingest
 
-`smart_ingest` accepts explicit `validFrom` and `validUntil` values as RFC 3339 timestamps or exact `YYYY-MM-DD` dates. Explicit values remain authoritative.
+`smart_ingest` accepts explicit `validFrom` and `validUntil` values as RFC 3339 timestamps or exact `YYYY-MM-DD` dates. Explicit values remain authoritative, and `validUntil` must be after `validFrom`.
 
-When `validFrom` is omitted and content contains exactly one distinct, strict `as of YYYY-MM-DD` date, Vestige infers that date as `validFrom` for a **new** node. Matching is case-insensitive and boundary-aware. Repeating the same date is unambiguous; multiple distinct dates, invalid calendar dates, or embedded-word matches are not inferred. The response's `validity` object always reports whether values were `explicit`, `inferred_as_of`, ambiguous and ignored, or absent.
+When `validFrom` is omitted and the content holds exactly one distinct, strict `as of YYYY-MM-DD` date, Vestige uses that date as `validFrom` for the new record. The phrase must start at a word boundary, and the date must be a real calendar date followed by no letter, digit or hyphen. Repeating the same date is unambiguous. Several distinct dates, an invalid date, or a match inside another word are not used.
 
-An inferred start that conflicts with an explicit `validUntil` is **not** applied; the ingest still stores and the skipped phrase is reported. Prose-inferred dates never rewrite an existing node's window: Prediction Error Gating `Update` / `Reinforce` / `Merge` / `Replace` only mutates stored `valid_from` / `valid_until` when the caller supplied those fields explicitly. `update_node_validity` merges bounds (`COALESCE`); omitting a bound preserves the stored value instead of writing `NULL`. That keeps an expired fact expired when a near-duplicate arrives with `as of YYYY-MM-DD` in the body.
+The response's `validity` object always says what happened. `source` is one of `none`, `explicit`, `inferred_as_of`, `explicit_and_inferred_as_of`, `ambiguous_as_of_not_applied`, `explicit_with_ambiguous_as_of_ignored`, `inferred_as_of_conflicts_with_explicit_validity_ignored` or `state_default_ttl`. `inferredPhrase` and `ambiguousPhrases` name the text that was used or skipped. An inferred start that conflicts with an explicit `validUntil` is not applied, and the save still goes through.
 
-## Similar-tag preflight
+This date reading is a parse of the content you are saving. It runs once, at write time, and it never affects how a record is found or ranked.
 
-Similar-tag nudges are scoped, bounded, deterministic, and never auto-applied. They recognize casing, punctuation, small edit-distance, and safe namespaced/non-namespaced suffix variants such as `prixsix`, `prix-six`, and `codebase:prix-six`.
+## State records expire by default
 
-To decide before storing a new variant:
+A record saved with `node_type: "state"` (a version number, a progress figure, an inventory) expires 30 days after it is saved unless you pass `validUntil`. Set `VESTIGE_STATE_TTL_DAYS` to change the default, or to `0` to turn it off. Other node types are untouched.
 
-```json
-{
-  "content": "Prix Six deployment note",
-  "tags": ["prix-six"],
-  "scope": "user",
-  "previewTagSuggestions": true
-}
-```
+## Tag suggestions are unavailable
 
-This returns `wouldWrite: false`, a `tagSuggestions` list, and `tagSuggestionStatus`; it does not store a memory. To accept a suggestion, repeat the ingest with an exact mapping:
+`smart_ingest` has two fields from the v3 engine, `previewTagSuggestions` and `acceptedTagSuggestions`. On a Strata log they have nothing to work with, because suggesting a nearby tag means comparing tag names and the log does not do that.
 
-```json
-{
-  "content": "Prix Six deployment note",
-  "tags": ["prix-six"],
-  "scope": "user",
-  "acceptedTagSuggestions": {
-    "prix-six": "prixsix"
-  }
-}
-```
-
-Vestige recalculates the same-scope vocabulary and rejects any mapping that is no longer a current suggestion. Omitting `acceptedTagSuggestions` preserves the caller's original tags. Batch items support the same two fields independently.
-
-The vocabulary scan uses distinct same-scope tags and fails the nudge explicitly above 10,000 distinct tags. Stored tags longer than 200 characters are skipped and counted (`ignoredOverlongVocabularyTags`) instead of disabling suggestions for the whole scope; they remain renameable through `dedup`. At most 50 caller tags of at most 200 characters each are considered, and edit distance is bounded to the one- or two-edit window Vestige can actually suggest. Secret-shaped caller mappings are rejected without echoing their bytes; secret-shaped legacy tags are excluded from responses and reported only as an ignored count. NFKC plus Unicode lowercase normalization is used; locale-specific language rules are deliberately not inferred.
-
-Ordinary tagged `smart_ingest` still computes suggestions on the write path. Deferring that scan until `previewTagSuggestions` or `acceptedTagSuggestions` is tracked separately and is not claimed here.
+- Every save reports `tagSuggestionStatus` as `{"status": "unavailable", "reason": "similarity_disabled"}` with a plain `detail`. Nothing failed. The tags are stored exactly as given.
+- `previewTagSuggestions: true` stores nothing and returns `wouldWrite: false`, an empty `tagSuggestions` and that status.
+- `acceptedTagSuggestions` is refused, because no mapping can be a current suggestion.
 
 ## Exact tag rename and merge
 
-Tag maintenance is available through the consolidated `dedup` tool:
+Tag maintenance is part of the `dedup` tool:
 
 - `action="tag_rename"` uses `source_tag` and `target_tag`.
 - `action="tag_merge"` uses two or more `source_tags` and one `target_tag`.
-- `scope` defaults to `user`; `all_scopes=true` is the explicit cross-scope mode.
+- `scope` defaults to `user`. `all_scopes=true` is the explicit cross-scope mode. Passing both is refused.
 
-Every operation is two-step. First call the action without confirmation. The read-only result lists exact source counts, affected IDs/count, collision information, and a `previewToken`. Then repeat the same action with `confirm=true`, that token, and a nonempty `reason`. Apply recomputes the token inside the SQLite write transaction, so a changed scope, source, target, affected set, or tag array makes the preview stale and aborts the operation.
+Without `confirm`, the call is a read-only preview. It lists the exact count for each source tag, the affected ids and their count, and a `previewToken`. A target tag that looks like a credential is refused without echoing it.
 
-Tags are parsed and reserialized as JSON arrays; substring replacement is never used. Source/target collisions become one deterministic target at the first affected position. The mutation and its durable audit record commit in one transaction. Operations are capped at 50,000 affected memories and a 16 MiB undo payload; larger operations fail without partial writes and should be narrowed by scope.
+**Applying is not available on a Strata log in 4.1.1.** Repeating the call with `confirm=true`, the token and a `reason` fails with "apply_tag_mutation is not implemented by this backend", and nothing is written. To change a tag today, save a corrected successor with `memory` action `edit`, which admits a new record and retires the old one.
 
-The preview and apply paths both enforce Vestige's default-deny credential policy for source and target tags; apply also screens the durable audit reason. Rejections never copy the detected credential bytes into the MCP response or audit log.
+`dedup` action `undo` works on recorded writes. See [MERGE_SUPERSEDE.md](MERGE_SUPERSEDE.md).
 
-Use `dedup(action="undo", operation_id="...")` to restore the exact prior tag arrays. Undo first verifies every current post-operation array and refuses the entire reversal if a later tag edit or missing memory would be overwritten. Omitting `operation_id` returns the mixed newest-20 reflog in `operations` plus a dedicated `tagOperations` list queried directly, so merge/supersede activity cannot bury a tag audit.
+## Full-store statistics
 
-## Full-store hygiene statistics
+Call `memory_status` with `view="stats"`. `all_scopes=true` is opt-in. The figures come from the live records of the selected scope.
 
-Call `memory_status` with `view="stats"`. The primary population is every stored row in the selected scope, including temporally inactive and superseded rows; lifecycle counts make those states explicit. `all_scopes=true` is opt-in.
-
-Aggregates cover the full store and include:
-
-- counts by memory type and exact tag;
-- age bands `0-7d`, `8-30d`, `31-90d`, `91-180d`, `181d+`, plus future-dated rows;
+- counts by record type and exact tag;
+- age bands `0-7d`, `8-30d`, `31-90d`, `91-180d`, `181d+`, plus future-dated records;
 - fixed retention buckets, including zero-count buckets;
-- lifecycle counts for current, future, expired, invalid-window, and superseded rows;
-- `neverAccessed`: no retained access-log row, durable retrieval counters (`times_retrieved` / `times_useful`) are zero, **and** the memory was created inside the 90-day access-log window. The log is pruned after 90 days, so absence of a log row is not durable evidence;
-- `accessUnknownPrunedLog`: created before that window with zero durable counters. Pre-prune history is unknowable. Agents must not suppress or purge these on access grounds;
-- largest-node total and deterministic bounded list by UTF-8 byte size;
-- recent tag rename/merge audit operations. `all_scopes` operations appear on single-scope stats when they rewrote that scope's tags.
+- lifecycle counts for current, future, expired and invalid-window records;
+- the largest records by UTF-8 byte size.
 
-Only detail lists are capped (`limit` defaults to 50 and is at most 200). Each list reports its total and whether it was truncated. The storage query loads bounded content previews rather than every full memory body and computes access status without per-row queries. If a preview contains a blocking credential shape, the preview is replaced with a redaction marker and `contentPreviewRedacted` is true; the matched secret bytes are not returned.
+Only detail lists are capped (`limit` defaults to 50 and is at most 200). Each list reports its total and whether it was truncated. If a preview contains a credential shape, it is replaced with a redaction marker and `contentPreviewRedacted` is true.
+
+A Strata log records no access history. Every record therefore appears under `accessUnknownPrunedLog`, and `neverAccessed` is always empty. Do not suppress a record on access grounds. The tag-operation audit list is empty for the same reason: no tag rename or merge has been applied.
+
+## Retiring a record
+
+- `memory` action `demote` does not delete. The record stays and fades faster.
+- `memory` action `edit` admits a successor and retires the old record. The id changes.
+- `suppress` hides a record from every read and keeps its bytes. On Strata it cannot be undone. It is not erasure.
+- `purge`, `memory` actions `purge` and `delete`, and `delete_knowledge` return `unavailable_in_4_0`. Nothing is erased from an append-only log.

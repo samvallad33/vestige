@@ -1,5 +1,7 @@
 # Vestige v3: verified developer-task efficiency
 
+> Historical. This page describes Vestige v3 and is kept for the record. For 4.x see the [README](../README.md).
+
 Objective: lower total cost per independently verified successful developer
 task, including memory operation, while preserving task success. Proposed
 engineering targets are 30% reduction, with 50%+ a stretch for repeated-context

@@ -64,6 +64,16 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0(@types/node@24.13.3)(@vitest/coverage-v8@5.0.0)(vite@8.2.2(@types/node@24.13.3)(jiti@2.7.0))
 
+  packages/mcp-darwin-arm64: {}
+
+  packages/mcp-darwin-x64: {}
+
+  packages/mcp-linux-arm64: {}
+
+  packages/mcp-linux-x64: {}
+
+  packages/mcp-win32-x64: {}
+
   packages/vestige-init: {}
 
   packages/vestige-mcp-npm: {}

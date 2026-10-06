@@ -1195,3 +1195,154 @@ fn full_disk_during_open_leaves_no_residue_that_blocks_the_next_open() {
     assert_eq!(log.append(1, b"one").unwrap().seq, 1);
     fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A copy through exFAT or a network share leaves a `._<name>` sidecar beside
+/// each file. One next to a segment ends in `.seg` but is not a segment: the
+/// log opens with it there and reads back every frame.
+#[test]
+fn a_hidden_sidecar_named_like_a_segment_does_not_stop_the_log_opening() {
+    let _serial = serialize();
+    reset_failpoints();
+    let dir = test_dir("hidden-sidecar");
+    {
+        let log = StrataLog::open(&dir).unwrap();
+        append_many(&log, 3);
+    }
+    let segment = only_segment(&dir);
+    let name = segment.file_name().unwrap().to_string_lossy().into_owned();
+    fs::write(dir.join(format!("._{name}")), b"\x00\x05\x16\x07sidecar").unwrap();
+    fs::write(
+        dir.join(format!("._00000000-{}.seg", "ab".repeat(16))),
+        b"not a segment",
+    )
+    .unwrap();
+    fs::write(dir.join(".DS_Store"), b"finder").unwrap();
+
+    assert_eq!(
+        segments(&dir),
+        vec![segment],
+        "hidden files are not segments"
+    );
+    let log = StrataLog::open(&dir).expect("the log opens beside the sidecars");
+    assert_eq!(log.read_frames(1).unwrap().len(), 3);
+    assert_eq!(log.append(1, b"after").unwrap().seq, 4);
+    drop(log);
+
+    // The same name without the leading dot is still refused as a bad segment.
+    fs::write(dir.join("stray.seg"), b"not a segment").unwrap();
+    assert!(matches!(
+        crate::log::list_segments(&dir),
+        Err(StrataError::Corrupt(_))
+    ));
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn full_disk_seal_next_segment_is_an_error_and_the_segment_stays_open() {
+    let _serial = serialize();
+    reset_failpoints();
+    let dir = test_dir("full-seal-next");
+    let log = StrataLog::open(&dir).unwrap();
+    append_many(&log, 3);
+    let seg = only_segment(&dir);
+    let before = fs::read(&seg).unwrap();
+
+    // The trailer is written and synced; the follow-on segment has no room.
+    set_site_full(Site::SegmentHeader, true);
+    let err = log.seal().expect_err("next segment cannot be created");
+    assert!(is_full(&err), "{err:?}");
+
+    // The seal is undone exactly: same single segment, same bytes, no trailer.
+    assert_eq!(only_segment(&dir), seg);
+    assert_eq!(fs::read(&seg).unwrap(), before);
+    assert_eq!(log.head().segment_no, 0);
+    let report = log.verify_log().unwrap();
+    assert_eq!(
+        (report.segments, report.sealed_segments, report.frames),
+        (1, 0, 3)
+    );
+
+    // Still full: a second attempt is refused the same way, not a panic.
+    let err = log.seal().expect_err("still no room");
+    assert!(is_full(&err), "{err:?}");
+    assert_eq!(fs::read(&seg).unwrap(), before);
+
+    // Space is back: appends continue in the same segment and a seal works.
+    set_site_full(Site::SegmentHeader, false);
+    assert_eq!(log.append(1, b"after").unwrap().seq, 4);
+    let sealed = log.seal().unwrap();
+    assert_eq!((sealed.sealed_segment_no, sealed.frame_count), (0, 4));
+    assert_eq!(log.append(2, b"next-segment").unwrap().seq, 5);
+    let report = log.verify_log().unwrap();
+    assert_eq!(
+        (report.segments, report.sealed_segments, report.frames),
+        (2, 1, 5)
+    );
+    drop(log);
+    let log = StrataLog::open(&dir).unwrap();
+    assert_eq!(log.read_frames(1).unwrap().len(), 5);
+    assert_eq!(log.head().last_acked_seq, 5);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn full_disk_seal_undo_survives_a_reopen_without_further_writes() {
+    let _serial = serialize();
+    reset_failpoints();
+    let dir = test_dir("full-seal-next-reopen");
+    let log = StrataLog::open(&dir).unwrap();
+    append_many(&log, 2);
+
+    set_site_full(Site::SegmentHeader, true);
+    let err = log.seal().expect_err("next segment cannot be created");
+    assert!(is_full(&err), "{err:?}");
+    set_site_full(Site::SegmentHeader, false);
+    drop(log);
+
+    // Recovery sees an ordinary open segment: nothing truncated, nothing new.
+    let log = StrataLog::open(&dir).unwrap();
+    assert_eq!(log.head().segment_no, 0);
+    assert_eq!(log.read_frames(1).unwrap().len(), 2);
+    assert_eq!(log.append(1, b"three").unwrap().seq, 3);
+    log.verify_log().unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn seal_stays_fail_stop_when_a_file_follows_the_sealed_segment() {
+    let _serial = serialize();
+    reset_failpoints();
+    let dir = test_dir("full-seal-next-leftover");
+    let log = StrataLog::open(&dir).unwrap();
+    append_many(&log, 2);
+
+    // A file already numbered as the next segment: taking the trailer off
+    // would leave an open segment with a successor, which no open accepts.
+    let leftover = dir.join(format!("00000001-{}.seg", "ab".repeat(16)));
+    fs::write(&leftover, b"").unwrap();
+    set_site_full(Site::SegmentHeader, true);
+    let err = log.seal().expect_err("next segment cannot be created");
+    assert!(is_full(&err), "{err:?}");
+    set_site_full(Site::SegmentHeader, false);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| log.append(1, b"x")));
+    let payload = result.expect_err("the log is fail-stopped");
+    let msg = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("panic payload is a String");
+    assert!(
+        msg.contains("seal could not create the next segment"),
+        "{msg}"
+    );
+
+    // The trailer was kept, so a reopen rolls forward from the sealed segment.
+    drop(log);
+    let log = StrataLog::open(&dir).unwrap();
+    assert_eq!(log.head().segment_no, 1);
+    assert_eq!(log.read_frames(1).unwrap().len(), 2);
+    assert_eq!(log.append(1, b"three").unwrap().seq, 3);
+    let report = log.verify_log().unwrap();
+    assert_eq!((report.segments, report.sealed_segments), (2, 1));
+    fs::remove_dir_all(&dir).unwrap();
+}

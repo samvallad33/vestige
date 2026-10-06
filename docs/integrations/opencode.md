@@ -1,10 +1,10 @@
 # OpenCode
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../../README.md) and the [4.0.0 changelog](../../CHANGELOG.md).
+> Written for Vestige 4.x.
 
-> Give OpenCode persistent local memory across TUI, CLI, and desktop sessions.
+> Give OpenCode a local record of your decisions across TUI, CLI, and desktop sessions.
 
-OpenCode supports local MCP servers through its `mcp` config. Add Vestige once and your OpenCode agents can remember project decisions, architecture context, preferences, and previous fixes between sessions.
+OpenCode supports local MCP servers through its `mcp` config. Add Vestige once and your OpenCode agents can reload project decisions, architecture context, preferences, and previous fixes between sessions.
 
 Verified with OpenCode `1.16.2` on June 8, 2026.
 
@@ -12,9 +12,9 @@ Verified with OpenCode `1.16.2` on June 8, 2026.
 
 ## Why OpenCode Users Add Vestige
 
-OpenCode is strong at driving real coding work from the terminal. The painful gap is continuity: the next session often has to rediscover what the previous session already learned. Vestige gives OpenCode a local memory layer through MCP, so the agent can reuse the project context that should not be trapped in one chat transcript.
+OpenCode is strong at driving real coding work from the terminal. The painful gap is continuity: the next session often has to rediscover what the previous session already learned. Vestige gives OpenCode a local, signed log through MCP, so the agent can reuse the project context that should not be trapped in one chat transcript.
 
-Useful memories include:
+Useful records include:
 
 - project decisions: "we use Axum handlers thinly and keep database logic in storage modules"
 - preferences: "prefer small focused PRs and explicit verification receipts"
@@ -22,7 +22,7 @@ Useful memories include:
 - bug fixes: "OpenCode rejects `mcpServers`; use top-level `mcp.vestige` with a command array"
 - workflow state: "PR #67 was merged, but the config shape needed correction before promotion"
 
-Vestige is local-first. Memories are stored in SQLite on your machine, can be scoped globally or per project, and are retrieved with tools like `vestige_session_start`, `vestige_recall`, and `vestige_smart_ingest`.
+Vestige is local-first. Records are stored in a Strata log on your machine, can be scoped globally or per project, and are found by exact handle (an id or an exact tag) with tools like `vestige_session_start`, `vestige_recall`, and `vestige_smart_ingest`.
 
 ---
 
@@ -30,7 +30,7 @@ Vestige is local-first. Memories are stored in SQLite on your machine, can be sc
 
 ### 1. Install Vestige
 
-Download the archive for your machine from the [GitHub Release](https://github.com/samvallad33/vestige/releases) and put `vestige-mcp` on your PATH. Do not install this version with npm.
+Install Vestige as described in the [README](../../README.md#install) and put `vestige-mcp` on your PATH.
 
 Verify the binary:
 
@@ -104,19 +104,19 @@ Vestige tools should be available with the `vestige_` prefix, such as `vestige_r
 
 In OpenCode:
 
-> "Remember that this project uses Rust with Axum and SQLite."
+> "Remember that this project uses Rust with Axum and SQLite. Tag it `stack`."
 
 Start a new OpenCode session, then ask:
 
-> "What stack does this project use?"
+> "Recall the `stack` tag from Vestige."
 
-It remembers.
+It comes back, with its memory id. Vestige 4.x finds a record by an exact handle (its id or an exact tag), not by resemblance, so name the tag when you save and when you ask. See [Getting Started](../GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
 
 ---
 
-## Project-Specific Memory
+## Project-Specific Data Directory
 
-To isolate memory per repo, add `--data-dir` to OpenCode's command array:
+To keep a separate store per repo, add `--data-dir` to OpenCode's command array:
 
 ```json
 {
@@ -140,7 +140,7 @@ For an absolute path:
   "mcp": {
     "vestige": {
       "type": "local",
-      "command": ["/usr/local/bin/vestige-mcp", "--data-dir", "/Users/you/projects/my-app/.vestige"],
+      "command": ["<absolute path from which vestige-mcp>", "--data-dir", "/Users/you/projects/my-app/.vestige"],
       "enabled": true,
       "timeout": 10000
     }

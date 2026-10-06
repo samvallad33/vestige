@@ -733,9 +733,6 @@ fn decode_b64(raw: &str) -> Result<Vec<u8>, base64::DecodeError> {
 /// Minimal DSSE envelope shape for digest recomputation.
 #[derive(serde::Deserialize)]
 struct DsseWire {
-    #[serde(rename = "payloadType")]
-    #[allow(dead_code)]
-    payload_type: String,
     payload: String,
     signatures: Vec<DsseWireSig>,
 }

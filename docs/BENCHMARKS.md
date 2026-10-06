@@ -1,10 +1,9 @@
 # Benchmarks
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> **The retrieval numbers on this page (MemConflict and Silent Rotation) were measured on the v3 engine or earlier, not on Vestige 4.x.** The MemConflict run used Vestige 2.4.1 and the Silent Rotation run used v3.1. Both used hybrid-search recall (keywords plus embeddings). A default 4.x build has neither: `recall` takes an exact handle, and a free-text `query` or `mode="contradictions"` returns `similarity_disabled`. The harnesses, including the LongMemEval sanity check, send exactly those calls, so run against a 4.x server they record retrieval errors, not scores. There is no 4.x benchmark on this page. For how 4.x behaves, see the [README](../README.md) and the [changelog](../CHANGELOG.md).
 
-This page documents the only retrieval benchmark Vestige currently stands
-behind, what it does and does not measure, how to reproduce it from a clean
-checkout, and where it is weak.
+This page documents the retrieval benchmarks Vestige ran on v3, what they do and
+do not measure, how to reproduce them from a clean v3 checkout, and where they are weak.
 
 > **Retraction notice — CauseBench.**
 > Vestige previously advertised a benchmark called **CauseBench**. It is
@@ -53,9 +52,9 @@ three conflict types:
 | Static | Factual correctness | Hold a true fact against a later false contradiction. |
 | Conditional | Contextual applicability | Recover the right condition-value binding. |
 
-This is the benchmark where Vestige *should* be strongest, because it ships
-contradiction inspection as a first-class tool (`recall(mode="contradictions")`)
-rather than as a post-hoc heuristic.
+On v3 this was the benchmark where Vestige *should* have been strongest, because it
+shipped contradiction inspection as a first-class tool (`recall(mode="contradictions")`)
+rather than as a post-hoc heuristic. That tool mode is withheld in 4.x.
 
 ### Published numbers, and one correction
 
@@ -183,6 +182,10 @@ Read this section before quoting any number from this harness.
 
 ### Reproducing
 
+These steps reproduce the v3 measurement. They need a v3 build of `vestige-mcp` (the
+harness's `recall` calls are free-text), so check out a v3 tag first. They do not run
+against a 4.x server.
+
 Requires: Rust toolchain, Python 3.9+ (**standard library only — no pip
 install**), network access for the one-time dataset fetch.
 
@@ -213,7 +216,7 @@ the `nomem`, `random` (seeded) and `bm25` arms are fully deterministic. The
 state, timestamps, and consolidation are time-dependent by design. Re-running
 reproduces the ranking, not necessarily the fourth decimal place.
 
-**Embedding warmup.** The harness blocks for a mandatory warmup (default 45s)
+**Embedding warmup (v3 only).** The harness blocks for a mandatory warmup (default 45s)
 after `initialize` before the first `tools/call`. Skipping it silently measures
 a degraded keyword-only fallback — a failure that does not look like a failure.
 The observed warmup is recorded in every results file. Verify a run used real
@@ -403,3 +406,17 @@ row appears. Not before, and never next to the paper's own table.
 4. Never cite CauseBench. Never cite the invalidated LongMemEval run.
 5. If a number cannot be reproduced from a clean checkout with the printed
    command, it is not a number — retract it.
+
+## Silent Rotation (measured on v3.1)
+
+Moved here from the README. Recall in these runs was still hybrid search, so the numbers describe v3.1, not 4.x.
+
+| Arm (6 models, 25 trials) | Converged correct | Converged wrong | Split |
+|---|---|---|---|
+| No memory | 0/25 | **21/25** | 4/25 |
+| Dense cosine RAG | 4/23 | **12/23** | 7/23 |
+| Vestige | 20/23 | **0/23** | 3/23 |
+
+Outcomes come from `tests/by_model_tables.py`: a trial is correct when the tests were green, the production replay passed, and the key was right; wrong when the tests were green but production failed; split when the merge conflicted.
+
+Do not quote this as proof that every other memory system converges on the wrong answer. In this run only the `rag`, `mem0` and `zep` baselines produced wrong-key convergence; `supermemory` and `hindsight` did not. The tool-parity flaw in the harness must also be fixed before the "0 of 23" figure is used as commercial evidence.

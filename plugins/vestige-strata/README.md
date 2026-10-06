@@ -1,10 +1,11 @@
 # Vestige Strata for OpenClaw
 
-Local-first memory for your OpenClaw agent, built on **Strata** — Vestige
-4.0's signed, append-only causal log. Not a vector database wearing a memory
-costume: every write passes a gate, comes back with a receipt you can replay
-byte-for-byte, and retention follows an FSRS-6 review schedule. Your agent's
-history is a log you own, on your disk, that nobody can silently rewrite.
+The kernel of the Causal Proof Engine, for your OpenClaw agent: **Strata**,
+Vestige 4.0's signed, append-only causal log. Zero vectors, zero RAG: every
+write passes a gate, comes back with a receipt you can replay byte-for-byte,
+and every answer carries its proof. Retention follows an FSRS-6 review
+schedule. Your agent's history is a log you own, on your disk, that nobody
+can silently rewrite.
 
 ## The tools
 

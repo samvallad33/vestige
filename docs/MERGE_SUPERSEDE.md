@@ -1,154 +1,50 @@
-# Merge / Supersede Controls (Phase 3)
+# Duplicates, Supersession and Undo
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> Written for Vestige 4.2.0. v3 had a merge and supersede workflow scored by embedding similarity. A Strata log withholds it. This page says what `dedup` does now and why the rest is refused.
 
-> Diff-previewed, confidence-gated, reversible, self-explaining
-> combine/dedupe/supersede on a never-delete (bitemporal) store.
+Records pile up: copies, near-copies and facts that are out of date. The fixes that go wrong are the ones that guess. A guess that merges two records destroys the audit trail, and a guess that deletes on a contradiction loses information. Vestige 4.x does not guess. It lists only records that are identical, it never merges, and every change it does make is a recorded write that you can undo.
 
-Memory systems accumulate duplicates, near-duplicates, and outdated facts. The
-naive fixes are all bad: dumb hashing under-merges (misses paraphrases),
-aggressive LLM merging over-merges and destroys the audit trail, and
-auto-deleting on contradiction silently loses information. Vestige's Phase 3
-takes the opposite stance:
+## What `dedup` does in 4.1.1
 
-- **Opt-in, never silent.** The default is preview/review. Nothing mutates your
-  memory unless you explicitly apply a plan.
-- **Diff-previewed.** `plan_merge` / `plan_supersede` show exactly what *would*
-  change before anything does.
-- **Confidence-gated.** A Fellegi-Sunter two-threshold score classifies each
-  candidate as `match` / `possible` / `non_match`.
-- **Reversible.** Every applied operation is recorded with an undo payload — a
-  *git reflog for your agent's memory*.
-- **Self-explaining.** Each candidate carries the signals that explain *why* two
-  memories were judged duplicates.
-- **Audit-preserving.** Superseding does not delete: it stamps `valid_until` and
-  keeps the old memory queryable (Graphiti-style "invalidate, don't delete").
+| Action | State | What it does |
+| --- | --- | --- |
+| `scan` | works | Lists exact duplicate clusters under `duplicateClusters`. Read-only |
+| `undo` | works | With no `operation_id`, lists recent recorded writes. With one, appends a compensating record. Needs `confirm=true` |
+| `tag_rename`, `tag_merge` | preview only | Shows what a rename or merge would touch. Applying is not available. See [MEMORY_HYGIENE.md](MEMORY_HYGIENE.md#exact-tag-rename-and-merge) |
+| `policy` | stored, unused | Reads and sets the two thresholds and `auto_apply`. 4.1.1 has no merge scoring and no apply step, so nothing acts on them |
+| `plan_merge` | withheld | `unavailable_in_4_0`: merge planning needs embeddings, which 4.0 removed |
+| `plan_supersede` | withheld | `unavailable_in_4_0`: supersede planning needs embeddings, which 4.0 removed |
+| `apply` | withheld | `unavailable_in_4_0`: there are no merge or supersede plans without embeddings |
+| `verdict` | withheld | `unavailable_in_4_0`: reconsolidation verdicts need embeddings, which 4.0 removed |
+| `protect` | withheld | `unavailable_in_4_0`: the Strata log has no protect flag yet |
 
-## The bitemporal model: invalidate, don't delete
+A withheld action is left out of the advertised schema and refused with its reason.
 
-Superseding memory A with memory B does **not** erase A. Instead:
+## Exact duplicates
 
-- `A.valid_until` is stamped with the supersede time.
-- `A.superseded_by` is set to `B.id` (a lineage pointer).
-- A remains fully queryable for audit. Searches and timelines can still surface
-  it; it is simply marked as no longer the current truth.
+`scan` forms a cluster only when records have the same content identity or the same declared source key:
 
-This reuses the existing `valid_from` / `valid_until` columns on
-`knowledge_nodes` (migration V2) plus a new `superseded_by` column (migration
-V14). Merges work the same way: the survivor absorbs the others' content, and
-each absorbed node is bitemporally invalidated rather than deleted.
+- the stored `content_hash` of the source envelope, or byte-identical content when no hash was recorded; or
+- the same `source_system` and `source_id`.
 
-## Fellegi-Sunter two-threshold scoring
+There is no similarity score. Two records that say the same thing in different words are not a cluster. In the scan response, `mergeCandidates` is `{"status": "unavailable", "reason": "embeddings_unavailable"}`. It carries no count and no list, so it cannot be read as "none found". `reconsolidationPlans` is empty, and `nextStep` says merge planning is withheld.
 
-Candidate scoring combines three signals into a weighted score in `[0, 1]`:
+## Superseding: invalidate, do not delete
 
-| Signal                  | Weight | Source                                     |
-| ----------------------- | -----: | ------------------------------------------ |
-| Embedding cosine sim    |   0.70 | stored embeddings (`node_embeddings`)      |
-| Tag overlap (Jaccard)   |   0.15 | `knowledge_nodes.tags`                     |
-| Content token overlap   |   0.15 | Jaccard over content tokens (len > 2)      |
+Nothing is deleted from a Strata log. To replace a record, use `memory` action `edit`. An edit admits a successor and retires the previous record, and it keeps the code anchors. The old record's bytes stay on the log. Reads and handle lookups no longer return it. The id changes, so move any reference you stored to the new id.
 
-The combined score is then classified against **two** thresholds:
+A fact that stops being true on a known date belongs in a validity window instead. Save it with `validUntil`, or let a `state` record expire. See [MEMORY_HYGIENE.md](MEMORY_HYGIENE.md#dated-facts-at-ingest).
 
-```
-score >= match_threshold       => "match"      (auto-merge eligible)
-possible_threshold <= score    => "possible"   (surfaced for review)
-score <  possible_threshold     => "non_match"  (never offered)
-```
+## Undo: the reflog
 
-Defaults: `match_threshold = 0.86`, `possible_threshold = 0.72`. The two-band
-design means borderline cases are surfaced for review instead of being
-force-decided in either direction.
+Every write is recorded, so `dedup` action `undo` can reverse one.
 
-A cluster's confidence is the **weakest** pairwise score within it (the loosest
-link), so a cluster is only as confident as its least-similar member.
+- With no `operation_id`, it returns the most recent recorded writes, newest first.
+- With an `operation_id` and `confirm=true`, it appends a compensating record to the log. The undone change is no longer visible to reads. An undo cannot itself be undone, so without `confirm=true` the call changes nothing and says so.
+- Undoing an edit leaves the pre-edit record live, with its code anchors, and retires only the edit.
 
-## The reversible operation log (the "memory reflog")
+The log itself is never rewritten. The write, the undo and the receipt of each stay on it. See [DECISION_RECEIPTS.md](DECISION_RECEIPTS.md).
 
-Every applied merge/supersede writes one row to `merge_operations`:
+## Protecting a record
 
-- `op_type` — `merge` | `supersede` | `undo`
-- `status` — `applied` | `reverted`
-- `survivor_id`, `affected_ids` — what was touched
-- `confidence`, `signals` — the score and *why* the memories combined
-- `reason` — a human-readable explanation
-- `undo_payload` — a JSON snapshot capturing everything needed to reverse it
-
-`merge_undo` consumes the undo payload to restore the survivor's prior
-content/tags and clear the bitemporal invalidation on every affected node, then
-records a compensating `undo` operation. Calling `merge_undo` with no
-`operation_id` returns the operation log so you can pick one.
-
-## Memory protection (pinning)
-
-`protect` sets the `protected` flag on a memory. A protected memory:
-
-- is never offered for auto-merge (it is flagged in `merge_candidates`),
-- cannot be merged *away* (it may only be the survivor of a merge),
-- cannot be superseded,
-- is excluded from garbage collection.
-
-Pass `protected: false` to unpin.
-
-## Tool surface
-
-| Tool               | Mutates? | Purpose                                                                   |
-| ------------------ | :------: | ------------------------------------------------------------------------- |
-| `merge_candidates` |    No    | Surface likely duplicate clusters with confidence + signals.              |
-| `plan_merge`       |    No    | Preview a merge of 2+ memories (a diff). Returns a `plan_id`.             |
-| `plan_supersede`   |    No    | Preview superseding A with B (bitemporal). Returns a `plan_id`.          |
-| `apply_plan`       |  **Yes** | Execute a plan by id; recorded as a reversible operation.                |
-| `merge_undo`       |  **Yes** | Reverse an operation, or list the operation log when given no id.        |
-| `protect`          |  **Yes** | Pin / unpin a memory so it can never be auto-merged/superseded/forgotten. |
-| `merge_policy`     |  **Yes** | Get/set the two thresholds + `auto_apply`.                               |
-
-### Typical flow
-
-```text
-1. merge_candidates                 -> review clusters + confidence + signals
-2. plan_merge { member_ids: [...] } -> inspect the diff, get plan_id
-3. apply_plan { plan_id, confirm }  -> apply; get operation_id (reversible)
-4. merge_undo { operation_id }      -> reverse if it was wrong
-```
-
-`apply_plan` requires `confirm: true` for `possible` / `non_match` plans. A
-`match` plan applies without `confirm` only when the policy has
-`auto_apply: true` (default `false`).
-
-## Configuration
-
-The merge policy persists per project (stored in `fsrs_config`). It can also be
-overridden via environment variables:
-
-| Variable                            | Meaning                              |
-| ----------------------------------- | ------------------------------------ |
-| `VESTIGE_MERGE_MATCH_THRESHOLD`     | Score ≥ this ⇒ `match`.             |
-| `VESTIGE_MERGE_POSSIBLE_THRESHOLD`  | Score ≥ this ⇒ at least `possible`. |
-| `VESTIGE_MERGE_AUTO_APPLY`          | `1`/`true` to allow auto-apply.      |
-
-A persisted policy (set via `merge_policy`) takes precedence over the
-environment, which takes precedence over the built-in defaults. When
-`vestige.toml` configuration lands, the policy will read from there as well.
-
-## Schema (migration V14)
-
-- `knowledge_nodes.protected INTEGER NOT NULL DEFAULT 0`
-- `knowledge_nodes.superseded_by TEXT`
-- `merge_plans(id, kind, status, created_at, applied_at, survivor_id,
-  member_ids, confidence, classification, payload)`
-- `merge_operations(id, plan_id, op_type, status, created_at, reverted_at,
-  reverts_op_id, survivor_id, affected_ids, confidence, signals, reason,
-  undo_payload)`
-
-The two `ALTER TABLE ... ADD COLUMN` statements are applied with duplicate-column
-guards so the migration is idempotent on replay; the rest of V14 uses
-`CREATE ... IF NOT EXISTS`.
-
-## Anti-patterns this design avoids
-
-- **Silently double-storing contradictions.** Merge composition attributes and
-  de-duplicates content instead of blindly concatenating or dropping it.
-- **Auto-deleting on contradiction.** Supersede invalidates bitemporally; the
-  old memory is retained and queryable.
-- **Trading away the audit trail for auto-merge convenience.** Every operation is
-  logged and reversible, with provenance for why memories combined.
+There is no `protect` flag on a Strata log in 4.1.1. Take a backup (`vestige backup <new-folder>`) before you change records you cannot afford to lose.

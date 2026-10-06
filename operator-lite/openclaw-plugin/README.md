@@ -11,14 +11,14 @@ Subscribes to `before_tool_call` and pipes each command through the Operator
 Lite gate (one stdlib-only Python file, analyzer-only — it never executes what
 it inspects):
 
-- **Deterministic verdicts** — 11 STOP rules + 17 SHADOW rules evaluated by a
+- **Deterministic verdicts** — 11 STOP rules + 15 SHADOW rules evaluated by a
   shell walker that follows `cd`, expands shell variables, reads heredocs,
   and simulates subshells before matching.
 - **GuardFall-proof** — sees through the obfuscation classes from CSA's
   GuardFall research: `$IFS` splitting, ANSI-C quoting, quote reassembly
   (`r''m -rf`), command substitution as the program name, `base64 -d | sh`,
   brace and glob expansion against the live filesystem, subshell time-bombs,
-  fork bombs. 43/43 on the adapted bypass corpus.
+  fork bombs. 46/46 on the adapted bypass corpus.
 - **Hash-chained receipts** — every verdict (allow, block, shadow) is
   appended to `~/.operator/receipts/<date>.jsonl` as a tamper-evident chain.
   `operator-gate verify` walks the chain.

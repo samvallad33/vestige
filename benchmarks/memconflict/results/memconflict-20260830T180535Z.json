@@ -32,7 +32,7 @@
       "name": "vestige",
       "version": "2.4.1"
     },
-    "binary": "/Users/entity002/vestige-v240-fixes/target/debug/vestige-mcp"
+    "binary": "<local build>/target/debug/vestige-mcp"
   },
   "config": {
     "arms": [

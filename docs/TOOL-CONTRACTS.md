@@ -1,11 +1,15 @@
-# Tool contracts and progressive discovery
+# Tool contracts
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../README.md) and the [4.0.0 changelog](../CHANGELOG.md).
+> The 16 tools a Vestige 4.2.0 server advertises, what each action takes, returns and writes
 
-Vestige advertises sixteen MCP tools. Most are action multiplexers: `recall`
-uses `mode`, `memory_status` uses `view`, and tools such as `memory` and `dedup`
-use `action`. An agent should choose the action needed for its current task.
-There is no requirement to call every tool during every session.
+Vestige advertises sixteen MCP tools, sorted by name. Most are action multiplexers:
+`memory`, `codebase`, `maintain` and `dedup` take an `action`, `memory_status` takes a
+`view`, and `ghostlink` takes a `mode`. An agent should choose the action its task needs.
+There is no requirement to call every tool in every session.
+
+Statements here come from the 4.2.0 code under `crates/` and from running the 4.2.0
+binaries against a scratch store. Where an older doc and the code differ, the
+code wins.
 
 ## Discover the installed contract
 
@@ -13,358 +17,498 @@ There is no requirement to call every tool during every session.
 {"name":"memory_status","arguments":{"view":"tools"}}
 ```
 
-This returns the same names, descriptions, action enums, defaults and tool-level
-annotations as the running server's `tools/list`. Request one complete schema:
+This lists the names, descriptions and action enums the running server advertises in
+`tools/list`. Request one complete schema:
 
 ```json
 {"name":"memory_status","arguments":{"view":"tools","tool":"maintain"}}
 ```
 
-The inventory includes compiled feature flags. They describe the build, not
-runtime readiness: a compiled embedder may still be loading, and an upstream
-connector still needs configuration. Embedding-backed duplicate scan, memory
-merge planning and apply need embeddings plus vector search. Tag maintenance
-and tag undo work without those features. Use health to inspect runtime state.
+The `tools/list` catalog is compact, about 20 KiB (a build-time guard fails the build
+above 22 KiB). Every field a call can send is on the wire with its type and its
+discriminator enums, and per-field prose moves one call deeper, into the full schema.
+A tool accepts grouped (`filters`, `source`) or flat fields. Actions a Strata log cannot
+honor are left out of the advertised schema and refused on call.
 
-The MCP annotations cover the whole tool. `recall` reason mode records
-composition evidence; `receipt` replay persists a durable replay artifact.
-Neither mixed tool is read-only. Receipt replay reuses its durable identity on
-retry. `suppress` compounds and is not idempotent. Client-side approval settings
-and the server's Memory PR review mode still determine whether a mutation runs.
-A successful protocol response can report `pendingReview=true` and
-`success=false`; inspect the application result before claiming a change.
+## Conventions every tool shares
 
-## Investigation before reinforcement
+**Handles, not queries.** A record is addressed by an id, a unique id prefix of 8 or
+more characters, or an exact tag. Tags are case-sensitive. No tool finds, ranks or pairs
+records by lookalike text.
 
-Backfill defaults to `promote=false`. A preview ranks earlier candidates using
-shared entities and chronology without changing their strengths or writing
-candidate edges. Its `causes` field is retained for compatibility, but every
-candidate is a hypothesis. The response explicitly reports
-`causality_verified=false`, scan limits, and whether reinforcement occurred.
-Existing edges may be reported during a preview; they are not created by it.
+**Receipts.** Every write returns a receipt id, an `eff-` id for the effect the gate
+admitted. `receipt` `get` shows what the write did, and `receipt` `replay` re-derives it
+from the log. Writes that return one directly: `smart_ingest` (and one per declared link),
+`memory` `promote`, `demote` and `edit`, `suppress`, `intention`, `ghostlink` `weave` and
+`harden`.
+
+**Scope.** Records default to scope `user`. Walks, GhostLink proposals, `dream` and
+`codebase` read one scope unless you pass `includeCrossScope` or `allScopes`. An id,
+a prefix or a tag handle resolves across scopes.
+
+**Typed refusals.** A call the log cannot honor says so, with a stable code in the
+message:
+
+| Code | Meaning |
+|------|---------|
+| `similarity_disabled` | The call asked for lookalike text: free-text `recall`, `recall` modes `reason` and `contradictions`, `session_start` `queries`, `ghostlink` `predict` with `current_topics`, `ghostlink` `map` with `query`. Pass an exact handle |
+| `handle_required` | `recall` found no record under that handle |
+| `ambiguous` | A `recall` prefix matched more than one id. The response lists the `candidates`. Pass a longer prefix or the full id |
+| `needs_report` | `causal_walk` had no usable start point. It names the one missing piece and does not guess |
+| `unavailable_in_4_0` | The action is withheld on a Strata log. See [Withheld in 4.x](#withheld-in-4x) |
+| `pending_strata` | The action is not admitted on the Strata log yet |
+
+**Honest parts.** A part of an otherwise working response that needs a capability this
+build lacks is `{"status": "unavailable", "reason": "...", "detail": "..."}` with no count
+and no list. A zero from a tool that did run means it looked and found none. An empty
+walk, dream or proposal says why in `emptyBecause` or `reason`.
+
+**Annotations.** MCP annotations describe the whole tool. `ghostlink` is not read-only
+because `weave` and `harden` write. `causal_walk` is not marked read-only either, though a
+Strata walk writes nothing.
+
+---
+
+## The tools
+
+### `recall`
+
+Find records by exact handle: `handle` is a record id, a unique id prefix (8+ characters)
+or an exact tag. Lookup order is exact id, then unique prefix, then exact tag.
+
+- A tag returns **every** live record carrying it, from every scope, with `nodes` and the
+  one-hop recorded `neighbors` (direction, `link_type`, strength; at most 20 edges). It
+  ignores `limit`.
+- An ambiguous prefix is refused as `ambiguous`, with its `candidates`.
+- A miss is `handle_required` (with `candidates: []`), not an empty list. Free text is
+  never split into words to look for a tag or an id inside it (4.2.0): only the whole
+  string is tried as a handle.
+- `query`, `mode: "reason"` and `mode: "contradictions"` return `similarity_disabled`.
+- A read never changes strength. Promote what helped with `memory`.
+
+CLI: `vestige recall --handle <handle>`.
+
+### `smart_ingest`
+
+Save one record (`content`) or up to 20 (`items`), never both. Fields: `node_type` (free
+text: `fact`, `concept`, `event`, `person`, `place`, `note`, `pattern`, `decision`),
+`tags`, `source`, `scope`, `validFrom`, `validUntil`, `links`, `allowSecrets`.
+
+- **Every create carries its proof (4.2.0).** The response holds `receiptId` (the `eff-`
+  effect that wrote it), `canonicalHash` (blake3 of the content after NFC,
+  zero-width stripping and whitespace collapsing, pipeline `nfc-zwstrip-wscollapse-v1`;
+  case is kept, so `API_KEY` and `api_key` are different text),
+  `entities` (typed spans with byte offsets, `CommitSha`, `Url`, `FilePath`, `IssueRef`,
+  `Email`, `Version`, from the pinned hand scanners; the first 8, dropped when empty) and
+  `importance` (`score` and `weightsVersion`, `linear-v1`; the factors are recomputable
+  from the submitted bytes). Nothing in the write path uses a model or similarity.
+- **Nothing is merged. A repeat reinforces.** A write whose canonical hash already exists
+  in the scope, on a record that is still live, creates no twin and never touches the
+  original: it records a small echo node (`source: "duplicate"`) linked `evidence_of` the
+  original and answers `decision: "reinforce"` with `duplicateOf`, `echoNodeId` and the
+  echo's own receipt. The echo carries the tags sent with the repeat, so a repeat sent
+  with a new tag is found under it, and any `links` sent with it are written from the
+  echo. Text whose record was edited away or suppressed is saved again as a new record.
+  Different text is always a new record (`decision: "create"`); no gate compares anything
+  by resemblance, and `predictionError` is always `1.0`.
+- **`intent_id` makes a write idempotent.** A write carrying `intent_id` (up to 128
+  characters of `A-Za-z0-9._:-`) is recorded once; sending it again, with the same or
+  different content, answers `decision: "replay"` with `replayOf` and the original
+  `intentDigest`, writes nothing, and reports `requestCanonicalHash` so a divergence is
+  visible. The intent index is a side file in the data directory; backups carry it.
+- **Auto-connect.** The new record is joined by `touched` edges to the records of its
+  scope that record the same exact identity (a tag, a file path, a commit sha, an issue
+  reference, a URL; never a word). All of one save's edges land as one write behind one
+  receipt. The response's `autoConnect` block lists the edges with the identity each is
+  joined on, `receiptId`, and `skipped`: every tag that did not join, its carriers out of
+  the scope and the reason (a hub tag more than half the scope carries, or more pairs than
+  the 100-edge budget of one write).
+- **`links`.** Up to 16 typed edges from the new record to existing records in the same
+  scope: `derived_from` (this record derives from it), `evidence_of` (this record is
+  evidence about it), `closes` (this record closes it, stored as `closed_by`) and, since
+  4.2.0, `supersedes` (this record fully replaces it; the old record stays intact and the
+  edge is the paper trail). Each link is written through the gate with its own receipt, and
+  batch `items` carry their own. Every link is checked before anything is written: the
+  kind, that the target is a live record, that it is in the same scope, and that no link
+  repeats. One refused link refuses the whole save. `corrects` is not declarable because
+  it can retire a record. These edges are what `causal_walk` follows and what GhostLink's
+  bridge lens walks.
+- **Batches are content-ordered.** A batch of `items` processes them in canonical-hash
+  order, so the same batch produces the same ids whatever order the items arrive in.
+- **Validity.** `validFrom` and `validUntil` are exact RFC 3339 times, and `validUntil`
+  must be after `validFrom`. Two defaults are applied when you pass none, and the
+  response's `validity.source` names which one fired. A record of type `state` gets a
+  `validUntil` 30 days out (`VESTIGE_STATE_TTL_DAYS`, `0` disables). And one literal rule
+  reads the content: a single `as of YYYY-MM-DD` phrase sets `validFrom` to that date.
+  Like the credential scanner, that rule reads the record's words at write time and does
+  not touch retrieval. Pass `validFrom` yourself to skip it. Records that are expired or
+  not yet valid are not GhostLink candidates.
+- **Secrets.** The gate refuses AWS, GitHub, Slack, Google, Anthropic, OpenAI (`sk-ant-`,
+  `sk-proj-`, `sk-svcacct-`, `sk-admin-`, legacy `sk-`) and Stripe live (`sk_live_`,
+  `rk_live_`) keys in every stored field. Stripe test keys and a bare `password:` line
+  are not blocked. `allowSecrets` overrides the gate, so set it only deliberately. A
+  refusal names the credential kind and never echoes the value.
+- `synapticCapture` and `tagSuggestionStatus` come back as typed `unavailable` parts
+  (`synaptic_capture_unavailable`, `similarity_disabled`) with a plain `detail`. Nothing
+  failed: tags are stored exactly as given.
+- Batch results carry `batchOutcome` (`applied`, `no_changes`, `partial`, `failed`) and
+  `atomic: false`. Earlier items stay committed when a later item fails.
+
+CLI: `vestige ingest "<content>" --tags a,b --node-type decision`.
+
+### `memory`
+
+One record. Actions: `get`, `get_batch` (`ids`), `state`, `promote`, `demote`, `edit`.
+
+- `state` reads the four accessibility bands (Active at 0.7 and above, Dormant at 0.4,
+  Silent at 0.1, Unavailable below). On a Strata log all three strengths it reports equal
+  one value, the card's retrievability.
+- `promote` is an FSRS review rated Easy. `demote` is a review rated Again. Both return a
+  `receiptId` and record an endorsement event for that exact content revision. An
+  endorsement records who endorsed. It does not make the claim true.
+- A demote does not delete. The record is still found by its id and tags, and it fades
+  faster from the lower stability. Retrievability reads 1.0 right after any review.
+- `edit` admits a successor and retires the previous node, which stays on the log. The
+  successor starts a fresh FSRS card. Code anchors carry over.
+- `purge` and `delete` return `unavailable_in_4_0`.
+
+### `memory_status`
+
+Views: `health` (default), `retention`, `timeline` (records by day, default 7 days),
+`changelog`, `provenance`, `coverage`, `stats`, `tools`.
+
+- `provenance` takes `memoryId` and returns the frame that admitted the record: its
+  sequence number, gate sequence, operation, frame hash and payload hash.
+- `coverage` counts anchors, edges by type and record ages. It says nothing about truth
+  or causal linkage.
+- `stats` counts by type, tag and age. `all_scopes` reads every scope.
+- `changelog` with a single `memory_id` is withheld, because a Strata log does not record
+  per-record state transitions. Use `provenance` or `receipt get`.
+- `health` still carries some v3-era wording in `warnings` and `diagnostics`, such as a
+  suggestion to run `consolidate`, which is withheld. Trust its numbers, not that advice.
+
+CLI: `vestige stats`, `vestige health`.
+
+### `session_start`
+
+Status, open intentions, `needsBackup` / `needsDream` and codebase context under one
+token budget (default 1000, counted as UTF-8 bytes divided by four). It writes nothing.
+
+- `include_intentions`, `include_status`, `include_predictions`, `scope`, `changed_files`
+  and `context` (`codebase`, `file`, `repoPath`, `topics`).
+- `queries` is ignored with a notice that names the exact-handle alternative.
+- With `context.codebase` it lists that codebase's patterns and decisions from the
+  requested scope. Pass `repoPath` to check their anchors against the checkout. When the
+  requested scope has none but other scopes hold the codebase's patterns, decisions or
+  change records, `codeContext.elsewhere` lists those scopes with counts (4.1.1).
+- Intentions show their id, their due date with the year, and an `OVERDUE` mark.
+  `needsBackup` and `needsDream` come from the last backup and dream that completed.
+
+### `receipt`
+
+`get` shows what a write did, from an `eff-` receipt id or a record id: the origin frame,
+the mutations, and an attestation that recomputes the hash chain and the signed trailers
+before it attests. `replay` re-derives the state from the log and compares it to the
+receipt: `matched`, `mismatches`, `stateDigest`, `replayedDigest`. Replay is read-only
+and makes no claim about the world. The receipt of one save's auto-connect edges
+(`autoConnect.receiptId`) lists every edge it wrote as an `edge_recorded` mutation, and
+`replay` re-derives them all. `save_walk` is withheld.
+
+### `causal_walk`
+
+Walk a failure backward from explicit start points.
 
 ```json
-{"name":"backfill","arguments":{"failure_id":"<memory-id>","scope":"project"}}
+{"name":"causal_walk","arguments":{"start_points":[{"kind":"logged_write","node_id":"mem-0000000000000005"}]}}
 ```
 
-Review candidates against current evidence before explicitly requesting
-`promote=true`. Expired or future memories are not reinforced. Suppressed and
-superseded memories are excluded from candidates. Promotion records a
-`backfill_candidate` edge; it does not create a proven causal relationship.
-The tool's default namespace is `user`; both failure and candidate selection
-use the requested namespace before scan limits. Automatic failure-ingestion
-hooks preserve that namespace and explicitly preview candidates without promotion.
-They report candidate count and hypothesis status.
+- **Start points.** `kind` is `failing_test`, `stack_frame`, `ci_run`, `logged_write` or
+  `version_range`. **Every kind accepts `node_id`** (4.1.1), the id of the record that
+  holds the symptom. Before 4.1.1 only `logged_write` could carry it. A start point with
+  no `node_id` is not walked, and `start_points` says why.
+- **Several start points walk together.** Each node lists the starts that reached it in
+  `from`, the shallowest route wins, and a start that is also a recorded cause of another
+  start keeps that edge in `causes`. `start_points` reports each as `walked`,
+  `unresolved`, `not_in_scope` or `duplicate`, with a reason.
+- **Direction.** The walk goes toward the cause. From a record it goes to what the record
+  is `derived_from`, and to the records that are `evidence_of` it, that it closed
+  (`closed_by`), or that `touched` it. A record derived from the start is downstream and
+  is never reported as a cause. This is the 4.1.1 fix. On 4.1.0 the walk followed
+  `derived_from` the wrong way.
+- **One touched edge per path (4.2.0).** A `touched` edge records that two records name
+  the same exact thing, and that does not carry over a second step, so a path follows at
+  most one of them; `derived_from`, `evidence_of` and `closed_by` chain to the depth
+  bound. `not_followed` counts the touched edges the walk saw and did not follow, the
+  records behind them, and the identities their two ends share (hub tags left out), and
+  `not_followed.held` lists those records one per record: `memory`, the reached record
+  it hangs `from`, the `depth` it would have, the `shared` identities and the content.
+  They are not causes and are not ranked with them; a tool that tests hypotheses
+  (`vestige prove`) takes them as its farther tier.
+- **Order with proof (4.2.0).** Causes are ordered by depth, then by the distinct exact
+  identities a cause shares with its start (more first), then by the rarer identity
+  first (fewer carriers in the scope), then by id. Each cause carries `rank`, `joined_on`
+  (identity and carriers), `shared_count` and `not_counted_hub_tags`; `ranking` states
+  the order and `scope_size`. The order arranges hypotheses; it proves nothing.
+- **Bounds.** At most 8 hops and 500 nodes. Results are hypotheses, not proven causes.
+- **No start point** returns `needs_report` and names what is missing.
+- **An empty walk says why.** `emptyBecause` and `incomingEdges` count the causal edges
+  that arrive from another scope (a walk does not cross scopes), the causal edges that lead
+  downstream, and the incoming edges that are not causal, by link type.
+- `promote` is accepted and answered: `promote: {"requested", "edges_persisted": 0, "note"}`.
+  A recorded walk follows only edges the log already holds, so there is no trail to record.
+  `scan_limit` and `lookback_days` apply to the legacy engine only.
+- The camelCase spellings `startPoints`, `nodeId`, `loggedWrite`, `scanLimit` and
+  `lookbackDays` are read like their snake_case names.
 
-`ghostlink(mode="propose")` (and its alias `graph(action="never_composed")`) also defaults to `user`. Supply `scope` for a
-project or `includeCrossScope=true` to deliberately investigate across projects.
-Absence from the local composition history does not establish worldwide
-novelty. The response labels `globalNoveltyVerified=false`. Suppressed,
-superseded, expired and future memories are excluded from composition candidates.
+CLI: `vestige causal-walk --logged-write <id>` or `--node-id <id>`. Writes nothing. The
+causes print as `#<n> <id> depth <d>` with the content on the next line, then the
+not-followed summary and the held records numbered on; `--json` prints the response.
+`vestige prove --logged-write <id> ...` runs the user's test on the leads (see README).
 
-These scope controls currently apply to `never_composed` only. Other graph
-actions retain their existing global behavior and reject these controls rather
-than silently ignoring them. Scope is a selection boundary in the local store;
-this patch does not establish multi-tenant authorization across every API.
+### `forgotten_lesson`
 
-## Reviewed changes and truthful outcomes
+`failure_id` (required), `scope`. Walks backward from the failure over recorded causal
+edges (`corrects`, `derived_from`, `evidence_of`, `closed_by`) and returns the fix or
+lesson records whose FSRS retrievability was below 0.5, lowest first, each with its
+`edge_path`, `retention_pct` and `recorded_at`. No entity overlap, keyword search or
+inferred edge is used. Read-only.
 
-- **Dedup:** Applying a strong match without `confirm=true` requires the current
-  `auto_apply` policy to permit it. Policy and all affected namespace identities
-  are checked inside the mutation transaction. A plan spanning namespaces is
-  rejected even with confirmation. Existing same-scope apply/undo remains
-  available. Scan/planning scope and stale-plan content checks are separate
-  concerns; this gate does not certify the plan's meaning.
-- **Smart ingest:** Supply `content` or `items`, never both. Ambiguous input is
-  rejected before storage. Batch results retain legacy `success` and add
-  `batchOutcome` (`applied`, `no_changes`, `partial`, `failed`) and `atomic=false`.
-  Earlier successful items remain committed when a later item fails.
-- **Memory edit:** The content update marks embeddings pending in the same SQL
-  transaction, removing stale profile and legacy vectors and journaling invalidation
-  for other processes. The tool reports `embeddingStatus` as `available` or `pending` instead
-  of promising that regeneration succeeded. Direct and bulk vector readers exclude
-  dirty nodes, and regeneration includes dirty nodes even when an old vector has
-  the same model and dimensions. Embedding persistence compares the original content and active profile inside
-  its write transaction and rejects a stale computation before storing it.
-  Tests cover the persistence/index path with supplied vectors; they do not load a model.
-- **Maintenance:** The advertised per-action schemas come from their actual
-  handlers. Portable export, `since`, confined export filenames, restore merge
-  options, GC age filters, dream controls and scoring context are discoverable.
-  Unsupported action fields are rejected. Export supports `since`; it does not
-  support `start`/`end`. Advertised snake_case GC and scoring arguments are
-  honored. Lifecycle, embeddings, logs and GC are store-wide; dream accepts an explicit namespace `scope`.
-- **Suppression:** Default review mode can hold the operation for review.
-  Explicit fast-mode suppression still compounds. New operations have an exact
-  per-operation journal, a 24-hour reversal window and atomic conflict checks
-  for local state and journaled neighbor effects, as detailed below.
+CLI: `vestige forgotten-lesson <failure-id>`.
 
-## Deterministic intentions
+### `selftest`
 
-`intention(action="check")` accepts `context.current_time` (or legacy
-`currentTime`) as an RFC3339 clock with timezone. Invalid timestamps fail.
-Checks use that clock for trigger, deadline and snooze comparisons.
-`include_snoozed=true` makes snoozed records visible, but does not let them fire
-before `snoozedUntil`, including when overdue.
+No arguments. Plants a cause, an intermediate and a symptom with recorded `derived_from`
+edges, plus decoys, in a throwaway log, walks back, and deletes the log. Eleven checks,
+including that decoy edges, forward edges and a keyword distractor are ignored and that
+the live store is unchanged. The live store is only read.
 
-Context triggers require all supplied constraints. Codebase and topic matching
-retain their case-insensitive substring behavior; `file_pattern` is a literal,
-case-sensitive path substring, not a glob. Event triggers require an explicit
-observed event key; there is no natural-language event-condition evaluator.
+CLI: `vestige selftest`.
 
-```json
-{"name":"intention","arguments":{"action":"set","description":"Review the finished build","trigger":{"type":"event","condition":"build_finished"}}}
-```
+### `ghostlink`
 
-```json
-{"name":"intention","arguments":{"action":"check","context":{"current_time":"2026-09-10T12:00:00Z","event":"build_finished"}}}
-```
+Never-composed pairs, each with its proof from recorded structure only. `mode` is
+`propose`, `bounty`, `weave`, `map`, `inspect`, `explore`, `predict` or `harden`.
 
-Dates, trigger types, priorities, list statuses and duration bounds validate
-before persistence. Parsed absolute time triggers keep their timestamp. These
-checks do not run a background scheduler or prove that an agent will supply the
-right event context.
+- **`propose`**, `lens` `bridge` (default) or `divergent`. Bridge admits pairs within three
+  undirected hops over recorded `touched`, `derived_from` or `closed_by` edges that were
+  never woven, and the shortest path is the proof. Divergent admits pairs no recorded edge
+  joins, scored `min(Path_min, 7)` times typed divergence. A pair whose members have no
+  typed profile is a forced juxtaposition from a deterministic sampler, with no score.
+  Filters: `scope`, `tags` (exact; both members must carry one), `includeCrossScope`,
+  `limit`, and `cursor` for the divergent lens. An empty proposal says why, with counts.
+  Each response carries `neverUses`, the list of what no lens uses.
+- **`weave`** records what a tested pair showed: `first_id`, `second_id`, `outcome_type`
+  (`helpful`, `dead_end`, `submitted`, `accepted`, `rejected`, `duplicate_risk`,
+  `needs_poc`, `bad_severity`, `user_promoted`, `user_demoted`, `closed_by_scope`,
+  `closed_by_duplicate`, `closed_by_false_assumption`, `closed_by_user`, `expired_lane`),
+  optional `lens`. It writes a composition record plus a `derived_from` edge to each
+  member, each with a receipt. The pair leaves both lenses. Suppressing a member withdraws
+  the records composed from it.
+- **`weave` `evidence` (4.1.1).** Up to 8 findings from outside, each with `url` (http or
+  https), `sha256` of the fetched content, `retrievedAt` (RFC 3339) and an optional `note`.
+  They are recorded on the composition record and tagged `evidence:<sha256>`, so
+  `recall` finds the record by the hash alone. Every entry is checked before anything is
+  written. Vestige never fetches the URL, and the release binary stays offline.
+- **`bounty`** groups woven outcomes into lanes, with the bridge lens as the
+  never-composed lane. **`map`** returns the recorded subgraph around `center_id`
+  (`depth` 1 to 3, `max_nodes`). **`inspect`** reads woven compositions with `view`
+  `recent`, `get` (`event_id`), `memory` or `neighbors` (`memory_id`). **`explore`** reads
+  recorded typed paths with `kind` `chain`, `associations` or `bridges` (`from`, `to`).
+  **`predict`** takes exact handles only (`context.current_file`).
+- **`harden`** seeds invariant laws from `<data-dir>/ghostlink-laws.json`, then
+  `~/.vestige/ghostlink-laws.json`, then six built-in laws. It is idempotent by law id and
+  names a malformed laws file instead of skipping it.
+- Reads never write to the log. `graph` still answers as a hidden alias.
 
-## Scoped reasoning and bounded evidence
+CLI: `vestige compose --lens bridge|divergent`.
 
-Lookup also budgets the complete response envelope with room for server receipt
-metadata. It omits whole cards and reports `evidenceIncomplete` or `truncated`
-when the budget cannot carry the evidence. Known dissent groups are omitted
-together rather than returning only one side. Lookup and reason share the
-serialized-byte budget unit described below; it is not an exact tokenizer count.
+### `codebase`
 
-Lookup's opt-in `context_packet=true` returns stable evidence cards, sorted by
-ID, with changing scores and diagnostics omitted. Source and temporal metadata
-remain attached when permitted by the output mask. `temporalState` describes
-only the validity interval (`current`, `historical`, `future`, or `unknown`),
-not source authority or factual correctness. A complete packet receives a
-`packetId` bound to its evidence, store, query/filter arguments and output profile.
-Changes to content, selected membership, validity state, or the boundary change
-the ID. Incomplete packets have no reusable ID.
+Code knowledge anchored to files and symbols. Actions: `remember_pattern`,
+`remember_decision`, `get_context`, `verify`, `reanchor`, `ingest_repo`. Always pass
+`repoPath`, or the anchors are stored unverifiable.
 
-Only send `known_packet_id` while the previously returned complete packet still
-exists in model context. An exact match returns `notModified=true` and no cards.
-After compaction, eviction, a new conversation, or uncertain retention, omit it
-to get a full refresh. The server does not know the client's context state.
-`examples/python/context_packets.py` demonstrates this host-side handshake and
-selection of exact tool schemas for clients that support dynamic catalogs.
-Neither capability automatically modifies Codex, activates provider prompt
-caching, or demonstrates lower billed tokens. Hash identity is not a signature
-or authorization boundary.
+- **`remember_pattern`** (`name`, `description`) and **`remember_decision`** (`decision`,
+  `rationale`, `alternatives`) take `files` (`path#symbol`) or structured `anchors`.
+- **`get_context`** reads one scope (`scope`, default `user`) or every scope with
+  `allScopes` (the two together are refused). It lists patterns and decisions marked
+  current or stale. `scopes` lists every scope that holds code memories for the codebase,
+  each with `patterns`, `decisions` and `events` (change records) counts. `total` beside
+  `count` shows what `limit` cut. An empty answer names the scopes that do hold some.
+- **`verify`** needs an explicit `repoPath`. It checks at most `limit` (default 200, max
+  1000) records of each type: patterns and decisions, and with a `codebase` its change
+  records too. `checkedByType`, `totalByType`, `uncheckedByType` and `truncated` say what
+  `limit` left unchecked. `reanchor` replaces reviewed evidence.
+- **`ingest_repo` (4.1.1)** turns each non-merge commit of a local checkout into one
+  `event` record in its own scope (the codebase name unless you pass `scope`). Each record
+  has the handles `git-commit`, `codebase:<name>` and `commit:<sha>`, provenance
+  `(git, <codebase>, <sha>)`, `valid_from` set to the commit's author time (clamped to
+  now), and anchors on every touched symbol and file that exists in the checkout. Find one
+  with `recall` `handle: "commit:<sha>"`, and re-check them all with `verify`.
+  - It previews unless `dryRun=false`, because the log is append-only.
+  - `repoPath` must be the top of a working tree. A subdirectory, a bare repository and a
+    `.git` directory are refused with the directory to pass.
+  - `limit` defaults to 100 and is capped at 500. Page back with `rev='<oldest sha>~1'`,
+    which the response offers as `pageBackWith`. A write stops at a 45 second budget with
+    `remaining` set.
+  - Re-running skips recorded commits and gives any commit whose anchors never landed its
+    anchors. A commit the secret gate refuses is skipped. A second write of the same
+    codebase into the same scope while one runs is refused. Previews never are.
+  - Git runs local-only with lazy fetching off, and with `-c log.showSignature=false -c
+    core.fsmonitor=false`, `--no-show-signature`, `--no-ext-diff`, `--no-textconv` and no
+    pager, so a hostile checkout's own config cannot make it run a program. If git stops
+    partway, the whole commits read before the stop are kept and `gitStoppedEarly` says why.
 
-`recall(mode="reason")` defaults to the `user` namespace and applies supported
-scope, type, validity, source, retention and tag filters to retrieved and
-activation-expanded evidence. Cross-namespace reasoning requires
-`includeCrossScope=true`. Contradiction inspection also defaults to `user`.
-Topic search uses a bounded global candidate pool before namespace filtering;
-this prevents foreign evidence from being returned but can reduce recall in a
-large mixed-namespace store. Unsupported controls fail with mode-specific errors.
+### `intention`
 
-Reason confidence is a heuristic score, not a calibrated truth probability.
-A supplied `token_budget` keeps complete evidence groups or omits them instead
-of cutting claims from their evidence. Budget accounting uses serialized UTF-8
-bytes divided by four, rounded up, for structured content including server
-metadata. This is not an exact model tokenizer count or a budget for the full
-JSON-RPC envelope and its duplicate text representation. Expand omitted details
-through memory IDs. Retrieval exposure records include only returned evidence.
+Reminders and plans. Actions: `set`, `check`, `update`, `list`, `graph`. A `set` returns a
+receipt. `list` and `check` honor `scope`.
 
-## Start points, scopes and capabilities this build lacks (Strata)
+- Triggers: `time` (`at`, `in_minutes`), `context` (`codebase`, `file_pattern`, `topic`),
+  `event` (`condition`), `activity`, plus recurring and compound (`all_of`, `any_of`).
+  Priorities are `low`, `normal`, `high`, `critical`. Statuses are `active`, `fulfilled`,
+  `cancelled`, `snoozed`.
+- `set` stores the `description` as written and never parses it (4.2.0). The trigger,
+  deadline and priority are the ones you pass. With no `trigger` and no `deadline` the
+  intention is manual, never fires on its own, and the response says so in `note`. No tag
+  is added that you did not pass.
+- `check` takes `context.current_time` (RFC 3339 with a timezone) and uses that clock for
+  trigger, deadline and snooze comparisons. `include_snoozed=true` shows snoozed records
+  but does not let them fire before `snoozedUntil`.
+- **Matching is exact (4.2.0).** A trigger fires on a clock, or when a stored value equals
+  a handle the check declares, byte for byte: `condition` or `activity` against
+  `context.event` and each entry of `context.events`, `codebase` against
+  `context.codebase`, `file_pattern` against `context.file` (an exact path, not a glob),
+  `topic` against each entry of `context.topics`. No substring, no case folding. Before
+  4.2.0 a context or activity trigger fired on a case-insensitive substring; one written
+  for that is still stored and listed, and fires only on the exact value. `list` and
+  `check` put `triggerMatching` on every text-keyed trigger: `firesOn` names the context
+  field and the value to pass. A trigger that cannot be evaluated carries
+  `invalid_trigger` and is never dropped from the list.
+- `list` returns one documented order, echoed as `order`: priority high to low, creation
+  time old to new, then id.
+- Dates, trigger types, priorities, statuses and duration bounds validate before anything
+  is written. A completed or cancelled intention cannot be snoozed back to active.
+- `graph` evaluates evidence-aware plans through a nested `command`: `plan`, `revise`,
+  `observe`, `evaluate`, `explain`, `portfolio`, `complete`, `cancel`, `acknowledge`,
+  `replay`, `memory_snapshot`, `refresh_memory`. It rejects an `at` more than 24 hours
+  ahead. Nothing runs in the background: a trigger fires only when something calls
+  `check` with matching context.
 
-`causal_walk` begins at recorded memories. Every start point (`failing_test`,
-`stack_frame`, `ci_run`, `version_range`, `logged_write`) accepts `node_id`, the id
-of the memory that records the symptom; it is required only for `logged_write`.
-The walk takes every distinct in-scope `node_id` and walks each backward over
-recorded `closed_by`, `derived_from`, `evidence_of` and `touched` edges, then merges
-the results. Backward follows each edge toward its earlier end, and an edge is
-stored the way its writer names it: from a memory the walk goes to what it is
-`derived_from` (the edge's target), and to the records that are `evidence_of` it,
-that it closed, or that `touched` it (the edge's source). A memory derived from the
-start is downstream and is never reported as a cause. In the merged result: a node appears once at its shallowest depth, lists the starts that
-reached it in `from`, and a start that is also a recorded cause of another start
-stays in `causes` with the edge that says so. `start_points` reports each one as
-`walked`, `unresolved` (no `node_id`), `not_in_scope` or `duplicate`, with a reason.
-With nothing to walk the response is `needs_report` naming the single missing
-piece (`node_id`, or `node` when no start node is in the scope). A misspelled
-field is still an error that names the real one. The camelCase spellings
-`startPoints`, `nodeId`, `loggedWrite`, `scanLimit` and `lookbackDays` are read like
-their snake_case names. A walk that ran from real start nodes and found no cause
-carries `emptyBecause` and `incomingEdges`: the causal edges whose upstream end is in
-another scope (`causalFromOtherScopes`; the walk does not cross scopes), the causal
-edges that lead downstream from a start (`causalDownstream`), and the incoming edges
-that are not causal, by link type (`nonCausal`), as the log records them. A recorded walk has no inferred trail, so
-`promote=true` writes nothing and says so in `promote` (`requested`,
-`edges_persisted: 0`, `note`); trail edges are recorded on the legacy engine only.
+### `maintain`
 
-`codebase(action="get_context")` reads one scope (`scope`, default `user`), or every
-scope with `allScopes=true`; the two together are refused. The response always
-lists the scopes that hold matching code memories with exact counts (`scopes`): each
-row has `patterns`, `decisions` and `events`, where `events` counts the `event`
-memories tagged `codebase:<name>` (such as `ingest_repo` change records) and is only
-counted when a codebase is named. `get_context` lists patterns and decisions only. When
-the requested scope has none, `note` names the scopes that do, and when change records
-exist it names the scopes that hold them with their counts and the `verify` call that
-checks them; it says "in any scope" only when no scope holds any of the three. `total`
-beside `count` shows what `limit` cut.
+Actions on a Strata log: `dream`, `dream_compile`, `gc`, `importance_score`, `backup`,
+`export`.
 
-`codebase(action="verify", repoPath=...)` checks at most `limit` (default 200, max 1000)
-memories of each type in the scope: patterns and decisions, and with a `codebase` its
-change records too. `checkedByType` counts what was checked, `totalByType` what the
-scope holds of each type read, `uncheckedByType` the types with memories left out, and
-`truncated` whether any were; the message then says how many more were not checked.
+- **`dream`** pages through one scope's live records (`memory_count` 5 to 500, default 50,
+  `after` cursor, `max_pairs`). It needs at least 5 live records on the page. It replays
+  the recorded edges whose strength is at or above `min_similarity` (here the edge-strength
+  floor, default 0.5) and folds one FSRS review per endpoint, with the rating taken from
+  that card's own state. It reads no content, records the pass so `needsDream` reflects it,
+  and returns `reviews`. `discovery` is `unavailable`, and when no edge was replayed,
+  `emptyBecause` says so.
+- **`dream_compile`** ranks the top `memory_count` live records by retrievability and
+  replays their recorded edges. An edge with both ends replayed gains 0.1 strength (cap
+  1.0). A weak edge (under 0.5) with one end outside the replay set is scaled by 0.95.
+  `corrects` edges among the replayed records count as contradictions, and `derived_from`
+  and `evidence_of` edges count as insights. It files no review items, rewrites no record,
+  and does not record a dream-history entry. The four phases it reports are named
+  `NREM1_Triage`, `NREM3_Consolidation`, `REM_Creative` and `Integration`.
+- **`gc`** is a stub on the MCP tool. It always reports zero candidates and deletes
+  nothing, because the log is append-only. The CLI `vestige gc --dry-run` lists records
+  below a retention threshold, and `vestige gc` without `--dry-run` is refused.
+- **`importance_score`** takes `id`, a full record id, and scores that record from its
+  recorded structure (4.2.0): `score` is `edges.total + reviews.count - reviews.lapses`,
+  and `computedFrom` returns every input, the typed edges that touch the record (`total`,
+  `incoming`, `outgoing`, `byKind`) and its FSRS reviews (`count`, `lapses`; a demote is a
+  lapse). It reads no content, tag or name, writes nothing, and returns the same bytes for
+  the same store and id. Passing free-text `content`, which the v3 word heuristics scored,
+  is refused with `unavailable_in_4_0` and names `id`. The word scorer is compiled out of
+  the default build, so `smart_ingest`'s `importanceScore` is `0.0` there.
+- **`backup`** writes a `vestige-<time>.strata` folder into `<data-dir>/backups/` and
+  reports its path and size. **`export`** writes `memories-<time>.json` or `.jsonl`
+  (`format`, `since`) into `<data-dir>/exports/`. Format `portable` is withheld.
+- `consolidate` and `restore` are withheld. See below.
 
-`session_start` with `context.codebase` lists that codebase's patterns and decisions
-from the requested scope. When it finds none there but other scopes hold the codebase's
-patterns, decisions or change records, `codeContext.elsewhere` lists those scopes with
-their counts and a notice says how to read them.
+### `dedup`
 
-`codebase(action="ingest_repo", repoPath=...)` records the commits of a local checkout
-as change records. It previews unless `dryRun=false`, because the log is append-only.
-`repoPath` must be the top of a working tree: git names history paths from there while
-anchors resolve against `repoPath`, so a subdirectory is refused with the directory to
-pass, and a bare repository or a `.git` directory is refused because it has no files to
-anchor. Each non-merge commit is an `event` in scope `scope` (default: the codebase name,
-which defaults to the checkout's directory name), tagged `git-commit`, `codebase:<name>`
-and `commit:<sha>`, with provenance `(git, <codebase>, <sha>)` and `valid_from` equal to
-the author time, clamped to now so a future date cannot hide the record. Find one commit
-with `recall(handle="commit:<sha>")`. Touched symbols and files that exist in the
-checkout are anchored; a commit with any verifiable anchor keeps only the verifiable
-ones, because a record is fresh only when all its anchors are, and `codebase(action="verify",
-codebase=...)` then checks the records against the working tree. Paths that resolve
-outside the checkout (a symlink, `..`) are never read. Git runs with lazy fetching off:
-a partial clone's missing objects are not downloaded, and if git stops partway the whole
-commits before the stop are recorded and `gitStoppedEarly` names the cause. The checkout
-may be untrusted, so git runs with `-c log.showSignature=false -c core.fsmonitor=false`
-and `--no-show-signature`, `--no-ext-diff`, `--no-textconv` and no pager: nothing its own
-config names is run. A rerun skips recorded commits, repairs commits that lack anchors,
-and stops at a 45 s write budget with `remaining` set; `limit` is capped at 500 and
-`pageBackWith` gives the `rev` that reads the next older page. A write is refused while
-another write of the same codebase into the same scope runs in the server process (both
-would read the recorded set before either wrote); previews are never refused. `partial`
-and `error` report a failed write. `nextStep` tells a commit the log refused (the run
-stopped there) apart from an anchor write that failed (every commit was recorded, and the
-same call again adds the anchors), and after a complete write it gives the `verify` call
-with the canonical checkout path.
+Actions on a Strata log: `scan` (default, read-only), `undo`, `tag_rename`, `tag_merge`,
+`policy`.
 
-The dashboard's `POST /api/consolidate` (the Stats page's Consolidate button) answers
-`501` with code `unavailable_in_4_0` on a Strata log, for the reason `maintain`
-withholds `consolidate`, and announces no consolidation.
+- `scan` groups exact duplicates only: identical content hash (or byte-identical content)
+  and identical declared source keys. `mergeCandidates` is `{"status": "unavailable",
+  "reason": "embeddings_unavailable"}`, and `nextStep` says merge planning is withheld.
+- `tag_rename` (`source_tag`, `target_tag`) and `tag_merge` (`source_tags`, `target_tag`)
+  preview first and apply only with the returned `preview_token`. Tags are matched exactly.
+- `undo` lists recent reversible operations, or reverses one by `operation_id`. Undoing a
+  logged write needs `confirm=true`. Undoing an edit leaves the pre-edit record live with
+  its code anchors and retires only the edit.
+- `policy` reports `matchThreshold`, `possibleThreshold` and `autoApply`. They are v3
+  similarity settings and do nothing here, because merge planning is withheld.
 
-An action, or one part of a report, that needs a capability this build does not
-have never returns an empty-looking success. A whole action the log cannot honor
-is withheld: it is absent from the advertised schema and refused with
-`unavailable_in_4_0`. A part of an otherwise working report is
-`{"status": "unavailable", "reason": "embeddings_unavailable", "detail": ...}` with
-no `count` or list. A zero from a tool that did run means it looked and found
-none, for example `dream` replaying recorded edges; its `discovery` field says
-that finding new connections is the half this build cannot do.
+### `project`
 
-## Verification and upgrade boundary
+Renders the durable subset of a scope (decisions, patterns, rule-tagged facts) into a
+fenced region of `CLAUDE.md` or `MEMORY.md`, one record id per line. `action` is `preview`
+(default, shows the diff) or `write`, which needs `confirm=true` and replaces only the
+fence. Options: `format` (`claude-md`, `memory-md`), `scope`, `max_items` (up to 500),
+`filters.min_retention`, `path`, `root`.
 
-The disposable `scripts/test-tool-frontier.py` fixture checks actual stdio
-responses, discovery parity, namespace selection, preview effects, review
-holds, receipt replay, and embedding-state reporting. It uses a temporary store
-and no connector credentials. `scripts/test-context-evidence.py` separately
-checks the source-aware context slice. Unit tests cover mode-specific behavior
-and transaction invariants; a client/model adoption benchmark is still needed
-to measure whether agents select tools more effectively.
+- Only a well-formed fence is replaced: real marker lines outside code blocks. A stray or
+  unclosed marker leaves the text untouched.
+- An existing target is read only if it is a regular file of at most 2 MiB, so a pipe or
+  special file cannot stall it. A filesystem-root `root` is refused.
 
-This candidate adds schema 34 (local suppression journal) and schema 35
-(journaled cascade effects). Backfill's
-new preview default, stricter argument validation, namespace defaults and
-corrected annotations are compatibility changes. Update callers that relied on
-implicit promotion, cross-project reasoning, or silently ignored arguments.
-The prior code-anchor change on this branch has its own versioned-hash rollback
-boundary: read `CODE-CONTEXT-EVIDENCE.md` before installing either change.
+CLI: `vestige project --out <file>`. The default target is `./CLAUDE.md`, so always pass
+`--out`.
 
-### Merge plan and undo consistency
+### `suppress`
 
-Merge and supersede previews include fingerprints of content, source identity,
-scope, protection, suppression and temporal state. Apply checks these inside
-its write transaction; changed or legacy previews require a new plan. Members
-must be distinct and currently active. Confirmation does not bypass these checks.
+Takes a record out of every read. `id` is required, `reason` is optional. The log keeps
+the bytes. Returns a `receiptId`. It is **not erasure**, and on a Strata log it cannot be
+undone: `reverse=true` is refused with `unavailable_in_4_0`. A leaked secret must be
+rotated, because its bytes stay on the log. `cascade_derived_from` is advertised, but on
+4.1.1 its targets report `pending_strata` and are not retired, so suppress records one at
+a time.
 
-Merge undo checks the post-apply fingerprints before restoring durable state in
-one transaction. Later edits or control changes produce a conflict. Legacy
-operations without fingerprints require manual recovery review. Embedding
-regeneration follows commit; failure leaves the embedding pending. This contract
-does not claim reversal of suppression cascades or external side effects.
+---
 
-### Suppression reversal
+## Withheld in 4.x
 
-New suppressions journal the local count, timestamp, retrieval strength, retention
-strength and stability in the same transaction as the penalty. Reversal restores
-the latest active snapshot, including values clipped at the penalty floor. It
-requires an unexpired snapshot and unchanged local suppression state. Stacked
-reversals restore each earlier timestamp, so a new suppression cannot extend the
-reversal window of an old one. Concurrent or later state changes fail without
-partial restoration. The response identifies `reversalScope: "local_state_and_journaled_cascades"`
-and `journaledCascadeReversal: "atomic"`.
+Each of these is absent from the advertised schema and refused with the reason.
 
-Schema 34 adds the local suppression journal. Schema 35 binds each neighbor
-penalty to that suppression operation, recording its before and after state in
-the same transaction. Repeated sweeps apply each operation/neighbor effect at
-most once. Cascades exclude protected or suppressed neighbors and other scopes.
-Reversal checks every journaled neighbor before restoring the seed and neighbors
-atomically. A later neighbor change rejects the whole reversal.
+| Call | Why |
+|------|-----|
+| `purge`, `delete_knowledge`, `memory` `purge` / `delete` | On an append-only signed log they could hide a record but not erase its bytes. Real erasure is planned as crypto-erasure ([#402](https://github.com/samvallad33/vestige/issues/402)) |
+| `maintain` `consolidate` (4.1.1) | Every phase is a no-op on Strata, and an all-zero reply read as a completed pass |
+| `maintain` `restore` | Restore a backup by copying its `log/` back |
+| `maintain` `importance_score` with free-text `content` (4.2.0) | Scoring text needs word heuristics. Pass `id` to score a record from its recorded edges and reviews |
+| `maintain` `export` format `portable` | Not written from a Strata log |
+| `dedup` `plan_merge`, `plan_supersede`, `apply`, `verdict` | They need embeddings |
+| `dedup` `protect` | The log has no protect flag yet |
+| `receipt` `save_walk` | Walk receipts are not recorded on a Strata log |
+| `suppress` `reverse` | A Strata suppression cannot be undone |
+| `memory_status` `changelog` with one `memory_id` | A Strata log keeps no per-record state transitions |
+| `source_sync` | Needs `--features connectors`, which no 4.x release build passes. The name is an unknown tool |
 
-Legacy and portable-imported suppressions without journal snapshots require
-explicit review; the tool does not invent their prior strengths. Unrecorded
-historical cascades and external effects cannot be reconstructed; the response
-reports `unrecordedEffectsReversed: false`. Both journals cascade on memory purge.
-Before installation, retain a paired database backup for rollback to an older binary.
+The dashboard's Consolidate button answers `501` with `unavailable_in_4_0` for the same
+reason as `maintain consolidate`. Dashboard routes for features a Strata log withholds
+answer `501` with `unavailable_in_4_0`, `similarity_disabled` or `pending_strata`, the
+same words an MCP caller sees.
 
-### Bounded restore
+## Admission and the CI sweep
 
-MCP restore reads at most 64 MiB from a regular file. Legacy JSON batches are
-limited to 10000 memories, validated in a disposable store, then imported into
-the target in one transaction. Empty content rejects the batch before target
-writes. Legacy restore copies only memory rows, leaves embeddings pending and
-reports `atomic: true`; it does not import staging settings or audit journals.
-Portable archives continue through their transactional importer. An index-refresh
-error after commit requires inspecting the target before retrying. Input limits
-bound file bytes and legacy rows, not a strict process-memory or elapsed-time budget.
+CI runs an admission sweep over stdio: every tool action the server advertises must be
+admitted, or the build fails. That is why the advertised schema leaves out what the log
+cannot honor.
 
-### Incremental embedding maintenance
+## v3 contracts (not used by the 4.x default build)
 
-`maintain(action="consolidate", phase="embeddings", batchSize=10)` previews a
-page by default. `dry_run=false` processes at most 100 selected memories per
-call using an already available active runtime; it does not install a model.
-The response exposes selection, success/failure/skip counts, runtime availability,
-elapsed time, `hasMore`, and `nextCursor`. Work runs off the async executor thread.
-Committed embedding rows are the checkpoint. Resume with `after=nextCursor`, then
-start a new sweep without `after` to discover earlier inserts or retry failures.
-The cursor is a live scan position, not a snapshot or a hard inference deadline.
-Suppressed memories are excluded from selection. Embedding batches cap at 100 rows. The default full consolidation behavior
-remains separate and retains its compatibility contract.
-
-
-### Lifecycle, logs, GC and dream pages
-
-On a Strata log `maintain(action="consolidate")` is withheld in every phase
-(see above); the contracts below for `consolidate` describe the legacy engine.
-
-`maintain(action="consolidate", phase="lifecycle", batchSize=100, budgetMs=1000)`
-previews a transactional ID page. Apply with `dry_run=false`. It updates decay,
-emotional promotion and activation, preserving protected/suppressed rows. Limits
-are 1–1000 rows and a cooperative 1–10000 ms processing budget; waiting for a lock
-or completing an SQL operation can exceed that time. Access-history input caps
-at 500 events per memory. `phase="logs"` trims bounded old-log batches and uses
-`hasMore` rather than a cursor; it rejects `after` and `budgetMs`.
-
-GC uses bounded transactional pages with eligibility rechecked before deletion.
-Protected records survive and a page failure rolls back the whole page, including
-purge side effects. Its UUID cursor is a live scan position. After a sweep, start
-again without a cursor to reconsider earlier inserts or state changes.
-
-Dream selects one scoped UUID page, excludes suppressed or currently invalid
-memories, and caps the input to fit `max_pairs` (default 1225). `memory_count`
-accepts 5–500; `max_pairs` accepts 10–124750. Resume using `nextCursor` while
-`hasMore` is true. Discovery compares pairs within each page; it does not cover
-cross-page pairs. Only processed waking tags at or before the operation's start
-are cleared, preserving unprocessed tags and newer tags. Pair/row limits do not
-establish a hard inference deadline or dollar cap. Default full consolidation
-(`phase="all"`) and background paths retain existing behavior.
-
-The installable `integrations/python` runtime owns the transcript and selected
-catalog and implements explicit retained-packet acknowledgment. It refreshes
-packets after compaction and serializes OpenAI Responses/Anthropic Messages
-requests. It does not install itself into another agent or invoke a model.
+Earlier versions of this page described the v3 engine: `recall` modes `reason` and
+`contradictions`, `backfill` with `promote`, embedding-backed duplicate scan and merge
+planning, suppression reversal windows and cascades, `maintain consolidate` phases,
+portable restore, context packets and Memory PR review modes. Each depended on
+embeddings, keyword scoring, inferred links or SQLite, and none is part of a Strata log.
+The code stays behind the `legacy-sqlite` and `v3-engine` features for the harnesses
+that test it. For how a v3 store arrives in 4.x, see
+[Migrating to Vestige 4.0](MIGRATING-v4.md).

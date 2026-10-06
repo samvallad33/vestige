@@ -43,10 +43,6 @@ pub struct GitCommit {
     /// Symbols from diff hunk headers, path-qualified (`<file>/<symbol>`) so
     /// they pass the entity shape test; a bare lowercase `fn_name` would not.
     pub symbols: Vec<String>,
-    /// Names harvested from the changed lines themselves (config keys, file
-    /// names, code identifiers appearing IN the diff body) — the causal link
-    /// usually lives here in plain text, not in the headers.
-    pub mentions: Vec<String>,
     /// Hunk spans (new-side line ranges) per file, bounded by [`MAX_HUNKS`].
     pub hunks: Vec<HunkSpan>,
     /// Hunks beyond [`MAX_HUNKS`] (recorded as a count, not spans, so the
@@ -67,12 +63,18 @@ pub struct GitCommit {
     /// The 40-hex SHA from a `(cherry picked from commit <sha>)` line.
     /// Anything else in the message is not a cherry-pick.
     pub cherry_picked_from: Option<String>,
-    /// `Fixes: <sha>` trailers, lowercase, 12 to 40 hex digits, as written.
-    /// A short prefix is resolved to a commit later, and only if it is unique.
+    /// `Fixes: <sha>` trailers, lowercase, exactly 40 hex digits, as written.
+    /// A short prefix is not a trailer and is never expanded.
     pub fixes: Vec<String>,
+    /// Valid trailers beyond [`MAX_FIXES`] (recorded as a count, so a commit
+    /// cannot turn its message into unbounded git lookups).
+    pub extra_fixes: usize,
     /// Lockfile version changes in this commit's diff. A package is included
     /// only when it loses exactly one version and gains exactly one other.
     pub lock_bumps: Vec<LockBump>,
+    /// Bumps beyond [`MAX_LOCK_BUMPS`] (recorded as a count, not edges, so a
+    /// lockfile churn cannot turn one commit into unbounded writes).
+    pub extra_lock_bumps: usize,
 }
 
 /// One package whose lockfile entry moved from `old_version` to `new_version`
@@ -462,9 +464,10 @@ pub fn cherry_picked_from(body: &str) -> Option<String> {
     None
 }
 
-/// `Fixes: <hex>` trailers. The token is 12 to 40 hex digits and the only
-/// thing on the line after the prefix. `fixes:` and a SHA inside a sentence
-/// are not trailers.
+/// `Fixes: <sha>` when the token is a full 40-hex commit id and the only
+/// thing on the line after the prefix. A 7–39 hex prefix, `fixes:`, and a
+/// SHA inside a sentence are not trailers. Nothing here asks git to expand
+/// a prefix.
 pub fn fixes_targets(body: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in body.lines() {
@@ -480,7 +483,7 @@ pub fn fixes_targets(body: &str) -> Vec<String> {
         if tokens.next().is_some() {
             continue;
         }
-        if (12..=40).contains(&sha.len()) && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        if is_full_sha(sha) {
             let sha = sha.to_ascii_lowercase();
             if !out.contains(&sha) {
                 out.push(sha);
@@ -518,9 +521,11 @@ const RECORD_SEP: char = '\u{1e}';
 const UNIT_SEP: char = '\u{1f}';
 const MAX_FILES: usize = 50;
 const MAX_SYMBOLS: usize = 40;
-/// Changed lines harvested per commit for mention entities.
-const MAX_DIFF_LINES: usize = 400;
-const MAX_MENTIONS: usize = 40;
+/// Valid `Fixes:` trailers kept per commit; the overflow is counted, not
+/// resolved, so a message cannot name unbounded git lookups.
+const MAX_FIXES: usize = 16;
+/// Lockfile bumps kept per commit; the overflow is counted, not written.
+const MAX_LOCK_BUMPS: usize = 200;
 /// Hunk spans kept per commit; overflow is counted in `extra_hunks`.
 const MAX_HUNKS: usize = 200;
 /// Upper bound for the comma-joined span list on the `hunks:` content line.
@@ -591,7 +596,6 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
         // attaching their symbols to files.last() would fabricate join keys
         let mut files_capped = false;
         let mut symbols: BTreeSet<String> = BTreeSet::new();
-        let mut diff_body = String::new();
         let mut hunks: Vec<HunkSpan> = Vec::new();
         let mut extra_hunks = 0usize;
         // (file, written target, syntax) — resolution is deferred until the
@@ -639,12 +643,9 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
                 }
             } else if line.starts_with('+') || line.starts_with('-') {
                 let text = line.trim_start_matches(['+', '-']);
-                if diff_body.len() < MAX_DIFF_LINES {
-                    diff_body.push_str(text);
-                    diff_body.push('\n');
-                }
-                // import edges ride the same changed lines; capture continues
-                // after the mention body is full (bounded independently)
+                // import edges ride the changed lines. Identifier-shaped
+                // names in the diff body are not copied onto the record:
+                // a `mentions:` line would become an entity-name join key.
                 if raw_imports.len() < MAX_IMPORTS
                     && let Some(file) = files.last().filter(|_| !files_capped)
                     && let Some((target, kind)) = import_target(text)
@@ -653,17 +654,6 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
                 }
             }
         }
-
-        // harvest identifier-shaped names from the changed lines, bounded
-        let mentions: Vec<String> = super::retroactive_backfill::extract_entities(&diff_body, &[])
-            .into_iter()
-            .filter(|m| {
-                !files.iter().any(|f| f == m)
-                    && !symbols.iter().any(|s| s == m)
-                    && !m.starts_with("commit")
-            })
-            .take(MAX_MENTIONS)
-            .collect();
 
         // resolve import edges against this commit's own file list — exact
         // module-segment matching only; anything else stays unresolved
@@ -678,7 +668,12 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
                 None => (file, target, false),
             });
         }
-        let lock_bumps = lock_bumps_from_diff(body);
+        let mut lock_bumps = lock_bumps_from_diff(body);
+        let extra_lock_bumps = lock_bumps.len().saturating_sub(MAX_LOCK_BUMPS);
+        lock_bumps.truncate(MAX_LOCK_BUMPS);
+        let extra_fixes = fixes.len().saturating_sub(MAX_FIXES);
+        let mut fixes = fixes;
+        fixes.truncate(MAX_FIXES);
         out.push(GitCommit {
             sha,
             time,
@@ -686,7 +681,6 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             files,
             extra_files,
             symbols: symbols.into_iter().collect(),
-            mentions,
             hunks,
             extra_hunks,
             imports,
@@ -694,7 +688,9 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             reverts,
             cherry_picked_from,
             fixes,
+            extra_fixes,
             lock_bumps,
+            extra_lock_bumps,
         });
     }
     out
@@ -941,9 +937,9 @@ fn leading_identifier(ctx: &str) -> Option<String> {
     .then_some(ident)
 }
 
-/// Content for a commit record. Every token on the files/modules/symbols lines
-/// is identifier-shaped by construction (see [`super::retroactive_backfill`]),
-/// so query-time extraction turns each into a causal join key.
+/// Content for a commit record. Files, modules, symbols, hunks and import
+/// edges are the handles the diff structure recorded. Changed-line
+/// identifiers are not copied onto a `mentions:` line.
 pub fn record_content(c: &GitCommit) -> String {
     let mut s = format!("commit {} {}", c.sha, c.subject);
     if !c.files.is_empty() {
@@ -968,10 +964,6 @@ pub fn record_content(c: &GitCommit) -> String {
     if !c.symbols.is_empty() {
         s.push_str("\nsymbols: ");
         s.push_str(&c.symbols.join(", "));
-    }
-    if !c.mentions.is_empty() {
-        s.push_str("\nmentions: ");
-        s.push_str(&c.mentions.join(", "));
     }
     if !c.hunks.is_empty() {
         s.push_str("\nhunks: ");
@@ -1494,14 +1486,76 @@ diff --git a/README.md b/README.md
         let sha = "ffffffffffffffffffffffffffffffffffffffff";
         let parent = "1111111111111111111111111111111111111111";
         let raw = format!(
-            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}{parent}\u{1f}backport\u{1f}backport\n\n(cherry picked from commit {original})\r\nFixes: {short}\nfixes: {fixed}\nFixes: {fixed} and more\nFixes: abc\n\u{1d}\n"
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}{parent}\u{1f}backport\u{1f}backport\n\n(cherry picked from commit {original})\r\nFixes: {fixed}\nFixes: {short}\nfixes: {fixed}\nFixes: {fixed} and more\nFixes: abc\n\u{1d}\n"
         );
         let commits = parse_git_log(&raw);
         assert_eq!(commits[0].cherry_picked_from.as_deref(), Some(original));
-        assert_eq!(commits[0].fixes, vec![short]);
+        assert_eq!(commits[0].fixes, vec![fixed.to_string()]);
         assert!(cherry_picked_from("(cherry picked from commit abc)").is_none());
-        assert!(fixes_targets("fixes: {fixed}").is_empty());
-        assert!(fixes_targets("Fixes: {fixed} extra").is_empty());
+        assert!(fixes_targets(&format!("Fixes: {short}")).is_empty());
+        assert!(fixes_targets(&format!("fixes: {fixed}")).is_empty());
+        assert!(fixes_targets(&format!("Fixes: {fixed} extra")).is_empty());
+        assert_eq!(
+            fixes_targets(&format!("Fixes: {fixed}")),
+            vec![fixed.to_string()]
+        );
+    }
+
+    #[test]
+    fn a_message_cannot_name_unbounded_fixes() {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        // Twenty valid trailers: sixteen are kept, the rest are counted.
+        let trailers: String = (0..20).map(|i| format!("Fixes: {:040x}\n", i)).collect();
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}\u{1f}batch fix\u{1f}batch fix\n\n{trailers}\u{1d}\n"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].fixes.len(), MAX_FIXES);
+        assert_eq!(commits[0].extra_fixes, 20 - MAX_FIXES);
+        assert_eq!(commits[0].fixes[0], format!("{:040x}", 0));
+        assert_eq!(
+            commits[0].fixes[MAX_FIXES - 1],
+            format!("{:040x}", MAX_FIXES - 1)
+        );
+    }
+
+    #[test]
+    fn a_lockfile_churn_cannot_name_unbounded_bumps() {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let packages = MAX_LOCK_BUMPS + 5;
+        let entries: String = (0..packages)
+            .map(|i| {
+                format!(
+                    "[[package]]\n name = \"pkg{i:03}\"\n-version = \"1.0.0\"\n+version = \"2.0.0\"\n"
+                )
+            })
+            .collect();
+        let diff = format!("diff --git a/Cargo.lock b/Cargo.lock\n{entries}");
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}\u{1f}churn\u{1f}churn\u{1d}\n{diff}"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].lock_bumps.len(), MAX_LOCK_BUMPS);
+        assert_eq!(commits[0].extra_lock_bumps, 5);
+    }
+
+    #[test]
+    fn diff_body_identifiers_are_not_written_as_mentions() {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}\u{1f}set the pool\u{1f}set the pool\u{1d}\ndiff --git a/src/a.rs b/src/a.rs\n@@ -1 +1 @@ fn load()\n-old\n+connection_pool = 1\n"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits.len(), 1);
+        let content = record_content(&commits[0]);
+        assert!(!content.contains("mentions:"), "{content}");
+        assert!(
+            !content.contains("connection_pool"),
+            "a diff-body identifier is not a join key: {content}"
+        );
+        assert!(content.contains("files: src/a.rs"), "{content}");
     }
 
     #[test]

@@ -18,21 +18,21 @@ corpus, everywhere.
 
 | Host | Mechanism | Port | Status |
 |---|---|---|---|
-| OpenClaw | `before_tool_call` plugin | [../../openclaw-plugin/](../../openclaw-plugin/) (ClawHub: `clawhub install vestige-operator-lite`) | published, inspector PASS |
-| Claude Code | `PreToolUse` hook | [../README.md](../README.md#install-3-hosts-one-script) | shipped |
-| Codex | hooks.json | [../README.md](../README.md#install-3-hosts-one-script) | shipped |
+| OpenClaw | `before_tool_call` plugin | [../openclaw-plugin/](../openclaw-plugin/) (ClawHub: `clawhub install vestige-operator-lite`) | published, inspector PASS |
+| Claude Code | `PreToolUse` hook | [../README.md](../README.md#install-one-command) | shipped |
+| Codex | hooks.json | [../README.md](../README.md#install-one-command) | shipped |
 | OpenHands | `.openhands/hooks.json` PreToolUse | [openhands/](openhands/) | gate-tested, suite PASS |
-| OpenCode | `.opencode/plugins/` `tool.execute.before` | [opencode/](opencode/) | gate-tested, corpus 43/43 via adapter, boots in opencode CLI |
+| OpenCode | `.opencode/plugins/` `tool.execute.before` | [opencode/](opencode/) | gate-tested, corpus 46/46 via adapter, boots in opencode CLI |
 | Cline | file hooks `~/.cline/hooks/PreToolUse` (fires before approval policies — covers YOLO) + SDK plugin | [cline/](cline/) | gate-tested, suite PASS, receipt chain OK |
 | Goose | lifecycle hooks `PreToolUse` (exit-2 block, goose v1.41.0+) | [goose/](goose/) | gate-tested, 29/29 |
 | Crush | `hooks.PreToolUse[]` in crush.json — flat `{name, matcher?, command, timeout}` entries; payload is the gate's contract verbatim (exit-2 block, stderr reason) | [crush/](crush/) | gate-tested, suite 40/40 |
-| Gemini CLI | `BeforeTool` hook in `~/.gemini/settings.json` (exit-2 deny) | [gemini-cli/](gemini-cli/) | gate-tested, suite PASS, corpus 43/43 |
-| Amazon Q CLI | `preToolUse` hook in `~/.aws/amazonq/cli-agents/q_cli_default.json` (exit-2 block, stderr to model) | [amazon-q/](amazon-q/) | gate-tested, suite PASS, corpus 43/43 via adapter |
+| Gemini CLI | `BeforeTool` hook in `~/.gemini/settings.json` (exit-2 deny) | [gemini-cli/](gemini-cli/) | gate-tested, suite PASS, corpus 46/46 |
+| Amazon Q CLI | `preToolUse` hook in `~/.aws/amazonq/cli-agents/q_cli_default.json` (exit-2 block, stderr to model) | [amazon-q/](amazon-q/) | gate-tested, suite PASS, corpus 46/46 via adapter |
 | Cursor | agent hooks in `~/.cursor/hooks.json` — `beforeShellExecution` + `beforeMCPExecution` + `preToolUse` (disjoint matchers); deny is stdout JSON `{"permission":"deny"}` at exit 0 (invalid output blocks too); `failClosed: true` shipped | [cursor/](cursor/) | gate-tested, suite 44/44 |
-| Windsurf (Cascade) | `pre_run_command` / `pre_write_code` / `pre_mcp_tool_use` hooks in `~/.codeium/windsurf/hooks.json` (workspace `.windsurf/hooks.json` / `.devin/hooks.json` optional) — payload reshaped by a shim (`tool_info.command_line` → `tool_input.command`; exit-2 block, stderr reason) | [windsurf/](windsurf/) | gate-tested, suite 57/57 PASS, corpus 43/43 via adapter |
+| Windsurf (Cascade) | `pre_run_command` / `pre_write_code` / `pre_mcp_tool_use` hooks in `~/.codeium/windsurf/hooks.json` (workspace `.windsurf/hooks.json` / `.devin/hooks.json` optional) — payload reshaped by a shim (`tool_info.command_line` → `tool_input.command`; exit-2 block, stderr reason) | [windsurf/](windsurf/) | gate-tested, suite 57/57 PASS, corpus 46/46 via adapter |
 | CrewAI | execution hooks — global `register_hook(PRE_TOOL_CALL, fn)`; block is `HookAborted(reason, source)` (special-cased; other hook exceptions fail open), LLM sees CrewAI's generic blocked message | [crewai/](crewai/) | gate-tested, suite PASS incl. real crewai 1.15.23 dispatch |
 | OpenAI Agents SDK | tool input guardrails (`reject_content`) | [openai-agents/](openai-agents/) | live-tested on openai-agents 0.22.3, 30 PASS |
-| LangChain / LangGraph (Python) | `@wrap_tool_call` / `AgentMiddleware` middleware for LangChain v1 `create_agent` (block = returned `ToolMessage`, handler never runs); hand-rolled LangGraph `ToolNode` via `decide()` + `ToolException` in the tool | [langchain/](langchain/) | gate-tested, suite PASS, corpus 43/43 via adapter, live `create_agent` loop (scripted model) PASS |
+| LangChain / LangGraph (Python) | `@wrap_tool_call` / `AgentMiddleware` middleware for LangChain v1 `create_agent` (block = returned `ToolMessage`, handler never runs); hand-rolled LangGraph `ToolNode` via `decide()` + `ToolException` in the tool | [langchain/](langchain/) | gate-tested, suite PASS, corpus 46/46 via adapter, live `create_agent` loop (scripted model) PASS |
 | Aider | no hook API — terminal wrapper | [aider/](aider/) | see port README |
 
 Status values: `shipped` (tested end-to-end) · `gate-tested` (gate contract

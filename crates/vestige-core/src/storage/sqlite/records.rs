@@ -451,40 +451,6 @@ impl SqliteMemoryStore {
         tags
     }
 
-    #[allow(dead_code)] // PR 10 GhostLink consumer lands later
-    pub(super) fn composition_bridge_score(
-        a: &KnowledgeNode,
-        b: &KnowledgeNode,
-        shared_tags: &[String],
-        shared_terms: &[String],
-        boundary_tags: &[String],
-    ) -> f64 {
-        let tag_distance = Self::tag_distance(&a.tags, &b.tags);
-        let node_type_bridge = if a.node_type != b.node_type { 1.0 } else { 0.0 };
-        let boundary_bridge = (boundary_tags.len() as f64 / 4.0).min(1.0);
-        let lexical_anchor = if shared_terms.is_empty() { 0.0 } else { 1.0 };
-        let tag_anchor = if shared_tags.is_empty() { 0.0 } else { 1.0 };
-
-        (tag_distance * 0.30
-            + node_type_bridge * 0.20
-            + boundary_bridge * 0.25
-            + lexical_anchor * 0.15
-            + tag_anchor * 0.10)
-            .clamp(0.0, 1.0)
-    }
-
-    #[allow(dead_code)] // PR 10 GhostLink consumer lands later
-    pub(super) fn tag_distance(a: &[String], b: &[String]) -> f64 {
-        let a_set = a.iter().map(String::as_str).collect::<HashSet<_>>();
-        let b_set = b.iter().map(String::as_str).collect::<HashSet<_>>();
-        let union = a_set.union(&b_set).count();
-        if union == 0 {
-            return 0.0;
-        }
-        let intersection = a_set.intersection(&b_set).count();
-        1.0 - (intersection as f64 / union as f64)
-    }
-
     pub(super) fn shared_content_terms(a: &str, b: &str, limit: usize) -> Vec<String> {
         let a_terms = Self::content_terms(a);
         let b_terms = Self::content_terms(b);
@@ -520,34 +486,6 @@ impl SqliteMemoryStore {
             + term.chars().filter(|ch| ch.is_ascii_digit()).count() * 2
             + usize::from(term.contains('-')) * 2
             + usize::from(term.contains('_')) * 2
-    }
-
-    #[allow(dead_code)] // PR 10 GhostLink consumer lands later
-    pub(super) fn anchor_summary(shared_tags: &[String], shared_terms: &[String]) -> String {
-        if !shared_tags.is_empty() && !shared_terms.is_empty() {
-            format!(
-                "shared tags ({}) and shared terms ({})",
-                shared_tags.join(", "),
-                shared_terms
-                    .iter()
-                    .take(4)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else if !shared_tags.is_empty() {
-            format!("shared tags ({})", shared_tags.join(", "))
-        } else {
-            format!(
-                "shared terms ({})",
-                shared_terms
-                    .iter()
-                    .take(4)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
     }
 
     pub(super) fn composition_question(

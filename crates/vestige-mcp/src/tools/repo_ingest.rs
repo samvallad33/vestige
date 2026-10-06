@@ -61,7 +61,8 @@
 //! commit named by that trailer. A reverted commit that is reachable locally
 //! but outside this page is ingested too, so the edge has both ends.
 //! `(cherry picked from commit <sha>)` is `derived_from` the named commit.
-//! `Fixes: <sha>` is `corrects` once the prefix resolves to one local commit.
+//! `Fixes: <40-hex sha>` is `corrects` only when that exact object is a
+//! commit. A shorter hex token is not read and is not expanded.
 //! A commit whose reverse diff has the same `git patch-id --stable` as an
 //! older commit's diff `corrects` that commit, and two commits with the same
 //! forward patch-id are the same change: the later `derived_from` the earlier.
@@ -103,6 +104,10 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_GIT_OUTPUT: u64 = 256 * 1024 * 1024;
 /// Anchors kept per commit; the overflow is counted, not silently dropped.
 const MAX_ANCHORS_PER_COMMIT: usize = 24;
+/// Commits pulled from outside the page per call (revert, cherry-pick and
+/// `Fixes:` targets). The trailers that name them are capped at parse time
+/// (git_records `MAX_FIXES`), and this bounds the pulls whatever names them.
+const MAX_PULLED_COMMITS: usize = 64;
 const SAMPLE_COMMITS: usize = 5;
 const IDS_SHOWN: usize = 20;
 /// Longest value accepted for a ref, date or name handed to git or the log.
@@ -711,7 +716,7 @@ struct History {
     page_len: usize,
     stopped_early: Option<String>,
     pulled_reverts: usize,
-    /// Cherry-pick and `Fixes:` targets pulled from outside the page.
+    /// Cherry-pick and full-sha `Fixes:` targets pulled from outside the page.
     pulled_named: usize,
     revert_merges: usize,
 }
@@ -746,7 +751,8 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         }
     }
 
-    resolve_fix_shas(root, &mut commits);
+    let mut verified: HashSet<String> = HashSet::new();
+    resolve_fix_shas(root, &mut commits, &mut verified);
     let mut pulled_reverts = 0usize;
     let mut pulled_named = 0usize;
     let mut revert_targets = HashSet::new();
@@ -770,7 +776,9 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         .collect();
     pending.sort();
     pending.dedup();
-    for sha in pending {
+    // A commit message names its targets; the page is what the caller asked
+    // for. Pulls are a bonus, so they are bounded however many are named.
+    for sha in pending.into_iter().take(MAX_PULLED_COMMITS) {
         if !commit_object_exists(root, &sha) {
             continue;
         }
@@ -789,7 +797,7 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         }
         commits.push(commit);
     }
-    resolve_fix_shas(root, &mut commits);
+    resolve_fix_shas(root, &mut commits, &mut verified);
 
     // The revision the caller named is the one a failure is observed at. A
     // release commit is often a merge, and `--no-merges` would drop it.
@@ -811,21 +819,39 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
     })
 }
 
-/// Replace `Fixes:` prefixes with the one local commit they name. An ambiguous
-/// or missing prefix is dropped. Nothing is fetched.
-fn resolve_fix_shas(root: &Path, commits: &mut [GitCommit]) {
+/// Keep a `Fixes:` token only when it is already a 40-hex sha and
+/// `git rev-parse --verify <sha>^{commit}` returns that same sha.
+/// A shorter token is dropped. It is never expanded, so a unique 12-hex
+/// prefix cannot pull a commit that was outside the page. Nothing is fetched.
+/// `verified` carries answers across commits and across the two passes of
+/// [`read_commits`], so a page of messages naming the same targets asks git
+/// once per distinct sha, not once per mention.
+fn resolve_fix_shas(root: &Path, commits: &mut [GitCommit], verified: &mut HashSet<String>) {
     for commit in commits.iter_mut() {
         let mut full = Vec::new();
-        for prefix in commit.fixes.drain(..) {
-            let Some(sha) = resolve_commit_sha(root, &prefix) else {
+        for token in commit.fixes.drain(..) {
+            if !is_exact_full_sha(&token) {
                 continue;
-            };
-            if sha != commit.sha && !full.contains(&sha) {
-                full.push(sha);
+            }
+            if !verified.contains(&token) {
+                match resolve_commit_sha(root, &token) {
+                    Some(sha) if sha == token => {
+                        verified.insert(sha);
+                    }
+                    // not a commit object, or not the commit it names
+                    _ => continue,
+                }
+            }
+            if token != commit.sha && !full.contains(&token) {
+                full.push(token);
             }
         }
         commit.fixes = full;
     }
+}
+
+fn is_exact_full_sha(sha: &str) -> bool {
+    sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// `git log -p` arguments. `merges` is `--no-merges` or `--merges`.
@@ -1047,6 +1073,12 @@ fn record_git_edges(
         }
         let bumps = lock_bumps_with_context(ctx.root, commit);
         for bump in &bumps {
+            // The budget is checked between commits; one commit's lockfile
+            // churn must not run past it unexamined.
+            if !ctx.dry_run && started.elapsed() >= budget {
+                stats.stopped_by_budget = true;
+                break;
+            }
             let new_id =
                 git_records::package_anchor_id(&bump.ecosystem, &bump.package, &bump.new_version);
             let old_id =
@@ -1544,6 +1576,7 @@ pub fn blame_line(root: &Path, rev: &str, path: &str, line: u32) -> Result<Optio
         root,
         &[
             "blame".into(),
+            "--no-textconv".into(),
             "-L".into(),
             format!("{line},{line}"),
             "--porcelain".into(),
@@ -2550,7 +2583,6 @@ pub fn parse_timeout(raw: &str) -> u32 {
         let backport = repo.shas.last().unwrap().clone();
         repo.write("src/b.rs", "fn b() {}\n");
         repo.git(&["add", "-A"], "2024-01-05T00:00:00Z");
-        let prefix = &feature[..12];
         repo.git(
             &[
                 "commit",
@@ -2558,7 +2590,9 @@ pub fn parse_timeout(raw: &str) -> u32 {
                 "-m",
                 "close the bug",
                 "-m",
-                &format!("Fixes: {prefix}\nfixes: {feature}\nFixes: {feature} and then some prose"),
+                &format!(
+                    "Fixes: {feature}\nfixes: {feature}\nFixes: {feature} and then some prose"
+                ),
             ],
             "2024-01-05T00:00:00Z",
         );
@@ -2648,6 +2682,115 @@ pub fn parse_timeout(raw: &str) -> u32 {
         assert_eq!(fixes_out["edges"]["fixes"], 1, "{fixes_out}");
     }
 
+    /// A unique short hex prefix used to be `git rev-parse`d into a full sha,
+    /// then `read_one_commit` added that commit even when it sat outside the
+    /// page, and the edge writer stored `corrects`. That is how a 300-commit
+    /// page could gain an off-page target. Only an exact 40-hex `Fixes:` line
+    /// whose object is that commit may do this. `This reverts commit <sha>.`
+    /// and `(cherry picked from commit <sha>)` are unchanged.
+    #[tokio::test]
+    async fn a_short_fixes_prefix_does_not_pull_or_link_an_outside_commit() {
+        let mut repo = Repo::empty();
+        repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
+        repo.commit("base", "2024-02-01T00:00:00Z");
+        repo.write("src/a.rs", "fn a() { let _ = 2; }\n");
+        repo.commit("the feature", "2024-02-02T00:00:00Z");
+        let feature = repo.shas[1].clone();
+        let prefix = &feature[..12];
+        let seven = &feature[..7];
+        repo.write("src/b.rs", "fn b() {}\n");
+        repo.git(&["add", "-A"], "2024-02-03T00:00:00Z");
+        repo.git(
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "close the bug",
+                "-m",
+                &format!(
+                    "Fixes: {prefix}\nFixes: {seven}\nfixes: {feature}\nFixes: {feature} mentioned in a sentence"
+                ),
+            ],
+            "2024-02-03T00:00:00Z",
+        );
+        let fixer = repo.git(&["rev-parse", "HEAD"], "2024-02-03T00:00:00Z");
+
+        let (storage, _dir) = strata();
+        let mut page = repo.request(false);
+        page.rev = Some(fixer);
+        page.limit = Some(1);
+        page.codebase = Some("loose-fixes".into());
+        page.scope = Some("loose-fixes".into());
+        let out = ingest(&storage, page).await;
+        assert_eq!(out["commits"]["pulledNamed"], 0, "{out}");
+        assert_eq!(out["commits"]["pulledReverts"], 0, "{out}");
+        assert_eq!(out["edges"]["fixes"], 0, "{out}");
+        let tag = commit_tag(&feature);
+        assert!(
+            storage
+                .current_code_context_nodes("event", Some(&tag), "loose-fixes", 5)
+                .unwrap()
+                .is_empty(),
+            "the off-page commit named by a short Fixes: prefix was ingested: {out}"
+        );
+        let edges = storage.get_all_connections().unwrap();
+        assert!(
+            edges.iter().all(|edge| edge.link_type != "corrects"),
+            "a loose Fixes: line wrote corrects: {edges:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_page_cannot_pull_unbounded_named_commits() {
+        // Seventy-four real off-page commits named by full-sha trailers:
+        // at most MAX_PULLED_COMMITS are pulled, whatever the messages name.
+        let mut repo = Repo::empty();
+        let targets = MAX_PULLED_COMMITS + 10;
+        for i in 0..targets {
+            repo.write("src/a.rs", &format!("fn a() {{ let _ = {i}; }}\n"));
+            repo.commit(&format!("base {i}"), "2024-02-01T00:00:00Z");
+        }
+        // Each fixer names sixteen of them; trailers are capped per commit,
+        // so it takes five commits to name all seventy-four.
+        let mut named = 0;
+        let mut fixers = 0;
+        while named < targets {
+            let end = (named + 16).min(targets);
+            let batch: Vec<String> = repo.shas[named..end]
+                .iter()
+                .map(|sha| format!("Fixes: {sha}"))
+                .collect();
+            named = end;
+            repo.write("src/fixer.rs", &format!("fn f{fixers}() {{}}\n"));
+            repo.git(&["add", "-A"], "2024-02-02T00:00:00Z");
+            repo.git(
+                &[
+                    "commit",
+                    "-q",
+                    "-m",
+                    &format!("fixer {fixers}"),
+                    "-m",
+                    &batch.join("\n"),
+                ],
+                "2024-02-02T00:00:00Z",
+            );
+            fixers += 1;
+        }
+        assert_eq!(named, targets);
+
+        let (storage, _dir) = strata();
+        let mut page = repo.request(false);
+        page.limit = Some(5);
+        page.codebase = Some("pull-cap".into());
+        page.scope = Some("pull-cap".into());
+        let out = ingest(&storage, page).await;
+        assert_eq!(
+            out["commits"]["pulledNamed"].as_u64().unwrap(),
+            MAX_PULLED_COMMITS as u64,
+            "{out}"
+        );
+    }
+
     #[tokio::test]
     async fn a_merge_is_kept_only_when_it_carries_the_git_revert_trailer() {
         let mut repo = Repo::standard();
@@ -2692,6 +2835,45 @@ pub fn parse_timeout(raw: &str) -> u32 {
             blame_line(root, &head, "src/missing.rs", 1)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// The checkout's own config can name a textconv program for a path
+    /// (`diff.<driver>.textconv` with `.gitattributes`), and `git blame` runs
+    /// it by default. Blaming a frame's line must not run it.
+    #[cfg(unix)]
+    #[test]
+    fn blame_runs_no_textconv_program_the_checkout_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut repo = Repo::empty();
+        repo.write(".gitattributes", "*.rs diff=planted\n");
+        repo.write("src/a.rs", "fn a() {\n    let introduced = 1;\n}\n");
+        repo.commit("introduce", DATES[0]);
+        let head = repo.shas[0].clone();
+        let root = repo.dir.path();
+        let marker = root.join(".git").join("textconv-ran");
+        let program = root.join(".git").join("planted-textconv");
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\necho ran >> '{}'\nprintf 'planted\\n'\ncat \"$1\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        repo.git(
+            &["config", "diff.planted.textconv", program.to_str().unwrap()],
+            DATES[0],
+        );
+
+        assert_eq!(
+            blame_line(root, &head, "src/a.rs", 2).unwrap().as_deref(),
+            Some(head.as_str())
+        );
+        assert!(
+            !marker.exists(),
+            "git blame ran the textconv program the checkout's config names"
         );
     }
 

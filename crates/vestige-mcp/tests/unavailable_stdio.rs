@@ -153,11 +153,17 @@ fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
+/// Seed probe memories. Each probe carries its own tag: an exact shared tag
+/// would auto-connect the pairs at save time, and the dream pass below
+/// asserts a store with no recorded edges. The probes share every word of
+/// their text (`probe memory`), which must not join them: auto-connect joins
+/// on exact identities only (its own coverage lives in auto_connect.rs and
+/// cli_strata.rs).
 fn seed(server: &mut Server, count: usize) {
     for i in 0..count {
         server.call_tool(
             "smart_ingest",
-            json!({"content": format!("probe memory {i}"), "node_type": "fact", "tags": ["probe"]}),
+            json!({"content": format!("probe memory {i}"), "node_type": "fact", "tags": [format!("probe-{i}")]}),
         );
     }
 }

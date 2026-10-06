@@ -1,7 +1,7 @@
 //! In-crate tests. Each test owns a unique temp directory (the log enforces
 //! a single writer per directory via `strata.lock`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use borsh::BorshDeserialize;
@@ -14,13 +14,13 @@ use strata_kernel::fsrs::{FsrsFold, ALGO_V2};
 use crate::op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 use crate::store::{
     classify_checkpoint_payload, classify_write_payload, decode_exact, handle_of, migration_edge,
-    migration_node, CheckpointPayload, WritePayload,
+    migration_node, store_intent_index, CheckpointPayload, IntentIndexEntry, WritePayload,
 };
 use crate::types::{ConnectionRecord, EdgeDirection, EdgeKind, IngestInput};
 use crate::{
     default_policy, effect_receipt_id, looks_like_failure, retire_rule_id, AdmissionContext,
-    EffectAction, RetireReceipt, StoreError, StrataStore, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE,
-    RULE_SUPPRESS,
+    EffectAction, RetireReceipt, StoreError, StrataStore, MAX_LIVE_ECHOES_PER_ORIGINAL, RULE_EDIT,
+    RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
 };
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -683,6 +683,8 @@ fn replay_store_and_migration_frames_do_not_cross_classify() {
                 StoreOp::RecordAnchors { .. }
                 | StoreOp::ReplaceAnchors { .. }
                 | StoreOp::RecordAnchorVerdict { .. } => {}
+                // Nor an edge batch: this fixture saves its one edge alone.
+                StoreOp::SaveEdges { .. } => {}
             }
         } else if frame.kind == KIND_STORE_CHECKPOINT {
             store_checkpoints += 1;
@@ -2513,6 +2515,182 @@ fn edge_effects_prove_and_the_memory_receipt_keeps_proving() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+fn touched(source: &str, target: &str) -> ConnectionRecord {
+    ConnectionRecord {
+        source_id: source.to_string(),
+        target_id: target.to_string(),
+        link_type: EdgeKind::Touched.as_str().to_string(),
+        strength_milli: 500,
+        created_at_ms: 1_700_000_000_000,
+        ..ConnectionRecord::default()
+    }
+}
+
+/// How many frames an open store's log holds, and how many of them are
+/// store data frames.
+fn frame_kinds(store: &StrataStore) -> (usize, usize) {
+    let frames = store.log().read_frames(1).expect("read log");
+    let store_writes = frames
+        .iter()
+        .filter(|frame| frame.kind == KIND_STORE_WRITE)
+        .count();
+    (frames.len(), store_writes)
+}
+
+#[test]
+fn an_edge_batch_is_one_admitted_write_and_every_edge_cites_it() {
+    let dir = temp_dir("edge-batch");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let new = store
+        .ingest(input("the memory being saved", &[]))
+        .expect("new");
+    let peers: Vec<String> = (0..5)
+        .map(|i| {
+            store
+                .ingest(input(&format!("earlier memory {i}"), &[]))
+                .expect("peer")
+        })
+        .collect();
+    let created = store
+        .latest_effect(&new)
+        .expect("prove")
+        .expect("create effect");
+    let batch: Vec<ConnectionRecord> = peers.iter().map(|peer| touched(peer, &new)).collect();
+
+    let (frames_before, writes_before) = frame_kinds(&store);
+    let effect = store.save_connections(&batch).expect("batch");
+    let (frames_after, writes_after) = frame_kinds(&store);
+    // One PROPOSE, one GATE, one EFFECT and one data frame for five edges.
+    assert_eq!(frames_after - frames_before, 4);
+    assert_eq!(writes_after - writes_before, 1);
+
+    // The edges are live in batch order, indexed from both ends.
+    assert_eq!(store.edges()[store.edges().len() - 5..], batch[..]);
+    assert_eq!(store.get_connections_for_memory(&new).len(), 5);
+    assert_eq!(
+        store.get_connections_for_memory(&peers[3]),
+        vec![batch[3].clone()]
+    );
+
+    // One receipt lists every edge: five proofs, all citing the one effect.
+    let proofs = store.effects_by_seq(effect).expect("prove");
+    assert_eq!(proofs.len(), 5);
+    for (proof, edge) in proofs.iter().zip(&batch) {
+        assert_eq!(proof.effect_seq, effect);
+        assert_eq!(proof.action, EffectAction::Edge);
+        assert_eq!(proof.node_id, edge.source_id);
+        assert_eq!(
+            proof.edge,
+            Some((edge.target_id.clone(), edge.link_type.clone()))
+        );
+        assert_eq!(proof.payload_digest, proofs[0].payload_digest);
+        assert_eq!(proof.data_seq, proofs[0].data_seq);
+    }
+    assert_eq!(
+        store.effect_by_seq(effect).expect("prove").as_ref(),
+        proofs.first()
+    );
+    let digest = store.state_digest();
+    drop(store);
+
+    // Reopen replays the batch to the same state, and the full scan proves
+    // the same five effects the index serves.
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(reopened.state_digest(), digest);
+    assert_eq!(reopened.orphan_write_count(), 0);
+    assert_eq!(reopened.effects_by_seq(effect).expect("prove"), proofs);
+    let scanned: Vec<crate::EffectProof> = reopened
+        .prove_effects()
+        .expect("every effect still proves")
+        .into_iter()
+        .filter(|proof| proof.effect_seq == effect)
+        .collect();
+    assert_eq!(scanned, proofs);
+    // The memory's own receipt is still its create; edges never shadow it.
+    assert_eq!(reopened.latest_effect(&new).expect("prove"), Some(created));
+    let refolded = reopened.refold().expect("refold");
+    assert_eq!(refolded.state_digest, digest);
+    assert!(
+        refolded.gate_mismatches.is_empty(),
+        "{:?}",
+        refolded.gate_mismatches
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_edge_batch_lands_whole_or_not_at_all() {
+    let dir = temp_dir("edge-batch-refused");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let a = store.ingest(input("a", &[])).expect("a");
+    let b = store.ingest(input("b", &[])).expect("b");
+    let c = store.ingest(input("c", &[])).expect("c");
+    let frames = frame_kinds(&store);
+
+    // An empty batch, an unknown edge kind, a negative strength and a source
+    // that is not a node are each refused before anything is proposed.
+    assert!(matches!(
+        store.save_connections(&[]),
+        Err(StoreError::InvalidInput(_))
+    ));
+    let mut unknown_kind = touched(&b, &a);
+    unknown_kind.link_type = "resembles".to_string();
+    let mut negative = touched(&b, &a);
+    negative.strength_milli = -1;
+    for bad in [unknown_kind, negative, touched("mem-not-recorded", &a)] {
+        let refused = store.save_connections(&[touched(&c, &a), bad]);
+        assert!(refused.is_err(), "{refused:?}");
+    }
+    assert_eq!(
+        frame_kinds(&store),
+        frames,
+        "a refused batch writes nothing"
+    );
+    assert!(store.edges().is_empty());
+
+    // A batch of one is the plain single-edge op, as every build reads it.
+    let single = store
+        .save_connections(&[touched(&b, &a)])
+        .expect("one edge");
+    let payloads: Vec<StoreOp> = store
+        .log()
+        .read_frames(1)
+        .expect("read log")
+        .iter()
+        .filter(|frame| frame.kind == KIND_STORE_WRITE)
+        .filter_map(|frame| decode_exact::<StoreOp>(&frame.payload))
+        .collect();
+    assert!(matches!(payloads.last(), Some(StoreOp::SaveEdge { .. })));
+    assert_eq!(store.effects_by_seq(single).expect("prove").len(), 1);
+    assert!(store
+        .effects_by_seq(single + 1_000)
+        .expect("prove")
+        .is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_edge_batch_op_appends_its_discriminant_after_every_existing_op() {
+    // Borsh discriminants are positional: the batch is variant 8, so every
+    // log written before it existed decodes to the same ops.
+    let op = StoreOp::SaveEdges {
+        edges: vec![touched("mem-1", "mem-2"), touched("mem-3", "mem-2")],
+    };
+    let bytes = borsh::to_vec(&op).expect("encode");
+    assert_eq!(bytes[0], 8);
+    assert_eq!(decode_exact::<StoreOp>(&bytes), Some(op));
+    assert!(matches!(
+        classify_write_payload(&bytes),
+        WritePayload::StoreOp(_)
+    ));
+    assert!(migration_node(&bytes).is_none());
+    // The single-edge op keeps its place.
+    let single = StoreOp::SaveEdge {
+        edge: touched("mem-1", "mem-2"),
+    };
+    assert_eq!(borsh::to_vec(&single).expect("encode")[0], 1);
+}
+
 #[test]
 fn anchor_effects_prove_and_the_memory_receipt_keeps_proving() {
     let dir = temp_dir("anchor-proof");
@@ -2833,4 +3011,691 @@ fn proving_effects_over_a_damaged_sealed_segment_fails_instead_of_hiding_later_o
         .expect_err("a damaged log must not verify");
     std::fs::remove_dir_all(&dir).ok();
     std::fs::remove_dir_all(&dest).ok();
+}
+
+/// Every file under `root`, as (path relative to `root`, bytes), sorted.
+fn tree_files(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).expect("read_dir") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let rel = path.strip_prefix(root).expect("under root");
+                out.push((
+                    rel.to_string_lossy().into_owned(),
+                    std::fs::read(&path).expect("read"),
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// Names in `dir` that a backup staged and did not clean up.
+fn staging_leftovers(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .expect("read_dir")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.contains(".partial"))
+        .collect()
+}
+
+#[test]
+fn backup_to_a_new_directory_holds_the_same_segments_and_verifies() {
+    let dir = temp_dir("backup-new-src");
+    let parent = temp_dir("backup-new-parent");
+    let dest = parent.join("copy");
+    let mut store = StrataStore::open(&dir).expect("open");
+    store.ingest(input("first fact", &[])).expect("first");
+    store.seal_checkpoint().expect("seal");
+    store.backup_to(&dest).expect("backup");
+
+    // Byte for byte the live log (minus its lock) plus the anchor file, and
+    // nothing else: no staging directory beside or inside the backup.
+    let mut want: Vec<(String, Vec<u8>)> = tree_files(&dir.join("log"))
+        .into_iter()
+        .filter(|(name, _)| name != "strata.lock")
+        .map(|(name, bytes)| (format!("log/{name}"), bytes))
+        .collect();
+    want.push((
+        "store.meta".to_string(),
+        std::fs::read(dir.join("store.meta")).expect("anchor"),
+    ));
+    want.sort();
+    let got: Vec<(String, Vec<u8>)> = tree_files(&dest)
+        .into_iter()
+        .map(|(name, bytes)| (name.replace('\\', "/"), bytes))
+        .collect();
+    assert_eq!(got, want);
+    assert_eq!(segment_files(&dest).len(), segment_files(&dir).len());
+    assert!(staging_leftovers(&parent).is_empty());
+
+    let backup = StrataStore::open(&dest).expect("the backup opens");
+    assert_eq!(backup.node_count(), 1);
+    backup.verify_checkpoint_chain().expect("chain verifies");
+    backup.log().verify_log().expect("log verifies");
+    drop(backup);
+    // The live store keeps writing after the backup.
+    store.ingest(input("second fact", &[])).expect("second");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&parent).ok();
+}
+
+#[test]
+fn a_backup_whose_copy_fails_midway_leaves_nothing_under_the_final_name() {
+    use crate::store::BACKUP_COPIES_BEFORE_FAILURE;
+
+    let dir = temp_dir("backup-fail-src");
+    let parent = temp_dir("backup-fail-parent");
+    let mut store = StrataStore::open(&dir).expect("open");
+    store.ingest(input("first fact", &[])).expect("first");
+    store.seal_checkpoint().expect("seal");
+
+    // A destination that does not exist yet: it must still not exist.
+    let dest = parent.join("copy");
+    BACKUP_COPIES_BEFORE_FAILURE.set(Some(2));
+    let err = store.backup_to(&dest);
+    BACKUP_COPIES_BEFORE_FAILURE.set(None);
+    let err = err.expect_err("the third file copy fails");
+    assert!(matches!(err, StoreError::Io(_)), "got {err}");
+    assert!(!dest.exists(), "a failed backup left {}", dest.display());
+    assert!(staging_leftovers(&parent).is_empty());
+
+    // An empty directory that already exists: it must still be empty.
+    let empty = parent.join("empty");
+    std::fs::create_dir(&empty).expect("mkdir");
+    BACKUP_COPIES_BEFORE_FAILURE.set(Some(2));
+    let err = store.backup_to(&empty);
+    BACKUP_COPIES_BEFORE_FAILURE.set(None);
+    err.expect_err("the third file copy fails");
+    assert_eq!(std::fs::read_dir(&empty).expect("read_dir").count(), 0);
+
+    // The live store is unharmed and the next backup succeeds.
+    store.ingest(input("second fact", &[])).expect("second");
+    store.backup_to(&dest).expect("backup once copies work");
+    let backup = StrataStore::open(&dest).expect("the backup opens");
+    assert_eq!(backup.node_count(), 2);
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&parent).ok();
+}
+
+#[test]
+fn a_second_backup_into_the_same_directory_replaces_the_first() {
+    use crate::store::BACKUP_COPIES_BEFORE_FAILURE;
+
+    let dir = temp_dir("backup-again-src");
+    let dest = temp_dir("backup-again-dest");
+    let mut store = StrataStore::open(&dir).expect("open");
+    store.ingest(input("first fact", &[])).expect("first");
+    store.seal_checkpoint().expect("seal");
+    store.backup_to(&dest).expect("first backup");
+    // A file the caller keeps beside log/ stays where it is.
+    std::fs::write(dest.join("receipt-signing.key"), b"kept").expect("write");
+    let first = tree_files(&dest);
+
+    // A second backup that fails while copying leaves the first as it was.
+    store.ingest(input("second fact", &[])).expect("second");
+    store.seal_checkpoint().expect("seal");
+    BACKUP_COPIES_BEFORE_FAILURE.set(Some(1));
+    let err = store.backup_to(&dest);
+    BACKUP_COPIES_BEFORE_FAILURE.set(None);
+    err.expect_err("the second file copy fails");
+    assert_eq!(tree_files(&dest), first);
+
+    store.backup_to(&dest).expect("second backup");
+    assert!(staging_leftovers(&dest).is_empty());
+    assert_eq!(
+        std::fs::read(dest.join("receipt-signing.key")).expect("read"),
+        b"kept"
+    );
+    for (name, bytes) in tree_files(&dir.join("log")) {
+        if name != "strata.lock" {
+            let copied = std::fs::read(dest.join("log").join(&name)).expect("copied");
+            assert_eq!(copied, bytes, "{name}");
+        }
+    }
+    let backup = StrataStore::open(&dest).expect("the backup opens");
+    assert_eq!(backup.node_count(), 2);
+    backup.verify_checkpoint_chain().expect("chain verifies");
+    backup.log().verify_log().expect("log verifies");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+// ---------------------------------------------------------------------
+// INGEST V5: canonical duplicate index + intent index (Lane A)
+// ---------------------------------------------------------------------
+
+fn duplicate_echo_input(orig: &str, chex: &str, lines: usize) -> IngestInput {
+    IngestInput {
+        content: format!(
+            "duplicate of {orig}\ncanonical_hash: {chex}\nsubmitted_line_count: {lines}"
+        ),
+        source: Some(crate::types::SourceKey {
+            system: crate::canonical::DUPLICATE_SOURCE.to_string(),
+            project: String::new(),
+            id: String::new(),
+        }),
+        source_updated_at_ms: None,
+        node_type: String::new(),
+        tags: Vec::new(),
+        created_at_ms: Some(1_700_000_000_000),
+        valid_from_ms: None,
+        valid_until_ms: None,
+    }
+}
+
+#[test]
+fn canonical_duplicate_lookup_finds_the_first_node_across_variants_and_reopens() {
+    let dir = temp_dir("canonical-first-node");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let a = store
+        .ingest(input("Café overrides", &[]))
+        .expect("ingest A");
+    store
+        .ingest(input("unrelated bytes", &[]))
+        .expect("ingest B");
+
+    let direct = store
+        .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("Café overrides"))
+        .expect("lookup");
+    assert_eq!(direct.as_deref(), Some(a.as_str()));
+
+    // NFC (decomposed accent), zero-width and whitespace variants all
+    // resolve to the same canonical hash.
+    let variant = "  Caf\u{65}\u{301}  overrides\u{200D} ";
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash(variant))
+            .expect("variant lookup"),
+        Some(a.clone()),
+        "NFC, zero-width and whitespace variants resolve to the first node"
+    );
+    // Case is identity: the same words in another case are another memory.
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("CAFÉ OVERRIDES"))
+            .expect("case lookup"),
+        None
+    );
+
+    // Different scope: no hit.
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash(
+                "other",
+                &crate::canonical::canonical_hash("Café overrides")
+            )
+            .expect("scoped lookup"),
+        None,
+        "the canonical index is per scope"
+    );
+
+    // The index is derived state: reopen rebuilds it from the log alone.
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("Café overrides"))
+            .expect("reopened lookup"),
+        Some(a)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn duplicate_echo_nodes_never_become_dedup_targets() {
+    let dir = temp_dir("canonical-echo");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let orig = store
+        .ingest(input("the original fact", &[]))
+        .expect("original");
+
+    // The reinforcer's echo node: source "duplicate", content naming the
+    // original. It lands, but it must never be indexed.
+    let echo = store
+        .ingest(duplicate_echo_input(&orig, "deadbeef", 3))
+        .expect("echo ingest");
+    assert_ne!(echo, orig, "the echo is its own node");
+
+    // The echo's own canonical form resolves to nothing...
+    let echo_record = store.get_node(&echo).expect("echo record");
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash(
+                "",
+                &crate::canonical::canonical_hash(&echo_record.content)
+            )
+            .expect("echo lookup"),
+        None,
+        "an echo node never becomes the dedup target"
+    );
+    // ...and the original is still the answer for its canonical form.
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &crate::canonical::canonical_hash("the original fact"))
+            .expect("original lookup"),
+        Some(orig)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intent_record_find_roundtrip_survives_reopen_and_backup() {
+    let dir = temp_dir("intent-roundtrip");
+    let backup = temp_dir("intent-roundtrip-backup");
+    let digest = crate::canonical::intent_digest(
+        &crate::canonical::canonical_hash_hex("intent content"),
+        "mcp",
+        &["run-42".to_string()],
+    );
+    let mut store = StrataStore::open(&dir).expect("open");
+    let (node, effect_seq) = store
+        .ingest_in_scope_with_receipt(input("intent content", &[]), "user")
+        .expect("ingest");
+    store
+        .record_intent("user", "run-42", &node, effect_seq, &digest)
+        .expect("record");
+
+    assert_eq!(
+        store.find_intent("user", "run-42").expect("find"),
+        Some((node.clone(), effect_seq, digest.clone())),
+        "roundtrip in the same session"
+    );
+    assert_eq!(
+        store.find_intent("user", "other").expect("miss"),
+        None,
+        "unknown intent ids miss"
+    );
+    assert_eq!(
+        store
+            .find_intent("elsewhere", "run-42")
+            .expect("scope miss"),
+        None,
+        "intent ids are per scope"
+    );
+
+    // The side file carries the entry across reopen...
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_intent("user", "run-42")
+            .expect("reopened find"),
+        Some((node.clone(), effect_seq, digest.clone())),
+        "intent entries survive reopen"
+    );
+    // ...and across a backup restore.
+    reopened.backup_to(&backup).expect("backup");
+    let restored = StrataStore::open(&backup).expect("open backup");
+    assert_eq!(
+        restored
+            .find_intent("user", "run-42")
+            .expect("restored find"),
+        Some((node, effect_seq, digest)),
+        "intent entries travel with backups"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&backup).ok();
+}
+
+#[test]
+fn intent_index_is_first_write_wins() {
+    let dir = temp_dir("intent-first-wins");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let (first, first_seq) = store
+        .ingest_in_scope_with_receipt(input("first write", &[]), "user")
+        .expect("first");
+    let (second, second_seq) = store
+        .ingest_in_scope_with_receipt(input("second write", &[]), "user")
+        .expect("second");
+    let digest_one = crate::canonical::intent_digest("01", "mcp", &[]);
+    let digest_two = crate::canonical::intent_digest("02", "mcp", &[]);
+
+    store
+        .record_intent("user", "idem", &first, first_seq, &digest_one)
+        .expect("first record");
+    // A second record under the same key never replaces the first.
+    store
+        .record_intent("user", "idem", &second, second_seq, &digest_two)
+        .expect("second record is a no-op, not an error");
+    assert_eq!(
+        store.find_intent("user", "idem").expect("find"),
+        Some((first.clone(), first_seq, digest_one)),
+        "the first write is the replay answer"
+    );
+    assert_ne!(first, second);
+    assert_ne!(first_seq, second_seq);
+
+    // Empty ids are refused.
+    assert!(matches!(
+        store.record_intent("user", "", &second, second_seq, &digest_two),
+        Err(StoreError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        store.record_intent("user", "idem2", "", second_seq, &digest_two),
+        Err(StoreError::InvalidInput(_))
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intent_log_appends_without_rewriting_its_prefix_and_survives_reopen() {
+    let dir = temp_dir("intent-append");
+    let backup = temp_dir("intent-append-backup");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let (node, seq) = store
+        .ingest_in_scope_with_receipt(input("intent one", &[]), "user")
+        .expect("ingest");
+    store
+        .record_intent("user", "first", &node, seq, "digest-1")
+        .expect("first");
+    let log_path = dir.join("intent-index.log");
+    let prefix = std::fs::read(&log_path).expect("log");
+    assert!(!prefix.is_empty());
+    let snapshot = dir.join("intent-index");
+    assert!(
+        !snapshot.exists(),
+        "a new intent appends; it does not rewrite the legacy snapshot"
+    );
+    for n in 0..24 {
+        store
+            .record_intent("user", &format!("later-{n}"), &node, seq, "digest-n")
+            .expect("append");
+    }
+    let grown = std::fs::read(&log_path).expect("grown log");
+    assert!(
+        grown.starts_with(&prefix),
+        "appending must not rewrite the bytes already durable"
+    );
+    assert!(grown.len() > prefix.len());
+    let len_before_repeat = grown.len();
+    store
+        .record_intent("user", "first", &node, seq + 1, "digest-replaced")
+        .expect("first write wins");
+    assert_eq!(
+        std::fs::metadata(&log_path).expect("meta").len(),
+        len_before_repeat as u64,
+        "a repeated intent id appends nothing"
+    );
+    assert_eq!(
+        store.find_intent("user", "first").expect("find").unwrap().2,
+        "digest-1"
+    );
+
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_intent("user", "later-23")
+            .expect("later")
+            .unwrap()
+            .2,
+        "digest-n"
+    );
+    reopened.backup_to(&backup).expect("backup");
+    let restored = StrataStore::open(&backup).expect("restored");
+    assert_eq!(
+        restored.find_intent("user", "first").expect("backup find"),
+        Some((node, seq, "digest-1".to_string()))
+    );
+    assert!(backup.join("intent-index.log").is_file());
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&backup).ok();
+}
+
+#[test]
+fn legacy_intent_snapshot_loads_and_new_records_append_beside_it() {
+    let dir = temp_dir("intent-legacy-snapshot");
+    let mut legacy = BTreeMap::new();
+    legacy.insert(
+        ("user".to_string(), "from-snapshot".to_string()),
+        IntentIndexEntry {
+            node_id: "mem-legacy".into(),
+            effect_seq: 3,
+            response_digest: "snap".into(),
+        },
+    );
+    store_intent_index(&dir, &legacy).expect("plant snapshot");
+    let snapshot_bytes = std::fs::read(dir.join("intent-index")).expect("snapshot");
+    let mut store = StrataStore::open(&dir).expect("open");
+    assert_eq!(
+        store
+            .find_intent("user", "from-snapshot")
+            .expect("legacy")
+            .unwrap()
+            .2,
+        "snap"
+    );
+    let (node, seq) = store
+        .ingest_in_scope_with_receipt(input("after the snapshot", &[]), "user")
+        .expect("ingest");
+    store
+        .record_intent("user", "from-log", &node, seq, "appended")
+        .expect("append");
+    assert_eq!(
+        std::fs::read(dir.join("intent-index")).expect("snapshot still"),
+        snapshot_bytes,
+        "appending must not rewrite the legacy snapshot"
+    );
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_intent("user", "from-snapshot")
+            .expect("legacy survives")
+            .unwrap()
+            .2,
+        "snap"
+    );
+    assert_eq!(
+        reopened
+            .find_intent("user", "from-log")
+            .expect("log survives")
+            .unwrap()
+            .2,
+        "appended"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_torn_intent_log_tail_is_ignored_and_a_bad_checksum_is_an_error() {
+    let dir = temp_dir("intent-torn");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let (node, seq) = store
+        .ingest_in_scope_with_receipt(input("torn target", &[]), "user")
+        .expect("ingest");
+    store
+        .record_intent("user", "kept", &node, seq, "kept-digest")
+        .expect("record");
+    store
+        .record_intent("user", "also", &node, seq, "also-digest")
+        .expect("second");
+    drop(store);
+
+    let log_path = dir.join("intent-index.log");
+    let mut torn = std::fs::read(&log_path).expect("log");
+    let good = torn.clone();
+    torn.extend_from_slice(b"torn-tail");
+    std::fs::write(&log_path, &torn).expect("plant tear");
+    let reopened = StrataStore::open(&dir).expect("torn tail still opens");
+    assert_eq!(
+        reopened
+            .find_intent("user", "kept")
+            .expect("kept")
+            .unwrap()
+            .2,
+        "kept-digest"
+    );
+    assert_eq!(
+        reopened
+            .find_intent("user", "also")
+            .expect("also")
+            .unwrap()
+            .2,
+        "also-digest"
+    );
+    let after_open = std::fs::read(&log_path).expect("truncated");
+    assert_eq!(after_open, good, "open drops the torn tail");
+    drop(reopened);
+
+    let mut corrupt = good.clone();
+    corrupt[4] ^= 0xff;
+    std::fs::write(&log_path, &corrupt).expect("plant checksum miss");
+    let err = match StrataStore::open(&dir) {
+        Err(err) => err,
+        Ok(_) => panic!("bad checksum must not open"),
+    };
+    let message = err.to_string();
+    assert!(
+        message.contains("checksum"),
+        "checksum failure is reported: {message}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn duplicate_echoes_reuse_an_exact_match_and_cap_per_original() {
+    let dir = temp_dir("echo-reuse");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let original = store
+        .ingest_in_scope(input("the original", &[]), "user")
+        .expect("original");
+    let content = format!("duplicate of {original}\ncanonical_hash: ab\nsubmitted_line_count: 1");
+    let tags = vec!["duplicate".to_string(), "cache".to_string()];
+    assert!(
+        store
+            .reuse_duplicate_echo("user", &original, &content, &tags)
+            .is_none(),
+        "nothing to reuse yet"
+    );
+    let mut earliest = String::new();
+    let mut cache_echo = String::new();
+    for n in 0..MAX_LIVE_ECHOES_PER_ORIGINAL {
+        let tags = if n == 1 {
+            vec!["duplicate".to_string(), "cache".to_string()]
+        } else {
+            vec!["duplicate".to_string(), format!("t{n:02}")]
+        };
+        let echo = store
+            .ingest_in_scope(
+                IngestInput {
+                    content: content.clone(),
+                    source: Some(crate::types::SourceKey {
+                        system: crate::canonical::DUPLICATE_SOURCE.to_string(),
+                        project: String::new(),
+                        id: String::new(),
+                    }),
+                    source_updated_at_ms: None,
+                    node_type: "note".into(),
+                    tags,
+                    created_at_ms: Some(1),
+                    valid_from_ms: None,
+                    valid_until_ms: None,
+                },
+                "user",
+            )
+            .expect("echo");
+        if n == 0 {
+            earliest = echo;
+        } else if n == 1 {
+            cache_echo = echo;
+        }
+    }
+    let exact = store
+        .reuse_duplicate_echo(
+            "user",
+            &original,
+            &content,
+            &["cache".into(), "duplicate".into()],
+        )
+        .expect("exact match wins over the cap");
+    assert_eq!(exact, cache_echo);
+    let capped = store
+        .reuse_duplicate_echo(
+            "user",
+            &original,
+            &content,
+            &["duplicate".into(), "brand-new".into()],
+        )
+        .expect("at the cap a new fingerprint reuses the earliest echo");
+    assert_eq!(capped, earliest);
+    assert_ne!(exact, capped);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn existing_store_upgrades_in_place_without_an_intent_file() {
+    // A store written before this feature has no intent-index side file; it
+    // must open (empty table) and start recording without migration.
+    let dir = temp_dir("intent-upgrade");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let node = store
+        .ingest(input("pre-feature fact", &[]))
+        .expect("ingest");
+    assert_eq!(store.find_intent("", "any").expect("empty table"), None);
+    store
+        .record_intent("", "first-after-upgrade", &node, 7, "digest")
+        .expect("record after upgrade");
+    assert_eq!(
+        store.find_intent("", "first-after-upgrade").expect("find"),
+        Some((node, 7, "digest".to_string()))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_retired_node_is_not_a_duplicate_target_and_the_next_one_takes_its_place() {
+    let dir = temp_dir("canonical-retired");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let hash = crate::canonical::canonical_hash("the cache ttl is 60 seconds");
+    let old = store
+        .ingest(input("the cache ttl is 60 seconds", &[]))
+        .expect("ingest old");
+    store.begin_tool_call();
+    let successor = store
+        .ingest(input("the cache ttl is 300 seconds", &[]))
+        .expect("ingest successor");
+    store
+        .retire(&old, &successor, &ctx(Some(RULE_EDIT), false))
+        .expect("retire old");
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &hash)
+            .expect("lookup"),
+        None,
+        "text that was retired can be saved again"
+    );
+
+    let again = store
+        .ingest(input("the cache ttl is 60 seconds", &[]))
+        .expect("ingest again");
+    assert_eq!(
+        store
+            .find_node_by_canonical_hash("", &hash)
+            .expect("lookup"),
+        Some(again.clone()),
+        "the new live node is the target now"
+    );
+
+    // Derived state: a reopen reaches the same answer from the log alone.
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(
+        reopened
+            .find_node_by_canonical_hash("", &hash)
+            .expect("lookup"),
+        Some(again)
+    );
 }

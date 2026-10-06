@@ -1665,28 +1665,6 @@ pub struct VerifiedDisclosureErasure {
 }
 
 impl VerifiedDisclosureErasure {
-    /// Integration seam for the verified-local-unlearning implementation.
-    /// Calling code must have verified both the erasure ledger signature and
-    /// the complete in-scope postcondition set before minting this capability.
-    #[allow(dead_code)] // wired by the integration layer in the same crate
-    pub(crate) fn after_verified_local_erasure(
-        receipt_id: OpaqueReceiptId,
-        evidence_slot: OpaqueEvidenceSlot,
-        commitment: impl Into<String>,
-        erasure_proof_digest: impl Into<String>,
-    ) -> Result<Self, AttestationError> {
-        let commitment = commitment.into();
-        let erasure_proof_digest = erasure_proof_digest.into();
-        validate_digest("erasure.commitment", &commitment)?;
-        validate_digest("erasure.proofDigest", &erasure_proof_digest)?;
-        Ok(Self {
-            receipt_id,
-            evidence_slot,
-            commitment,
-            erasure_proof_digest,
-        })
-    }
-
     pub fn erasure_proof_digest(&self) -> &str {
         &self.erasure_proof_digest
     }
@@ -3050,33 +3028,6 @@ mod tests {
         let payload =
             String::from_utf8(canonical_attestation_bytes(bound.attestation()).unwrap()).unwrap();
         assert!(!payload.contains("private-memory"));
-    }
-
-    #[test]
-    fn missing_disclosure_is_neutral_without_matching_verified_erasure() {
-        let attestation = attestation();
-        let disclosure = disclosure();
-        let expected = disclosure.evidence_commitment();
-        assert_eq!(
-            verify_disclosure(&attestation, expected.evidence_slot.as_str(), None),
-            DisclosureVerification::MissingDisclosure
-        );
-        let proof = VerifiedDisclosureErasure::after_verified_local_erasure(
-            disclosure.receipt_id.clone(),
-            disclosure.evidence_slot.clone(),
-            expected.commitment,
-            payload_digest(b"verified-erasure-proof"),
-        )
-        .unwrap();
-        assert_eq!(
-            verify_disclosure_with_erasure_proof(
-                &attestation,
-                disclosure.evidence_slot.as_str(),
-                None,
-                Some(&proof),
-            ),
-            DisclosureVerification::UnavailableAfterVerifiedErasure
-        );
     }
 
     #[test]

@@ -1,9 +1,9 @@
 name: v3 contracts
 on:
   pull_request:
-    branches: [main, v4, release/v4.0.0-rc]
+    branches: [main, v4, release/**]
   push:
-    branches: [main, v4, release/v4.0.0-rc]
+    branches: [main, v4, release/**]
 permissions:
   contents: read
 jobs:

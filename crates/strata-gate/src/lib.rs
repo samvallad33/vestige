@@ -26,7 +26,7 @@
 //! - [`sweep`] — [`sweep`]: emit `GAP` records for structural violations.
 //!
 //! Byte-exact layouts, enum codes, and integration decisions are documented in
-//! `SCOPE-HANDOFF.md` at the crate root.
+//! the byte-exact layouts in `record.rs`.
 
 pub mod admit;
 pub mod inputs;

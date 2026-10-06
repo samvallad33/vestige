@@ -1,12 +1,10 @@
-# Codex Intelligent Memory Protocol
+# Codex Protocol for Vestige
 
-> **This page describes Vestige v3.** Vestige 4.0 stores memory on Strata and changes recall, backups and several tools. This page is being rewritten for 4.0.x. For how 4.0 behaves, see the [README](../../README.md) and the [4.0.0 changelog](../../CHANGELOG.md).
+> Written for Vestige 4.x.
 
-Codex can connect to Vestige through MCP, but MCP registration alone only makes
-the tools available. It does not make Codex automatically reason with memory.
+Codex can connect to Vestige through MCP, but MCP registration alone only makes the tools available. It does not make Codex call them. Use this protocol when you configure a Codex workspace that should consult Vestige before it answers.
 
-Use this protocol when configuring a Codex workspace that should behave like it
-has long-term cognitive memory.
+Vestige finds a record by an exact handle: a full id, a unique id prefix of 8 or more characters, or an exact tag. It does not search by wording, so the protocol below names the tag to recall.
 
 ## 1. Register Vestige MCP
 
@@ -17,62 +15,50 @@ command = "/absolute/path/to/vestige-mcp"
 
 Restart Codex after changing MCP configuration.
 
-## 2. Add An `AGENTS.md` Trigger
+## 2. Add an `AGENTS.md` trigger
 
-Codex reads `AGENTS.md` files as workspace instructions. Put a file at the repo
-root, or a higher workspace root, with a rule like:
+Codex reads `AGENTS.md` files as workspace instructions. Put a file at the repo root, or a higher workspace root, with a rule like:
 
 ```markdown
-Before answering substantive prompts, consult Vestige using the current prompt
-plus project and user context. Use `session_start` for broad context,
-`recall(mode="lookup")` for quick memory checks, and
-`recall(mode="reason"|"contradictions")` for decisions, contradictions, or
-accuracy-sensitive questions. Compose memories into actions; do not summarize
-retrievals.
+At the start of a task, call Vestige `session_start` with include_intentions and
+include_status, and with context.codebase and context.repoPath for the checkout you
+are editing. Then call `recall` with handle set to the task's narrow topic tag.
+Recall by exact tag or id only; a free-text query returns similarity_disabled.
+Compose what you find into actions; do not summarize retrievals. Save decisions,
+corrections and verified facts with `smart_ingest`, tagged with the project and one
+narrow topic.
 ```
 
-This is the Codex equivalent of the lightweight top-bread memory trigger.
-
-## 3. Use A Query Router
+## 3. Use a router
 
 Use the smallest call that can change the answer:
 
 - `session_start`: start of a topic or project switch.
-- `recall(mode="lookup")`: identity, preference, exact memory, or quick project
-  context.
-- `recall(mode="reason"|"contradictions")`: decision history, contradictions,
-  timelines, or root-cause analysis.
-- `memory(get_batch)`: expand specific load-bearing memories.
-- `smart_ingest`: save durable corrections, decisions, or new preferences.
+- `recall` with `handle`: the history of one topic by exact tag, or one record by id.
+- `memory` with `action="get_batch"`: expand specific load-bearing records by id.
+- `causal_walk` and `forgotten_lesson`: after a failure. Save the failure as an `event` record first and walk from its id.
+- `smart_ingest`: save durable corrections, decisions and new preferences.
 
-## 4. Compose, Do Not Summarize
+## 4. Compose, do not summarize
 
-Retrieved memory is evidence, not the final answer.
+A retrieved record is evidence, not the final answer.
 
 Use this mental transform:
 
 ```text
-memory fact -> implication -> action
+record -> implication -> action
 ```
 
-If memory does not change the action, do not mention it. If it does, make the
-changed recommendation clear.
+If a record does not change the action, do not mention it. If it does, make the changed recommendation clear and cite the record id.
 
-## 5. Know The Limit
+## 5. Know the limit
 
-Claude Code's Cognitive Sandwich uses `UserPromptSubmit` and `Stop` hooks.
-Codex supports `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`
-hooks too; its payload differs, so configure an explicit adapter rather than
-assuming Claude's scripts can read Codex events unchanged.
+Claude Code's Cognitive Sandwich uses `UserPromptSubmit` and `Stop` hooks, and most of its layers call v3 tools. See [COGNITIVE_SANDWICH.md](../COGNITIVE_SANDWICH.md). This repository ships no Codex hook adapter.
 
-For Codex, the reliable portable layer is:
+For Codex, the portable layer is:
 
 1. MCP server configured.
 2. `AGENTS.md` instruction trigger.
-3. The native hook adapter for session recall, prompt recall, tool receipts, and
-   final-answer checks.
-4. Explicit agent discipline: call Vestige before substantive answers.
+3. Explicit agent discipline: call Vestige at the start of a task and save what the task established.
 
-Keep the adapter fail-open and keep the hook source shared with Claude so both
-surfaces follow the same retrieval, composition, verification, and feedback
-workflow.
+To stop destructive commands before they run, use the [Operator Lite](../../operator-lite/README.md) gate. It supports Codex hooks and is a separate layer from this protocol.

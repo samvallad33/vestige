@@ -68,14 +68,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
-            # vector-search (usearch HNSW index) is REQUIRED. Without it the
-            # storage layer's #[cfg(feature = "vector-search")] paths compile
-            # out, so embeddings are never persisted or queried: the binary
-            # reports "Embedding Service: Not Ready", 0% coverage, consolidate
-            # generates 0 embeddings, and no model download is ever attempted.
-            # usearch builds cleanly on MSVC because vestige-core pins it with
-            # features=["fp16lib"] (see crates/vestige-core/Cargo.toml).
-            cargo_flags: "--no-default-features --features embeddings,ort-download,vector-search"
+            # Windows builds without codebase-git (libgit2, OpenSSL and libssh2
+            # on MSVC); the codebase tool reports git history as unavailable.
+            cargo_flags: "--no-default-features"
             needs_onnxruntime: false
           # 4.0 has no ONNX runtime, so Intel Mac builds the default features
           # like every other macOS target and needs nothing installed.

@@ -1,5 +1,7 @@
 # Vestige Roadmap
 
+> Historical. This page describes Vestige v3 and is kept for the record. For 4.x see the [README](../README.md).
+
 > Public adoption roadmap for making Vestige easier to start, easier to trust,
 > and easier to configure.
 

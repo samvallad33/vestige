@@ -1,8 +1,8 @@
 {
   "name": "vestige",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "private": true,
-  "description": "Cognitive memory for AI - MCP server with FSRS-6 spaced repetition",
+  "description": "Vestige: the Causal Proof Engine and operating system for AI agents. A signed log, zero vectors, and every answer carries its proof.",
   "author": "Sam Valladares",
   "license": "AGPL-3.0-only",
   "repository": {
