@@ -1331,7 +1331,6 @@ mod tests {
         subject: &str,
         files: &[&str],
         symbols: &[&str],
-        mentions: &[&str],
         days_ago: i64,
     ) -> KnowledgeNode {
         let content = git_records::record_content(&git_records::GitCommit {
@@ -1341,7 +1340,6 @@ mod tests {
             files: files.iter().map(|f| f.to_string()).collect(),
             extra_files: 0,
             symbols: symbols.iter().map(|s| s.to_string()).collect(),
-            mentions: mentions.iter().map(|m| m.to_string()).collect(),
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],
@@ -1379,7 +1377,6 @@ mod tests {
             "harden login",
             &["tests/auth_test.rs", "src/auth.rs"],
             &[],
-            &[],
             5,
         );
         // GOOD: touched the test file 25 days ago (older, loses on recency)
@@ -1388,7 +1385,6 @@ mod tests {
             &sha_of('b'),
             "tune session cache",
             &["tests/auth_test.rs", "src/session.rs"],
-            &[],
             &[],
             25,
         );
@@ -1400,7 +1396,7 @@ mod tests {
             1,
         );
         // unrelated commit: shares nothing, must be invisible
-        commit_record(&storage, &sha_of('c'), "docs", &["README.md"], &[], &[], 2);
+        commit_record(&storage, &sha_of('c'), "docs", &["README.md"], &[], 2);
 
         let result = walk_storage(
             &storage,
@@ -1462,7 +1458,6 @@ mod tests {
             "introduce auth",
             &["src/auth.rs"],
             &[],
-            &[],
             10,
         );
         let last = commit_record(
@@ -1470,7 +1465,6 @@ mod tests {
             &sha_of('d'),
             "tweak timeout",
             &["src/auth.rs"],
-            &[],
             &[],
             3,
         );
@@ -1543,7 +1537,6 @@ mod tests {
             "harden login",
             &["tests/auth_test.rs", "src/auth.rs"],
             &[],
-            &[],
             5,
         );
         // in-range co-touch (the rev-list sha), older
@@ -1552,7 +1545,6 @@ mod tests {
             &in_range_sha,
             "tune session cache",
             &["tests/auth_test.rs", "src/session.rs"],
-            &[],
             &[],
             8,
         );
@@ -1597,7 +1589,6 @@ mod tests {
             &sha_of('f'),
             "harden login",
             &["tests/auth_test.rs"],
-            &[],
             &[],
             3,
         );
@@ -1650,18 +1641,17 @@ mod tests {
         // a note the failing run retrieved (referenced evidence)
         let note = seed(
             &storage,
-            "API_TIMEOUT was changed in the deploy env",
-            vec!["API_TIMEOUT"],
+            "the deploy failed in src/deploy.rs",
+            vec!["src/deploy.rs"],
             2,
         );
-        // the quiet change carrying the same env var, older than the run
+        // the quiet change carrying the same file, older than the run
         let change = commit_record(
             &storage,
             &sha_of('7'),
             "tweak deploy",
             &["src/deploy.rs"],
             &[],
-            &["API_TIMEOUT"],
             4,
         );
 
@@ -1699,7 +1689,7 @@ mod tests {
         let top = &result.causes[0];
         assert_eq!(top.id, change.id);
         assert_eq!(top.path[0].via, "ci_run/failed_calls");
-        assert!(top.shared_anchors.contains(&"api_timeout".to_string()));
+        assert!(top.shared_anchors.contains(&"src/deploy.rs".to_string()));
     }
 
     #[test]
@@ -1712,7 +1702,6 @@ mod tests {
             "introduce auth",
             &["src/auth.rs"],
             &[],
-            &[],
             10,
         );
         commit_record(
@@ -1720,7 +1709,6 @@ mod tests {
             &sha_of('d'),
             "tweak timeout",
             &["src/auth.rs"],
-            &[],
             &[],
             3,
         );
@@ -1839,7 +1827,6 @@ mod tests {
             "harden login",
             &["tests/auth_test.rs", "src/auth.rs"],
             &[],
-            &[],
             5,
         );
 
@@ -1920,7 +1907,6 @@ mod tests {
             files: (0..52).map(|i| format!("src/f{i}.rs")).collect(),
             extra_files: 2,
             symbols: vec!["src/f0.rs/handler_0".into()],
-            mentions: vec!["API_TIMEOUT".into()],
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],

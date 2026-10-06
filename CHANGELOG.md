@@ -257,6 +257,13 @@ as orphan writes and does not see those edges until it is upgraded.
   commit:` in the bisect log). Earlier git writes the same lines without
   quotes. Both are read. A bisect that stopped early still names no commit.
 
+- **Commit records do not copy diff-body names onto a `mentions:` line.**
+  Added and removed lines used to be scanned for identifier-shaped tokens, and
+  those names were written as `mentions:`. Query-time extraction then treated
+  them as causal join keys. The line is gone. Files, hunk-header symbols, hunk
+  spans, and import edges stay. A name that appears only in a changed line is
+  not on the record.
+
 - **`npx -y vestige-mcp-server` starts the server.** The npm package declared
   four bins and none was named after the package, so npx could not pick one
   and printed "could not determine executable to run"; the package now has a

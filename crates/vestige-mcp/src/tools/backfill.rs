@@ -867,7 +867,6 @@ mod tests {
             files: vec!["events/local.py".into()],
             symbols: vec![],
             extra_files: 0,
-            mentions: vec![],
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],

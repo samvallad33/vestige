@@ -709,7 +709,8 @@ pub struct ClosedIssueNode {
 pub struct GitCommitNode {
     pub node_id: String,
     /// Full record content: `commit <sha> <subject>` header plus
-    /// `files:`/`modules:`/`symbols:`/`mentions:` lines.
+    /// `files:`/`modules:`/`symbols:` lines. Diff-body names are not copied
+    /// onto a `mentions:` line.
     pub content: String,
 }
 

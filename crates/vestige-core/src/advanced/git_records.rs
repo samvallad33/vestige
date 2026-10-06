@@ -43,10 +43,6 @@ pub struct GitCommit {
     /// Symbols from diff hunk headers, path-qualified (`<file>/<symbol>`) so
     /// they pass the entity shape test; a bare lowercase `fn_name` would not.
     pub symbols: Vec<String>,
-    /// Names harvested from the changed lines themselves (config keys, file
-    /// names, code identifiers appearing IN the diff body) — the causal link
-    /// usually lives here in plain text, not in the headers.
-    pub mentions: Vec<String>,
     /// Hunk spans (new-side line ranges) per file, bounded by [`MAX_HUNKS`].
     pub hunks: Vec<HunkSpan>,
     /// Hunks beyond [`MAX_HUNKS`] (recorded as a count, not spans, so the
@@ -519,9 +515,6 @@ const RECORD_SEP: char = '\u{1e}';
 const UNIT_SEP: char = '\u{1f}';
 const MAX_FILES: usize = 50;
 const MAX_SYMBOLS: usize = 40;
-/// Changed lines harvested per commit for mention entities.
-const MAX_DIFF_LINES: usize = 400;
-const MAX_MENTIONS: usize = 40;
 /// Hunk spans kept per commit; overflow is counted in `extra_hunks`.
 const MAX_HUNKS: usize = 200;
 /// Upper bound for the comma-joined span list on the `hunks:` content line.
@@ -592,7 +585,6 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
         // attaching their symbols to files.last() would fabricate join keys
         let mut files_capped = false;
         let mut symbols: BTreeSet<String> = BTreeSet::new();
-        let mut diff_body = String::new();
         let mut hunks: Vec<HunkSpan> = Vec::new();
         let mut extra_hunks = 0usize;
         // (file, written target, syntax) — resolution is deferred until the
@@ -640,12 +632,9 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
                 }
             } else if line.starts_with('+') || line.starts_with('-') {
                 let text = line.trim_start_matches(['+', '-']);
-                if diff_body.len() < MAX_DIFF_LINES {
-                    diff_body.push_str(text);
-                    diff_body.push('\n');
-                }
-                // import edges ride the same changed lines; capture continues
-                // after the mention body is full (bounded independently)
+                // import edges ride the changed lines. Identifier-shaped
+                // names in the diff body are not copied onto the record:
+                // a `mentions:` line would become an entity-name join key.
                 if raw_imports.len() < MAX_IMPORTS
                     && let Some(file) = files.last().filter(|_| !files_capped)
                     && let Some((target, kind)) = import_target(text)
@@ -654,17 +643,6 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
                 }
             }
         }
-
-        // harvest identifier-shaped names from the changed lines, bounded
-        let mentions: Vec<String> = super::retroactive_backfill::extract_entities(&diff_body, &[])
-            .into_iter()
-            .filter(|m| {
-                !files.iter().any(|f| f == m)
-                    && !symbols.iter().any(|s| s == m)
-                    && !m.starts_with("commit")
-            })
-            .take(MAX_MENTIONS)
-            .collect();
 
         // resolve import edges against this commit's own file list — exact
         // module-segment matching only; anything else stays unresolved
@@ -687,7 +665,6 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             files,
             extra_files,
             symbols: symbols.into_iter().collect(),
-            mentions,
             hunks,
             extra_hunks,
             imports,
@@ -942,9 +919,9 @@ fn leading_identifier(ctx: &str) -> Option<String> {
     .then_some(ident)
 }
 
-/// Content for a commit record. Every token on the files/modules/symbols lines
-/// is identifier-shaped by construction (see [`super::retroactive_backfill`]),
-/// so query-time extraction turns each into a causal join key.
+/// Content for a commit record. Files, modules, symbols, hunks and import
+/// edges are the handles the diff structure recorded. Changed-line
+/// identifiers are not copied onto a `mentions:` line.
 pub fn record_content(c: &GitCommit) -> String {
     let mut s = format!("commit {} {}", c.sha, c.subject);
     if !c.files.is_empty() {
@@ -969,10 +946,6 @@ pub fn record_content(c: &GitCommit) -> String {
     if !c.symbols.is_empty() {
         s.push_str("\nsymbols: ");
         s.push_str(&c.symbols.join(", "));
-    }
-    if !c.mentions.is_empty() {
-        s.push_str("\nmentions: ");
-        s.push_str(&c.mentions.join(", "));
     }
     if !c.hunks.is_empty() {
         s.push_str("\nhunks: ");
@@ -1508,6 +1481,23 @@ diff --git a/README.md b/README.md
             fixes_targets(&format!("Fixes: {fixed}")),
             vec![fixed.to_string()]
         );
+    }
+
+    #[test]
+    fn diff_body_identifiers_are_not_written_as_mentions() {
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2024-07-23T16:00:00+00:00\u{1f}\u{1f}set the pool\u{1f}set the pool\u{1d}\ndiff --git a/src/a.rs b/src/a.rs\n@@ -1 +1 @@ fn load()\n-old\n+connection_pool = 1\n"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits.len(), 1);
+        let content = record_content(&commits[0]);
+        assert!(!content.contains("mentions:"), "{content}");
+        assert!(
+            !content.contains("connection_pool"),
+            "a diff-body identifier is not a join key: {content}"
+        );
+        assert!(content.contains("files: src/a.rs"), "{content}");
     }
 
     #[test]

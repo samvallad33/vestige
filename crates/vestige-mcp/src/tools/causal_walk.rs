@@ -2423,7 +2423,6 @@ mod tests {
             files: files.iter().map(|f| f.to_string()).collect(),
             extra_files: 0,
             symbols: vec![],
-            mentions: vec![],
             hunks: vec![],
             extra_hunks: 0,
             imports: vec![],
