@@ -89,7 +89,7 @@ The first lines say this is pre-release code from PR #445, commit `b4bcd52b81`, 
 
 "This step checks the store with strata-verify" checks the store and prints the signing-key fingerprint, then `OK`. A new data directory creates its own signing key, so the fingerprint and the two digests on your machine will differ from the paste. The rank, the ingested count, and `MATCH` / `OK` are the lines to read.
 
-The second command is the baseline. It ranks those same 20 commits from the same failure text and prints its own top 9, then the rank of `d2f58d9`. On the run below that rank is 20. The corpus size on screen should be 20, the same count as the Vestige side.
+The second command is the baseline. It ranks those same 20 commits from the same failure text and prints its own top 9, then the rank of `d2f58d9`. On the run below that rank is 20. It then ranks `d2f58d9` among only the commits the walk returned. On the run below that rank is 9. The corpus size on screen should be 20, the same count as the Vestige side.
 
 ## Output from the fair-cut run
 
@@ -128,25 +128,25 @@ This step walks backward from that failure record and ranks the commits it reach
 #7 20df970a567f3a73448244b68dd5517ab738eaeb edges=touched,derived_from
 #8 f40da39bafd375a549df4324d302d3257481c3c7 edges=touched,derived_from
 #9 bec8468183c7cc1697ad1d34a5eb6087ec5c8a90 edges=touched,derived_from
-causal_walk seconds: 0.025558
+causal_walk seconds: 0.025573
 cause d2f58d92991fa08b24596fcc6c6472dc5015d3bc is rank 1
 
 This step replays the signed log and rebuilds it, then compares the two digests.
-live digest: 801b523d903b6180e75a6f64acb26f2f84444c5fa309011a65c47e60e8d96406
-replayed digest: 801b523d903b6180e75a6f64acb26f2f84444c5fa309011a65c47e60e8d96406
+live digest: 279db3d5702f73f07857c1077196bc19aa6a7aa5f4e2ebd73838a98820725d52
+replayed digest: 279db3d5702f73f07857c1077196bc19aa6a7aa5f4e2ebd73838a98820725d52
 MATCH
 
 This step checks the store with strata-verify and prints the signing-key fingerprint.
 {
   "failures": [],
   "frames_total": 3056,
-  "key_fingerprint": "997783c46c66c60c953ffb87e4c19d21f9f8ae7c63629ad9030eb77ba9311409",
+  "key_fingerprint": "714017f05cf724c2f787671a36a5c559c944096c5ff339d0981c66b36216072a",
   "key_pin": "strata.key",
   "key_pin_note": "no migration receipt. Folder pin is strata.key in the log directory. A trailer signature must match it. No receipt-signing.key was required.",
   "ok": true,
   "segments": 1
 }
-key fingerprint: 997783c46c66c60c953ffb87e4c19d21f9f8ae7c63629ad9030eb77ba9311409
+key fingerprint: 714017f05cf724c2f787671a36a5c559c944096c5ff339d0981c66b36216072a
 OK
 ```
 
@@ -169,6 +169,16 @@ top 9:
 #8 d3f06de4f5fca1a9bb43f11b8e469fce306e94db cosine=0.332630
 #9 351d602d86c484a39bc537f1eb99866ea2c25fc1 cosine=0.320223
 cause d2f58d92991fa08b24596fcc6c6472dc5015d3bc rank: 20
+among the 9 commits causal_walk returned: d2f58d92991fa08b24596fcc6c6472dc5015d3bc rank 9
+#1 0b5c0220b5a563ec67c1d4d407e636e0c8d17291 cosine=0.379415
+#2 79dce7391e17c9872a96e3d2cfe186c3a94ee1e0 cosine=0.371084
+#3 bec8468183c7cc1697ad1d34a5eb6087ec5c8a90 cosine=0.361305
+#4 e6126ce0dc105c329dac4d45cf74c2ea8c944882 cosine=0.313288
+#5 b6697a777c301f68ec4f8a81f1707badf223e837 cosine=0.303889
+#6 74112553bf3c1e675dddc5ce25c3f7d3b6f49656 cosine=0.260331
+#7 20df970a567f3a73448244b68dd5517ab738eaeb cosine=0.251010
+#8 f40da39bafd375a549df4324d302d3257481c3c7 cosine=0.242493
+#9 d2f58d92991fa08b24596fcc6c6472dc5015d3bc cosine=0.183735
 ```
 
 ## Longer history
@@ -188,7 +198,7 @@ DEMO_HISTORY=300 DEMO_PAUSE=1 bash demo/marcelo/vestige-side.sh
 DEMO_HISTORY=300 bash demo/marcelo/rag-side.sh
 ```
 
-On the machine that produced the paste below, the Vestige side took 496.708 seconds. The first ingest round wrote all 300 commits. The budget flag stayed set through round 8, and round 9 reported the page finished. The walk listed 10 commits, and `d2f58d9` was rank 1. The baseline corpus was 300 commits, and that same commit was rank 266.
+On the machine that produced the paste below, the Vestige side took 496.708 seconds. The first ingest round wrote all 300 commits. The budget flag stayed set through round 8, and round 9 reported the page finished. The walk listed 10 commits, and `d2f58d9` was rank 1. The baseline corpus was 300 commits, and that same commit was rank 266. Among those 10 commits, its rank was 10.
 
 Vestige side:
 
@@ -275,6 +285,17 @@ top 9:
 #8 321101d340d7966e02b10b20f94704de0621e3d1 cosine=0.457959
 #9 cb3fefff15f7795cd1877d82ea821b0a4896b6dc cosine=0.457928
 cause d2f58d92991fa08b24596fcc6c6472dc5015d3bc rank: 266
+among the 10 commits causal_walk returned: d2f58d92991fa08b24596fcc6c6472dc5015d3bc rank 10
+#1 cf20673197f2073aa2ccde999423b816d3cb5ca5 cosine=0.380029
+#2 0b5c0220b5a563ec67c1d4d407e636e0c8d17291 cosine=0.379415
+#3 79dce7391e17c9872a96e3d2cfe186c3a94ee1e0 cosine=0.371084
+#4 bec8468183c7cc1697ad1d34a5eb6087ec5c8a90 cosine=0.361305
+#5 e6126ce0dc105c329dac4d45cf74c2ea8c944882 cosine=0.313288
+#6 b6697a777c301f68ec4f8a81f1707badf223e837 cosine=0.303889
+#7 74112553bf3c1e675dddc5ce25c3f7d3b6f49656 cosine=0.260331
+#8 20df970a567f3a73448244b68dd5517ab738eaeb cosine=0.251010
+#9 f40da39bafd375a549df4324d302d3257481c3c7 cosine=0.242493
+#10 d2f58d92991fa08b24596fcc6c6472dc5015d3bc cosine=0.183735
 ```
 
 ## Do not say

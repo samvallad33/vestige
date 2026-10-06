@@ -415,6 +415,7 @@ try:
     if not causes:
         stop("the walk returned no commits")
     rank = None
+    walked = []
     for index, cause in enumerate(causes, start=1):
         sha = (cause.get("structure") or {}).get("sha") or ""
         edges = path_edges(cause)
@@ -423,10 +424,15 @@ try:
         else:
             edge_text = "(none of the recorded edge types)"
         print("#%d %s edges=%s" % (index, sha, edge_text))
+        if not sha:
+            stop("a ranked commit has no id")
+        walked.append(sha)
         if sha == CAUSE_SHA:
             rank = index
         if sha == FIX_SHA:
             stop("the walk reached the revert commit")
+    with open(os.path.join(HOME, "causal-walk-commits.txt"), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(walked) + "\n")
     print("causal_walk seconds: %.6f" % elapsed)
     sys.stdout.flush()
     if rank != 1:

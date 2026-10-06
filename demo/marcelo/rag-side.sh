@@ -12,6 +12,7 @@ DEMO_HOME="${DEMO_HOME:-$HOME/vestige-demo}"
 DEMO_HOME="$(cd "$DEMO_HOME" && pwd)"
 [[ -f "$DEMO_HOME/.vestige-demo" ]] || die "run demo/marcelo/setup.sh first"
 [[ -f "$DEMO_HOME/ingested-commits.txt" ]] || die "run demo/marcelo/vestige-side.sh first"
+[[ -f "$DEMO_HOME/causal-walk-commits.txt" ]] || die "run demo/marcelo/vestige-side.sh first"
 [[ -x "$DEMO_HOME/rag-venv/bin/python" ]] || die "run demo/marcelo/setup.sh first"
 
 # The corpus is the commit list the Vestige side wrote. DEMO_HISTORY only
@@ -52,4 +53,5 @@ exec "$DEMO_HOME/rag-venv/bin/python" "$SCRIPT_DIR/rag_baseline/search.py" \
   "$DEMO_HOME/ingested-commits.txt" \
   "$DEMO_HOME/failure.txt" \
   "$DEMO_HOME/cause-sha.txt" \
-  "$DEMO_HOME/ingested-count.txt"
+  "$DEMO_HOME/ingested-count.txt" \
+  "$DEMO_HOME/causal-walk-commits.txt"

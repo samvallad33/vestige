@@ -73,9 +73,9 @@ def cosine_scores(query_vec, doc_vecs):
 
 
 def main():
-    if len(sys.argv) != 6:
-        stop("usage: search.py REPO SHAS QUERY_FILE CAUSE_FILE COUNT_FILE")
-    repo, shas_path, query_path, cause_path, count_path = sys.argv[1:]
+    if len(sys.argv) != 7:
+        stop("usage: search.py REPO SHAS QUERY_FILE CAUSE_FILE COUNT_FILE WALK_FILE")
+    repo, shas_path, query_path, cause_path, count_path, walk_path = sys.argv[1:]
     shas = load_lines(shas_path)
     cause_lines = load_lines(cause_path)
     count_lines = load_lines(count_path)
@@ -135,6 +135,41 @@ def main():
         print("cause %s rank: absent" % cause)
         sys.exit(1)
     print("cause %s rank: %d" % (cause, cause_rank))
+
+    # Same scores as the full corpus. This only restricts which commits are ranked.
+    walked = load_lines(walk_path)
+    if not walked:
+        stop("the walk returned no commits")
+    positions = {}
+    for index, sha in enumerate(shas):
+        positions[sha] = index
+    subset = []
+    seen = set()
+    for sha in walked:
+        if sha in seen:
+            continue
+        seen.add(sha)
+        if sha not in positions:
+            stop("a walk commit is outside the corpus")
+        subset.append(positions[sha])
+    subset_order = sorted(subset, key=lambda i: (-scores[i], i))
+    subset_rank = None
+    for rank, index in enumerate(subset_order, start=1):
+        if shas[index] == cause:
+            subset_rank = rank
+            break
+    if subset_rank is None:
+        print(
+            "among the %d commits causal_walk returned: %s rank absent"
+            % (len(subset_order), cause)
+        )
+        sys.exit(1)
+    print(
+        "among the %d commits causal_walk returned: %s rank %d"
+        % (len(subset_order), cause, subset_rank)
+    )
+    for rank, index in enumerate(subset_order, start=1):
+        print("#%d %s cosine=%.6f" % (rank, shas[index], scores[index]))
 
 
 if __name__ == "__main__":
