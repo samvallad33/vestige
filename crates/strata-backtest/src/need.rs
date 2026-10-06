@@ -28,6 +28,13 @@ pub struct TransitionModel {
     proof: Proof,
 }
 
+impl TransitionModel {
+    /// Frames cited while learning T. Every seq is inside the prefix.
+    pub fn proof(&self) -> &Proof {
+        &self.proof
+    }
+}
+
 /// SR Need from `current`. Missing or unknown current state ⇒ all zeros.
 pub fn sr_need(model: &TransitionModel, current: Option<&Subject>) -> BTreeMap<Subject, f64> {
     let Some(current) = current else {

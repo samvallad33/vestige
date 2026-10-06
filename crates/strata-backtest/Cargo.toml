@@ -18,3 +18,7 @@ libm = "0.2"
 strata-kernel = { path = "../strata-kernel" }
 strata-store = { path = "../strata-store" }
 tempfile = "3"
+
+[[bin]]
+name = "strata-backtest"
+path = "src/bin/strata_backtest.rs"
