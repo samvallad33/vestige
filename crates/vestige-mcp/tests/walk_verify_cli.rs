@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use vestige_mcp::walk_verify::stats::{Stats, Wald};
 
 struct Ran {
     ok: bool,
@@ -182,6 +183,9 @@ struct Plan {
     /// c7 rewrites the README line c5 changed, so reverting all of c5 on
     /// v2 conflicts.
     later_commit_conflicts: bool,
+    /// c7 rewrites the very line c5 broke (and leaves it broken), so
+    /// neither the whole commit nor that line can be undone on v2.
+    later_commit_rewrites_the_line: bool,
     /// The commits that get a memory.
     remembered: Vec<usize>,
     /// The file the failure report names.
@@ -194,6 +198,7 @@ impl Default for Plan {
     fn default() -> Self {
         Self {
             later_commit_conflicts: false,
+            later_commit_rewrites_the_line: false,
             remembered: (0..=12).collect(),
             failure_names: "calc.sh",
             dir_prefix: "walk-verify-",
@@ -236,6 +241,13 @@ fn fixture(plan: &Plan) -> Fixture {
         touched.push(files.to_vec());
     };
     let adds = "calc.sh adds two numbers";
+    let integers = "calc.sh adds two integers";
+    // How the broken line reads from c7 on.
+    let late = if plan.later_commit_rewrites_the_line {
+        "- 0 -"
+    } else {
+        "-"
+    };
 
     write("calc.sh", &calc(adds, "+", &[]));
     write("README.md", README);
@@ -256,7 +268,7 @@ fn fixture(plan: &Plan) -> Fixture {
     write("notes.txt", &notes(2));
     commit(&day(5), "Take a second note", &["notes.txt"]);
 
-    write("calc.sh", &calc("calc.sh adds two integers", "-", &[6]));
+    write("calc.sh", &calc(integers, "-", &[6]));
     write(
         "README.md",
         "# tinyproj\nA tiny calculator.\nStatus: reworked\nMore docs.\n",
@@ -276,6 +288,9 @@ fn fixture(plan: &Plan) -> Fixture {
             "# tinyproj\nA tiny calculator.\nStatus: reworked twice\nMore docs.\n",
         );
         commit(&day(8), "Update the status line", &["README.md"]);
+    } else if plan.later_commit_rewrites_the_line {
+        write("calc.sh", &calc(integers, late, &[6]));
+        commit(&day(8), "Subtract nothing as well", &["calc.sh"]);
     } else {
         write("notes.txt", &notes(4));
         commit(&day(8), "Take a fourth note", &["notes.txt"]);
@@ -285,7 +300,7 @@ fn fixture(plan: &Plan) -> Fixture {
     write("extra.txt", "extra\nmore\n");
     commit(&day(10), "Extend the extra file", &["extra.txt"]);
     write("notes.txt", &notes(5));
-    write("calc.sh", &calc("calc.sh adds two integers", "-", &[6, 9]));
+    write("calc.sh", &calc(integers, late, &[6, 9]));
     commit(
         &day(11),
         "Take a fifth note, spell out another filler",
@@ -294,10 +309,7 @@ fn fixture(plan: &Plan) -> Fixture {
     write("notes.txt", &notes(6));
     commit(&day(12), "Take a sixth note", &["notes.txt"]);
     write("extra.txt", "extra\nmore\nand more\n");
-    write(
-        "calc.sh",
-        &calc("calc.sh adds two integers", "-", &[3, 6, 9]),
-    );
+    write("calc.sh", &calc(integers, late, &[3, 6, 9]));
     commit(
         &day(20),
         "Extend the extra file again, spell out a third filler",
@@ -674,7 +686,8 @@ fn walk_verify_prove_goes_from_the_walk_to_a_checked_report() {
         "{}",
         ran.text()
     );
-    assert_eq!(report["tool"], "vestige prove (walk-verify 7)");
+    assert_eq!(report["tool"], "vestige prove (walk-verify 8)");
+    assert_eq!(report["contradictions"], json!([]));
     assert_eq!(report["window_commits"], 12);
     assert_eq!(
         report["walk_lead_rank"],
@@ -1005,6 +1018,73 @@ fn walk_verify_prove_undoes_only_the_found_lines_when_the_whole_commit_conflicts
 }
 
 #[test]
+fn walk_verify_prove_says_so_when_the_lines_can_no_longer_be_undone() {
+    let fixture = fixture(&Plan {
+        later_commit_rewrites_the_line: true,
+        ..Plan::default()
+    });
+    let report_path = fixture.path("report.json");
+    let ran = fixture.prove(&report_path, &[]);
+    assert!(ran.ok, "{}", ran.text());
+    let report = read_json(&report_path);
+    assert_eq!(
+        report["first_bad_commit"],
+        fixture.commits[BREAKING].as_str(),
+        "{}",
+        ran.text()
+    );
+    // The line is found on the parent as before...
+    let why = &report["why"];
+    assert_eq!(
+        why["minimal_failing_changes"],
+        json!([{"file": "calc.sh", "line": 15, "added": ["sum=$((a - b))"]}])
+    );
+    assert_eq!(why["commit_without_minimal"], "good");
+    // ...but on v2 neither the commit nor that hunk applies in reverse.
+    // Nothing is tested, nothing is claimed, no patch is written.
+    assert!(
+        ran.stdout.contains(
+            "later commits rewrote these exact lines, so they cannot be undone mechanically on v2"
+        ),
+        "{}",
+        ran.stdout
+    );
+    assert_eq!(why["undo_on_bad"], "rewritten");
+    assert_eq!(why["undo_how"], Value::Null);
+    assert!(why.get("undo_patch").is_none(), "{why}");
+    assert!(!fixture.path("report.undo.patch").exists());
+    assert!(!phases(&report).contains(&"undo"));
+    assert_eq!(
+        rungs(&report),
+        [
+            ("LEAD", true),
+            ("BOUNDARY", true),
+            ("CONFIRMED", true),
+            ("ISOLATED", true),
+            ("REVERSED", false),
+        ]
+        .map(|(name, holds)| (name.to_string(), holds))
+    );
+    let reversed = rung(&report, "REVERSED");
+    assert_eq!(
+        reversed["statement"],
+        "later commits rewrote these lines on v2; there is no mechanical undo"
+    );
+    assert_eq!(reversed["proof"], "no run");
+    assert!(ran.stdout.contains("4 of 5 rungs hold"), "{}", ran.stdout);
+    let checked = fixture.check(&report_path);
+    assert!(checked.ok, "{}", checked.text());
+    assert!(
+        checked
+            .stdout
+            .contains("undo on v2: none applies, later commits rewrote these lines"),
+        "{}",
+        checked.stdout
+    );
+    fixture.assert_no_worktree_left();
+}
+
+#[test]
 fn walk_verify_prove_lets_bisect_decide_when_the_walk_missed_the_commit() {
     // Nobody ever recorded the breaking commit: it has no memory.
     let fixture = fixture(&Plan {
@@ -1099,7 +1179,7 @@ fn walk_verify_prove_lets_bisect_decide_when_the_walk_missed_the_commit() {
 }
 
 #[test]
-fn walk_verify_prove_says_when_the_recorded_runs_do_not_fit_one_first_bad_commit() {
+fn walk_verify_prove_says_when_the_recorded_verdicts_contradict_each_other() {
     // A bug that comes and goes: the test fails from c5, passes again
     // while extra.txt has exactly two lines (c9 to c11), and fails on v2.
     // The breaking commit has no memory, so step 4 tests later leads.
@@ -1124,18 +1204,17 @@ fn walk_verify_prove_says_when_the_recorded_runs_do_not_fit_one_first_bad_commit
     );
     let passing = probe_on(&report, &fixture.commits[10]);
     assert_eq!(passing["verdict"], "good");
-    assert!(
-        ran.stdout.contains(&format!(
-            "Run {} does not fit one first bad commit: {} tested GOOD and comes after this one.",
-            passing["n"],
-            fixture.short(10)
-        )),
-        "{}",
-        ran.stdout
+    let contradiction = format!(
+        "run {}: {} tested GOOD but contains the named commit",
+        passing["n"],
+        fixture.short(10)
     );
+    assert_eq!(report["contradictions"], json!([contradiction]));
+    assert!(ran.stdout.contains(&contradiction), "{}", ran.stdout);
     assert!(
-        ran.stdout
-            .contains("The test does not fail on every commit after the first bad one"),
+        ran.stdout.contains(
+            "The recorded verdicts contradict each other, so this commit is NOT confirmed."
+        ),
         "{}",
         ran.stdout
     );
@@ -1143,10 +1222,7 @@ fn walk_verify_prove_says_when_the_recorded_runs_do_not_fit_one_first_bad_commit
     assert_eq!(confirmed["holds"], false);
     assert_eq!(
         confirmed["statement"],
-        format!(
-            "stock git bisect over all 12 commits names it, but run {} does not fit one first bad commit",
-            passing["n"]
-        )
+        "git bisect names it, but 1 recorded verdict contradict it"
     );
     // The boundary itself was tested and stands.
     assert_eq!(rung(&report, "BOUNDARY")["holds"], true);
@@ -1155,6 +1231,13 @@ fn walk_verify_prove_says_when_the_recorded_runs_do_not_fit_one_first_bad_commit
     assert!(checked.ok, "{}", checked.text());
     assert!(
         checked.stdout.contains("CONFIRMED no "),
+        "{}",
+        checked.stdout
+    );
+    assert!(
+        checked
+            .stdout
+            .contains(&format!("contradiction, {contradiction}")),
         "{}",
         checked.stdout
     );
@@ -1601,24 +1684,36 @@ out=$(sh calc.sh 2 3); echo "2+3=$out"; test "$out" = 5"#,
 }
 
 #[test]
-fn walk_verify_prove_flaky_names_a_commit_that_fails_one_run_in_three() {
+fn walk_verify_prove_flaky_names_a_commit_that_fails_some_of_the_time() {
     let fixture = fixture(&Plan::default());
     let breaking = &fixture.commits[BREAKING];
-    // Deterministic flakiness: once calc.sh subtracts, the test fails on
-    // every third run, counted in a file outside the repository.
-    let counter = fixture.path("count");
+    // Deterministic flakiness, counted per checked-out state in files
+    // outside the repository. Once calc.sh subtracts, the test passes ten
+    // runs and then fails three, over and over. On v2 the bug shows more
+    // often: nine runs in twenty. So the bad end measures a failure rate
+    // (9 of 20) well above the rate of the commit that introduced it, and
+    // every bad commit passes its first ten runs.
+    let counts = fixture.path("counts");
+    std::fs::create_dir(&counts).unwrap();
     let script = fixture.path("flaky.sh");
     write_script(
         &script,
         &format!(
             r#"out=$(sh calc.sh 2 3)
 if [ "$out" = 5 ]; then echo "2+3=$out"; exit 0; fi
-n=$(cat '{counter}' 2>/dev/null || echo 0)
+key=$(cat calc.sh README.md notes.txt extra.txt CHANGES.txt 2>/dev/null | cksum | tr -d ' ')
+count='{counts}'/"$key"
+n=$(cat "$count" 2>/dev/null || echo 0)
 n=$((n + 1))
-echo "$n" > '{counter}'
-if [ $((n % 3)) -eq 0 ]; then echo "2+3=$out on bad run $n"; exit 1; fi
+echo "$n" > "$count"
+if [ "$(cat extra.txt 2>/dev/null)" = "$(printf 'extra\nmore\nand more')" ]; then
+  at=$(( (n - 1) % 20 + 1 ))
+  if [ $((at % 2)) -eq 0 ] && [ "$at" -le 18 ]; then echo "2+3=$out on run $n"; exit 1; fi
+elif [ $(( (n - 1) % 13 )) -ge 10 ]; then
+  echo "2+3=$out on run $n"; exit 1
+fi
 echo "2+3=$out, but run $n got lucky""#,
-            counter = counter.display(),
+            counts = counts.display(),
         ),
     );
     let fixture_file = fixture.path("inputs.txt");
@@ -1631,7 +1726,7 @@ echo "2+3=$out, but run $n got lucky""#,
             path_arg(&script),
             "--flaky",
             "--strength-runs",
-            "30",
+            "40",
             "--also-hash",
             path_arg(&fixture_file),
         ]
@@ -1643,41 +1738,47 @@ echo "2+3=$out, but run $n got lucky""#,
     let report = read_json(&report_path);
 
     // The two ends, in batches of ten until they differ beyond chance:
-    // 3 of 10 and 6 of 20 failures are not enough, 10 of 30 is.
+    // 5 of 10 failures are not enough, 9 of 20 are.
     let probes = report["probes"].as_array().unwrap();
     assert_eq!(probes[0]["commit"], fixture.commits[0].as_str());
     assert_eq!(probes[0]["phase"], "baseline");
     assert_eq!(probes[0]["verdict"], "good");
-    assert_eq!(probes[0]["oracle_said"], "failed 0 of 30 runs");
+    assert_eq!(probes[0]["oracle_said"], "failed 0 of 20 runs");
     assert_eq!(
         (&probes[0]["runs"], &probes[0]["fails"]),
-        (&json!(30), &json!(0))
+        (&json!(20), &json!(0))
     );
     assert_eq!(probes[1]["commit"], fixture.commits[12].as_str());
     assert_eq!(probes[1]["verdict"], "bad");
-    assert_eq!(probes[1]["oracle_said"], "failed 10 of 30 runs");
+    assert_eq!(probes[1]["oracle_said"], "failed 9 of 20 runs");
     assert_eq!(
         (&probes[1]["runs"], &probes[1]["fails"]),
-        (&json!(30), &json!(10))
+        (&json!(20), &json!(9))
     );
     assert_eq!(probes[0]["at"], probes[1]["at"]);
     assert!(
         ran.stdout
-            .contains("The two ends differ beyond chance (p = 0.0004). Each commit is now tested repeatedly until the evidence is decisive at 0.01."),
+            .contains("The two ends differ beyond chance (p = 0.00061). Each commit is now tested repeatedly until the evidence is decisive at 0.01."),
         "{}",
         ran.stdout
     );
+
+    // A bad commit is judged against the lower bound of that rate, not
+    // against the rate as measured (walk-verify.py 8, flaky_baseline).
     let stats = &report["flaky"]["stats"];
-    assert_eq!(stats["p0"], json!(0.5 / 31.0));
-    assert_eq!(stats["p1"], json!(10.5 / 31.0));
+    assert_eq!(stats["p0"], json!(0.5 / 21.0));
+    assert_eq!(stats["p1_point_estimate"], json!(9.5 / 21.0));
+    let p1 = stats["p1"].as_f64().unwrap();
+    assert!((p1 - 0.23057789677592416).abs() < 1e-12, "{p1}");
     assert_eq!(
         (&stats["alpha"], &stats["beta"]),
         (&json!(0.01), &json!(0.01))
     );
-    assert_eq!(stats["max_runs"], 80);
+    assert_eq!(stats["max_runs"], 200);
 
-    // Every later verdict is a sequential test: a commit that never fails
-    // is good after 12 runs, one that fails every third run is bad within 9.
+    // Every later verdict is a sequential test. A state that never fails
+    // is good after 20 passes; one that passes ten runs and then fails
+    // three is bad after 25 runs, 5 of them failures.
     for probe in &probes[2..] {
         let (runs, fails) = (
             probe["runs"].as_u64().unwrap(),
@@ -1687,9 +1788,9 @@ echo "2+3=$out, but run $n got lucky""#,
             probe["phase"].as_str().unwrap(),
             probe["verdict"].as_str().unwrap(),
         ) {
-            ("strength", _) => assert_eq!(runs, 30, "{probe}"),
-            (_, "good") => assert_eq!((runs, fails), (12, 0), "{probe}"),
-            (_, "bad") => assert!((2..=9).contains(&runs) && fails >= 2, "{probe}"),
+            ("strength", _) => assert_eq!(runs, 40, "{probe}"),
+            (_, "good") => assert_eq!((runs, fails), (20, 0), "{probe}"),
+            (_, "bad") => assert_eq!((runs, fails), (25, 5), "{probe}"),
             (_, other) => panic!("an undecided verdict {other}: {probe}"),
         }
         assert!(
@@ -1700,6 +1801,24 @@ echo "2+3=$out, but run $n got lucky""#,
             "{probe}"
         );
     }
+    assert_eq!(probe_on(&report, breaking)["verdict"], "bad");
+
+    // This is a run the measured rate would have got wrong: judged against
+    // 9 of 20, eight passes in a row call a commit GOOD, and every bad
+    // commit here passes its first ten runs. The breaking commit and every
+    // commit after it would have tested good, and git bisect would have
+    // named v2.
+    let against_point_estimate = Stats {
+        p0: stats["p0"].as_f64().unwrap(),
+        p1: stats["p1_point_estimate"].as_f64().unwrap(),
+        p1_point_estimate: stats["p1_point_estimate"].as_f64().unwrap(),
+        alpha: 0.01,
+        beta: 0.01,
+        max_runs: 200,
+    };
+    let mut wald = Wald::new(&against_point_estimate);
+    let called_good_after = (1..=10).find(|_| wald.observe(false).is_some());
+    assert_eq!(called_good_after, Some(8));
 
     // The same commit, the same change, and one more rung.
     assert_eq!(
@@ -1708,6 +1827,7 @@ echo "2+3=$out, but run $n got lucky""#,
         "{}",
         ran.text()
     );
+    assert_eq!(report["contradictions"], json!([]));
     assert_eq!(report["found_in_runs"], 3);
     assert!(
         ran.stdout
@@ -1733,22 +1853,22 @@ echo "2+3=$out, but run $n got lucky""#,
     );
     assert!(ran.stdout.contains("6 of 6 rungs hold"), "{}", ran.stdout);
 
-    // How strong: thirty runs with the commit, thirty without.
+    // How strong: forty runs with the commit, forty without.
     let strength = &report["flaky"]["strength"];
     let (with, without) = (&strength["with"], &strength["without"]);
-    assert_eq!((&with["fails"], &with["runs"]), (&json!(10), &json!(30)));
+    assert_eq!((&with["fails"], &with["runs"]), (&json!(10), &json!(40)));
     assert_eq!(
         (&without["fails"], &without["runs"]),
-        (&json!(0), &json!(30))
+        (&json!(0), &json!(40))
     );
     let p = strength["fisher_p"].as_f64().unwrap();
-    assert!((p - 0.0003985065657050695).abs() < 1e-15, "{p}");
+    assert!((p - 0.0005148281748755058).abs() < 1e-15, "{p}");
     let times = strength["at_least_times"].as_f64().unwrap();
-    assert!((times - 1.4941164966027056).abs() < 1e-9, "{times}");
+    assert!((times - 1.4406207089840726).abs() < 1e-9, "{times}");
     let repeated = rung(&report, "REPEATED");
     assert_eq!(
         repeated["statement"],
-        "it fails 10 of 30 times with the commit and 0 of 30 without (p = 0.0004)"
+        "it fails 10 of 40 times with the commit and 0 of 40 without (p = 0.00051)"
     );
     assert_eq!(
         repeated["proof"],
@@ -1756,13 +1876,13 @@ echo "2+3=$out, but run $n got lucky""#,
     );
     assert!(
         ran.stdout
-            .contains("With this commit the test fails 10 of 30 times. Without it, 0 of 30."),
+            .contains("With this commit the test fails 10 of 40 times. Without it, 0 of 40."),
         "{}",
         ran.stdout
     );
     assert!(
         ran.stdout
-            .contains("Chance of that split if the commit made no difference: 0.0004. Failure is at least 1.5 times more likely with it"),
+            .contains("Chance of that split if the commit made no difference: 0.00051. Failure is at least 1.4 times more likely with it"),
         "{}",
         ran.stdout
     );
@@ -1784,7 +1904,7 @@ echo "2+3=$out, but run $n got lucky""#,
     let protocol = &report["protocol"];
     assert_eq!(
         protocol["flaky"],
-        json!({"alpha": 0.01, "max_runs_per_commit": 80, "baseline_max": 100, "strength_runs": 30})
+        json!({"alpha": 0.01, "max_runs_per_commit": 200, "baseline_max": 100, "strength_runs": 40})
     );
     let hashed = protocol["also_hashed"].as_object().unwrap();
     assert_eq!(hashed.len(), 1);
@@ -1797,7 +1917,7 @@ echo "2+3=$out, but run $n got lucky""#,
     let checked = fixture.check(&report_path);
     assert!(checked.ok, "{}", checked.text());
     for line in [
-        "REPEATED  yes  it fails 10 of 30 times with the commit and 0 of 30 without (p = 0.0004)",
+        "REPEATED  yes  it fails 10 of 40 times with the commit and 0 of 40 without (p = 0.00051)",
         "also frozen: inputs.txt sha256 ",
     ] {
         assert!(checked.stdout.contains(line), "{line}: {}", checked.stdout);
@@ -2021,6 +2141,38 @@ impl Fixture {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         vestige(&self.store, &args)
     }
+}
+
+#[test]
+fn walk_verify_prove_survives_a_test_that_rewrites_tracked_files() {
+    // The test edits two tracked files and leaves a file behind on every
+    // run, the way a build that rewrites a lockfile does. One of the files
+    // differs from commit to commit, so a checkout that is not forced
+    // would refuse to move on.
+    let fixture = fixture(&Plan::default());
+    let report_path = fixture.path("report.json");
+    let test = r##"echo "left by the test" >> notes.txt; echo "# built" >> calc.sh; echo artifact > built.out; out=$(sh calc.sh 2 3); echo "2+3=$out"; test "$out" = 5"##;
+    let ran = fixture.prove_with(&report_path, test, &[]);
+    assert!(ran.ok, "{}", ran.text());
+    let report = read_json(&report_path);
+    assert_eq!(
+        report["first_bad_commit"],
+        fixture.commits[BREAKING].as_str(),
+        "{}",
+        ran.text()
+    );
+    let phases = phases(&report);
+    for phase in ["candidate", "parent", "bisect", "lines", "without", "undo"] {
+        assert!(phases.contains(&phase), "no {phase} run in {phases:?}");
+    }
+    assert!(ran.stdout.contains("5 of 5 rungs hold"), "{}", ran.stdout);
+    // What the test left behind is in no patch.
+    let patch = std::fs::read_to_string(fixture.path("report.undo.patch")).unwrap();
+    assert!(!patch.contains("left by the test"), "{patch}");
+    assert!(!patch.contains("built"), "{patch}");
+    assert!(fixture.check(&report_path).ok);
+    fixture.assert_no_worktree_left();
+    assert_eq!(git(&fixture.repo, NOW, &["status", "--porcelain"]), "");
 }
 
 #[test]

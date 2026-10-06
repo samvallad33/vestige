@@ -152,7 +152,8 @@ pub fn rate_upper(k: u64, n: u64) -> f64 {
 /// (beyond [`MAX_FIXED_RUNS`] a side); a NaN is below no threshold, so it
 /// can only read as "not decided".
 pub fn fisher_p(f1: u64, n1: u64, f0: u64, n0: u64) -> f64 {
-    let (total, fails) = (n1 + n0, f1 + f0);
+    // Saturating: the counts may come from a report someone else wrote.
+    let (total, fails) = (n1.saturating_add(n0), f1.saturating_add(f0));
     let all = choose(total, n1);
     if !all.is_finite() {
         return f64::NAN;
@@ -168,10 +169,13 @@ pub fn fisher_p(f1: u64, n1: u64, f0: u64, n0: u64) -> f64 {
 /// commit has to be.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stats {
-    /// Failure rate on the good end.
+    /// Failure rate on the good end, smoothed.
     pub p0: f64,
-    /// Failure rate on the bad end.
+    /// The failure rate a bad commit is judged against: the exact 97.5%
+    /// lower bound of the bad end's rate.
     pub p1: f64,
+    /// The bad end's rate as measured, smoothed. Not what is tested against.
+    pub p1_point_estimate: f64,
     /// Accepted chance of calling a good commit bad.
     pub alpha: f64,
     /// Accepted chance of calling a bad commit good.
@@ -181,14 +185,27 @@ pub struct Stats {
 }
 
 impl Stats {
-    /// From `(failures, runs)` on each end. The rates are smoothed,
-    /// `(f + 0.5) / (n + 1)`, so neither is ever 0 or 1 and every run moves
-    /// the evidence by a finite step.
+    /// From `(failures, runs)` on each end.
+    ///
+    /// The good end's rate is smoothed, `(f + 0.5) / (n + 1)`, so it is
+    /// never 0 and every run moves the evidence by a finite step.
+    ///
+    /// The bad end's measured rate is not what commits are judged against.
+    /// The measuring stops as soon as the two ends look different, which
+    /// favours a lucky, too-high rate on the bad end; a test against that
+    /// estimate calls a truly bad commit good about three times more often
+    /// than `--alpha` allows (2.6% at alpha 0.01 and a true rate of 30% in
+    /// simulation). Judged against the exact 97.5% lower bound of the rate
+    /// it is about 0.1%, for roughly twice the runs on a good commit. The
+    /// bound is kept at least half as large again as the good end's rate,
+    /// so the two hypotheses never coincide.
     pub fn measured(good: (u64, u64), bad: (u64, u64), alpha: f64, max_runs: u64) -> Self {
         let smoothed = |(fails, runs): (u64, u64)| (fails as f64 + 0.5) / (runs as f64 + 1.0);
+        let p0 = smoothed(good);
         Self {
-            p0: smoothed(good),
-            p1: smoothed(bad),
+            p0,
+            p1: rate_lower(bad.0, bad.1).max(p0 * 1.5),
+            p1_point_estimate: smoothed(bad),
             alpha,
             beta: alpha,
             max_runs,
@@ -196,7 +213,8 @@ impl Stats {
     }
 
     /// Whether a sequential test between the two rates can decide anything:
-    /// the bad end must fail more often than the good end.
+    /// both must be rates, the bad one the larger. It fails when the good
+    /// end itself fails more than two times in three.
     pub fn separates(&self) -> bool {
         self.p0 > 0.0 && self.p1 > self.p0 && self.p1 < 1.0
     }
@@ -386,9 +404,14 @@ mod tests {
         assert!(fisher_p(1000, 3000, 0, 3000).is_nan());
     }
 
+    /// The rates of the reference tool's version 7 trace: 0 of 20 on the
+    /// good end, 7 of 20 on the bad end, judged against the point estimate.
     fn stats() -> Stats {
-        // 0 of 20 on the good end, 7 of 20 on the bad end.
-        Stats::measured((0, 20), (7, 20), 0.01, 80)
+        let measured = Stats::measured((0, 20), (7, 20), 0.01, 80);
+        Stats {
+            p1: measured.p1_point_estimate,
+            ..measured
+        }
     }
 
     /// Feed runs to the test the way the measuring loop does.
@@ -409,19 +432,67 @@ mod tests {
     }
 
     #[test]
-    fn the_measured_rates_are_smoothed() {
-        let stats = stats();
+    fn a_bad_commit_is_judged_against_the_lower_bound_of_the_measured_rate() {
+        // walk-verify.py 8, flaky_baseline: 0 of 20 against 9 of 20.
+        let stats = Stats::measured((0, 20), (9, 20), 0.01, 200);
         close(stats.p0, 0.023809523809523808);
-        close(stats.p1, 0.35714285714285715);
-        assert_eq!((stats.alpha, stats.beta, stats.max_runs), (0.01, 0.01, 80));
+        close(stats.p1, 0.23057789677592416);
+        close(stats.p1_point_estimate, 0.4523809523809524);
+        assert_eq!((stats.alpha, stats.beta, stats.max_runs), (0.01, 0.01, 200));
         assert!(stats.separates());
+        // 0 of 30 against 10 of 30, and 0 of 20 against 7 of 20.
+        let stats = Stats::measured((0, 30), (10, 30), 0.01, 200);
+        close(stats.p0, 0.016129032258064516);
+        close(stats.p1, 0.1728742215260391);
+        close(stats.p1_point_estimate, 0.3387096774193548);
+        close(
+            Stats::measured((0, 20), (7, 20), 0.01, 200).p1,
+            0.153909204784541,
+        );
         close(
             Stats::measured((0, 10), (5, 10), 0.01, 80).p0,
             0.045454545454545456,
         );
-        // Ends that fail equally often, or the wrong way round, decide nothing.
-        assert!(!Stats::measured((5, 10), (5, 10), 0.01, 80).separates());
-        assert!(!Stats::measured((7, 20), (0, 20), 0.01, 80).separates());
+        // A bound that would fall to the good end's rate is held at one and
+        // a half times that rate.
+        let close_ends = Stats::measured((5, 10), (6, 10), 0.01, 80);
+        close(close_ends.p1, close_ends.p0 * 1.5);
+        assert!(close_ends.separates());
+        // A good end that fails most of the time leaves no room above it.
+        let failing_good = Stats::measured((70, 100), (100, 100), 0.01, 80);
+        assert!(failing_good.p1 >= 1.0);
+        assert!(!failing_good.separates());
+    }
+
+    /// Runs of the sequential test the point estimate gets wrong and the
+    /// lower bound gets right: the bad end failed 9 of 20, and a commit
+    /// that really fails 3 runs in 13 passes its first 10.
+    #[test]
+    fn the_lower_bound_does_not_call_a_slow_failure_good() {
+        let measured = Stats::measured((0, 20), (9, 20), 0.01, 200);
+        let ten_pass_three_fail = |run: u64| run % 13 >= 10;
+        let decide = |stats: &Stats| {
+            let mut wald = Wald::new(stats);
+            let (mut fails, mut runs) = (0u64, 0u64);
+            loop {
+                let failed = ten_pass_three_fail(runs);
+                runs += 1;
+                fails += u64::from(failed);
+                if let Some(verdict) = wald.observe(failed) {
+                    return (verdict, runs, fails);
+                }
+            }
+        };
+        let against_point_estimate = Stats {
+            p1: measured.p1_point_estimate,
+            ..measured
+        };
+        assert_eq!(decide(&against_point_estimate), ("good", 8, 0));
+        assert_eq!(decide(&measured), ("bad", 25, 5));
+        // A commit that never fails needs 20 passes now, not 8.
+        let mut wald = Wald::new(&measured);
+        let passes = (1..).find(|_| wald.observe(false).is_some()).unwrap();
+        assert_eq!(passes, 20);
     }
 
     #[test]

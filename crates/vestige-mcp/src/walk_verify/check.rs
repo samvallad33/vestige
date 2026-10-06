@@ -31,6 +31,10 @@ use super::json::{ZERO_HASH, chain_hash, protocol_hash, sha256_hex};
 use super::stats::{REPEATED_P, fisher_p};
 use super::text::{Palette, abspath, head, py_display};
 
+/// Strength counts above this are taken as they are, not recomputed: the
+/// report is someone else's input, and it must not set how long this runs.
+const MOST_RUNS: u64 = 100_000;
+
 fn is_verdict(text: &str) -> bool {
     matches!(text, "good" | "bad" | "skip")
 }
@@ -65,8 +69,12 @@ fn backed(rung: &str, rep: &Value, probes: &[Value]) -> Option<bool> {
                 .filter_map(|probe| Some((probe["fails"].as_u64()?, probe["runs"].as_u64()?)))
                 .collect();
             match sides.as_slice() {
+                // Counts no run could have produced are not recomputed.
+                [(_, n1), (_, n0)] if *n1 > MOST_RUNS || *n0 > MOST_RUNS => None,
                 [(f1, n1), (f0, n0)] if f1 <= n1 && f0 <= n0 => {
-                    Some(fisher_p(*f1, *n1, *f0, *n0) < REPEATED_P)
+                    let p = fisher_p(*f1, *n1, *f0, *n0);
+                    // NaN: more runs than a float can count the splits of.
+                    (!p.is_nan()).then_some(p < REPEATED_P)
                 }
                 _ => Some(false),
             }
@@ -243,6 +251,9 @@ pub fn check(report: &Path) -> anyhow::Result<i32> {
         }
     }
 
+    for line in rep["contradictions"].as_array().into_iter().flatten() {
+        println!("  contradiction, {}", py_display(Some(line)));
+    }
     for rung in rep["verdict_card"].as_array().into_iter().flatten() {
         let name = py_display(rung.get("rung"));
         let holds = rung["holds"] == true;
@@ -679,6 +690,39 @@ mod tests {
             Some(false)
         );
         assert_eq!(backed("LEAD", &json!({}), &[]), None);
+        // Counts from a report are input: absurd ones are not computed on.
+        let strength = |with: (u64, u64), without: (u64, u64)| {
+            chain(&[
+                ("a x1", "bad", "strength", Some(with)),
+                ("b x1", "good", "strength", Some(without)),
+            ])
+        };
+        let rep = json!({});
+        assert_eq!(
+            backed("REPEATED", &rep, &strength((30, 10), (30, 0))),
+            Some(true)
+        );
+        assert_eq!(
+            backed("REPEATED", &rep, &strength((30, 2), (30, 0))),
+            Some(false)
+        );
+        assert_eq!(
+            backed("REPEATED", &rep, &strength((10, 30), (30, 0))),
+            Some(false)
+        );
+        assert_eq!(
+            backed("REPEATED", &rep, &strength((3000, 1000), (3000, 0))),
+            None
+        );
+        assert_eq!(
+            backed(
+                "REPEATED",
+                &rep,
+                &strength((u64::MAX, u64::MAX), (u64::MAX, 0))
+            ),
+            None
+        );
+        assert_eq!(backed("REPEATED", &rep, &[]), Some(false));
         assert_eq!(backed("BOUNDARY", &json!({}), &[]), None);
     }
 }

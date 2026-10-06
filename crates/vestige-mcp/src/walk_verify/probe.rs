@@ -727,7 +727,7 @@ mod tests {
     #[test]
     fn repeated_runs_stop_when_the_evidence_is_decisive() {
         let stats = Stats::measured((0, 20), (7, 20), 0.01, 80);
-        // Never fails: good after 12 runs.
+        // Never fails: good after 33 runs.
         let dir = tempfile::tempdir().unwrap();
         let outcome = measure(
             &test_in(dir.path(), "echo ok", None),
@@ -735,8 +735,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!((outcome.verdict, outcome.exit), ("good", 0));
-        assert_eq!(outcome.counts, Some((12, 0)));
-        assert_eq!(outcome.said, "failed 0 of 12 runs");
+        assert_eq!(outcome.counts, Some((33, 0)));
+        assert_eq!(outcome.said, "failed 0 of 33 runs");
         // Fails on every third run: bad after 9 runs, 3 of them failures.
         let dir = tempfile::tempdir().unwrap();
         let outcome = measure(&every_nth(dir.path(), 3), Mode::Sequential(&stats)).unwrap();

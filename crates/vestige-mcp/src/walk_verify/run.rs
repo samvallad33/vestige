@@ -27,15 +27,15 @@ use super::probe::{
     Mode, Outcome, Session, Test, count_of, measure, new_entry, probe_text, run_test, text_of,
     verdict_of,
 };
-use super::stats::{BASELINE_P, MAX_FIXED_RUNS, Stats, fisher_p};
+use super::stats::{BASELINE_P, MAX_FIXED_RUNS, REPEATED_P, Stats, fisher_p};
 use super::text::{
     Palette, Stop, abspath, expand_user, file_name, format_g, head, now_stamp, opt_display,
     py_display, stop, strip, utf8,
 };
 use super::{CHILD_COMMAND, ProveArgs};
 
-/// Report format written here: the fields `walk-verify.py` version 7 writes.
-const TOOL: &str = "vestige prove (walk-verify 7)";
+/// Report format written here: the fields `walk-verify.py` version 8 writes.
+const TOOL: &str = "vestige prove (walk-verify 8)";
 
 /// The exit-code rule, as the frozen protocol states it.
 const PROTOCOL_RULE: &str = "exit 0 good, 125 cannot test, any other code bad";
@@ -276,15 +276,15 @@ impl Prover<'_> {
         }
     }
 
-    /// Put the worktree on `commit`. `force` also drops what a patch or a
-    /// test changed in tracked files.
-    fn checkout(&self, commit: &str, force: bool) -> anyhow::Result<()> {
-        let mut command = git_command(&self.test.worktree);
-        command.args(["checkout", "-q", "--detach"]);
-        if force {
-            command.arg("-f");
-        }
-        let output = command.arg(commit).output().context("cannot run git")?;
+    /// Put the worktree on `commit`, dropping what a patch or a test changed
+    /// in tracked files. The worktree is this run's own; a test that
+    /// rewrites a tracked file (a lockfile, a generated source) must not
+    /// stop the next commit from being checked out.
+    fn checkout(&self, commit: &str) -> anyhow::Result<()> {
+        let output = git_command(&self.test.worktree)
+            .args(["checkout", "-q", "--detach", "-f", commit])
+            .output()
+            .context("cannot run git")?;
         if !output.status.success() {
             return Err(stop(
                 2,
@@ -304,7 +304,7 @@ impl Prover<'_> {
         if let Some(hit) = self.session.cached(sha) {
             return Ok(hit.clone());
         }
-        self.checkout(sha, false)?;
+        self.checkout(sha)?;
         let outcome = measure(&self.test, self.mode())?;
         let subject = subject_of(&self.repo, sha);
         let entry = new_entry(sha, &subject, &outcome, &self.oracle_sha256, phase);
@@ -447,7 +447,7 @@ impl Prover<'_> {
         let mut p_value = 1.0;
         while on_bad.1 < baseline_max {
             for ((commit, name), counts) in [(bad, &mut on_bad), (good, &mut on_good)] {
-                self.checkout(commit, false)?;
+                self.checkout(commit)?;
                 let before = counts.1;
                 for _ in 0..BASELINE_BATCH {
                     let run = run_test(&self.test)?;
@@ -683,7 +683,7 @@ impl Prover<'_> {
         let worktree = &self.test.worktree;
         // Fails when no revert is in progress, which is the usual case.
         git_ok(worktree, &["revert", "--abort"]);
-        self.checkout(commit, true)?;
+        self.checkout(commit)?;
         git_out(worktree, &["reset", "-q", "--hard"])?;
         git_out(worktree, &["clean", "-fdq"])?;
         Ok(())
@@ -922,7 +922,7 @@ impl Prover<'_> {
         let Palette { b, d, o, .. } = self.pal;
         let mut sides = Vec::with_capacity(2);
         for (name, commit) in [("with", first_bad), ("without", parent)] {
-            self.checkout(commit, true)?;
+            self.checkout(commit)?;
             let entry = self.probe_state(
                 &format!("{} x{runs}", head(commit, 10)),
                 &format!("fixed-size run {name} the first bad commit"),
@@ -950,17 +950,13 @@ impl Prover<'_> {
     }
 }
 
-/// The recorded verdicts that do not fit `first_bad` being the one first
-/// bad commit: a commit before it that tested bad, or a commit after it
-/// that tested good. git bisect assumes there are none and never looks;
-/// with a test that fails only some of the time, or a bug that comes and
-/// goes, there can be. Each is returned with where it sits.
-fn contradicting<'a>(
-    repo: &Path,
-    entries: &'a [Entry],
-    first_bad: &str,
-) -> anyhow::Result<Vec<(&'a Entry, &'static str)>> {
-    let mut against = Vec::new();
+/// The recorded verdicts that contradict `first_bad` being the one first
+/// bad commit: a commit before it that tested bad, or a commit that
+/// contains it and tested good. git bisect assumes there are none and
+/// never looks; with a test that fails only some of the time, or a bug
+/// that comes and goes, there can be. One line each, naming the run.
+fn contradictions(repo: &Path, entries: &[Entry], first_bad: &str) -> anyhow::Result<Vec<String>> {
+    let mut found = Vec::new();
     for entry in entries {
         let commit = text_of(entry, "commit");
         if !is_sha(commit) || commit == first_bad {
@@ -969,13 +965,18 @@ fn contradicting<'a>(
         let ancestor = |older: &str, newer: &str| {
             git_test(repo, &["merge-base", "--is-ancestor", older, newer])
         };
+        let (run, short) = (count_of(entry, "n"), head(commit, 10));
         match text_of(entry, "verdict") {
-            "bad" if ancestor(commit, first_bad)? => against.push((entry, "before")),
-            "good" if ancestor(first_bad, commit)? => against.push((entry, "after")),
+            "bad" if ancestor(commit, first_bad)? => found.push(format!(
+                "run {run}: {short} tested BAD but comes before the named commit"
+            )),
+            "good" if ancestor(first_bad, commit)? => found.push(format!(
+                "run {run}: {short} tested GOOD but contains the named commit"
+            )),
             _ => {}
         }
     }
-    Ok(against)
+    Ok(found)
 }
 
 /// The last `n` characters of `s`.
@@ -1376,6 +1377,39 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
         println!("  {d}... and {} more{o}", kept.len() - args.show);
     }
 
+    // Oldest to newest. Step 4 lines the leads up in this order, under git
+    // bisect's own assumption: one first bad commit, everything after it bad.
+    let order = git_out(
+        repo,
+        &[
+            "rev-list",
+            "--topo-order",
+            "--reverse",
+            &format!("{good}..{bad}"),
+        ],
+    )?;
+    let position: HashMap<&str, usize> = order
+        .split_whitespace()
+        .enumerate()
+        .map(|(index, sha)| (sha, index))
+        .collect();
+
+    // The worktree comes before the protocol is put on record: if it cannot
+    // be made, nothing has been written to the store.
+    let added = git_command(repo)
+        .args(["worktree", "add", "-q", "--detach"])
+        .arg(&worktree)
+        .arg(bad)
+        .output()
+        .context("cannot run git")?;
+    if !added.status.success() {
+        return refuse(format!(
+            "worktree failed: {}",
+            strip(&String::from_utf8_lossy(&added.stderr))
+        ));
+    }
+    scratch.worktree_added(&worktree);
+
     // Frozen before the first test: what is tested, with what, on which leads.
     let kept_commits: Vec<&str> = kept
         .iter()
@@ -1441,37 +1475,6 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
     protocol["sha256"] = json!(protocol_sha256);
     protocol["memory"] = json!(protocol_memory);
 
-    // Oldest to newest. Step 4 lines the leads up in this order, under git
-    // bisect's own assumption: one first bad commit, everything after it bad.
-    let order = git_out(
-        repo,
-        &[
-            "rev-list",
-            "--topo-order",
-            "--reverse",
-            &format!("{good}..{bad}"),
-        ],
-    )?;
-    let position: HashMap<&str, usize> = order
-        .split_whitespace()
-        .enumerate()
-        .map(|(index, sha)| (sha, index))
-        .collect();
-
-    let added = git_command(repo)
-        .args(["worktree", "add", "-q", "--detach"])
-        .arg(&worktree)
-        .arg(bad)
-        .output()
-        .context("cannot run git")?;
-    if !added.status.success() {
-        return refuse(format!(
-            "worktree failed: {}",
-            strip(&String::from_utf8_lossy(&added.stderr))
-        ));
-    }
-    scratch.worktree_added(&worktree);
-
     let mut prover = Prover {
         storage: storage.as_ref(),
         pal,
@@ -1506,7 +1509,13 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             // A NaN p (counts too large) is not below the bar either.
             let beyond_chance = p_value < BASELINE_P;
             let separates = prover.stats.is_some_and(|stats| stats.separates());
-            if !beyond_chance || !separates {
+            if beyond_chance && !separates {
+                println!(
+                    "{r}The test fails on {good_ref} itself more than two times in three, too often to judge single commits against it, so nothing can be decided with this test.{o}"
+                );
+                return Ok(None);
+            }
+            if !beyond_chance {
                 println!(
                     "{r}After {} runs on each end the failure rates are not clearly different (p = {}), so nothing can be decided with this test.{o}",
                     flaky.baseline_max,
@@ -1651,6 +1660,18 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             aborted.as_deref().unwrap_or_default()
         );
     }
+    let contradictions = match &first_bad {
+        Some(first_bad) => contradictions(repo, &entries, first_bad)?,
+        None => Vec::new(),
+    };
+    for line in &contradictions {
+        println!("  {r}{line}{o}");
+    }
+    if !contradictions.is_empty() {
+        println!(
+            "  {r}The recorded verdicts contradict each other, so this commit is NOT confirmed. With an intermittent bug, rerun with a smaller --alpha.{o}"
+        );
+    }
     let agree = boundary
         .as_ref()
         .is_some_and(|lead| first_bad.is_some() && lead.commit == first_bad);
@@ -1677,32 +1698,6 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             "  {y}The walk did not reach this commit. The tested result stands; the walk missed it.{o}"
         );
     }
-    let against = match &first_bad {
-        Some(first_bad) => contradicting(repo, &entries, first_bad)?,
-        None => Vec::new(),
-    };
-    for (entry, place) in &against {
-        println!(
-            "  {y}Run {} does not fit one first bad commit: {} tested {} and comes {place} this one.{o}",
-            py_display(entry.get("n")),
-            head(text_of(entry, "commit"), 10),
-            text_of(entry, "verdict").to_uppercase()
-        );
-    }
-    if !against.is_empty() {
-        println!(
-            "  {y}{}{o}",
-            if plan.flaky.is_some() {
-                "With a test that fails only some of the time a verdict can be a run of luck, so git bisect may have been led past the commit. REPEATED tests the named commit directly."
-            } else {
-                "The test does not fail on every commit after the first bad one, so there is more than one place where it starts to fail; this is the one git bisect arrived at."
-            }
-        );
-    }
-    let against_runs: Vec<u64> = against
-        .iter()
-        .map(|(entry, _)| count_of(entry, "n"))
-        .collect();
     let found_in = runs_before_bisect.saturating_sub(2);
     if agree && let Some(plain) = plain_runs.filter(|plain| *plain > 0) {
         let what = if plan.flaky.is_some() {
@@ -1720,11 +1715,18 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             "  {b}[tested]{o} With this commit the test fails {b}{} of {}{o} times. Without it, {b}{} of {}{o}.",
             strength.with.fails, strength.with.runs, strength.without.fails, strength.without.runs
         );
-        println!(
-            "  {b}[tested]{o} Chance of that split if the commit made no difference: {b}{}{o}. Failure is at least {b}{:.1} times{o} more likely with it {d}(95% confidence, exact binomial bounds){o}.",
-            format_g(strength.fisher_p, 2),
-            strength.at_least_times.unwrap_or(0.0)
-        );
+        if strength.fisher_p < REPEATED_P {
+            println!(
+                "  {b}[tested]{o} Chance of that split if the commit made no difference: {b}{}{o}. Failure is at least {b}{:.1} times{o} more likely with it {d}(95% confidence, exact binomial bounds){o}.",
+                format_g(strength.fisher_p, 2),
+                strength.at_least_times.unwrap_or(0.0)
+            );
+        } else {
+            println!(
+                "  {r}[tested] That split could easily be chance (p = {}). The named commit did NOT hold up under repeated runs; do not rely on it.{o}",
+                format_g(strength.fisher_p, 2)
+            );
+        }
     }
     if let Some(why) = &why {
         let count = why.minimal.len();
@@ -1798,7 +1800,7 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             parent: parents.first().map(String::as_str),
             lead: reached.map(|lead| (lead.rank, leads.len(), lead.memory.as_str())),
             window: *window,
-            against: &against_runs,
+            contradictions: contradictions.len(),
             bad_ref,
             why: why.as_ref(),
             strength: strength.as_ref(),
@@ -1916,6 +1918,7 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             "stats": stats.map(|stats| json!({
                 "p0": stats.p0,
                 "p1": stats.p1,
+                "p1_point_estimate": stats.p1_point_estimate,
                 "alpha": stats.alpha,
                 "beta": stats.beta,
                 "max_runs": stats.max_runs,
@@ -1948,6 +1951,7 @@ fn prove_inner(storage: &Arc<Storage>, data_dir: &Path, args: &ProveArgs) -> any
             })).collect::<Vec<_>>(),
         },
         "flaky": flaky_report,
+        "contradictions": contradictions,
         "protocol": protocol,
         "verdict_card": card.iter().map(Rung::json).collect::<Vec<_>>(),
         "probes": entries,

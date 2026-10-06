@@ -655,7 +655,8 @@ enum Commands {
     /// reaches over recorded edges, drops any committed after --reported-at
     /// or outside good..bad, and freezes the protocol (the test's sha256,
     /// the two ends, the leads) before any test runs. Then it runs your test
-    /// on those leads only and on the parent of the earliest failing one.
+    /// on those leads only, closest links first, and on the parent of the
+    /// earliest failing one.
     /// Stock `git bisect run` over the whole range confirms it, reusing the
     /// verdicts already recorded. Then it finds the smallest set of the
     /// commit's changes that still fails, tests the commit without them, and

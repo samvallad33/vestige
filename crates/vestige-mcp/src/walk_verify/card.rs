@@ -126,9 +126,9 @@ pub(super) struct CardFacts<'a> {
     pub lead: Option<(usize, usize, &'a str)>,
     /// Commits in `good..bad`.
     pub window: u64,
-    /// Runs whose verdict does not fit one first bad commit: bad before
-    /// this commit, or good after it.
-    pub against: &'a [u64],
+    /// How many recorded verdicts contradict this being the first bad
+    /// commit: bad on a commit before it, or good on one that contains it.
+    pub contradictions: usize,
     pub bad_ref: &'a str,
     pub why: Option<&'a Why>,
     pub strength: Option<&'a Strength>,
@@ -306,7 +306,7 @@ pub(super) fn verdict_card(facts: &CardFacts<'_>) -> Vec<Rung> {
     } else {
         runs(&bisected)
     };
-    card.push(if facts.against.is_empty() {
+    card.push(if facts.contradictions == 0 {
         Rung {
             name: "CONFIRMED",
             holds: true,
@@ -316,20 +316,15 @@ pub(super) fn verdict_card(facts: &CardFacts<'_>) -> Vec<Rung> {
     } else {
         // git bisect names a commit whatever the other runs say; the rung
         // only holds when none of them says otherwise.
-        let numbers: Vec<String> = facts.against.iter().map(u64::to_string).collect();
-        let (run, does) = if numbers.len() == 1 {
-            ("run", "does")
-        } else {
-            ("runs", "do")
-        };
         Rung {
             name: "CONFIRMED",
             holds: false,
             statement: format!(
-                "{named}, but {run} {} {does} not fit one first bad commit",
-                numbers.join(",")
+                "git bisect names it, but {} recorded verdict{} contradict it",
+                facts.contradictions,
+                if facts.contradictions == 1 { "" } else { "s" }
             ),
-            proof: bisect_runs,
+            proof: "see the runs listed above".to_string(),
         }
     });
 
@@ -426,7 +421,7 @@ mod tests {
             parent: Some(PARENT),
             lead: Some((3, 7, "mem-00000000000000dd")),
             window: 12,
-            against: &[],
+            contradictions: 0,
             bad_ref: "v2",
             why,
             strength: None,
@@ -546,21 +541,21 @@ mod tests {
     fn confirmed_holds_only_when_no_recorded_run_says_otherwise() {
         let entries = entries();
         let mut facts = facts(&entries, None);
-        facts.against = &[4];
+        facts.contradictions = 1;
         let card = verdict_card(&facts);
         assert_eq!(
             row(&card[2]),
             (
                 "CONFIRMED",
                 false,
-                "stock git bisect over all 12 commits names it, but run 4 does not fit one first bad commit",
-                "runs 6,7"
+                "git bisect names it, but 1 recorded verdict contradict it",
+                "see the runs listed above"
             )
         );
-        facts.against = &[4, 9];
+        facts.contradictions = 2;
         assert_eq!(
             verdict_card(&facts)[2].statement,
-            "stock git bisect over all 12 commits names it, but runs 4,9 do not fit one first bad commit"
+            "git bisect names it, but 2 recorded verdicts contradict it"
         );
         // The other rungs are read from their own runs.
         assert!(card[0].holds && card[1].holds);

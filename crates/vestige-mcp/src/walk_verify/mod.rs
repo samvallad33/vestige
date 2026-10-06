@@ -12,8 +12,11 @@
 //!    two ends, the leads in order and the limits are hashed and saved as a
 //!    memory, so none of them can be chosen after seeing a result. Then the
 //!    test must pass on `--good` and fail on `--bad`;
-//! 4. a bisect over all the leads, oldest to newest, then the parent of the
-//!    earliest failing one. "fails, parent passes" is a tested boundary;
+//! 4. a bisect over the leads, closest links first: the leads one recorded
+//!    link from the failure, oldest to newest, then the parent of the
+//!    earliest failing one. "fails, parent passes" is a tested boundary.
+//!    Leads two links away are added only when the closer ones do not hold
+//!    it, and `--max-candidates` caps the new test runs of the whole step;
 //! 5. stock `git bisect run` over the whole range as confirmation, reusing
 //!    every verdict already recorded, and a replay that counts how many
 //!    runs plain bisect needs;
@@ -35,7 +38,15 @@
 //! `[recorded link]` is a lead from the walk, `[tested]` is a test run.
 //!
 //! The test follows `git bisect run`: exit 0 is good, 125 is "cannot test
-//! this commit", any other code is bad.
+//! this commit", any other code up to 127 is bad. A run that cannot be
+//! started, runs past `--timeout` (it is killed with its process group) or
+//! dies of a signal or with a code above 127 gives no verdict: it counts as
+//! "cannot test". The test never sees the variables `git bisect run`
+//! exports (`GIT_DIR` and the like), in any phase.
+//!
+//! After the bisect the recorded verdicts are held against each other: a
+//! commit that tested bad before the named one, or good though it contains
+//! it, is listed as a contradiction, and CONFIRMED then does not hold.
 //!
 //! ## A bug that only shows some of the time
 //!
@@ -44,6 +55,14 @@
 //! chance (p < 0.001); every commit is then judged by Wald's sequential
 //! test between the two measured failure rates, and a commit the test
 //! cannot decide within `--max-runs` counts as "cannot test". See [`stats`].
+//!
+//! A bad commit is judged against the exact 97.5% lower bound of the bad
+//! end's failure rate, not against the rate as measured: the measuring
+//! stops as soon as the ends differ, which favours a rate measured too
+//! high, and a test against that estimate calls a truly bad commit good
+//! about three times more often than `--alpha` allows. REPEATED then tests
+//! the named commit directly, with a fixed number of runs, and is the rung
+//! to read before trusting a `--flaky` result.
 //!
 //! ## What it touches
 //!
@@ -151,7 +170,7 @@ pub struct ProveArgs {
     pub alpha: f64,
     /// --flaky: at most this many runs on one commit; undecided by then, it
     /// counts as cannot test
-    #[arg(long, default_value_t = 80, value_name = "RUNS")]
+    #[arg(long, default_value_t = 200, value_name = "RUNS")]
     pub max_runs: u64,
     /// --flaky: at most this many runs on each end while measuring how
     /// often the test fails there

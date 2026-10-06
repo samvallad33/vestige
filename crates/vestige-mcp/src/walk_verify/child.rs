@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::CHILD_COMMAND;
-use super::git::{git_out, git_test, subject_of, watch_signals};
+use super::git::{git_ok, git_out, git_test, subject_of, watch_signals};
 use super::probe::{Mode, Session, Test, append_line, measure, new_entry, text_of};
 use super::stats::Stats;
 
@@ -64,6 +64,7 @@ pub(super) struct ChildConfig {
 pub(super) struct StatsBits {
     p0: u64,
     p1: u64,
+    p1_point_estimate: u64,
     alpha: u64,
     beta: u64,
     max_runs: u64,
@@ -74,6 +75,7 @@ impl From<Stats> for StatsBits {
         Self {
             p0: stats.p0.to_bits(),
             p1: stats.p1.to_bits(),
+            p1_point_estimate: stats.p1_point_estimate.to_bits(),
             alpha: stats.alpha.to_bits(),
             beta: stats.beta.to_bits(),
             max_runs: stats.max_runs,
@@ -86,6 +88,7 @@ impl From<StatsBits> for Stats {
         Self {
             p0: f64::from_bits(bits.p0),
             p1: f64::from_bits(bits.p1),
+            p1_point_estimate: f64::from_bits(bits.p1_point_estimate),
             alpha: f64::from_bits(bits.alpha),
             beta: f64::from_bits(bits.beta),
             max_runs: bits.max_runs,
@@ -198,6 +201,9 @@ fn child_probe(cfg: &ChildConfig) -> anyhow::Result<i32> {
         None => Mode::Once,
     };
     let outcome = measure(&cfg.test(), mode)?;
+    // git checks the next commit out itself and stops if the test left a
+    // tracked file changed. The worktree is the run's own: put it back.
+    git_ok(&cfg.worktree, &["reset", "-q", "--hard"]);
     let code = code_of(outcome.verdict)?;
     let subject = subject_of(&cfg.repo, &sha);
     let entry = new_entry(&sha, &subject, &outcome, &cfg.oracle_sha256, "bisect");
@@ -256,7 +262,11 @@ mod tests {
         // The rates come back bit for bit, not through a decimal.
         let stats: Stats = read.stats.unwrap().into();
         assert_eq!(stats, Stats::measured((0, 30), (10, 30), 0.01, 80));
-        assert_eq!(stats.p1.to_bits(), (10.5f64 / 31.0).to_bits());
+        assert_eq!(
+            stats.p1_point_estimate.to_bits(),
+            (10.5f64 / 31.0).to_bits()
+        );
+        assert_eq!(stats.p1.to_bits(), 0.1728742215260391f64.to_bits());
         assert_eq!(read.test().timeout, Some(Duration::from_secs(600)));
     }
 
