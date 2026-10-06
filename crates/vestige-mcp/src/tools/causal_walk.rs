@@ -16,8 +16,10 @@
 //! that exact version, and a lockfile bump is reached from that anchor.
 //! `node_id` still names the failure memory. `ci_run` and `version_range` do
 //! not resolve by name. Shared names are not edges. A child of a visited
-//! commit that `corrects` an older commit contributes that older commit, and
-//! a revert that git can prove is a descendant of the failure does too.
+//! commit that `corrects` an older commit contributes that older commit. A
+//! recorded `corrects` edge whose target is an ancestor of the failure
+//! revision contributes that target too, including when the revert sits on
+//! another branch.
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -1589,10 +1591,11 @@ fn upstream_note_for(
     })
 }
 
-/// When a recorded `corrects` edge's revert is a descendant of the failure
-/// revision and its target is an ancestor, add that target. This reaches a
-/// revert whose parent was not ingested. Missing git objects are reported;
-/// nothing is fetched. A cause already reached by the walk is left as it is.
+/// When a recorded `corrects` edge names a commit that is an ancestor of the
+/// failure revision, add that commit. The revert itself may sit on another
+/// branch (it is not required to be a descendant of the failure). Missing git
+/// objects are reported; nothing is fetched. A cause the walk already reached
+/// is left as it is.
 fn extend_revert_ancestry(
     storage: &Arc<Storage>,
     scope: &str,
@@ -1637,13 +1640,10 @@ fn extend_revert_ancestry(
         if revert_sha == failure_sha || cause_sha == failure_sha {
             continue;
         }
-        match (
-            crate::tools::repo_ingest::git_is_ancestor(root, failure_sha, &revert_sha),
-            crate::tools::repo_ingest::git_is_ancestor(root, &cause_sha, failure_sha),
-        ) {
-            (Ok(true), Ok(true)) => added.push((edge.target_id, edge.source_id)),
-            (Err(_), _) | (_, Err(_)) => missing_objects = true,
-            _ => {}
+        match crate::tools::repo_ingest::git_is_ancestor(root, &cause_sha, failure_sha) {
+            Ok(true) => added.push((edge.target_id, edge.source_id)),
+            Err(_) => missing_objects = true,
+            Ok(false) => {}
         }
     }
     let from = nodes
@@ -3354,6 +3354,82 @@ mod strata_walk {
             .iter()
             .find(|row| row["structure"]["sha"] == cause)
             .unwrap();
+        assert_eq!(cause_row["structure"]["edge"], "corrects", "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_revert_on_another_branch_still_names_an_ancestor_of_the_failure() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let root = repo.path();
+        let day = |n: u32| format!("2024-03-{n:02}T00:00:00Z");
+        git_at(root, &["init", "-q"], &day(1));
+        std::fs::write(root.join("cause.rs"), "fn cause() {}\n").unwrap();
+        git_at(root, &["add", "-A"], &day(1));
+        git_at(root, &["commit", "-q", "-m", "cause"], &day(1));
+        let cause = git_at(root, &["rev-parse", "HEAD"], &day(1));
+        let main = git_at(root, &["branch", "--show-current"], &day(1));
+        std::fs::write(root.join("mid.rs"), "fn mid() {}\n").unwrap();
+        git_at(root, &["add", "-A"], &day(2));
+        git_at(root, &["commit", "-q", "-m", "between"], &day(2));
+        std::fs::write(root.join("README.md"), "observed\n").unwrap();
+        git_at(root, &["add", "-A"], &day(3));
+        git_at(root, &["commit", "-q", "-m", "failure revision"], &day(3));
+        let failure_rev = git_at(root, &["rev-parse", "HEAD"], &day(3));
+        git_at(root, &["switch", "-q", "-c", "side", &cause], &day(4));
+        std::fs::write(root.join("side.rs"), "fn side() {}\n").unwrap();
+        git_at(root, &["add", "-A"], &day(4));
+        git_at(root, &["commit", "-q", "-m", "side"], &day(4));
+        git_at(root, &["revert", "--no-edit", &cause], &day(5));
+        let revert = git_at(root, &["rev-parse", "HEAD"], &day(5));
+        git_at(root, &["switch", "-q", &main], &day(5));
+        let on_this_branch = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["merge-base", "--is-ancestor", &failure_rev, &revert])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .unwrap();
+        assert!(
+            !on_this_branch.success(),
+            "the revert is not downstream of the failure revision"
+        );
+
+        let (storage, _log) = open();
+        ingest_repo(&storage, root, &cause, 1).await;
+        ingest_repo(&storage, root, &failure_rev, 1).await;
+        let pulled = ingest_repo(&storage, root, &revert, 1).await;
+        assert!(
+            pulled["edges"]["reverts"].as_u64().unwrap() >= 1,
+            "{pulled}"
+        );
+        let failure_id = {
+            let tag = crate::tools::repo_ingest::commit_tag(&failure_rev);
+            storage
+                .current_code_context_nodes("event", Some(&tag), "demo", 5)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .id
+        };
+        let failure = put(&storage, "demo", "failure observed with no path");
+        link(&storage, &failure, &failure_id, "derived_from");
+        let out = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "logged_write", "node_id": failure}]
+            })),
+        )
+        .await
+        .unwrap();
+        let cause_row = out["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["structure"]["sha"] == cause)
+            .unwrap_or_else(|| panic!("{out}"));
         assert_eq!(cause_row["structure"]["edge"], "corrects", "{out}");
     }
 }
