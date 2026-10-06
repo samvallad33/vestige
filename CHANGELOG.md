@@ -251,6 +251,11 @@ as orphan writes and does not see those edges until it is upgraded.
 
 ### Fixed
 
+- **`vestige prove` reads the first bad commit from current git.** Git now
+  quotes the term (`<sha> is the first 'bad' commit`, and `# first 'bad'
+  commit:` in the bisect log). Earlier git writes the same lines without
+  quotes. Both are read. A bisect that stopped early still names no commit.
+
 - **Commit records do not copy diff-body names onto a `mentions:` line.**
   Added and removed lines used to be scanned for identifier-shaped tokens, and
   those names were written as `mentions:`. Query-time extraction then treated

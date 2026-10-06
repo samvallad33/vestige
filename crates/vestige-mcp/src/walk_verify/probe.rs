@@ -623,10 +623,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let test = test_in(dir.path(), "true", None);
         let command = test_command(&test);
-        // The repository variables, plus `GIT_CONFIG_PARAMETERS` (the `-c`
-        // hooksPath setting must not reach the user's test). Nothing else
-        // is set or removed. (The end-to-end test runs a test that looks
-        // for them under a real `git bisect run`.)
+        // Exactly these nine are removed from what the test inherits, and
+        // nothing else is set or removed: the eight that point git at a
+        // repository, and `GIT_CONFIG_PARAMETERS` (the `-c` hooksPath
+        // setting prove's own git calls carry must not reach the user's
+        // test). (The end-to-end test runs a test that looks for them
+        // under a real `git bisect run`.)
         let removed: Vec<&str> = command
             .get_envs()
             .map(|(name, value)| {

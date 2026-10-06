@@ -209,19 +209,27 @@ pub(super) const PLAIN_DIFF: [&str; 12] = [
 ];
 
 /// The first bad commit a bisect log names. git writes this comment line
-/// in English whatever the locale, unlike what it prints.
+/// in English whatever the locale, unlike what it prints. Current git
+/// quotes the term (`# first 'bad' commit: [sha]`); earlier git writes
+/// `# first bad commit: [sha]`. Both are read. A "possible first" line,
+/// from a bisect that stopped early, is not this line.
 pub(super) fn first_bad_logged(log: &str) -> Option<String> {
     log.lines().rev().find_map(|line| {
-        let rest = line.strip_prefix("# first bad commit: [")?;
+        let rest = line
+            .strip_prefix("# first bad commit: [")
+            .or_else(|| line.strip_prefix("# first 'bad' commit: ["))?;
         let (sha, _) = rest.split_once(']')?;
         is_sha(sha).then(|| sha.to_string())
     })
 }
 
 /// The commit a line of `git bisect` output names as first bad (English
-/// locale only; [`first_bad_logged`] is the one relied on).
+/// locale only; [`first_bad_logged`] is the one relied on). Current git
+/// prints `is the first 'bad' commit`; earlier git omits the quotes.
 pub(super) fn first_bad_named(line: &str) -> Option<String> {
-    let sha = line.strip_suffix(" is the first bad commit")?;
+    let sha = line
+        .strip_suffix(" is the first bad commit")
+        .or_else(|| line.strip_suffix(" is the first 'bad' commit"))?;
     is_sha(sha).then(|| sha.to_string())
 }
 
@@ -391,9 +399,18 @@ mod tests {
         assert_eq!(first_bad_logged(""), None);
         assert_eq!(first_bad_logged("# first bad commit: [nothex] x"), None);
         assert_eq!(first_bad_logged("# first bad commit: [4a6c2c0"), None);
+        // Current git quotes the term. A stopped bisect still names none.
+        let quoted = format!("# first 'bad' commit: [{sha}] Adding retries\n");
+        assert_eq!(first_bad_logged(&quoted).as_deref(), Some(sha));
+        let possible = format!("# possible first 'bad' commit: [{sha}] y\n");
+        assert_eq!(first_bad_logged(&possible), None);
 
         assert_eq!(
             first_bad_named(&format!("{sha} is the first bad commit")).as_deref(),
+            Some(sha)
+        );
+        assert_eq!(
+            first_bad_named(&format!("{sha} is the first 'bad' commit")).as_deref(),
             Some(sha)
         );
         assert_eq!(
@@ -401,6 +418,7 @@ mod tests {
             None
         );
         assert_eq!(first_bad_named("4a6c2c0 is the first bad commit"), None);
+        assert_eq!(first_bad_named("4a6c2c0 is the first 'bad' commit"), None);
     }
 
     /// A repository with two commits, the second a child of the first.

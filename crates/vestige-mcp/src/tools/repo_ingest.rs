@@ -1544,6 +1544,7 @@ pub fn blame_line(root: &Path, rev: &str, path: &str, line: u32) -> Result<Optio
         root,
         &[
             "blame".into(),
+            "--no-textconv".into(),
             "-L".into(),
             format!("{line},{line}"),
             "--porcelain".into(),
@@ -2692,6 +2693,45 @@ pub fn parse_timeout(raw: &str) -> u32 {
             blame_line(root, &head, "src/missing.rs", 1)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// The checkout's own config can name a textconv program for a path
+    /// (`diff.<driver>.textconv` with `.gitattributes`), and `git blame` runs
+    /// it by default. Blaming a frame's line must not run it.
+    #[cfg(unix)]
+    #[test]
+    fn blame_runs_no_textconv_program_the_checkout_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut repo = Repo::empty();
+        repo.write(".gitattributes", "*.rs diff=planted\n");
+        repo.write("src/a.rs", "fn a() {\n    let introduced = 1;\n}\n");
+        repo.commit("introduce", DATES[0]);
+        let head = repo.shas[0].clone();
+        let root = repo.dir.path();
+        let marker = root.join(".git").join("textconv-ran");
+        let program = root.join(".git").join("planted-textconv");
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\necho ran >> '{}'\nprintf 'planted\\n'\ncat \"$1\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        repo.git(
+            &["config", "diff.planted.textconv", program.to_str().unwrap()],
+            DATES[0],
+        );
+
+        assert_eq!(
+            blame_line(root, &head, "src/a.rs", 2).unwrap().as_deref(),
+            Some(head.as_str())
+        );
+        assert!(
+            !marker.exists(),
+            "git blame ran the textconv program the checkout's config names"
         );
     }
 
