@@ -99,7 +99,7 @@ pub(crate) fn register_open(memory: &Arc<StrataMemory>) {
     open.push((memory.log_dir.clone(), Arc::downgrade(memory)));
 }
 
-fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
+pub(crate) fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
     if !is_strata_backend(storage) {
         return None;
     }
@@ -343,6 +343,15 @@ impl StrataMemory {
         self.store
             .lock()
             .unwrap_or_else(|err| panic!("strata memory lock poisoned: {err}"))
+    }
+
+    /// Run `body` with the open log. The guard is held for the call.
+    pub(crate) fn with_store_mut<T>(
+        &self,
+        body: impl FnOnce(&mut strata_store::StrataStore) -> T,
+    ) -> T {
+        let mut store = self.lock();
+        body(&mut store)
     }
 
     fn nodes(&self) -> Vec<strata_store::NodeRecord> {

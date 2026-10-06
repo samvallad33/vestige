@@ -1668,9 +1668,9 @@ pub fn blame_line(root: &Path, rev: &str, path: &str, line: u32) -> Result<Optio
 
 /// What a git run produced. A non-zero exit is `failure` (stderr), not an
 /// error: git may have written whole commits before it died.
-struct GitRun {
-    stdout: Vec<u8>,
-    failure: Option<String>,
+pub(crate) struct GitRun {
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) failure: Option<String>,
 }
 
 /// Run git in `root`, local-only, bounded in time and output size, never
@@ -1681,7 +1681,7 @@ struct GitRun {
 /// git to run. Settings given with `-c` win over that file, so the ones that
 /// would run a program on a read are pinned off here: `log.showSignature`
 /// (which runs `gpg.program`) and `core.fsmonitor` (a hook command).
-fn run_git(root: &Path, args: &[String]) -> Result<GitRun, String> {
+pub(crate) fn run_git(root: &Path, args: &[String]) -> Result<GitRun, String> {
     let mut child = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -1695,6 +1695,8 @@ fn run_git(root: &Path, args: &[String]) -> Result<GitRun, String> {
             "core.fsmonitor=false",
         ])
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         // a partial clone must not fetch missing objects from its remote

@@ -1985,6 +1985,8 @@ impl StrataStore {
     /// The latest proved effect for `node_id` (a node or an intention id).
     ///
     /// Answered from the effect index, like [`StrataStore::effect_by_seq`].
+    /// Edge effects are excluded: they must not hide the source node's own
+    /// receipt. Use [`Self::edge_proofs`] for those.
     pub fn latest_effect(&self, node_id: &str) -> Result<Option<EffectProof>, StoreError> {
         self.effect_index.check()?;
         Ok(self
@@ -1992,6 +1994,35 @@ impl StrataStore {
             .latest
             .get(node_id)
             .map(|&idx| self.effect_index.proofs[idx].clone()))
+    }
+
+    /// Proved `SaveEdge` effects from `source` to `target` of `link_type`,
+    /// oldest first.
+    ///
+    /// The effect index keeps edge proofs out of [`Self::latest_effect`].
+    /// This scans that index. Replay rebuilds it, so the answer matches a
+    /// full log read.
+    pub fn edge_proofs(
+        &self,
+        source: &str,
+        target: &str,
+        link_type: &str,
+    ) -> Result<Vec<EffectProof>, StoreError> {
+        self.effect_index.check()?;
+        Ok(self
+            .effect_index
+            .proofs
+            .iter()
+            .filter(|proof| {
+                proof.action == EffectAction::Edge
+                    && proof.node_id == source
+                    && proof
+                        .edge
+                        .as_ref()
+                        .is_some_and(|(got_target, kind)| got_target == target && kind == link_type)
+            })
+            .cloned()
+            .collect())
     }
 
     /// Review clock recorded on the latest explicit review of `id`.

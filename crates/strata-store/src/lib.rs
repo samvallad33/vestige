@@ -63,6 +63,7 @@ mod card;
 mod error;
 mod gate_log;
 mod ghostlink;
+mod handles;
 mod op;
 mod store;
 mod types;
@@ -82,6 +83,10 @@ pub use ghostlink::{
     PathStep, PathVia, PoolFilter, ADMITTING_KINDS, BEYOND_RADIUS, BRIDGE_MAX_HOPS,
     COMPOSITION_NODE_TYPE, DIVERGENT_RADIUS, GHOSTLINK_TAG, LEGACY_INFERRED, LENS_TAG_PREFIX,
     MEASURED_MEMBER_CAP, OUTCOME_TAG_PREFIX, WEAVE_SOURCE_PREFIX, WEAVE_TAG,
+};
+pub use handles::{
+    hunk_anchor_id, parse_qualified_file_handle, percent_decode, percent_encode,
+    qualified_file_handle,
 };
 pub use op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 pub use store::{

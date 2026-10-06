@@ -352,11 +352,14 @@ enum Commands {
         allow_secrets: bool,
     },
 
-    /// Ingest git commits as memory records (legacy SQLite stores only)
+    /// Ingest git commits as memory records
     ///
-    /// One record per commit, upserted by repo and sha and dated to the commit
-    /// time, so re-running is idempotent. The Strata store in 4.0 exposes no
-    /// source upsert or creation-time rewrite, so it refuses before writing.
+    /// One record per commit, dated to the commit time, so re-running appends
+    /// nothing new. On a Strata log each commit gets `touched` edges to
+    /// repository-qualified file handles (`meta_sha` is the commit) and hunk
+    /// anchors for new-side line ranges. The hunk-header symbol is stored on
+    /// the anchor. Diff mentions and imports are not edges. A legacy SQLite
+    /// store still upserts by source key.
     IngestGit {
         /// Path to the git repository
         path: PathBuf,
@@ -4633,11 +4636,9 @@ fn git_repo_identity(path: &Path) -> Option<String> {
     Some(stripped)
 }
 
-/// Ingest git commits as memory records. Each commit becomes one event whose
-/// content carries the files, module dirs and hunk-header symbols — the
-/// query-time entity extractor turns those into the causal join keys. Records
-/// upsert on `(git, "<repo>#<sha>")`, so re-running is free, and created_at is
-/// the commit time so the backward reach is exact.
+/// Ingest git commits as memory records. A Strata log records `touched` edges
+/// and hunk anchors. A legacy SQLite store still upserts on
+/// `(git, "<repo>#<sha>")` and dates the row to the commit time.
 fn run_ingest_git(
     path: PathBuf,
     since: Option<String>,
@@ -4647,9 +4648,27 @@ fn run_ingest_git(
 ) -> anyhow::Result<()> {
     let storage = open_storage()?;
     if is_strata(&storage) {
-        anyhow::bail!(
-            "unavailable_in_4_0: ingest-git is not available on Strata in Vestige 4.0: it upserts each commit by source key and dates it to the commit time, and the Strata store exposes neither operation yet. Nothing was written."
-        );
+        let report = vestige_mcp::tools::ingest_git::execute(
+            storage.as_ref(),
+            vestige_mcp::tools::ingest_git::Request {
+                repo_path: path,
+                since,
+                until,
+                max_commits,
+            },
+        )
+        .map_err(anyhow::Error::msg)?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!("{}", "=== Vestige Ingest Git ===".cyan().bold());
+            println!();
+            println!(
+                "{}",
+                vestige_mcp::tools::ingest_git::render_human(&report)
+            );
+        }
+        return Ok(());
     }
     let repo_display = path
         .file_name()

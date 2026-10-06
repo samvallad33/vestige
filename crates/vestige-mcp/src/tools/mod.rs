@@ -54,6 +54,9 @@ pub mod unavailable;
 // `codebase action=ingest_repo`: the repo connector (commits -> change records).
 pub mod repo_ingest;
 
+// `vestige ingest-git` on a Strata log: touched edges and hunk anchors.
+pub mod ingest_git;
+
 // v1.3: Auto-save and dedup tools
 pub mod dedup;
 pub mod importance;
