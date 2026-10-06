@@ -58,6 +58,38 @@ pub struct GitCommit {
     /// module dirs; an unresolved target keeps the module path as written —
     /// never a guess.
     pub imports: Vec<(String, String, bool)>,
+    /// Full parent SHAs from `git log %P`, in the order git prints them.
+    pub parents: Vec<String>,
+    /// The commit named by git's exact `This reverts commit <40-hex sha>.`
+    /// trailer, when this commit is a `git revert`.
+    pub reverts: Option<String>,
+}
+
+/// The graph id of a file anchor: exact repo-relative path, no normalization
+/// beyond what git already recorded.
+pub fn path_anchor(path: &str) -> String {
+    format!("path:{path}")
+}
+
+/// The target of a line git itself wrote: `This reverts commit <40-hex sha>.`
+/// Anything else (a short sha, a sentence that merely mentions a revert) is
+/// not that trailer.
+pub fn revert_target(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("This reverts commit ")?;
+    let sha = rest.strip_suffix('.').unwrap_or(rest);
+    if is_full_sha(sha) {
+        Some(sha.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+fn parse_parents(field: &str) -> Vec<String> {
+    field
+        .split_whitespace()
+        .filter(|sha| is_full_sha(sha))
+        .map(|sha| sha.to_ascii_lowercase())
+        .collect()
 }
 
 fn is_full_sha(s: &str) -> bool {
@@ -90,9 +122,14 @@ enum ImportKind {
     Include,
 }
 
-/// Parse `git log -p --unified=0 --no-color --pretty=format:%x1e%H%x1f%aI%x1f%s`.
-/// Files come from `diff --git a/X b/Y` lines (the b/ side wins, so renames
-/// land under the new name); symbols from hunk-header trailing context.
+/// Parse `git log -p --unified=0 --no-color`
+/// `--pretty=format:%x1e%H%x1f%aI%x1f%P%x1f%s%n%b`.
+///
+/// A header of three fields (`sha`, time, subject) is the older format and
+/// has no parents. Four fields insert `%P` before the subject. Lines of the
+/// commit message before the first `diff --git` are scanned only for git's
+/// revert trailer. Files come from `diff --git a/X b/Y` (the b/ side wins, so
+/// renames land under the new name); symbols from hunk-header trailing context.
 pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
     let mut out: Vec<GitCommit> = Vec::new();
     for chunk in raw.split(RECORD_SEP) {
@@ -116,7 +153,12 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             .trim()
             .parse::<DateTime<Utc>>()
             .unwrap_or_default();
-        let subject = fields.next().unwrap_or("").trim().to_string();
+        let third = fields.next().unwrap_or("");
+        let fourth = fields.next();
+        let (parents, subject) = match fourth {
+            Some(subject) => (parse_parents(third), subject.trim().to_string()),
+            None => (Vec::new(), third.trim().to_string()),
+        };
 
         let mut files: Vec<String> = Vec::new();
         let mut extra_files = 0usize;
@@ -130,7 +172,19 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
         // (file, written target, syntax) — resolution is deferred until the
         // whole commit is scanned and the file list is complete
         let mut raw_imports: BTreeSet<(String, String, ImportKind)> = BTreeSet::new();
+        let mut reverts: Option<String> = None;
+        let mut in_diff = false;
         for line in body.lines() {
+            if !in_diff {
+                if line.starts_with("diff --git ") {
+                    in_diff = true;
+                } else {
+                    if reverts.is_none() {
+                        reverts = revert_target(line);
+                    }
+                    continue;
+                }
+            }
             if let Some(rest) = line.strip_prefix("diff --git a/") {
                 match rest.split_once(" b/") {
                     // git C-quotes exotic paths; the +++ line below re-captures them
@@ -222,6 +276,8 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
             hunks,
             extra_hunks,
             imports,
+            parents,
+            reverts,
         });
     }
     out
@@ -691,6 +747,32 @@ diff --git a/README.md b/README.md
         // the docs commit touches files but has no parseable symbol context
         assert_eq!(commits[1].files, vec!["README.md"]);
         assert!(commits[1].symbols.is_empty());
+    }
+
+    #[test]
+    fn parents_and_the_git_revert_trailer_are_exact() {
+        let parent = "1111111111111111111111111111111111111111";
+        let reverted = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        let sha = "2222222222222222222222222222222222222222";
+        let raw = format!(
+            "\u{1e}{sha}\u{1f}2026-01-02T00:00:00+00:00\u{1f}{parent}\u{1f}Revert \"touch the list\"\n\nThis reverts commit {reverted}.\nA mention of revert {reverted} is not a trailer.\nThis reverts commit abc.\ndiff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@ fn keep\n-old\n+new\n"
+        );
+        let commits = parse_git_log(&raw);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].parents, vec![parent.to_string()]);
+        assert_eq!(commits[0].reverts.as_deref(), Some(reverted));
+        assert_eq!(commits[0].files, vec!["src/lib.rs".to_string()]);
+        // The old three-field header still parses, with no parents invented.
+        let legacy = parse_git_log(FIXTURE);
+        assert!(legacy[0].parents.is_empty());
+        assert!(legacy[0].reverts.is_none());
+        assert!(
+            revert_target("this reverts commit abcdefabcdefabcdefabcdefabcdefabcdefabcd.")
+                .is_none()
+        );
+        assert!(
+            revert_target("This reverts commit abcdefabcdefabcdefabcdefabcdefabcdefabcd").is_some()
+        );
     }
 
     #[test]
