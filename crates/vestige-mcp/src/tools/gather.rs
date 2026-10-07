@@ -94,7 +94,7 @@ fn gh_json(args: &[&str]) -> Result<Value, String> {
         .map_err(|e| format!("gh {} returned invalid JSON: {e}", args.join(" ")))
 }
 
-/// Run one ingest_repo page and return `(summary, pageBackRev)`.
+/// Run one ingest_repo page and return `(summary, next rev, next skip)`.
 async fn ingest_page(
     storage: &Arc<Storage>,
     repo_path: &PathBuf,
@@ -102,7 +102,8 @@ async fn ingest_page(
     worked_in: &str,
     broke_in: &str,
     page_back: Option<String>,
-) -> Result<(Value, Option<String>), String> {
+    page_skip: Option<usize>,
+) -> Result<(Value, Option<String>, Option<u64>), String> {
     let request = repo_ingest::Request {
         repo_path: repo_path.clone(),
         codebase: None,
@@ -110,6 +111,7 @@ async fn ingest_page(
         rev: page_back,
         since: None,
         until: None,
+        skip: page_skip,
         limit: Some(200),
         dry_run: false,
         budget: None,
@@ -119,7 +121,8 @@ async fn ingest_page(
     // both ends recallable by handle.
     let _ = (worked_in, broke_in);
     let back = summary["pageBackWith"]["rev"].as_str().map(String::from);
-    Ok((summary, back))
+    let skip = summary["pageBackWith"]["skip"].as_u64();
+    Ok((summary, back, skip))
 }
 
 pub async fn execute(
@@ -224,14 +227,16 @@ pub async fn execute(
     let mut commit_pages = 0;
     if let Some(repo_path) = &repo_path {
         let mut page_back: Option<String> = None;
+        let mut page_skip: Option<usize> = None;
         loop {
-            let (summary, back) = ingest_page(
+            let (summary, back, skip) = ingest_page(
                 storage,
                 repo_path,
                 &scope,
                 worked_in.as_deref().unwrap_or(""),
                 broke_in.as_deref().unwrap_or(""),
                 page_back.clone(),
+                page_skip,
             )
             .await?;
             commit_pages += 1;
@@ -241,7 +246,10 @@ pub async fn execute(
             commits_covered += summary["commits"]["created"].as_u64().unwrap_or(0)
                 + summary["commits"]["alreadyIngested"].as_u64().unwrap_or(0);
             match back {
-                Some(rev) if commit_pages < 10 => page_back = Some(rev),
+                Some(rev) if commit_pages < 10 => {
+                    page_back = Some(rev);
+                    page_skip = skip.and_then(|n| usize::try_from(n).ok());
+                }
                 _ => break,
             }
         }

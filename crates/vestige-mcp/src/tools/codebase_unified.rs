@@ -109,7 +109,12 @@ pub fn schema() -> Value {
             },
             "rev": {
                 "type": "string",
-                "description": "ingest_repo: git revision or range to read (default HEAD), e.g. 'v1.2..v1.3' or '<sha>~1' to page further back."
+                "description": "ingest_repo: git revision or range to read (default HEAD), e.g. 'v4.0.1' or 'v1.2..v1.3'. To page, pass pageBackWith.rev again; do not substitute '<sha>~1', which follows only the first parent and drops side-branch commits."
+            },
+            "skip": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "ingest_repo: non-merge commits to pass over before this page (default 0). The next page is pageBackWith.skip with the same rev, in git rev-list --no-merges --topo-order."
             },
             "since": {
                 "type": "string",
@@ -155,6 +160,8 @@ struct CodebaseArgs {
     rev: Option<String>,
     since: Option<String>,
     until: Option<String>,
+    /// ingest_repo: commits to pass over. `pageBackWith.skip` of the previous page.
+    skip: Option<u64>,
 }
 
 /// Structured anchor as it arrives over MCP.
@@ -412,6 +419,12 @@ async fn execute_ingest_repo(storage: &Arc<Storage>, args: &CodebaseArgs) -> Res
         Some(limit) if limit >= 1 => Some(limit as usize),
         Some(_) => return Err("limit must be at least 1".into()),
     };
+    let skip = match args.skip {
+        None => None,
+        Some(skip) => Some(
+            usize::try_from(skip).map_err(|_| "skip does not fit in this process".to_string())?,
+        ),
+    };
     super::repo_ingest::execute(
         storage,
         super::repo_ingest::Request {
@@ -421,6 +434,7 @@ async fn execute_ingest_repo(storage: &Arc<Storage>, args: &CodebaseArgs) -> Res
             rev: args.rev.clone(),
             since: args.since.clone(),
             until: args.until.clone(),
+            skip,
             limit,
             dry_run: args.dry_run.unwrap_or(true),
             budget: None,
