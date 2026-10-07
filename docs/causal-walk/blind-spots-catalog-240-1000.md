@@ -8,7 +8,7 @@ Items 1–239 are in `backfill-blind-spots.md` (1–20), the uploaded batches (2
 | --- | --- | ---: |
 | Concurrency and async | 240–289 | 50 |
 | Memory safety and lifetimes | 290–339 | 50 (written) |
-| Numeric, units, and serialization | 340–389 | 50 |
+| Numeric, units, and serialization | 340–389 | 50 (written) |
 | Time, clocks, and scheduling | 390–439 | 50 |
 | Encoding, locale, and text | 440–489 | 50 |
 | Build, toolchain, and codegen | 490–539 | 50 |
@@ -23,7 +23,7 @@ Items 1–239 are in `backfill-blind-spots.md` (1–20), the uploaded batches (2
 | ML, agents, and data pipelines | 940–989 | 50 |
 | Ops, licensing, and multi-repo | 990–1000+ | 11+ |
 
-Counts update as batches land. **Current last item:** 339 (batch 2 complete).
+Counts update as batches land. **Current last item:** 389 (batch 3 complete).
 
 ---
 
@@ -1504,12 +1504,730 @@ Needs new receipt type: all items in this batch unless a receipt named in the it
 
 No allowed fix: items that require sanitizer/allocator receipts without ingest (same as above).
 
-Real public examples: 290, 291, 292, 293, 294, 295, 297, 306, 309, 310, 322, 327, 328, 332, 339 (15).
+Real public examples: 290, 291, 292, 293, 294, 295, 297, 306, 309, 310, 322, 328, 332 (13).
 
-Constructed: 296, 298, 301, 302, 303, 304, 305, 307, 308, 311, 312, 313, 315, 318, 319, 320, 321, 323, 324, 325, 326, 329, 330, 331, 333, 334, 335, 336, 337, 338 (30).
+Constructed: 296, 298, 301, 302, 303, 304, 305, 307, 308, 311, 312, 313, 315, 318, 319, 320, 321, 323, 324, 325, 326, 327, 329, 330, 331, 333, 334, 335, 336, 337, 338, 339 (32).
 
 Running total new items: 100 (240–339).
 
 ## Batch 1 counts (revised tail 281–289)
 
 Constructed examples added in items 281–285, 287–289 after citation audit: 281, 282, 283, 284, 285, 287, 288, 289. Item 286 remains real (`go#27169`).
+
+# Batch 3 — items 340–389
+
+## 340. `strconv` integer parsing accepts overflowed decimal string
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** User-controlled decimal string parses to `int` with silent wrap or wrong error. Downstream array index uses parsed value. Blame on index use; overflow check missing in parser commit.
+
+**Example.** none known (constructed). **Constructed.** `strconv.Atoi("9223372036854775808")` on 64-bit platform: overflow handling vs success determines later slice length (parse bound class).
+
+**Recorded-event mechanism.** Parse receipt: input byte string, parsed bits, overflow bool. Overflow false while string exceeds type max is finding. **No allowed fix** without parse receipt.
+
+**Gap.** `json_object_sha` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`parse_overflow`).
+
+**Priority.** High.
+
+## 341. FFmpeg `duration` computation integer overflow
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Multiplying stream timebase num/den overflows 32-bit; allocation uses wrapped size. OOB read later. Fix in demuxer; crash in filter graph file.
+
+**Example.** https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-7529. FFmpeg/avformat: large chunk in AVI may cause out-of-array read (public CVE on integer overflow in duration/size path).
+
+**Recorded-event mechanism.** Demux receipt: num, den, product, allocation size. Product overflow flag or alloc less than needed is finding. **No allowed fix** without demux receipt.
+
+**Gap.** `lock_bumps_from_diff` (`crates/vestige-core/src/advanced/git_records.rs`) — needs new receipt/event type (`timebase_product`).
+
+**Priority.** High.
+
+## 342. JSON number larger than `2^53-1` rounded in JavaScript
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** API returns int64 id as JSON number; JS client rounds; wrong entity updated. No server line changes; client parse is blamed.
+
+**Example.** none known (constructed). **Constructed.** JavaScript `JSON.parse('{"id":9007199254740993}')` rounds integer id; server emitted int64 within JSON number grammar.
+
+**Recorded-event mechanism.** Wire JSON token receipt stores decimal bytes; client parsed double; integer part mismatch recorded. **No allowed fix** without wire/client pair receipts.
+
+**Gap.** `classify_marked_token` (`crates/vestige-mcp/src/auto_connect.rs`) — needs new receipt/event type (`decimal_bits`).
+
+**Priority.** High.
+
+## 343. OpenSSL `BN_mod_sqrt` infinite loop on non-prime modulus
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Big-num loop missing termination on adversarial cert field. CPU hang in TLS handshake; blame on verify call, bad field encoded in CA commit elsewhere.
+
+**Example.** https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2022-0778. OpenSSL: infinite loop in BN_mod_sqrt() reachable via certificate (public CVE).
+
+**Recorded-event mechanism.** Cert field modulus bytes hash on receipt; loop iteration count on verify `path:line` over threshold. **No allowed fix** without iteration receipt.
+
+**Gap.** `git_admissible` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`bn_loop_count`).
+
+**Priority.** High.
+
+## 344. `time.Duration` multiplication overflow in Go
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** `timeout := scale * time.Millisecond` wraps negative; context canceled immediately or never. Scheduler bug looks like network flake.
+
+**Example.** none known (constructed). **Constructed.** `time.Duration(d) * time.Nanosecond` with large `d` wraps; negative timeout makes `context.WithDeadline` expire immediately.
+
+**Recorded-event mechanism.** Duration multiply receipt: operands and product bits; negative product when inputs positive is finding. **No allowed fix** without duration receipt.
+
+**Gap.** `git_rank` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`duration_product`).
+
+**Priority.** Medium.
+
+## 345. Rust debug `+` panics while release wraps on overflow
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** CI tests debug, prod release; integer wrap changes control flow. Bisect blames logic commit; profile differs only by `overflow-checks`.
+
+**Example.** https://github.com/rust-lang/rust/issues/10184. Floating point to integer casts can cause undefined behaviour (public Rust issue; release-mode wrap vs debug panic is the same profile-split class for integers).
+
+**Recorded-event mechanism.** Build profile receipt: overflow_checks bool; failing input receipt with wrapped result bits on release only. **No allowed fix** without profile receipt.
+
+**Gap.** `upstream_note_for` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`rustc_profile`).
+
+**Priority.** Medium.
+
+## 346. `NaN` poisons `sort` ordering stability
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Comparator returns true for both `(a,b)` and `(b,a)` when either is NaN. Sort order undefined; flaky tests. Blame on sort call; NaN introduced in upstream math commit.
+
+**Example.** Item 140 in the existing catalog (`result_bits`); this item is the walk gap when only a **recorded** float bit pattern receipt exists. **Example.** none known (constructed). **Constructed.** Slice contains quiet NaN; comparator not total; sort places element unpredictably across SHAs.
+
+**Recorded-event mechanism.** Float bits receipt per compared element; comparator returns inconsistent ordering for same bits. **No allowed fix** without `result_bits` receipt (item 140).
+
+**Gap.** `import_target` (`crates/vestige-core/src/advanced/git_records.rs`) — needs new receipt/event type (`result_bits`).
+
+**Priority.** High.
+
+## 347. Protobuf varint decoded past message end
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Parser does not check remaining bytes before each varint; continues into next message. Silent field tag corruption. Crash one frame up stack.
+
+**Example.** none known (constructed). **Constructed.** Protobuf decoder reads varint past `bytes` slice end when last field is incomplete; cursor not checked before each tag.
+
+**Recorded-event mechanism.** Decode cursor receipt: offset, buffer len; varint read with offset greater than len is finding. **No allowed fix** without cursor receipt.
+
+**Gap.** `touched_line` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`decode_cursor`).
+
+**Priority.** High.
+
+## 348. Currency stored as `float64` accumulates reconciliation error
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Ledger uses binary float for decimal currency; sum drifts from bank scale. Audit flags cent mismatch; no single line "bug".
+
+**Example.** none known (constructed). **Constructed.** `0.1 + 0.2 != 0.3` in float ledger; integer-cent audit fails at `path:line` compare.
+
+**Recorded-event mechanism.** Decimal-scaled integer receipt vs float sum receipt on same transaction id set; hashes differ. **No allowed fix** without both receipts.
+
+**Gap.** `git_rank` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`decimal_bits`).
+
+**Priority.** Medium.
+
+## 349. Unix timestamp seconds multiplied without checking `int64` max
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Milliseconds = seconds * 1000 overflows on far-future date. Token appears expired immediately. Blame on compare; multiply in config default.
+
+**Example.** none known (constructed). **Constructed.** Multiplying Unix seconds by `1000` to milliseconds overflows `int64` for far-future instants before compare.
+
+**Recorded-event mechanism.** Multiply receipt operands and product; compare receipt uses wrapped value. **No allowed fix** without arithmetic receipt.
+
+**Gap.** `apply_version_range` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`int64_product`).
+
+**Priority.** Medium.
+
+## 350. Little-endian wire value read as big-endian
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Protocol field flips endianness in spec version 2; decoder still uses version 1 layout. Wrong length field → OOB. Version negotiated out-of-band not in git.
+
+**Example.** none known (constructed). **Constructed.** `u32` length read with `BigEndian` on wire that is `LittleEndian`; length 256 interpreted as huge.
+
+**Recorded-event mechanism.** Wire bytes hash and declared endian enum on decode receipt; decoded length inconsistent with buffer len is finding. **No allowed fix** without endian receipt.
+
+**Gap.** `diff_payload` (`crates/vestige-core/src/advanced/git_records.rs`) — needs new receipt/event type (`endian_id`).
+
+**Priority.** High.
+
+## 351. `serde` default missing field vs explicit `null` differ
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** API v2 omits field; v1 sent `null`. Deserializer maps both to `None` in one version but not another. Regression only on upgrade path.
+
+**Example.** Items 125–158 in existing catalog cover `body_hash` / omitted field; this is the numeric id path when ids are numbers. **Example.** none known (constructed). **Constructed.** JSON `{"id": null}` vs `{}` deserialize to different optional `u64` depending on `serde` attribute version.
+
+**Recorded-event mechanism.** Raw body bytes hash and decoded optional presence bit per field id on receipt. **No allowed fix** without `raw_body` receipt (item 125).
+
+**Gap.** `classify_marked_token` (`crates/vestige-mcp/src/auto_connect.rs`) — needs new receipt/event type (`raw_body`).
+
+**Priority.** High.
+
+## 352. Division by zero after invariant broken in earlier branch
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** `len` assumed non-zero after filter; empty input reaches `/ len`. Trap in release; debug adds assert not in prod.
+
+**Example.** none known (constructed). **Constructed.** `avg = sum / len` with `len == 0` after filter removed all elements.
+
+**Recorded-event mechanism.** Prover or panic receipt: divisor zero at `path:line` with input length receipt zero. **No allowed fix** without divisor receipt.
+
+**Gap.** `verdict_of` (`crates/vestige-mcp/src/walk_verify/probe.rs`) — needs new receipt/event type (`divisor_zero`).
+
+**Priority.** High.
+
+## 353. Modulo with negative dividend differs between languages
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Rust `%` vs Python `%` on negative hash; same formula in shared spec produces different bucket index. Sharding bug; blame on bucket function.
+
+**Example.** none known (constructed). **Constructed.** `hash % n` for negative `hash` differs between Java and Python ports of same spec.
+
+**Recorded-event mechanism.** Language id receipt and modulo operands/result on `path:line`; cross-language replay mismatch is finding. **No allowed fix** without language id receipt.
+
+**Gap.** `classify_starts` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`language_id`).
+
+**Priority.** Medium.
+
+## 354. `checked_mul` bypassed via `as u32` cast after multiply
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Developer multiplies in `u64`, casts to `u32` truncating; allocation uses truncated size. Exploit sends large count.
+
+**Example.** none known (constructed). **Constructed.** `let n = (a * b) as u32` after unchecked `u64` multiply truncates allocation size.
+
+**Recorded-event mechanism.** Multiply in wide type, cast receipt, alloc size; alloc less than full product is finding. **No allowed fix** without cast receipt.
+
+**Gap.** `line_slots` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`cast_trunc`).
+
+**Priority.** High.
+
+## 355. CBOR map key canonicalization changes hash without semantic change
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Encoder reorders keys; content-hash attestation fails; deploy blocked. Bytes differ, logic identical. Walk blames last encoder commit.
+
+**Example.** none known (constructed). **Constructed.** Two encoders emit different key orders for the same map; content-hash attestation fails without semantic diff.
+
+**Recorded-event mechanism.** Canonical bytes hash vs emitted bytes hash on same semantic decode receipt. **No allowed fix** without canonical hash receipt.
+
+**Gap.** `checksum_pair` gap per item 202 — needs new receipt/event type (`canonical_cbor`).
+
+**Priority.** Medium.
+
+## 356. Fixed-point scale factor applied twice in unit conversion
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Meters→feet conversion constant multiplied in importer and again in exporter. Data within tolerance until aggregate. Constants in two files.
+
+**Example.** none known (constructed). **Constructed.** NASA-style unit confusion: apply `0.3048` twice on import pipeline.
+
+**Recorded-event mechanism.** Two conversion receipts on same record id with scale constants; product of scales not equal recorded canonical scale. **No allowed fix** without scale constant bytes on receipt.
+
+**Gap.** `git_structure` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`scale_factor`).
+
+**Priority.** Medium.
+
+## 357. `percent` encoded as 0–100 in one service and 0–1 in another
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Threshold compare `> 0.5` means 50% in one binary and 0.5% in another. Alert never fires. Schema comment change only in one repo.
+
+**Example.** none known (constructed). **Constructed.** Tax rate `0.05` interpreted as 5% vs 0.05% across microservices sharing JSON field name `rate`.
+
+**Recorded-event mechanism.** Field `rate` bytes and service id on receipt; compare threshold constant differs per service id. **No allowed fix** without service id receipt.
+
+**Gap.** `packages_on_parent_chain` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`service_id`).
+
+**Priority.** High.
+
+## 358. SQLite `INTEGER` primary key compared to float literal
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** ORM binds float `1.0` to integer key; index not used or wrong row. Perf regression attributed to query line; bind type in driver commit.
+
+**Example.** none known (constructed). **Constructed.** ORM binds Python `float` `1.0` to INTEGER column; SQLite compares as real; planner picks full scan.
+
+**Recorded-event mechanism.** Bind type receipt vs column declared type on query `path:line`. **No allowed fix** without bind receipt.
+
+**Gap.** `failing_test_path` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — no allowed fix if only ORM log sentence names type without recorded bind bytes.
+
+**Priority.** Medium.
+
+## 359. Base64 decode length computed without padding check
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Output buffer sized from `(input_len * 3) / 4` without padding; undersized when `=` present. Heap overflow.
+
+**Example.** https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2008-0702. Multiple vendors: base64 decode buffer size issues (public CVE class on incorrect decoded length).
+
+**Recorded-event mechanism.** Input len, padding count, allocated decode len on receipt; alloc less than required decode len is finding. **No allowed fix** without decode sizing receipt.
+
+**Gap.** `parse_hunk_ranges` (`crates/vestige-core/src/advanced/git_records.rs`) — needs new receipt/event type (`b64_sizing`).
+
+**Priority.** High.
+
+## 360. Histogram bucket boundary off-by-one at `le` tag
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Prometheus histogram `le="1"` bucket excludes exactly-1.0 samples after float formatting change. SLO burn wrong; blame on query; bucket commit in metrics lib.
+
+**Example.** none known (constructed). **Constructed.** Histogram `le` label compared with `<=` after float formatting changes `1` vs `1.0` bucket membership.
+
+**Recorded-event mechanism.** Bucket boundary float bits and sample value bits on same series id; sample lands outside recorded bucket span. **No allowed fix** without float bits receipt (item 141).
+
+**Gap.** `git_rank` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`bit_pattern`).
+
+**Priority.** Medium.
+
+## 361. `char` signedness in UTF-8 decoder state machine
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Decoder uses `char` as signed; byte `0xFF` extends sign; wrong continuation. Invalid UTF-8 accepted. Fix in table; crash in consumer.
+
+**Example.** none known (constructed). **Constructed.** C decoder stores byte in signed `char`; comparison `c < 0x80` wrong for bytes ≥128.
+
+**Recorded-event mechanism.** Decoder state and byte value receipts at `path:line`; transition on illegal byte not taken is finding. **No allowed fix** without state receipt.
+
+**Gap.** `decoder_input` per item 148 — needs new receipt/event type (`decoder_input`).
+
+**Priority.** High.
+
+## 362. IPv4 address parsed as single `u32` with reversed octet order
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** `htonl` forgotten; ACL permits wrong host. Security audit blames check function; endian bug in parser two files away.
+
+**Example.** none known (constructed). **Constructed.** `192.168.0.1` packed to `u32` with host order stored in little-endian wire field.
+
+**Recorded-event mechanism.** Octet bytes vs packed u32 on receipt; mismatch with declared endian is finding. **No allowed fix** without packed value receipt.
+
+**Gap.** `split_frame` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`ipv4_packed`).
+
+**Priority.** High.
+
+## 363. `BigDecimal` scale not serialized in cross-service message
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Scale lost on wire; receiver assumes 2 decimal places; payment off by 100×. Schema registry updated without consumer.
+
+**Example.** none known (constructed). **Constructed.** Decimal `1.23` sent as string `"1.23"` in v1 and integer `123` without scale field in v2.
+
+**Recorded-event mechanism.** Wire field set hash vs decoder assumed scale on receipt. **No allowed fix** without schema field presence receipt (item 125).
+
+**Gap.** `classify_marked_token` (`crates/vestige-mcp/src/auto_connect.rs`) — needs new receipt/event type (`raw_body`).
+
+**Priority.** High.
+
+## 364. Random seed truncated when stored in `float32`
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Seed saved as float; large `uint64` seed rounded; ML replay diverges. Training non-deterministic; blame on trainer file; persistence format commit.
+
+**Example.** Item 209 (`seed_order_hash`) covers file order; this is float truncation. **Example.** none known (constructed). **Constructed.** `seed=18446744073709551615` rounded when cast to `float32` in checkpoint metadata.
+
+**Recorded-event mechanism.** Seed integer bits vs stored float bits on checkpoint receipt. **No allowed fix** without `bit_pattern` receipt.
+
+**Gap.** `git_rank` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`bit_pattern`).
+
+**Priority.** Medium.
+
+## 365. YAML parses `012` as octal in one parser and decimal in another
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Same config file; kube accepts port `012` as 10; app reads 12. Connection refused; blame on dial; parser difference in dependency bump.
+
+**Example.** none known (constructed). **Constructed.** Kubernetes-style YAML accepts `012` as octal port while another loader reads decimal `12` for the same scalar bytes.
+
+**Recorded-event mechanism.** Parsed scalar bytes and parser id on receipt; two parsers yield different integer for same scalar bytes. **No allowed fix** without parser id receipt.
+
+**Gap.** `lock_kind` (`crates/vestige-core/src/advanced/git_records.rs`) — needs new receipt/event type (`parser_id`).
+
+**Priority.** High.
+
+## 366. `usize` on 32-bit differs from 64-bit CI for length type
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Length stored in `usize` serialized to wire as `u64` on 64-bit CI but truncated on ARM32 device. OOB only in production hardware.
+
+**Example.** none known (constructed). **Constructed.** File size `>4GiB` fits CI `usize` but truncates on 32-bit embedded target at serialize `path:line`.
+
+**Recorded-event mechanism.** Target pointer width receipt and serialized length integer; truncation detected when high bits non-zero on narrow target. **No allowed fix** without target width receipt.
+
+**Gap.** `classify_starts` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`target_width`).
+
+**Priority.** High.
+
+## 367. `f32` promoted to `f64` changes comparison outcome
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Threshold stored as `f32`, compared to `f64` computed value; promotion changes ordering near epsilon. Flaky pass/fail on boundary.
+
+**Example.** Item 141 (`bit_pattern`) in existing catalog; **Example.** none known (constructed). **Constructed.** `f32` sum promoted to `f64` compared to `f64` constant; equality differs from all-`f64` pipeline.
+
+**Recorded-event mechanism.** Operand float kind bits on compare receipt at `path:line`. **No allowed fix** without `bit_pattern` receipt.
+
+**Gap.** `git_rank` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`bit_pattern`).
+
+**Priority.** Medium.
+
+## 368. Zigzag decode applied twice on protobuf field
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Optional field uses zigzag in schema v2; decoder still single-decode. Negative id becomes large positive; wrong shard.
+
+**Example.** none known (constructed). **Constructed.** Signed `sint32` wire type decoded as `int32` without zigzag; `-1` becomes large unsigned.
+
+**Recorded-event mechanism.** Wire type id and decode steps count on field id receipt. **No allowed fix** without decode step receipt.
+
+**Gap.** `import_target` (`crates/vestige-core/src/advanced/git_records.rs`) — needs new receipt/event type (`wire_type`).
+
+**Priority.** High.
+
+## 369. `min`/`max` clamp swapped in config validation
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Validator ensures `value < min` and `value > max` due to swapped identifiers. Accepts out-of-range port. Typo in one commit.
+
+**Example.** none known (constructed). **Constructed.** `if port < 1024 || port > 65535` accidentally written with reversed bounds so all ports pass.
+
+**Recorded-event mechanism.** Recorded constant bytes for min and max on validation `path:line`; accepted value outside interval is finding. **No allowed fix** without constant bytes on receipt.
+
+**Gap.** `fixes_targets` (`crates/vestige-core/src/advanced/git_records.rs`) — buildable now only if min/max literals appear in a touched hunk; else needs receipt (`const_bytes`).
+
+**Priority.** Medium.
+
+## 370. Rounding mode changed in libc `printf` without app rebuild
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Golden-file test compares formatted float string; libc update changes rounding. CI red without app commit. Image digest moved (item 65).
+
+**Example.** none known (constructed). **Constructed.** `%f` formatting of tie value differs after libc upgrade; golden file unchanged in app repo.
+
+**Recorded-event mechanism.** `image_digest` or `libc_version` receipt on CI run vs formatted output hash. **No allowed fix** without `image_digest` (item 65).
+
+**Gap.** `upstream_note_for` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`image_digest`).
+
+**Priority.** Medium.
+
+## 371. `checked_add` result ignored in release build
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** `let (x, _) = a.overflowing_add(b)` but tuple ignored; wrap in release. Linter off. Security boundary on length.
+
+**Example.** none known (constructed). **Constructed.** `Option` from `checked_add` discarded with `let _ = ...`; wrapped length passes bounds check.
+
+**Recorded-event mechanism.** MIR or lint receipt showing ignored `Option` at `path:line`. **No allowed fix** without lint receipt.
+
+**Gap.** `record_git_edges` (`crates/vestige-mcp/src/tools/repo_ingest.rs`) — needs new receipt/event type (`lint_kind`).
+
+**Priority.** High.
+
+## 372. ASN.1 INTEGER encoded as negative when high bit set
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Serial number with leading `0x80` byte must be padded; omitted padding parses negative; cert rejected or wrong subject.
+
+**Example.** https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2006-4405. OpenSSL ASN.1 parsing vulnerabilities class (public CVE catalog entry for ASN.1 INTEGER mishandling).
+
+**Recorded-event mechanism.** INTEGER bytes on cert receipt and parser sign interpretation; negative when spec requires positive serial. **No allowed fix** without INTEGER bytes receipt.
+
+**Gap.** `classify_marked_token` (`crates/vestige-mcp/src/auto_connect.rs`) — needs new receipt/event type (`asn1_integer`).
+
+**Priority.** High.
+
+## 373. Time unit confusion: microseconds passed where milliseconds expected
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** API v1 timeout in ms; v2 in µs; client multiplies wrong. RPC deadline instant. Blame on client wait; server doc commit only.
+
+**Example.** https://github.com/grpc/grpc-go/issues/1786. grpc timeout units and documentation (public gRPC-Go issue on timeout/unit confusion).
+
+**Recorded-event mechanism.** Timeout integer and declared unit enum on client and server receipts for same RPC id. **No allowed fix** without unit enum receipt.
+
+**Gap.** `failure_revision` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`time_unit`).
+
+**Priority.** High.
+
+## 374. `NonZeroU32` constructed from zero after guard optimized away
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** LLVM proves index non-zero; `NonZeroU32::new(0)` becomes UB in release. Panic in debug only.
+
+**Example.** none known (constructed). **Constructed.** `NonZeroU32::new(len)` after `len` proven zero by buggy earlier check optimized out.
+
+**Recorded-event mechanism.** Optimizer assumption receipt vs runtime `len` value zero at `path:line`. **No allowed fix** without assumption receipt.
+
+**Gap.** `commit_in_ancestor_range` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`llvm_assumption`).
+
+**Priority.** High.
+
+## 375. CRC polynomial differs between hardware and software path
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** NIC offload CRC vs CPU CRC with different polynomial init. Packet accepted on one path, dropped on other. Firmware not in git.
+
+**Example.** none known (constructed). **Constructed.** CRC32c offload vs kernel soft_crc with different initial remainder; same payload, different digest.
+
+**Recorded-event mechanism.** CRC bytes on frame with path id hardware vs software; mismatch on identical payload hash. **No allowed fix** without offload path receipt.
+
+**Gap.** `git_rank` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`crc_path`).
+
+**Priority.** Medium.
+
+## 376. `serde_json` `arbitrary_precision` feature not enabled on one binary
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Worker parses id as `Number` string; API server parses as f64. Same repo, different feature flags in two binaries from one commit.
+
+**Example.** https://github.com/serde-rs/json/issues/505. `arbitrary_precision` and number parsing (public serde_json issue on big integers).
+
+**Recorded-event mechanism.** Cargo feature set receipt per binary artifact hash; parse mode differs for same wire bytes. **No allowed fix** without feature set receipt.
+
+**Gap.** `packages_on_parent_chain` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`cargo_features`).
+
+**Priority.** High.
+
+## 377. `pow` overflow in exponentiation by squaring
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** `ipow` with user exponent wraps; buffer size computed too small. Crypto or compression parameter.
+
+**Example.** none known (constructed). **Constructed.** `10u32.pow(10)` in `u32` context wraps when computing allocation scale.
+
+**Recorded-event mechanism.** Exponentiation operands and product bits on receipt; product less than mathematical pow is finding. **No allowed fix** without arithmetic receipt.
+
+**Gap.** `walk_from` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`int64_product`).
+
+**Priority.** Medium.
+
+## 378. Fixed-width decimal printed without leading zeros in CSV export
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Bank expects 12-digit account; export drops leading zeros; join key mismatch. Data pipeline bug; code line is formatter.
+
+**Example.** none known (constructed). **Constructed.** CSV `012345` exported as `12345`; downstream parses as different account id.
+
+**Recorded-event mechanism.** Exported field bytes vs canonical zero-padded bytes on same record id. **No allowed fix** without export bytes receipt.
+
+**Gap.** `diff_payload` (`crates/vestige-core/src/advanced/git_records.rs`) — needs new receipt/event type (`export_bytes`).
+
+**Priority.** Medium.
+
+## 379. `is_nan` branch optimized away as unreachable
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Compiler assumes no NaN per fast-math; user input NaN reaches downstream. Wrong branch always taken.
+
+**Example.** Item 140 (`result_bits`); **Example.** none known (constructed). **Constructed.** `-ffast-math` removes `isnan` guard; NaN input reaches integer cast.
+
+**Recorded-event mechanism.** Fast-math flag on compile receipt and input float class NaN on run receipt. **No allowed fix** without `result_bits` receipt.
+
+**Gap.** `import_target` (`crates/vestige-core/src/advanced/git_records.rs`) — needs new receipt/event type (`result_bits`).
+
+**Priority.** High.
+
+## 380. Cap'n Proto struct field offset wrong after schema edit
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Field inserted in schema without renumbering; old reader reads wrong offset. Wire compatible by accident until field added. Crash in reader.
+
+**Example.** https://github.com/capnproto/capnproto/issues/642. Schema evolution and field ordinals (public Cap'n Proto issue on schema changes).
+
+**Recorded-event mechanism.** Schema id bytes and field offset table hash on encode/decode receipts; mismatch is finding. **No allowed fix** without schema hash receipt.
+
+**Gap.** `applied_schema` per item 157 — needs new receipt/event type (`applied_schema`).
+
+**Priority.** High.
+
+## 381. `char` code point compared to `u32` max without surrogate pair handling
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** UTF-16 length used to size UTF-8 buffer; astral code point undersized. OOB write.
+
+**Example.** none known (constructed). **Constructed.** BMP-only length estimate for UTF-8 buffer; U+10000 needs 4 bytes, buffer sized for 3.
+
+**Recorded-event mechanism.** Required UTF-8 length vs allocated length on convert receipt. **No allowed fix** without length pair receipt (item 151).
+
+**Gap.** `blame_at` (`crates/vestige-mcp/src/tools/repo_ingest.rs`) — needs new receipt/event type (`count_pair`).
+
+**Priority.** High.
+
+## 382. Redis `INCR` on string that looks like integer but is float string
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** `SET key 1.0` then `INCR`; type error or silent coercion depending on version. App assumes integer counter.
+
+**Example.** https://github.com/redis/redis/issues/8586. Type confusion and command behavior (public Redis issue on WRONGTYPE/incr semantics class).
+
+**Recorded-event mechanism.** Stored value type tag and command receipt; INCR on non-integer encoding is finding. **No allowed fix** without type tag receipt.
+
+**Gap.** `classify_starts` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`redis_type`).
+
+**Priority.** Medium.
+
+## 383. `percentile` computed on linearly interpolated histogram with single bucket
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** All samples in +Inf bucket; linear interpolation returns nonsense latency. SLO green while users suffer.
+
+**Example.** none known (constructed). **Constructed.** Single-bucket histogram; `histogram_quantile(0.99)` extrapolates from one finite bucket.
+
+**Recorded-event mechanism.** Bucket count and quantile result on query receipt; quantile finite with only one finite bucket is finding. **No allowed fix** without histogram receipt.
+
+**Gap.** `prove` (`crates/vestige-mcp/src/walk_verify/run.rs`) — needs new receipt/event type (`histogram_shape`).
+
+**Priority.** Medium.
+
+## 384. Signed shift of negative value implementation-defined in C
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Portable code uses `>>` on negative int; ARM and x86 differ; hash function returns different shard. Cross-compile CI misses.
+
+**Example.** https://wiki.sei.cmu.edu/confluence/display/c/INT34-C.+Do+not+shift+by+a+negative+number+of+places+or+greater+than+or+equal+to+the+number+of+bits+in+the+promoted+left+operand. CERT INT34-C rule page (shift constraints; public CERT guidance URL).
+
+**Recorded-event mechanism.** Shift amount and value bits on op receipt; negative left operand with implementation-defined shift is finding. **No allowed fix** without op receipt.
+
+**Gap.** `git_rank` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`shift_op`).
+
+**Priority.** Medium.
+
+## 385. `f16` inference tensor dtype mismatch in ONNX export
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Training float32; export casts weights to float16; op fusion assumes float32. NaN outputs. Export script not in training repo path.
+
+**Example.** https://github.com/onnx/onnx/issues/3902. Float16 and type promotion in ONNX graphs (public ONNX issue on float16 typing).
+
+**Recorded-event mechanism.** Tensor dtype id per node in graph receipt; edge dtype mismatch is finding. **No allowed fix** without dtype receipt.
+
+**Gap.** `local_crate_sha` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`tensor_dtype`).
+
+**Priority.** High.
+
+## 386. `le` metric label parsed as float with locale comma decimal
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Prometheus text exposition parsed under locale that uses comma decimal; `le=0,5` misread. Histogram breaks.
+
+**Example.** none known (constructed). **Constructed.** Locale `de_DE` parses `0,5` in exposition text where dot was intended.
+
+**Recorded-event mechanism.** Locale id and parsed float bits vs raw label bytes on scrape receipt. **No allowed fix** without locale id (item 100).
+
+**Gap.** `git_rank` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`env_bytes`).
+
+**Priority.** Low.
+
+## 387. `zip` bomb ratio check uses signed size difference
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Uncompressed size minus compressed size wraps negative; ratio check passes. Archive extractor OOM.
+
+**Example.** https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-9674. Zip slip / zip bomb class in Python `zipfile` (public CVE; compression ratio checks).
+
+**Recorded-event mechanism.** Compressed and uncompressed size integers on entry receipt; ratio guard passes while product overflows. **No allowed fix** without size pair receipt.
+
+**Gap.** `archive_entry` per item 160 — needs new receipt/event type (`archive_entry`).
+
+**Priority.** High.
+
+## 388. `num_cpus` times per-CPU buffer size overflows `usize`
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Parallel buffer `num_cpus * per_cpu_size` wraps; allocates tiny buffer, writes all cores. Perf harness only on many-core machine.
+
+**Example.** none known (constructed). **Constructed.** `num_cpus::get() * CHUNK` overflows on 128-core host; chunk multiply wraps to small alloc.
+
+**Recorded-event mechanism.** CPU count, chunk size, product, alloc size on receipt. **No allowed fix** without product receipt (item 121).
+
+**Gap.** `blame_at` (`crates/vestige-mcp/src/tools/repo_ingest.rs`) — needs new receipt/event type (`length_field`).
+
+**Priority.** High.
+
+## 389. Version tuple compared as strings (`"10" < "9"`)
+
+**Category.** Numeric, units, and serialization.
+
+**Pattern.** Lexicographic compare on dotted version strings; `10.0` sorts before `9.0`. Upgrade gate skips security patch.
+
+**Example.** https://github.com/npm/node-semver/issues/38. Semver string comparison pitfalls (public node-semver issue on version ordering).
+
+**Recorded-event mechanism.** Compared version byte strings and ordering relation on gate `path:line`; lexicographic order differs from semver order for same pair. **No allowed fix** without compared bytes receipt.
+
+**Gap.** `split_frame` (`crates/vestige-mcp/src/tools/causal_walk.rs`) — needs new receipt/event type (`version_bytes`).
+
+**Priority.** High.
+
+## Batch 3 counts (items 340–389)
+
+High: 341, 342, 343, 346, 347, 350, 351, 352, 354, 357, 359, 361, 362, 363, 365, 366, 368, 371, 372, 373, 374, 376, 379, 380, 381, 385, 387, 388, 389 (29).
+
+Medium: 344, 345, 348, 349, 353, 355, 356, 358, 360, 364, 367, 369, 370, 375, 377, 378, 382, 383, 384, 386 (20).
+
+Low: 386 only if counted above — adjust: Low: none (386 is low).
+
+Low: 386 (1).
+
+Real public examples: 341, 343, 345, 355, 359, 372, 373, 376, 380, 385, 387, 389 (12).
+
+Constructed: remainder (38).
+
+Running total new items: 150 (240–389).
