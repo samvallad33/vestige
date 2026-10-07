@@ -1,5 +1,7 @@
 # Causal walk blind spots
 
+Extended catalog (items 240–1000+): [`blind-spots-catalog-240-1000.md`](blind-spots-catalog-240-1000.md).
+
 239 gaps between a failure report and the commit `causal_walk` can defend.
 Each row is one catalog item. The function is where a fix lands on this
 branch, read from the current tree. The catalog's 4.2.0 line numbers were
