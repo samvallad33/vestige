@@ -22,6 +22,9 @@
 //! * `predict` — context-ahead memories; on Strata only from exact handles
 //!   (`current_file` code anchors). Free-text topics are refused.
 //! * `harden` — seed invariant bug-class laws (a write), idempotent by law id.
+//! * `heal` — self-heal: weave verdicts automatically from recorded events
+//!   (a PoC suite run, GitHub triage/merge/duplicate state), so later
+//!   rankings weigh them without a human typing an outcome.
 //!
 //! Binding principle: ZERO vector / strings / RAG. Nothing here admits,
 //! ranks, pairs or explains through embeddings, text-vector cosine,
@@ -42,7 +45,7 @@ use vestige_core::Storage;
 
 /// Every GhostLink mode, in schema order.
 pub const MODES: &[&str] = &[
-    "propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden",
+    "propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden", "heal",
 ];
 /// `inspect` views.
 pub const VIEWS: &[&str] = &["recent", "get", "memory", "neighbors"];
@@ -61,7 +64,7 @@ pub fn schema() -> Value {
             "mode": {
                 "type": "string",
                 "enum": MODES,
-                "description": "propose: never-composed pairs with proofs (lens bridge|divergent). bounty: lanes from woven outcomes. weave: record a composition outcome (write). map: recorded subgraph. inspect: woven compositions (view). explore: typed paths (kind). predict: context-ahead memories from exact handles. harden: seed invariant laws (write)."
+                "description": "propose: never-composed pairs with proofs (lens bridge|divergent). bounty: lanes from woven outcomes. weave: record a composition outcome (write). map: recorded subgraph. inspect: woven compositions (view). explore: typed paths (kind). predict: context-ahead memories from exact handles. harden: seed invariant laws (write). heal: self-heal — weave verdicts automatically from recorded events (write)."
             },
             "lens": {
                 "type": "string",
@@ -474,6 +477,355 @@ async fn harden(storage: &Arc<Storage>, strata: bool) -> Result<Value, String> {
 }
 
 // ----------------------------------------------------------------------
+// Self-heal: verdicts recorded from events, not from a human typing
+// ----------------------------------------------------------------------
+
+/// One run of the self-heal pass.
+///
+/// `source=poc` — prove before ranking. Pulls the top bounty leads, runs the
+/// target repo's Foundry or Hardhat suite once, and weaves the verdict onto
+/// each lead: exit 0 weaves `submitted` (the repro runs), a clean test
+/// failure weaves `dead_end` (no repro), anything that could not execute
+/// weaves `needs_poc`. The suite output is saved under
+/// `~/Downloads/vestige-heal-runs/` and its sha256 rides the weave as
+/// evidence, so the test is attached to the lead. Woven outcomes feed
+/// `outcome_score_adjustment`, which lifts reproduced leads in every later
+/// propose and bounty ranking.
+///
+/// `source=github` — automatic verdicts from recorded repository state.
+/// Fetches the linked issue or pull request through `gh` and maps recorded
+/// facts only: closed as duplicate weaves `duplicate_risk`, closed with the
+/// linked pull request merged weaves `accepted`, closed without a merge
+/// weaves `rejected`, and a triage reply (comment by an OWNER, MEMBER or
+/// COLLABORATOR) on an open issue weaves `needs_poc`. No reply text is read
+/// for meaning: the author association and merge state are the facts.
+fn heal(storage: &Arc<Storage>, args: &Value) -> Result<Value, String> {
+    let source = str_arg(args, "source").ok_or("heal requires source: 'poc' or 'github'")?;
+    match source {
+        "poc" => heal_poc(storage, args),
+        "github" => heal_github(storage, args),
+        other => Err(format!(
+            "unknown heal source '{other}'; use 'poc' or 'github'"
+        )),
+    }
+}
+
+/// One `gh api` call, JSON-parsed. Fetching is gather's job; ghostlink heal
+/// only reads recorded repository state through the authenticated CLI.
+fn gh_json(args: &[&str]) -> Result<Value, String> {
+    let out = std::process::Command::new("gh")
+        .args(args)
+        .output()
+        .map_err(|e| format!("gh is not runnable: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "gh {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("gh {} returned invalid JSON: {e}", args.join(" ")))
+}
+
+/// Runs one command in `dir`, captures combined output, and returns
+/// (exit code as classification, output bytes). Classification: 0 = ran and
+/// passed, 1 = ran and failed, 2 = could not run.
+fn run_suite(repo_path: &Path, command: Option<&str>) -> ((u8, Vec<u8>), String) {
+    let (program, run_args): (String, Vec<String>) = match command {
+        Some(explicit) => {
+            let mut words = explicit.split_whitespace().map(str::to_string);
+            let program = words.next().unwrap_or_default();
+            (program, words.collect())
+        }
+        None => {
+            if repo_path.join("foundry.toml").is_file() {
+                ("forge".into(), vec!["test".into()])
+            } else if repo_path.join("hardhat.config.js").is_file()
+                || repo_path.join("hardhat.config.ts").is_file()
+            {
+                ("npx".into(), vec!["hardhat".into(), "test".into()])
+            } else {
+                return (
+                    (2, b"no foundry.toml or hardhat config in repoPath".to_vec()),
+                    String::new(),
+                );
+            }
+        }
+    };
+    let out = std::process::Command::new(&program)
+        .args(&run_args)
+        .current_dir(repo_path)
+        .output();
+    match out {
+        Ok(out) => {
+            let mut bytes = out.stdout.clone();
+            bytes.extend_from_slice(&out.stderr);
+            let code = if out.status.success() { 0u8 } else { 1u8 };
+            ((code, bytes), format!("{program} {}", run_args.join(" ")))
+        }
+        Err(err) => (
+            (2, format!("could not spawn {program}: {err}").into_bytes()),
+            program,
+        ),
+    }
+}
+
+/// sha256 hex of bytes (the evidence hash the weave record carries).
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn heal_poc(storage: &Arc<Storage>, args: &Value) -> Result<Value, String> {
+    let repo_path = PathBuf::from(
+        str_arg(args, "repoPath").ok_or("heal source=poc requires repoPath (the target repo)")?,
+    );
+    if !repo_path.is_dir() {
+        return Err(format!("repoPath {:?} is not a directory", repo_path));
+    }
+    // Scope is optional: named scope pulls that scope's leads; omit it (or
+    // includeCrossScope) to pull leads across every scope. The weave itself
+    // always lands in the pair's own scope, so cross-scope proving cannot
+    // smuggle a record into the wrong namespace.
+    let mut heal_args = args.clone();
+    if args.get("scope").is_none() && args.get("includeCrossScope").is_none() {
+        heal_args["includeCrossScope"] = json!(true);
+    }
+    let scope = scope_arg(&heal_args)?;
+    let limit = limit_arg(args, 3);
+    let test_command = str_arg(args, "testCommand").map(str::to_string);
+    let evidence_url = str_arg(args, "evidenceUrl")
+        .ok_or("heal source=poc requires evidenceUrl: the https URL this lead tracks (the issue or the repo)")?
+        .to_string();
+
+    // 1. Top leads exactly as bounty sees them.
+    let mut request = propose_request(&heal_args)?;
+    request.lens = engine::Lens::Bridge;
+    request.cursor = None;
+    request.scope = scope.clone();
+    let bounty_before = engine::bounty(storage.as_ref(), &request)?;
+
+    // Lead pairs: needsPocLanes first (they literally ask for a proof), then
+    // neverComposedLanes (fresh leads), then alreadyComposedLanes (re-prove).
+    let pair_of = |entry: &Value| -> Option<(String, String)> {
+        let first = entry.get("firstId").and_then(Value::as_str)?;
+        let second = entry.get("secondId").and_then(Value::as_str)?;
+        Some((first.to_string(), second.to_string()))
+    };
+    let mut leads: Vec<(String, String)> = Vec::new();
+    for lane in [
+        "needsPocLanes",
+        "neverComposedLanes",
+        "alreadyComposedLanes",
+    ] {
+        if let Some(list) = bounty_before[lane].as_array() {
+            for entry in list {
+                if let Some(pair) = pair_of(entry)
+                    && !leads.contains(&pair)
+                {
+                    leads.push(pair);
+                }
+            }
+        }
+    }
+    if leads.is_empty() {
+        return Err(
+            "no bounty leads in this scope to prove: weave a pair first or widen the scope".into(),
+        );
+    }
+    let leads: Vec<_> = leads.into_iter().take(limit).collect();
+
+    // 2. Run the suite once, save the log under ~/Downloads (never /tmp).
+    let ((classification, output), command_line) = run_suite(&repo_path, test_command.as_deref());
+    let runs_dir = directories::BaseDirs::new()
+        .map(|d| d.home_dir().join("Downloads/vestige-heal-runs"))
+        .unwrap_or_else(|| PathBuf::from("vestige-heal-runs"));
+    std::fs::create_dir_all(&runs_dir)
+        .map_err(|e| format!("could not create {}: {e}", runs_dir.display()))?;
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let log_path = runs_dir.join(format!("poc-{stamp}.log"));
+    std::fs::write(&log_path, &output)
+        .map_err(|e| format!("could not write {}: {e}", log_path.display()))?;
+    let output_sha = sha256_hex(&output);
+    let outcome = match classification {
+        0 => "submitted",
+        1 => "dead_end",
+        _ => "needs_poc",
+    };
+
+    // 3. Weave the verdict onto each lead, evidence attached.
+    let evidence = engine::parse_evidence(Some(&json!([{
+        "url": evidence_url,
+        "sha256": output_sha,
+        "retrievedAt": chrono::Utc::now().to_rfc3339(),
+        "note": format!(
+            "PoC run `{command_line}` exit={classification} in {}; log: {}",
+            repo_path.display(),
+            log_path.display()
+        ),
+    }])))?;
+    let mut woven: Vec<Value> = Vec::new();
+    for (first, second) in &leads {
+        match engine::weave_with_evidence(
+            storage.as_ref(),
+            first,
+            second,
+            outcome,
+            Some("bridge"),
+            &evidence,
+        ) {
+            Ok(record) => woven.push(json!({
+                "firstId": first, "secondId": second,
+                "outcome": outcome, "recordId": record.get("recordId").cloned().unwrap_or(Value::Null),
+            })),
+            Err(err) => woven.push(json!({
+                "firstId": first, "secondId": second,
+                "outcome": "skipped", "error": err,
+            })),
+        }
+    }
+
+    // 4. Re-rank: the woven outcomes now ride outcome_score_adjustment, so
+    // reproduced leads lift in later propose and bounty calls. Return the
+    // fresh bounty so the caller sees the new order immediately.
+    let bounty_after = engine::bounty(storage.as_ref(), &request)?;
+
+    Ok(json!({
+        "mode": "heal",
+        "source": "poc",
+        "suite": {
+            "command": command_line,
+            "exit": classification,
+            "outcome": outcome,
+            "logPath": log_path.display().to_string(),
+            "logSha256": output_sha,
+        },
+        "leadsProven": leads.len(),
+        "woven": woven,
+        "bountyAfter": bounty_after,
+        "note": "exit 0 wove submitted (repro runs); a clean test failure wove dead_end (no repro); a suite that could not run wove needs_poc. The sha256 evidence attaches the test to every lead. Future propose and bounty calls weigh these outcomes."
+    }))
+}
+
+fn heal_github(storage: &Arc<Storage>, args: &Value) -> Result<Value, String> {
+    let issue_url = str_arg(args, "issueUrl")
+        .ok_or("heal source=github requires issueUrl: the linked issue or pull request")?
+        .to_string();
+    let first_id = str_arg(args, "firstId")
+        .ok_or("heal source=github requires firstId: the lead pair to weave the verdict onto")?
+        .to_string();
+    let second_id = str_arg(args, "secondId")
+        .ok_or("heal source=github requires secondId: the lead pair to weave the verdict onto")?
+        .to_string();
+
+    let trimmed = issue_url.trim().trim_end_matches('/');
+    let parts: Vec<&str> = trimmed.split('/').collect();
+    let (owner, name, number) = match parts.as_slice() {
+        [.., o, n, kind, num] if *kind == "issues" || *kind == "pull" => (*o, *n, *num),
+        _ => return Err("issueUrl must be a GitHub issue or pull URL".into()),
+    };
+    let issue_json = gh_json(&["api", &format!("repos/{owner}/{name}/issues/{number}")])?;
+    let state = issue_json["state"].as_str().unwrap_or("open").to_string();
+    let state_reason = issue_json["state_reason"].as_str().map(str::to_string);
+    let html_url = issue_json["html_url"]
+        .as_str()
+        .unwrap_or(&issue_url)
+        .to_string();
+
+    // Merged? For a pull, the pulls endpoint carries `merged`; for an issue
+    // closed by a PR the timeline carries the cross-reference.
+    let mut merged = false;
+    let kind_is_pull = trimmed.contains("/pull/");
+    if kind_is_pull {
+        if let Ok(pr) = gh_json(&["api", &format!("repos/{owner}/{name}/pulls/{number}")]) {
+            merged = pr["merged"].as_bool().unwrap_or(false);
+        }
+    }
+
+    // Triage reply: the newest comment on an open issue by an OWNER, MEMBER
+    // or COLLABORATOR. The association is a recorded fact; reply text is
+    // never read for meaning.
+    let mut triaged = false;
+    if state == "open" {
+        if let Ok(comments) = gh_json(&[
+            "api",
+            &format!("repos/{owner}/{name}/issues/{number}/comments?per_page=20"),
+        ]) {
+            if let Some(list) = comments.as_array() {
+                triaged = list.iter().any(|c| {
+                    matches!(
+                        c["author_association"].as_str(),
+                        Some("OWNER") | Some("MEMBER") | Some("COLLABORATOR")
+                    )
+                });
+            }
+        }
+    }
+
+    let (outcome, reason) = if state_reason.as_deref() == Some("duplicate") {
+        (
+            "duplicate_risk".to_string(),
+            "closed as a duplicate".to_string(),
+        )
+    } else if merged {
+        (
+            "accepted".to_string(),
+            "linked pull request was merged".to_string(),
+        )
+    } else if state == "closed" {
+        (
+            "rejected".to_string(),
+            "closed without a merged fix".to_string(),
+        )
+    } else if triaged {
+        (
+            "needs_poc".to_string(),
+            "maintainer triage reply on an open issue".to_string(),
+        )
+    } else {
+        return Err(
+            "no recorded state change to weave: the issue is open with no maintainer triage reply"
+                .into(),
+        );
+    };
+
+    let body_bytes = serde_json::to_vec(&issue_json).unwrap_or_default();
+    let evidence = engine::parse_evidence(Some(&json!([{
+        "url": html_url,
+        "sha256": sha256_hex(&body_bytes),
+        "retrievedAt": chrono::Utc::now().to_rfc3339(),
+        "note": format!("GitHub state: {state}{}; verdict mapped from recorded repository facts", state_reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default()),
+    }])))?;
+
+    let record = engine::weave_with_evidence(
+        storage.as_ref(),
+        &first_id,
+        &second_id,
+        &outcome,
+        Some("bridge"),
+        &evidence,
+    )?;
+
+    Ok(json!({
+        "mode": "heal",
+        "source": "github",
+        "issue": format!("{owner}/{name}#{number}"),
+        "state": state,
+        "stateReason": state_reason,
+        "merged": merged,
+        "triaged": triaged,
+        "outcome": outcome,
+        "reason": reason,
+        "record": record,
+        "note": "verdict mapped from recorded repository facts only: merge state, close reason and comment author association. Future propose and bounty calls weigh it."
+    }))
+}
+
+// ----------------------------------------------------------------------
 // Dispatch
 // ----------------------------------------------------------------------
 
@@ -538,7 +890,7 @@ fn propose_request(args: &Value) -> Result<ProposeRequest, String> {
 }
 
 fn check_mode_fields(mode: &str, args: &Value) -> Result<(), String> {
-    if !matches!(mode, "propose" | "bounty")
+    if !matches!(mode, "propose" | "bounty" | "heal")
         && (args.get("scope").is_some() || args.get("includeCrossScope").is_some())
     {
         return Err("scope and includeCrossScope apply only to modes propose and bounty".into());
@@ -653,6 +1005,7 @@ async fn execute_strata(storage: &Arc<Storage>, mode: &str, args: &Value) -> Res
         }
         "predict" => engine::predict(storage.as_ref(), args.get("context")),
         "harden" => harden(storage, true).await,
+        "heal" => heal(storage, &args),
         other => Err(format!("Unknown mode '{other}'.")),
     }
 }
@@ -666,6 +1019,7 @@ async fn execute_legacy(
 ) -> Result<Value, String> {
     let action = match mode {
         "harden" => return harden(storage, false).await,
+        "heal" => return Err("heal is Strata-only: it weaves verdicts onto recorded composition pairs in a Strata log".into()),
         "propose" => {
             if Lens::parse(args.get("lens").and_then(Value::as_str))? == Lens::Divergent {
                 return Err("lens 'divergent' needs a Strata log (Vestige 4.0); a legacy SQLite store answers lens 'bridge' only".into());
@@ -731,7 +1085,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_lists_eight_modes_and_two_lenses() {
+    fn schema_lists_nine_modes_and_two_lenses() {
         let s = schema();
         let modes: Vec<&str> = s["properties"]["mode"]["enum"]
             .as_array()
@@ -742,7 +1096,8 @@ mod tests {
         assert_eq!(
             modes,
             [
-                "propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden"
+                "propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden",
+                "heal"
             ]
         );
         assert_eq!(

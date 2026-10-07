@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use vestige_core::Storage;
@@ -64,7 +64,7 @@ fn parse_issue_url(url: &str) -> Result<IssueRef, String> {
             return Err(
                 "url must be a GitHub issue URL like https://github.com/owner/repo/issues/123"
                     .into(),
-            )
+            );
         }
     };
     let number: u64 = num
@@ -142,8 +142,17 @@ pub async fn execute(
     let scope = scope.unwrap_or_else(|| issue.scope.clone());
 
     // ---- Fetch (dynamic, through gh) ------------------------------------
-    let issue_json = gh_json(&["api", &format!("repos/{}/{}/issues/{}", issue.owner, issue.name, issue.number)])?;
-    let title = issue_json["title"].as_str().unwrap_or("untitled").to_string();
+    let issue_json = gh_json(&[
+        "api",
+        &format!(
+            "repos/{}/{}/issues/{}",
+            issue.owner, issue.name, issue.number
+        ),
+    ])?;
+    let title = issue_json["title"]
+        .as_str()
+        .unwrap_or("untitled")
+        .to_string();
     let body = issue_json["body"].as_str().unwrap_or("").to_string();
     let state = issue_json["state"].as_str().unwrap_or("open").to_string();
     let mut labels: Vec<String> = Vec::new();
@@ -216,8 +225,15 @@ pub async fn execute(
     if let Some(repo_path) = &repo_path {
         let mut page_back: Option<String> = None;
         loop {
-            let (summary, back) =
-                ingest_page(storage, repo_path, &scope, worked_in.as_deref().unwrap_or(""), broke_in.as_deref().unwrap_or(""), page_back.clone()).await?;
+            let (summary, back) = ingest_page(
+                storage,
+                repo_path,
+                &scope,
+                worked_in.as_deref().unwrap_or(""),
+                broke_in.as_deref().unwrap_or(""),
+                page_back.clone(),
+            )
+            .await?;
             commit_pages += 1;
             // True coverage: new writes AND commits the scope already held
             // (a re-run counts the window it verified, not just new writes).
@@ -246,7 +262,11 @@ pub async fn execute(
         };
         // The scoped write path, the same one smart_ingest uses: receipts
         // MUST land in the gather scope or the walk (scoped) never sees them.
-        storage.ingest_in_scope_with_secret_policy(input, &scope, vestige_core::SecretPolicy::Reject)
+        storage.ingest_in_scope_with_secret_policy(
+            input,
+            &scope,
+            vestige_core::SecretPolicy::Reject,
+        )
     };
 
     let mut linked_pr_ids: Vec<String> = Vec::new();
@@ -256,11 +276,7 @@ pub async fn execute(
                 "Linked pull request #{n} on issue {}/{}/#{}: {t}",
                 issue.owner, issue.name, issue.number
             ),
-            vec![
-                issue.name.clone(),
-                "gather".into(),
-                "linked-pr".into(),
-            ],
+            vec![issue.name.clone(), "gather".into(), "linked-pr".into()],
             format!("github:{}/{}/#{}", issue.owner, issue.name, n),
         )
         .map_err(|e| format!("linked PR #{n} was not admitted: {e}"))?;
@@ -405,10 +421,15 @@ pub async fn execute(
     let missing_receipts: Vec<String> = {
         let mut m = Vec::new();
         if repo_path.is_none() {
-            m.push("repoPath: no commits were ingested, so the walk cannot reach any commit record".into());
+            m.push(
+                "repoPath: no commits were ingested, so the walk cannot reach any commit record"
+                    .into(),
+            );
         }
         if worked_in.is_none() || broke_in.is_none() {
-            m.push("workedIn/brokeIn: no version window, so structural ranking could not fire".into());
+            m.push(
+                "workedIn/brokeIn: no version window, so structural ranking could not fire".into(),
+            );
         }
         if !storage
             .node_is_in_scope(&failure_id, &scope)
@@ -485,6 +506,9 @@ mod tests {
             .node_is_in_scope(&node.id, vestige_core::DEFAULT_MEMORY_SCOPE)
             .unwrap_or(false);
         assert!(in_gather_scope, "receipt must be in the gather scope");
-        assert!(!in_user_scope, "receipt must NOT fall back to the user scope");
+        assert!(
+            !in_user_scope,
+            "receipt must NOT fall back to the user scope"
+        );
     }
 }
