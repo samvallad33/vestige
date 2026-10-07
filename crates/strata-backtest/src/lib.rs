@@ -12,7 +12,9 @@
 #![warn(missing_docs)]
 
 pub mod canon;
+pub mod corpus;
 pub mod cuts;
+pub mod evb;
 pub mod events;
 pub mod manifest;
 pub mod mechanism;
@@ -20,6 +22,7 @@ pub mod metrics;
 pub mod need;
 pub mod open;
 pub mod protocol;
+pub mod report;
 pub mod rng;
 
 pub use events::{

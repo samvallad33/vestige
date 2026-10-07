@@ -147,6 +147,9 @@ jobs:
       - name: Test strata-backtest (offline replay harness, workspace-excluded)
         run: cargo test --manifest-path crates/strata-backtest/Cargo.toml
 
+      - name: Check committed Mattar-Daw results (release bytes)
+        run: cargo run --quiet --release --manifest-path crates/strata-backtest/Cargo.toml --bin strata-backtest -- --prereg docs/benchmarks/MATTAR-EVB-PREREGISTRATION.md --check docs/benchmarks/results/mattar-evb-v1.json
+
       - name: Test the strata log, kernel and gate crates (workspace-excluded)
         run: |
           cargo test --manifest-path crates/strata/Cargo.toml
