@@ -263,6 +263,17 @@ pub fn extract_entities(content: &str, tags: &[String]) -> Vec<String> {
             word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '-');
         if cleaned.contains('.') && cleaned.len() > 3 && !is_pure_number(cleaned) {
             entities.push(cleaned.to_string());
+            // A path's directory segments are domain tokens: `x/mlxrunner/mlx/random.go`
+            // says the memory is about `mlxrunner` and `mlx`, so a failure tagged
+            // `mlx` joins the commits that touched that tree without anyone
+            // naming a file in the failure report.
+            if cleaned.contains('/') {
+                for segment in cleaned.split('/') {
+                    if segment.len() >= 3 && !is_pure_number(segment) && !is_stopword(segment) {
+                        entities.push(segment.to_lowercase());
+                    }
+                }
+            }
         }
     }
 
@@ -344,5 +355,23 @@ mod tests {
         );
         assert_eq!(pair_key("a-node", "b-node"), pair_key("b-node", "a-node"));
         assert_eq!(pair_key("same", "same"), None);
+    }
+
+    #[test]
+    fn module_prefix_entities_from_paths() {
+        let commit = extract_entities(
+            "commit 4860130f839a mlx: rework the MLX sampler (#16122)\nfiles: x/mlxrunner/mlx/random.go, x/mlxrunner/sample/sampler.go",
+            &[],
+        );
+        let failure = extract_entities(
+            "Severe inter-prompt delay regression on Apple Silicon MLX in v0.24.0",
+            &["mlx".to_string()],
+        );
+        let shared: HashSet<String> = commit.iter().cloned().collect();
+        let hit: Vec<&String> = failure.iter().filter(|e| shared.contains(*e)).collect();
+        assert!(
+            !hit.is_empty(),
+            "failure tagged mlx must share an entity with the mlxrunner commit; commit entities: {commit:?}, failure entities: {failure:?}"
+        );
     }
 }
