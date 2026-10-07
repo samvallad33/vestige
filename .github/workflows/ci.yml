@@ -211,6 +211,7 @@ jobs:
     needs: [no-embeddings-build]
     if: |
       github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
       github.event_name == 'pull_request'
     env:
       ANDROID_API: "24"
@@ -288,6 +289,7 @@ jobs:
     # before merge, not after.
     if: |
       github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
       github.event_name == 'pull_request'
     needs: [test]
     strategy:
@@ -356,6 +358,7 @@ jobs:
     needs: [test]
     if: |
       github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
       github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -426,6 +429,7 @@ jobs:
     container: ubuntu:22.04
     if: |
       github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
       github.event_name == 'pull_request'
     needs: [test]
     env:
@@ -497,6 +501,7 @@ jobs:
     needs: [release-build-linux]
     if: |
       github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
       github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -540,6 +545,7 @@ jobs:
     container: ubuntu:22.04
     if: |
       github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
       github.event_name == 'pull_request'
     needs: [test]
     env:
@@ -611,6 +617,7 @@ jobs:
     needs: [release-build-linux-arm64]
     if: |
       github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
       github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
