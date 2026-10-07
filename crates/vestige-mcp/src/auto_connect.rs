@@ -10,19 +10,29 @@
 //!
 //! Where `vestige connect` is a full scan (extract entities from every node
 //! in the scope, intersect every pair), auto-connect runs on ONE memory and
-//! must stay cheap:
+//! must stay cheap. It links on exact identities only:
 //!
-//! 1. Extract the new memory's entities once ([`extract_entities`], the same
-//!    deterministic extractor the connect command uses — file paths,
-//!    identifiers, tags; no ML, no similarity).
-//! 2. Resolve each entity as a tag handle through
-//!    [`Storage::resolve_handle`] — the exact path `vestige recall --handle
-//!    <tag>` takes. A `Tag` resolution names the live nodes carrying that
-//!    tag, so candidate generation is the store's own tag lookup, never a
-//!    pairwise scan of the log.
-//! 3. For each candidate (minus the memory itself, minus pairs already
+//! * a tag, exactly as recorded on the memory
+//! * a repo-relative path (`src/lib.rs`, `x/mlxrunner/mlx/random.go`)
+//! * a commit sha
+//! * an issue ref (`GH-42`, `#123`, `owner/repo#123`)
+//! * a url
+//!
+//! Free-text words and path directory segments are not edge keys. Segments
+//! may still appear in [`extract_entities`] for the connect command; they
+//! do not create a `touched` edge by themselves.
+//!
+//! 1. Collect those identity keys once ([`edge_keys`]). No ML, no
+//!    similarity, no keyword overlap.
+//! 2. Resolve each recorded tag through [`Storage::resolve_handle`] — the
+//!    exact path `vestige recall --handle <tag>` takes. A `Tag` resolution
+//!    names the live nodes carrying that tag.
+//! 3. When the memory carries a path, sha, issue ref, or url, page the
+//!    scope and keep nodes whose identity keys intersect. Content words are
+//!    never resolved as handles.
+//! 4. For each candidate (minus the memory itself, minus pairs already
 //!    joined by a recorded edge either direction), confirm the shared
-//!    entities by set intersection and write one `touched` edge through
+//!    identity keys by set intersection and write one `touched` edge through
 //!    [`Storage::save_connection`], exactly as the connect command writes
 //!    its edges.
 //!
@@ -34,10 +44,9 @@
 //! `vestige connect` — is left alone, so re-ingesting or re-running never
 //! stacks parallel edges.
 //!
-//! Candidate generation only sees entities that exist as TAGS on other
-//! memories; two memories sharing a bare content identifier with no matching
-//! tag are still the full scan's job (`vestige connect` remains the
-//! catch-up command).
+//! A commit sha, path, issue ref, or url in the content is enough: it does
+//! not have to be stored as a tag. `vestige connect` remains the catch-up
+//! scan for anything auto-connect did not join.
 
 use std::collections::HashSet;
 
@@ -84,16 +93,17 @@ pub fn auto_connect_new_memory(
         .map_err(|err| format!("auto-connect could not read {memory_id} back: {err}"))?
         .ok_or_else(|| format!("auto-connect could not read {memory_id} back: not found"))?;
 
-    // Sorted and deduplicated by extract_entities, so the lookup cap below
-    // always drops the same entities for the same memory.
-    let entities = extract_entities(content, tags);
-    if entities.is_empty() {
+    // Sorted and deduplicated by edge_keys, so the same memory always
+    // looks up the same identities.
+    let keys = edge_keys(content, tags);
+    if keys.is_empty() {
         return Ok(AutoConnectReport {
             edges: 0,
             shared_entities: Vec::new(),
         });
     }
-    let new_entities: HashSet<String> = entities.iter().cloned().collect();
+    let new_keys: HashSet<String> = keys.iter().cloned().collect();
+    let content_keys = content_identity_keys(content);
 
     // Pairs the new memory already shares a recorded edge with (either
     // direction), normalized so id order cannot hide a duplicate. This is
@@ -106,15 +116,17 @@ pub fn auto_connect_new_memory(
         .filter_map(|edge| pair_key(&edge.source_id, &edge.target_id))
         .collect();
 
-    // Candidate generation: each entity resolved as a tag handle names the
-    // live nodes carrying that tag. Only Tag resolutions are consumed — a
-    // handle that resolved as a memory id (or an id prefix) matched a node's
-    // id, not a shared entity, and the pair would not survive the
-    // intersection check anyway.
+    // Exact tags only. A content word is never resolved as a handle, so
+    // "code" / "lead" / "only" cannot pull in every memory tagged with a
+    // generic word.
     let mut candidates: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for entity in entities.iter().take(MAX_TAG_LOOKUPS) {
-        let resolution = storage.resolve_handle(entity);
+    for tag in tags.iter().take(MAX_TAG_LOOKUPS) {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            continue;
+        }
+        let resolution = storage.resolve_handle(tag);
         if resolution.kind != HandleKind::Tag {
             continue;
         }
@@ -122,6 +134,41 @@ pub fn auto_connect_new_memory(
             if id != memory_id && seen.insert(id.clone()) {
                 candidates.push(id);
             }
+        }
+    }
+    // A path, sha, issue ref, or url is not a tag. Page the scope and keep
+    // memories whose exact identity keys intersect. Strata's page read is a
+    // full scope load, so one large page covers a normal store.
+    if !content_keys.is_empty() {
+        const PAGE: i32 = 4_096;
+        let mut offset = 0i32;
+        loop {
+            let page = storage
+                .get_all_nodes_in_scope(scope, PAGE, offset)
+                .map_err(|err| format!("auto-connect could not read scope {scope}: {err}"))?;
+            if page.is_empty() {
+                break;
+            }
+            let full = page.len() == PAGE as usize;
+            for node in page {
+                if node.id == memory_id || seen.contains(&node.id) {
+                    continue;
+                }
+                let shares = edge_keys(&node.content, &node.tags)
+                    .into_iter()
+                    .any(|key| new_keys.contains(&key));
+                if shares && seen.insert(node.id.clone()) {
+                    candidates.push(node.id);
+                }
+            }
+            if !full {
+                break;
+            }
+            let next = offset.saturating_add(PAGE);
+            if next == offset {
+                break;
+            }
+            offset = next;
         }
     }
 
@@ -156,7 +203,7 @@ pub fn auto_connect_new_memory(
         if joined.contains(&key) {
             continue;
         }
-        let shared = shared_entities(&new_entities, &node);
+        let shared = shared_entities(&new_keys, &node);
         if shared.is_empty() {
             continue;
         }
@@ -203,21 +250,102 @@ fn pair_key(left: &str, right: &str) -> Option<(String, String)> {
     })
 }
 
-/// The entities two memories share: the intersection of the new memory's
-/// entity set and the candidate's, sorted. A tag-handle candidate always
-/// shares at least the tag it was found by, but the intersection is still
-/// computed — it is what the caller reports, and it keeps any non-tag
-/// resolution honest.
-fn shared_entities(new_entities: &HashSet<String>, candidate: &KnowledgeNode) -> Vec<String> {
-    let candidate_entities: HashSet<String> = extract_entities(&candidate.content, &candidate.tags)
+/// The exact identities two memories share: the intersection of the new
+/// memory's edge keys and the candidate's, sorted. Free-text words and path
+/// directory segments are absent from both sides.
+fn shared_entities(new_keys: &HashSet<String>, candidate: &KnowledgeNode) -> Vec<String> {
+    let candidate_keys: HashSet<String> = edge_keys(&candidate.content, &candidate.tags)
         .into_iter()
         .collect();
-    let mut shared: Vec<String> = new_entities
-        .intersection(&candidate_entities)
-        .cloned()
-        .collect();
+    let mut shared: Vec<String> = new_keys.intersection(&candidate_keys).cloned().collect();
     shared.sort();
     shared
+}
+
+/// Exact identities that may justify a `touched` edge: recorded tags, plus
+/// repo-relative paths, commit shas, issue refs, and urls from the content.
+/// Commit shas are lowercased so `A1B2C3D` and `a1b2c3d` are one identity.
+/// Directory segments and free-text words are not included.
+fn edge_keys(content: &str, tags: &[String]) -> Vec<String> {
+    let mut keys = content_identity_keys(content);
+    for tag in tags {
+        let tag = tag.trim();
+        if !tag.is_empty() {
+            keys.push(tag.to_string());
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Path, commit sha, issue ref, and url. Email and version spans are not
+/// identities this bridge links on. Paths are the cleaned repo-relative
+/// token (`x/mlx/random.go`, `path.py`); directory segments are not keys,
+/// and a trailing comma or parenthesis is not part of the path.
+fn content_identity_keys(content: &str) -> Vec<String> {
+    use crate::intake::entities::{EntityKind, extract_typed_spans};
+
+    let mut keys = repo_relative_paths(content);
+    for span in extract_typed_spans(content) {
+        match span.kind {
+            EntityKind::CommitSha => keys.push(span.surface.to_ascii_lowercase()),
+            EntityKind::Url | EntityKind::IssueRef => keys.push(span.surface),
+            EntityKind::FilePath | EntityKind::Email | EntityKind::Version => {}
+        }
+    }
+    keys
+}
+
+/// Repo-relative file tokens: a slash or a bare filename with an extension.
+/// `src/lib.rs` and `path.py` qualify. `mlx` (a directory segment) and
+/// `v0.24.0` (a version) do not.
+fn repo_relative_paths(content: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    for word in content.split_whitespace() {
+        let cleaned = word.trim_matches(|c: char| {
+            !c.is_alphanumeric() && c != '.' && c != '_' && c != '-' && c != '/' && c != '~'
+        });
+        if is_repo_relative_path(cleaned) {
+            keys.push(cleaned.to_string());
+        }
+    }
+    keys
+}
+
+fn is_repo_relative_path(token: &str) -> bool {
+    if token.len() <= 3 || token.contains("://") || is_pure_number(token) || is_version_token(token)
+    {
+        return false;
+    }
+    let final_segment = token.rsplit('/').next().unwrap_or(token);
+    let Some(dot) = final_segment.rfind('.') else {
+        return false;
+    };
+    dot > 0
+        && dot + 1 < final_segment.len()
+        && final_segment[dot + 1..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric())
+}
+
+fn is_version_token(token: &str) -> bool {
+    let body = token.strip_prefix('v').unwrap_or(token);
+    let mut parts = body.split('.');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    if first.is_empty() || !first.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let mut groups = 1usize;
+    for part in parts {
+        if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        groups += 1;
+    }
+    groups >= 2
 }
 
 /// The pair ordered (source, target) with the earlier record first:
@@ -246,11 +374,10 @@ fn earlier_first(
 /// the same entities.
 ///
 /// Identifiers are lowercased so `Euler` and `euler` join; file paths and
-/// tags keep their case (a path is its exact bytes). Sharing is decided by
-/// set intersection downstream, which is also where the "identifier must
-/// appear in >= 2 memories" rule lives: an identifier shared by a pair
-/// appears in 2 memories by definition, so no separate document-frequency
-/// pass is needed.
+/// tags keep their case (a path is its exact bytes). Sharing for `vestige
+/// connect` is decided by set intersection downstream. Auto-connect does
+/// not use these free-text identifiers or path directory segments as edge
+/// keys; see [`edge_keys`].
 pub fn extract_entities(content: &str, tags: &[String]) -> Vec<String> {
     let mut entities = Vec::new();
 
@@ -373,5 +500,110 @@ mod tests {
             !hit.is_empty(),
             "failure tagged mlx must share an entity with the mlxrunner commit; commit entities: {commit:?}, failure entities: {failure:?}"
         );
+        // The directory segment stays an entity. It is not an edge key.
+        let path_keys = edge_keys(
+            "commit 4860130f839a mlx: rework the MLX sampler (#16122)\nfiles: x/mlxrunner/mlx/random.go, x/mlxrunner/sample/sampler.go",
+            &[],
+        );
+        assert!(
+            path_keys
+                .iter()
+                .any(|key| key == "x/mlxrunner/mlx/random.go")
+        );
+        assert!(
+            !path_keys
+                .iter()
+                .any(|key| key == "mlx" || key == "mlxrunner")
+        );
+    }
+
+    /// Two memories that share only common words (and a directory segment)
+    /// get no `touched` edge. Two that share a commit sha get one.
+    #[test]
+    fn common_words_create_no_edges_and_a_shared_commit_sha_creates_one() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/smart-ingest-exact-identities")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = RmDir(dir.clone());
+
+        let storage = crate::strata_memory::open(&dir).unwrap();
+        let scope = vestige_core::DEFAULT_MEMORY_SCOPE;
+        let ingest = |content: &str, tags: &[&str]| {
+            storage
+                .ingest(vestige_core::IngestInput {
+                    content: content.to_string(),
+                    tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                    ..vestige_core::IngestInput::default()
+                })
+                .unwrap()
+        };
+
+        // "only" / "lead" / "code" are the generic words real stores were
+        // joining on. The first memory is tagged `code` and `mlx` so the
+        // old extractor would resolve both as tag handles.
+        let prose = ingest("the only lead is the code", &["code", "mlx"]);
+        let path = "x/mlxrunner/mlx/random.go";
+        assert!(
+            extract_entities(&format!("touched {path}"), &[])
+                .iter()
+                .any(|entity| entity == "mlx"),
+            "a path directory segment stays an entity"
+        );
+        let overlap = ingest(&format!("only the lead code lives under {path}"), &[]);
+        let words = auto_connect_new_memory(
+            storage.as_ref(),
+            &overlap.id,
+            scope,
+            &overlap.content,
+            &overlap.tags,
+        )
+        .unwrap();
+        assert_eq!(
+            words.edges, 0,
+            "common words and a directory segment must not create edges: {words:?}"
+        );
+        assert!(
+            storage
+                .get_connections_for_memory(&prose.id)
+                .unwrap()
+                .is_empty(),
+            "the prose memory stays unlinked"
+        );
+
+        let sha = "a1b2c3d4e5f67890";
+        let landed = ingest(&format!("landed commit {sha} on main"), &[]);
+        let reverted = ingest(&format!("revert {sha} after the outage"), &[]);
+        let linked = auto_connect_new_memory(
+            storage.as_ref(),
+            &reverted.id,
+            scope,
+            &reverted.content,
+            &reverted.tags,
+        )
+        .unwrap();
+        assert_eq!(linked.edges, 1, "{linked:?}");
+        assert_eq!(linked.shared_entities, vec![sha.to_string()]);
+        let edges = storage.get_connections_for_memory(&reverted.id).unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].link_type, "touched");
+        assert!(
+            (edges[0].source_id == landed.id && edges[0].target_id == reverted.id)
+                || (edges[0].source_id == reverted.id && edges[0].target_id == landed.id)
+        );
+    }
+
+    struct RmDir(std::path::PathBuf);
+    impl Drop for RmDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
