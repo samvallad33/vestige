@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the current view is the fold over the chain. `corrects` stays
   review-gated. This supersedes the 4.1.1 note that kept `supersedes`
   out of the declarable kinds.
+- **`ingest_repo` records `touched` edges for an exact shared file path.** Two commit records in the same scope are linked only when both changed the same repo-relative path. Directory segments and content tokens are not paths. A path touched by more than `max(25, 5%)` of the commits in the scope is reported in `skippedHubPaths` and produces no edges; every other path is a chain to the nearest earlier and later commit, so a later page and a re-run stay idempotent.
 - **Batch writes are content-ordered.** A batch processes its items
   sorted by `(canonicalHash, original index)` and answers in the caller's
   order, so the same batch produces byte-identical receipts and node ids

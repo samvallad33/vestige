@@ -51,6 +51,19 @@
 //! records go to their own scope (the codebase name unless one is given), so a
 //! third-party repository never lands in the shared `user` scope. Merge
 //! commits are skipped: they carry no diff to anchor.
+//!
+//! **Exact path edges.** After the records land, two commit records in this
+//! scope get one `touched` edge when they changed the same repo-relative file
+//! path. The path is the exact string git recorded for the commit (the `b/`
+//! side, capped the same way the commit record is). It is not split into
+//! directory segments, not lowercased, and not taken from content tokens.
+//! A path touched by more commits than `max(25, 5%)` of the commits in the
+//! scope is a hub: it produces no edges and is listed in `skippedHubPaths`.
+//! Every other path is a chain — each commit links only to the nearest earlier
+//! and later commit that touched that path — so the edge count stays linear.
+//! A later page reads the files of commits already in the scope and extends
+//! the chain. A re-run writes an edge only when that pair does not already
+//! have it.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -60,11 +73,11 @@ use std::sync::mpsc;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use vestige_core::advanced::git_records::{self, GitCommit};
 use vestige_core::codebase::{AnchorDraft, AnchorStatus, CodeAnchor, capture_anchor};
-use vestige_core::{IngestInput, SourceEnvelope, Storage, StorageError};
+use vestige_core::{ConnectionRecord, IngestInput, SourceEnvelope, Storage, StorageError};
 
 /// Commits read per call unless the caller says otherwise.
 pub const DEFAULT_LIMIT: usize = 100;
@@ -80,6 +93,14 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_GIT_OUTPUT: u64 = 256 * 1024 * 1024;
 /// Anchors kept per commit; the overflow is counted, not silently dropped.
 const MAX_ANCHORS_PER_COMMIT: usize = 24;
+/// Files kept per commit by `git_records` (`MAX_FILES`). A later page must
+/// not invent paths the commit record itself dropped.
+const RECORDED_FILES: usize = 50;
+/// A path touched by more commits than `max(HUB_FLOOR, 5% of the scope)` is
+/// a hub and records no pairwise `touched` edges.
+const HUB_FLOOR: usize = 25;
+const HUB_SHARE_NUM: usize = 5;
+const HUB_SHARE_DEN: usize = 100;
 const SAMPLE_COMMITS: usize = 5;
 const IDS_SHOWN: usize = 20;
 /// Longest value accepted for a ref, date or name handed to git or the log.
@@ -159,6 +180,7 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
         .filter(|sha| !sha.is_empty());
 
     let ingested = ingested_commits(storage, &scope, &codebase)?;
+    let mut sha_to_id = ingested.clone();
     // git lists newest first; write oldest first so memory ids follow history.
     let fresh: Vec<&GitCommit> = commits
         .iter()
@@ -228,6 +250,7 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             }
         };
         stats.created += 1;
+        sha_to_id.insert(commit.sha.clone(), node.id.clone());
         if node_ids.len() < IDS_SHOWN {
             node_ids.push(node.id.clone());
         }
@@ -257,6 +280,16 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
         }
     }
     flush_anchors(storage, &mut queue, &mut stats, &mut failures);
+    let path_edges = record_exact_path_edges(
+        storage,
+        &root,
+        &commits,
+        &sha_to_id,
+        req.dry_run,
+        started,
+        budget,
+        &mut stats,
+    );
     let remaining = if req.dry_run {
         0
     } else {
@@ -326,6 +359,13 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             "stoppedByBudget": stats.stopped_by_budget,
             "skippedSecret": stats.skipped_secret,
             "futureDatesClamped": stats.future_dates_clamped,
+        },
+        "edges": {
+            (if req.dry_run { "wouldRecord" } else { "recorded" }): path_edges.touched,
+            "touched": path_edges.touched,
+            "commitsInScope": path_edges.commits_in_scope,
+            "hubBound": path_edges.hub_bound,
+            "skippedHubPaths": path_edges.skipped_hubs,
         },
         "anchors": anchors,
         "sample": sample,
@@ -581,6 +621,254 @@ fn ingested_commits(
         }
     }
     Ok(recorded)
+}
+
+struct PathEdgeReport {
+    touched: usize,
+    commits_in_scope: usize,
+    hub_bound: usize,
+    skipped_hubs: Vec<String>,
+}
+
+struct Touch {
+    sha: String,
+    id: Option<String>,
+    time: DateTime<Utc>,
+    files: Vec<String>,
+}
+
+/// `max(25, 5% of commits in scope)`, integer percent, rounded down.
+fn hub_bound(commits_in_scope: usize) -> usize {
+    let share = commits_in_scope.saturating_mul(HUB_SHARE_NUM) / HUB_SHARE_DEN;
+    share.max(HUB_FLOOR)
+}
+
+fn path_is_hub(touchers: usize, commits_in_scope: usize) -> bool {
+    touchers > hub_bound(commits_in_scope)
+}
+
+/// `touched` edges between commit records that changed one exact path.
+///
+/// Paths come from the commit's recorded file list, never from directory
+/// segments or from [`crate::auto_connect::extract_entities`].
+fn record_exact_path_edges(
+    storage: &Arc<Storage>,
+    root: &Path,
+    commits: &[GitCommit],
+    sha_to_id: &HashMap<String, String>,
+    dry_run: bool,
+    started: Instant,
+    budget: Duration,
+    stats: &mut Stats,
+) -> PathEdgeReport {
+    let page: HashSet<&str> = commits.iter().map(|commit| commit.sha.as_str()).collect();
+    let mut scope_shas: HashSet<&str> = sha_to_id.keys().map(String::as_str).collect();
+    if dry_run {
+        for commit in commits {
+            scope_shas.insert(commit.sha.as_str());
+        }
+    }
+    let commits_in_scope = scope_shas.len();
+    let bound = hub_bound(commits_in_scope);
+
+    let mut touches: Vec<Touch> = Vec::new();
+    for commit in commits {
+        let id = sha_to_id.get(&commit.sha).cloned();
+        if !dry_run && id.is_none() {
+            continue;
+        }
+        touches.push(Touch {
+            sha: commit.sha.clone(),
+            id,
+            time: commit.time,
+            files: commit.files.clone(),
+        });
+    }
+    let missing: Vec<String> = sha_to_id
+        .keys()
+        .filter(|sha| !page.contains(sha.as_str()))
+        .cloned()
+        .collect();
+    let prior = read_recorded_files(root, &missing);
+    for sha in &missing {
+        let Some((time, files)) = prior.get(sha) else {
+            continue;
+        };
+        touches.push(Touch {
+            sha: sha.clone(),
+            id: sha_to_id.get(sha).cloned(),
+            time: *time,
+            files: files.clone(),
+        });
+    }
+
+    let mut by_path: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, touch) in touches.iter().enumerate() {
+        let mut seen = HashSet::new();
+        for file in &touch.files {
+            if file.is_empty() || file.contains('\n') || file.contains('\u{1e}') {
+                continue;
+            }
+            if !seen.insert(file.as_str()) {
+                continue;
+            }
+            by_path.entry(file.clone()).or_default().push(index);
+        }
+    }
+
+    let mut paths: Vec<String> = by_path.keys().cloned().collect();
+    paths.sort();
+    let mut skipped_hubs = Vec::new();
+    let mut planned: Vec<(usize, usize)> = Vec::new();
+    for path in &paths {
+        let mut order = by_path[path].clone();
+        order.sort_unstable();
+        order.dedup();
+        if path_is_hub(order.len(), commits_in_scope) {
+            skipped_hubs.push(path.clone());
+            continue;
+        }
+        order.sort_by(|&left, &right| {
+            touches[left]
+                .time
+                .cmp(&touches[right].time)
+                .then_with(|| touches[left].sha.cmp(&touches[right].sha))
+        });
+        order.dedup();
+        for pair in order.windows(2) {
+            planned.push((pair[0], pair[1]));
+        }
+    }
+
+    let mut existing: HashSet<(String, String)> = storage
+        .get_all_connections()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|edge| edge.link_type == "touched")
+        .map(|edge| (edge.source_id, edge.target_id))
+        .collect();
+    let mut touched = 0usize;
+    for (earlier, later) in planned {
+        if !dry_run && started.elapsed() >= budget {
+            stats.stopped_by_budget = true;
+            break;
+        }
+        let (Some(source), Some(target)) =
+            (touches[earlier].id.as_deref(), touches[later].id.as_deref())
+        else {
+            // Preview of a commit that has no record yet. Count the pair by
+            // sha so two shared paths do not double it. A write never counts
+            // an edge it did not store.
+            if dry_run {
+                let dedup = (touches[earlier].sha.clone(), touches[later].sha.clone());
+                if existing.insert(dedup) {
+                    touched += 1;
+                }
+            }
+            continue;
+        };
+        if !existing.insert((source.to_string(), target.to_string())) {
+            continue;
+        }
+        if dry_run {
+            touched += 1;
+            continue;
+        }
+        let now = Utc::now();
+        if storage
+            .save_connection(&ConnectionRecord {
+                source_id: source.to_string(),
+                target_id: target.to_string(),
+                strength: 1.0,
+                link_type: "touched".to_string(),
+                created_at: now,
+                last_activated: now,
+                activation_count: 0,
+            })
+            .is_ok()
+        {
+            touched += 1;
+        }
+    }
+
+    PathEdgeReport {
+        touched,
+        commits_in_scope,
+        hub_bound: bound,
+        skipped_hubs,
+    }
+}
+
+/// Exact file lists for commits already recorded and not on this page.
+/// `git log --name-only --no-walk` so a later page does not re-diff history
+/// and does not split a path into segments.
+fn read_recorded_files(
+    root: &Path,
+    shas: &[String],
+) -> HashMap<String, (DateTime<Utc>, Vec<String>)> {
+    let mut out = HashMap::new();
+    for chunk in shas.chunks(40) {
+        let mut args = vec![
+            "log".to_string(),
+            "--no-walk".into(),
+            "--name-only".into(),
+            "--no-merges".into(),
+            "--no-color".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "--no-show-signature".into(),
+            "--pretty=format:%x1e%H%x1f%aI".into(),
+        ];
+        args.extend(chunk.iter().cloned());
+        let Ok(run) = run_git(root, &args) else {
+            continue;
+        };
+        if run.failure.is_some() && run.stdout.is_empty() {
+            continue;
+        }
+        for (sha, time, files) in parse_name_only(&String::from_utf8_lossy(&run.stdout)) {
+            out.insert(sha, (time, files));
+        }
+    }
+    out
+}
+
+fn parse_name_only(raw: &str) -> Vec<(String, DateTime<Utc>, Vec<String>)> {
+    let mut out = Vec::new();
+    let mut current: Option<(String, DateTime<Utc>, Vec<String>)> = None;
+    for line in raw.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if let Some(rest) = line.strip_prefix('\u{1e}') {
+            if let Some(done) = current.take() {
+                out.push(done);
+            }
+            let mut fields = rest.split('\u{1f}');
+            let sha = fields.next().unwrap_or("").trim().to_string();
+            let time = fields
+                .next()
+                .unwrap_or("")
+                .trim()
+                .parse::<DateTime<Utc>>()
+                .unwrap_or_default();
+            if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                current = Some((sha, time, Vec::new()));
+            }
+            continue;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((_, _, files)) = current.as_mut()
+            && !files.iter().any(|have| have == line)
+            && files.len() < RECORDED_FILES
+        {
+            files.push(line.to_string());
+        }
+    }
+    if let Some(done) = current {
+        out.push(done);
+    }
+    out
 }
 
 /// Point captured anchors at their record.
@@ -2056,6 +2344,245 @@ pub fn parse_timeout(raw: &str) -> u32 {
         assert!(
             !full["message"].as_str().unwrap().contains("not checked"),
             "{full}"
+        );
+    }
+
+    fn commit_node(storage: &Arc<Storage>, scope: &str, sha: &str) -> String {
+        let tag = format!("commit:{sha}");
+        nodes(storage, scope)
+            .into_iter()
+            .find(|node| node.tags.iter().any(|have| have == &tag))
+            .unwrap_or_else(|| panic!("no commit {sha} in {scope}"))
+            .id
+    }
+
+    fn touched(storage: &Arc<Storage>) -> Vec<vestige_core::ConnectionRecord> {
+        storage
+            .get_all_connections()
+            .unwrap()
+            .into_iter()
+            .filter(|edge| edge.link_type == "touched")
+            .collect()
+    }
+
+    #[test]
+    fn hub_bound_is_the_larger_of_25_and_five_percent() {
+        assert_eq!(hub_bound(3), 25);
+        assert_eq!(hub_bound(26), 25);
+        assert_eq!(hub_bound(500), 25);
+        assert_eq!(hub_bound(577), 28);
+        assert!(!path_is_hub(25, 26));
+        assert!(path_is_hub(26, 26));
+        assert!(!path_is_hub(28, 577));
+        assert!(path_is_hub(29, 577));
+    }
+
+    #[test]
+    fn name_only_lines_are_exact_paths() {
+        let raw = "\u{1e}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u{1f}2026-01-01T00:00:00+00:00\ncontracts/gov/Token.sol\n\n\u{1e}bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\u{1f}2026-01-02T00:00:00+00:00\ncontracts/x.sol\n";
+        let parsed = parse_name_only(raw);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].2, vec!["contracts/gov/Token.sol".to_string()]);
+        assert_eq!(parsed[1].2, vec!["contracts/x.sol".to_string()]);
+    }
+
+    /// A and B share `contracts/x.sol`. C touches only `contracts/y.sol`.
+    /// Two other commits share directory segments (`contracts`, `gov`) and
+    /// not a path. Only A→B is a `touched` edge, including when B arrives
+    /// on a later page. GhostLink bridge then admits that pair.
+    #[tokio::test]
+    async fn exact_file_path_links_neighbors_and_not_directory_segments() {
+        let mut repo = Repo::empty();
+        repo.write("contracts/x.sol", "contract X { uint v = 1; }\n");
+        repo.commit("A touches x", "2026-04-01T00:00:00+00:00");
+        repo.write("contracts/x.sol", "contract X { uint v = 2; }\n");
+        repo.commit("B touches x", "2026-04-02T00:00:00+00:00");
+        repo.write("contracts/y.sol", "contract Y {}\n");
+        repo.commit("C touches y", "2026-04-03T00:00:00+00:00");
+        repo.write("contracts/gov/Token.sol", "contract Token {}\n");
+        repo.commit("segment contracts/gov", "2026-04-04T00:00:00+00:00");
+        repo.write("src/gov/Token.sol", "contract Token {}\n");
+        repo.commit("segment gov only", "2026-04-05T00:00:00+00:00");
+
+        let (storage, _dir) = strata();
+        let mut preview = repo.request(true);
+        preview.codebase = Some("pairs".into());
+        preview.scope = Some("pairs".into());
+        let preview = ingest(&storage, preview).await;
+        assert_eq!(preview["edges"]["wouldRecord"], 1, "{preview}");
+        assert_eq!(preview["edges"]["skippedHubPaths"], json!([]), "{preview}");
+        assert!(touched(&storage).is_empty(), "a preview wrote an edge");
+
+        let mut only_a = repo.request(false);
+        only_a.codebase = Some("pairs".into());
+        only_a.scope = Some("pairs".into());
+        only_a.limit = Some(1);
+        only_a.rev = Some(repo.shas[0].clone());
+        let page_a = ingest(&storage, only_a).await;
+        assert_eq!(page_a["commits"]["created"], 1, "{page_a}");
+        assert_eq!(page_a["edges"]["touched"], 0, "{page_a}");
+
+        let mut only_b = repo.request(false);
+        only_b.codebase = Some("pairs".into());
+        only_b.scope = Some("pairs".into());
+        only_b.limit = Some(1);
+        only_b.rev = Some(repo.shas[1].clone());
+        let page_b = ingest(&storage, only_b).await;
+        assert_eq!(page_b["commits"]["created"], 1, "{page_b}");
+        assert_eq!(page_b["edges"]["touched"], 1, "{page_b}");
+        assert_eq!(page_b["edges"]["skippedHubPaths"], json!([]), "{page_b}");
+
+        let mut rest = repo.request(false);
+        rest.codebase = Some("pairs".into());
+        rest.scope = Some("pairs".into());
+        let rest = ingest(&storage, rest).await;
+        assert_eq!(rest["commits"]["created"], 3, "{rest}");
+        assert_eq!(rest["edges"]["touched"], 0, "no new pair: {rest}");
+
+        let id = |sha: &str| commit_node(&storage, "pairs", sha);
+        let (a, b, c) = (id(&repo.shas[0]), id(&repo.shas[1]), id(&repo.shas[2]));
+        let (gov, other) = (id(&repo.shas[3]), id(&repo.shas[4]));
+        let edges = touched(&storage);
+        assert_eq!(edges.len(), 1, "{edges:?}");
+        assert_eq!(
+            edges[0].source_id, a,
+            "earlier commit is the source: {edges:?}"
+        );
+        assert_eq!(edges[0].target_id, b, "{edges:?}");
+        assert!(!edges[0].target_id.contains('/'));
+        for lone in [&c, &gov, &other] {
+            let neighbors = storage.get_connections_for_memory(lone).unwrap();
+            assert!(
+                neighbors.iter().all(|edge| edge.link_type != "touched"),
+                "{lone} must not be linked by a directory segment: {neighbors:?}"
+            );
+        }
+
+        let again = ingest(&storage, {
+            let mut req = repo.request(false);
+            req.codebase = Some("pairs".into());
+            req.scope = Some("pairs".into());
+            req
+        })
+        .await;
+        assert_eq!(again["edges"]["touched"], 0, "{again}");
+        assert_eq!(touched(&storage).len(), 1, "re-ingest duplicated the edge");
+
+        let mut other_scope = repo.request(false);
+        other_scope.codebase = Some("pairs".into());
+        other_scope.scope = Some("other".into());
+        let other_out = ingest(&storage, other_scope).await;
+        assert_eq!(other_out["edges"]["touched"], 1, "{other_out}");
+        let edges = touched(&storage);
+        assert_eq!(edges.len(), 2, "{edges:?}");
+        for edge in &edges {
+            let same = ["pairs", "other"].into_iter().any(|scope| {
+                storage.node_is_in_scope(&edge.source_id, scope).unwrap()
+                    && storage.node_is_in_scope(&edge.target_id, scope).unwrap()
+            });
+            assert!(same, "edge crossed scopes: {edge:?}");
+        }
+
+        let proposed = crate::strata_memory::ghostlink::propose(
+            storage.as_ref(),
+            &crate::strata_memory::ghostlink::ProposeRequest {
+                lens: crate::strata_memory::ghostlink::Lens::Bridge,
+                scope: Some("pairs".into()),
+                tags: Vec::new(),
+                limit: 10,
+                cursor: None,
+            },
+        )
+        .unwrap();
+        let candidates = proposed["candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 1, "{proposed}");
+        let pair = [
+            candidates[0]["firstId"].as_str().unwrap(),
+            candidates[0]["secondId"].as_str().unwrap(),
+        ];
+        assert!(
+            pair.contains(&a.as_str()) && pair.contains(&b.as_str()),
+            "{proposed}"
+        );
+        assert_eq!(candidates[0]["hops"], 1, "{proposed}");
+    }
+
+    /// A file every commit touches is a hub once it passes max(25, 5%).
+    /// The chain for that path is not written. A path only two commits
+    /// share still is.
+    #[tokio::test]
+    async fn a_hub_file_touched_by_every_commit_records_no_edges() {
+        let mut repo = Repo::empty();
+        for i in 0..26 {
+            repo.write(
+                "contracts/Hub.sol",
+                &format!("contract Hub {{ uint v = {i}; }}\n"),
+            );
+            if i < 2 {
+                repo.write(
+                    "contracts/x.sol",
+                    &format!("contract X {{ uint v = {i}; }}\n"),
+                );
+            }
+            if i == 2 {
+                repo.write("contracts/y.sol", "contract Y {}\n");
+            }
+            let date = format!("2026-05-{:02}T00:00:00+00:00", i + 1);
+            repo.commit(&format!("hub {i}"), &date);
+        }
+        let (storage, _dir) = strata();
+        let mut req = repo.request(false);
+        req.codebase = Some("hub".into());
+        req.scope = Some("hub".into());
+        let out = ingest(&storage, req).await;
+        assert_eq!(out["edges"]["commitsInScope"], 26, "{out}");
+        assert_eq!(out["edges"]["hubBound"], 25, "{out}");
+        assert_eq!(out["edges"]["touched"], 1, "{out}");
+        assert_eq!(
+            out["edges"]["skippedHubPaths"],
+            json!(["contracts/Hub.sol"]),
+            "{out}"
+        );
+        let edges = touched(&storage);
+        assert_eq!(edges.len(), 1, "{edges:?}");
+        let a = commit_node(&storage, "hub", &repo.shas[0]);
+        let b = commit_node(&storage, "hub", &repo.shas[1]);
+        let c = commit_node(&storage, "hub", &repo.shas[2]);
+        assert_eq!(edges[0].source_id, a);
+        assert_eq!(edges[0].target_id, b);
+        assert!(
+            storage
+                .get_connections_for_memory(&c)
+                .unwrap()
+                .iter()
+                .all(|edge| edge.link_type != "touched"),
+            "the y.sol commit is not on the hub chain"
+        );
+        let again = ingest(&storage, {
+            let mut req = repo.request(false);
+            req.codebase = Some("hub".into());
+            req.scope = Some("hub".into());
+            req
+        })
+        .await;
+        assert_eq!(again["edges"]["touched"], 0, "{again}");
+        assert_eq!(touched(&storage).len(), 1);
+
+        let proposed = crate::strata_memory::ghostlink::propose(
+            storage.as_ref(),
+            &crate::strata_memory::ghostlink::ProposeRequest {
+                lens: crate::strata_memory::ghostlink::Lens::Bridge,
+                scope: Some("hub".into()),
+                tags: Vec::new(),
+                limit: 10,
+                cursor: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            proposed["candidates"].as_array().unwrap().len(),
+            1,
+            "hub must not admit the clique: {proposed}"
         );
     }
 }
