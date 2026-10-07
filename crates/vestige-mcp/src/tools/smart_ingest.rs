@@ -842,18 +842,15 @@ fn take_intent_ids(args: Option<Value>) -> Result<(Option<Value>, TakenIntents),
         return Ok((None, TakenIntents::default()));
     };
     let mut intents = TakenIntents::default();
-    if let Some(raw) = args
-        .as_object_mut()
-        .and_then(|map| remove_intent_id(map))
-    {
+    if let Some(raw) = args.as_object_mut().and_then(|map| remove_intent_id(map)) {
         intents.single = Some(validate_intent_id(raw)?);
     }
     if let Some(items) = args.get_mut("items").and_then(Value::as_array_mut) {
         for item in items.iter_mut() {
-            let raw = item
-                .as_object_mut()
-                .and_then(|map| remove_intent_id(map));
-            intents.items.push(raw.map(|raw| validate_intent_id(raw)).transpose()?);
+            let raw = item.as_object_mut().and_then(|map| remove_intent_id(map));
+            intents
+                .items
+                .push(raw.map(|raw| validate_intent_id(raw)).transpose()?);
         }
     }
     Ok((Some(args), intents))
@@ -1089,13 +1086,7 @@ fn attach_intent_record(
         submitted_source,
         stored_tags,
     );
-    match storage.record_intent_entry(
-        scope,
-        intent_id,
-        node_id,
-        effect_seq.unwrap_or(0),
-        &digest,
-    ) {
+    match storage.record_intent_entry(scope, intent_id, node_id, effect_seq.unwrap_or(0), &digest) {
         Ok(()) => response["intentId"] = serde_json::json!(intent_id),
         Err(err) => {
             response["intentError"] = serde_json::json!(format!(
@@ -1158,7 +1149,10 @@ fn reinforce_duplicate(
     let edge = strata_memory::save_links(
         storage.as_ref(),
         &echo_id,
-        &[(strata_memory::DeclaredLink::EvidenceOf, original.to_string())],
+        &[(
+            strata_memory::DeclaredLink::EvidenceOf,
+            original.to_string(),
+        )],
     );
     let mut response = serde_json::json!({
         "success": true,
@@ -1418,12 +1412,7 @@ async fn execute_verbose(
             .map_err(|e| e.to_string())?
         {
             return Ok(intent_replay_response(
-                &scope,
-                intent_id,
-                &replay_of,
-                effect_seq,
-                &digest,
-                &content,
+                &scope, intent_id, &replay_of, effect_seq, &digest, &content,
             ));
         }
     }
@@ -2390,19 +2379,19 @@ async fn execute_batch(
             // indexed first, so intra-batch duplicates resolve to the
             // lowest original index of the group.
             // ================================================================
-            let duplicate_of =
-                match storage.find_duplicate_by_canonical_hash(&scope, &item.content) {
-                    Ok(found) => found,
-                    Err(reason) => {
-                        errors += 1;
-                        results.push(serde_json::json!({
-                            "index": i,
-                            "status": "error",
-                            "reason": reason.to_string()
-                        }));
-                        continue;
-                    }
-                };
+            let duplicate_of = match storage.find_duplicate_by_canonical_hash(&scope, &item.content)
+            {
+                Ok(found) => found,
+                Err(reason) => {
+                    errors += 1;
+                    results.push(serde_json::json!({
+                        "index": i,
+                        "status": "error",
+                        "reason": reason.to_string()
+                    }));
+                    continue;
+                }
+            };
             if let Some(original) = duplicate_of {
                 reinforced += 1;
                 match reinforce_duplicate(
@@ -2950,10 +2939,12 @@ mod tests {
         assert_eq!(args.unwrap()["content"], "kept");
 
         // An invalid id fails the whole call before anything is written.
-        assert!(take_intent_ids(Some(serde_json::json!({
-            "content": "x", "intent_id": "not allowed"
-        })))
-        .is_err());
+        assert!(
+            take_intent_ids(Some(serde_json::json!({
+                "content": "x", "intent_id": "not allowed"
+            })))
+            .is_err()
+        );
         let (_, empty) = take_intent_ids(None).unwrap();
         assert_eq!(empty.single, None);
         assert!(empty.items.is_empty());
@@ -2961,7 +2952,8 @@ mod tests {
     }
 
     #[test]
-    fn failure_hook_levers_parse_as_documented() {        use super::{flag_enabled_from, flag_opt_in_from};
+    fn failure_hook_levers_parse_as_documented() {
+        use super::{flag_enabled_from, flag_opt_in_from};
         // On-by-default lever (live backfill): unset is on, only explicit off words turn it off.
         assert!(flag_enabled_from(None));
         for off in ["0", "false", "OFF", "no", " off "] {
@@ -4351,13 +4343,13 @@ mod tests {
         let batch_intent = &schema_value["properties"]["items"]["items"]["properties"]["intent_id"];
         assert!(batch_intent.is_object(), "{batch_intent}");
         assert_eq!(batch_intent["pattern"], "^[A-Za-z0-9._:-]+$");
-        let kinds: Vec<&str> = schema_value["properties"]["links"]["items"]["properties"]["kind"]
-            ["enum"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|kind| kind.as_str().unwrap())
-            .collect();
+        let kinds: Vec<&str> =
+            schema_value["properties"]["links"]["items"]["properties"]["kind"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|kind| kind.as_str().unwrap())
+                .collect();
         for still in ["derived_from", "evidence_of", "closes", "supersedes"] {
             assert!(kinds.contains(&still), "{kinds:?} lost {still}");
         }

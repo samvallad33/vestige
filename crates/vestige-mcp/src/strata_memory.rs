@@ -1647,9 +1647,7 @@ impl MemoryStoreSend for StrataMemory {
         scope: &str,
         intent_id: &str,
     ) -> Result<Option<(String, u64, String)>, StorageError> {
-        self.lock()
-            .find_intent(scope, intent_id)
-            .map_err(map_store)
+        self.lock().find_intent(scope, intent_id).map_err(map_store)
     }
 
     fn record_intent_entry(
@@ -4642,7 +4640,10 @@ mod tests {
     #[test]
     fn supersedes_declared_link_parses_and_records_new_to_old() {
         assert!(DeclaredLink::NAMES.contains(&"supersedes"));
-        assert_eq!(DeclaredLink::parse("supersedes"), Some(DeclaredLink::Supersedes));
+        assert_eq!(
+            DeclaredLink::parse("supersedes"),
+            Some(DeclaredLink::Supersedes)
+        );
         assert_eq!(DeclaredLink::parse("nonsense"), None);
 
         let dir = tempfile::TempDir::new().unwrap();
@@ -4723,7 +4724,10 @@ mod tests {
             "the receipt id is eff- plus the admitting effect seq"
         );
         assert_eq!(memory.node_effect_seq(&id), Some(effect_seq));
-        assert_eq!(memory.latest_receipt_id_for_node("mem-does-not-exist"), None);
+        assert_eq!(
+            memory.latest_receipt_id_for_node("mem-does-not-exist"),
+            None
+        );
         assert_eq!(memory.node_effect_seq("mem-does-not-exist"), None);
     }
 
@@ -4759,7 +4763,9 @@ mod tests {
         );
         // Another scope stays clean.
         assert_eq!(
-            storage.find_duplicate_by_canonical_hash("other", "Dup Wiring Probe").unwrap(),
+            storage
+                .find_duplicate_by_canonical_hash("other", "Dup Wiring Probe")
+                .unwrap(),
             None
         );
 

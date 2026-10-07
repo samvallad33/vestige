@@ -233,7 +233,10 @@ fn proof_carrying_write_path_over_real_stdio() {
     assert_eq!(created["success"], json!(true), "{created}");
     assert_eq!(created["decision"], "create");
     let a_node = created["nodeId"].as_str().expect("nodeId").to_string();
-    let a_receipt = created["receiptId"].as_str().expect("receiptId").to_string();
+    let a_receipt = created["receiptId"]
+        .as_str()
+        .expect("receiptId")
+        .to_string();
     assert!(a_receipt.starts_with("eff-"), "{a_receipt}");
     let a_hash = created["canonicalHash"]
         .as_str()
@@ -276,7 +279,10 @@ fn proof_carrying_write_path_over_real_stdio() {
     assert_eq!(reinforced["canonicalHash"], json!(a_hash));
     assert_eq!(reinforced["pipeline"], "nfc-lower-zwstrip-wscollapse-v1");
     assert_eq!(reinforced["rawBytes"], json!(alpha.len()));
-    let echo = reinforced["echoNodeId"].as_str().expect("echoNodeId").to_string();
+    let echo = reinforced["echoNodeId"]
+        .as_str()
+        .expect("echoNodeId")
+        .to_string();
     assert_ne!(echo, a_node);
     assert!(
         reinforced["receiptId"]
@@ -317,8 +323,7 @@ fn proof_carrying_write_path_over_real_stdio() {
     assert_eq!(folded_nfc["decision"], "reinforce", "{folded_nfc}");
     assert_eq!(folded_nfc["duplicateOf"], json!(cafe_node));
     assert_eq!(
-        folded_nfc["canonicalHash"],
-        cafe["canonicalHash"],
+        folded_nfc["canonicalHash"], cafe["canonicalHash"],
         "NFC-folded variant must hash identically to the precomposed original"
     );
 
@@ -336,7 +341,10 @@ fn proof_carrying_write_path_over_real_stdio() {
             .is_some_and(|receipt| receipt.starts_with("eff-")),
         "{intent_create}"
     );
-    let run42_node = intent_create["nodeId"].as_str().expect("nodeId").to_string();
+    let run42_node = intent_create["nodeId"]
+        .as_str()
+        .expect("nodeId")
+        .to_string();
     let after_create = total_memories(&mut server);
     assert_eq!(after_create, before + 1);
 
@@ -356,8 +364,7 @@ fn proof_carrying_write_path_over_real_stdio() {
         "{replay}"
     );
     assert_eq!(
-        replay["requestCanonicalHash"],
-        intent_create["canonicalHash"],
+        replay["requestCanonicalHash"], intent_create["canonicalHash"],
         "same bytes: the request hash must equal the create's canonicalHash"
     );
     assert_eq!(
@@ -381,8 +388,7 @@ fn proof_carrying_write_path_over_real_stdio() {
     assert_eq!(divergent["replayOf"], json!(run42_node));
     assert_eq!(divergent["intentDigest"], replay["intentDigest"]);
     assert_ne!(
-        divergent["requestCanonicalHash"],
-        intent_create["canonicalHash"],
+        divergent["requestCanonicalHash"], intent_create["canonicalHash"],
         "the divergence must be visible in requestCanonicalHash"
     );
     assert_eq!(
@@ -453,7 +459,11 @@ fn proof_carrying_write_path_over_real_stdio() {
     // Order-independence: the same batch again replays the intent-keyed
     // creates and reinforces the rest.
     let replayed_batch = server.tool("smart_ingest", batch_args);
-    assert_eq!(replayed_batch["summary"]["created"], json!(0), "{replayed_batch}");
+    assert_eq!(
+        replayed_batch["summary"]["created"],
+        json!(0),
+        "{replayed_batch}"
+    );
     assert_eq!(replayed_batch["summary"]["replayed"], json!(2));
     assert_eq!(replayed_batch["summary"]["reinforced"], json!(2));
     let replayed_results = replayed_batch["results"].as_array().expect("results");
@@ -502,11 +512,9 @@ fn proof_carrying_write_path_over_real_stdio() {
         "no evidence_of edge {echo} -> {a_node}: {edges:?}"
     );
     assert!(
-        edges
-            .iter()
-            .any(|edge| edge.link_type == "supersedes"
-                && edge.source_id == b_node
-                && edge.target_id == a_node),
+        edges.iter().any(|edge| edge.link_type == "supersedes"
+            && edge.source_id == b_node
+            && edge.target_id == a_node),
         "no supersedes edge {b_node} -> {a_node}: {edges:?}"
     );
 }

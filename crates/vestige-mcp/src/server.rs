@@ -1305,6 +1305,39 @@ description: Some("Investigate a failure from explicit start points (failing_tes
                 ..Default::default()
             },
             // ================================================================
+            // GATHER — GitHub issue receipt factory (MCP-only). Records the
+            // issue, its comments, cross-referenced PRs and the repo commit
+            // window as labeled receipts in one scope (commits first, so
+            // auto-connect edges point failure-ward), then proposes
+            // ghostlink leads and runs causal_walk. Gathering is dynamic;
+            // judging is deterministic over recorded edges. When the walk
+            // returns nothing, missingReceipts names what to fetch next.
+            // ================================================================
+            ToolDescription {
+                name: "gather".to_string(),
+                title: Some("Gather".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: false,
+                    open_world_hint: true,
+                }),
+description: Some("Record a GitHub issue hunt's evidence as labeled receipts (issue, comments, cross-referenced PRs, commit window via ingest_repo paging, one scope), then run ghostlink leads and causal_walk over the recorded edges. Arguments: url (issue URL), repoPath (local checkout, optional), workedIn/brokeIn (version window, optional), scope (optional), maxComments. Causes are hypotheses; missingReceipts names the next receipt class to fetch.".to_string()),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "GitHub issue URL (…/issues/N)"},
+                        "repoPath": {"type": "string", "description": "local checkout of the same repository; its commit window is ingested before the failure record"},
+                        "workedIn": {"type": "string", "description": "good version tag for the window"},
+                        "brokeIn": {"type": "string", "description": "bad version tag for the window"},
+                        "scope": {"type": "string", "description": "memory namespace (default owner-repo-number)"},
+                        "maxComments": {"type": "integer", "description": "stop after this many comments (default 50)"}
+                    },
+                    "required": ["url"]
+                }),
+                ..Default::default()
+            },
+            // ================================================================
             // w3d SELF-CALIBRATION — planted-cause selftest. Verifies the
             // backfill surface end-to-end against a temp COPY of the store
             // (backup_to snapshot): plants quiet causes + failures, scores
@@ -1919,6 +1952,10 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             // CAUSAL WALK — the advertised flagship (successor to backfill)
             // ================================================================
             "causal_walk" => tools::causal_walk::execute(&self.storage, request.arguments).await,
+            "gather" => {
+                tools::gather::execute(&self.storage, Some(&self.cognitive), request.arguments)
+                    .await
+            }
 
             // ================================================================
             // HIDDEN ALIAS (v3.2): backfill → causal_walk replaced it on the

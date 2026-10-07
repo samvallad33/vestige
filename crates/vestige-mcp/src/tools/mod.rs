@@ -54,6 +54,10 @@ pub mod unavailable;
 // `codebase action=ingest_repo`: the repo connector (commits -> change records).
 pub mod repo_ingest;
 
+// `gather`: GitHub issue receipt factory (issue + comments + linked PRs +
+// commit window as labeled receipts, then ghostlink leads + causal_walk).
+pub mod gather;
+
 // v1.3: Auto-save and dedup tools
 pub mod dedup;
 pub mod importance;

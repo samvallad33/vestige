@@ -4918,11 +4918,7 @@ fn run_connect(
         }
     }
 
-    println!(
-        "{}: {}",
-        "Candidate pairs".white().bold(),
-        pairs.len()
-    );
+    println!("{}: {}", "Candidate pairs".white().bold(), pairs.len());
     println!();
 
     let capped = pairs.len() > max_edges;

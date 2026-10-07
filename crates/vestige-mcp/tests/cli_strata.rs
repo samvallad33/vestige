@@ -992,7 +992,10 @@ fn connect_min_shared_gates_the_pairs() {
     assert!(loose.ok, "{}", loose.text());
     assert_eq!(edge_count(dir.path()), 1, "only near/euler pairs connect");
 
-    let walk = vestige(dir.path(), &["causal-walk", "--logged-write", &far, "--json"]);
+    let walk = vestige(
+        dir.path(),
+        &["causal-walk", "--logged-write", &far, "--json"],
+    );
     assert!(walk.ok, "{}", walk.text());
     let value: Value = serde_json::from_str(&walk.stdout).unwrap();
     let causes: Vec<&str> = value["causes"]
