@@ -28,6 +28,8 @@ pub enum StoreOp {
         record: NodeRecord,
     },
     /// Append one typed edge and update the forward/reverse indexes.
+    /// A path-touch edge (`meta_sha` is `{count}\n{path}`) replaces the
+    /// stored edge for that source, target, link type and path.
     SaveEdge {
         /// The edge; `link_type` was vocabulary-validated at write time.
         edge: ConnectionRecord,

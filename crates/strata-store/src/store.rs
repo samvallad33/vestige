@@ -727,6 +727,16 @@ pub struct StrataStore {
     intent_index: BTreeMap<(String, String), IntentIndexEntry>,
 }
 
+/// Path of a path-touch edge. `meta_sha` is `{touch_count}\n{path}`.
+fn touch_path(meta: Option<&str>) -> Option<&str> {
+    let meta = meta?;
+    let (count, path) = meta.split_once('\n')?;
+    if path.is_empty() || count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(path)
+}
+
 impl StrataStore {
     /// Open (or create) a store under `dir` with the default policy
     /// (allow writes, hold destructive).
@@ -943,16 +953,35 @@ impl StrataStore {
                 }
             }
             StoreOp::SaveEdge { edge } => {
-                let idx = self.edges.len();
-                self.edges.push(edge.clone());
-                self.forward
-                    .entry(edge.source_id.clone())
-                    .or_default()
-                    .push(idx);
-                self.reverse
-                    .entry(edge.target_id.clone())
-                    .or_default()
-                    .push(idx);
+                let replace = {
+                    let path = touch_path(edge.meta_sha.as_deref());
+                    path.and_then(|path| {
+                        self.forward
+                            .get(&edge.source_id)?
+                            .iter()
+                            .copied()
+                            .find(|&idx| {
+                                let have = &self.edges[idx];
+                                have.target_id == edge.target_id
+                                    && have.link_type == edge.link_type
+                                    && touch_path(have.meta_sha.as_deref()) == Some(path)
+                            })
+                    })
+                };
+                if let Some(idx) = replace {
+                    self.edges[idx] = edge.clone();
+                } else {
+                    let idx = self.edges.len();
+                    self.edges.push(edge.clone());
+                    self.forward
+                        .entry(edge.source_id.clone())
+                        .or_default()
+                        .push(idx);
+                    self.reverse
+                        .entry(edge.target_id.clone())
+                        .or_default()
+                        .push(idx);
+                }
             }
             StoreOp::SupersedeNode { id, superseded_by } => {
                 if let Some(record) = self.nodes.get_mut(id) {

@@ -286,7 +286,8 @@ const MAINTENANCE_STAMPS: &str = "maintenance-stamps.json";
 impl StrataMemory {
     /// One `touched` edge whose strength is `strength_milli` (1000 = 1) and
     /// whose `meta_sha` is `{touch_count}\n{path}`. The path is the exact
-    /// repo-relative file, not a directory segment.
+    /// repo-relative file, not a directory segment. A later call for the
+    /// same source, target and path replaces that edge's strength and count.
     pub(crate) fn record_path_touch(
         &self,
         source: &str,
@@ -307,9 +308,10 @@ impl StrataMemory {
         self.lock().save_connection(&edge).is_ok()
     }
 
-    /// Recorded `touched` edges as `(source, target, path)`. `path` is `None`
-    /// when the edge was written without a path (an older ingest).
-    pub(crate) fn touched_edge_paths(&self) -> Vec<(String, String, Option<String>)> {
+    /// Recorded `touched` edges as `(source, target, path, strength milli,
+    /// touch count)`. `path` is `None` when the edge was written without a
+    /// path (an older ingest).
+    pub(crate) fn touched_edge_details(&self) -> Vec<(String, String, Option<String>, i64, i64)> {
         self.lock()
             .edges()
             .into_iter()
@@ -320,8 +322,23 @@ impl StrataMemory {
                         .map(|(_, path)| path.to_string())
                         .filter(|path| !path.is_empty())
                 });
-                (edge.source_id, edge.target_id, path)
+                (
+                    edge.source_id,
+                    edge.target_id,
+                    path,
+                    edge.strength_milli,
+                    edge.activation_count,
+                )
             })
+            .collect()
+    }
+
+    /// Recorded `touched` edges as `(source, target, path)`. `path` is `None`
+    /// when the edge was written without a path (an older ingest).
+    pub(crate) fn touched_edge_paths(&self) -> Vec<(String, String, Option<String>)> {
+        self.touched_edge_details()
+            .into_iter()
+            .map(|(source, target, path, _, _)| (source, target, path))
             .collect()
     }
 

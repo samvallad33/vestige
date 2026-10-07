@@ -69,10 +69,15 @@
 //! when every commit touches the path. A path touched by more commits than
 //! `max(25, 5%)` of the commits in the scope is reported in `hubPaths` and is
 //! not skipped. Each edge's strength is `1/touchCount` for that path, stored
-//! as milli-units, and the path and touch count ride on the edge. A later
-//! page reads the files of commits already in the scope and extends the
-//! chain. A re-run writes a missing chain link once. An older edge that has
-//! no path still covers its commit pair, so it is not written again.
+//! as milli-units, and the path and touch count ride on the edge.
+//! `touchCount` is how many commits already ingested in this scope changed
+//! that path, not how many this page changed. The hub bound is `max(25, 5%)`
+//! of those commits, and `hubPaths` lists every path whose touch count
+//! exceeds it. A later page reads the files of commits already in the scope,
+//! extends the chain, and rewrites the strength of that path's existing
+//! edges to the new total. A re-run writes a missing chain link once and
+//! leaves a current strength alone. An older edge that has no path still
+//! covers its commit pair, so it is not written again.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -684,7 +689,9 @@ fn path_weight_milli(touch_count: usize) -> i64 {
 ///
 /// Paths come from the commit's recorded file list, never from directory
 /// segments or from [`crate::auto_connect::extract_entities`]. Hubs keep
-/// their chain. Strength is [`path_weight_milli`] of that path's touch count.
+/// their chain. Strength is [`path_weight_milli`] of that path's touch count
+/// across every commit already ingested in the scope. A later page rewrites
+/// an existing edge of that path when the total has grown.
 fn record_exact_path_edges(
     storage: &Arc<Storage>,
     root: &Path,
@@ -777,26 +784,36 @@ fn record_exact_path_edges(
         }
     }
 
-    // A path-tagged edge covers that path. An older edge with no path covers
+    // A path-tagged edge covers that path. Its strength is rewritten when
+    // the scope's touch count has grown. An older edge with no path covers
     // the commit pair, so a re-run does not add a second edge for it. Edges
     // written in this call are tagged and do not block a second path.
     let memory = crate::strata_memory::live_memory(storage.as_ref());
     let recorded = match &memory {
-        Some(memory) => memory.touched_edge_paths(),
+        Some(memory) => memory.touched_edge_details(),
         None => storage
             .get_all_connections()
             .unwrap_or_default()
             .into_iter()
             .filter(|edge| edge.link_type == "touched")
-            .map(|edge| (edge.source_id, edge.target_id, None))
+            .map(|edge| {
+                (
+                    edge.source_id,
+                    edge.target_id,
+                    None,
+                    (edge.strength * 1000.0).round() as i64,
+                    i64::from(edge.activation_count),
+                )
+            })
             .collect(),
     };
-    let mut tagged: HashSet<(String, String, String)> = HashSet::new();
+    // (source, target, path) -> (strength milli, touch count)
+    let mut tagged: HashMap<(String, String, String), (i64, i64)> = HashMap::new();
     let mut legacy_pairs: HashSet<(String, String)> = HashSet::new();
-    for (source, target, path) in recorded {
+    for (source, target, path, milli, count) in recorded {
         match path {
             Some(path) => {
-                tagged.insert((source, target, path));
+                tagged.insert((source, target, path), (milli, count));
             }
             None => {
                 legacy_pairs.insert((source, target));
@@ -830,18 +847,22 @@ fn record_exact_path_edges(
         };
         let source = source.to_string();
         let target = target.to_string();
-        if tagged.contains(&(source.clone(), target.clone(), path.clone()))
-            || legacy_pairs.contains(&(source.clone(), target.clone()))
-        {
+        let key = (source.clone(), target.clone(), path.clone());
+        let count = touch_count as i64;
+        if let Some(&(have_milli, have_count)) = tagged.get(&key) {
+            if have_milli == milli && have_count == count {
+                continue;
+            }
+        } else if legacy_pairs.contains(&(source.clone(), target.clone())) {
             continue;
         }
         if dry_run {
-            tagged.insert((source, target, path));
+            tagged.insert(key, (milli, count));
             touched += 1;
             continue;
         }
         let wrote = if let Some(memory) = &memory {
-            memory.record_path_touch(&source, &target, milli, touch_count as i64, &path)
+            memory.record_path_touch(&source, &target, milli, count, &path)
         } else {
             let now = Utc::now();
             storage
@@ -852,12 +873,12 @@ fn record_exact_path_edges(
                     link_type: "touched".to_string(),
                     created_at: now,
                     last_activated: now,
-                    activation_count: i32::try_from(touch_count).unwrap_or(i32::MAX),
+                    activation_count: i32::try_from(count).unwrap_or(i32::MAX),
                 })
                 .is_ok()
         };
         if wrote {
-            tagged.insert((source, target, path));
+            tagged.insert(key, (milli, count));
             touched += 1;
         }
     }
@@ -3029,5 +3050,83 @@ pub fn parse_timeout(raw: &str) -> u32 {
             2,
             "second re-ingest duplicated an edge"
         );
+    }
+
+    /// Two pages change one path. Strength is `round(1000 / touches)` for
+    /// every commit of that path already in the scope, and the first page's
+    /// edge is rewritten when the second page adds a touch.
+    #[tokio::test]
+    async fn two_pages_touching_one_path_use_the_total_touch_count() {
+        let mut repo = Repo::empty();
+        for i in 0..3 {
+            repo.write(
+                "contracts/Lido.sol",
+                &format!("contract Lido {{ uint v = {i}; }}\n"),
+            );
+            repo.commit(
+                &format!("touch {i}"),
+                &format!("2026-08-0{}T00:00:00+00:00", i + 1),
+            );
+        }
+        let (storage, _dir) = strata();
+        let mut page1 = repo.request(false);
+        page1.codebase = Some("lido".into());
+        page1.scope = Some("lido".into());
+        page1.limit = Some(2);
+        let first = ingest(&storage, page1).await;
+        assert_eq!(first["commits"]["created"], 2, "{first}");
+        assert_eq!(first["edges"]["touched"], 1, "{first}");
+        assert_eq!(first["edges"]["hubBound"], 25, "{first}");
+        assert_eq!(first["edges"]["hubPaths"], json!([]), "{first}");
+
+        let mut page2 = repo.request(false);
+        page2.codebase = Some("lido".into());
+        page2.scope = Some("lido".into());
+        page2.limit = Some(2);
+        page2.rev = Some(first["pageBackWith"]["rev"].as_str().unwrap().to_string());
+        page2.skip = Some(first["pageBackWith"]["skip"].as_u64().unwrap() as usize);
+        let second = ingest(&storage, page2).await;
+        assert_eq!(second["commits"]["created"], 1, "{second}");
+        assert_eq!(second["edges"]["commitsInScope"], 3, "{second}");
+        assert_eq!(second["edges"]["hubBound"], 25, "{second}");
+        assert_eq!(second["edges"]["hubPaths"], json!([]), "{second}");
+
+        let total = 3usize;
+        let want = path_weight_milli(total);
+        assert_eq!(want, 333);
+        let edges = touched(&storage);
+        assert_eq!(edges.len(), 2, "chain links, not a duplicate: {edges:?}");
+        for edge in &edges {
+            assert_eq!(
+                edge.activation_count, total as i32,
+                "touch count is the scope total: {edge:?}"
+            );
+            assert_eq!(
+                (edge.strength * 1000.0).round() as i64,
+                want,
+                "strength is round(1000/total touches): {edge:?}"
+            );
+        }
+        let recorded = crate::strata_memory::live_memory(storage.as_ref())
+            .unwrap()
+            .touched_edge_details();
+        assert!(
+            recorded.iter().all(|(_, _, path, milli, count)| {
+                path.as_deref() == Some("contracts/Lido.sol")
+                    && *milli == want
+                    && *count == total as i64
+            }),
+            "{recorded:?}"
+        );
+
+        let again = ingest(&storage, {
+            let mut req = repo.request(false);
+            req.codebase = Some("lido".into());
+            req.scope = Some("lido".into());
+            req
+        })
+        .await;
+        assert_eq!(again["edges"]["touched"], 0, "{again}");
+        assert_eq!(touched(&storage).len(), 2, "re-ingest duplicated an edge");
     }
 }
