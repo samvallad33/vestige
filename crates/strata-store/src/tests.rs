@@ -3013,13 +3013,20 @@ fn proving_effects_over_a_damaged_sealed_segment_fails_instead_of_hiding_later_o
     std::fs::remove_dir_all(&dest).ok();
 }
 
-/// Every file under `root`, as (path relative to `root`, bytes), sorted.
+/// Every file under `root` except `strata.lock`, as (path relative to
+/// `root`, bytes), sorted. The lock is skipped by name, before any read:
+/// a live store holds it with `File::try_lock`, which on Windows is a
+/// mandatory exclusive `LockFileEx`, and a second handle's read of that
+/// file fails with ERROR_LOCK_VIOLATION (the filter-after-read the callers
+/// used before never got the chance to run there).
 fn tree_files(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
     fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
         for entry in std::fs::read_dir(dir).expect("read_dir") {
             let path = entry.expect("entry").path();
             if path.is_dir() {
                 walk(root, &path, out);
+            } else if path.file_name().and_then(|n| n.to_str()) == Some("strata.lock") {
+                continue;
             } else {
                 let rel = path.strip_prefix(root).expect("under root");
                 out.push((
@@ -3060,11 +3067,11 @@ fn backup_to_a_new_directory_holds_the_same_segments_and_verifies() {
     store.seal_checkpoint().expect("seal");
     store.backup_to(&dest).expect("backup");
 
-    // Byte for byte the live log (minus its lock) plus the anchor file, and
-    // nothing else: no staging directory beside or inside the backup.
+    // Byte for byte the live log (minus its lock, which `tree_files` never
+    // reads) plus the anchor file, and nothing else: no staging directory
+    // beside or inside the backup.
     let mut want: Vec<(String, Vec<u8>)> = tree_files(&dir.join("log"))
         .into_iter()
-        .filter(|(name, _)| name != "strata.lock")
         .map(|(name, bytes)| (format!("log/{name}"), bytes))
         .collect();
     want.push((
@@ -3159,10 +3166,8 @@ fn a_second_backup_into_the_same_directory_replaces_the_first() {
         b"kept"
     );
     for (name, bytes) in tree_files(&dir.join("log")) {
-        if name != "strata.lock" {
-            let copied = std::fs::read(dest.join("log").join(&name)).expect("copied");
-            assert_eq!(copied, bytes, "{name}");
-        }
+        let copied = std::fs::read(dest.join("log").join(&name)).expect("copied");
+        assert_eq!(copied, bytes, "{name}");
     }
     let backup = StrataStore::open(&dest).expect("the backup opens");
     assert_eq!(backup.node_count(), 2);
