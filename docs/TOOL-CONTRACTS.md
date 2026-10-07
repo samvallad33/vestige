@@ -236,7 +236,7 @@ may be untrusted, so git runs with `-c log.showSignature=false -c core.fsmonitor
 and `--no-show-signature`, `--no-ext-diff`, `--no-textconv` and no pager: nothing its own
 config names is run. A rerun skips recorded commits, repairs commits that lack anchors,
 and stops at a 45 s write budget with `remaining` set; `limit` is capped at 500 and
-`pageBackWith` gives the `rev` that reads the next older page. A write is refused while
+`pageBackWith` gives `rev` (the commit the walk started from, or the range you passed) and `skip` (how many non-merge commits to pass over). Pass both back with the same `since` and `until`. A `<sha>~1` cursor follows only the first parent and drops side-branch commits. A write is refused while
 another write of the same codebase into the same scope runs in the server process (both
 would read the recorded set before either wrote); previews are never refused. `partial`
 and `error` report a failed write. `nextStep` tells a commit the log refused (the run

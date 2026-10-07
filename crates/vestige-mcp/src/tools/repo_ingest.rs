@@ -46,6 +46,13 @@
 //! either wrote, so a second one is refused while the first runs; previews are
 //! never refused.
 //!
+//! Pages walk every non-merge commit reachable from the revision, in
+//! `git rev-list --topo-order`, and `pageBackWith` carries that revision
+//! plus the next `skip`. Continuing from `<oldest>~1` follows only the
+//! first parent, so a side branch that merged in beside that parent was
+//! never read. A re-run from the original revision skips commits already
+//! recorded and writes the ones that cursor dropped.
+//!
 //! Preview is the default. The log is append-only: a bulk write cannot be
 //! undone, so the first call says what it would write and nothing else. The
 //! records go to their own scope (the codebase name unless one is given), so a
@@ -53,17 +60,19 @@
 //! commits are skipped: they carry no diff to anchor.
 //!
 //! **Exact path edges.** After the records land, two commit records in this
-//! scope get one `touched` edge when they changed the same repo-relative file
+//! scope get a `touched` edge when they changed the same repo-relative file
 //! path. The path is the exact string git recorded for the commit (the `b/`
 //! side, capped the same way the commit record is). It is not split into
 //! directory segments, not lowercased, and not taken from content tokens.
-//! A path touched by more commits than `max(25, 5%)` of the commits in the
-//! scope is a hub: it produces no edges and is listed in `skippedHubPaths`.
-//! Every other path is a chain — each commit links only to the nearest earlier
-//! and later commit that touched that path — so the edge count stays linear.
-//! A later page reads the files of commits already in the scope and extends
-//! the chain. A re-run writes an edge only when that pair does not already
-//! have it.
+//! Every path is a chain — each commit links only to the nearest earlier and
+//! later commit that touched that path — so the edge count stays linear even
+//! when every commit touches the path. A path touched by more commits than
+//! `max(25, 5%)` of the commits in the scope is reported in `hubPaths` and is
+//! not skipped. Each edge's strength is `1/touchCount` for that path, stored
+//! as milli-units, and the path and touch count ride on the edge. A later
+//! page reads the files of commits already in the scope and extends the
+//! chain. A re-run writes a missing chain link once. An older edge that has
+//! no path still covers its commit pair, so it is not written again.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -81,9 +90,9 @@ use vestige_core::{ConnectionRecord, IngestInput, SourceEnvelope, Storage, Stora
 
 /// Commits read per call unless the caller says otherwise.
 pub const DEFAULT_LIMIT: usize = 100;
-/// Hard cap per call; page deeper with `rev` or `until`. Every record is one
-/// durable log write (about 80 ms each), so a page stays well inside a client's
-/// request timeout.
+/// Hard cap per call; page deeper with the same `rev` and `pageBackWith.skip`.
+/// Every record is one durable log write (about 80 ms each), so a page stays
+/// well inside a client's request timeout.
 pub const MAX_LIMIT: usize = 500;
 /// A write phase that runs past this stops cleanly; a rerun continues.
 const WRITE_BUDGET: Duration = Duration::from_secs(45);
@@ -97,7 +106,7 @@ const MAX_ANCHORS_PER_COMMIT: usize = 24;
 /// not invent paths the commit record itself dropped.
 const RECORDED_FILES: usize = 50;
 /// A path touched by more commits than `max(HUB_FLOOR, 5% of the scope)` is
-/// a hub and records no pairwise `touched` edges.
+/// reported in `hubPaths`. The chain is still recorded.
 const HUB_FLOOR: usize = 25;
 const HUB_SHARE_NUM: usize = 5;
 const HUB_SHARE_DEN: usize = 100;
@@ -114,6 +123,10 @@ pub struct Request {
     pub rev: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
+    /// Non-merge commits to pass over before this page. `None` is 0.
+    /// The next page is `pageBackWith.skip` with the same `rev`. A
+    /// `<commit>~1` cursor is not a page: it follows only the first parent.
+    pub skip: Option<usize>,
     pub limit: Option<usize>,
     pub dry_run: bool,
     /// Write-phase time budget; `None` is [`WRITE_BUDGET`]. Tests shrink it.
@@ -172,7 +185,13 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
         Some(claim_write(storage, &scope, &codebase)?)
     };
 
-    let (commits, stopped_early) = read_commits(&root, &req, limit)?;
+    let read = read_commits(&root, &req, limit)?;
+    let CommitRead {
+        commits,
+        stopped_early,
+        more: more_in_history,
+        rev: pinned_rev,
+    } = read;
     let head = run_git(&root, &["rev-parse".into(), "HEAD".into()])
         .ok()
         .filter(|run| run.failure.is_none())
@@ -296,8 +315,9 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
         fresh.len() - stats.created - stats.skipped_secret
     };
 
-    let oldest = commits.last().map(|commit| commit.sha.clone());
-    let more = commits.len() >= limit && stopped_early.is_none();
+    let skip = req.skip.unwrap_or(0);
+    let more = more_in_history && stopped_early.is_none() && !commits.is_empty();
+    let next_skip = skip.saturating_add(commits.len());
     let sample: Vec<Value> = fresh
         .iter()
         .rev()
@@ -365,7 +385,8 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             "touched": path_edges.touched,
             "commitsInScope": path_edges.commits_in_scope,
             "hubBound": path_edges.hub_bound,
-            "skippedHubPaths": path_edges.skipped_hubs,
+            "hubPaths": path_edges.hub_paths,
+            "weight": "1/touchCount",
         },
         "anchors": anchors,
         "sample": sample,
@@ -377,7 +398,11 @@ fn run(storage: &Arc<Storage>, req: Request) -> Result<Value, String> {
             "hint": PARTIAL_CLONE_HINT,
         })),
         "more": more,
-        "pageBackWith": if more { oldest.map(|sha| json!({"rev": format!("{sha}~1")})) } else { None },
+        "pageBackWith": if more {
+            Some(json!({"rev": pinned_rev, "skip": next_skip}))
+        } else {
+            None
+        },
         "partial": failures.first.is_some(),
         "error": failures.first,
         "nextStep": next_step,
@@ -627,7 +652,7 @@ struct PathEdgeReport {
     touched: usize,
     commits_in_scope: usize,
     hub_bound: usize,
-    skipped_hubs: Vec<String>,
+    hub_paths: Vec<String>,
 }
 
 struct Touch {
@@ -647,10 +672,19 @@ fn path_is_hub(touchers: usize, commits_in_scope: usize) -> bool {
     touchers > hub_bound(commits_in_scope)
 }
 
+/// `round(1000 / touch_count)` in milli-units: `(1000 + n/2) / n`.
+/// One thousand milli-units is strength 1. A path touched twice is 500;
+/// a path touched 26 times is 38.
+fn path_weight_milli(touch_count: usize) -> i64 {
+    let n = i64::try_from(touch_count).unwrap_or(i64::MAX).max(1);
+    (1000 + n / 2) / n
+}
+
 /// `touched` edges between commit records that changed one exact path.
 ///
 /// Paths come from the commit's recorded file list, never from directory
-/// segments or from [`crate::auto_connect::extract_entities`].
+/// segments or from [`crate::auto_connect::extract_entities`]. Hubs keep
+/// their chain. Strength is [`path_weight_milli`] of that path's touch count.
 fn record_exact_path_edges(
     storage: &Arc<Storage>,
     root: &Path,
@@ -718,14 +752,18 @@ fn record_exact_path_edges(
 
     let mut paths: Vec<String> = by_path.keys().cloned().collect();
     paths.sort();
-    let mut skipped_hubs = Vec::new();
-    let mut planned: Vec<(usize, usize)> = Vec::new();
+    let mut hub_paths = Vec::new();
+    // (earlier index, later index, path, touch count)
+    let mut planned: Vec<(usize, usize, String, usize)> = Vec::new();
     for path in &paths {
         let mut order = by_path[path].clone();
         order.sort_unstable();
         order.dedup();
-        if path_is_hub(order.len(), commits_in_scope) {
-            skipped_hubs.push(path.clone());
+        let touch_count = order.len();
+        if path_is_hub(touch_count, commits_in_scope) {
+            hub_paths.push(path.clone());
+        }
+        if touch_count < 2 {
             continue;
         }
         order.sort_by(|&left, &right| {
@@ -734,59 +772,92 @@ fn record_exact_path_edges(
                 .cmp(&touches[right].time)
                 .then_with(|| touches[left].sha.cmp(&touches[right].sha))
         });
-        order.dedup();
         for pair in order.windows(2) {
-            planned.push((pair[0], pair[1]));
+            planned.push((pair[0], pair[1], path.clone(), touch_count));
         }
     }
 
-    let mut existing: HashSet<(String, String)> = storage
-        .get_all_connections()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|edge| edge.link_type == "touched")
-        .map(|edge| (edge.source_id, edge.target_id))
-        .collect();
+    // A path-tagged edge covers that path. An older edge with no path covers
+    // the commit pair, so a re-run does not add a second edge for it. Edges
+    // written in this call are tagged and do not block a second path.
+    let memory = crate::strata_memory::live_memory(storage.as_ref());
+    let recorded = match &memory {
+        Some(memory) => memory.touched_edge_paths(),
+        None => storage
+            .get_all_connections()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|edge| edge.link_type == "touched")
+            .map(|edge| (edge.source_id, edge.target_id, None))
+            .collect(),
+    };
+    let mut tagged: HashSet<(String, String, String)> = HashSet::new();
+    let mut legacy_pairs: HashSet<(String, String)> = HashSet::new();
+    for (source, target, path) in recorded {
+        match path {
+            Some(path) => {
+                tagged.insert((source, target, path));
+            }
+            None => {
+                legacy_pairs.insert((source, target));
+            }
+        }
+    }
+    let mut preview_only: HashSet<(String, String, String)> = HashSet::new();
+
     let mut touched = 0usize;
-    for (earlier, later) in planned {
+    for (earlier, later, path, touch_count) in planned {
         if !dry_run && started.elapsed() >= budget {
             stats.stopped_by_budget = true;
             break;
         }
+        let milli = path_weight_milli(touch_count);
         let (Some(source), Some(target)) =
             (touches[earlier].id.as_deref(), touches[later].id.as_deref())
         else {
-            // Preview of a commit that has no record yet. Count the pair by
-            // sha so two shared paths do not double it. A write never counts
-            // an edge it did not store.
-            if dry_run {
-                let dedup = (touches[earlier].sha.clone(), touches[later].sha.clone());
-                if existing.insert(dedup) {
-                    touched += 1;
-                }
+            // Preview of a commit that has no record yet. Count one edge per
+            // path. A write never counts an edge it did not store.
+            if dry_run
+                && preview_only.insert((
+                    touches[earlier].sha.clone(),
+                    touches[later].sha.clone(),
+                    path,
+                ))
+            {
+                touched += 1;
             }
             continue;
         };
-        if !existing.insert((source.to_string(), target.to_string())) {
+        let source = source.to_string();
+        let target = target.to_string();
+        if tagged.contains(&(source.clone(), target.clone(), path.clone()))
+            || legacy_pairs.contains(&(source.clone(), target.clone()))
+        {
             continue;
         }
         if dry_run {
+            tagged.insert((source, target, path));
             touched += 1;
             continue;
         }
-        let now = Utc::now();
-        if storage
-            .save_connection(&ConnectionRecord {
-                source_id: source.to_string(),
-                target_id: target.to_string(),
-                strength: 1.0,
-                link_type: "touched".to_string(),
-                created_at: now,
-                last_activated: now,
-                activation_count: 0,
-            })
-            .is_ok()
-        {
+        let wrote = if let Some(memory) = &memory {
+            memory.record_path_touch(&source, &target, milli, touch_count as i64, &path)
+        } else {
+            let now = Utc::now();
+            storage
+                .save_connection(&ConnectionRecord {
+                    source_id: source.clone(),
+                    target_id: target.clone(),
+                    strength: milli as f64 / 1000.0,
+                    link_type: "touched".to_string(),
+                    created_at: now,
+                    last_activated: now,
+                    activation_count: i32::try_from(touch_count).unwrap_or(i32::MAX),
+                })
+                .is_ok()
+        };
+        if wrote {
+            tagged.insert((source, target, path));
             touched += 1;
         }
     }
@@ -795,7 +866,7 @@ fn record_exact_path_edges(
         touched,
         commits_in_scope,
         hub_bound: bound,
-        skipped_hubs,
+        hub_paths,
     }
 }
 
@@ -905,52 +976,163 @@ fn flush_anchors(
     queue.clear();
 }
 
-/// Commits from `git log`, newest first, and why git stopped early if it did.
-fn read_commits(
-    root: &Path,
-    req: &Request,
-    limit: usize,
-) -> Result<(Vec<GitCommit>, Option<String>), String> {
+/// One page of history. `rev` is what the next page must pass back: a single
+/// revision is pinned to its commit sha, and a range is kept as given.
+struct CommitRead {
+    commits: Vec<GitCommit>,
+    stopped_early: Option<String>,
+    /// Another non-merge commit sits after this page in the same walk.
+    more: bool,
+    rev: String,
+}
+
+/// The revision every page of this walk reads. A single rev is its commit
+/// sha, so a branch tip moving between pages cannot shift `skip`. A range
+/// (`a..b`) is not a commit and is kept verbatim.
+fn paging_rev(root: &Path, rev: Option<&str>) -> Result<String, String> {
+    let rev_arg = rev;
+    let rev = rev.unwrap_or("HEAD");
+    if rev.contains("..") {
+        return Ok(rev.to_string());
+    }
+    let run = run_git(
+        root,
+        &[
+            "rev-parse".into(),
+            "--verify".into(),
+            format!("{rev}^{{commit}}"),
+        ],
+    )?;
+    if let Some(stderr) = run.failure {
+        // `HEAD^{commit}` on an empty repository says "Needed a single
+        // revision". `git log` with no revision, which is what a caller
+        // who passed no `rev` used to hit, says the branch has no commits.
+        if rev_arg.is_none() {
+            let branch = run_git(
+                root,
+                &["log".into(), "-1".into(), "--pretty=format:%H".into()],
+            )?;
+            if let Some(stderr) = branch.failure {
+                return Err(git_failure(&stderr));
+            }
+            let sha = String::from_utf8_lossy(&branch.stdout).trim().to_string();
+            if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Ok(sha);
+            }
+        }
+        return Err(git_failure(&stderr));
+    }
+    let sha = String::from_utf8_lossy(&run.stdout).trim().to_string();
+    if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("could not resolve rev '{rev}' to a commit"));
+    }
+    Ok(sha)
+}
+
+/// `shas` order, stopping at the first sha the log did not return whole.
+fn commits_in_list_order(shas: &[String], commits: Vec<GitCommit>) -> Vec<GitCommit> {
+    let mut by_sha: HashMap<String, GitCommit> = commits
+        .into_iter()
+        .map(|commit| (commit.sha.clone(), commit))
+        .collect();
+    let mut out = Vec::new();
+    for sha in shas {
+        match by_sha.remove(sha) {
+            Some(commit) => out.push(commit),
+            None => break,
+        }
+    }
+    out
+}
+
+/// One page of the non-merge commits reachable from `req.rev`, newest first
+/// in `--topo-order`, after `req.skip` commits. The walk is the full set:
+/// `skip` does not follow a first parent, so a side branch merged beside
+/// the first-parent line stays in the set. Diffs come from `git log -p` of
+/// those commits only. A git death mid-diff drops the cut record.
+fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<CommitRead, String> {
+    let rev = paging_rev(root, req.rev.as_deref())?;
+    let skip = req.skip.unwrap_or(0);
+    let mut list_args = vec![
+        "rev-list".to_string(),
+        "--no-merges".into(),
+        "--topo-order".into(),
+        format!("--max-count={}", limit.saturating_add(1)),
+        format!("--skip={skip}"),
+    ];
+    if let Some(since) = &req.since {
+        list_args.push(format!("--since={since}"));
+    }
+    if let Some(until) = &req.until {
+        list_args.push(format!("--until={until}"));
+    }
+    list_args.push(rev.clone());
+    let listed = run_git(root, &list_args)?;
+    if let Some(stderr) = listed.failure {
+        return Err(git_failure(&stderr));
+    }
+    let mut shas: Vec<String> = String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    let mut more = shas.len() > limit;
+    shas.truncate(limit);
+    if shas.is_empty() {
+        return Ok(CommitRead {
+            commits: Vec::new(),
+            stopped_early: None,
+            more: false,
+            rev,
+        });
+    }
+
     // Nothing the checkout's own config names may run: no external diff, no
     // textconv filter, and no signature check (log.showSignature would run
-    // gpg.program, a path the repository chooses).
-    let mut args: Vec<String> = [
+    // gpg.program, a path the repository chooses). `--no-walk=unsorted`
+    // emits the listed commits in the rev-list order and does not traverse
+    // parents, so the page cannot grow a first-parent tail.
+    let mut log_args: Vec<String> = [
         "log",
         "-p",
+        "--no-walk=unsorted",
         "--unified=0",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
         "--no-show-signature",
-        "--no-merges",
         "--pretty=format:%x1e%H%x1f%aI%x1f%s",
     ]
     .iter()
     .map(|arg| arg.to_string())
     .collect();
-    args.push("-n".into());
-    args.push(limit.to_string());
-    if let Some(since) = &req.since {
-        args.push(format!("--since={since}"));
-    }
-    if let Some(until) = &req.until {
-        args.push(format!("--until={until}"));
-    }
-    if let Some(rev) = &req.rev {
-        args.push(rev.clone());
-    }
-    let run = run_git(root, &args)?;
+    log_args.extend(shas.iter().cloned());
+    let run = run_git(root, &log_args)?;
     let mut commits = git_records::parse_git_log(&String::from_utf8_lossy(&run.stdout));
-    let Some(failure) = run.failure else {
-        return Ok((commits, None));
-    };
-    // git streams commit by commit and died partway. The last record may be
-    // cut mid-diff, so it is not trusted; everything before it is whole.
-    commits.pop();
-    if commits.is_empty() {
-        return Err(git_failure(&failure));
+    let failure = run.failure;
+    if failure.is_some() {
+        // git streams commit by commit and died partway. The last record may
+        // be cut mid-diff, so it is not trusted; everything before it is whole.
+        commits.pop();
     }
-    Ok((commits, Some(git_failure(&failure))))
+    let commits = commits_in_list_order(&shas, commits);
+    if commits.is_empty() {
+        return Err(git_failure(
+            failure.as_deref().unwrap_or("git exited with an error"),
+        ));
+    }
+    // A hole with no git error still has commits left on this page. Say so,
+    // so the cursor advances only over the commits that were actually read.
+    if failure.is_none() && commits.len() < shas.len() {
+        more = true;
+    }
+    Ok(CommitRead {
+        commits,
+        stopped_early: failure.map(|stderr| git_failure(&stderr)),
+        more,
+        rev,
+    })
 }
 
 /// What a git run produced. A non-zero exit is `failure` (stderr), not an
@@ -1355,6 +1537,7 @@ pub fn parse_timeout(raw: &str) -> u32 {
                 rev: None,
                 since: None,
                 until: None,
+                skip: None,
                 limit: None,
                 dry_run,
                 budget: None,
@@ -1505,11 +1688,17 @@ pub fn parse_timeout(raw: &str) -> u32 {
         let first = ingest(&storage, newest_two).await;
         assert_eq!(first["commits"]["created"], 2, "{first}");
         assert_eq!(first["more"], true);
+        let back_rev = first["pageBackWith"]["rev"].as_str().unwrap();
         assert_eq!(
-            first["pageBackWith"]["rev"],
-            format!("{}~1", repo.shas[2]),
-            "points just before the oldest commit read"
+            back_rev.len(),
+            40,
+            "the walk is pinned to a commit: {first}"
         );
+        assert!(
+            !back_rev.contains('~'),
+            "a first-parent cursor drops side history: {first}"
+        );
+        assert_eq!(first["pageBackWith"]["skip"], 2, "{first}");
 
         // read all four: the two already recorded are skipped, not duplicated
         let all = ingest(&storage, repo.request(false)).await;
@@ -1525,17 +1714,106 @@ pub fn parse_timeout(raw: &str) -> u32 {
         assert_eq!(again["more"], false);
         assert!(again["pageBackWith"].is_null());
 
-        // paging backwards with the hint reads the older commits
+        // paging with the hint reads the older commits, same revision
         let (storage2, _dir2) = strata();
         let mut newest = repo.request(false);
         newest.limit = Some(2);
-        ingest(&storage2, newest).await;
+        let first = ingest(&storage2, newest).await;
         let mut older = repo.request(false);
         older.limit = Some(2);
-        older.rev = Some(format!("{}~1", repo.shas[2]));
+        older.rev = Some(first["pageBackWith"]["rev"].as_str().unwrap().to_string());
+        older.skip = Some(first["pageBackWith"]["skip"].as_u64().unwrap() as usize);
         let page = ingest(&storage2, older).await;
         assert_eq!(page["commits"]["created"], 2, "{page}");
+        assert_eq!(page["more"], false, "{page}");
+        assert!(page["pageBackWith"].is_null());
         assert_eq!(nodes(&storage2, "demo").len(), 4);
+    }
+
+    /// A side branch merged behind the page boundary is not an ancestor of
+    /// the first parent's `<oldest>~1`. Skip-paging still records every
+    /// non-merge commit, and a re-run from the original rev adds only what
+    /// is missing.
+    #[tokio::test]
+    async fn paging_keeps_a_side_branch_merged_behind_the_page_boundary() {
+        let mut repo = Repo::empty();
+        repo.write("main.txt", "a\n");
+        repo.commit("A main", "2026-07-01T00:00:00+00:00");
+        repo.write("main.txt", "b\n");
+        repo.commit("B main", "2026-07-02T00:00:00+00:00");
+        repo.write("main.txt", "c\n");
+        repo.commit("C main", "2026-07-03T00:00:00+00:00");
+        // Side commits are newer than C and older than D. A newest-first
+        // page of 2 that then walked `<oldest>~1` would leave C behind:
+        // C is not an ancestor of the side tip.
+        repo.git(
+            &["switch", "-q", "-c", "side", &repo.shas[1]],
+            "2026-07-04T00:00:00+00:00",
+        );
+        repo.write("contracts/Lido.sol", "contract Lido { uint v = 1; }\n");
+        repo.commit("S1 side", "2026-07-04T00:00:00+00:00");
+        repo.write("contracts/Lido.sol", "contract Lido { uint v = 2; }\n");
+        repo.commit("S2 side", "2026-07-05T00:00:00+00:00");
+        repo.git(&["switch", "-q", "-"], "2026-07-06T00:00:00+00:00");
+        repo.git(
+            &["merge", "-q", "--no-ff", "side", "-m", "merge side"],
+            "2026-07-06T00:00:00+00:00",
+        );
+        repo.write("main.txt", "d\n");
+        repo.commit("D main", "2026-07-07T00:00:00+00:00");
+        assert_eq!(repo.shas.len(), 6, "merge commits are not records");
+
+        let (storage, _dir) = strata();
+        let mut skip: Option<usize> = None;
+        let mut rev: Option<String> = None;
+        let mut created = 0u64;
+        for page_n in 1..=6 {
+            let mut req = repo.request(false);
+            req.limit = Some(2);
+            req.skip = skip;
+            req.rev = rev.clone();
+            let page = ingest(&storage, req).await;
+            created += page["commits"]["created"].as_u64().unwrap();
+            let back = page["pageBackWith"]["rev"].as_str().unwrap_or("");
+            assert!(
+                !back.contains('~'),
+                "page {page_n} walked a first parent: {page}"
+            );
+            if page["more"] == true {
+                rev = Some(back.to_string());
+                let next = page["pageBackWith"]["skip"].as_u64().unwrap() as usize;
+                assert!(next > skip.unwrap_or(0), "cursor did not advance: {page}");
+                skip = Some(next);
+            } else {
+                break;
+            }
+        }
+        assert_eq!(created, 6, "a page dropped a non-merge commit");
+        assert_eq!(nodes(&storage, "demo").len(), 6);
+        for sha in &repo.shas {
+            commit_node(&storage, "demo", sha);
+        }
+
+        let again = ingest(&storage, repo.request(false)).await;
+        assert_eq!(again["commits"]["created"], 0, "{again}");
+        assert_eq!(again["commits"]["alreadyIngested"], 6, "{again}");
+        assert_eq!(
+            nodes(&storage, "demo").len(),
+            6,
+            "a re-run duplicated a commit"
+        );
+
+        // The commits a short first page never reached are written by a
+        // fresh walk from the same rev, and the ones already recorded are not.
+        let (fresh, _dir) = strata();
+        let mut first = repo.request(false);
+        first.limit = Some(2);
+        let first = ingest(&fresh, first).await;
+        assert_eq!(first["commits"]["created"], 2, "{first}");
+        let rest = ingest(&fresh, repo.request(false)).await;
+        assert_eq!(rest["commits"]["created"], 4, "{rest}");
+        assert_eq!(rest["commits"]["alreadyIngested"], 2, "{rest}");
+        assert_eq!(nodes(&fresh, "demo").len(), 6);
     }
 
     #[tokio::test]
@@ -1913,7 +2191,7 @@ pub fn parse_timeout(raw: &str) -> u32 {
             10,
         )
         .unwrap()
-        .0;
+        .commits;
         for commit in commits.iter().filter(|c| c.subject != "docs") {
             storage
                 .ingest_in_scope(change_record(commit, "demo", now), "demo")
@@ -2375,6 +2653,9 @@ pub fn parse_timeout(raw: &str) -> u32 {
         assert!(path_is_hub(26, 26));
         assert!(!path_is_hub(28, 577));
         assert!(path_is_hub(29, 577));
+        assert_eq!(path_weight_milli(2), 500);
+        assert_eq!(path_weight_milli(3), 333);
+        assert_eq!(path_weight_milli(26), 38);
     }
 
     #[test]
@@ -2410,7 +2691,8 @@ pub fn parse_timeout(raw: &str) -> u32 {
         preview.scope = Some("pairs".into());
         let preview = ingest(&storage, preview).await;
         assert_eq!(preview["edges"]["wouldRecord"], 1, "{preview}");
-        assert_eq!(preview["edges"]["skippedHubPaths"], json!([]), "{preview}");
+        assert_eq!(preview["edges"]["hubPaths"], json!([]), "{preview}");
+        assert_eq!(preview["edges"]["weight"], "1/touchCount", "{preview}");
         assert!(touched(&storage).is_empty(), "a preview wrote an edge");
 
         let mut only_a = repo.request(false);
@@ -2430,7 +2712,7 @@ pub fn parse_timeout(raw: &str) -> u32 {
         let page_b = ingest(&storage, only_b).await;
         assert_eq!(page_b["commits"]["created"], 1, "{page_b}");
         assert_eq!(page_b["edges"]["touched"], 1, "{page_b}");
-        assert_eq!(page_b["edges"]["skippedHubPaths"], json!([]), "{page_b}");
+        assert_eq!(page_b["edges"]["hubPaths"], json!([]), "{page_b}");
 
         let mut rest = repo.request(false);
         rest.codebase = Some("pairs".into());
@@ -2449,6 +2731,20 @@ pub fn parse_timeout(raw: &str) -> u32 {
             "earlier commit is the source: {edges:?}"
         );
         assert_eq!(edges[0].target_id, b, "{edges:?}");
+        assert_eq!(
+            edges[0].activation_count, 2,
+            "touch count rides on the edge"
+        );
+        assert_eq!(
+            (edges[0].strength * 1000.0).round() as i64,
+            500,
+            "strength is 1/touchCount: {edges:?}"
+        );
+        let recorded = crate::strata_memory::live_memory(storage.as_ref())
+            .unwrap()
+            .touched_edge_paths();
+        assert_eq!(recorded.len(), 1, "{recorded:?}");
+        assert_eq!(recorded[0].2.as_deref(), Some("contracts/x.sol"));
         assert!(!edges[0].target_id.contains('/'));
         for lone in [&c, &gov, &other] {
             let neighbors = storage.get_connections_for_memory(lone).unwrap();
@@ -2508,10 +2804,11 @@ pub fn parse_timeout(raw: &str) -> u32 {
     }
 
     /// A file every commit touches is a hub once it passes max(25, 5%).
-    /// The chain for that path is not written. A path only two commits
-    /// share still is.
+    /// The chain is still written, one edge per consecutive pair, at
+    /// strength `1/touchCount`. A second path between the same pair is its
+    /// own edge. A re-run adds nothing.
     #[tokio::test]
-    async fn a_hub_file_touched_by_every_commit_records_no_edges() {
+    async fn a_hub_file_keeps_a_chain_at_low_weight() {
         let mut repo = Repo::empty();
         for i in 0..26 {
             repo.write(
@@ -2537,26 +2834,69 @@ pub fn parse_timeout(raw: &str) -> u32 {
         let out = ingest(&storage, req).await;
         assert_eq!(out["edges"]["commitsInScope"], 26, "{out}");
         assert_eq!(out["edges"]["hubBound"], 25, "{out}");
-        assert_eq!(out["edges"]["touched"], 1, "{out}");
+        // 25 Hub.sol chain edges plus the one x.sol edge between the first pair.
+        assert_eq!(out["edges"]["touched"], 26, "{out}");
         assert_eq!(
-            out["edges"]["skippedHubPaths"],
+            out["edges"]["hubPaths"],
             json!(["contracts/Hub.sol"]),
             "{out}"
         );
         let edges = touched(&storage);
-        assert_eq!(edges.len(), 1, "{edges:?}");
-        let a = commit_node(&storage, "hub", &repo.shas[0]);
-        let b = commit_node(&storage, "hub", &repo.shas[1]);
-        let c = commit_node(&storage, "hub", &repo.shas[2]);
-        assert_eq!(edges[0].source_id, a);
-        assert_eq!(edges[0].target_id, b);
+        assert_eq!(edges.len(), 26, "{edges:?}");
+        let hub_edges: Vec<_> = edges
+            .iter()
+            .filter(|edge| edge.activation_count == 26)
+            .collect();
+        let rare: Vec<_> = edges
+            .iter()
+            .filter(|edge| edge.activation_count == 2)
+            .collect();
+        assert_eq!(hub_edges.len(), 25, "{edges:?}");
+        assert_eq!(rare.len(), 1, "{edges:?}");
+        for edge in &hub_edges {
+            assert_eq!(
+                (edge.strength * 1000.0).round() as i64,
+                38,
+                "hub weight is 1/26: {edge:?}"
+            );
+        }
+        assert_eq!((rare[0].strength * 1000.0).round() as i64, 500);
+        let recorded = crate::strata_memory::live_memory(storage.as_ref())
+            .unwrap()
+            .touched_edge_paths();
+        let ids: Vec<String> = repo
+            .shas
+            .iter()
+            .map(|sha| commit_node(&storage, "hub", sha))
+            .collect();
+        let hub_links: HashSet<(String, String)> = recorded
+            .iter()
+            .filter(|(_, _, path)| path.as_deref() == Some("contracts/Hub.sol"))
+            .map(|(source, target, _)| (source.clone(), target.clone()))
+            .collect();
+        assert_eq!(hub_links.len(), 25, "{recorded:?}");
+        for pair in ids.windows(2) {
+            assert!(
+                hub_links.contains(&(pair[0].clone(), pair[1].clone())),
+                "missing Hub.sol link {} → {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        let x_links: Vec<_> = recorded
+            .iter()
+            .filter(|(_, _, path)| path.as_deref() == Some("contracts/x.sol"))
+            .collect();
+        assert_eq!(x_links.len(), 1, "{x_links:?}");
+        assert_eq!(x_links[0].0, ids[0]);
+        assert_eq!(x_links[0].1, ids[1]);
         assert!(
             storage
-                .get_connections_for_memory(&c)
+                .get_connections_for_memory(&ids[2])
                 .unwrap()
                 .iter()
-                .all(|edge| edge.link_type != "touched"),
-            "the y.sol commit is not on the hub chain"
+                .any(|edge| edge.link_type == "touched"),
+            "the y.sol commit stays on the hub chain"
         );
         let again = ingest(&storage, {
             let mut req = repo.request(false);
@@ -2566,7 +2906,11 @@ pub fn parse_timeout(raw: &str) -> u32 {
         })
         .await;
         assert_eq!(again["edges"]["touched"], 0, "{again}");
-        assert_eq!(touched(&storage).len(), 1);
+        assert_eq!(
+            touched(&storage).len(),
+            26,
+            "re-ingest duplicated a hub edge"
+        );
 
         let proposed = crate::strata_memory::ghostlink::propose(
             storage.as_ref(),
@@ -2579,10 +2923,111 @@ pub fn parse_timeout(raw: &str) -> u32 {
             },
         )
         .unwrap();
+        // Chain, not a clique: distances 1+2+3 on 26 commits.
+        assert_eq!(proposed["admission"]["admittedPairs"], 72, "{proposed}");
         assert_eq!(
             proposed["candidates"].as_array().unwrap().len(),
-            1,
-            "hub must not admit the clique: {proposed}"
+            10,
+            "{proposed}"
+        );
+    }
+
+    /// Records already in the log, with one chain edge absent the way a hub
+    /// skip left it, and one older untagged edge covering another pair.
+    /// Re-ingest writes the missing edge once and does not duplicate the old one.
+    #[tokio::test]
+    async fn reingest_adds_a_missing_chain_edge_once() {
+        let mut repo = Repo::empty();
+        repo.write("contracts/x.sol", "contract X { uint v = 1; }\n");
+        repo.commit("A", "2026-06-01T00:00:00+00:00");
+        repo.write("contracts/x.sol", "contract X { uint v = 2; }\n");
+        repo.commit("B", "2026-06-02T00:00:00+00:00");
+        repo.write("contracts/x.sol", "contract X { uint v = 3; }\n");
+        repo.commit("C", "2026-06-03T00:00:00+00:00");
+
+        let (storage, _dir) = strata();
+        let request = {
+            let mut req = repo.request(false);
+            req.codebase = Some("backfill".into());
+            req.scope = Some("backfill".into());
+            req
+        };
+        let commits = read_commits(repo.dir.path(), &request, 100)
+            .unwrap()
+            .commits;
+        let now = Utc::now();
+        for commit in &commits {
+            storage
+                .ingest_in_scope(change_record(commit, "backfill", now), "backfill")
+                .unwrap();
+        }
+        assert!(
+            touched(&storage).is_empty(),
+            "old-style records have no edges"
+        );
+        let a = commit_node(&storage, "backfill", &repo.shas[0]);
+        let b = commit_node(&storage, "backfill", &repo.shas[1]);
+        let c = commit_node(&storage, "backfill", &repo.shas[2]);
+        storage
+            .save_connection(&ConnectionRecord {
+                source_id: a.clone(),
+                target_id: b.clone(),
+                strength: 1.0,
+                link_type: "touched".to_string(),
+                created_at: now,
+                last_activated: now,
+                activation_count: 0,
+            })
+            .unwrap();
+
+        let out = ingest(&storage, {
+            let mut req = repo.request(false);
+            req.codebase = Some("backfill".into());
+            req.scope = Some("backfill".into());
+            req
+        })
+        .await;
+        assert_eq!(out["commits"]["created"], 0, "{out}");
+        assert_eq!(out["edges"]["touched"], 1, "the missing link: {out}");
+        let edges = touched(&storage);
+        assert_eq!(edges.len(), 2, "legacy pair was duplicated: {edges:?}");
+        let filled: Vec<_> = edges
+            .iter()
+            .filter(|edge| edge.activation_count == 3)
+            .collect();
+        assert_eq!(filled.len(), 1, "{edges:?}");
+        assert_eq!(filled[0].source_id, b);
+        assert_eq!(filled[0].target_id, c);
+        assert_eq!((filled[0].strength * 1000.0).round() as i64, 333);
+        let legacy: Vec<_> = edges
+            .iter()
+            .filter(|edge| edge.source_id == a && edge.target_id == b)
+            .collect();
+        assert_eq!(legacy.len(), 1, "{edges:?}");
+        assert_eq!(legacy[0].activation_count, 0);
+        assert_eq!((legacy[0].strength * 1000.0).round() as i64, 1000);
+        let recorded = crate::strata_memory::live_memory(storage.as_ref())
+            .unwrap()
+            .touched_edge_paths();
+        assert!(
+            recorded.iter().any(|(source, target, path)| {
+                source == &b && target == &c && path.as_deref() == Some("contracts/x.sol")
+            }),
+            "{recorded:?}"
+        );
+
+        let again = ingest(&storage, {
+            let mut req = repo.request(false);
+            req.codebase = Some("backfill".into());
+            req.scope = Some("backfill".into());
+            req
+        })
+        .await;
+        assert_eq!(again["edges"]["touched"], 0, "{again}");
+        assert_eq!(
+            touched(&storage).len(),
+            2,
+            "second re-ingest duplicated an edge"
         );
     }
 }

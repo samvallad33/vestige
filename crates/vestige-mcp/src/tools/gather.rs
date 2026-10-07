@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use vestige_core::Storage;
@@ -64,7 +64,7 @@ fn parse_issue_url(url: &str) -> Result<IssueRef, String> {
             return Err(
                 "url must be a GitHub issue URL like https://github.com/owner/repo/issues/123"
                     .into(),
-            )
+            );
         }
     };
     let number: u64 = num
@@ -94,7 +94,7 @@ fn gh_json(args: &[&str]) -> Result<Value, String> {
         .map_err(|e| format!("gh {} returned invalid JSON: {e}", args.join(" ")))
 }
 
-/// Run one ingest_repo page and return `(summary, pageBackRev)`.
+/// Run one ingest_repo page and return `(summary, next rev, next skip)`.
 async fn ingest_page(
     storage: &Arc<Storage>,
     repo_path: &PathBuf,
@@ -102,7 +102,8 @@ async fn ingest_page(
     worked_in: &str,
     broke_in: &str,
     page_back: Option<String>,
-) -> Result<(Value, Option<String>), String> {
+    page_skip: Option<usize>,
+) -> Result<(Value, Option<String>, Option<u64>), String> {
     let request = repo_ingest::Request {
         repo_path: repo_path.clone(),
         codebase: None,
@@ -110,6 +111,7 @@ async fn ingest_page(
         rev: page_back,
         since: None,
         until: None,
+        skip: page_skip,
         limit: Some(200),
         dry_run: false,
         budget: None,
@@ -119,7 +121,8 @@ async fn ingest_page(
     // both ends recallable by handle.
     let _ = (worked_in, broke_in);
     let back = summary["pageBackWith"]["rev"].as_str().map(String::from);
-    Ok((summary, back))
+    let skip = summary["pageBackWith"]["skip"].as_u64();
+    Ok((summary, back, skip))
 }
 
 pub async fn execute(
@@ -142,8 +145,17 @@ pub async fn execute(
     let scope = scope.unwrap_or_else(|| issue.scope.clone());
 
     // ---- Fetch (dynamic, through gh) ------------------------------------
-    let issue_json = gh_json(&["api", &format!("repos/{}/{}/issues/{}", issue.owner, issue.name, issue.number)])?;
-    let title = issue_json["title"].as_str().unwrap_or("untitled").to_string();
+    let issue_json = gh_json(&[
+        "api",
+        &format!(
+            "repos/{}/{}/issues/{}",
+            issue.owner, issue.name, issue.number
+        ),
+    ])?;
+    let title = issue_json["title"]
+        .as_str()
+        .unwrap_or("untitled")
+        .to_string();
     let body = issue_json["body"].as_str().unwrap_or("").to_string();
     let state = issue_json["state"].as_str().unwrap_or("open").to_string();
     let mut labels: Vec<String> = Vec::new();
@@ -215,9 +227,18 @@ pub async fn execute(
     let mut commit_pages = 0;
     if let Some(repo_path) = &repo_path {
         let mut page_back: Option<String> = None;
+        let mut page_skip: Option<usize> = None;
         loop {
-            let (summary, back) =
-                ingest_page(storage, repo_path, &scope, worked_in.as_deref().unwrap_or(""), broke_in.as_deref().unwrap_or(""), page_back.clone()).await?;
+            let (summary, back, skip) = ingest_page(
+                storage,
+                repo_path,
+                &scope,
+                worked_in.as_deref().unwrap_or(""),
+                broke_in.as_deref().unwrap_or(""),
+                page_back.clone(),
+                page_skip,
+            )
+            .await?;
             commit_pages += 1;
             // True coverage: new writes AND commits the scope already held
             // (a re-run counts the window it verified, not just new writes).
@@ -225,7 +246,10 @@ pub async fn execute(
             commits_covered += summary["commits"]["created"].as_u64().unwrap_or(0)
                 + summary["commits"]["alreadyIngested"].as_u64().unwrap_or(0);
             match back {
-                Some(rev) if commit_pages < 10 => page_back = Some(rev),
+                Some(rev) if commit_pages < 10 => {
+                    page_back = Some(rev);
+                    page_skip = skip.and_then(|n| usize::try_from(n).ok());
+                }
                 _ => break,
             }
         }
@@ -246,7 +270,11 @@ pub async fn execute(
         };
         // The scoped write path, the same one smart_ingest uses: receipts
         // MUST land in the gather scope or the walk (scoped) never sees them.
-        storage.ingest_in_scope_with_secret_policy(input, &scope, vestige_core::SecretPolicy::Reject)
+        storage.ingest_in_scope_with_secret_policy(
+            input,
+            &scope,
+            vestige_core::SecretPolicy::Reject,
+        )
     };
 
     let mut linked_pr_ids: Vec<String> = Vec::new();
@@ -256,11 +284,7 @@ pub async fn execute(
                 "Linked pull request #{n} on issue {}/{}/#{}: {t}",
                 issue.owner, issue.name, issue.number
             ),
-            vec![
-                issue.name.clone(),
-                "gather".into(),
-                "linked-pr".into(),
-            ],
+            vec![issue.name.clone(), "gather".into(), "linked-pr".into()],
             format!("github:{}/{}/#{}", issue.owner, issue.name, n),
         )
         .map_err(|e| format!("linked PR #{n} was not admitted: {e}"))?;
@@ -405,10 +429,15 @@ pub async fn execute(
     let missing_receipts: Vec<String> = {
         let mut m = Vec::new();
         if repo_path.is_none() {
-            m.push("repoPath: no commits were ingested, so the walk cannot reach any commit record".into());
+            m.push(
+                "repoPath: no commits were ingested, so the walk cannot reach any commit record"
+                    .into(),
+            );
         }
         if worked_in.is_none() || broke_in.is_none() {
-            m.push("workedIn/brokeIn: no version window, so structural ranking could not fire".into());
+            m.push(
+                "workedIn/brokeIn: no version window, so structural ranking could not fire".into(),
+            );
         }
         if !storage
             .node_is_in_scope(&failure_id, &scope)
@@ -485,6 +514,9 @@ mod tests {
             .node_is_in_scope(&node.id, vestige_core::DEFAULT_MEMORY_SCOPE)
             .unwrap_or(false);
         assert!(in_gather_scope, "receipt must be in the gather scope");
-        assert!(!in_user_scope, "receipt must NOT fall back to the user scope");
+        assert!(
+            !in_user_scope,
+            "receipt must NOT fall back to the user scope"
+        );
     }
 }

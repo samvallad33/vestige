@@ -99,7 +99,7 @@ pub(crate) fn register_open(memory: &Arc<StrataMemory>) {
     open.push((memory.log_dir.clone(), Arc::downgrade(memory)));
 }
 
-fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
+pub(crate) fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
     if !is_strata_backend(storage) {
         return None;
     }
@@ -284,6 +284,47 @@ pub struct StrataMemory {
 const MAINTENANCE_STAMPS: &str = "maintenance-stamps.json";
 
 impl StrataMemory {
+    /// One `touched` edge whose strength is `strength_milli` (1000 = 1) and
+    /// whose `meta_sha` is `{touch_count}\n{path}`. The path is the exact
+    /// repo-relative file, not a directory segment.
+    pub(crate) fn record_path_touch(
+        &self,
+        source: &str,
+        target: &str,
+        strength_milli: i64,
+        touch_count: i64,
+        path: &str,
+    ) -> bool {
+        let edge = strata_store::ConnectionRecord {
+            source_id: source.to_string(),
+            target_id: target.to_string(),
+            strength_milli,
+            link_type: "touched".to_string(),
+            meta_sha: Some(format!("{touch_count}\n{path}")),
+            created_at_ms: chrono::Utc::now().timestamp_millis(),
+            activation_count: touch_count,
+        };
+        self.lock().save_connection(&edge).is_ok()
+    }
+
+    /// Recorded `touched` edges as `(source, target, path)`. `path` is `None`
+    /// when the edge was written without a path (an older ingest).
+    pub(crate) fn touched_edge_paths(&self) -> Vec<(String, String, Option<String>)> {
+        self.lock()
+            .edges()
+            .into_iter()
+            .filter(|edge| edge.link_type == "touched")
+            .map(|edge| {
+                let path = edge.meta_sha.as_deref().and_then(|meta| {
+                    meta.split_once('\n')
+                        .map(|(_, path)| path.to_string())
+                        .filter(|path| !path.is_empty())
+                });
+                (edge.source_id, edge.target_id, path)
+            })
+            .collect()
+    }
+
     /// When `key` last completed, or `None` when it never has or the stamp
     /// file is missing or unreadable.
     fn maintenance_stamp(&self, key: &str) -> Option<DateTime<Utc>> {
