@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- [`docs/causal-walk/blind-spots.md`](docs/causal-walk/blind-spots.md) maps 239 gaps between a failure report and the commit `causal_walk` can defend. Five are closed in this tree, 34 are buildable from facts already on disk, 195 need a named receipt, and five have no allowed fix.
+
+### Changed
+
+- `version_range` keeps a commit when `git merge-base --is-ancestor` says it is an ancestor of `broke_in` and a descendant of `worked_in`. `worked_in` is exclusive. `broke_in` is inclusive. The check uses objects already in the local repository.
+- A whitespace-only or comment-only blame does not take the blame slot or the hunk slot. When a frame resolved and no cause has blame of the line, a touched failing hunk, or a revert after the failure, `needsProve` names `vestige prove` over the `version_range` and each cause's `rank` is null.
+- `ingest_repo` records the old-side line range of each hunk, so a deletion-only commit stays a candidate on `hunk:<file>:<start>+<len>`.
+- A `Fixes:` trailer whose first token is 7–40 hex digits resolves only when `git rev-parse --verify <token>^{commit}` names one local commit. Vestige does not prefix-match the token itself.
+- `smart_ingest` strips one literal `path:` prefix before the path check, links a failure to an existing byte-equal `file:<path>` anchor in the same scope, and refuses a `codebase:` tag that is already recorded in another scope, naming that scope.
+
 ## [4.2.0] - 2026-10-06
 
 4.1.2 was prepared on 2026-10-05 and never tagged; its fixes ship here. No

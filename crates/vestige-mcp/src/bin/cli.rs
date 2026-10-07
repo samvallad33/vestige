@@ -492,8 +492,9 @@ enum Commands {
     /// recorded structure (revert, blame, hunk, hop, edge kind). Otherwise
     /// they are ordered by depth, then by the exact identities each shares
     /// with the start, which are printed. --ci-run needs --node-id. A
-    /// complete version range is `git rev-list --first-parent` and does not
-    /// need --node-id. --logged-write walks one memory directly.
+    /// complete version range keeps ancestors of --broke-in that descend from
+    /// --worked-in (`git merge-base --is-ancestor`) and does not need
+    /// --node-id. --logged-write walks one memory directly.
     ///
     /// A legacy SQLite store walks every start point through shared exact
     /// anchors to change records and, unless --no-promote, records
@@ -4544,8 +4545,8 @@ fn run_backfill(
 /// Run a causal walk from the CLI: explicit start points -> exact mechanism
 /// edges -> ranked suspect change records. Mirrors the MCP `causal_walk`
 /// tool (same core engine); `--json` prints the raw result for tooling.
-/// `--git-repo` with `--worked-in` and `--broke-in` limits commit candidates
-/// to `git rev-list --first-parent worked_in..broke_in`.
+/// `--git-repo` with `--worked-in` and `--broke-in` keeps commit candidates
+/// that are ancestors of broke-in and descendants of worked-in.
 #[allow(clippy::too_many_arguments)]
 fn run_causal_walk(
     failing_test: Option<String>,
@@ -4570,8 +4571,8 @@ fn run_causal_walk(
     if is_strata(&storage) {
         // ci_run is not a recorded edge. stack_frame and failing_test resolve
         // by exact path once ingest_repo has recorded the file. A complete
-        // version range is a local `git rev-list --first-parent`, not a name
-        // search, so it is not refused for lack of --node-id.
+        // version range is a local ancestry check, not a name search, so it
+        // is not refused for lack of --node-id.
         let version_flags = [git_repo.is_some(), worked_in.is_some(), broke_in.is_some()];
         if version_flags.iter().any(|given| *given) && !version_flags.iter().all(|given| *given) {
             anyhow::bail!(
