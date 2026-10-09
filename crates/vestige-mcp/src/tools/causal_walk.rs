@@ -1876,7 +1876,14 @@ fn git_admissible(storage: &Arc<Storage>, id: &str, git: &GitQuery) -> bool {
     {
         return false;
     }
-    if git.failure_commit_id.as_deref() == Some(id) {
+    // The failure revision is context, not a cause, once the walk resolved
+    // its own evidence (a frame's files, anchors, or blame). When the
+    // revision is the only structural thing resolved, it came from the
+    // start's own recorded `derived_from` edge, and cutting it would drop
+    // the one cause that edge declares.
+    let resolved_evidence =
+        !git.files.is_empty() || !git.anchors.is_empty() || !git.blame_shas.is_empty();
+    if resolved_evidence && git.failure_commit_id.as_deref() == Some(id) {
         return false;
     }
     if let Some(failure_time) = git.failure_time
@@ -2604,6 +2611,76 @@ mod strata_walk {
             .iter()
             .map(|node| node["id"].as_str().unwrap().to_string())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn a_derived_from_commit_cause_is_reported_not_cut_as_the_revision() {
+        // The field shape: the symptom's only recorded cause is a commit
+        // record linked `derived_from`, which the same walk resolves as the
+        // failure revision. The recorded edge must still report it as a
+        // cause; cutting it emptied the walk behind a false
+        // "no recorded causal edge" explanation.
+        let (storage, _dir) = open();
+        let cause = put_tagged(
+            &storage,
+            "commit 7244e9221ff25b0c93a13ad8f1aa8917ca50f697 runtime: eliminate _Psyscall\nfiles: src/runtime/proc.go",
+            &[
+                "git-commit",
+                "commit:7244e9221ff25b0c93a13ad8f1aa8917ca50f697",
+            ],
+        );
+        let failure = put(
+            &storage,
+            "user",
+            "FAILURE stop-the-world never completes while goroutines are blocked in read(2)",
+        );
+        link(&storage, &failure, &cause, "derived_from");
+
+        let out = execute(&storage, Some(json!({ "node_id": failure })))
+            .await
+            .unwrap();
+        assert_eq!(causes_of(&out), vec![(cause.clone(), 1)], "{out}");
+        assert!(out["emptyBecause"].is_null(), "{out}");
+        assert!(node_ids(&out).contains(&cause), "{out}");
+        let row = &out["causes"][0];
+        assert_eq!(row["path"][0]["source_id"], json!(failure), "{out}");
+        assert_eq!(row["path"][0]["target_id"], json!(cause), "{out}");
+        assert_eq!(row["path"][0]["link_type"], "derived_from", "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_resolved_failure_revision_stays_out_when_frames_resolve() {
+        // With a frame resolved, blame works against the revision and the
+        // revision itself stays context, not a cause. Recorded as a guard
+        // for the shape above.
+        let (storage, _dir) = open();
+        let cause = put_tagged(
+            &storage,
+            "commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa runtime: rework syscall paths\nfiles: src/runtime/proc.go",
+            &[
+                "git-commit",
+                "commit:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+        );
+        let failure = put(
+            &storage,
+            "user",
+            "FAILURE crash at src/runtime/proc.go during stop the world",
+        );
+        link(&storage, &failure, &cause, "derived_from");
+        link(&storage, &cause, "file:src/runtime/proc.go", "touched");
+
+        let out = execute(
+            &storage,
+            Some(json!({
+                "start_points": [
+                    {"kind": "stack_frame", "frame": "src/runtime/proc.go:100", "node_id": failure}
+                ]
+            })),
+        )
+        .await
+        .unwrap();
+        assert!(!causes_of(&out).iter().any(|(id, _)| *id == cause), "{out}");
     }
 
     #[tokio::test]
