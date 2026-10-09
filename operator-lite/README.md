@@ -8,6 +8,12 @@ every decision.
 Part of [Vestige](https://github.com/samvallad33/vestige). Free and standalone:
 copy one file, wire one hook, and your agent has a deterministic gate.
 
+## From Lite to Operator, in 88 seconds
+
+[![From Lite to Operator](media/from-lite-to-operator.gif)](media/from-lite-to-operator.mp4)
+
+Click the picture to watch the full film.
+
 ## Install (one command)
 
     curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o /tmp/operator-gate.py && python3 /tmp/operator-gate.py install
