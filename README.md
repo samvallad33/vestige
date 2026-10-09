@@ -15,6 +15,16 @@ Vestige is a fail-closed runtime firewall for AI agents. The model proposes, a d
 
 Agents run `rm -rf`, force-push, drop tables, and overwrite `.env` on their own, and nothing stops them. When something breaks, similarity search finds lookalikes, not causes.
 
+## Vestige Operator
+
+[![Watch Vestige Operator stop what Operator Lite lets through](operator-lite/media/from-lite-to-operator.gif)](operator-lite/media/from-lite-to-operator.mp4)
+
+Click the picture to watch the full film.
+
+Operator Lite is free and stays free. Vestige Operator is the owner's version of the same gate: $149 once, and every later version is yours at no charge, with laws you write, a Board of today's stops, and a weekly Letter of what your agents tried and what stopped them. You download a small archive the moment you pay; from an installed Operator Lite, `upgrade --install <the archive you downloaded>` unpacks it and starts the wizard.
+
+[Buy Vestige Operator](https://payhip.com/b/d4xvu)
+
 ## Quick start
 
 Operator Lite is the free gate in [`operator-lite/`](operator-lite/). It is one file, stdlib only, and it sits on a PreToolUse hook (Claude Code, Codex, OpenClaw, or any host with command hooks).
@@ -81,12 +91,6 @@ The memory server is a Strata signed append-only log. Every write is gated and r
 claude mcp add vestige vestige-mcp -s user
 codex mcp add vestige -- vestige-mcp
 ```
-
-## Vestige Operator
-
-Operator Lite is free and stays free. Vestige Operator is the owner's version of the same gate: $149 once, and every later version is yours at no charge, with laws you write, a Board of today's stops, and a weekly Letter of what your agents tried and what stopped them. You download a small archive the moment you pay; from an installed Operator Lite, `upgrade --install <the archive you downloaded>` unpacks it and starts the wizard.
-
-[Buy Vestige Operator](https://payhip.com/b/d4xvu)
 
 ## Docs
 
