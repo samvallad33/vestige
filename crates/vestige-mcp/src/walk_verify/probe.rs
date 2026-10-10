@@ -835,4 +835,25 @@ mod tests {
                 .starts_with("Oracle probe: abc x30 (fixed-size run) tested BAD.")
         );
     }
+
+    #[ignore]
+    #[cfg(unix)]
+    #[test]
+    fn catalog_item_59_a_hang_is_a_fail() {
+        let root = PathBuf::from(std::env::var("HOME").unwrap())
+            .join("Downloads/vestige-blind-spots-975d/item-59");
+        std::fs::create_dir_all(&root).unwrap();
+        let run = run_test(&test_in(
+            &root,
+            "sleep 30",
+            Some(Duration::from_millis(200)),
+        ))
+        .unwrap();
+        assert_eq!(verdict_of(run.exit), "bad", "catalog 59: {}", run.said);
+        assert!(
+            !run.said.contains("cannot test"),
+            "catalog 59: a timeout is a fail: {}",
+            run.said
+        );
+    }
 }
