@@ -18,8 +18,10 @@
 //! one walk start resolver. `vestige connect` and auto-connect still join
 //! memories on byte-exact identities; they do not resolve frames.
 //! `node_id` names the failure memory. `ci_run` does not resolve by name.
-//! `version_range` bounds candidates with `git rev-list --first-parent` and
-//! is not a name search. Shared names are not edges. A child of a visited
+//! `version_range` keeps a commit when `git merge-base --is-ancestor` says
+//! it is an ancestor of `broke_in` and a descendant of `worked_in`
+//! (`worked_in` itself stays out). It is not a name search. Shared names are
+//! not edges. A child of a visited
 //! commit that `corrects` an older commit contributes that older commit. A
 //! recorded `corrects` edge whose target is an ancestor of the failure
 //! revision contributes that target too, including when the revert sits on
@@ -86,7 +88,7 @@ pub fn schema() -> Value {
             "start_points": {
                 "type": "array",
                 "minItems": 1,
-                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). stack_frame and failing_test resolve by exact path to file anchors ingest_repo recorded. version_range limits commit candidates to git rev-list --first-parent worked_in..broke_in in the local repo. It is not a version-name search. ci_run walks the node_id memory.",
+                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). stack_frame and failing_test resolve by exact path to file anchors ingest_repo recorded. version_range keeps commits that are ancestors of broke_in and descendants of worked_in, checked with git merge-base --is-ancestor on local objects. It is not a version-name search. ci_run walks the node_id memory.",
                 "items": {
                     "oneOf": [
                         {
@@ -128,8 +130,8 @@ pub fn schema() -> Value {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "version_range"},
-                                "worked_in": {"type": "string", "description": "Last-known-good revision (tag or SHA). Exclusive start of git rev-list --first-parent."},
-                                "broke_in": {"type": "string", "description": "First-bad revision (tag or SHA). Inclusive end of git rev-list --first-parent."},
+                                "worked_in": {"type": "string", "description": "Last-known-good revision (tag or SHA). A candidate must be a descendant of this commit. The commit itself is excluded."},
+                                "broke_in": {"type": "string", "description": "First-bad revision (tag or SHA). A candidate must be an ancestor of this commit, inclusive."},
                                 "repo": {"type": "string", "description": "Path to the local git repository. Nothing is fetched."},
                                 "node_id": symptom_node_id()
                             },
@@ -368,6 +370,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
                 ancestry_note: None,
                 range,
                 structural_rank: false,
+                needs_prove: false,
             },
         ));
     }
@@ -412,6 +415,27 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
     } else {
         BTreeMap::new()
     };
+    // Blame and the failing hunk are the line-level facts. When neither
+    // fired, and no revert did either, the ordered list is not a cause:
+    // rank 1 would be depth, edge kind, or id.
+    let needs_prove = structural
+        && !git.files.is_empty()
+        && !causes.is_empty()
+        && causes.iter().all(|cause| {
+            structure.get(&cause.id).is_none_or(|row| {
+                !row.get("blameOfLine")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && !row
+                        .get("touchedFailingHunk")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    && !row
+                        .get("revertedAfterFailure")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+            })
+        });
     let upstream_note = upstream_note_for(storage, &rows, &causes);
     let range = apply_version_range(
         storage,
@@ -451,6 +475,7 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
             ancestry_note,
             range,
             structural_rank: structural,
+            needs_prove,
         },
     ))
 }
@@ -1004,6 +1029,10 @@ struct WalkOut {
     /// True when candidates were ordered by recorded git structure. False
     /// when they were ordered by depth and exact identities.
     structural_rank: bool,
+    /// True when a file frame resolved and neither blame, the failing hunk,
+    /// nor a revert selected a commit. The candidates stay; rank 1 is not
+    /// a cause.
+    needs_prove: bool,
 }
 
 /// Every start the caller gave, in order: top-level handles first (`node_id`,
@@ -1293,7 +1322,11 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
     };
     let cause_json = |(index, node): (usize, &Reached)| {
         let mut value = node_json(node);
-        value["rank"] = json!(index + 1);
+        if walk.needs_prove {
+            value["rank"] = Value::Null;
+        } else {
+            value["rank"] = json!(index + 1);
+        }
         if let Some(evidence) = walk.ranking.evidence.get(&node.id) {
             value["start"] = json!(node.start);
             value["shared_count"] = json!(evidence.count);
@@ -1308,7 +1341,8 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
             "scope_size": walk.ranking.scope_size,
             "joined_on": "per cause: the exact identities it records that its start records too, each with its carriers out of scope_size; a depth-1 cause is linked to the start itself, a deeper one is only compared with it",
             "touched": "a path follows lineage edges (derived_from, evidence_of, closed_by) freely and at most one touched edge",
-            "evidence_status": "hypothesis",
+            "evidence_status": if walk.needs_prove { "needs_prove" } else { "hypothesis" },
+            "needs_prove": walk.needs_prove,
         })
     });
     let not_followed = (walk.not_followed.edges > 0).then(|| {
@@ -1374,6 +1408,12 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "nodes": walk.nodes.iter().map(&node_json).collect::<Vec<_>>(),
         "causes": walk.causes.iter().enumerate().map(cause_json).collect::<Vec<_>>(),
         "ranking": ranking,
+        "needsProve": walk.needs_prove.then(|| json!({
+            "flag": true,
+            "command": "vestige prove",
+            "over": "version_range",
+            "because": "neither blame of the line nor a touched failing hunk selected a commit, and no revert did either; the candidates are returned and rank 1 is not the cause. vestige prove runs the recorded test across the version_range",
+        })),
         "not_followed": not_followed,
         "needs_report": walk.needs_report,
         "upstreamSkipped": walk.upstream_note,
@@ -1454,6 +1494,9 @@ struct GitQuery {
     failure_commit_id: Option<String>,
     failure_time: Option<DateTime<Utc>>,
     blame_shas: HashSet<String>,
+    /// Blamed commits whose edit of the line is whitespace or a comment.
+    /// They do not take the blame slot or the hunk slot.
+    non_semantic: HashSet<String>,
     failure_sha: Option<String>,
     root: Option<PathBuf>,
     active: bool,
@@ -1515,6 +1558,41 @@ fn resolve_git_frames(
             }
         }
     }
+    // A failure linked to an existing `file:` anchor (byte-equal path, same
+    // scope) starts the walk there too. A commit record is not expanded:
+    // it already touches those anchors, and fanning out would rank every
+    // other toucher of every file it edited.
+    for id in starts {
+        let is_commit = storage
+            .get_node(id)
+            .ok()
+            .flatten()
+            .as_ref()
+            .is_some_and(|node| commit_sha(node).is_some());
+        if is_commit {
+            continue;
+        }
+        let Ok(edges) = storage.get_connections_for_memory(id) else {
+            continue;
+        };
+        for edge in edges {
+            if edge.link_type != "touched" || edge.source_id != id.as_str() {
+                continue;
+            }
+            let Some(path) = edge.target_id.strip_prefix("file:") else {
+                continue;
+            };
+            if !recorded.iter().any(|(anchor, _)| anchor == &edge.target_id) {
+                continue;
+            }
+            if file_seen.insert(path.to_string()) {
+                files.push(path.to_string());
+            }
+            if anchor_seen.insert(edge.target_id.clone()) {
+                anchors.push(edge.target_id);
+            }
+        }
+    }
 
     let mut revision: Option<Revision> = None;
     for id in starts {
@@ -1536,10 +1614,21 @@ fn resolve_git_frames(
         root = git_root_from_touchers(storage, scope, &files)?;
     }
     let mut blame_shas = HashSet::new();
+    let mut non_semantic = HashSet::new();
     if let (Some(line), Some(sha), Some(root)) = (line, failure_sha.as_deref(), root.as_ref()) {
         for file in &files {
-            if let Ok(Some(blamed)) = crate::tools::repo_ingest::blame_line(root, sha, file, line) {
-                blame_shas.insert(blamed);
+            let Ok(Some(hit)) = crate::tools::repo_ingest::blame_at(root, sha, file, line) else {
+                continue;
+            };
+            if crate::tools::repo_ingest::line_change_is_blank_or_comment(
+                root,
+                &hit.sha,
+                file,
+                hit.origin_line,
+            ) {
+                non_semantic.insert(hit.sha);
+            } else {
+                blame_shas.insert(hit.sha);
             }
         }
     }
@@ -1560,6 +1649,7 @@ fn resolve_git_frames(
         failure_commit_id,
         failure_time,
         blame_shas,
+        non_semantic,
         failure_sha,
         root,
         active,
@@ -1951,6 +2041,19 @@ fn edge_rank(path: &[Hop]) -> u8 {
     }
 }
 
+/// Blame and hunk slots for one cause. A whitespace-only or comment-only
+/// edit of the blamed line takes neither slot, so it cannot outrank a
+/// commit that did not win them.
+fn line_slots(storage: &Arc<Storage>, id: &str, sha: Option<&str>, git: &GitQuery) -> (bool, bool) {
+    if sha.is_some_and(|sha| git.non_semantic.contains(sha)) {
+        return (false, false);
+    }
+    (
+        sha.is_some_and(|sha| git.blame_shas.contains(sha)),
+        touched_line(storage, id, &git.files, git.line),
+    )
+}
+
 fn git_rank(
     storage: &Arc<Storage>,
     cause: &Reached,
@@ -1958,9 +2061,10 @@ fn git_rank(
 ) -> (u8, u8, u8, u32, u8, i64, String) {
     let node = storage.get_node(&cause.id).ok().flatten();
     let sha = node.as_ref().and_then(commit_sha);
+    let (blame_hit, hunk_hit) = line_slots(storage, &cause.id, sha.as_deref(), git);
     let reverted = u8::from(!reverted_after(storage, &cause.id, git.failure_time));
-    let blame = u8::from(!sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)));
-    let hunk = u8::from(!touched_line(storage, &cause.id, &git.files, git.line));
+    let blame = u8::from(!blame_hit);
+    let hunk = u8::from(!hunk_hit);
     let gap = match (
         git.failure_time,
         node.as_ref().and_then(|node| node.valid_from),
@@ -1990,13 +2094,14 @@ fn git_structure(
     for cause in causes {
         let node = storage.get_node(&cause.id).ok().flatten();
         let sha = node.as_ref().and_then(commit_sha);
+        let (blame_hit, hunk_hit) = line_slots(storage, &cause.id, sha.as_deref(), git);
         out.insert(
             cause.id.clone(),
             json!({
                 "sha": sha,
                 "revertedAfterFailure": reverted_after(storage, &cause.id, git.failure_time),
-                "blameOfLine": sha.as_ref().is_some_and(|sha| git.blame_shas.contains(sha)),
-                "touchedFailingHunk": touched_line(storage, &cause.id, &git.files, git.line),
+                "blameOfLine": blame_hit,
+                "touchedFailingHunk": hunk_hit,
                 "hop": cause.depth,
                 "edge": cause.path.last().map(|hop| hop.link_type.as_str()),
                 "lockfile": lockfile_of(storage, &cause.id),
@@ -2209,12 +2314,10 @@ fn apply_version_range(
         } => Some((worked_in.as_str(), broke_in.as_str(), repo.as_str())),
         _ => None,
     })?;
-    let window = match crate::tools::repo_ingest::first_parent_rev_list(
-        std::path::Path::new(repo),
-        worked_in,
-        broke_in,
-    ) {
-        Ok(window) => window,
+    let root = std::path::Path::new(repo);
+    let (good, bad) = match crate::tools::repo_ingest::resolve_range_ends(root, worked_in, broke_in)
+    {
+        Ok(ends) => ends,
         Err(err) => {
             return Some(json!({
                 "workedIn": worked_in,
@@ -2229,41 +2332,70 @@ fn apply_version_range(
         }
     };
     let mut excluded = Vec::new();
+    let mut missing = false;
     causes.retain(|cause| match node_commit_sha(storage, &cause.id) {
-        Some(sha) if !window.shas.contains(&sha) => {
-            excluded.push(sha);
-            false
-        }
-        _ => true,
+        Some(sha) => match commit_in_ancestor_range(root, &good, &bad, &sha) {
+            Ok(true) => true,
+            Ok(false) => {
+                excluded.push(sha);
+                false
+            }
+            Err(_) => {
+                missing = true;
+                excluded.push(sha);
+                false
+            }
+        },
+        None => true,
     });
     let dropped: HashSet<&str> = excluded.iter().map(String::as_str).collect();
     nodes.retain(|node| match node_commit_sha(storage, &node.id) {
         Some(sha) => !dropped.contains(sha.as_str()),
         None => true,
     });
-    let because = if excluded.is_empty() {
+    let mut because = if excluded.is_empty() {
         format!(
-            "no commit candidate was outside git rev-list --first-parent {}..{}",
-            window.good, window.bad
+            "no commit candidate was outside the commits that descend from {good} and are ancestors of {bad} (git merge-base --is-ancestor)"
         )
     } else {
         format!(
-            "{} commit(s) excluded: outside git rev-list --first-parent {}..{}",
-            excluded.len(),
-            window.good,
-            window.bad
+            "{} commit(s) excluded: not both a descendant of {good} and an ancestor of {bad} (git merge-base --is-ancestor)",
+            excluded.len()
         )
     };
+    if missing {
+        because
+            .push_str("; a commit object is not in the local repository and nothing was fetched");
+    }
     Some(json!({
         "workedIn": worked_in,
         "brokeIn": broke_in,
         "repo": repo,
-        "good": window.good,
-        "bad": window.bad,
+        "good": good,
+        "bad": bad,
         "excluded": excluded.len(),
         "excludedShas": excluded,
         "because": because,
     }))
+}
+
+/// `sha` stays when it is an ancestor of `bad` (inclusive) and `good` is an
+/// ancestor of `sha`, and `sha` is not `good` itself. Both checks are
+/// `git merge-base --is-ancestor` on local objects.
+fn commit_in_ancestor_range(
+    root: &std::path::Path,
+    good: &str,
+    bad: &str,
+    sha: &str,
+) -> Result<bool, String> {
+    if sha == good {
+        return Ok(false);
+    }
+    let ancestor_of_bad = crate::tools::repo_ingest::git_is_ancestor(root, sha, bad)?;
+    if !ancestor_of_bad {
+        return Ok(false);
+    }
+    crate::tools::repo_ingest::git_is_ancestor(root, good, sha)
 }
 
 fn node_commit_sha(storage: &Arc<Storage>, id: &str) -> Option<String> {
@@ -3961,7 +4093,7 @@ mod strata_walk {
             out["range"]["because"]
                 .as_str()
                 .unwrap()
-                .contains("rev-list --first-parent"),
+                .contains("merge-base --is-ancestor"),
             "{out}"
         );
     }
@@ -4250,5 +4382,33 @@ mod strata_walk {
             .find(|row| row["structure"]["sha"] == cause)
             .unwrap_or_else(|| panic!("{out}"));
         assert_eq!(cause_row["structure"]["edge"], "corrects", "{out}");
+    }
+
+    #[ignore]
+    #[test]
+    fn catalog_item_102_path_outside_the_work_tree() {
+        assert!(
+            !paths_identify(
+                "/opt/build/src/util/linked_list.rs",
+                "tokio/src/util/linked_list.rs"
+            ),
+            "catalog 102: a path outside the work tree does not match on a shared suffix"
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn catalog_item_38_ordered_frames() {
+        let (path, line) = split_frame("src/app.rs:10\nsrc/lib.rs:2");
+        assert_eq!(path, "src/app.rs");
+        assert_eq!(line, Some(10));
+    }
+
+    #[ignore]
+    #[test]
+    fn catalog_item_39_locator_syntax() {
+        let (path, line) = split_frame("File \"src/parser.py\", line 40, in load");
+        assert_eq!(path, "src/parser.py");
+        assert_eq!(line, Some(40));
     }
 }

@@ -61,8 +61,10 @@
 //! commit named by that trailer. A reverted commit that is reachable locally
 //! but outside this page is ingested too, so the edge has both ends.
 //! `(cherry picked from commit <sha>)` is `derived_from` the named commit.
-//! `Fixes: <40-hex sha>` is `corrects` only when that exact object is a
-//! commit. A shorter hex token is not read and is not expanded.
+//! `Fixes:` keeps its first token when that token is 7–40 hex digits.
+//! `git rev-parse --verify <token>^{commit}` resolves it, and only when git
+//! resolves that one object. An ambiguous or missing token is dropped.
+//! Vestige does not prefix-match commit ids itself.
 //! A commit whose reverse diff has the same `git patch-id --stable` as an
 //! older commit's diff `corrects` that commit, and two commits with the same
 //! forward patch-id are the same change: the later `derived_from` the earlier.
@@ -716,7 +718,7 @@ struct History {
     page_len: usize,
     stopped_early: Option<String>,
     pulled_reverts: usize,
-    /// Cherry-pick and full-sha `Fixes:` targets pulled from outside the page.
+    /// Cherry-pick and `Fixes:` targets pulled from outside the page.
     pulled_named: usize,
     revert_merges: usize,
 }
@@ -751,7 +753,7 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
         }
     }
 
-    let mut verified: HashSet<String> = HashSet::new();
+    let mut verified: HashMap<String, Option<String>> = HashMap::new();
     resolve_fix_shas(root, &mut commits, &mut verified);
     let mut pulled_reverts = 0usize;
     let mut pulled_named = 0usize;
@@ -819,39 +821,37 @@ fn read_commits(root: &Path, req: &Request, limit: usize) -> Result<History, Str
     })
 }
 
-/// Keep a `Fixes:` token only when it is already a 40-hex sha and
-/// `git rev-parse --verify <sha>^{commit}` returns that same sha.
-/// A shorter token is dropped. It is never expanded, so a unique 12-hex
-/// prefix cannot pull a commit that was outside the page. Nothing is fetched.
+/// Replace each `Fixes:` token with the commit `git rev-parse --verify
+/// <token>^{commit}` names, and only when that command succeeds. Git's own
+/// check is the uniqueness check: an ambiguous prefix and a missing object
+/// both fail it, and neither is expanded here. Nothing is fetched.
 /// `verified` carries answers across commits and across the two passes of
 /// [`read_commits`], so a page of messages naming the same targets asks git
-/// once per distinct sha, not once per mention.
-fn resolve_fix_shas(root: &Path, commits: &mut [GitCommit], verified: &mut HashSet<String>) {
+/// once per distinct token, not once per mention.
+fn resolve_fix_shas(
+    root: &Path,
+    commits: &mut [GitCommit],
+    verified: &mut HashMap<String, Option<String>>,
+) {
     for commit in commits.iter_mut() {
         let mut full = Vec::new();
         for token in commit.fixes.drain(..) {
-            if !is_exact_full_sha(&token) {
-                continue;
-            }
-            if !verified.contains(&token) {
-                match resolve_commit_sha(root, &token) {
-                    Some(sha) if sha == token => {
-                        verified.insert(sha);
-                    }
-                    // not a commit object, or not the commit it names
-                    _ => continue,
-                }
-            }
-            if token != commit.sha && !full.contains(&token) {
-                full.push(token);
+            let resolved = if let Some(cached) = verified.get(&token) {
+                cached.clone()
+            } else {
+                let answer = resolve_commit_sha(root, &token);
+                verified.insert(token, answer.clone());
+                answer
+            };
+            if let Some(sha) = resolved
+                && sha != commit.sha
+                && !full.contains(&sha)
+            {
+                full.push(sha);
             }
         }
         commit.fixes = full;
     }
-}
-
-fn is_exact_full_sha(sha: &str) -> bool {
-    sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// `git log -p` arguments. `merges` is `--no-merges` or `--merges`.
@@ -996,14 +996,28 @@ fn record_git_edges(
             );
         }
         for hunk in &commit.hunks {
-            note_edge(
-                ctx.storage,
-                source,
-                &hunk_anchor_id(&hunk.file, hunk.start, hunk.len),
-                "touched",
-                ctx.dry_run,
-                &mut out.touched,
-            );
+            // New side names added lines. Old side names removed lines, so a
+            // deletion-only commit is still a candidate for those lines.
+            if hunk.len > 0 {
+                note_edge(
+                    ctx.storage,
+                    source,
+                    &hunk_anchor_id(&hunk.file, hunk.start, hunk.len),
+                    "touched",
+                    ctx.dry_run,
+                    &mut out.touched,
+                );
+            }
+            if hunk.old_len > 0 && (hunk.old_start != hunk.start || hunk.old_len != hunk.len) {
+                note_edge(
+                    ctx.storage,
+                    source,
+                    &hunk_anchor_id(&hunk.file, hunk.old_start, hunk.old_len),
+                    "touched",
+                    ctx.dry_run,
+                    &mut out.touched,
+                );
+            }
         }
         for parent in &commit.parents {
             if !known.contains(parent.as_str()) {
@@ -1521,6 +1535,32 @@ pub struct FirstParentRange {
     pub shas: HashSet<String>,
 }
 
+/// Resolve both ends of a version range to full SHAs. Missing objects are
+/// an error; nothing is fetched.
+pub fn resolve_range_ends(root: &Path, good: &str, bad: &str) -> Result<(String, String), String> {
+    check_git_arg("worked_in", good)?;
+    check_git_arg("broke_in", bad)?;
+    if !root.is_dir() {
+        return Err(format!(
+            "version range repo {} is not an available directory",
+            root.display()
+        ));
+    }
+    let good_sha = resolve_commit_sha(root, good).ok_or_else(|| {
+        format!(
+            "could not resolve worked_in `{good}` to a commit in {}",
+            root.display()
+        )
+    })?;
+    let bad_sha = resolve_commit_sha(root, bad).ok_or_else(|| {
+        format!(
+            "could not resolve broke_in `{bad}` to a commit in {}",
+            root.display()
+        )
+    })?;
+    Ok((good_sha, bad_sha))
+}
+
 pub fn first_parent_rev_list(
     root: &Path,
     good: &str,
@@ -1565,9 +1605,22 @@ pub fn first_parent_rev_list(
     })
 }
 
+/// One porcelain blame hit: the commit and the line number in that commit.
+pub struct BlameAt {
+    pub sha: String,
+    /// Line in the blamed commit (`orig` in the porcelain header), not the
+    /// line number at the revision that was blamed.
+    pub origin_line: u32,
+}
+
 /// Blame one line at `rev` in `root`. `Ok(None)` is an unresolvable line, not
 /// a git failure the caller should guess past. The SHA is the porcelain header.
 pub fn blame_line(root: &Path, rev: &str, path: &str, line: u32) -> Result<Option<String>, String> {
+    Ok(blame_at(root, rev, path, line)?.map(|hit| hit.sha))
+}
+
+/// Blame one line and keep the origin line in the blamed commit.
+pub fn blame_at(root: &Path, rev: &str, path: &str, line: u32) -> Result<Option<BlameAt>, String> {
     if line == 0 || path.is_empty() {
         return Ok(None);
     }
@@ -1589,18 +1642,158 @@ pub fn blame_line(root: &Path, rev: &str, path: &str, line: u32) -> Result<Optio
         return Ok(None);
     }
     let text = String::from_utf8_lossy(&run.stdout);
-    let Some(sha) = text.split_whitespace().next() else {
+    let mut fields = text.split_whitespace();
+    let Some(sha) = fields.next() else {
         return Ok(None);
     };
     let sha = sha.to_ascii_lowercase();
+    let origin_line = fields
+        .next()
+        .and_then(|field| field.parse().ok())
+        .unwrap_or(line);
     if sha.len() == 40
         && sha.chars().all(|c| c.is_ascii_hexdigit())
         && sha.chars().any(|c| c != '0')
     {
-        Ok(Some(sha))
+        Ok(Some(BlameAt { sha, origin_line }))
     } else {
         Ok(None)
     }
+}
+
+/// True when the hunk of `rev` that contains `line` changes only whitespace
+/// or a comment. A code edit on that line is false. A diff git cannot show
+/// is false, so a missing parent does not hide a real blame.
+pub fn line_change_is_blank_or_comment(root: &Path, rev: &str, path: &str, line: u32) -> bool {
+    if line == 0 || path.is_empty() || check_git_arg("rev", rev).is_err() {
+        return false;
+    }
+    let parent = format!("{rev}^");
+    let run = run_git(
+        root,
+        &[
+            "diff".into(),
+            "-U0".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            parent,
+            rev.into(),
+            "--".into(),
+            path.into(),
+        ],
+    );
+    let Ok(run) = run else {
+        return false;
+    };
+    if run.failure.is_some() {
+        return false;
+    }
+    hunk_at_line_is_blank_or_comment(&String::from_utf8_lossy(&run.stdout), line)
+}
+
+fn hunk_at_line_is_blank_or_comment(diff: &str, line: u32) -> bool {
+    let mut in_hunk = false;
+    let mut covers = false;
+    let mut removed = Vec::new();
+    let mut added = Vec::new();
+    let mut saw = false;
+    for raw in diff.lines() {
+        if let Some(rest) = raw.strip_prefix("@@") {
+            if covers {
+                break;
+            }
+            in_hunk = false;
+            removed.clear();
+            added.clear();
+            let header = rest.split("@@").next().unwrap_or("");
+            if let Some((start, len)) = new_side_span(header)
+                && len > 0
+                && line >= start
+                && line < start.saturating_add(len)
+            {
+                in_hunk = true;
+                covers = true;
+            }
+            continue;
+        }
+        if !in_hunk || raw.starts_with('\\') {
+            continue;
+        }
+        if let Some(text) = raw.strip_prefix('+') {
+            if raw.starts_with("+++") {
+                continue;
+            }
+            added.push(text.to_string());
+            saw = true;
+        } else if let Some(text) = raw.strip_prefix('-') {
+            if raw.starts_with("---") {
+                continue;
+            }
+            removed.push(text.to_string());
+            saw = true;
+        }
+    }
+    if !covers || !saw {
+        return false;
+    }
+    let comment_only = removed
+        .iter()
+        .chain(added.iter())
+        .all(|line| is_blank_or_comment_line(line));
+    if comment_only {
+        return true;
+    }
+    let fold = |lines: &[String]| -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| line.chars().filter(|c| !c.is_whitespace()).collect())
+            .filter(|line: &String| !line.is_empty())
+            .collect()
+    };
+    let removed = fold(&removed);
+    let added = fold(&added);
+    !removed.is_empty() && removed == added
+}
+
+fn new_side_span(header: &str) -> Option<(u32, u32)> {
+    let plus = header
+        .split_whitespace()
+        .find(|token| token.starts_with('+'))?;
+    let mut parts = plus.strip_prefix('+')?.splitn(2, ',');
+    let start = parts.next()?.parse().ok()?;
+    let len = match parts.next() {
+        Some(len) => len.parse().ok()?,
+        None => 1,
+    };
+    Some((start, len))
+}
+
+/// A diff line whose trimmed text is empty or is only a comment introducer.
+/// A preprocessor directive (`#include`) and a pointer write (`*ptr`) are
+/// not comments. This classifies the blamed line's own diff; it is not a
+/// join key.
+fn is_blank_or_comment_line(raw: &str) -> bool {
+    let text = raw.trim();
+    if text.is_empty() {
+        return true;
+    }
+    if text.starts_with("//")
+        || text.starts_with("/*")
+        || text.starts_with("*/")
+        || text.starts_with("<!--")
+    {
+        return true;
+    }
+    if let Some(rest) = text.strip_prefix('*') {
+        return rest.is_empty() || rest.starts_with('/') || rest.starts_with(char::is_whitespace);
+    }
+    if let Some(rest) = text.strip_prefix('#') {
+        return rest.is_empty() || rest.starts_with(char::is_whitespace);
+    }
+    if let Some(rest) = text.strip_prefix("--") {
+        return rest.is_empty() || rest.starts_with(char::is_whitespace);
+    }
+    false
 }
 
 /// What a git run produced. A non-zero exit is `failure` (stderr), not an
@@ -2682,14 +2875,12 @@ pub fn parse_timeout(raw: &str) -> u32 {
         assert_eq!(fixes_out["edges"]["fixes"], 1, "{fixes_out}");
     }
 
-    /// A unique short hex prefix used to be `git rev-parse`d into a full sha,
-    /// then `read_one_commit` added that commit even when it sat outside the
-    /// page, and the edge writer stored `corrects`. That is how a 300-commit
-    /// page could gain an off-page target. Only an exact 40-hex `Fixes:` line
-    /// whose object is that commit may do this. `This reverts commit <sha>.`
-    /// and `(cherry picked from commit <sha>)` are unchanged.
+    /// A `Fixes:` token resolves only when `git rev-parse --verify
+    /// <token>^{commit}` names one local commit. A unique 12-hex prefix and
+    /// a subject after the token do. A lowercase `fixes:` line and a token
+    /// git cannot resolve do not. Vestige does not scan object ids itself.
     #[tokio::test]
-    async fn a_short_fixes_prefix_does_not_pull_or_link_an_outside_commit() {
+    async fn a_fixes_token_resolves_only_when_git_names_one_commit() {
         let mut repo = Repo::empty();
         repo.write("src/a.rs", "fn a() { let _ = 1; }\n");
         repo.commit("base", "2024-02-01T00:00:00Z");
@@ -2697,7 +2888,8 @@ pub fn parse_timeout(raw: &str) -> u32 {
         repo.commit("the feature", "2024-02-02T00:00:00Z");
         let feature = repo.shas[1].clone();
         let prefix = &feature[..12];
-        let seven = &feature[..7];
+        let missing = "0123456789ab";
+        assert_ne!(&feature[..missing.len()], missing);
         repo.write("src/b.rs", "fn b() {}\n");
         repo.git(&["add", "-A"], "2024-02-03T00:00:00Z");
         repo.git(
@@ -2708,35 +2900,51 @@ pub fn parse_timeout(raw: &str) -> u32 {
                 "close the bug",
                 "-m",
                 &format!(
-                    "Fixes: {prefix}\nFixes: {seven}\nfixes: {feature}\nFixes: {feature} mentioned in a sentence"
+                    "Fixes: {prefix} (subject ignored)\nfixes: {feature}\nFixes: {missing}\nFixes: {feature} mentioned in a sentence"
                 ),
             ],
             "2024-02-03T00:00:00Z",
         );
         let fixer = repo.git(&["rev-parse", "HEAD"], "2024-02-03T00:00:00Z");
+        let via_git = repo.git(
+            &["rev-parse", "--verify", &format!("{prefix}^{{commit}}")],
+            "2024-02-03T00:00:00Z",
+        );
+        assert_eq!(via_git, feature);
 
         let (storage, _dir) = strata();
         let mut page = repo.request(false);
-        page.rev = Some(fixer);
+        page.rev = Some(fixer.clone());
         page.limit = Some(1);
         page.codebase = Some("loose-fixes".into());
         page.scope = Some("loose-fixes".into());
         let out = ingest(&storage, page).await;
-        assert_eq!(out["commits"]["pulledNamed"], 0, "{out}");
-        assert_eq!(out["commits"]["pulledReverts"], 0, "{out}");
-        assert_eq!(out["edges"]["fixes"], 0, "{out}");
-        let tag = commit_tag(&feature);
-        assert!(
+        assert_eq!(out["commits"]["pulledNamed"], 1, "{out}");
+        assert_eq!(out["edges"]["fixes"], 1, "{out}");
+        let id_of = |sha: &str| {
+            let tag = commit_tag(sha);
             storage
                 .current_code_context_nodes("event", Some(&tag), "loose-fixes", 5)
                 .unwrap()
-                .is_empty(),
-            "the off-page commit named by a short Fixes: prefix was ingested: {out}"
-        );
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("missing {sha}"))
+                .id
+        };
+        let feature_id = id_of(&feature);
+        let fixer_id = id_of(&fixer);
         let edges = storage.get_all_connections().unwrap();
         assert!(
-            edges.iter().all(|edge| edge.link_type != "corrects"),
-            "a loose Fixes: line wrote corrects: {edges:?}"
+            edges.iter().any(|edge| {
+                edge.source_id == fixer_id
+                    && edge.target_id == feature_id
+                    && edge.link_type == "corrects"
+            }),
+            "git's resolution of the prefix is the corrects target: {edges:?}"
+        );
+        assert!(
+            edges.iter().all(|edge| edge.target_id != missing),
+            "an unresolved token was stored: {edges:?}"
         );
     }
 

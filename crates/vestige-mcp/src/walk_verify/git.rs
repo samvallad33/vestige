@@ -394,6 +394,18 @@ mod tests {
         assert_eq!(removed, expected);
     }
 
+    #[ignore]
+    #[test]
+    fn catalog_item_33_bisect_skip_next_to_the_first_bad() {
+        let sha = "a".repeat(40);
+        let log = format!("# possible first bad commit: [{sha}]\n");
+        assert_eq!(
+            first_bad_logged(&log).as_deref(),
+            Some(sha.as_str()),
+            "catalog 33: a skip beside the boundary keeps the possible-first sha"
+        );
+    }
+
     #[test]
     fn a_first_bad_commit_is_read_from_the_bisect_log() {
         let sha = "4a6c2c0ff8fe5a2a6409cf18dc2bf2dd2a755270";

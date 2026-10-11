@@ -135,3 +135,9 @@ pub mod project;
 /// Ignored real-repo proof. `cargo test --workspace` does not run it.
 #[cfg(test)]
 mod causal_git_proof;
+
+/// Catalog gaps for causal_walk and ingest_repo. Passing tests cover the
+/// slice landed with the mapping doc. `#[ignore]` tests name the high-priority
+/// gaps whose facts are already on disk.
+#[cfg(test)]
+mod blind_spots;

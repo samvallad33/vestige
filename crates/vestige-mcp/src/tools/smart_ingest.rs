@@ -26,6 +26,7 @@
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use unicode_normalization::UnicodeNormalization;
@@ -945,6 +946,69 @@ fn bounded_echo_tags(stored: &[String]) -> Vec<String> {
     tags
 }
 
+/// Refuse a write whose `codebase:` tag is already recorded only in other
+/// scopes. The error names those scopes. A tag this scope already holds, or
+/// a tag no memory holds, is allowed. An echo of a memory this scope already
+/// accepted is not checked here.
+fn refuse_foreign_codebase(
+    storage: &Arc<Storage>,
+    scope: &str,
+    tags: &[String],
+) -> Result<(), String> {
+    let wanted: Vec<String> = tags
+        .iter()
+        .filter_map(|tag| tag.strip_prefix("codebase:"))
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("codebase:{name}"))
+        .collect();
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let Some(scopes) = strata_memory::node_scopes(storage.as_ref()) else {
+        return Ok(());
+    };
+    let nodes = storage
+        .get_all_nodes(i32::MAX, 0)
+        .map_err(|err| format!("could not read scopes for a codebase tag: {err}"))?;
+    let mut satisfied = false;
+    let mut foreign: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for tag in &wanted {
+        let mut here = false;
+        let mut elsewhere = BTreeSet::new();
+        for node in &nodes {
+            if !node.tags.iter().any(|stored| stored == tag) {
+                continue;
+            }
+            match scopes.get(&node.id).map(String::as_str) {
+                Some(found) if found == scope => here = true,
+                Some(found) if !found.is_empty() => {
+                    elsewhere.insert(found.to_string());
+                }
+                _ => {}
+            }
+        }
+        if here {
+            satisfied = true;
+        } else {
+            for other in elsewhere {
+                foreign.entry(tag.clone()).or_default().insert(other);
+            }
+        }
+    }
+    if satisfied || foreign.is_empty() {
+        return Ok(());
+    }
+    let named = foreign
+        .iter()
+        .map(|(tag, scopes)| {
+            let list = scopes.iter().cloned().collect::<Vec<_>>().join(", ");
+            format!("{tag} is recorded in scope {list}")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(format!("{named}; write this memory in that scope"))
+}
+
 /// Auto-connect every memory this ingest saved: the ingest-time share of
 /// `vestige connect`, joined onto the saved nodes through the shared
 /// `crate::auto_connect` module. Walks the same response slots `write_links`
@@ -1647,6 +1711,7 @@ async fn execute_verbose(
 
     // Check if force_create is enabled
     if args.force_create.unwrap_or(false) {
+        refuse_foreign_codebase(storage, &scope, &hook_tags)?;
         let node = storage
             .ingest_in_scope_with_secret_policy(input, &scope, secret_policy)
             .map_err(|e| e.to_string())?;
@@ -1739,6 +1804,7 @@ async fn execute_verbose(
                 &hook_tags,
             );
         }
+        refuse_foreign_codebase(storage, &scope, &hook_tags)?;
         let node = storage
             .ingest_in_scope_with_secret_policy(input, &scope, secret_policy)
             .map_err(|e| e.to_string())?;
@@ -2191,6 +2257,15 @@ async fn execute_batch(
         // Check force_create: global flag OR per-item flag
         let item_force = global_force_create || item_force_create;
         if item_force {
+            if let Err(reason) = refuse_foreign_codebase(storage, &scope, &hook_tags) {
+                errors += 1;
+                results.push(serde_json::json!({
+                    "index": i,
+                    "status": "error",
+                    "reason": reason,
+                }));
+                continue;
+            }
             match storage.ingest_in_scope_with_secret_policy(input, &scope, secret_policy) {
                 Ok(node) => {
                     let node_id = node.id.clone();
@@ -2313,6 +2388,15 @@ async fn execute_batch(
                         }));
                     }
                 }
+                continue;
+            }
+            if let Err(reason) = refuse_foreign_codebase(storage, &scope, &hook_tags) {
+                errors += 1;
+                results.push(serde_json::json!({
+                    "index": i,
+                    "status": "error",
+                    "reason": reason,
+                }));
                 continue;
             }
             match storage.ingest_in_scope_with_secret_policy(input, &scope, secret_policy) {

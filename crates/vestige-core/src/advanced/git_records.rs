@@ -3,7 +3,7 @@
 //! Turn `git log -p` output into memory records so Backfill can join a failure
 //! to the change that caused it, not only to another description of it. Each
 //! commit becomes one record tagged `git-commit`; its files, modules, hunk
-//! spans (new-side line ranges, the anchors blame needs) and import edges ride
+//! spans (new-side and old-side line ranges, the anchors blame needs) and import edges ride
 //! in the content alongside the hunk-header symbols, so the query-time entity
 //! extractor picks them up as join keys with no schema change.
 
@@ -16,8 +16,9 @@ pub const COMMIT_TAG: &str = "git-commit";
 /// `source_system` key for the idempotent source upsert.
 pub const SOURCE_SYSTEM: &str = "git";
 
-/// One `@@ -a[,b] +c[,d] @@` hunk span on the new side — where the changed
-/// lines live in the post-commit file, so blame can anchor onto it.
+/// One `@@ -a[,b] +c[,d] @@` hunk span. The new side is where added lines
+/// live. The old side is the lines the commit removed, so a deletion-only
+/// hunk is still a touched range.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HunkSpan {
     /// File the hunk belongs to (the b/ side name, like `files`).
@@ -26,6 +27,10 @@ pub struct HunkSpan {
     pub start: u32,
     /// New-side line count (`,d`); an omitted count means a single line.
     pub len: u32,
+    /// Old-side start line (`-a`).
+    pub old_start: u32,
+    /// Old-side line count (`,b`); an omitted count means a single line.
+    pub old_len: u32,
     /// Symbol from the hunk-header trailing context, when one parses.
     pub symbol: Option<String>,
 }
@@ -63,8 +68,9 @@ pub struct GitCommit {
     /// The 40-hex SHA from a `(cherry picked from commit <sha>)` line.
     /// Anything else in the message is not a cherry-pick.
     pub cherry_picked_from: Option<String>,
-    /// `Fixes: <sha>` trailers, lowercase, exactly 40 hex digits, as written.
-    /// A short prefix is not a trailer and is never expanded.
+    /// `Fixes:` trailer tokens, lowercase, 7–40 hex digits. The first token
+    /// on the line is kept and any further words are ignored. Expansion to a
+    /// commit object is not done here.
     pub fixes: Vec<String>,
     /// Valid trailers beyond [`MAX_FIXES`] (recorded as a count, so a commit
     /// cannot turn its message into unbounded git lookups).
@@ -464,10 +470,10 @@ pub fn cherry_picked_from(body: &str) -> Option<String> {
     None
 }
 
-/// `Fixes: <sha>` when the token is a full 40-hex commit id and the only
-/// thing on the line after the prefix. A 7–39 hex prefix, `fixes:`, and a
-/// SHA inside a sentence are not trailers. Nothing here asks git to expand
-/// a prefix.
+/// The first token of a `Fixes:` trailer when it is 7–40 hex digits.
+/// Further words on the line, including a parenthesized subject, are
+/// ignored. `fixes:` (any other case) is not the trailer. Nothing here
+/// asks git to expand a prefix or matches one commit's id against another.
 pub fn fixes_targets(body: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in body.lines() {
@@ -475,22 +481,23 @@ pub fn fixes_targets(body: &str) -> Vec<String> {
         let Some(rest) = line.strip_prefix("Fixes:") else {
             continue;
         };
-        let rest = rest.trim();
-        let mut tokens = rest.split_whitespace();
-        let Some(sha) = tokens.next() else {
+        let Some(token) = rest.split_whitespace().next() else {
             continue;
         };
-        if tokens.next().is_some() {
-            continue;
-        }
-        if is_full_sha(sha) {
-            let sha = sha.to_ascii_lowercase();
-            if !out.contains(&sha) {
-                out.push(sha);
+        if is_fixes_token(token) {
+            let token = token.to_ascii_lowercase();
+            if !out.contains(&token) {
+                out.push(token);
             }
         }
     }
     out
+}
+
+/// 7–40 hex digits. Shorter than 7 is not a commit prefix git will resolve;
+/// longer than 40 is not a SHA-1.
+fn is_fixes_token(token: &str) -> bool {
+    (7..=40).contains(&token.len()) && token.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn is_full_sha(s: &str) -> bool {
@@ -627,13 +634,16 @@ pub fn parse_git_log(raw: &str) -> Vec<GitCommit> {
                     {
                         symbols.insert(format!("{file}/{sym}"));
                     }
-                    // blame anchors: the +c[,d] side is where the new lines live
-                    if let Some((start, len)) = parse_new_side(ranges) {
+                    // Both sides of `@@`. A pure deletion has a new length of
+                    // 0 and an old range that still names the removed lines.
+                    if let Some((old_start, old_len, start, len)) = parse_hunk_ranges(ranges) {
                         if hunks.len() < MAX_HUNKS {
                             hunks.push(HunkSpan {
                                 file: file.clone(),
                                 start,
                                 len,
+                                old_start,
+                                old_len,
                                 symbol: sym.clone(),
                             });
                         } else {
@@ -713,15 +723,29 @@ fn push_file(
     }
 }
 
-/// New side of an `@@` header's range list: the `+c[,d]` token, parsed as
-/// (start, len). An omitted `,d` means a single-line hunk (len 1). A missing
-/// or malformed `+` token yields `None` and the hunk is skipped.
-fn parse_new_side(ranges: &str) -> Option<(u32, u32)> {
-    let plus = ranges.split_whitespace().find(|t| t.starts_with('+'))?;
-    let mut it = plus.strip_prefix('+')?.splitn(2, ',');
+/// Both sides of an `@@` header: `(old_start, old_len, new_start, new_len)`.
+/// An omitted count means a single line. A missing or malformed side skips
+/// the hunk. A new length of 0 is a pure deletion and is kept.
+fn parse_hunk_ranges(ranges: &str) -> Option<(u32, u32, u32, u32)> {
+    let mut old = None;
+    let mut new = None;
+    for token in ranges.split_whitespace() {
+        if let Some(rest) = token.strip_prefix('-') {
+            old = parse_span(rest);
+        } else if let Some(rest) = token.strip_prefix('+') {
+            new = parse_span(rest);
+        }
+    }
+    let (old_start, old_len) = old?;
+    let (start, len) = new?;
+    Some((old_start, old_len, start, len))
+}
+
+fn parse_span(body: &str) -> Option<(u32, u32)> {
+    let mut it = body.splitn(2, ',');
     let start = it.next()?.parse().ok()?;
     let len = match it.next() {
-        Some(l) => l.parse().ok()?,
+        Some(len) => len.parse().ok()?,
         None => 1,
     };
     Some((start, len))
@@ -1170,6 +1194,8 @@ diff --git a/README.md b/README.md
                 file: "events/local.py".into(),
                 start: 10,
                 len: 8,
+                old_start: 10,
+                old_len: 7,
                 symbol: Some("write_event".into())
             }
         );
@@ -1179,6 +1205,8 @@ diff --git a/README.md b/README.md
                 file: "src/store.rs".into(),
                 start: 40,
                 len: 7,
+                old_start: 40,
+                old_len: 6,
                 symbol: Some("LocalFileStore".into()) // camel-case header symbol
             }
         );
@@ -1189,6 +1217,8 @@ diff --git a/README.md b/README.md
                 file: "src/legacy.h".into(),
                 start: 1,
                 len: 1,
+                old_start: 0,
+                old_len: 0,
                 symbol: None
             }
         );
@@ -1199,6 +1229,8 @@ diff --git a/README.md b/README.md
                 file: "README.md".into(),
                 start: 1,
                 len: 4,
+                old_start: 1,
+                old_len: 3,
                 symbol: None
             }]
         );
@@ -1218,9 +1250,35 @@ diff --git a/README.md b/README.md
                 file: "src/solo.rs".into(),
                 start: 9,
                 len: 1,
+                old_start: 5,
+                old_len: 1,
                 symbol: Some("solo".into())
             }]
         );
+    }
+
+    #[test]
+    fn a_deletion_keeps_the_old_side_range() {
+        let raw = "\u{1e}6666666666666666666666666666666666666666\u{1f}2026-09-01T12:00:00+00:00\u{1f}drop\n"
+            .to_string()
+            + "diff --git a/src/drop.rs b/src/drop.rs\n"
+            + "@@ -10,3 +10,0 @@ fn drop_check()\n"
+            + "-    check();\n"
+            + "-    check();\n"
+            + "-    check();\n";
+        let commits = parse_git_log(&raw);
+        assert_eq!(
+            commits[0].hunks,
+            vec![HunkSpan {
+                file: "src/drop.rs".into(),
+                start: 10,
+                len: 0,
+                old_start: 10,
+                old_len: 3,
+                symbol: Some("drop_check".into()),
+            }]
+        );
+        assert_eq!(commits[0].files, vec!["src/drop.rs"]);
     }
 
     #[test]
@@ -1490,11 +1548,18 @@ diff --git a/README.md b/README.md
         );
         let commits = parse_git_log(&raw);
         assert_eq!(commits[0].cherry_picked_from.as_deref(), Some(original));
-        assert_eq!(commits[0].fixes, vec![fixed.to_string()]);
+        assert_eq!(commits[0].fixes, vec![fixed.to_string(), short.to_string()]);
         assert!(cherry_picked_from("(cherry picked from commit abc)").is_none());
-        assert!(fixes_targets(&format!("Fixes: {short}")).is_empty());
+        assert_eq!(
+            fixes_targets(&format!("Fixes: {short}")),
+            vec![short.to_string()]
+        );
         assert!(fixes_targets(&format!("fixes: {fixed}")).is_empty());
-        assert!(fixes_targets(&format!("Fixes: {fixed} extra")).is_empty());
+        assert_eq!(
+            fixes_targets(&format!("Fixes: {fixed} extra")),
+            vec![fixed.to_string()]
+        );
+        assert!(fixes_targets("Fixes: abc").is_empty());
         assert_eq!(
             fixes_targets(&format!("Fixes: {fixed}")),
             vec![fixed.to_string()]

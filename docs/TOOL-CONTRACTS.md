@@ -216,7 +216,15 @@ and makes no claim about the world. The receipt of one save's auto-connect edges
 
 ### `causal_walk`
 
-Walk a failure backward from explicit start points.
+Walk a failure backward from explicit start points. The gaps this walk still
+does not close are listed in
+[`docs/causal-walk/blind-spots.md`](causal-walk/blind-spots.md). `version_range`
+keeps a commit when `git merge-base --is-ancestor` says it is an ancestor of
+`broke_in` and a descendant of `worked_in` (`worked_in` exclusive, `broke_in`
+inclusive), using objects already on disk. When a frame resolved and no cause
+has blame of the line, a touched failing hunk, or a revert after the failure,
+`needsProve` names `vestige prove` over that range and each cause's `rank` is
+null.
 
 ```json
 {"name":"causal_walk","arguments":{"start_points":[{"kind":"logged_write","node_id":"mem-0000000000000005"}]}}

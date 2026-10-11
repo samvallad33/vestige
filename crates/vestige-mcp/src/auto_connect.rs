@@ -562,6 +562,42 @@ pub fn auto_connect_new_memory(
         });
     }
 
+    // A path token links to an existing `file:<path>` anchor in this scope.
+    // The anchor id is the identity. Byte-equal path only; another scope's
+    // anchor is not this one.
+    for identity in &mine {
+        if identity.kind != IdentityKind::Path {
+            continue;
+        }
+        let anchor = format!("file:{}", identity.value);
+        if !file_anchor_in_scope(storage, scope, &anchor)? {
+            continue;
+        }
+        let already = pair_key(memory_id, &anchor).is_some_and(|key| joined.contains(&key))
+            || edges.iter().any(|edge| {
+                (edge.source_id == memory_id && edge.target_id == anchor)
+                    || (edge.target_id == memory_id && edge.source_id == anchor)
+            });
+        if already {
+            continue;
+        }
+        edges.push(ConnectionRecord {
+            source_id: memory_id.to_string(),
+            target_id: anchor.clone(),
+            strength: 1.0,
+            link_type: "touched".to_string(),
+            created_at: now,
+            last_activated: now,
+            activation_count: 0,
+        });
+        shared_seen.insert(format!("path:{}", identity.value));
+        report.pairs.push(JoinedPair {
+            source_id: memory_id.to_string(),
+            target_id: anchor,
+            identities: vec![format!("path:{}", identity.value)],
+        });
+    }
+
     // One write for every edge of this pass: they land together or not at
     // all, behind one gate decision and one synced append.
     if !edges.is_empty() {
@@ -779,6 +815,32 @@ fn rank_open(
     ranked
 }
 
+/// True when some memory in `scope` already has a `touched` edge whose
+/// target is this exact `file:` anchor. The anchor is not a memory, so the
+/// scope is the source memory's scope.
+fn file_anchor_in_scope(storage: &Storage, scope: &str, anchor: &str) -> Result<bool, String> {
+    let edges = storage
+        .get_connections_for_memory(anchor)
+        .map_err(|err| format!("auto-connect could not read anchor {anchor}: {err}"))?;
+    for edge in edges {
+        if edge.link_type != "touched" || edge.target_id != anchor {
+            continue;
+        }
+        let here = storage
+            .node_is_in_scope(&edge.source_id, scope)
+            .map_err(|err| {
+                format!(
+                    "auto-connect could not read the scope of {}: {err}",
+                    edge.source_id
+                )
+            })?;
+        if here {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// A normalized, order-independent pair key, `None` for a self-pair.
 fn pair_key(left: &str, right: &str) -> Option<(String, String)> {
     (left != right).then(|| {
@@ -970,9 +1032,12 @@ fn classify_marked_token(raw: &str) -> Vec<Identity> {
         )];
     }
 
-    // File path: a `:line` or `:line:col` suffix and a leading `./` are not
-    // part of the path.
+    // File path: one literal `path:` prefix, a `:line` or `:line:col`
+    // suffix, and a leading `./` are not part of the path.
     let mut path = token;
+    if let Some(rest) = path.strip_prefix("path:") {
+        path = rest;
+    }
     for _ in 0..2 {
         if let Some((head, tail)) = path.rsplit_once(':')
             && !tail.is_empty()

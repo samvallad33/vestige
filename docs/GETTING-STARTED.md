@@ -107,7 +107,9 @@ On a new store this reports that no recorded causal edge leads upstream from the
 memory. That is the correct answer: nothing has linked the two yet. The walk only
 follows edges that were written. Your agent writes one when it saves a memory with
 `links`, for example the failure with `{"kind": "derived_from", "to": "<decision id>"}`.
-After that, the walk from the failure reaches the decision.
+After that, the walk from the failure reaches the decision. The cases the walk
+still cannot close are listed in
+[`docs/causal-walk/blind-spots.md`](causal-walk/blind-spots.md).
 
 `vestige selftest` plants a known cause in a throwaway copy and checks that the walk
 finds it. Your live store is only read.
