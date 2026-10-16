@@ -204,6 +204,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Walk receipts: canonical backfill parameter envelopes with blake3 digests for deterministic re-execution",
         up: MIGRATION_V40_UP,
     },
+    Migration {
+        version: 41,
+        description: "Reset bound-pinned personalised decay (w20) to the FSRS-6 default after the optimizer edge-fit fix",
+        up: MIGRATION_V41_UP,
+    },
 ];
 
 /// A database migration
@@ -4105,3 +4110,16 @@ UPDATE schema_version SET version = 99;\n";
         assert_eq!(domain_scores, "{}");
     }
 }
+
+/// V41: The optimizer could pin the personalised decay at either bracket
+/// edge (observed: 0.0803 pinned at the lower edge on a production store;
+/// the failure-heavy variant rode the bracket to its upper bound). Those
+/// values are the bracket, not a fit. Restore the FSRS-6 default and let
+/// the guarded optimiser re-personalise on the next consolidation.
+const MIGRATION_V41_UP: &str = r#"
+UPDATE fsrs_config
+   SET value = '0.1542',
+       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+ WHERE key = 'w20'
+   AND (CAST(value AS REAL) <= 0.081 OR CAST(value AS REAL) >= 0.499);
+"#;

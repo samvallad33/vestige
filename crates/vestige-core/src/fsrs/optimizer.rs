@@ -12,6 +12,12 @@ use chrono::{DateTime, Utc};
 /// consumer of decay (accessibility states, hygiene stats, forgetting).
 pub const MIN_DECAY_BOUND: f64 = 0.08;
 
+/// Highest decay exponent the optimizer may fit. FSRS-6 personalised decay
+/// lands around 0.1-0.3 on review data; a fit pressed against 1.0 is a
+/// hyperbolic curve that collapses store-wide retention within days
+/// (measured: 814 of 1,617 memories below 0.30 retention in a week).
+pub const MAX_DECAY_BOUND: f64 = 0.5;
+
 /// Failed-recall events (rating 1) required before a decay fit is trusted.
 pub const MIN_FORGETTING_EVIDENCE: usize = 5;
 
@@ -147,10 +153,13 @@ impl FSRSOptimizer {
             return self.weights[20];
         }
 
-        // Lower bound is decay-meaningful, roughly half the FSRS-6 default
-        // (0.1542). The previous bound of 0.01 was a numeric convenience the
-        // degenerate fit slammed into; no human forgetting curve is that flat.
-        let (mut a, mut b) = (MIN_DECAY_BOUND, 1.0);
+        let previous = self.weights[20];
+
+        // The bracket is decay-meaningful on both ends: the lower bound is
+        // roughly half the FSRS-6 default (0.1542), and the upper bound sits
+        // well below 1.0 because a near-hyperbolic curve collapses
+        // store-wide retention.
+        let (mut a, mut b) = (MIN_DECAY_BOUND, MAX_DECAY_BOUND);
         let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
 
         let mut x1 = b - (b - a) / phi;
@@ -180,7 +189,24 @@ impl FSRSOptimizer {
             }
         }
 
+        // An optimum pressed against either bound is not a fit — it is the
+        // bracket. On an agent access log the loss can be monotone across
+        // the whole bracket (failure-heavy windows push it up, success-heavy
+        // windows push it down), so an edge result means "no evidence for a
+        // personalised decay", not "the personalised decay is 0.08 or 1.0".
+        // Keep the current value; the log makes the refusal auditable.
         let optimal_decay = (a + b) / 2.0;
+        if (optimal_decay - MIN_DECAY_BOUND).abs() < 0.001
+            || (MAX_DECAY_BOUND - optimal_decay).abs() < 0.001
+        {
+            tracing::warn!(
+                optimal_decay,
+                previous,
+                "w20 optimisation reached the bracket edge; refusing to personalise"
+            );
+            self.weights[20] = previous;
+            return previous;
+        }
         self.weights[20] = optimal_decay;
         optimal_decay
     }
@@ -268,15 +294,13 @@ mod tests {
         let reviews = create_test_reviews(200);
         optimizer.add_reviews(reviews);
 
-        let original_decay = optimizer.weights()[20];
         let optimized_decay = optimizer.optimize_decay();
 
-        // Decay should be a reasonable value
-        assert!(optimized_decay > 0.01);
-        assert!(optimized_decay < 1.0);
-
-        // Optimization should have changed the value
-        assert_ne!(original_decay, optimized_decay);
+        // Decay must stay inside the meaningful bracket. Edge results are
+        // refused and returned unchanged, so the value may equal the
+        // previous default — what it may never do is leave the bracket.
+        assert!(optimized_decay >= MIN_DECAY_BOUND);
+        assert!(optimized_decay <= MAX_DECAY_BOUND);
     }
 
     /// REGRESSION (v2.6.0): a success-only history must not produce a fit.
@@ -319,7 +343,37 @@ mod tests {
             optimized >= MIN_DECAY_BOUND,
             "fit {optimized} fell below the floor {MIN_DECAY_BOUND}"
         );
-        assert!(optimized < 1.0);
+        assert!(optimized <= MAX_DECAY_BOUND);
+    }
+
+    /// REGRESSION: a failure-heavy window makes the loss monotone in w20, so
+    /// the golden-section search rode the bracket to its upper bound and
+    /// returned a data-independent constant — measured as 0.999662756779506
+    /// on two production stores, with store-wide retention collapsing (814
+    /// of 1,617 memories below 0.30 retention within a week). An edge result
+    /// is not a personalization; the optimizer must refuse it and keep the
+    /// current value.
+    #[test]
+    fn failure_heavy_history_refuses_the_upper_edge() {
+        let mut optimizer = FSRSOptimizer::new();
+        let now = Utc::now();
+        optimizer.add_reviews((0..200).map(|i| ReviewLog {
+            timestamp: now - Duration::hours(i as i64),
+            rating: if i % 20 == 19 { 3 } else { 1 }, // mostly forgot
+            stability: 2.8,
+            difficulty: 5.0,
+            elapsed_days: 30.0 + (i as f64 * 0.5),
+        }));
+        assert!(optimizer.has_enough_data());
+        assert!(optimizer.has_forgetting_evidence());
+
+        let default_decay = optimizer.weights()[20];
+        let result = optimizer.optimize_decay();
+        assert_eq!(
+            result, default_decay,
+            "an optimum at the bracket edge is not a personalization"
+        );
+        assert!(result < MAX_DECAY_BOUND);
     }
 
     #[test]

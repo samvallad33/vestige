@@ -1749,6 +1749,16 @@ impl SqliteMemoryStore {
             .filter_map(warn_skipped_row("optimize_w20_if_ready"))
             .collect();
 
+        // FSRS elapsed is time since the PREVIOUS review of the same card,
+        // not time since the card was created. Training on age-since-creation
+        // made the loss monotonically decreasing in w20 on failure-heavy
+        // windows, so the golden-section search pinned the fit at a bracket
+        // edge (observed pinned at 0.0803 on a production store; the
+        // failure-heavy variant rides the bracket to its upper bound) — a
+        // constant wearing a personalization costume.
+        let mut previous_access: std::collections::HashMap<&str, DateTime<Utc>> =
+            std::collections::HashMap::new();
+
         for (node_id, access_type, accessed_at) in &logs {
             // Get node state for stability/difficulty
             let node_state: Option<(f64, f64, String)> = reader
@@ -1780,14 +1790,22 @@ impl SqliteMemoryStore {
                     _ => 3,
                 };
 
-                let elapsed = (ts - created).num_seconds() as f64 / 86400.0;
+                // Elapsed is the gap since this node's previous explicit
+                // access; for a node's first appearance in the window, fall
+                // back to its creation time.
+                let base = previous_access
+                    .get(node_id.as_str())
+                    .copied()
+                    .unwrap_or(created);
+                let elapsed = ((ts - base).num_seconds() as f64 / 86400.0).max(0.001);
+                previous_access.insert(node_id.as_str(), ts);
 
                 optimizer.add_review(ReviewLog {
                     timestamp: ts,
                     rating,
                     stability,
                     difficulty,
-                    elapsed_days: elapsed.max(0.001),
+                    elapsed_days: elapsed,
                 });
             }
         }

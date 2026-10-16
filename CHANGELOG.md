@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Degenerate w20 personalization pinned at the optimizer bracket.**
+  `optimize_w20_if_ready` trained on time-since-creation instead of time
+  since the previous review, which made its loss monotone in w20 on agent
+  access logs; the golden-section search then returned the bracket edge as
+  a "fit" (observed pinned at 0.0803 on a production store, and the
+  failure-heavy variant rides the bracket to its upper bound). The
+  optimizer now measures elapsed from the previous access, refuses an
+  optimum at either bracket edge (keeping the current value and logging),
+  caps the bracket at 0.5, and migration V41 resets bound-pinned values to
+  the FSRS-6 default (0.1542).
+
 ## [4.2.0] - 2026-10-06
 
 4.1.2 was prepared on 2026-10-05 and never tagged; its fixes ship here. No
