@@ -198,7 +198,9 @@ for cmd, rule, label in [
         need(rs[-1].get("cwd") == os.environ["WD"],
              "receipt cwd == Q payload cwd: %s" % label)
 
-rs3 = shadow_recs(os.environ["C3"])
+# a call no rule matches is receipted as PASS (gate 0.3.6+; SHADOW_STOP before)
+rs3 = [r for r in recs if r.get("decision") in ("PASS", "SHADOW_STOP")
+       and r.get("action_preview") == os.environ["C3"]]
 need(bool(rs3) and not (rs3[-1].get("commitments") or []),
      "benign ls -la: receipted with no rule hits")
 
@@ -225,10 +227,10 @@ PYEOF
 
 # ---- 6. GuardFall corpus through the adapter ---------------------------------- #
 say ""
-say "=== GuardFall corpus (43 bypass techniques) through the adapter ==="
+say "=== GuardFall corpus (every case in corpora/guardfall.json) through the adapter ==="
 CORPUS="$PORT_DIR/../../corpora/guardfall.json"
 if [ -f "$CORPUS" ]; then
-    HOME="$HOME" CORPUS="$CORPUS" python3 - <<'PYEOF' && ok "GuardFall corpus through adapter: 43/43 expected verdicts" \
+    HOME="$HOME" CORPUS="$CORPUS" python3 - <<'PYEOF' && ok "GuardFall corpus through adapter: every case gave its expected verdict" \
         || bad "corpus through adapter had failures"
 import glob
 import importlib.util
@@ -248,12 +250,25 @@ wr = load("qwrap", os.path.join(home, ".operator", "gate", "q-wrapper.py"))
 cfg = gate.load_config()
 cases = json.load(open(os.environ["CORPUS"]))["cases"]
 passed, failed = 0, []
+import shutil, tempfile
 for case in cases:
-    payload = wr.reshape({"hook_event_name": "preToolUse", "cwd": "/tmp",
+    cwd = "/tmp"
+    tmpd = None
+    if case.get("fixtures"):   # script files the case runs, never executed (as cmd_corpus does)
+        tmpd = tempfile.mkdtemp(prefix="opgate-fixture-")
+        for fx in case["fixtures"]:
+            fp = os.path.join(tmpd, fx["name"])
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with open(fp, "w", encoding="utf-8") as f:
+                f.write(fx["body"])
+        cwd = tmpd
+    payload = wr.reshape({"hook_event_name": "preToolUse", "cwd": cwd,
                           "tool_name": "execute_bash",
                           "tool_input": {"command": case["cmd"]}})
     assert payload["tool_name"] == "bash", payload["tool_name"]  # reshape engaged
     _, _, hits, _, _, _ = gate.classify(payload, cfg)
+    if tmpd:
+        shutil.rmtree(tmpd, True)
     rids = set(h[0] for h in hits)
     exp = case["expect"]
     if exp == "ALLOW":

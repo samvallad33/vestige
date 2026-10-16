@@ -160,7 +160,9 @@ for cmd, rule, label in [
         need(rs[-1].get("cwd") == os.environ["WD"],
              "receipt cwd == gemini payload cwd: %s" % label)
 
-rs3 = shadow_recs(os.environ["C3"])
+# a call no rule matches is receipted as PASS (gate 0.3.6+; SHADOW_STOP before)
+rs3 = [r for r in recs if r.get("decision") in ("PASS", "SHADOW_STOP")
+       and r.get("action_preview") == os.environ["C3"]]
 need(bool(rs3) and not (rs3[-1].get("commitments") or []),
      "benign ls -la: receipted with no rule hits")
 

@@ -132,7 +132,7 @@ note = "\u65e5\u672c\u8a9e \u201dquoted\u201d \u00fc"
 with open(os.path.join(i_home, ".claude", "settings.json"), "w", encoding="utf-8") as f:
     json.dump({"env": {"NOTE": note}}, f, ensure_ascii=False)
 i_env = dict(os.environ, HOME=i_home, USERPROFILE=i_home)
-for k in ("OPERATOR_HOME", "OPERATOR_AGENT_SESSION", "OPERATOR_GATE_MODE"):
+for k in ("OPERATOR_HOME", "OPERATOR_AGENT_SESSION", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "OPERATOR_GATE_MODE"):
     i_env.pop(k, None)
 p = subprocess.run([sys.executable, GATE, "install", "--no-replay"], capture_output=True, env=i_env, cwd=i_home)
 check("install exits 0 beside a settings file with non-ASCII text", p.returncode == 0, p.stderr[-300:])
@@ -241,7 +241,7 @@ except Exception as exc:
     wired = repr(exc)
 print("wired hook: %s" % wired)
 check("the registered hook names this interpreter and the installed gate", wired.startswith('"') and "python3 " not in wired
-      and "/.operator/gate/operator-gate.py" in wired and wired.endswith("hook --source claude"), wired)
+      and "/.operator/gate/operator-gate.py" in wired and "'--source','claude'" in wired and " -I -c " in wired, wired)
 payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}, "cwd": work, "session_id": "t"})
 p = subprocess.run(wired, shell=True, input=payload, capture_output=True, text=True, env=env2)
 check("the registered hook runs through the Windows shell and records in shadow", p.returncode == 0 and not p.stderr.strip(), p.stderr[:200])

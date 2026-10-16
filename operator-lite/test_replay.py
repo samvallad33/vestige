@@ -190,15 +190,17 @@ try:
     wired = json.load(open(os.path.join(home2, ".claude", "settings.json")))["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
 except Exception as exc:
     wired = repr(exc)
-check("lone file: the Claude Code hook points at the installed copy", wired == "python3 %s hook --source claude" % installed, wired)
+check("lone file: the Claude Code hook points at the installed copy", wired == g.claude_hook_command(installed)
+      and installed in wired and wired.endswith("hook --source claude"), wired)
 check("lone file: install starts in shadow and shows the replay without being asked",
       open(os.path.join(home2, ".operator", "mode")).read().strip() == "shadow"
       and "tool calls your agents made" in p.stdout and "Your first laws, drafted from this history:" in p.stdout, p.stdout[-400:])
 payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}, "cwd": REPO, "session_id": "t"})
-p = subprocess.run(wired.split(), input=payload, capture_output=True, text=True, env=env2)
+# Claude Code runs a hook command through a shell, so the test does too.
+p = subprocess.run(wired, shell=True, input=payload, capture_output=True, text=True, env=env2)
 check("lone file: the wired hook records in shadow and does not block", p.returncode == 0 and not p.stderr, p.stderr[:200])
 open(os.path.join(home2, ".operator", "mode"), "w").write("enforce\n")
-p = subprocess.run(wired.split(), input=payload, capture_output=True, text=True, env=env2)
+p = subprocess.run(wired, shell=True, input=payload, capture_output=True, text=True, env=env2)
 check("lone file: after the flip to enforce the wired hook stops the force-push", p.returncode == 2 and "OP-004" in p.stderr, p.stderr[:200])
 p = subprocess.run([sys.executable, installed, "verify"], capture_output=True, text=True, env=env2)
 check("lone file: both verdicts are in the receipt chain", "receipts=2 chain=OK" in p.stdout, p.stdout[:200])

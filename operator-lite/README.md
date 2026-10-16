@@ -27,7 +27,17 @@ From a clone, `python3 operator-gate.py install` does the same. It copies the ga
 every verdict, blocks nothing) and then replays your last 30 days of Claude Code
 history through the rules. Nothing in that history is executed.
 
+`install` never replaces a gate that outranks it: when `~/.operator/gate/operator-gate.py`
+is the paid Operator gate or a newer version, it prints both versions and the path, changes
+nothing and exits 4. `install --force` replaces it anyway, after a warning, and keeps the
+replaced gate in `~/.operator/install-backups/`. `install` and `uninstall` refuse to run in
+a shell Claude Code's agent started (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`) or one that sets
+`OPERATOR_AGENT_SESSION`; other agents' shells are not recognized.
+
 ## Other hosts, or by hand
+
+The `cp` below checks nothing: if `~/.operator/gate/operator-gate.py` already exists, use
+`install` instead, so the paid gate or a newer one is never overwritten.
 
     mkdir -p ~/.operator/gate
     cp operator-gate.py ~/.operator/gate/

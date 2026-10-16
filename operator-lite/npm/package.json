@@ -1,0 +1,17 @@
+{
+  "name": "operator-lite",
+  "version": "0.3.7",
+  "description": "One command that installs the Operator Lite pre-tool gate for every coding agent on this machine (Claude Code, Cursor, Gemini CLI, Windsurf, Cline, Goose, opencode, Amazon Q).",
+  "bin": { "operator-lite": "bin/operator-lite.js" },
+  "files": ["bin/", "gate/"],
+  "scripts": {
+    "prepack": "node bin/bundle.js",
+    "test": "node test.js"
+  },
+  "engines": { "node": ">=16" },
+  "license": "AGPL-3.0-only",
+  "author": "Sam Valladares",
+  "repository": { "type": "git", "url": "git+https://github.com/samvallad33/vestige.git", "directory": "operator-lite/npm" },
+  "homepage": "https://github.com/samvallad33/vestige/tree/main/operator-lite",
+  "keywords": ["ai-agents", "security", "guardrails", "claude-code", "cursor", "pre-tool-gate"]
+}

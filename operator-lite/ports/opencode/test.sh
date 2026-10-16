@@ -101,7 +101,7 @@ run_case "benign ls -> ALLOW (silent)" 0 "$TD/p3.json" c3
 CORPORA_DIR=$(dirname -- "$GATE")/corpora
 if [ -f "$CORPORA_DIR/guardfall.json" ]; then
   note ""
-  note "== 1b. gate bypass corpus (43 cases, classification only) =="
+  note "== 1b. gate bypass corpus (46 cases, classification only) =="
   if python3 "$GATE" corpus guardfall; then
     ok "guardfall corpus"
   else

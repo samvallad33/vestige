@@ -31,7 +31,11 @@ TEST_HOME="$TEST_BASE/home"          # gets the real install.sh treatment
 TEST_BARE="$TEST_BASE/bare"          # no install: gate is unreachable from here
 mkdir -p "$TEST_HOME" "$TEST_BARE" || exit 1
 TMPDIR="$TEST_BASE/tmp"; mkdir -p "$TMPDIR"; export TMPDIR
-ORIG_PWD=$(pwd)                      # the adapter passes os.getcwd() as the gate cwd
+# The adapter passes os.getcwd() as the gate cwd. Run the checks from a project
+# folder inside the throwaway tree, so the result does not depend on where the
+# caller stood (from $HOME or above, ~/demo-factory would sit inside the cwd).
+mkdir -p "$TEST_BASE/project" && cd "$TEST_BASE/project" || exit 1
+ORIG_PWD=$(pwd)
 HOME="$TEST_HOME"; export HOME
 trap 'rm -rf "$TEST_BASE"' EXIT
 
@@ -75,7 +79,7 @@ section "shadow mode (default)"
 
 hookcheck 'ls -la' bash s-ls; rc=$?
 [ "$rc" = "0" ] && ok "benign ls -> exit 0 (allowed)" || bad "benign ls exited $rc, want 0"
-[ "$(receipt_decision)" = "SHADOW_STOP" ] && ok "benign call receipted" || bad "no receipt for benign call"
+case "$(receipt_decision)" in PASS|SHADOW_STOP) ok "benign call receipted (PASS: no rule matched)" ;; *) bad "no receipt for benign call" ;; esac
 [ "$(receipt_commitments)" = "" ] && ok "benign receipt carries no rule hits" || bad "commitments: $(receipt_commitments)"
 [ "$(receipt_source)" = "crewai" ] && ok "receipt source = crewai (--source plumbed)" || bad "receipt source: $(receipt_source)"
 [ "$(receipt_cwd)" = "$ORIG_PWD" ] && ok "receipt cwd = adapter process cwd (os.getcwd())" || bad "receipt cwd: $(receipt_cwd)"

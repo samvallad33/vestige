@@ -32,6 +32,10 @@ else
   if [ -f "$SRC_DIR/operator-gate.py" ]; then
     cp "$SRC_DIR/operator-gate.py" "$GATE"
     echo "gate:  installed bundled copy -> $GATE"
+  elif [ -f "$SRC_DIR/../../operator-gate.py" ]; then
+    # a repo checkout: operator-lite/ports/goose -> operator-lite/operator-gate.py
+    cp "$SRC_DIR/../../operator-gate.py" "$GATE"
+    echo "gate:  installed from checkout -> $GATE"
   else
     TMP="$GATE_DIR/.operator-gate.py.$$"
     if command -v curl >/dev/null 2>&1; then

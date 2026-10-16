@@ -183,7 +183,7 @@ grep -q "OPERATOR: STOPPED" "$LOGS/e-rm.out" \
   && ok "agent_message carries the gate's OPERATOR: STOPPED verdict" || bad "no verdict in agent_message"
 decision_field "$LOGS/e-rm.out" "d['user_message']" | grep -q "OP-003" \
   && ok "user_message names the rule (OP-003)" || bad "user_message: $(decision_field "$LOGS/e-rm.out" "d['user_message']")"
-decision_field "$LOGS/e-rm.out" "d['user_message']" | grep -q "operator-gate approve [0-9a-f]\{24\}" \
+decision_field "$LOGS/e-rm.out" "d['user_message']" | grep -q "operator-gate\(\.py\)\{0,1\} approve [0-9a-f]\{24\}" \
   && ok "user_message carries the one-time approve digest" || bad "no approve digest in user_message"
 
 rc=$(gate_hook \

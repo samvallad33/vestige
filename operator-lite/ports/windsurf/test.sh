@@ -249,7 +249,7 @@ if [ -f "$CORPUS" ]; then
   # (a shadow case may legally co-fire a STOP hit, which blocks in enforce);
   # a rule id = that rule hit and the call blocked.
   GATE_CMD="$HOOK_CMD" CORPUS_FILE="$CORPUS" RECEIPTS="$RECEIPTS" python3 <<'PYEOF' \
-    && ok "guardfall corpus: 43/43 verdicts survive the windsurf reshape" \
+    && ok "guardfall corpus: every case's verdict survives the windsurf reshape" \
     || bad "guardfall corpus via adapter"
 import json, os, subprocess, sys
 
@@ -267,17 +267,29 @@ def last_receipt():
 
 corpus = json.load(open(os.environ["CORPUS_FILE"]))["cases"]
 fails = []
+import shutil, tempfile
 for case in corpus:
+    cwd, tmpd = "/tmp", None
+    if case.get("fixtures"):   # script files the case runs, never executed (as cmd_corpus does)
+        tmpd = tempfile.mkdtemp(prefix="opgate-fixture-")
+        for fx in case["fixtures"]:
+            fp = os.path.join(tmpd, fx["name"])
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with open(fp, "w", encoding="utf-8") as f:
+                f.write(fx["body"])
+        cwd = tmpd
     payload = json.dumps({
         "agent_action_name": "pre_run_command",
         "trajectory_id": "guardfall",
         "execution_id": "guardfall-exec",
         "timestamp": "2026-09-29T12:00:00Z",
         "model_name": "corpus",
-        "tool_info": {"command_line": case["cmd"], "cwd": "/tmp"},
+        "tool_info": {"command_line": case["cmd"], "cwd": cwd},
     })
     r = subprocess.run(["bash", "-c", os.environ["GATE_CMD"]],
                        input=payload.encode(), capture_output=True)
+    if tmpd:
+        shutil.rmtree(tmpd, True)
     rec = last_receipt()
     hits = set(rec.get("commitments") or [])
     expect = str(case["expect"])

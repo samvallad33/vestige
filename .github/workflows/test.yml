@@ -52,6 +52,25 @@ jobs:
       - if: runner.os != 'Windows'
         run: python3 operator-lite/test_replay.py
       - if: runner.os != 'Windows'
+        run: python3 operator-lite/test_install_guard.py
+      - if: runner.os != 'Windows'
+        run: python3 operator-lite/test_sqlpipe.py
+      - if: runner.os != 'Windows'
+        run: python3 operator-lite/test_strata_guard.py
+      - if: runner.os != 'Windows'
+        run: python3 operator-lite/test_self_protect.py
+      - if: runner.os != 'Windows'
+        name: every host port's own test suite, offline
+        run: |
+          for t in operator-lite/ports/*/test.sh; do
+            echo "== $t"
+            # a home outside every temp folder: the gate treats temp paths as scratch, and the port tests
+            # check deletes that must be stopped
+            h="$HOME/operator-lite-ports/$(basename "$(dirname "$t")")"
+            mkdir -p "$h"
+            HOME="$h" bash "$t" || exit 1
+          done
+      - if: runner.os != 'Windows'
         run: python3 operator-lite/operator-gate.py corpus guardfall
       - if: runner.os != 'Windows'
         run: cmp operator-lite/operator-gate.py operator-lite/openclaw-plugin/gate/operator-gate.py

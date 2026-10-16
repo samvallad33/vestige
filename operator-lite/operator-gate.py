@@ -39,6 +39,7 @@ except ImportError:                                  # Windows: receipts lock th
     fcntl = None
 
 VERSION = "0.3.7"
+EDITION = "lite"                 # the paid gate is "operator"; install never replaces a gate that outranks this one
 INTEGRITY = "reference_digest_not_signature"
 IS_WINDOWS = os.name == "nt"
 
@@ -420,9 +421,32 @@ def has_flag(flags, short, long_=None):
 
 
 UNKNOWN_CWD = "/__unknown_cwd__"
-MEMORY_DIRS = [pj(HOME, ".vestige"),
-               pj(HOME, "Library", "Application Support", "com.vestige.core")]
-MEMORY_FILE_RE = re.compile(r"vestige\.db|strata|\.wal$|\.shm$|\.sqlite3?$", re.I)
+
+
+def vestige_data_dirs(env, home, platform):
+    """Where Vestige 4.x keeps its Strata store, the way its ProjectDirs("com", "vestige", "core") resolves
+    it: VESTIGE_DATA_DIR first, then the platform default (docs/STORAGE.md). Pure, so every platform's
+    answer can be tested anywhere."""
+    dirs = []
+    custom = (env.get("VESTIGE_DATA_DIR") or "").strip()
+    if custom:
+        dirs.append(canon(home + custom[1:] if custom.startswith("~") else custom).rstrip("/"))
+    if platform == "darwin":
+        dirs.append(home + "/Library/Application Support/com.vestige.core")
+    elif platform.startswith("win"):
+        dirs.append(canon_windows(env.get("APPDATA") or home + "/AppData/Roaming").rstrip("/") + "/vestige/core/data")
+    else:
+        xdg = env.get("XDG_DATA_HOME") or ""
+        dirs.append((xdg.rstrip("/") if xdg.startswith("/") else home + "/.local/share") + "/core")
+    return dirs
+
+
+STRATA_DIRS = [canon(d) for d in vestige_data_dirs(os.environ, HOME, sys.platform)]
+MEMORY_DIRS = [pj(HOME, ".vestige")] + STRATA_DIRS
+MEMORY_FILE_RE = re.compile(r"vestige\.db|\.wal$|\.shm$|\.sqlite3?$", re.I)
+# Inside a Strata data dir: the hash-chained log (segments, head.state, strata.key), the keys that sign
+# its receipts and identify its actor, the store marker, and the backups. Exports and logs stay writable.
+STRATA_CRITICAL_RE = re.compile(r"^(?:log|backups)(?:/.*)?$|^(?:actor\.key|receipt-signing\.key|store\.meta)$")
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "{", "(", "!", "}", ")", "done", "fi", "esac"}
 LOOP_HEADS = {"for", "case", "select", "function"}
 HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
@@ -696,6 +720,67 @@ def decode_ansi_c_quotes(cmd):
 
 
 MAX_SCRIPT_BYTES = 262144
+DB_CLIENT_PROGS = ("psql", "sqlite3", "mysql", "mariadb", "duckdb", "mongosh", "redis-cli", "supabase")
+SQL_FILE_EXT = (".sql", ".psql", ".ddl")
+# `< FILE` and `0< FILE`; never `<<`, `<<<`, `<(...)` or `<&`
+DB_INPUT_RE = re.compile(r"(?:(?<=\s)|^)0?<(?![<(&>])\s*([^\s<>|&;()]+)")
+
+
+def sql_file_text(path):
+    """A SQL file's text when it is a local, regular, non-empty text file under MAX_SCRIPT_BYTES, else None."""
+    try:
+        st = os.stat(path)
+        if not _stat.S_ISREG(st.st_mode) or st.st_size == 0 or st.st_size > MAX_SCRIPT_BYTES:
+            return None
+        with open(path, "rb") as f:
+            raw = f.read(MAX_SCRIPT_BYTES)
+    except Exception:
+        return None
+    return None if b"\0" in raw[:4096] else raw.decode("utf-8", "replace")
+
+
+def db_input_sql(fed, rest, seg, ecwd):
+    """The SQL a database client is handed besides its own arguments, so OP-007 judges it the same way:
+    the words an echo or printf pipes in, the files a cat, tac, head or tail pipes in, `< FILE`,
+    `-f FILE`, a positional .sql file, and `.read FILE` / `\\i FILE`. A file the gate cannot read
+    (missing, binary, too large, or the working directory is unknown) is not judged."""
+    texts, names = [], []
+    if fed:
+        words = []
+        for w in fed[1]:
+            if REDIRECT_TOKEN_RE.match(w):
+                break
+            words.append(w)
+        if fed[0] in ("echo", "printf"):
+            text = " ".join(w for w in words if not (w.startswith("-") and len(w) <= 3)).replace("\\n", "\n")
+            if text.strip() and "__SUBST__" not in text:
+                texts.append(text)
+        elif fed[0] in ("cat", "tac", "head", "tail"):
+            names += [w for w in words if not w.startswith("-")]
+    for i, t in enumerate(rest):
+        if REDIRECT_TOKEN_RE.match(t):
+            break                                       # what follows `>` is an output file, not input
+        if t in ("-f", "--file") and i + 1 < len(rest):
+            names.append(rest[i + 1])
+        elif t.startswith("--file="):
+            names.append(t[7:])
+        elif not t.startswith("-") and t.lower().endswith(SQL_FILE_EXT):
+            names.append(t)
+    names += re.findall(r"(?:\.read|\\ir?)\s+([^\s'\";]+)", seg)
+    m = DB_INPUT_RE.search(mask_quotes(seg))
+    if m:
+        names.append(seg[m.start(1):m.end(1)].strip("'\""))
+    if ecwd is not None:
+        seen = set()
+        for n in names:
+            p = resolve(n, ecwd)
+            if p not in seen:
+                seen.add(p)
+                body = sql_file_text(p)
+                if body:
+                    texts.append(body)
+    return "\n".join(texts)
+
 
 SCRIPT_ARG_INTERPRETERS = ("bash", "sh", "zsh", "dash", "ksh", "fish",
                            "python", "python3", "python2", "perl", "ruby",
@@ -809,7 +894,7 @@ def analyze(cmd, cwd, depth=0, vars_=None):
                         "filtered": False, "unresolved": False, "flags": [], "args": [], "cwd": UNKNOWN_CWD,
                         "writes": [], "text": cmd[:200]})
     cmd = SUBST_RE.sub("__SUBST__", cmd)
-    hd = 0
+    hd, cursor, feeder = 0, 0, None
     for seg in split_segments(cmd):
         nh = len(HEREDOC_RE.findall(seg))
         my_bodies, hd = bodies[hd:hd + nh], hd + nh
@@ -840,6 +925,10 @@ def analyze(cmd, cwd, depth=0, vars_=None):
             continue
         prog = os.path.basename(toks[0])
         rest = toks[1:]
+        at = cmd.find(seg, cursor)                          # is this segment fed by a pipe from the one before?
+        piped = at > 0 and re.search(r"(?<!\|)\|&?\s*$", cmd[:at]) is not None
+        cursor = at + len(seg) if at >= 0 else cursor
+        fed, feeder = (feeder if piped else None), (prog, rest)
         handed = cmd_exe_line(toks)
         if handed is not None:                              # `cmd /c "rmdir /s /q X"` from a shell
             effects += cmd_exe_effects(handed, state["cwd"])
@@ -936,10 +1025,14 @@ def analyze(cmd, cwd, depth=0, vars_=None):
         elif prog == "git":
             eff["kind"] = "git"
             g = list(rest)
+            gdir = None
             while g and g[0].startswith("-"):
+                if g[0] == "-C" and len(g) > 1:              # git -C <dir>: the repository the command acts on
+                    gdir = resolve(g[1], gdir or ecwd)
                 g = g[2:] if g[0] in ("-C", "-c", "--git-dir", "--work-tree") else g[1:]
             eff["sub"] = g[0] if g else ""
             eff["gargs"] = g[1:]
+            eff["gdir"] = gdir
         elif prog in INTERPRETERS:
             eff["kind"] = "inline"
             if my_bodies:
@@ -959,10 +1052,16 @@ def analyze(cmd, cwd, depth=0, vars_=None):
             operands = args[1:]
             recursive = has_flag(flags, "r") or has_flag(flags, "R") or "--recursive" in flags or prog in ("rg", "ag", "ack")
             eff["kind"] = "filter" if not operands and not recursive else "read"
-        elif prog in ("psql", "sqlite3", "mysql", "mariadb", "duckdb", "mongosh", "redis-cli", "supabase"):
+        elif prog in DB_CLIENT_PROGS:
             eff["kind"] = "db"
             if my_bodies:
                 eff["text"] = seg + "\n" + "\n".join(my_bodies)
+            try:                                            # `echo SQL | psql`, `cat x.sql | sqlite3`, `< x.sql`, `-f x.sql`
+                fed_sql = db_input_sql(fed, rest, seg, ecwd)
+            except Exception:
+                fed_sql = ""
+            if fed_sql:
+                eff["text"] += "\n" + fed_sql
         elif prog in ("fly", "flyctl", "stripe", "vercel", "wrangler", "netlify", "gh", "npm", "pnpm", "yarn",
                       "cargo", "twine", "docker", "vestige", "vestige-mcp", "operator-gate"):
             eff["kind"] = "cli"
@@ -1181,14 +1280,38 @@ def target_hits(kind, t, recursive, roots, gate_files):
     return hits
 
 
+def rel_inside(target, root):
+    """The part of `target` below `root`, or None when it is not below it."""
+    for t in variants(target):
+        for r in variants(root):
+            r = r.rstrip("/")
+            if t.startswith(r + "/"):
+                return t[len(r) + 1:]
+    return None
+
+
+def memory_store_hit(w, verb):
+    """Why touching `w` is OP-002, or None. A Strata store loses its history when its log, keys, marker or
+    backups go, or when the data dir (or a folder holding it, short of HOME) is deleted or moved."""
+    for d in STRATA_DIRS:
+        if verb in ("delete", "move") and is_same_or_ancestor(w, d) and not is_same_or_ancestor(w, HOME):
+            return "%s of the Vestige store %s" % (verb, d)
+        rel = rel_inside(w, d)
+        if rel and STRATA_CRITICAL_RE.match(rel.rstrip("/")):
+            return "%s Vestige store path %s" % (verb, w)
+    if any(is_inside(w, d) for d in MEMORY_DIRS) and MEMORY_FILE_RE.search(w):
+        return "%s memory store path %s" % (verb, w)
+    return None
+
+
 def write_hits(w, gate_files, verb="write to"):
     hits = []
     if touches_gate_home(w) or any(is_inside(w, f) for f in gate_files):
         hits.append(("OP-000", "%s gate/hook path %s" % (verb, w),
                      "Ask the owner to make this change, or to grant a one-time permit."))
-    if any(is_inside(w, d) for d in MEMORY_DIRS) and MEMORY_FILE_RE.search(w):
-        hits.append(("OP-002", "%s memory store path %s" % (verb, w),
-                     "Use `vestige backup` first; erasure is not something an agent decides."))
+    store = memory_store_hit(w, verb)
+    if store:
+        hits.append(("OP-002", store, "Use `vestige backup` first; erasure is not something an agent decides."))
     base = w.rstrip("/").rsplit("/", 1)[-1]
     parent = w.rstrip("/").rsplit("/", 1)[-2] if w.rstrip("/").count("/") >= 1 else ""
     is_init = base in SHELL_INIT_FILES or (base == "config.fish" and parent.endswith("fish")) \
@@ -1319,13 +1442,22 @@ def classify_effect(e, cfg, cwd):
         if sub == "push" and force:
             protected = re.compile(r"(^|[:/+ ])(main|master|trunk|release[/\-].*|prod.*)$")
             refs = [a for a in ga if not a.startswith("-")]
-            branches = refs[1:] if len(refs) > 1 else []
-            bad = any(protected.search(b) for b in branches)
-            if not branches:
+            # The branch each refspec writes on the remote. HEAD, @ or no refspec at all push the branch
+            # checked out where git runs (its -C directory, else the working directory).
+            dsts, current = [], len(refs) < 2
+            for spec in refs[1:]:
+                dst = spec.lstrip("+").split(":", 1)[-1]
+                if dst in ("HEAD", "@", ""):
+                    current = True
+                else:
+                    dsts.append(dst)
+            bad = any(protected.search(d) for d in dsts)
+            if current and not bad:
                 try:
-                    cur = subprocess.run(["git", "-C", ecwd or cwd or ".", "symbolic-ref", "--short", "HEAD"],
-                                         capture_output=True, text=True, timeout=1).stdout.strip()
-                    bad = bool(protected.search(cur))
+                    r = subprocess.run(["git", "-C", e.get("gdir") or ecwd or cwd or ".", "symbolic-ref", "--short",
+                                        "HEAD"], capture_output=True, text=True, timeout=1)
+                    cur = r.stdout.strip() if r.returncode == 0 else ""
+                    bad = not cur or bool(protected.search(cur))   # unreadable branch: fail closed
                 except Exception:
                     bad = True
             if bad:
@@ -1539,6 +1671,44 @@ def write_paths(tool, ti, cwd):
     return paths
 
 
+LITE_OWNER_SUBS = ("", "install", "uninstall", "mode", "approve", "upgrade")
+LITE_PACKAGE_RE = re.compile(r"(?:@[\w.-]+/)?operator-lite(?:@[^\s/]*)?")
+CLAUDE_SETTINGS_RE = re.compile(r"/\.claude/settings(?:\.local)?\.json$")
+
+
+def lite_owner_sub(prog, args):
+    """The owner-only subcommand ("" for the bare install) when a command runs the operator-lite package
+    through npx, bunx, pnpx, pnpm/yarn dlx, npm/pnpm exec or its own bin; None for anything else."""
+    if prog in ("npx", "bunx", "pnpx"):
+        rest = list(args)
+    elif prog in ("yarn", "pnpm") and args[:1] == ["dlx"] or prog in ("npm", "pnpm") and args[:1] in (["exec"], ["x"]):
+        rest = list(args[1:])
+    elif prog == "operator-lite":
+        rest = ["operator-lite"] + list(args)
+    else:
+        return None
+    rest = [a for a in rest if a != "--"]
+    for i, a in enumerate(rest):
+        if LITE_PACKAGE_RE.fullmatch(a):
+            while i + 1 < len(rest) and LITE_PACKAGE_RE.fullmatch(rest[i + 1]):   # npx -p operator-lite operator-lite
+                i += 1
+            sub = rest[i + 1] if i + 1 < len(rest) else ""
+            return sub if sub in LITE_OWNER_SUBS else None
+    return None
+
+
+def hook_settings_hit(path, text):
+    """Claude Code reads hooks from every .claude/settings*.json, and a project's settings outrank the
+    user's, so a project file that turns hooks off or rewires them switches the gate off. OP-000 when the
+    write carries hooks or disableAllHooks; a recorded OP-S14 when its content cannot be seen."""
+    if not CLAUDE_SETTINGS_RE.search(path):
+        return None
+    if re.search(r"disableAllHooks|\"hooks\"|\bhooks\s*[:=]", text or ""):
+        return ("OP-000", "agent writes hook settings in %s" % path,
+                "Hook settings are the owner's; propose the change instead of writing it.")
+    return ("OP-S14", "write to Claude Code settings %s" % path, "")
+
+
 def classify(payload, cfg):
     tool_raw = str(payload.get("tool_name") or payload.get("toolName") or "")
     tool = tool_raw.lower()
@@ -1581,6 +1751,14 @@ def classify(payload, cfg):
         for eff in (analyze_powershell(cmd, cwd) if tool in POWERSHELL_TOOLS else analyze(cmd, cwd)):
             effects_out.append(eff)
             hits += classify_effect(eff, cfg, cwd)
+            sub = lite_owner_sub(eff.get("prog", ""), eff.get("args", []))
+            if sub is not None:
+                hits.append(("OP-000", "agent invoked `operator-lite %s`" % (sub or "install"),
+                             "Approvals and installs are run by the owner in their own terminal."))
+            for w in eff.get("writes", []):
+                hit = hook_settings_hit(w, cmd)
+                if hit:
+                    hits.append(hit)
         if re.search(r"operator-gate(\.py)?['\"]?\s+(approve|mode|install|uninstall|upgrade\s+--install)\b", cmd):
             hits.append(("OP-000", "agent invoked the gate's owner commands",
                          "Approvals and installs are run by the owner in their own terminal."))
@@ -1601,6 +1779,10 @@ def classify(payload, cfg):
                                 "unresolved": False, "flags": [], "args": [],
                                 "cwd": cwd, "writes": [p], "text": "%s %s" % (tool_raw, p)})
         body = str(ti.get("content") or ti.get("new_string") or "")
+        for p in write_paths(tool, ti, cwd):
+            hit = hook_settings_hit(p, body)
+            if hit:
+                hits.append(hit)
         if re.search(r"(sk_live|rk_live|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})", body):
             hits.append(("OP-S04", "credential-shaped string in write", ""))
     elif tool.startswith("mcp__"):
@@ -2537,44 +2719,191 @@ def hook_command(dst, source):
     return "python3 %s hook --source %s" % (dst, source)
 
 
+def claude_hook_command(dst):
+    """The command registered in Claude Code, which runs it through a shell. python3 exits 2 when it
+    cannot open the gate file, and Claude Code reads exit 2 as a block, so a gate that went missing would
+    block every tool call. The test exits 1 instead (a non-blocking error) and the path is quoted. Windows
+    hosts run the command in cmd, PowerShell or Git Bash, so there the check is made by Python itself."""
+    if IS_WINDOWS:
+        return guarded_python_command(canon(sys.executable), dst)
+    q = shlex.quote(dst)
+    return "[ -f %s ] && python3 %s hook --source claude" % (q, q)
+
+
+def guarded_python_command(python, dst):
+    """One quoted interpreter and one -c program, the same in every Windows shell: run the gate when the
+    file exists (its exit code, 2 on STOP, passes through), exit 0 when it is gone. -I keeps the working
+    directory off sys.path, so a project file cannot stand in for a stdlib module."""
+    code = ("import os,runpy,sys;g=%r;sys.argv=[g,'hook','--source','claude'];"
+            "os.path.isfile(g) and runpy.run_path(g,run_name='__main__')" % dst)
+    return '"%s" -I -c "%s"' % (python, code)
+
+
+def is_claude_gate_hook(command):
+    """A registration of this gate in Claude Code, in this version's form or an older one."""
+    return "operator-gate.py" in command and ("hook --source claude" in command or "'--source','claude'" in command)
+
+
+# --------------------------------------------------------------------------- #
+# install guard: never replace a gate that outranks this one
+# --------------------------------------------------------------------------- #
+# Every paid gate since 0.3.1 defines load_law and cmd_commitments, and no Lite ever has; its $149-tier
+# modules sit beside it. A gate that states EDITION is read by that first.
+PAID_MARK_RE = re.compile(r"^def (?:load_law|cmd_commitments|_feature)\(", re.M)
+PAID_SIBLINGS = ("board.py", "letter.py", "sealed.py", "almost_forgot.py")
+# Claude Code sets CLAUDECODE=1 and CLAUDE_CODE_ENTRYPOINT in every shell its Bash tool starts, and does
+# not set OPERATOR_AGENT_SESSION (checked 2026-10-15). OPERATOR_AGENT_SESSION stays the marker any
+# other host can set.
+AGENT_ENV = ("OPERATOR_AGENT_SESSION", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
+
+
+def agent_session():
+    """The variable that marks this shell as an AI agent's, or None."""
+    for name in AGENT_ENV:
+        if os.environ.get(name):
+            return name
+    return None
+
+
+def version_tuple(text):
+    try:
+        return tuple(int(x) for x in str(text).split("."))
+    except ValueError:
+        return None
+
+
+def gate_identity(path):
+    """(edition, version) of a gate file, read as text and never run. edition is "operator" (the paid
+    gate), "lite", or "unknown" (a gate from before either marker); version is "" when unreadable."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except Exception:
+        return "unknown", ""
+    m = re.search(r"^VERSION\s*=\s*[\"']([^\"']+)[\"']", text, re.M)
+    version = m.group(1) if m and version_tuple(m.group(1)) else ""
+    m = re.search(r"^EDITION\s*=\s*[\"'](\w+)[\"']", text, re.M)
+    if m:
+        return m.group(1).lower(), version
+    here = os.path.dirname(os.path.abspath(path))
+    if PAID_MARK_RE.search(text) or any(os.path.isfile(pj(here, n)) for n in PAID_SIBLINGS):
+        return "operator", version
+    return ("lite" if "Operator Lite" in text else "unknown"), version
+
+
+def gate_label(edition, version):
+    name = {"operator": "Operator", "lite": "Operator Lite"}.get(edition, "a gate of unknown edition")
+    return "%s %s" % (name, version or "(version unreadable)")
+
+
+def install_refusal(dst, src):
+    """Why copying this gate over the one at dst would be a downgrade, or None when it would not."""
+    if not os.path.lexists(dst) or os.path.realpath(dst) == os.path.realpath(src):
+        return None
+    edition, version = gate_identity(dst)
+    if edition == "operator":
+        return "it is the paid Operator gate"
+    if edition not in ("lite", "unknown"):
+        return "it is the %s edition, not Operator Lite" % edition
+    theirs = version_tuple(version) if version else None
+    if theirs is None:
+        return "its version cannot be read"
+    if theirs > version_tuple(VERSION):
+        return "it is newer than this one"
+    return None
+
+
 def cmd_install(argv):
-    """Owner-side install: copies the gate to ~/.operator/gate and wires Claude Code. Mode starts SHADOW."""
-    if os.environ.get("OPERATOR_AGENT_SESSION"):
-        print("Refusing: installs are run by the owner in their own terminal.")
+    """Owner-side install: copies the gate to ~/.operator/gate and wires Claude Code. Mode starts SHADOW.
+    It refuses to replace the paid gate or a newer gate unless the owner passes --force."""
+    agent = agent_session()
+    if agent:
+        print("Refusing: installs are run by the owner in their own terminal (%s is set: this shell "
+              "belongs to an agent)." % agent)
         return 3
     dst_dir = pj(HOME, ".operator", "gate")
     src = os.path.abspath(__file__)
-    os.makedirs(dst_dir, exist_ok=True)
     dst = pj(dst_dir, "operator-gate.py")
+    why = install_refusal(dst, src)
+    replaced = gate_identity(dst) if os.path.lexists(dst) and os.path.realpath(src) != os.path.realpath(dst) else None
+    if why:
+        theirs = gate_label(*replaced)
+        print("\n".join([
+            "%s: %s holds %s, and %s." % ("--force given" if "--force" in argv else "Refusing to install",
+                                         canon(dst), theirs, why),
+            "  installed:  %-28s %s" % (theirs, canon(dst)),
+            "  this one:   %-28s %s" % (gate_label(EDITION, VERSION), canon(src))]))
+        if "--force" not in argv:
+            print("Nothing was changed; the installed gate keeps running.\n"
+                  "To replace it with Operator Lite %s anyway, run the install again with --force "
+                  "(npx operator-lite --force)." % VERSION)
+            return 4
+        bdir = pj(HOME, ".operator", "install-backups")
+        backup = pj(bdir, "operator-gate-replaced-%s.py" % time.strftime("%Y%m%d-%H%M%S"))
+        try:
+            os.makedirs(bdir, exist_ok=True)
+            shutil.copyfile(dst, backup)
+        except Exception as exc:
+            print("Refusing: the installed gate could not be kept before replacing it (%s). Nothing was changed." % exc)
+            return 4
+        print("WARNING: --force replaces %s with Operator Lite %s. What %s does beyond Lite stops now.\n"
+              "  the replaced gate is kept at %s\n"
+              "  to put it back: cp '%s' '%s'" % (theirs, VERSION, theirs, canon(backup), canon(backup), canon(dst)))
+    os.makedirs(dst_dir, exist_ok=True)
     if os.path.realpath(src) != os.path.realpath(dst):
         shutil.copyfile(src, dst)                  # bytes: the installed gate is the downloaded file exactly
+        print("gate: %s -> %s%s" % (gate_label(EDITION, VERSION), canon(dst),
+                                     " (replaced %s)" % gate_label(*replaced) if replaced else ""))
     os.chmod(dst, 0o755)
     ensure_dirs()
     mode_path = pj(OP_HOME, "mode")
     if not os.path.exists(mode_path):
         with open(mode_path, "w", encoding="utf-8") as f:
             f.write("shadow\n")
-    # Claude Code PreToolUse hook (merge, never clobber)
+    # Claude Code PreToolUse hook: merge, never clobber. A settings.json that does not parse is the
+    # owner's file in the middle of an edit; it is left exactly as it is.
     settings_path = pj(HOME, ".claude", "settings.json")
-    hook_cmd = hook_command(dst, "claude")
+    hook_cmd = claude_hook_command(dst)
+    registered, raw, settings = False, None, {}
     try:
-        try:
+        if os.path.exists(settings_path):
             with open(settings_path, encoding="utf-8") as f:
-                settings = json.load(f)
-        except Exception:
-            settings = {}
-        hooks = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
-        entry = {"matcher": "*", "hooks": [{"type": "command", "command": hook_cmd}]}
-        if not any(h.get("hooks") and any(hh.get("command") == hook_cmd for hh in h["hooks"]) for h in hooks):
-            hooks.append(entry)
-        os.makedirs(os.path.dirname(settings_path), exist_ok=True)   # Claude Code not started yet on this machine
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-        print("claude: PreToolUse hook registered in %s" % settings_path)
+                raw = f.read()
+            settings = json.loads(raw) if raw.strip() else {}
+            if not isinstance(settings, dict):
+                raise ValueError("its top level is not a JSON object")
     except Exception as exc:
-        print("claude: could not register hook (%s) -- add manually:" % exc)
-        print('  "hooks": {"PreToolUse": [{"matcher": "*", "hooks": '
-              '[{"type": "command", "command": "%s"}]}]}' % hook_cmd)
+        settings = None
+        print("claude: %s could not be read as JSON (%s). It was left as it is." % (settings_path, exc))
+    if settings is not None:
+        try:
+            groups = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
+            ours = [hh for g in groups for hh in g.get("hooks", []) if is_claude_gate_hook(hh.get("command", ""))]
+            if ours:                                  # an older registration of this gate: update it in place
+                ours[0]["command"] = hook_cmd
+                for g in groups:
+                    g["hooks"] = [hh for hh in g.get("hooks", []) if hh is ours[0] or hh not in ours[1:]]
+                groups[:] = [g for g in groups if g.get("hooks")]
+            else:
+                groups.append({"matcher": "*", "hooks": [{"type": "command", "command": hook_cmd}]})
+            text = json.dumps(settings, indent=2)
+            if raw is None or json.loads(raw or "{}") != settings:
+                os.makedirs(os.path.dirname(settings_path), exist_ok=True)   # Claude Code not started yet here
+                if raw is not None:
+                    backup = "%s.bak-operator-%s" % (settings_path, time.strftime("%Y%m%d-%H%M%S"))
+                    with open(backup, "w", encoding="utf-8") as f:
+                        f.write(raw)
+                    print("claude: the previous settings are kept at %s" % backup)
+                with open(settings_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+            registered = True
+            print("claude: PreToolUse hook registered in %s" % settings_path)
+        except Exception as exc:
+            print("claude: could not register hook (%s)." % exc)
+    if not registered:
+        print("  Nothing was written. Add this group to \"hooks\" in %s by hand, then run install again:" % settings_path)
+        print('  "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": %s}]}]'
+              % json.dumps(hook_cmd))
     print("other hosts: register this as their pre-tool hook -> %s" % hook_command(dst, "<host>"))
     try:
         launcher = place_launcher(dst)
@@ -2589,14 +2918,19 @@ def cmd_install(argv):
             cmd_replay(["--budget", "12", "--from-install"])
         except Exception:
             pass
+    if not registered:
+        print("\nThe gate is installed, but Claude Code is not wired to it yet (see above).")
+        return 5
     print("\nFrom now on every tool call your agents make passes through the gate.\n"
           "See what it caught: %s status" % self_cmd())
     return 0
 
 
 def cmd_uninstall(argv):
-    if os.environ.get("OPERATOR_AGENT_SESSION"):
-        print("Refusing: uninstalls are run by the owner in their own terminal.")
+    agent = agent_session()
+    if agent:
+        print("Refusing: uninstalls are run by the owner in their own terminal (%s is set: this shell "
+              "belongs to an agent)." % agent)
         return 3
     settings_path = pj(HOME, ".claude", "settings.json")
     try:

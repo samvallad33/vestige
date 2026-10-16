@@ -51,6 +51,9 @@ function runGate(gatePath, payload) {
         resolve(r);
       }
     };
+    // python3 exits 2 when it cannot open the gate file, and exit 2 reads as STOP: a missing gate would
+    // block every call. Treat it as unreachable instead (the fail-open rule below).
+    if (!existsSync(gatePath)) return done({ ok: false, err: `gate file missing: ${gatePath}` });
     let child;
     try {
       child = spawn(process.env.OPERATOR_PYTHON || "python3", [gatePath, "hook", "--source", "openclaw"], {

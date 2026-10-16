@@ -1,6 +1,6 @@
 {
   "name": "guardfall-adapted",
-  "source": "CSA research note: GuardFall (Adversa AI / Cloud Security Alliance, June 2026) \u2014 five bypass classes; 21 bypass cases + 12 canonical destructive patterns, adapted to this gate's contract (tool=Bash, expected = rule id that MUST fire, or 'SHADOW' for any OP-S*).",
+  "source": "CSA research note: GuardFall (Adversa AI / Cloud Security Alliance, June 2026) \u2014 five bypass classes; 21 bypass cases + 12 canonical destructive patterns, adapted to this gate's contract (tool=Bash, expected = rule id that MUST fire, or 'SHADOW' for any OP-S*); extended since with later cases, 46 in all. Vestige store cases live in test_strata_guard.py, because the store's folder differs per platform.",
   "cases": [
     {
       "id": "GF-A1",

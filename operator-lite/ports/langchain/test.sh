@@ -151,7 +151,7 @@ section "guardfall corpus via the adapter (enforce mode)"
 CORPUS="$PORT_DIR/../../corpora/guardfall.json"
 if [ -f "$CORPUS" ]; then
   MODULE="$MIDDLEWARE" CORPUS_FILE="$CORPUS" RECEIPTS="$RECEIPTS" python3 > "$LOGS/corpus.log" 2>&1 <<'PYEOF' \
-    && ok "guardfall corpus: 43/43 verdicts survive the adapter's decide()" \
+    && ok "guardfall corpus: every case's verdict survives the adapter's decide()" \
     || { bad "guardfall corpus via adapter"; cat "$LOGS/corpus.log"; }
 import importlib.util, json, os, sys
 
@@ -172,8 +172,20 @@ def last_receipt():
 
 corpus = json.load(open(os.environ["CORPUS_FILE"]))["cases"]
 fails = []
+import shutil, tempfile
 for case in corpus:
-    verdict, message = mod.decide("shell", {"command": case["cmd"]}, cwd="/tmp")
+    cwd, tmpd = "/tmp", None
+    if case.get("fixtures"):   # script files the case runs, never executed (as cmd_corpus does)
+        tmpd = tempfile.mkdtemp(prefix="opgate-fixture-")
+        for fx in case["fixtures"]:
+            fp = os.path.join(tmpd, fx["name"])
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with open(fp, "w", encoding="utf-8") as f:
+                f.write(fx["body"])
+        cwd = tmpd
+    verdict, message = mod.decide("shell", {"command": case["cmd"]}, cwd=cwd)
+    if tmpd:
+        shutil.rmtree(tmpd, True)
     hits = set(last_receipt().get("commitments") or [])
     expect = str(case["expect"])
     if expect == "ALLOW":

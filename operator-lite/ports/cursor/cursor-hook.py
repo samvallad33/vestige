@@ -74,7 +74,9 @@ DESTRUCTIVE_LIKE = re.compile(
     re.I,
 )
 
-APPROVE_RE = re.compile(r"operator-gate approve ([0-9a-f]{24})")
+# The gate prints `<how to run it> approve <digest>`: `operator-gate approve` when its
+# launcher is on PATH, else `python3 ~/.operator/gate/operator-gate.py approve`.
+APPROVE_RE = re.compile(r"((?:python3? \S*)?operator-gate(?:\.py)?) approve ([0-9a-f]{24})")
 RULE_LINE_RE = re.compile(r"OPERATOR: STOPPED \(([^)]+)\)")
 
 
@@ -113,7 +115,7 @@ def deny(gate_stderr, raw):
     user = "Operator Lite: blocked (%s)." % m.group(1) if m else "Operator Lite: blocked."
     a = APPROVE_RE.search(text)
     if a:
-        user += " Owner can allow once: operator-gate approve %s" % a.group(1)
+        user += " Owner can allow once: %s approve %s" % (a.group(1), a.group(2))
     return emit({
         "continue": True,
         "permission": "deny",
