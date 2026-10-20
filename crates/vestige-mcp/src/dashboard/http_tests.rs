@@ -751,6 +751,40 @@ async fn consolidate_on_a_strata_log_is_refused_not_reported_as_a_zero_pass() {
     }
 }
 
+/// The brain print's retention lanes (#495): read at the log's head clock,
+/// so two reads of an untouched log agree, and counts only.
+#[tokio::test]
+async fn brain_shape_reads_retention_at_the_log_head_clock() {
+    let (_dir, storage) = strata();
+    for n in 0..3 {
+        remember(&storage, &format!("a private brain shape memory {n}"), &[]);
+    }
+    let app = router(&storage);
+
+    let reply = own(&app, "GET", "/api/brain-shape", None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert!(!reply.body.contains("private"), "{}", reply.body);
+    let shape = reply.json();
+    let head = crate::strata_memory::retention_at_head(storage.as_ref()).unwrap();
+    assert_eq!(shape["basis"], "log_head_clock");
+    assert_eq!(shape["asOfMs"], head.as_of_ms);
+    assert_eq!(shape["total"], 3);
+    assert_eq!(shape["averageRetention"], head.average);
+    assert_eq!(shape["endangeredCount"], head.endangered);
+    let distribution = shape["distribution"].as_array().unwrap();
+    assert_eq!(distribution.len(), 10);
+    assert_eq!(distribution[0]["range"], "0-10%");
+    assert_eq!(distribution[9]["range"], "90-100%");
+    let counted: u64 = distribution
+        .iter()
+        .map(|band| band["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!(counted, 3);
+
+    let again = own(&app, "GET", "/api/brain-shape", None).await;
+    assert_eq!(again.body, reply.body);
+}
+
 #[tokio::test]
 async fn a_script_with_the_bearer_token_can_write() {
     let (_dir, storage) = strata();

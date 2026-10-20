@@ -165,6 +165,8 @@ fn build_guarded_router(state: AppState, guard: AccessGuard) -> (Router, AppStat
             "/api/retention-distribution",
             get(handlers::retention_distribution),
         )
+        // The brain print's retention lanes at the log's head clock (#495).
+        .route("/api/brain-shape", get(handlers::brain_shape))
         // Intentions (v2.0)
         .route("/api/intentions", get(handlers::list_intentions))
         // Reasoning Theater (v2.0.8) — 8-stage cognitive pipeline surface.

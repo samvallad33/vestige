@@ -2069,6 +2069,40 @@ pub async fn retention_distribution(
     })))
 }
 
+/// The retention lanes the brain print hashes, read at the log's head clock
+/// (#495). `/api/stats` and `/api/retention-distribution` read retrievability
+/// at now, so a print built from them re-keyed every day on an untouched
+/// store; these are a function of the log alone. Counts only, no memory text.
+pub async fn brain_shape(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let head = crate::strata_memory::retention_at_head(state.storage.as_ref()).ok_or_else(|| {
+        ApiError::reason(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "strata_log_not_open",
+            "strata_log_not_open: the brain shape is read from the Strata log, which this process does not hold".to_string(),
+        )
+    })?;
+    let distribution: Vec<Value> = head
+        .buckets
+        .iter()
+        .enumerate()
+        .map(|(i, &count)| {
+            serde_json::json!({
+                "range": format!("{}-{}%", i * 10, (i + 1) * 10),
+                "count": count,
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "basis": "log_head_clock",
+        "asOfMs": head.as_of_ms,
+        "asOf": DateTime::<Utc>::from_timestamp_millis(head.as_of_ms).map(|at| at.to_rfc3339()),
+        "total": head.total,
+        "averageRetention": head.average,
+        "distribution": distribution,
+        "endangeredCount": head.endangered,
+    })))
+}
+
 // ============================================================================
 // INTENTIONS (v2.0)
 // ============================================================================
