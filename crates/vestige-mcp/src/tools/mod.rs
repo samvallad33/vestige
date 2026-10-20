@@ -26,6 +26,7 @@ pub mod search_unified;
 // mode=lookup (default) is a zero-overhead pass-through to search_unified.
 pub mod recall;
 pub mod receipt;
+mod scope;
 pub mod smart_ingest;
 // #57: external-source connectors (GitHub Issues / Redmine retrieval layer).
 // The tool is absent from tools/list and dispatch unless this feature is on.

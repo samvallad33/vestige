@@ -10,8 +10,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::scope::validate_scope;
 use crate::cognitive::CognitiveEngine;
-use vestige_core::{DEFAULT_MEMORY_SCOPE, Storage};
+use vestige_core::Storage;
 
 /// Input schema for deep_reference / cross_reference tool
 pub fn schema() -> Value {
@@ -173,17 +174,6 @@ fn validate_reason_envelope(value: &Value) -> Result<(), String> {
         ));
     }
 
-    Ok(())
-}
-
-fn validate_scope(raw_scope: Option<&str>) -> Result<(), String> {
-    let scope = raw_scope.unwrap_or(DEFAULT_MEMORY_SCOPE).trim();
-    if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
-        return Err(
-            "Invalid scope: expected a non-empty identifier of at most 200 visible characters"
-                .to_string(),
-        );
-    }
     Ok(())
 }
 

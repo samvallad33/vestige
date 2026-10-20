@@ -8,7 +8,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 
-use vestige_core::{DEFAULT_MEMORY_SCOPE, Storage};
+use super::scope::validate_scope;
+use vestige_core::Storage;
 
 pub fn schema() -> Value {
     serde_json::json!({
@@ -62,6 +63,7 @@ struct ContradictionArgs {
     limit: Option<i32>,
     scope: Option<String>,
     #[serde(alias = "include_cross_scope")]
+    #[allow(dead_code)]
     include_cross_scope: Option<bool>,
 }
 
@@ -97,22 +99,6 @@ fn validate_envelope(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_scope(args: &ContradictionArgs) -> Result<(String, bool), String> {
-    let scope = args
-        .scope
-        .as_deref()
-        .unwrap_or(DEFAULT_MEMORY_SCOPE)
-        .trim()
-        .to_string();
-    if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
-        return Err(
-            "Invalid scope: expected a non-empty identifier of at most 200 visible characters"
-                .to_string(),
-        );
-    }
-    Ok((scope, args.include_cross_scope.unwrap_or(false)))
-}
-
 pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
     let args: ContradictionArgs = match args {
         Some(value) => {
@@ -135,7 +121,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         );
     }
 
-    let _ = parse_scope(&args)?;
+    validate_scope(args.scope.as_deref())?;
     if let Some(raw) = args.since.as_deref() {
         let _ = DateTime::parse_from_rfc3339(raw)
             .map_err(|e| format!("Invalid since timestamp: {}", e))?

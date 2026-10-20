@@ -10,8 +10,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::scope::validate_scope;
 use crate::cognitive::CognitiveEngine;
-use vestige_core::{DEFAULT_MEMORY_SCOPE, OutputConfig, Storage};
+use vestige_core::{OutputConfig, Storage};
 
 /// Input schema for unified search tool
 pub fn schema() -> Value {
@@ -232,17 +233,6 @@ fn parse_valid_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
         )));
     }
     Err("Invalid validAt: expected 'now', RFC3339, or YYYY-MM-DD".to_string())
-}
-
-fn validate_scope(raw_scope: Option<&str>) -> Result<(), String> {
-    let scope = raw_scope.unwrap_or(DEFAULT_MEMORY_SCOPE).trim();
-    if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
-        return Err(
-            "Invalid scope: expected a non-empty identifier of at most 200 visible characters"
-                .to_string(),
-        );
-    }
-    Ok(())
 }
 
 fn validate_source_args(args: &SearchArgs) -> Result<(), String> {
