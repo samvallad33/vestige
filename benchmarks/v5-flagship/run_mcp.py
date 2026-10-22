@@ -412,7 +412,7 @@ def check_selftest(c):
 
 
 def no_similarity(c):
-    body, ms = c.call("recall", {"query": "look up the similar quiet configuration"})
+    body, ms = c.call("recall", {"query": "look up the similar quiet configuration"}, ok=False)
     if "similarity_disabled" not in json.dumps(body, sort_keys=True):
         raise AssertionError("expected explicit similarity_disabled refusal")
     return {"similarity_disabled": True, "elapsed_tool_ms": ms}
