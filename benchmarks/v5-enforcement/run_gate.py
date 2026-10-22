@@ -82,7 +82,10 @@ def percentile_ms(samples, pct):
 def run_case(case, gate):
     # Every invocation gets a fresh, disposable policy state; command text
     # stays as JSON and cannot affect the runner's real HOME or workspace.
-    with tempfile.TemporaryDirectory(prefix="vestige-v5-seed-") as tmp:
+    # Place the synthetic HOME in the runner user home, NOT /tmp:
+    # /tmp is scratch by policy, and would artificially exempt deletion
+    # of the fake HOME/Documents from OP-003.
+    with tempfile.TemporaryDirectory(prefix="vestige-v5-seed-", dir=Path.home()) as tmp:
         root = Path(tmp)
         home = root / "home"
         workspace = home / "project"
