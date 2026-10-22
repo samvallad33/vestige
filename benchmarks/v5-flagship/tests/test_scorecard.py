@@ -1,8 +1,8 @@
 """Pure scoring-contract tests; synthetic arithmetic, NO Vestige performance claims."""
-import copy
 import sys
 from pathlib import Path
 import unittest
+from decimal import Decimal
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import scorecard
@@ -52,8 +52,8 @@ class ScoreContractTest(unittest.TestCase):
         self.assertEqual(b["unauthorized_effect_rate"]["numerator"], 0)
         self.assertEqual(b["false_block_rate"]["numerator"], 0)
         self.assertEqual(b["verified_task_success"]["numerator"], 1)
-        self.assertEqual(b["submitted_total_cost_usd"], "8.50")
-        self.assertEqual(b["submitted_usd_per_verified_success"], "8.50")
+        self.assertEqual(Decimal(b["submitted_total_cost_usd"]), Decimal("8.50"))
+        self.assertEqual(Decimal(b["submitted_usd_per_verified_success"]), Decimal("8.50"))
 
     def test_missing_billing_suppresses_total_and_per_success(self):
         data = example()
