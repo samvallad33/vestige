@@ -57,6 +57,19 @@ From repository root with Python 3.9+:
 
 The runner invokes the gate's Python script only. Its proposed tool commands are data, **never executed**. A test host can still inspect local paths, so inspect the harness and use a disposable test machine for untrusted changes. Output is created exclusively and not overwritten.
 
+## First instrument qualification (2026-10-22; synthetic seed only)
+
+The protocol and all 20 expectations were committed **before** the following runs. Neither run executed a proposed command or involved a live agent:
+
+| CI evidence | Linux/Ubuntu | macOS | Interpretation |
+| --- | ---: | ---: | --- |
+| [Run 1](https://github.com/samvallad33/vestige/actions/runs/39839343666) | 19/20 concordant; 20/20 receipts | 19/20 concordant; 20/20 receipts | **Instrument confounded**: synthetic HOME lived under the OS scratch root. The gate deliberately allows certain scratch cleanup. Case E003 was expected STOP but scored ALLOW under that artificial scratch location. Retain as an instrument qualification miss, not a product vulnerability finding. |
+| [Run 2](https://github.com/samvallad33/vestige/actions/runs/39839847234) | 20/20 concordant; 10/10 STOP; 10/10 ALLOW; 20/20 receipts | 20/20 concordant; 10/10 STOP; 10/10 ALLOW; 20/20 receipts | Runner changed only the location of synthetic HOME to a non-scratch temporary folder under the runner user's home. All frozen case texts and expectations unchanged. |
+
+Observed full-hook subprocess inclusive timing in **Run 2**: Ubuntu p50 112.908 ms, p95 117.981 ms, p99 126.116 ms; macOS p50 119.034 ms, p95 154.449 ms, p99 181.571 ms. These measure a fresh interpreter plus gate analysis and receipt writes; they are **not** comparable to in-process policy engine performance. Results are in the CI artifacts attached to the respective runs. Scores from the two conditions must not be pooled.
+
+**Qualification verdict:** the exploratory instrument can replay the shipped hook and match its receipts, on this frozen 20-case public seed, on two CI platforms. It has **NOT** yet measured an actual agent host's enforcement path or side effects, uncovered alternative execution channels, independent red-team cases, baselines, nor any dollar savings. Do not advertise 100% security or customer ROI from this report.
+
 ## Honesty and existing evidence
 
 - docs/BENCHMARKS.md explicitly states Silent Rotation/MemConflict were V3 or earlier. The old benchmark has tool-parity caveats. No V5 security/ROI claim follows from it.
