@@ -1,0 +1,99 @@
+{
+  "version": "vestige-v5-trials-0.1",
+  "created_utc_date": "2026-10-22",
+  "status": "planned_with_synthetic_live_stdio_instrument_only",
+  "upstream_seed": "benchmarks/v5-enforcement-prereg-20261022",
+  "product": "Vestige V5 default Strata",
+  "actual_feature_inventory": [
+    "causal_walk",
+    "codebase",
+    "dedup",
+    "forgotten_lesson",
+    "gather",
+    "ghostlink",
+    "intention",
+    "maintain",
+    "memory",
+    "memory_status",
+    "precedent",
+    "project",
+    "recall",
+    "receipt",
+    "selftest",
+    "session_start",
+    "smart_ingest",
+    "suppress"
+  ],
+  "tool_catalog_expected_count": 18,
+  "suite": [
+    "enforcement-real-effect",
+    "multi-host-adapter",
+    "single-use-approval",
+    "cross-session-precedent",
+    "strata-crypto-tamper",
+    "hindsight-with-evidence",
+    "fsrs-forgetting-dreaming",
+    "causal-groundtruth-investigation",
+    "ghostlink-independent-novelty",
+    "code-anchors-intentions",
+    "18-tool-stdio-contract",
+    "verified-dollar-economics"
+  ],
+  "direct_stdio_smoke": {
+    "cases": [
+      "catalog_exact_18",
+      "ingest_exact_provenance",
+      "receipt_replay",
+      "handle_recall",
+      "no_free_text_similarity",
+      "explicit_edge_walk",
+      "no_edge_abstention",
+      "selftest_live_store_untouched",
+      "cross_session_restart"
+    ],
+    "input_type": "synthetic_public",
+    "exposes_tool_args_only_to_mcp_binary": true,
+    "may_run_actual_model": false,
+    "may_use_network": false,
+    "claims": "mechanics_only_not_business_or_security_generalization"
+  },
+  "proposed_arena": {
+    "host_effects_per_arm": 300,
+    "blinded_real_incidents": 80,
+    "distinct_incident_projects": 8,
+    "independent_pilot_teams": "3-5",
+    "negative_cases_required": true,
+    "company_approval_required": true,
+    "baseline_restrictions": "match default host and policy; same tasks, models, budgets, historical evidence and permitted integration"
+  },
+  "primary_metrics": {
+    "safety": [
+      "unauthorized_effect_rate",
+      "legitimate_task_success",
+      "false_block_rate"
+    ],
+    "causal": [
+      "verified_patch_success",
+      "unsupported_cause_rate",
+      "missing_edge_abstention",
+      "time_to_correct_fix"
+    ],
+    "economics": [
+      "complete_usd_per_verified_success",
+      "completion_rate",
+      "human_review_minutes"
+    ]
+  },
+  "cannot_claim": [
+    "global_unbypassability",
+    "V5_default_has_V3_retroactive_backfill",
+    "real_cost_savings_from_synthetic_cases",
+    "universal_neuroscience_computation",
+    "signed_receipt_implies_true_event",
+    "v5_better_than_vector_rag_without_head_to_head"
+  ],
+  "stats": "raw counts, Wilson confidence bounds, project-cluster bootstrap for dependent units",
+  "reproduction": "archive commit IDs/SHAs, binary digest, environment, model, configs, seeds, raw redacted output + certified evaluators",
+  "license_note": "no paid Operator test or third-party API billing is authorized",
+  "retained_history": "all failed and confounded runs must stay in audit trail"
+}
