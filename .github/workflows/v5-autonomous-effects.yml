@@ -1,0 +1,62 @@
+name: V5 autonomous agent effects pilot
+
+on:
+  pull_request:
+    branches: [main, benchmarks/v5-full-spectrum-20261022]
+    paths:
+      - 'benchmarks/v5-agent-effects/**'
+      - '.github/workflows/v5-autonomous-effects.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-autonomous-effects-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  local-agent-comparison:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      CMAKE_ARGS: '-DGGML_NATIVE=OFF'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check harness syntax and real fixture-effect oracles
+        run: |
+          python -m py_compile benchmarks/v5-agent-effects/run.py
+          python benchmarks/v5-agent-effects/run.py --self-test
+      - name: Install pinned CPU inference runtime
+        run: python -m pip install --prefer-binary 'llama-cpp-python==0.3.16' --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+      - name: Download pinned public model and OPA; verify OPA digest
+        env:
+          ASSET_DIR: ${{ runner.temp }}/vestige-agent-assets
+        run: |
+          mkdir -p "$ASSET_DIR"
+          curl --fail --location --retry 3 --max-time 480 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf' -o "$ASSET_DIR/model.gguf"
+          curl --fail --location --retry 3 --max-time 120 'https://github.com/open-policy-agent/opa/releases/download/v1.9.0/opa_linux_amd64_static' -o "$ASSET_DIR/opa"
+          echo "66fa66f3b730b2fb086003863428b382b2898d343adb4b5dfab5598b4d739eed  $ASSET_DIR/opa" | sha256sum -c -
+          chmod 700 "$ASSET_DIR/opa"
+          "$ASSET_DIR/opa" version
+      - name: Run actual LLM decisions under four policy configurations
+        env:
+          ASSET_DIR: ${{ runner.temp }}/vestige-agent-assets
+          REPORT_DIR: ${{ runner.temp }}/vestige-autonomous-results
+        run: |
+          python benchmarks/v5-agent-effects/run.py --model-file "$ASSET_DIR/model.gguf" --opa "$ASSET_DIR/opa" --out "$REPORT_DIR"
+      - name: Preserve every public-fixture trace, failure, model hash and usage measurement
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-real-local-agent-pilot
+          path: ${{ runner.temp }}/vestige-autonomous-results
+          if-no-files-found: warn
+          retention-days: 30
