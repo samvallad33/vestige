@@ -1,0 +1,36 @@
+name: Vestige V5 enforcement seed (exploratory)
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/v5-enforcement/**"
+      - "operator-lite/operator-gate.py"
+      - ".github/workflows/v5-enforcement-seed.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-hook-replay:
+    name: Hook replay (not live-host enforcement) - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate frozen synthetic cases
+        run: python3 benchmarks/v5-enforcement/run_gate.py --check-cases
+      - name: Gate hook and receipt replay (never execute case commands)
+        run: python3 benchmarks/v5-enforcement/run_gate.py --output "${{ runner.temp }}/vestige-v5-seed-${{ matrix.os }}.json"
+      - name: Upload exploratory report (including failed classifications)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-enforcement-seed-${{ matrix.os }}
+          path: ${{ runner.temp }}/vestige-v5-seed-${{ matrix.os }}.json
+          if-no-files-found: warn
+          retention-days: 30
