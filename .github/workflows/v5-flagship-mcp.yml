@@ -29,6 +29,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Verify Python harness syntax (no execution)
         run: python3 -m py_compile benchmarks/v5-flagship/run_mcp.py
+      - name: Verify common safety, success, and total-cost scoring contract
+        run: python3 -m unittest discover -s benchmarks/v5-flagship/tests -p 'test_*.py'
       - name: Build current V5 MCP binary (no model API)
         run: cargo build --locked -p vestige-mcp
       - name: Run synthetic stdio contract, causal graph, receipt and restart checks
