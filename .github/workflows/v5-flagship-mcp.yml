@@ -1,0 +1,43 @@
+name: Vestige V5 full-spectrum MCP instrument
+
+on:
+  pull_request:
+    branches:
+      - main
+      - benchmarks/v5-enforcement-prereg-20261022
+    paths:
+      - "benchmarks/v5-flagship/**"
+      - ".github/workflows/v5-flagship-mcp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-stdio:
+    name: Real V5 MCP smoke (not agent or ROI) - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify Python harness syntax (no execution)
+        run: python3 -m py_compile benchmarks/v5-flagship/run_mcp.py
+      - name: Build current V5 MCP binary (no model API)
+        run: cargo build --locked -p vestige-mcp
+      - name: Run synthetic stdio contract, causal graph, receipt and restart checks
+        run: python3 benchmarks/v5-flagship/run_mcp.py --binary target/debug/vestige-mcp --output "${{ runner.temp }}/vestige-v5-stdio-${{ matrix.os }}.json"
+      - name: Upload results including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-flagship-stdio-${{ matrix.os }}
+          path: ${{ runner.temp }}/vestige-v5-stdio-${{ matrix.os }}.json
+          if-no-files-found: warn
+          retention-days: 30
