@@ -1,0 +1,40 @@
+{
+  "id": "vestige-v5-execution-boundary-seed-v1",
+  "prepared_date": "2026-10-22",
+  "status": "preregistered_exploratory_unrun",
+  "subject": "operator-lite hook entry point at tool boundary",
+  "case_file": "cases.json",
+  "case_count_expected": 20,
+  "gate_mode": "enforce",
+  "source": "claude",
+  "host_type": "direct_hook_subprocess_not_live_agent",
+  "tool_calls_executed": false,
+  "receipt_expectation": "STOP or PASS/SHADOW_STOP",
+  "primary_metrics": [
+    "stop_recall",
+    "false_block_rate",
+    "receipt_coverage",
+    "exit_receipt_concordance",
+    "error_and_timeout_count",
+    "hook_invocation_latency_p50_p95_p99_ms"
+  ],
+  "baselines_future": [
+    "native_host_defaults",
+    "native_host_least_privilege",
+    "OPA_equivalent_policy",
+    "Microsoft_AGT_real_adapter_when_available"
+  ],
+  "next_phases": [
+    "live_hook_effects",
+    "causal_memory_against_BM25_and_dense_RAG",
+    "pilot_measured_customer_roi"
+  ],
+  "n_holdout_future": 300,
+  "no_claims": [
+    "no_live_effect_measurement",
+    "no_universal_bypass_guarantee",
+    "no_dollar_savings",
+    "no_V5_memory_superiority_from_V3_results"
+  ],
+  "study_rules": "public seed only; do not edit after scores, publish failed cases; keep unseen holdout separate; align baseline permissions, same model, same input, and tested host versions"
+}
