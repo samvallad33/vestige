@@ -1,0 +1,59 @@
+name: Publish Operator Lite to npm
+# Publishes operator-lite and @vestige/init from this repository through npm trusted
+# publishing: no stored token, and npm attaches provenance to each version it accepts.
+# Run by hand only. dry_run is on by default and packs both packages without publishing.
+# Each package's Trusted Publisher on npmjs.com names this file: publish-lite.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Pack and list both packages only; publish nothing"
+        type: boolean
+        default: true
+
+permissions: read-all
+
+jobs:
+  publish:
+    name: Publish operator-lite and @vestige/init
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      # trusted publishing needs npm 11.5.1 or later
+      - name: npm 11.21.1
+        run: npm install -g npm@11.21.1
+
+      - name: The npm package carries this gate at its own version
+        run: node operator-lite/npm/test.js
+
+      - name: "@vestige/init bundles the same gate file"
+        run: cmp operator-lite/operator-gate.py packages/vestige-init/hooks/operator-lite.py
+
+      - name: Pack both packages (dry run)
+        if: ${{ inputs.dry_run }}
+        run: |
+          (cd operator-lite/npm && npm pack --dry-run)
+          (cd packages/vestige-init && npm pack --dry-run)
+
+      - name: Publish operator-lite
+        if: ${{ !inputs.dry_run }}
+        working-directory: operator-lite/npm
+        run: npm publish --access public
+
+      - name: Publish @vestige/init
+        if: ${{ !inputs.dry_run }}
+        working-directory: packages/vestige-init
+        run: npm publish --access public
