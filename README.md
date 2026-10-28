@@ -12,6 +12,7 @@ Vestige gives AI agents a memory that gets sharper over time, and a guard that c
 [![Tests](https://img.shields.io/github/actions/workflow/status/samvallad33/vestige/ci.yml?branch=main&label=CI)](https://github.com/samvallad33/vestige/actions)
 [![Binary](https://img.shields.io/badge/platforms-6_release_targets-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/samvallad33/vestige/badge)](https://scorecard.dev/viewer/?uri=github.com/samvallad33/vestige)
 
 <a id="install"></a>
 ## Quick start
