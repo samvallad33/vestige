@@ -666,8 +666,8 @@ a time.
 What the Operator gate ruled, and why (5.0.0). It reads the gate's own files under
 `$OPERATOR_HOME`, or `~/.operator` when that is unset: `receipts/YYYY-MM-DD.jsonl`, one
 receipt per line, and `permits/<action_digest>.json`, `.json.used` or `.json.expired`. It
-writes nothing, touches no store state, and approves or issues nothing. It does not verify
-the receipts' hash chain.
+writes nothing, touches no store state, and approves or issues nothing. Before it answers,
+it verifies the receipts' digest chain over the day files it reads (5.0.1, see below).
 
 - **Filters**, all optional:
   - `since` (default `24h`): a number and a unit, `s`, `m`, `h`, `d` or `w`.
@@ -686,6 +686,18 @@ the receipts' hash chain.
   the `commitment`), `detail` and `digest`, plus `via`, `action_digest`, `commitment`,
   `prev` (the digest this receipt chains to), `normalized`, `transforms` and
   `gate_version` when the receipt has them.
+- **The chain is verified first (5.0.1).** Every line of the day files read must name, in
+  `prev`, the digest of the line before it, and must match its own `digest` (SHA-256 of the
+  receipt without `digest`, as the gate's `digest_of` spells it). The first file read
+  chains to the last line of the newest file before it, or to 64 zeros at the start of the
+  chain. `chain` reports `status` (`ok`, `broken` or `empty`), `receipts_checked`, up to
+  five `breaks` as `file:line` with `breaks_total`, `from_file`, `anchored_to`,
+  `integrity` (`reference_digest_not_signature`) and a `note`. A receipt holding a
+  non-integer number is linked but its own digest is not recomputed, because its Python
+  spelling cannot be reproduced exactly; `digests_not_recomputed` counts them. A broken
+  chain adds a `warning` naming the first break and `chain_break: true` on the items at a
+  break. A digest chain detects accidental edits and removals; it is not a signature and
+  proves no authorship.
 - **Permits.** An item carries `permit` when one answers it: the permit for the same
   `action_digest` whose `stop_receipt` names the receipt's `digest`, or else the nearest
   by grant time, since older permits name no stop. An ALLOW takes the latest permit

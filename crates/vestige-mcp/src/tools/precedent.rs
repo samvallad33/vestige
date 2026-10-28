@@ -5,9 +5,10 @@
 //! `digest`) and `permits/<action_digest>.json[.used|.expired]`. A receipt links
 //! to the permit whose `stop_receipt` names it, or else to a permit for the same
 //! `action_digest` paired by grant time (older permits carry no `stop_receipt`).
-//! Day files that end before the window are not read. Nothing here writes,
-//! approves, issues, or deletes anything; the hash chain is not verified in this
-//! version.
+//! Day files that end before the window are not read. Before answering, the
+//! digest chain of the day files it reads is verified the way `operator-gate
+//! verify` does it, anchored to the last line of the newest file before them.
+//! Nothing here writes, approves, issues, or deletes anything.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -158,9 +159,113 @@ fn ts_unix(ts: &str) -> Option<i64> {
         .map(|t| t.and_utc().timestamp())
 }
 
+/// The gate's `digest_of`: SHA-256 of the record without its `digest`, spelled
+/// as Python's `json.dumps(sort_keys=True, separators=(",", ":"),
+/// ensure_ascii=False)`. None when the record holds a non-integer number, whose
+/// Python spelling this cannot reproduce byte for byte.
+fn gate_digest(rec: &Value) -> Option<String> {
+    fn canonical(v: &Value, out: &mut String, top: bool) -> bool {
+        match v {
+            Value::Null => out.push_str("null"),
+            Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Value::Number(n) if n.is_f64() => return false,
+            Value::Number(n) => out.push_str(&n.to_string()),
+            // serde_json escapes `"`, `\` and controls below 0x20 as Python does.
+            Value::String(s) => out.push_str(&serde_json::to_string(s).unwrap_or_default()),
+            Value::Array(a) => {
+                out.push('[');
+                for (i, x) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    if !canonical(x, out, false) {
+                        return false;
+                    }
+                }
+                out.push(']');
+            }
+            Value::Object(o) => {
+                // UTF-8 byte order is code point order, Python's sort_keys order.
+                let mut keys: Vec<&String> =
+                    o.keys().filter(|k| !(top && *k == "digest")).collect();
+                keys.sort();
+                out.push('{');
+                for (i, k) in keys.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(k).unwrap_or_default());
+                    out.push(':');
+                    if !canonical(&o[k], out, false) {
+                        return false;
+                    }
+                }
+                out.push('}');
+            }
+        }
+        true
+    }
+    use sha2::Digest;
+    let mut text = String::new();
+    if !canonical(rec, &mut text, true) {
+        return None;
+    }
+    Some(
+        sha2::Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+
+/// What the digest chain of the day files a call read shows.
+#[derive(Default)]
+struct ChainCheck {
+    checked: usize,
+    breaks: Vec<String>,
+    not_recomputed: usize,
+    first_file: Option<String>,
+    anchor: String,
+}
+
+impl ChainCheck {
+    fn to_json(&self) -> Value {
+        json!({
+            "status": if self.checked == 0 { "empty" } else if self.breaks.is_empty() { "ok" } else { "broken" },
+            "receipts_checked": self.checked,
+            "breaks": self.breaks.iter().take(5).collect::<Vec<_>>(),
+            "breaks_total": self.breaks.len(),
+            "digests_not_recomputed": self.not_recomputed,
+            "from_file": self.first_file,
+            "anchored_to": self.anchor,
+            "integrity": "reference_digest_not_signature",
+            "note": "Each receipt must name the digest of the line before it and match its own digest. A digest chain detects accidental edits; it is not a signature and proves no authorship."
+        })
+    }
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The stored digest on the last non-empty line of a day file, if it parses.
+fn last_digest(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().rev().find(|l| !l.trim().is_empty())?;
+    serde_json::from_str::<Value>(line.trim())
+        .ok()?
+        .get("digest")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// (ts, scan order, record) for every receipt in the window, oldest scan first.
 /// Lines that do not parse, or carry no readable ts, count in the second slot.
-fn read_receipts(home: &Path, cutoff: i64) -> (Vec<(i64, usize, Value)>, usize) {
+/// The third slot is the digest chain of every line in the files read.
+fn read_receipts(home: &Path, cutoff: i64) -> (Vec<(i64, usize, Value)>, usize, ChainCheck) {
     let rdir = home.join("receipts");
     let mut files: Vec<PathBuf> = match std::fs::read_dir(&rdir) {
         Ok(rd) => rd
@@ -168,8 +273,10 @@ fn read_receipts(home: &Path, cutoff: i64) -> (Vec<(i64, usize, Value)>, usize) 
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
             .collect(),
-        Err(_) => return (Vec::new(), 0),
+        Err(_) => return (Vec::new(), 0, ChainCheck::default()),
     };
+    files.sort();
+    let all = files.clone();
     // A day file holds that UTC day's receipts. Skip days that end before the
     // cutoff, keeping one spare day in case a file was named by local date.
     if let Some(first) = DateTime::from_timestamp(cutoff, 0).map(|t| t.date_naive() - Days::new(1))
@@ -181,18 +288,74 @@ fn read_receipts(home: &Path, cutoff: i64) -> (Vec<(i64, usize, Value)>, usize) 
                 .is_none_or(|day| day >= first)
         });
     }
-    files.sort();
+    // The first file read chains to the last line of the newest file before it.
+    let mut chain = ChainCheck {
+        first_file: files.first().map(|p| file_name(p)),
+        ..ChainCheck::default()
+    };
+    let before = files
+        .first()
+        .and_then(|f| all.iter().take_while(|p| *p != f).last());
+    let mut expected: Option<String> = match before {
+        None => {
+            chain.anchor = "the start of the chain".into();
+            Some("0".repeat(64))
+        }
+        Some(p) => match last_digest(p) {
+            Some(d) => {
+                chain.anchor = format!("the last line of {}", file_name(p));
+                Some(d)
+            }
+            None => {
+                chain.anchor = format!("unreadable: the last line of {}", file_name(p));
+                None
+            }
+        },
+    };
     let mut out = Vec::new();
     let mut skipped = 0usize;
     for f in files {
         let Ok(text) = std::fs::read_to_string(&f) else {
             continue;
         };
-        for line in text.lines() {
-            let Ok(rec) = serde_json::from_str::<Value>(line.trim()) else {
-                if !line.trim().is_empty() {
-                    skipped += 1;
+        let name = file_name(&f);
+        for (n, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let at = format!("{name}:{}", n + 1);
+            let parsed = serde_json::from_str::<Value>(line.trim()).ok();
+            let stored = parsed
+                .as_ref()
+                .and_then(|r| r.get("digest"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            chain.checked += 1;
+            let broke = match (&parsed, &stored) {
+                (Some(r), Some(d)) => {
+                    let linked = expected
+                        .as_deref()
+                        .is_none_or(|e| r.get("prev").and_then(Value::as_str) == Some(e));
+                    let own = match gate_digest(r) {
+                        Some(g) => g == *d,
+                        None => {
+                            chain.not_recomputed += 1;
+                            true
+                        }
+                    };
+                    expected = Some(d.clone());
+                    !linked || !own
                 }
+                _ => {
+                    expected = None;
+                    true
+                }
+            };
+            if broke {
+                chain.breaks.push(at);
+            }
+            let Some(mut rec) = parsed else {
+                skipped += 1;
                 continue;
             };
             let Some(ts) = rec.get("ts").and_then(Value::as_str).and_then(ts_unix) else {
@@ -200,12 +363,15 @@ fn read_receipts(home: &Path, cutoff: i64) -> (Vec<(i64, usize, Value)>, usize) 
                 continue;
             };
             if ts >= cutoff {
+                if broke {
+                    rec["chain_break"] = json!(true);
+                }
                 let seq = out.len();
                 out.push((ts, seq, rec));
             }
         }
     }
-    (out, skipped)
+    (out, skipped, chain)
 }
 
 /// Every permit file in name order, each carrying its suffix status and the note.
@@ -376,6 +542,7 @@ fn build_item(rec: &Value, permits: &[Value]) -> Value {
         "normalized",
         "transforms",
         "gate_version",
+        "chain_break",
     ] {
         if let Some(v) = rec.get(k) {
             item[k] = v.clone();
@@ -514,7 +681,7 @@ fn run(home: &Path, q: &Query) -> Result<Value, String> {
             "skipped_lines": 0
         }));
     }
-    let (recs, skipped) = read_receipts(home, q.cutoff);
+    let (recs, skipped, chain) = read_receipts(home, q.cutoff);
     let permits = load_permits(home);
     let mut hits: Vec<(i64, usize, Value)> = recs
         .into_iter()
@@ -543,12 +710,21 @@ fn run(home: &Path, q: &Query) -> Result<Value, String> {
             if allowed == 1 { "" } else { "s" }
         ));
     }
-    Ok(json!({
+    let mut out = json!({
         "tool": "precedent",
         "summary": summary,
         "items": hits.into_iter().map(|(_, _, i)| i).take(q.limit).collect::<Vec<_>>(),
-        "skipped_lines": skipped
-    }))
+        "skipped_lines": skipped,
+        "chain": chain.to_json(),
+    });
+    if let Some(first) = chain.breaks.first() {
+        out["warning"] = json!(format!(
+            "The receipt chain is broken at {first} ({} break{} in the files read): a receipt was edited, removed or reordered after the gate wrote it, or another writer forked the chain. Treat these records as unverified and run `operator-gate verify`.",
+            chain.breaks.len(),
+            if chain.breaks.len() == 1 { "" } else { "s" }
+        ));
+    }
+    Ok(out)
 }
 
 pub async fn execute(_storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
@@ -1084,12 +1260,153 @@ mod tests {
             );
         }
         write(home, "receipts/undated.jsonl", &format!("{inside}\n"));
-        let (recs, skipped) = read_receipts(home, cutoff);
+        let (recs, skipped, _) = read_receipts(home, cutoff);
         assert_eq!(
             recs.len(),
             3,
             "10-11 (one spare day), 10-12 and the undated file"
         );
         assert_eq!(skipped, 2, "the 10-10 file is never read");
+    }
+
+    // Written with Operator 0.3.14's own digest_of, spelled the way the gate
+    // writes a receipt line. The first chain line carries a non-ASCII
+    // character, an escaped quote, a tab and a newline.
+    const GATE_ANCHOR: &str = r#"{"action_preview": "ls", "decision": "PASS", "digest": "c0aec578c8b092c1c440405b44d39fe2d859210d6a0da18f0d23e640676ca95a", "gate_version": "0.3.14", "integrity": "reference_digest_not_signature", "prev": "0000000000000000000000000000000000000000000000000000000000000000", "source": "claude", "tool": "Bash", "ts": "2026-10-23T23:59:00Z", "v": 1}"#;
+    const GATE_CHAIN: [&str; 3] = [
+        r#"{"action_digest": "abab1212abab1212abab1212", "action_preview": "rm -rf ~/Documents", "commitment": "OP-003", "cwd": "/repo", "decision": "STOP", "detail": "café — \"quoted\"\ttab\nline", "digest": "0910719b3b88bb52cab057131743ac36a5ae3ebc0b890658ca2f1a7a5d0a6ac1", "gate_version": "0.3.14", "integrity": "reference_digest_not_signature", "prev": "c0aec578c8b092c1c440405b44d39fe2d859210d6a0da18f0d23e640676ca95a", "rule": "no-blind-recursive-delete", "session": "s1", "source": "claude", "tool": "Bash", "transforms": ["variables-expanded"], "ts": "2026-10-24T01:00:00Z", "v": 1}"#,
+        r#"{"action_digest": "abab1212abab1212abab1212", "action_preview": "rm -rf ~/Documents", "commitments": ["OP-003"], "cwd": "/repo", "decision": "ALLOW", "digest": "2b5c16da00e7c56642727d79045a645940ce586ba6b31b16809ed4fede10fad7", "gate_version": "0.3.14", "integrity": "reference_digest_not_signature", "prev": "0910719b3b88bb52cab057131743ac36a5ae3ebc0b890658ca2f1a7a5d0a6ac1", "session": "s1", "source": "claude", "tool": "Bash", "ts": "2026-10-24T01:05:00Z", "v": 1, "via": "permit"}"#,
+        r#"{"action_preview": "README.md", "cwd": "/repo", "decision": "PASS", "digest": "c999d2cec7a36b0885f342334f75f6cacd4408c543687d62f12a38c09188e260", "gate_version": "0.3.14", "integrity": "reference_digest_not_signature", "n": 7, "prev": "2b5c16da00e7c56642727d79045a645940ce586ba6b31b16809ed4fede10fad7", "source": "zcode", "tool": "Read", "ts": "2026-10-24T01:06:00Z", "v": 1}"#,
+    ];
+    const GATE_FLOAT: &str = r#"{"decision": "PASS", "digest": "ffe75e5d754785834b59ee9545ba50352713c6547e7dc89c012e90a1f6a9730b", "elapsed": 1.5, "gate_version": "0.3.14", "integrity": "reference_digest_not_signature", "prev": "c999d2cec7a36b0885f342334f75f6cacd4408c543687d62f12a38c09188e260", "tool": "Bash", "ts": "2026-10-24T01:07:00Z", "v": 1}"#;
+
+    fn chain_home(anchor: Option<&str>, day: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        if let Some(a) = anchor {
+            write(dir.path(), "receipts/2026-10-23.jsonl", &format!("{a}\n"));
+        }
+        write(
+            dir.path(),
+            "receipts/2026-10-24.jsonl",
+            &format!("{}\n", day.join("\n")),
+        );
+        dir
+    }
+
+    /// The chain over the 10-24 file alone: a cutoff on 10-25 skips 10-23.
+    fn chain_from_1024(dir: &tempfile::TempDir) -> Value {
+        let cutoff = DateTime::parse_from_rfc3339("2026-10-25T06:00:00Z")
+            .unwrap()
+            .timestamp();
+        read_receipts(dir.path(), cutoff).2.to_json()
+    }
+
+    fn everything(dir: &tempfile::TempDir) -> Value {
+        run(
+            dir.path(),
+            &query(json!({"since": "3650d", "decision": "all"})),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn digest_matches_the_gates_digest_of() {
+        for line in GATE_CHAIN.iter().chain(std::iter::once(&GATE_ANCHOR)) {
+            let rec: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(
+                gate_digest(&rec).as_deref(),
+                rec["digest"].as_str(),
+                "{line}"
+            );
+        }
+        let float: Value = serde_json::from_str(GATE_FLOAT).unwrap();
+        assert_eq!(
+            gate_digest(&float),
+            None,
+            "a float's Python spelling is not reproduced"
+        );
+    }
+
+    #[test]
+    fn an_intact_chain_is_ok_from_its_start() {
+        let dir = chain_home(Some(GATE_ANCHOR), &GATE_CHAIN);
+        let out = everything(&dir);
+        assert_eq!(out["chain"]["status"], "ok", "{out}");
+        assert_eq!(out["chain"]["receipts_checked"], 4);
+        assert_eq!(out["chain"]["anchored_to"], "the start of the chain");
+        assert_eq!(out["chain"]["integrity"], "reference_digest_not_signature");
+        assert!(out.get("warning").is_none());
+        assert!(
+            out["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|i| i.get("chain_break").is_none())
+        );
+    }
+
+    #[test]
+    fn the_first_file_read_chains_to_the_last_line_before_it() {
+        let dir = chain_home(Some(GATE_ANCHOR), &GATE_CHAIN);
+        let chain = chain_from_1024(&dir);
+        assert_eq!(chain["status"], "ok", "{chain}");
+        assert_eq!(chain["receipts_checked"], 3);
+        assert_eq!(chain["from_file"], "2026-10-24.jsonl");
+        assert_eq!(chain["anchored_to"], "the last line of 2026-10-23.jsonl");
+        // An earlier file that ends on a different receipt breaks the first link.
+        let forked = chain_home(Some(GATE_CHAIN[2]), &GATE_CHAIN);
+        let chain = chain_from_1024(&forked);
+        assert_eq!(chain["status"], "broken");
+        assert_eq!(chain["breaks"], json!(["2026-10-24.jsonl:1"]));
+    }
+
+    #[test]
+    fn an_edited_receipt_breaks_the_chain_and_is_flagged() {
+        let edited = GATE_CHAIN[2].replace("README.md", "secrets.env");
+        let dir = chain_home(Some(GATE_ANCHOR), &[GATE_CHAIN[0], GATE_CHAIN[1], &edited]);
+        let out = everything(&dir);
+        assert_eq!(out["chain"]["status"], "broken");
+        assert_eq!(out["chain"]["breaks"], json!(["2026-10-24.jsonl:3"]));
+        assert_eq!(out["chain"]["breaks_total"], 1);
+        assert!(
+            out["warning"]
+                .as_str()
+                .unwrap()
+                .contains("broken at 2026-10-24.jsonl:3"),
+            "{out}"
+        );
+        for item in out["items"].as_array().unwrap() {
+            let flagged = item.get("chain_break") == Some(&json!(true));
+            assert_eq!(flagged, item["tool"] == "Read", "{item}");
+        }
+    }
+
+    #[test]
+    fn a_removed_receipt_breaks_the_chain() {
+        let dir = chain_home(Some(GATE_ANCHOR), &[GATE_CHAIN[0], GATE_CHAIN[2]]);
+        let out = everything(&dir);
+        assert_eq!(out["chain"]["breaks"], json!(["2026-10-24.jsonl:2"]));
+    }
+
+    #[test]
+    fn a_receipt_holding_a_float_is_linked_but_not_recomputed() {
+        let dir = chain_home(
+            Some(GATE_ANCHOR),
+            &[GATE_CHAIN[0], GATE_CHAIN[1], GATE_CHAIN[2], GATE_FLOAT],
+        );
+        let out = everything(&dir);
+        assert_eq!(out["chain"]["status"], "ok", "{out}");
+        assert_eq!(out["chain"]["digests_not_recomputed"], 1);
+    }
+
+    #[test]
+    fn a_line_that_is_not_json_breaks_the_chain() {
+        let dir = chain_home(
+            Some(GATE_ANCHOR),
+            &[GATE_CHAIN[0], "not json", GATE_CHAIN[1]],
+        );
+        let out = everything(&dir);
+        assert_eq!(out["chain"]["breaks"], json!(["2026-10-24.jsonl:2"]));
+        assert_eq!(out["skipped_lines"], 1);
     }
 }
