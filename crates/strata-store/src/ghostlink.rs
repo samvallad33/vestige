@@ -25,6 +25,24 @@
 //! join from eligibility; they never admit a bridge pair, never add a
 //! candidate and never raise a score.
 //!
+//! **Ranking** ([`GhostSnapshot::bridge_ranked`], and the divergent lane
+//! with a per-memory cap or a rotating window):
+//!
+//! * A bridge pair's *proof strength* is read off its proof path alone:
+//!   the product of its step weights ([`W_CLOSED_BY`], [`W_DERIVED_FROM`],
+//!   [`W_TOUCHED_ARTIFACT`], [`W_TOUCHED_ASSOCIATION`]), damped at every
+//!   node by `1 / log2(2 + extra degree)` (intermediates fully, the two
+//!   endpoints as a geometric mean), divided by the hop count. The proof is
+//!   the shortest path with the greatest strength (ties by id), so the
+//!   score is explained by the path it ships with.
+//! * A per-memory cap keeps one memory from filling a page: best first,
+//!   each memory at most `cap` times; pairs over the cap only fill what the
+//!   capped picks leave short (bridge), or wait for the next greedy round
+//!   (divergent, so paging never repeats or drops a pair).
+//! * A rotating measured window splits the typed profiles into blocks
+//!   seeded by the log head and walks every block pair across pages, so
+//!   every typed member is measured, deterministically per head seq.
+//!
 //! Every read here is a read: nothing is appended to the log.
 
 use std::cell::RefCell;
@@ -60,8 +78,23 @@ pub const DIVERGENT_RADIUS: u32 = 6;
 pub const BEYOND_RADIUS: u32 = DIVERGENT_RADIUS + 1;
 /// Typed-profile members the measured lane evaluates exactly per page.
 pub const MEASURED_MEMBER_CAP: usize = 2_000;
+/// Bridge proof-strength weight of a `closed_by` step.
+pub const W_CLOSED_BY: f64 = 1.0;
+/// Bridge proof-strength weight of a `derived_from` step.
+pub const W_DERIVED_FROM: f64 = 1.0;
+/// Bridge proof-strength weight of a `touched` step with an artifact
+/// endpoint (a file or symbol a memory recorded touching).
+pub const W_TOUCHED_ARTIFACT: f64 = 0.8;
+/// Bridge proof-strength weight of a `touched` step between two memories:
+/// the association ingest-time auto-connect records for a shared exact
+/// identity. The weakest evidence a path can carry.
+pub const W_TOUCHED_ASSOCIATION: f64 = 0.25;
+/// Default per-memory cap on a propose page.
+pub const DEFAULT_PER_MEMORY_CAP: usize = 1;
 
 const CURSOR_PREFIX: &str = "gl1";
+/// Cursor prefix of a capped or rotating divergent ranking.
+const CURSOR_PREFIX_RANKED: &str = "gl2";
 const NO_PARENT: u32 = u32::MAX;
 
 /// `ghostlink-weave:<a>:<b>` with the ids in order.
@@ -306,6 +339,11 @@ pub struct DivergentSummary {
     pub measured_members_beyond_cap: usize,
     /// Sampler schedule positions scanned this page.
     pub positions_scanned: u64,
+    /// Measured windows the lane walks across pages (block pairs when the
+    /// window rotates; 1 otherwise).
+    pub measured_windows: usize,
+    /// The window this page's measured lane started in.
+    pub measured_window_index: usize,
 }
 
 /// One divergent page.
@@ -337,6 +375,9 @@ struct Scratch {
     current: u32,
     dist: Vec<u32>,
     parent: Vec<(u32, u16, bool)>,
+    /// Best proof strength of a shortest path reaching each node (the
+    /// evidence walk only; read for nodes seen in the current walk).
+    best: Vec<f64>,
 }
 
 impl Scratch {
@@ -346,6 +387,7 @@ impl Scratch {
             current: 0,
             dist: vec![0; n],
             parent: vec![(NO_PARENT, 0, true); n],
+            best: vec![0.0; n],
         }
     }
 
@@ -426,6 +468,8 @@ impl Slot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Cursor {
+    /// Measured window (always 0 on a `gl1` cursor).
+    window: usize,
     measured_offset: usize,
     slot: Option<Slot>,
 }
@@ -433,6 +477,9 @@ struct Cursor {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Ranked {
     score: f64,
+    /// `min(|Nt(a)|, |Nt(b)|)`: how many recorded relations the weaker
+    /// side's divergence was measured on. Breaks score ties.
+    support: u32,
     a: u32,
     b: u32,
 }
@@ -446,14 +493,163 @@ impl PartialOrd for Ranked {
 }
 
 impl Ord for Ranked {
-    /// Greater ranks later: lower score, then higher ids.
+    /// Greater ranks later: lower score, then less support, then higher
+    /// ids.
     fn cmp(&self, other: &Self) -> Ordering {
         other
             .score
             .total_cmp(&self.score)
+            .then(other.support.cmp(&self.support))
             .then(self.a.cmp(&other.a))
             .then(self.b.cmp(&other.b))
     }
+}
+
+/// A ranked pair a page can hold: ordered so that a *worse* pair compares
+/// greater, with its two member indexes.
+trait PagePair: Copy + Ord {
+    fn ends(&self) -> (u32, u32);
+}
+
+impl PagePair for Kept {
+    fn ends(&self) -> (u32, u32) {
+        (self.a, self.b)
+    }
+}
+
+impl PagePair for Ranked {
+    fn ends(&self) -> (u32, u32) {
+        (self.a, self.b)
+    }
+}
+
+/// Bounded collector for a per-memory-capped page.
+///
+/// Uncapped (`cap == usize::MAX`) it is a plain top-`keep` heap. Capped it
+/// keeps each member's best `keep` pairs. A pair the cap-greedy selection
+/// takes among its first `L` picks sits within the top `(cap + 2) * L` of
+/// both its members' lists (every pair of a member ranked above it was
+/// either picked, at most `cap` per round over at most `L` rounds, or
+/// skipped for a saturated partner, at most `2L` of them), so a per-member
+/// bound of `(cap + 2) * L + 1` makes the selection over the kept
+/// candidates exactly the selection over every pair.
+struct CappedTop<T: PagePair> {
+    keep: usize,
+    cap: usize,
+    plain: BinaryHeap<T>,
+    per: HashMap<u32, BinaryHeap<T>>,
+}
+
+impl<T: PagePair> CappedTop<T> {
+    /// A collector exact for the first `picks` cap-greedy picks.
+    fn new(picks: usize, cap: usize) -> Self {
+        let keep = if cap == usize::MAX {
+            picks
+        } else {
+            cap.saturating_add(2)
+                .saturating_mul(picks)
+                .saturating_add(1)
+        };
+        Self {
+            keep,
+            cap,
+            plain: BinaryHeap::new(),
+            per: HashMap::new(),
+        }
+    }
+
+    fn offer(&mut self, item: T) {
+        if self.keep == 0 {
+            return;
+        }
+        if self.cap == usize::MAX {
+            self.plain.push(item);
+            if self.plain.len() > self.keep {
+                self.plain.pop();
+            }
+            return;
+        }
+        let (a, b) = item.ends();
+        for member in [a, b] {
+            let heap = self.per.entry(member).or_default();
+            heap.push(item);
+            if heap.len() > self.keep {
+                heap.pop();
+            }
+        }
+    }
+
+    /// Every kept candidate, best first, each once.
+    fn candidates(self) -> Vec<T> {
+        if self.cap == usize::MAX {
+            return self.plain.into_sorted_vec();
+        }
+        let mut all: Vec<T> = self.per.into_values().flatten().collect();
+        all.sort_unstable();
+        all.dedup();
+        all
+    }
+}
+
+/// Best first with each member at most `cap` times; pairs over the cap
+/// fill only the room the capped picks leave, in rank order.
+fn select_with_fill<T: PagePair>(candidates: Vec<T>, k: usize, cap: usize) -> Vec<T> {
+    let mut used: HashMap<u32, usize> = HashMap::new();
+    let mut picks = Vec::with_capacity(k);
+    let mut over = Vec::new();
+    for item in candidates {
+        if picks.len() >= k {
+            break;
+        }
+        let (a, b) = item.ends();
+        let room = |member: u32| used.get(&member).copied().unwrap_or(0) < cap;
+        if room(a) && room(b) {
+            *used.entry(a).or_insert(0) += 1;
+            *used.entry(b).or_insert(0) += 1;
+            picks.push(item);
+        } else {
+            over.push(item);
+        }
+    }
+    let room = k - picks.len();
+    picks.extend(over.into_iter().take(room));
+    picks
+}
+
+/// The cap-greedy round sequence: round 1 takes, in rank order, every
+/// pair whose members are both under `cap` picks in that round; round 2
+/// does the same over what is left, and so on. Every pair lands in exactly
+/// one round. Returns the sequence (at least `need` long unless every
+/// candidate is placed) and the end position of each round.
+fn greedy_rounds<T: PagePair>(candidates: Vec<T>, cap: usize, need: usize) -> (Vec<T>, Vec<usize>) {
+    let mut sequence = Vec::new();
+    let mut round_ends = Vec::new();
+    let mut left = candidates;
+    while sequence.len() < need && !left.is_empty() {
+        let mut used: HashMap<u32, usize> = HashMap::new();
+        let mut rest = Vec::with_capacity(left.len());
+        for item in left {
+            let (a, b) = item.ends();
+            let room = |member: u32| used.get(&member).copied().unwrap_or(0) < cap;
+            if room(a) && room(b) {
+                *used.entry(a).or_insert(0) += 1;
+                *used.entry(b).or_insert(0) += 1;
+                sequence.push(item);
+            } else {
+                rest.push(item);
+            }
+        }
+        round_ends.push(sequence.len());
+        left = rest;
+    }
+    (sequence, round_ends)
+}
+
+/// One measured lane slice of a window.
+struct LaneSlice {
+    pairs: Vec<Ranked>,
+    eligible: u64,
+    members: usize,
 }
 
 /// A read-only view of the recorded graph for one GhostLink query.
@@ -473,8 +669,15 @@ pub struct GhostSnapshot<'s> {
     kind_admitting: Vec<bool>,
     kind_typed: Vec<bool>,
     kind_legacy: Vec<bool>,
+    /// Proof-strength class per kind: 1 closed_by, 2 derived_from,
+    /// 3 touched, 0 anything else.
+    kind_class: Vec<u8>,
     adj: Vec<Vec<Adj>>,
     typed_profile: Vec<bool>,
+    /// The id is a memory record (not an artifact such as a file anchor).
+    is_memory: Vec<bool>,
+    /// Distinct neighbors over admitting edges (`|Nt|`).
+    admit_degree: Vec<u32>,
     records: Vec<CompositionRecord>,
     record_nodes: HashSet<u32>,
     woven: HashSet<(u32, u32)>,
@@ -482,9 +685,17 @@ pub struct GhostSnapshot<'s> {
     outcomes: HashMap<u32, BTreeSet<String>>,
     pool: Vec<u32>,
     /// The measured lane's window: the first `measured_cap` typed pool
-    /// members in id order. The lane owns exactly the pairs inside it.
+    /// members in id order, or every typed pool member when the window
+    /// rotates. The lane owns exactly the pairs inside it.
     measured_window: Vec<bool>,
     measured_cap: usize,
+    /// Walk every typed member across pages in head-seeded blocks.
+    rotating: bool,
+    /// Window members in blocks (id order inside each block).
+    blocks: Vec<Vec<u32>>,
+    /// Measured windows in walk order: `(i, i)` owns the pairs inside
+    /// block `i`, `(i, j)` the pairs across blocks `i` and `j`.
+    windows: Vec<(usize, usize)>,
     in_pool: Vec<bool>,
     scratch: RefCell<Scratch>,
     components: RefCell<Option<(Vec<u32>, Vec<u32>)>>,
@@ -587,6 +798,16 @@ impl<'s> GhostSnapshot<'s> {
             .map(|kind| EdgeKind::parse(kind).is_some())
             .collect();
         let kind_legacy = kinds.iter().map(|kind| *kind == LEGACY_INFERRED).collect();
+        let kind_class = kinds
+            .iter()
+            .map(|kind| match EdgeKind::parse(kind) {
+                Some(EdgeKind::ClosedBy) => 1,
+                Some(EdgeKind::DerivedFrom) => 2,
+                Some(EdgeKind::Touched) => 3,
+                _ => 0,
+            })
+            .collect();
+        let is_memory = ids.iter().map(|id| nodes.contains_key(*id)).collect();
 
         let mut adj: Vec<Vec<Adj>> = vec![Vec::new(); ids.len()];
         for edge in edges {
@@ -621,6 +842,7 @@ impl<'s> GhostSnapshot<'s> {
             head_seq: store.log().head().last_acked_seq,
             head_clock_ms: store.head_clock_ms(),
             typed_profile: vec![false; ids.len()],
+            admit_degree: vec![0; ids.len()],
             in_pool: vec![false; ids.len()],
             scratch: RefCell::new(Scratch::new(ids.len())),
             ids,
@@ -629,6 +851,8 @@ impl<'s> GhostSnapshot<'s> {
             kind_admitting,
             kind_typed,
             kind_legacy,
+            kind_class,
+            is_memory,
             adj,
             records: Vec::new(),
             record_nodes: HashSet::new(),
@@ -638,12 +862,16 @@ impl<'s> GhostSnapshot<'s> {
             pool: Vec::new(),
             measured_window: Vec::new(),
             measured_cap: MEASURED_MEMBER_CAP,
+            rotating: false,
+            blocks: Vec::new(),
+            windows: Vec::new(),
             components: RefCell::new(None),
         };
         for at in 0..snapshot.ids.len() {
             snapshot.typed_profile[at] = snapshot.adj[at]
                 .iter()
                 .any(|edge| snapshot.kind_admitting[edge.kind as usize]);
+            snapshot.admit_degree[at] = snapshot.typed_set(at as u32).len() as u32;
         }
         snapshot.load_records(nodes);
         snapshot.select_pool(nodes);
@@ -653,14 +881,53 @@ impl<'s> GhostSnapshot<'s> {
 
     fn fill_measured_window(&mut self) {
         self.measured_window = vec![false; self.ids.len()];
-        for &at in self
+        let typed: Vec<u32> = self
             .pool
             .iter()
-            .filter(|&&at| self.typed_profile[at as usize])
-            .take(self.measured_cap)
-        {
+            .copied()
+            .filter(|&at| self.typed_profile[at as usize])
+            .collect();
+        let cap = self.measured_cap.max(1);
+        if !self.rotating || typed.len() <= cap {
+            let window: Vec<u32> = typed.into_iter().take(cap).collect();
+            for &at in &window {
+                self.measured_window[at as usize] = true;
+            }
+            self.blocks = vec![window];
+            self.windows = vec![(0, 0)];
+            return;
+        }
+        // Every typed member is measured: the lane owns every typed pair,
+        // walked one block pair (at most `cap` members) per window. Block
+        // membership is seeded by the log head, so the first page differs
+        // as the log grows and stays fixed for one head seq.
+        for &at in &typed {
             self.measured_window[at as usize] = true;
         }
+        let seed = self.head_seq.to_le_bytes();
+        let mut keyed: Vec<([u8; 32], u32)> = typed
+            .iter()
+            .map(|&at| {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(&seed);
+                hasher.update(self.ids[at as usize].as_bytes());
+                (*hasher.finalize().as_bytes(), at)
+            })
+            .collect();
+        keyed.sort_unstable();
+        let half = (cap / 2).max(1);
+        self.blocks = keyed
+            .chunks(half)
+            .map(|chunk| {
+                let mut block: Vec<u32> = chunk.iter().map(|(_, at)| *at).collect();
+                block.sort_unstable();
+                block
+            })
+            .collect();
+        let count = self.blocks.len();
+        self.windows = (0..count)
+            .flat_map(|gap| (0..count - gap).map(move |i| (i, i + gap)))
+            .collect();
     }
 
     /// The same snapshot with a smaller measured window (tests exercise the
@@ -668,6 +935,16 @@ impl<'s> GhostSnapshot<'s> {
     #[cfg(test)]
     pub(crate) fn with_measured_cap(mut self, cap: usize) -> Self {
         self.measured_cap = cap;
+        self.fill_measured_window();
+        self
+    }
+
+    /// The same snapshot with a rotating measured window: every typed pool
+    /// member is measured, `MEASURED_MEMBER_CAP` members per window, in
+    /// blocks seeded by the log head and walked across pages. Cursors are
+    /// `gl2` cursors.
+    pub fn with_rotating_window(mut self) -> Self {
+        self.rotating = true;
         self.fill_measured_window();
         self
     }
@@ -1190,6 +1467,210 @@ impl<'s> GhostSnapshot<'s> {
     }
 
     // ------------------------------------------------------------------
+    // Bridge proof strength
+    // ------------------------------------------------------------------
+
+    /// Weight of one admitting step between `from` and `to`.
+    fn step_weight(&self, from: u32, to: u32, kind: u16) -> f64 {
+        match self.kind_class[kind as usize] {
+            1 => W_CLOSED_BY,
+            2 => W_DERIVED_FROM,
+            3 if self.is_memory[from as usize] && self.is_memory[to as usize] => {
+                W_TOUCHED_ASSOCIATION
+            }
+            3 => W_TOUCHED_ARTIFACT,
+            _ => 0.0,
+        }
+    }
+
+    /// `1 / log2(2 + d)` for `d` admitting neighbors beyond the `own`
+    /// edges the path itself uses at `node`: a node the path merely passes
+    /// through costs nothing, a hub costs its fan-out.
+    fn hub_damp(&self, node: u32, own: u32) -> f64 {
+        let extra = self.admit_degree[node as usize].saturating_sub(own);
+        1.0 / (2.0 + f64::from(extra)).log2()
+    }
+
+    fn end_damp(&self, a: u32, b: u32) -> f64 {
+        (self.hub_damp(a, 1) * self.hub_damp(b, 1)).sqrt()
+    }
+
+    /// Proof strength of a bridge path: the product of its step weights
+    /// (an intermediate node's hub damping applied before the step that
+    /// leaves it), times the endpoints' geometric-mean hub damping, over
+    /// the hop count. `0.0` for an empty path or one this snapshot cannot
+    /// walk. Recomputes exactly what [`Self::bridge_ranked`] ranked by.
+    pub fn path_evidence(&self, path: &[PathStep]) -> f64 {
+        let (Some(first), Some(last)) = (path.first(), path.last()) else {
+            return 0.0;
+        };
+        let at = |id: &str| self.index.get(id).copied();
+        let (Some(a), Some(b)) = (at(&first.from), at(&last.to)) else {
+            return 0.0;
+        };
+        let mut strength = 1.0;
+        for (step_at, step) in path.iter().enumerate() {
+            let (Some(from), Some(to)) = (at(&step.from), at(&step.to)) else {
+                return 0.0;
+            };
+            let Some(kind) = self.kinds.iter().position(|kind| *kind == step.kind) else {
+                return 0.0;
+            };
+            if !self.kind_admitting[kind] {
+                return 0.0;
+            }
+            if step_at > 0 {
+                strength *= self.hub_damp(from, 2);
+            }
+            strength *= self.step_weight(from, to, kind as u16);
+        }
+        strength * self.end_damp(a, b) / path.len() as f64
+    }
+
+    /// Level-synchronous walk from `from` over admitting edges up to
+    /// [`BRIDGE_MAX_HOPS`], keeping for every node the strongest shortest
+    /// path (strictly stronger replaces; ties keep the first discoverer in
+    /// id order). Returns `(node, hops)` in walk order, `from` excluded.
+    fn evidence_walk(&self, scratch: &mut Scratch, from: u32) -> Vec<(u32, u32)> {
+        scratch.reset();
+        scratch.visit(from, 0, (NO_PARENT, 0, true));
+        scratch.best[from as usize] = 1.0;
+        let mut reached = Vec::new();
+        let mut frontier = vec![from];
+        for depth in 1..=BRIDGE_MAX_HOPS {
+            let mut next = Vec::new();
+            for &node in &frontier {
+                let carry = if node == from {
+                    1.0
+                } else {
+                    scratch.best[node as usize] * self.hub_damp(node, 2)
+                };
+                for edge in &self.adj[node as usize] {
+                    if !self.kind_admitting[edge.kind as usize] {
+                        continue;
+                    }
+                    let gain = carry * self.step_weight(node, edge.to, edge.kind);
+                    let to = edge.to as usize;
+                    if !scratch.seen(edge.to) {
+                        scratch.visit(edge.to, depth, (node, edge.kind, edge.forward));
+                        scratch.best[to] = gain;
+                        next.push(edge.to);
+                    } else if scratch.dist[to] == depth && gain > scratch.best[to] {
+                        scratch.best[to] = gain;
+                        scratch.parent[to] = (node, edge.kind, edge.forward);
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            next.sort_unstable();
+            reached.extend(next.iter().map(|&node| (node, depth)));
+            frontier = next;
+        }
+        reached
+    }
+
+    /// The `k` best bridge pairs by `score(first_id, second_id, hops,
+    /// strength)`, each memory at most `per_member` times on the page (pairs
+    /// over the cap fill only room the capped picks leave), best first,
+    /// ties by `(first_id, second_id)`, plus how many pairs the walk
+    /// admitted. Admission is exactly [`Self::bridge_top`]'s; the proof of
+    /// each pair is its strongest shortest path and `strength` is
+    /// [`Self::path_evidence`] of that proof. `per_member == usize::MAX`
+    /// is uncapped. Memory stays bounded by the page (and the cap).
+    pub fn bridge_ranked(
+        &self,
+        k: usize,
+        per_member: usize,
+        mut score: impl FnMut(&str, &str, u32, f64) -> f64,
+    ) -> (BridgeReport, usize) {
+        let admitting = &self.kind_admitting;
+        let mut top: CappedTop<Kept> = CappedTop::new(k, per_member);
+        let mut admitted = 0usize;
+        let mut woven_pairs_excluded = 0;
+        let mut with_edges = 0;
+        let mut touching: HashSet<(u32, u32, u16, bool)> = HashSet::new();
+        {
+            let mut scratch = self.scratch.borrow_mut();
+            for &a in &self.pool {
+                if !self.typed_profile[a as usize] {
+                    continue;
+                }
+                with_edges += 1;
+                for edge in &self.adj[a as usize] {
+                    if admitting[edge.kind as usize] {
+                        touching.insert(if edge.forward {
+                            (a, edge.to, edge.kind, true)
+                        } else {
+                            (edge.to, a, edge.kind, true)
+                        });
+                    }
+                }
+                for (b, hops) in self.evidence_walk(&mut scratch, a) {
+                    if b <= a || !self.in_pool[b as usize] {
+                        continue;
+                    }
+                    if self.woven_idx(a, b) {
+                        woven_pairs_excluded += 1;
+                        continue;
+                    }
+                    admitted += 1;
+                    if k == 0 {
+                        continue;
+                    }
+                    let strength = scratch.best[b as usize] * self.end_damp(a, b) / f64::from(hops);
+                    top.offer(Kept {
+                        score: score(self.ids[a as usize], self.ids[b as usize], hops, strength),
+                        a,
+                        b,
+                        hops,
+                    });
+                }
+            }
+        }
+        let kept = if per_member == usize::MAX {
+            top.candidates().into_iter().take(k).collect()
+        } else {
+            select_with_fill(top.candidates(), k, per_member)
+        };
+        let mut targets: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        for pair in &kept {
+            targets.entry(pair.a).or_default().push(pair.b);
+        }
+        let mut paths: HashMap<(u32, u32), Vec<PathStep>> = HashMap::new();
+        {
+            let mut scratch = self.scratch.borrow_mut();
+            for (a, bs) in targets {
+                self.evidence_walk(&mut scratch, a);
+                for b in bs {
+                    paths.insert((a, b), self.path_from(&scratch, a, b));
+                }
+            }
+        }
+        let candidates = kept
+            .into_iter()
+            .map(|pair| BridgeCandidate {
+                first_id: self.ids[pair.a as usize].to_string(),
+                second_id: self.ids[pair.b as usize].to_string(),
+                hops: pair.hops,
+                path: paths.remove(&(pair.a, pair.b)).unwrap_or_default(),
+            })
+            .collect();
+        (
+            BridgeReport {
+                head_seq: self.head_seq,
+                pool_size: self.pool.len(),
+                pool_nodes_with_admitting_edges: with_edges,
+                admitting_edges_touching_pool: touching.len(),
+                woven_pairs_excluded,
+                candidates,
+            },
+            admitted,
+        )
+    }
+
+    // ------------------------------------------------------------------
     // Divergent lens
     // ------------------------------------------------------------------
 
@@ -1258,29 +1739,59 @@ impl<'s> GhostSnapshot<'s> {
         blake3::hash(&body).to_hex()[..8].to_string()
     }
 
-    fn encode_cursor(&self, cursor: Cursor) -> String {
+    /// `gl1.<head>.<filter>.<offset>.<s>.<p>.<i>` for the plain ranking;
+    /// `gl2.<head>.<filter>.<window>.<offset>.<s>.<p>.<i>` for a capped or
+    /// rotating one.
+    fn encode_cursor(&self, cursor: Cursor, ranked: bool) -> String {
         let (s, p, i) = match cursor.slot {
             Some(slot) => (slot.s, slot.p, slot.i),
             None => (0, 0, 0),
         };
-        format!(
-            "{CURSOR_PREFIX}.{}.{}.{}.{s}.{p}.{i}",
-            self.head_seq,
-            self.filter_fingerprint(),
-            cursor.measured_offset
-        )
+        let (head, filter) = (self.head_seq, self.filter_fingerprint());
+        if ranked {
+            format!(
+                "{CURSOR_PREFIX_RANKED}.{head}.{filter}.{}.{}.{s}.{p}.{i}",
+                cursor.window, cursor.measured_offset
+            )
+        } else {
+            format!(
+                "{CURSOR_PREFIX}.{head}.{filter}.{}.{s}.{p}.{i}",
+                cursor.measured_offset
+            )
+        }
     }
 
-    fn decode_cursor(&self, text: &str) -> Result<Cursor, StoreError> {
+    fn decode_cursor(&self, text: &str, ranked: bool) -> Result<Cursor, StoreError> {
         let bad = || {
             StoreError::InvalidInput(format!(
                 "cursor '{text}' is not a GhostLink divergent cursor; omit it to start from the first page"
             ))
         };
-        let parts: Vec<&str> = text.trim().split('.').collect();
-        if parts.len() != 7 || parts[0] != CURSOR_PREFIX {
+        let mut parts: Vec<&str> = text.trim().split('.').collect();
+        let (prefix, len) = if ranked {
+            (CURSOR_PREFIX_RANKED, 8)
+        } else {
+            (CURSOR_PREFIX, 7)
+        };
+        if (ranked && parts.first() == Some(&CURSOR_PREFIX))
+            || (!ranked && parts.first() == Some(&CURSOR_PREFIX_RANKED))
+        {
+            return Err(StoreError::InvalidInput(
+                "cursor was issued for a different ranking (per-memory cap or rotating window); omit it to restart".into(),
+            ));
+        }
+        if parts.len() != len || parts[0] != prefix {
             return Err(bad());
         }
+        let window = if ranked {
+            let window: usize = parts.remove(3).parse().map_err(|_| bad())?;
+            if window > self.windows.len() {
+                return Err(bad());
+            }
+            window
+        } else {
+            0
+        };
         let head: u64 = parts[1].parse().map_err(|_| bad())?;
         if head != self.head_seq {
             return Err(StoreError::InvalidInput(format!(
@@ -1314,6 +1825,7 @@ impl<'s> GhostSnapshot<'s> {
             Some(Slot { s, p, i })
         };
         Ok(Cursor {
+            window,
             measured_offset,
             slot,
         })
@@ -1447,22 +1959,29 @@ impl<'s> GhostSnapshot<'s> {
         summary
     }
 
-    /// The best `take` measured pairs (score desc, then ids), how many
-    /// eligible measured pairs were evaluated, and how many members.
-    fn measured_top(&self, take: usize) -> (Vec<Ranked>, u64, usize) {
-        let typed: Vec<u32> = self
-            .pool
+    /// Score every eligible pair of measured window `window` into `sink`;
+    /// returns how many eligible pairs and how many members it walked.
+    /// Window `(i, i)` pairs the members of block `i`; `(i, j)` pairs each
+    /// member of block `i` with each member of block `j`.
+    fn scan_window(&self, window: usize, sink: &mut dyn FnMut(Ranked)) -> (u64, usize) {
+        let Some(&(i, j)) = self.windows.get(window) else {
+            return (0, 0);
+        };
+        let left = &self.blocks[i];
+        let right = &self.blocks[j];
+        let sets: HashMap<u32, Vec<u32>> = left
             .iter()
-            .copied()
-            .filter(|&at| self.measured_window[at as usize])
+            .chain(if i == j { [].iter() } else { right.iter() })
+            .map(|&at| (at, self.typed_set(at)))
             .collect();
-        let sets: HashMap<u32, Vec<u32>> =
-            typed.iter().map(|&at| (at, self.typed_set(at))).collect();
-        let mut heap: BinaryHeap<Ranked> = BinaryHeap::new();
         let mut eligible = 0u64;
         let mut scratch = self.scratch.borrow_mut();
         let edge_ok = |_: u16| true;
-        for (at, &a) in typed.iter().enumerate() {
+        for (at, &a) in left.iter().enumerate() {
+            let partners = if i == j { &left[at + 1..] } else { &right[..] };
+            if partners.is_empty() {
+                continue;
+            }
             self.bfs(&mut scratch, a, DIVERGENT_RADIUS, &edge_ok, None);
             // |Nt(a) & Nt(b)| for every b two typed hops away.
             let mut shared: HashMap<u32, usize> = HashMap::new();
@@ -1475,36 +1994,74 @@ impl<'s> GhostSnapshot<'s> {
             }
             // A neighbor reached over two admitting edges of different kinds
             // counts once: recount against the deduplicated sets.
-            for &b in &typed[at + 1..] {
+            for &b in partners {
                 if self.linked_idx(a, b) || self.woven_idx(a, b) {
                     continue;
                 }
                 eligible += 1;
+                let (sa, sb) = (&sets[&a], &sets[&b]);
                 let common = if shared.contains_key(&b) {
-                    intersect_count(&sets[&a], &sets[&b])
+                    intersect_count(sa, sb)
                 } else {
                     0
                 };
-                let overlap = common as f64 / ((sets[&a].len() * sets[&b].len()) as f64).sqrt();
+                let overlap = common as f64 / ((sa.len() * sb.len()) as f64).sqrt();
                 let hops = scratch
                     .distance(b)
                     .unwrap_or(BEYOND_RADIUS)
                     .min(BEYOND_RADIUS);
-                let item = Ranked {
+                sink(Ranked {
                     score: f64::from(hops) * (1.0 - overlap),
-                    a,
-                    b,
-                };
-                if take == 0 {
-                    continue;
-                }
-                heap.push(item);
-                if heap.len() > take {
-                    heap.pop();
-                }
+                    support: sa.len().min(sb.len()) as u32,
+                    a: a.min(b),
+                    b: a.max(b),
+                });
             }
         }
-        (heap.into_sorted_vec(), eligible, typed.len())
+        (eligible, left.len() + if i == j { 0 } else { right.len() })
+    }
+
+    /// The best `take` measured pairs of the (single) window (score desc,
+    /// then support, then ids), how many eligible measured pairs were
+    /// evaluated, and how many members.
+    fn measured_top(&self, take: usize) -> (Vec<Ranked>, u64, usize) {
+        let mut top: CappedTop<Ranked> = CappedTop::new(take, usize::MAX);
+        let (eligible, members) = self.scan_window(0, &mut |item| top.offer(item));
+        (top.candidates(), eligible, members)
+    }
+
+    /// Pairs `offset .. offset + room` of window `window`'s ranking. With a
+    /// per-member cap the ranking is the cap-greedy round sequence and the
+    /// slice stops at the end of a round, so no member passes the cap on a
+    /// page and every pair is reached exactly once across pages.
+    fn window_slice(&self, window: usize, offset: usize, room: usize, cap: usize) -> LaneSlice {
+        let need = offset.saturating_add(room);
+        let mut top: CappedTop<Ranked> = CappedTop::new(need, cap);
+        let (eligible, members) = self.scan_window(window, &mut |item| top.offer(item));
+        let pairs = if cap == usize::MAX {
+            top.candidates()
+                .into_iter()
+                .skip(offset)
+                .take(room)
+                .collect()
+        } else {
+            let (sequence, round_ends) = greedy_rounds(top.candidates(), cap, need);
+            let stop = round_ends
+                .iter()
+                .copied()
+                .find(|&end| end > offset)
+                .unwrap_or(sequence.len())
+                .min(need);
+            sequence
+                .get(offset..stop.max(offset))
+                .map(<[Ranked]>::to_vec)
+                .unwrap_or_default()
+        };
+        LaneSlice {
+            pairs,
+            eligible,
+            members,
+        }
     }
 
     /// Walk the schedule from `start`, keeping each member at most once on
@@ -1516,12 +2073,12 @@ impl<'s> GhostSnapshot<'s> {
         order: &[u32],
         start: Option<Slot>,
         need: usize,
+        mut used: HashSet<u32>,
     ) -> (Vec<(u32, u32)>, Option<Slot>, u64) {
         let n = order.len();
         let scan_budget = (need as u64 * 64).max(4_096);
         let eval_budget = (need * 16).max(256);
         let mut slot = start.and_then(|slot| slot.normalize(n));
-        let mut used: HashSet<u32> = HashSet::new();
         let mut far: Vec<(u32, u32)> = Vec::new();
         let mut near: Vec<(u32, u64, u32, u32)> = Vec::new();
         let (mut scanned, mut evaluated) = (0u64, 0usize);
@@ -1577,26 +2134,76 @@ impl<'s> GhostSnapshot<'s> {
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<DivergentPage, StoreError> {
+        self.divergent_page_with(cursor, limit, usize::MAX)
+    }
+
+    /// [`Self::divergent_page`] with each memory at most `per_member` times
+    /// in the measured lane of a page (`usize::MAX` is uncapped). A capped
+    /// or rotating snapshot ranks each window as a cap-greedy round
+    /// sequence and pages with `gl2` cursors; every eligible pair is still
+    /// reached exactly once.
+    pub fn divergent_page_with(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+        per_member: usize,
+    ) -> Result<DivergentPage, StoreError> {
         let limit = limit.max(1);
+        let ranked_mode = self.rotating || per_member != usize::MAX;
         let cursor = match cursor.map(str::trim).filter(|text| !text.is_empty()) {
-            Some(text) => self.decode_cursor(text)?,
+            Some(text) => self.decode_cursor(text, ranked_mode)?,
             None => Cursor {
+                window: 0,
                 measured_offset: 0,
                 slot: Some(Slot::START),
             },
         };
         let mut summary = self.summary();
-        let (ranked, measured_total, members) =
-            self.measured_top(cursor.measured_offset.saturating_add(limit));
-        summary.measured_members_evaluated = members;
-        let measured: Vec<DivergentEval> = ranked
-            .iter()
-            .skip(cursor.measured_offset)
-            .take(limit)
-            .filter_map(|item| self.divergent_eval_idx(item.a, item.b))
-            .collect();
-        let measured_offset = cursor.measured_offset + measured.len();
-        let measured_done = measured_offset as u64 >= measured_total;
+        summary.measured_windows = self.windows.len();
+        summary.measured_window_index = cursor.window;
+        let (measured, window, measured_offset, measured_done) = if ranked_mode {
+            let (mut window, mut offset) = (cursor.window, cursor.measured_offset);
+            let mut measured: Vec<DivergentEval> = Vec::new();
+            let mut members = 0;
+            while window < self.windows.len() && measured.len() < limit {
+                let slice = self.window_slice(window, offset, limit - measured.len(), per_member);
+                members += slice.members;
+                offset += slice.pairs.len();
+                measured.extend(
+                    slice
+                        .pairs
+                        .iter()
+                        .filter_map(|item| self.divergent_eval_idx(item.a, item.b)),
+                );
+                if offset as u64 >= slice.eligible {
+                    window += 1;
+                    offset = 0;
+                    // A capped page never spans two windows: each window's
+                    // rounds know nothing of the other's picks.
+                    if per_member == usize::MAX || measured.is_empty() {
+                        continue;
+                    }
+                }
+                // The page is full, or the slice stopped at a round or
+                // window end.
+                break;
+            }
+            summary.measured_members_evaluated = members;
+            let done = window >= self.windows.len();
+            (measured, window, offset, done)
+        } else {
+            let (ranked, measured_total, members) =
+                self.measured_top(cursor.measured_offset.saturating_add(limit));
+            summary.measured_members_evaluated = members;
+            let measured: Vec<DivergentEval> = ranked
+                .iter()
+                .skip(cursor.measured_offset)
+                .take(limit)
+                .filter_map(|item| self.divergent_eval_idx(item.a, item.b))
+                .collect();
+            let offset = cursor.measured_offset + measured.len();
+            (measured, 0, offset, offset as u64 >= measured_total)
+        };
         let room = limit - measured.len();
         let mut slot = cursor.slot;
         if measured_done && summary.juxtaposition_eligible_pairs == 0 {
@@ -1607,7 +2214,22 @@ impl<'s> GhostSnapshot<'s> {
         let mut juxtaposition = Vec::new();
         if measured_done && room > 0 && slot.is_some() {
             let order = self.spread_order();
-            let (chosen, next, scanned) = self.sample(&order, slot, room);
+            // Under a cap, a member the measured lane placed on this page
+            // is not placed again by the sampler.
+            let used: HashSet<u32> = if per_member == usize::MAX {
+                HashSet::new()
+            } else {
+                measured
+                    .iter()
+                    .flat_map(|eval| {
+                        [
+                            self.index[eval.first_id.as_str()],
+                            self.index[eval.second_id.as_str()],
+                        ]
+                    })
+                    .collect()
+            };
+            let (chosen, next, scanned) = self.sample(&order, slot, room, used);
             summary.positions_scanned = scanned;
             slot = next;
             juxtaposition = chosen
@@ -1616,10 +2238,14 @@ impl<'s> GhostSnapshot<'s> {
                 .collect();
         }
         let next_cursor = (!measured_done || slot.is_some()).then(|| {
-            self.encode_cursor(Cursor {
-                measured_offset,
-                slot,
-            })
+            self.encode_cursor(
+                Cursor {
+                    window,
+                    measured_offset,
+                    slot,
+                },
+                ranked_mode,
+            )
         });
         Ok(DivergentPage {
             head_seq: self.head_seq,
