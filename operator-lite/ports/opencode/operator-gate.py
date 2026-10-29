@@ -6779,6 +6779,12 @@ def stop(reason_lines):
     sys.exit(2)
 
 
+def end_turn(reason):
+    """Ask the host to end the agent's turn as well as block this call (Claude Code's `continue: false`)."""
+    sys.stdout.write(json.dumps({"continue": False, "stopReason": reason}) + "\n")
+    sys.stdout.flush()
+
+
 def degraded_hit(raw):
     """Gate crashed: fail closed only for text that plainly looks destructive, else fail open."""
     return bool(re.search(r"\brm\s+-[a-zA-Z]*[rR]|\bmv\s+\S*(vestige|Developer|\.zcode|\.claude)|"
@@ -6895,6 +6901,12 @@ def hook_main(argv):
             meta["stop_rules"] = [h[0] for h in enforce_hits]
             if top[0] not in HOLD_RULES:                  # a hold on the session says nothing about the target
                 guarded(chain_note_stop, None, base_rec["session"], fx_effects, meta, top[0], rd)
+            if top[0] == "OP-020" and source == "claude":
+                # a second try at an action already stopped this session ends the turn (#530): the block
+                # still holds through exit 2, and Claude Code reads this JSON with it
+                end_turn("Operator Lite ended this turn. The agent tried again, another way, an action the gate "
+                         "already stopped in this session: %s. Only the owner can allow it once, from their own "
+                         "terminal: operator-gate approve %s" % (redact(top[3]), adigest))
             stop(stop_lines(top, meta.get("transforms"), adigest, rd))
         if shadow_hits:
             write_receipt(dict(base_rec, decision="SHADOW_STOP", commitments=[h[0] for h in shadow_hits],
