@@ -3356,13 +3356,17 @@ def classify_effect(e, cfg, cwd):
 
 INLINE_WRITE_CALL_RE = re.compile(
     r"\bopen\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|\bwriteFile(?:Sync)?\s*\(|\bappendFile(?:Sync)?\s*\(|"
-    r"\bcopyfile\s*\(|shutil\.copy2?\s*\(|fs\.(?:write|append|copy)\w*\s*\(|File\.write\s*\(|\btofile\s*\(")
+    r"\bcopyfile\s*\(|shutil\.copy2?\s*\(|fs\.(?:write|append|copy|truncate)\w*\s*\(|File\.write\s*\(|\btofile\s*\(|"
+    r"\bos\.truncate\s*\(")
+# __import__('os').remove(...) is os.remove(...) and require('fs').rmSync(...) is fs.rmSync(...): read the
+# module call as its name before judging the code
+INLINE_IMPORT_CALL_RE = re.compile(r"(?:__import__|\brequire)\(\s*(['\"])(?:node:)?([A-Za-z_][\w.]*)\1\s*\)")
 INLINE_DELETE_CALL_RE = re.compile(
     r"\brmtree\s*\(|shutil\.move\s*\(|os\.(?:remove|unlink|rmdir|removedirs|rename|replace)\s*\(|\brmSync\s*\(|"
     r"\brimraf\s*\(|\bunlinkSync\s*\(|fs\.(?:rm|unlink|rename)\w*\s*\(|File\.delete\s*\(|FileUtils\.(?:rm|mv)\w*\s*\(|"
     r"\bremove_tree\s*\(|\.(?:unlink|rmdir)\s*\(|\bunlink\s*\(")
 INLINE_RECURSIVE_RE = re.compile(r"rmtree|rmSync|rimraf|remove_tree|rm_r|rm_rf|rmdirSync|^fs\.rm\b|fs\.promises\.rm|FileUtils\.rm")
-INLINE_MODE_RE = re.compile(r"^(?:mode\s*=\s*)?['\"][wax][+bt]*['\"]$")
+INLINE_MODE_RE = re.compile(r"^(?:mode\s*=\s*)?['\"](?:[wax][+bt]*|r[bt]*\+[bt]*)['\"]$")   # r+ writes too
 INLINE_LITERAL_RE = re.compile(
     r"^(?:os\.path\.expanduser\(|Path\(|pathlib\.Path\()?\s*(['\"])(.*?)\1\s*\)?(?:\.(?:expanduser|resolve|absolute)\(\s*\))*$")
 INLINE_ASSIGN_RE = re.compile(
@@ -3579,7 +3583,7 @@ def _temp_names(text):
 def inline_file_calls(text, ecwd, roots, gate_files):
     """Judge each file-writing or file-deleting call in inline code by its own path operand.
     Returns (hits, unresolved_kind_or_None, mentions_gate_path)."""
-    code = _code_of(text)
+    code = INLINE_IMPORT_CALL_RE.sub(lambda m: m.group(2), _code_of(text))
     masked = _mask_code_strings(code)
     temp = _temp_names(code)
     literals = {}
