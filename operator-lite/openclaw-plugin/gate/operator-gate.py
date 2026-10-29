@@ -6901,9 +6901,10 @@ def hook_main(argv):
             meta["stop_rules"] = [h[0] for h in enforce_hits]
             if top[0] not in HOLD_RULES:                  # a hold on the session says nothing about the target
                 guarded(chain_note_stop, None, base_rec["session"], fx_effects, meta, top[0], rd)
-            if top[0] == "OP-020" and source == "claude":
+            if top[0] == "OP-020" and source == "claude" and not str(top[3]).startswith("names "):
                 # a second try at an action already stopped this session ends the turn (#530): the block
-                # still holds through exit 2, and Claude Code reads this JSON with it
+                # still holds through exit 2, and Claude Code reads this JSON with it. A script that only
+                # names the stopped target is stopped as before, and the turn goes on: it may be reading it
                 end_turn("Operator Lite ended this turn. The agent tried again, another way, an action the gate "
                          "already stopped in this session: %s. Only the owner can allow it once, from their own "
                          "terminal: operator-gate approve %s" % (redact(top[3]), adigest))

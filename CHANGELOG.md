@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A second try at an action the gate already stopped in the session ends the
   turn. The call is still blocked, and on Claude Code the gate also answers
   `continue: false` with a stop reason that names the first stop and its
-  receipt (#530).
+  receipt (#530). A script that only names the stopped target, for example
+  to read it, is stopped as before and the turn goes on.
 
 ### Install
 

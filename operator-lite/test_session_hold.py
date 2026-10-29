@@ -55,6 +55,8 @@ work = os.path.join(home, "work")
 os.makedirs(work)
 with open(os.path.join(work, "wipe.sh"), "w") as f:
     f.write('for f in "$HOME/notes"/*; do unlink "$f"; done\n')
+with open(os.path.join(work, "peek.sh"), "w") as f:
+    f.write('ls -la "$HOME/notes"\n')
 with open(os.path.join(work, "tidy.sh"), "w") as f:
     f.write('for f in "$HOME/scratch-other"/*; do unlink "$f"; done\n')
 os.makedirs(op)
@@ -75,6 +77,10 @@ check("agent A, in the same session, is stopped emptying the same folder by a sc
       rc == 2 and "OP-020" in err, err[:400])
 check("the second try at the stopped action ends the turn, naming the first receipt (#530)", ends_turn(),
       last.get("out"))
+
+rc, err = hook("bash peek.sh", "agent-a", work, "claude")
+check("a script that only names the stopped folder is stopped (OP-020 names)", rc == 2 and "OP-020" in err, err[:300])
+check("and only naming it does not end the turn", not ends_turn(), last.get("out"))
 
 rc, err = hook("rm -rf ~/notes", "agent-c", home, "codex")
 rc, err = hook("bash wipe.sh", "agent-c", work, "codex")
