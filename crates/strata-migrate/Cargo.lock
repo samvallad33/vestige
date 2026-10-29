@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "strata"
-version = "5.0.1"
+version = "6.0.1"
 dependencies = [
  "blake3",
  "borsh",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "strata-kernel"
-version = "5.0.1"
+version = "6.0.1"
 dependencies = [
  "blake3",
  "borsh",
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "strata-migrate"
-version = "5.0.1"
+version = "6.0.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -964,7 +964,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vestige-core"
-version = "5.0.0"
+version = "6.0.1"
 dependencies = [
  "base64 0.23.1",
  "blake3",

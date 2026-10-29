@@ -2159,7 +2159,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "strata"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "blake3",
  "borsh",
@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "strata-gate"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "blake3",
  "borsh",
@@ -2178,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "strata-kernel"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "blake3",
  "borsh",
@@ -2187,7 +2187,7 @@ dependencies = [
 
 [[package]]
 name = "strata-migrate"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "strata-store"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "blake3",
  "borsh",
@@ -2221,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "strata-verify"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "blake3",
  "borsh",
@@ -2707,7 +2707,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vestige-core"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -2732,7 +2732,7 @@ dependencies = [
 
 [[package]]
 name = "vestige-mcp"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2772,7 +2772,7 @@ dependencies = [
 
 [[package]]
 name = "vestige-upgrade"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "directories",
  "libc",

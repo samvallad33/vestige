@@ -39,7 +39,7 @@ try:
 except ImportError:                                  # Windows: receipts lock through msvcrt instead
     fcntl = None
 
-VERSION = "6.0.0"
+VERSION = "6.0.1"
 EDITION = "lite"                 # the paid gate is "operator"; install never replaces a gate that outranks this one
 INTEGRITY = "reference_digest_not_signature"
 IS_WINDOWS = os.name == "nt"

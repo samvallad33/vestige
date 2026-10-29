@@ -1,6 +1,6 @@
 [package]
 name = "strata-gate"
-version = "6.0.0"
+version = "6.0.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Strata gate runtime: the model proposes, the deterministic checker decides; change+verdict land as one signed record"

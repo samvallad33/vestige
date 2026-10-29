@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "operator-lite"
-version = "6.0.0"
+version = "6.0.1"
 description = "One pip install that gates LangChain, CrewAI and OpenAI Agents SDK shell tool calls through the Operator Lite pre-tool gate (gate installed/downloaded separately -- not bundled)."
 readme = "README.md"
 requires-python = ">=3.9"

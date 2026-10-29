@@ -1,6 +1,6 @@
 {
   "name": "vestige",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "private": true,
   "description": "Vestige: the Causal Proof Engine and operating system for AI agents. A signed log, zero vectors, and every answer carries its proof.",
   "author": "Sam Valladares",

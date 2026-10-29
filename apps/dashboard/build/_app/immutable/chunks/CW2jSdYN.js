@@ -1,1 +1,0 @@
-import{l as e,u as t}from"./D4Zxj_j2.js";import{i as n}from"./BVqTbojw.js";function r(e,n){throw new t(e,n.toString())}function i(t,i){let a=n(t)??`/palace`;r(308,`${e}${a}${i.search}`)}export{i as t};
