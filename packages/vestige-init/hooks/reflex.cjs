@@ -22,6 +22,7 @@ function canonical(client, event) {
 function argumentsFor(client, event, input) {
   const pick = (...keys) => { for (const k of keys) if (typeof input[k] === 'string' && input[k]) return input[k]; return ''; };
   const toolInput = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+  const response = input.tool_response && typeof input.tool_response === 'object' ? input.tool_response : {};
   return {
     action: 'hook', host: client, format: 'plain',
     event: canonical(client, event),
@@ -37,6 +38,10 @@ function argumentsFor(client, event, input) {
     cwd: pick('cwd'),
     summary: pick('compact_summary'),
     trigger: pick('trigger'),
+    stdout: typeof response.stdout === 'string' ? response.stdout : '',
+    stderr: typeof response.stderr === 'string' ? response.stderr : '',
+    interrupted: response.interrupted === true ? 'true' : '',
+    background: toolInput.run_in_background === true ? 'true' : '',
   };
 }
 

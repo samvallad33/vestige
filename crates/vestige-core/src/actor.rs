@@ -186,6 +186,16 @@ impl ProcessActor {
         ed25519_dalek::SigningKey::from_bytes(&self.seed).verifying_key()
     }
 
+    /// An Ed25519 signature over `message` by this actor. Callers sign
+    /// domain-separated bytes (a DSSE pre-authentication encoding), and the
+    /// seed itself never leaves this type.
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        use ed25519_dalek::Signer as _;
+        ed25519_dalek::SigningKey::from_bytes(&self.seed)
+            .sign(message)
+            .to_bytes()
+    }
+
     /// Load the actor key from `path`, minting and persisting a fresh
     /// identity at first run. The file holds exactly 32 raw seed bytes with
     /// owner-only permissions (same shape as the receipt signing sidecar).
@@ -511,6 +521,22 @@ mod tests {
         assert_eq!(
             ed25519_public_key_from_did_key(actor.did()).expect("parse own did"),
             public_key
+        );
+    }
+
+    #[test]
+    fn a_signature_verifies_under_the_actor_key_and_only_for_its_message() {
+        use ed25519_dalek::Verifier as _;
+        let actor = ProcessActor::mint();
+        let sig = ed25519_dalek::Signature::from_bytes(&actor.sign(b"DSSEv1 1 t 1 x"));
+        let key = actor.verifying_key();
+        assert!(key.verify(b"DSSEv1 1 t 1 x", &sig).is_ok());
+        assert!(key.verify(b"DSSEv1 1 t 1 y", &sig).is_err());
+        assert!(
+            ProcessActor::mint()
+                .verifying_key()
+                .verify(b"DSSEv1 1 t 1 x", &sig)
+                .is_err()
         );
     }
 

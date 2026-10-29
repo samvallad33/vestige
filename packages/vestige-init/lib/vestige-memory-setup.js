@@ -36,10 +36,15 @@ function reflexReady(binaryPath, env) {
 // `agent` is the subagent's id and empty for the main agent, so every Vestige
 // read lands in the context of the agent that made it.
 // `error` and `interrupt` let Failure Pairing classify a failed call; `file`
-// names what an edit tool wrote before the fix.
+// names what an edit tool wrote before the fix. `stdout`, `stderr`,
+// `interrupted` and `background` let a witness digest exactly what an
+// allowlisted test command printed, and skip a run that was cut short or sent
+// to the background.
 const REFLEX_INPUT = { event: '${hook_event_name}', session: '${session_id}', tool: '${tool_name}', call: '${tool_use_id}', agent: '${agent_id}', command: '${tool_input.command}', source: '${source}',
   error: '${error}', interrupt: '${is_interrupt}', file: '${tool_input.file_path}', cwd: '${cwd}',
-  summary: '${compact_summary}', trigger: '${trigger}', host: 'claude' };
+  summary: '${compact_summary}', trigger: '${trigger}',
+  stdout: '${tool_response.stdout}', stderr: '${tool_response.stderr}', interrupted: '${tool_response.interrupted}', background: '${tool_input.run_in_background}',
+  host: 'claude' };
 const REFLEX_EVENTS = {
   claude: [['PreToolUse', '*'], ['PostToolUse', '*'], ['PostToolUseFailure', '*'], ['UserPromptSubmit'], ['SubagentStart'], ['SubagentStop'], ['PreCompact'], ['PostCompact'], ['Stop']],
   codex: [['SessionStart'], ['UserPromptSubmit'], ['PreToolUse', '*'], ['PostToolUse', '*'], ['SubagentStart'], ['PreCompact'], ['Stop']],
