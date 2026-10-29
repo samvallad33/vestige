@@ -5809,6 +5809,7 @@ fn run_ghostlink_propose(
         tags,
         limit: usize::try_from(limit.clamp(1, 100)).unwrap_or(5),
         cursor: None,
+        per_memory: strata_store::DEFAULT_PER_MEMORY_CAP,
     };
     let answer =
         propose(storage.as_ref(), &request).map_err(|e| anyhow::anyhow!("compose error: {e}"))?;
