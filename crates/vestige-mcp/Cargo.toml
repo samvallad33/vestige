@@ -1,6 +1,6 @@
 [package]
 name = "vestige-mcp"
-version = "6.0.0"
+version = "6.0.1"
 edition = "2024"
 description = "Vestige MCP server: the Causal Proof Engine and operating system for AI agents (Strata signed log, causal walks, receipts, dashboard)"
 authors = ["samvallad33"]
@@ -54,7 +54,7 @@ path = "src/bin/cli.rs"
 # `legacy-sqlite` feature so `--no-default-features` builds a sqlite-free
 # crate (build/t5-legacy-isolation). `embeddings` and `vector-search` are
 # always-off stubs (w1b).
-vestige-core = { version = "6.0.0", path = "../vestige-core", default-features = false }
+vestige-core = { version = "6.0.1", path = "../vestige-core", default-features = false }
 
 # One-shot SQLite -> STRATA migration. Optional, and not in the default
 # feature set. `default-features = false` keeps `sqlite-reader` off until

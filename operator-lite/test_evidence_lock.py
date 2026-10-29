@@ -43,6 +43,12 @@ STOP = [
     "echo 'approved by owner' >> ~/.claude/projects/-work/s1.jsonl",
     "cp /dev/null ~/.zsh_history",
     "python3 -c \"open('%s', 'w').write('')\"" % T,
+    # 6.0.1: spellings that reached a record without naming os directly, or emptied it without open(..., 'w')
+    "python3 -c \"open(__import__('os').path.expanduser('~/.zsh_history'), 'w').close()\"",
+    "python3 -c \"__import__('os').remove(__import__('os').path.expanduser('~/.zsh_history'))\"",
+    "python3 -c \"import os; os.truncate(os.path.expanduser('~/.zsh_history'), 0)\"",
+    "python3 -c \"open('%s', 'r+').truncate(0)\"" % T,
+    "node -e \"require('fs').truncateSync('%s')\"" % T,
 ]
 TOOL_STOP = [
     ("Write", {"file_path": T, "content": "{}\n"}),
@@ -57,6 +63,9 @@ ALLOW = [
     "ls ~/.claude/projects",
     "rm ~/work/projects/data.jsonl",
     "echo hi > ~/work/notes.txt",
+    "python3 -c \"print(__import__('os').path.exists('%s'))\"" % T,
+    "python3 -c \"print(open('%s', 'r').read())\"" % T,
+    "python3 -c \"import os; os.truncate('%s', 0)\"" % os.path.join(work, "notes.txt"),
 ]
 
 bad = 0

@@ -15,6 +15,7 @@ import type {
 	DreamResult,
 	ImportanceScore,
 	RetentionDistribution,
+	BrainShapeHead,
 	ConsolidationResult,
 	IntentionItem,
 	SuppressResult,
@@ -173,6 +174,9 @@ export const api = {
 	consolidate: () => fetcher<ConsolidationResult>('/consolidate', { method: 'POST' }),
 
 	retentionDistribution: () => fetcher<RetentionDistribution>('/retention-distribution'),
+
+	// The brain print's retention lanes at the log's head clock (#495).
+	brainShape: () => fetcher<BrainShapeHead>('/brain-shape'),
 
 	// Memory changelog (#changelog): the historical event stream (DreamCompleted,
 	// ConnectionDiscovered, MemorySuppressed, ...) — the recorded past of the live

@@ -12,11 +12,14 @@
  * Determinism rule: only STORED shape enters the print. `dueForReview` is a
  * wall-clock property (`next_review <= now`), so it is carried on the shape
  * for display but never hashed or scored — otherwise an untouched store would
- * re-key every time a card crossed its due date.
+ * re-key every time a card crossed its due date. The retention lanes (mean,
+ * endangered count, the ten bands) are read at the log's head clock from
+ * /api/brain-shape, never at now: /api/stats and /api/retention-distribution
+ * measure retrievability at now, which moves every day on an untouched store.
  */
 
 import { api } from '$stores/api';
-import type { RetentionDistribution, SystemStats } from '$types';
+import type { BrainShapeHead, RetentionDistribution, SystemStats } from '$types';
 
 export const BRAIN_PRINT_VERSION = 1;
 export const BRAIN_PRINT_PREFIX = 'vb1-';
@@ -399,24 +402,32 @@ export function computeBrainPrint(shape: BrainShape): BrainPrint {
 
 /**
  * Lift API payloads into a shape. Reads endangered LENGTH only — never
- * content, ids, or labels from that array.
+ * content, ids, or labels from that array. When `head` is given (the
+ * /api/brain-shape lanes) the retention lanes come from it, not from the
+ * now-based `stats` and `retention` values.
  */
 export function shapeFromStore(input: {
 	stats: Pick<SystemStats, 'totalMemories' | 'dueForReview' | 'averageRetention' | 'embeddingCoverage'>;
 	retention: Pick<RetentionDistribution, 'distribution' | 'byType' | 'total'> & {
 		endangered?: { length: number } | null;
 	};
+	head?: Pick<BrainShapeHead, 'averageRetention' | 'distribution' | 'endangeredCount'>;
 	topology?: BrainTopology;
 }): BrainShape {
 	const endangered = input.retention.endangered;
+	const head = input.head;
 	return {
 		totalMemories: intLane(input.stats.totalMemories),
 		dueForReview: intLane(input.stats.dueForReview),
-		averageRetention: input.stats.averageRetention,
+		averageRetention: head ? head.averageRetention : input.stats.averageRetention,
 		embeddingCoverage: input.stats.embeddingCoverage,
-		endangeredCount: endangered ? intLane(endangered.length) : 0,
+		endangeredCount: head
+			? intLane(head.endangeredCount)
+			: endangered
+				? intLane(endangered.length)
+				: 0,
 		byType: { ...input.retention.byType },
-		retentionBuckets: input.retention.distribution.map((row) => ({
+		retentionBuckets: (head ? head.distribution : input.retention.distribution).map((row) => ({
 			range: row.range,
 			count: intLane(row.count)
 		})),
@@ -425,15 +436,12 @@ export function shapeFromStore(input: {
 	};
 }
 
-/**
- * Fetch live shape and return the print. Pass hub graph counts when they
- * already represent the store's connected field; omit them (receipt-scoped
- * views, cold start) and this takes one cheap `api.graph` itself.
- */
-export async function captureBrainPrint(topology?: BrainTopology): Promise<BrainPrint> {
-	const [stats, retention, graph] = await Promise.all([
+/** The store's shape for a print: retention lanes at the log's head clock. */
+async function captureShape(topology?: BrainTopology): Promise<{ shape: BrainShape; stats: SystemStats }> {
+	const [stats, retention, head, graph] = await Promise.all([
 		api.stats(),
 		api.retentionDistribution(),
+		api.brainShape(),
 		topology
 			? Promise.resolve(null)
 			: api.graph({ max_nodes: 200, depth: 3, sort: 'connected' }).catch(() => null)
@@ -441,7 +449,18 @@ export async function captureBrainPrint(topology?: BrainTopology): Promise<Brain
 	const topo =
 		topology ??
 		(graph ? { nodeCount: graph.nodeCount, edgeCount: graph.edgeCount } : undefined);
-	return computeBrainPrint(shapeFromStore({ stats, retention, topology: topo }));
+	return { shape: shapeFromStore({ stats, retention, head, topology: topo }), stats };
+}
+
+/**
+ * Fetch the store's shape and return the print. Pass hub graph counts when
+ * they already represent the store's connected field; omit them
+ * (receipt-scoped views, cold start) and this takes one cheap `api.graph`
+ * itself.
+ */
+export async function captureBrainPrint(topology?: BrainTopology): Promise<BrainPrint> {
+	const { shape } = await captureShape(topology);
+	return computeBrainPrint(shape);
 }
 
 /** Absolute share URL: current location, demo + print seed, no capture/receipt. */
@@ -616,17 +635,7 @@ export async function captureBrainBundle(topology?: BrainTopology): Promise<{
 	print: BrainPrint;
 	archiveDays: number;
 }> {
-	const [stats, retention, graph] = await Promise.all([
-		api.stats(),
-		api.retentionDistribution(),
-		topology
-			? Promise.resolve(null)
-			: api.graph({ max_nodes: 200, depth: 3, sort: 'connected' }).catch(() => null)
-	]);
-	const topo =
-		topology ??
-		(graph ? { nodeCount: graph.nodeCount, edgeCount: graph.edgeCount } : undefined);
-	const shape = shapeFromStore({ stats, retention, topology: topo });
+	const { shape, stats } = await captureShape(topology);
 	const print = computeBrainPrint(shape);
 	const oldest = stats.oldestMemory;
 	const newest = stats.newestMemory;

@@ -162,7 +162,8 @@ const MAPPED: &[&str] = &[
 
 /// The sqlite_master-driven expectation: every nonempty user table without
 /// a STRATA mapping (mirrors the migrator's own skipped_tables logic — the
-/// audit required skipped_tables to be schema-driven, not hand-listed).
+/// audit required skipped_tables to be schema-driven, not hand-listed). A
+/// read error fails the test; a table whose rows cannot be counted is named.
 fn expected_skipped(db: &std::path::Path) -> Vec<String> {
     let conn = rusqlite::Connection::open_with_flags(
         format!("file:{}?mode=ro&immutable=1", db.display()),
@@ -179,18 +180,17 @@ fn expected_skipped(db: &std::path::Path) -> Vec<String> {
     let names: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .unwrap()
-        .filter_map(Result::ok)
-        .collect();
+        .collect::<Result<_, _>>()
+        .unwrap();
     let mut out: Vec<String> = names
         .into_iter()
         .filter(|name| !MAPPED.contains(&name.as_str()))
         .filter(|name| {
-            let quoted = format!("\"{name}\"");
+            let quoted = format!("\"{}\"", name.replace('"', "\"\""));
             conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
                 row.get::<_, i64>(0)
             })
-            .map(|n| n > 0)
-            .unwrap_or(false)
+            .map_or(true, |n| n > 0)
         })
         .collect();
     out.sort();

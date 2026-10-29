@@ -296,9 +296,12 @@ test('a gate STOP receipt becomes a rule memory and a stop memory derived_from i
   fs.writeFileSync(mcp, FAKE_MCP, { mode: 0o755 });
 
   const payload = JSON.stringify({ hook_event_name: 'PostToolUse', session_id: 's-1' });
+  // the scratch home stands in for HOME: a Vestige 6 server running on this machine keeps its reflex
+  // heartbeat fresh under the real HOME, and the hook would rightly step aside for it
+  const isolated = { ...process.env, HOME: home, XDG_DATA_HOME: '', VESTIGE_DATA_DIR: '', OPERATOR_HOME: opHome };
   const run = spawnSync('python3', [kernel.stopMemorySource(), '--mcp', mcp], {
     input: payload, encoding: 'utf8', timeout: 30000,
-    env: { ...process.env, OPERATOR_HOME: opHome, VESTIGE_MCP_BIN: '', PATH: '/usr/bin:/bin' },
+    env: { ...isolated, VESTIGE_MCP_BIN: '', PATH: '/usr/bin:/bin' },
   });
   assert.equal(run.status, 0, run.stderr);
   const said = JSON.parse(run.stdout).hookSpecificOutput;
@@ -313,7 +316,7 @@ test('a gate STOP receipt becomes a rule memory and a stop memory derived_from i
   assert.match(writes[1].content, /git checkout -- src\/app\.py/);
 
   const rerun = spawnSync('python3', [kernel.stopMemorySource(), '--mcp', mcp], {
-    input: payload, encoding: 'utf8', timeout: 30000, env: { ...process.env, OPERATOR_HOME: opHome },
+    input: payload, encoding: 'utf8', timeout: 30000, env: isolated,
   });
   assert.equal(rerun.status, 0);
   assert.equal(rerun.stdout, '', 'a stop already recorded is not written or announced again');
@@ -322,7 +325,7 @@ test('a gate STOP receipt becomes a rule memory and a stop memory derived_from i
   // The next session starts and is told what was stopped, with the handle that recalls it.
   const next = spawnSync('python3', [kernel.stopMemorySource(), '--mcp', mcp], {
     input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's-2', source: 'startup' }),
-    encoding: 'utf8', timeout: 30000, env: { ...process.env, OPERATOR_HOME: opHome },
+    encoding: 'utf8', timeout: 30000, env: isolated,
   });
   assert.equal(next.status, 0, next.stderr);
   const told = JSON.parse(next.stdout).hookSpecificOutput;

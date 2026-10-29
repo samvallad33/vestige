@@ -1,6 +1,6 @@
 {
   "name": "@vestige/init",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "description": "Local memory setup for AI agents: merge MCP connections and memory hooks, with optional free Operator Lite",
   "bin": {
     "vestige-init": "bin/init.js"
@@ -34,11 +34,11 @@
     "operator-lite": "0.3.10"
   },
   "optionalDependencies": {
-    "@vestige/mcp-darwin-arm64": "6.0.0",
-    "@vestige/mcp-darwin-x64": "6.0.0",
-    "@vestige/mcp-linux-arm64": "6.0.0",
-    "@vestige/mcp-linux-x64": "6.0.0",
-    "@vestige/mcp-win32-x64": "6.0.0"
+    "@vestige/mcp-darwin-arm64": "6.0.1",
+    "@vestige/mcp-darwin-x64": "6.0.1",
+    "@vestige/mcp-linux-arm64": "6.0.1",
+    "@vestige/mcp-linux-x64": "6.0.1",
+    "@vestige/mcp-win32-x64": "6.0.1"
   },
   "files": [
     "bin",

@@ -81,19 +81,19 @@ importers:
         version: 0.3.10
     optionalDependencies:
       '@vestige/mcp-darwin-arm64':
-        specifier: 6.0.0
+        specifier: 6.0.1
         version: link:../mcp-darwin-arm64
       '@vestige/mcp-darwin-x64':
-        specifier: 6.0.0
+        specifier: 6.0.1
         version: link:../mcp-darwin-x64
       '@vestige/mcp-linux-arm64':
-        specifier: 6.0.0
+        specifier: 6.0.1
         version: link:../mcp-linux-arm64
       '@vestige/mcp-linux-x64':
-        specifier: 6.0.0
+        specifier: 6.0.1
         version: link:../mcp-linux-x64
       '@vestige/mcp-win32-x64':
-        specifier: 6.0.0
+        specifier: 6.0.1
         version: link:../mcp-win32-x64
 
   packages/vestige-mcp-npm: {}

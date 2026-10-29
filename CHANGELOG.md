@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.1] - 2026-10-28
+
+### Operator Lite
+
+- The evidence lock reads more spellings. Inline code that reaches a module
+  through `__import__('os')` or `require('fs')` is judged as `os` and `fs`,
+  `os.truncate` and `fs.truncate*` count as writes, and opening a file in `r+`
+  mode counts as a write. Emptying or removing shell history or a transcript
+  that way is stopped under OP-002 (#529).
+- A second try at an action the gate already stopped in the session ends the
+  turn. The call is still blocked, and on Claude Code the gate also answers
+  `continue: false` with a stop reason that names the first stop and its
+  receipt (#530). A script that only names the stopped target, for example
+  to read it, is stopped as before and the turn goes on.
+
+### Install
+
+- `@vestige/init` sets aside one app whose config is a symlink or has a
+  malformed section, with a line to add it by hand, instead of stopping the
+  whole install.
+
+### Strata
+
+- `strata-migrate` treats a SQLite read error as an error, never a default. A
+  schema version out of range is refused by its value, a store that holds
+  memories but records no schema version is refused by name, an empty store
+  reads as 0, a table it cannot count stays in the skipped list, and an
+  incomplete WAL checkpoint on the snapshot copy is refused (#496).
+- The brain print reads its retention lanes at the log head instead of the wall
+  clock, so an unchanged store keeps the same print (#495).
+- The crate lockfiles under `crates/` carry the release version.
+
+### Dashboard
+
+- The embedded dashboard is rebuilt at 6.0.1.
+
 ## [6.0.0] - 2026-10-28
 
 ### Reflex: every hook firing reaches Vestige

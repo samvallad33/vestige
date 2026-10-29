@@ -157,13 +157,38 @@ function commented(file) {
   try { JSON.parse(raw); return false; } catch {}
   try { JSON.parse(withoutComments(raw)); return true; } catch { return false; }
 }
+// A config that is a symlink, as dotfile managers leave it, is not rewritten through the link, and a config
+// whose MCP or hooks section is not an object (an array, say) cannot take the entry. Either way only that
+// client is set aside to be added by hand; every other client is still set up.
+function symlinked(file) { try { return fs.lstatSync(file).isSymbolicLink(); } catch { return false; } }
+function malformed(file, keys) {
+  let raw; try { raw = read(file); } catch { return false; }
+  if (raw === null || !raw.trim()) return false;
+  let cursor; try { cursor = JSON.parse(raw); } catch { return false; }
+  for (const key of keys) {
+    if (cursor[key] === undefined) return false;
+    if (!cursor[key] || typeof cursor[key] !== 'object' || Array.isArray(cursor[key])) return true;
+    cursor = cursor[key];
+  }
+  return false;
+}
+function setAside(c) {
+  const json = [c.id === 'codex' ? null : c.file, c.hookFile].filter(Boolean);
+  const file = json.find(commented);
+  if (file) return { file, reason: 'comments' };
+  const linked = [c.file, c.hookFile].filter(Boolean).find(symlinked);
+  if (linked) return { file: linked, reason: 'symlink' };
+  if (c.id !== 'codex' && c.keys && malformed(c.file, c.keys)) return { file: c.file, reason: 'section' };
+  if (c.hookFile && malformed(c.hookFile, ['hooks'])) return { file: c.hookFile, reason: 'section' };
+  return null;
+}
 function plan({ home = os.homedir(), platform = os.platform(), env = process.env, guard = false, clients, node = process.execPath } = {}) {
   const found = binary(home, platform, env);
   const handAdd = [];
   const detected = catalog(home, platform, env).filter(c => c.detected && (!clients || clients.includes(c.id))).filter(c => {
-    const kept = [c.id === 'codex' ? null : c.file, c.hookFile].filter(Boolean).find(commented);
-    if (kept) handAdd.push({ id: c.id, name: c.name, file: kept, keys: c.keys });
-    return !kept;
+    const aside = setAside(c);
+    if (aside) handAdd.push({ id: c.id, name: c.name, file: aside.file, keys: c.keys, reason: aside.reason });
+    return !aside;
   });
   const base = path.join(home, '.vestige', 'memory'); const manifestFile = path.join(base, 'manifest.json');
   if (!found) return { missing: true, detected, handAdd, changes: [], home, base, manifestFile };
@@ -440,7 +465,9 @@ async function main(args = process.argv.slice(2)) {
   }
   if (planned.changes.length) say(`  WRITE  ${planned.manifestFile} — exact ownership and rollback record`);
   for (const h of planned.handAdd) {
-    say(`  SKIP   ${h.file} — it has comments, so it is left exactly as it is.`);
+    const why = { comments: 'it has comments', symlink: 'it is a symlink, which setup does not write through',
+      section: 'its MCP or hooks section is not an object' }[h.reason] || 'it has comments';
+    say(`  SKIP   ${h.file} — ${why}, so it is left exactly as it is.`);
     if (h.keys) say(`    To connect ${h.name}, add this under ${h.keys.join('.')}: "vestige": ${JSON.stringify({ command: planned.binary, args: [] })}`);
   }
   if (has('--dry-run')) { if (machine) console.log(json({ status: 'preview', detected: planned.detected.map(c => c.id), skipped: planned.handAdd.map(h => h.id), files: planned.changes.map(c => ({ file: c.file, description: c.description })) })); return; }

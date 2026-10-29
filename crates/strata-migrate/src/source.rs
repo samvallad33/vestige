@@ -83,8 +83,9 @@ pub struct SourceSnapshot {
     pub table_counts: Vec<(String, u64)>,
     /// EVERY user table with rows, from sqlite_master (audit finding:
     /// skipped_tables must be driven by the schema, not by a hand list, so
-    /// the receipt never claims a fuller copy than it is).
-    pub all_nonempty_tables: Vec<(String, u64)>,
+    /// the receipt never claims a fuller copy than it is). `None` is a table
+    /// whose rows could not be counted; it is still named.
+    pub all_nonempty_tables: Vec<(String, Option<u64>)>,
 }
 
 /// One V40 `walk_receipts` row; becomes a reference node in the log.
@@ -373,9 +374,16 @@ pub fn prepare_source(
             // never opened read-write.
             let conn = rusqlite::Connection::open(&db_copy)
                 .map_err(|e| MigrationError::Source(format!("checkpoint snapshot copy: {e}")))?;
-            let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-                row.get::<_, i64>(0)
-            });
+            let (busy, log, checkpointed) = conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(|e| MigrationError::Source(format!("checkpoint snapshot copy: {e}")))?;
+            checkpoint_complete(busy, log, checkpointed)?;
         }
         let files = SourceFiles {
             db: db_copy,
@@ -400,6 +408,19 @@ pub fn prepare_source(
             false,
         ))
     }
+}
+
+/// The snapshot copy is read with `immutable=1`, which does not see the WAL,
+/// so a checkpoint that left frames behind would drop those rows silently.
+/// `PRAGMA wal_checkpoint` answers (busy, WAL frames, frames checkpointed);
+/// a copy not in WAL mode answers (0, -1, -1).
+fn checkpoint_complete(busy: i64, log: i64, checkpointed: i64) -> Result<(), MigrationError> {
+    if busy != 0 || log != checkpointed {
+        return Err(MigrationError::Source(format!(
+            "checkpoint snapshot copy: incomplete (busy {busy}, {checkpointed} of {log} WAL frames checkpointed)"
+        )));
+    }
+    Ok(())
 }
 
 /// Load `<src>` as a snapshot, auto-detecting the path shape. SQLite
@@ -428,38 +449,35 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
             dropped_vectors: 0,
             walk_receipts: Vec::new(),
             table_counts: table_counts.clone(),
-            all_nonempty_tables: table_counts,
+            all_nonempty_tables: table_counts
+                .iter()
+                .map(|(name, rows)| (name.clone(), Some(*rows)))
+                .collect(),
         });
     }
 
     let conn = open_readonly(&files.db)?;
-    let schema_version = conn
-        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
-            row.get::<_, u32>(0)
-        })
-        .unwrap_or(0);
+    let schema_version = read_schema_version(&conn)?;
 
     let envelope_head = verify_envelope_chain(&conn)?;
 
-    let dropped_vectors = conn
-        .query_row("SELECT COUNT(*) FROM node_embeddings", [], |row| {
+    // The signed receipt names the dropped vectors: a count that cannot be
+    // read is an error, not 0. A store without the table has none.
+    let dropped_vectors = if table_exists(&conn, "node_embeddings")? {
+        conn.query_row("SELECT COUNT(*) FROM node_embeddings", [], |row| {
             row.get::<_, i64>(0)
         })
-        .map(|n| n.max(0) as u64)
-        .unwrap_or(0);
+        .map_err(|e| MigrationError::Source(format!("count node_embeddings: {e}")))?
+        .max(0) as u64
+    } else {
+        0
+    };
 
     let mut walk_receipts = Vec::new();
     {
         // Real v3.1.1 stores (schema <= 39) have no walk_receipts table; it
         // only exists from V40. Missing table = empty vec, same as read_table.
-        let has_walk_receipts: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='walk_receipts'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|n| n > 0)
-            .unwrap_or(false);
+        let has_walk_receipts = table_exists(&conn, "walk_receipts")?;
         if !has_walk_receipts {
             return finish_snapshot(
                 &conn,
@@ -501,31 +519,83 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
     )
 }
 
-/// Every user table with at least one row, per sqlite_master.
-fn all_nonempty_tables(conn: &rusqlite::Connection) -> Vec<(String, u64)> {
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table'
-         AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'knowledge_fts%'
-         ORDER BY name",
-    ) else {
-        return Vec::new();
-    };
-    let names: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map(|rows| rows.filter_map(Result::ok).collect())
-        .unwrap_or_default();
-    names
-        .into_iter()
-        .filter_map(|name| {
-            let quoted = format!("\"{name}\"");
-            conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .ok()
-            .filter(|n| *n > 0)
-            .map(|n| (name, n as u64))
+/// `MAX(version)` from `schema_version`. GENESIS, PARAMS and the signed
+/// MIGRATION_RECEIPT all carry it, so a value outside u32, or no value on a
+/// store that holds memories, is refused instead of being recorded as 0. A
+/// store without memories and without a version reads 0.
+fn read_schema_version(conn: &rusqlite::Connection) -> Result<u32, MigrationError> {
+    let version = if table_exists(conn, "schema_version")? {
+        conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get::<_, Option<i64>>(0)
         })
-        .collect()
+        .map_err(|e| MigrationError::Source(format!("read schema_version: {e}")))?
+    } else {
+        None
+    };
+    match version {
+        Some(version) => u32::try_from(version).map_err(|_| {
+            MigrationError::Corrupt(format!(
+                "schema_version {version} is outside 0..={}",
+                u32::MAX
+            ))
+        }),
+        None => {
+            let holds_memories = table_exists(conn, "knowledge_nodes")?
+                && conn
+                    .query_row("SELECT EXISTS (SELECT 1 FROM knowledge_nodes)", [], |row| {
+                        row.get::<_, bool>(0)
+                    })
+                    .map_err(|e| MigrationError::Source(format!("read knowledge_nodes: {e}")))?;
+            if holds_memories {
+                return Err(MigrationError::UnsupportedSource(
+                    "the store holds memories but records no schema_version".to_string(),
+                ));
+            }
+            Ok(0)
+        }
+    }
+}
+
+fn table_exists(conn: &rusqlite::Connection, name: &str) -> Result<bool, MigrationError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        [name],
+        |row| row.get::<_, bool>(0),
+    )
+    .map_err(|e| MigrationError::Source(format!("read sqlite_master: {e}")))
+}
+
+/// Every user table with at least one row, per sqlite_master. A table whose
+/// rows cannot be counted (a virtual table over a module this build lacks,
+/// say) is kept with an unknown count, so the report still names it.
+fn all_nonempty_tables(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<(String, Option<u64>)>, MigrationError> {
+    let list_error = |e: rusqlite::Error| MigrationError::Source(format!("list tables: {e}"));
+    let mut stmt = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table'
+             AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'knowledge_fts%'
+             ORDER BY name",
+        )
+        .map_err(list_error)?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(list_error)?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(list_error)?;
+    let mut tables = Vec::new();
+    for name in names {
+        let quoted = format!("\"{}\"", name.replace('"', "\"\""));
+        match conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
+            row.get::<_, i64>(0)
+        }) {
+            Ok(rows) if rows > 0 => tables.push((name, Some(rows as u64))),
+            Ok(_) => {}
+            Err(_) => tables.push((name, None)),
+        }
+    }
+    Ok(tables)
 }
 
 /// Build the SourceSnapshot from the already-read scalars: the portable
@@ -537,7 +607,7 @@ fn finish_snapshot(
     dropped_vectors: u64,
     walk_receipts: Vec<WalkReceiptRow>,
 ) -> Result<SourceSnapshot, MigrationError> {
-    let all_nonempty = all_nonempty_tables(conn);
+    let all_nonempty = all_nonempty_tables(conn)?;
     let mut tables = Vec::new();
     let mut table_counts = Vec::new();
     for table_name in PORTABLE_TABLES {
@@ -1042,6 +1112,23 @@ mod timestamp_tests {
         ] {
             assert!(timestamp_ms(raw).is_err(), "{raw:?} must not parse");
         }
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::checkpoint_complete;
+
+    /// The answers SQLite gives `PRAGMA wal_checkpoint(TRUNCATE)`: a copy whose
+    /// WAL was folded in (0, 0, 0), a copy not in WAL mode (0, -1, -1), and a
+    /// checkpoint a reader blocked (1, 1, 0).
+    #[test]
+    fn only_a_finished_checkpoint_lets_the_immutable_read_go_ahead() {
+        assert!(checkpoint_complete(0, 0, 0).is_ok());
+        assert!(checkpoint_complete(0, -1, -1).is_ok());
+        let blocked = checkpoint_complete(1, 1, 0).unwrap_err().to_string();
+        assert!(blocked.contains("busy 1, 0 of 1 WAL frames"), "{blocked}");
+        assert!(checkpoint_complete(0, 5, 3).is_err());
     }
 }
 

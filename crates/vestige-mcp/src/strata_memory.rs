@@ -176,6 +176,60 @@ pub fn verify_log(storage: &Storage) -> Result<LogCheck, String> {
         .map_err(|err| err.to_string())
 }
 
+/// The retention shape the dashboard's brain print hashes, read at the log's
+/// head clock instead of now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeadRetention {
+    /// The clock every lane is read at: [`strata_store::StrataStore::head_clock_ms`].
+    pub as_of_ms: i64,
+    /// Retrievable memories measured (the set `/api/stats` counts).
+    pub total: u64,
+    /// Mean retrievability at `as_of_ms`.
+    pub average: f64,
+    /// Memories per 10% band, `floor(R * 10)` capped at 9, the bands of
+    /// `/api/retention-distribution`.
+    pub buckets: [u64; 10],
+    /// Memories under 30% retrievability at `as_of_ms`.
+    pub endangered: u64,
+}
+
+/// Retention over every retrievable memory, read at the log's head clock (the
+/// greatest recorded creation or review time). `/api/stats` and
+/// `/api/retention-distribution` read retrievability at now, so a brain print
+/// built from them re-keyed every day on an untouched store (#495). These
+/// lanes are a function of the log alone. `None` when this process does not
+/// hold the Strata log.
+pub fn retention_at_head(storage: &Storage) -> Option<HeadRetention> {
+    let memory = live_memory(storage)?;
+    let store = memory.lock();
+    let as_of_ms = store.head_clock_ms();
+    let mut head = HeadRetention {
+        as_of_ms,
+        total: 0,
+        average: 0.0,
+        buckets: [0; 10],
+        endangered: 0,
+    };
+    let mut sum = 0.0;
+    for record in store.nodes().into_iter().filter(retrievable) {
+        let score = store
+            .retrievability_at(&record.id, as_of_ms)
+            .ok()
+            .flatten()
+            .unwrap_or(0.0);
+        sum += score;
+        head.total += 1;
+        head.buckets[((score * 10.0).floor() as usize).min(9)] += 1;
+        if score < 0.3 {
+            head.endangered += 1;
+        }
+    }
+    if head.total > 0 {
+        head.average = sum / head.total as f64;
+    }
+    Some(head)
+}
+
 /// `memory_status` view `provenance` on a Strata log.
 ///
 /// The creating frame and any recorded supersede chain, read from the log.
@@ -5791,5 +5845,75 @@ mod tests {
         // it, and the async side sees that wait.
         assert!(yielded >= Duration::from_millis(30), "{yielded:?}");
         assert!(current_background().is_none());
+    }
+
+    /// #495: the brain print's retention lanes come from the log alone. They
+    /// equal retrievability read at the head clock, survive a reopen, and are
+    /// not the lanes the same cards give days later (or at now, which is what
+    /// /api/stats reads and why the print used to re-key every day).
+    #[test]
+    fn retention_at_head_reads_every_lane_at_the_log_head_clock() {
+        const DAY: i64 = 86_400_000;
+        // A fixed "today" well in the past, so now is days past the head.
+        const BASE: i64 = 1_790_000_000_000;
+        let dir = tempfile::TempDir::new().unwrap();
+        {
+            let mut raw = strata_store::StrataStore::open(dir.path()).unwrap();
+            for i in 0..40i64 {
+                raw.ingest(strata_store::IngestInput {
+                    content: format!("aged memory {i}"),
+                    node_type: "fact".into(),
+                    created_at_ms: Some(BASE - i * 3 * DAY),
+                    ..strata_store::IngestInput::default()
+                })
+                .unwrap();
+            }
+        }
+        let lanes_at = |storage: &Storage, as_of_ms: i64| {
+            let memory = live_memory(storage).unwrap();
+            let store = memory.lock();
+            let mut lanes = HeadRetention {
+                as_of_ms,
+                total: 0,
+                average: 0.0,
+                buckets: [0; 10],
+                endangered: 0,
+            };
+            let mut sum = 0.0;
+            for record in store.nodes() {
+                let score = store
+                    .retrievability_at(&record.id, as_of_ms)
+                    .unwrap()
+                    .unwrap();
+                sum += score;
+                lanes.total += 1;
+                lanes.buckets[((score * 10.0).floor() as usize).min(9)] += 1;
+                lanes.endangered += u64::from(score < 0.3);
+            }
+            lanes.average = sum / lanes.total as f64;
+            lanes
+        };
+
+        let storage = open(dir.path()).unwrap();
+        let head = retention_at_head(storage.as_ref()).unwrap();
+        assert_eq!(head.as_of_ms, BASE);
+        assert_eq!(head, lanes_at(storage.as_ref(), BASE));
+        assert_eq!(head.total, storage.get_stats().unwrap().total_nodes as u64);
+        let later = lanes_at(storage.as_ref(), BASE + 7 * DAY);
+        assert_ne!(
+            (head.average * 1000.0).round(),
+            (later.average * 1000.0).round(),
+            "a week of clock moves the brain print's r: lane"
+        );
+        assert_ne!(
+            (head.average * 1000.0).round(),
+            (storage.get_stats().unwrap().average_retention * 1000.0).round(),
+            "/api/stats reads at now, days past the head"
+        );
+
+        drop(storage);
+        let reopened = open(dir.path()).unwrap();
+        assert_eq!(retention_at_head(reopened.as_ref()).unwrap(), head);
+        assert!(no_sqlite(dir.path()));
     }
 }

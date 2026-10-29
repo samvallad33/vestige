@@ -46,6 +46,29 @@ test('a client config with comments is left untouched and setup continues for th
   setup.apply(p);
   assert.equal(fs.readFileSync(zed, 'utf8'), original);
 });
+test('a symlinked client config is set aside and setup continues for the others', () => {
+  const f = fixture(); const real = path.join(f.home, 'dotfiles', 'gemini-settings.json');   // where a dotfile manager keeps it
+  const link = path.join(f.home, '.gemini', 'settings.json');
+  fs.mkdirSync(path.dirname(real), { recursive: true }); fs.writeFileSync(real, '{}');
+  fs.symlinkSync(real, link);
+  const p = setup.plan({ ...f, platform: 'linux' });
+  const aside = p.handAdd.find(h => h.id === 'gemini');
+  assert(aside, 'the client behind the symlink is set aside'); assert.equal(aside.reason, 'symlink'); assert.equal(aside.file, link);
+  assert(!p.changes.some(c => c.file === link || c.file === real), 'nothing is written through the link');
+  assert(p.detected.some(c => c.id === 'claude'), 'the other clients still get set up');
+  setup.apply(p);
+  assert.equal(fs.readFileSync(real, 'utf8'), '{}'); assert(fs.lstatSync(link).isSymbolicLink());
+});
+test('a config whose MCP section is an array is set aside and setup continues for the others', () => {
+  const f = fixture(); const mcp = path.join(f.home, '.cursor', 'mcp.json');
+  const original = '{ "mcpServers": [] }\n'; fs.writeFileSync(mcp, original);
+  const p = setup.plan({ ...f, platform: 'linux' });
+  const aside = p.handAdd.find(h => h.id === 'cursor');
+  assert(aside, 'the malformed client is set aside'); assert.equal(aside.reason, 'section');
+  assert(p.detected.some(c => c.id === 'claude'));
+  setup.apply(p);
+  assert.equal(fs.readFileSync(mcp, 'utf8'), original);
+});
 test('an empty client config file is treated as empty JSON, not a crash', () => {
   const f = fixture(); const hooks = path.join(f.home, '.cursor', 'hooks.json');
   fs.writeFileSync(hooks, ''); fs.writeFileSync(path.join(f.home, '.cursor', 'mcp.json'), '{}');

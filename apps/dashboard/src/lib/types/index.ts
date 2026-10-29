@@ -239,6 +239,22 @@ export interface RetentionDistribution {
 	total: number;
 }
 
+/**
+ * GET /api/brain-shape: the brain print's retention lanes, read at the log's
+ * head clock (the greatest recorded creation or review time), not at now.
+ * Same log → same values on any day. Counts only, no memory text.
+ */
+export interface BrainShapeHead {
+	basis: 'log_head_clock';
+	asOfMs: number;
+	asOf: string | null;
+	total: number;
+	averageRetention: number;
+	/** The ten 10% bands of RetentionDistribution.distribution. */
+	distribution: { range: string; count: number }[];
+	endangeredCount: number;
+}
+
 export interface ConsolidationResult {
 	nodesProcessed: number;
 	decayApplied: number;

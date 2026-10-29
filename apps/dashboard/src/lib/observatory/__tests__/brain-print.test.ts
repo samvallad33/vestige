@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
 	canonicalShapePayload,
+	captureBrainBundle,
+	captureBrainPrint,
 	computeBrainPrint,
 	deriveTraits,
 	encodeShapeVector,
@@ -14,7 +16,16 @@ import {
 	TYPE_LANES,
 	type BrainShape
 } from '../brain-print';
-import type { RetentionDistribution, SystemStats } from '$types';
+import type { BrainShapeHead, RetentionDistribution, SystemStats } from '$types';
+
+// The captures read the store through these; nothing else in this file does.
+const apiMock = vi.hoisted(() => ({
+	stats: vi.fn(),
+	retentionDistribution: vi.fn(),
+	brainShape: vi.fn(),
+	graph: vi.fn()
+}));
+vi.mock('$stores/api', () => ({ api: apiMock }));
 
 function buckets(weights: number[]): BrainShape['retentionBuckets'] {
 	const total = weights.reduce((s, n) => s + n, 0) || 1;
@@ -239,5 +250,62 @@ describe('brain print determinism: stored shape only, never wall-clock', () => {
 		// Lane 2 is reserved and always zero.
 		expect(a.vector[2]).toBe(0);
 		expect(a.traits.map((t) => t.id)).not.toContain('review-pressure');
+	});
+
+	it('live retention drift does not change the print: its lanes come from the head clock (#495)', async () => {
+		// One untouched store captured on three days. /api/stats and
+		// /api/retention-distribution read retrievability at now, so their mean,
+		// bands and endangered list drift daily (r: 442 -> 405 over a week); the
+		// log's head-clock lanes from /api/brain-shape do not.
+		const head: BrainShapeHead = {
+			basis: 'log_head_clock',
+			asOfMs: 1_790_000_000_000,
+			asOf: '2026-09-21T13:33:20+00:00',
+			total: 250,
+			averageRetention: 0.442,
+			distribution: buckets([20, 18, 16, 14, 12, 10, 8, 6, 4, 2]),
+			endangeredCount: 6
+		};
+		const live = (averageRetention: number, endangered: number, weights: number[]) => ({
+			stats: {
+				totalMemories: 250,
+				dueForReview: 0,
+				averageRetention,
+				embeddingCoverage: 0,
+				oldestMemory: '2026-05-27T13:33:20Z',
+				newestMemory: '2026-09-21T13:33:20Z'
+			} as SystemStats,
+			retention: {
+				total: 250,
+				byType: { fact: 250 },
+				distribution: buckets(weights),
+				endangered: Array.from({ length: endangered }, () => ({}))
+			} as unknown as RetentionDistribution
+		});
+		const days = [
+			live(0.442, 6, [20, 18, 16, 14, 12, 10, 8, 6, 4, 2]),
+			live(0.405, 8, [24, 20, 16, 14, 11, 9, 7, 5, 3, 1]),
+			live(0.398, 9, [25, 21, 16, 13, 11, 9, 7, 5, 2, 1])
+		];
+		for (const day of days) {
+			apiMock.stats.mockResolvedValueOnce(day.stats);
+			apiMock.retentionDistribution.mockResolvedValueOnce(day.retention);
+		}
+		apiMock.brainShape.mockResolvedValue(head);
+		const topology = { nodeCount: 200, edgeCount: 310 };
+
+		const today = await captureBrainPrint(topology);
+		const nextWeek = await captureBrainPrint(topology);
+		const bundle = await captureBrainBundle(topology);
+		expect(nextWeek).toEqual(today);
+		expect(bundle.print).toEqual(today);
+		expect(bundle.archiveDays).toBe(117);
+		expect(apiMock.brainShape).toHaveBeenCalledTimes(3);
+		expect(today.vector[3]).toBe(442);
+		expect(today.vector[5]).toBe(6);
+
+		// The same two days through the now-based lanes re-key: the #495 bug.
+		const reKeyed = days.slice(0, 2).map((day) => computeBrainPrint(shapeFromStore({ ...day, topology })));
+		expect(reKeyed[1]!.printId).not.toBe(reKeyed[0]!.printId);
 	});
 });

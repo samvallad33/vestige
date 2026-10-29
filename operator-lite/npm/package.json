@@ -1,6 +1,6 @@
 {
   "name": "operator-lite",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "description": "One command that installs the Operator Lite pre-tool gate for every coding agent on this machine (Claude Code, Cursor, Gemini CLI, Windsurf, Cline, Goose, opencode, Amazon Q).",
   "bin": { "operator-lite": "bin/operator-lite.js" },
   "files": ["bin/", "gate/"],
