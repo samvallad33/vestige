@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Proof-carrying pull requests
+
+- Record a signed test witness when an agent runs a command on the witness allowlist: the command, the
+  exit code, the SHA-256 of the output, and the git tree before and after the run, taken through a
+  scratch copy of the index. A runner that reports zero tests in JSON or junit is caught.
+- Add `receipt(action='prove')`, which bundles the witnesses of one commit's tree with the Failure
+  Pairing `closes` edges and Operator stops of the same sessions as an in-toto Statement v1 in a DSSE
+  envelope, written to `.vestige/proof/` or a git note.
+- Add `vestige-verify-proof` and `vestige verify-proof`, an offline verifier that does not open a store.
+  It recomputes every claim from the signed witnesses, and changing any byte of a bundle fails it.
+- Add the `actions/proof-carrying-pr` composite GitHub Action, which reads trusted keys and required
+  commands from the base branch.
+- Tag Reflex failure, fix, stop and resolution memories with `reflex-session-<session id>`.
+- `@vestige/init` hooks pass a shell call's output, its interrupted flag and its background flag to
+  Reflex.
+
 ## [6.0.0] - 2026-10-28
 
 ### Reflex: every hook firing reaches Vestige
