@@ -1,0 +1,10 @@
+upstream/
+evidence/
+campaigns/*/data/
+campaigns/*/smoke/
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+*.key

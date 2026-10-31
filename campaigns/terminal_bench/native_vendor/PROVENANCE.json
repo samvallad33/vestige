@@ -1,0 +1,57 @@
+{
+  "source_repo": "/Users/entity002/Documents/Vestige/work/agentdojo-vestige-20261030",
+  "source_commit": "75cea0673940d6e5dc293e8aa22ea776a63f76e9",
+  "files": {
+    "stack.py": {
+      "source_sha256": "42092921f7403e442c7ab3fa91a2ce3a49d8722f52ac3551927997b89fe02600",
+      "local_sha256": "b616209c7fe80fa310fa6bd6ee6bb41db3688d675019c2b25973a9b1d7f38f7c"
+    },
+    "native_bridge.mjs": {
+      "source_sha256": "66a6325ce38dcfafab63c39e700ded4b33781a8382f27fb14405d3a89aff9994",
+      "local_sha256": "b0499c44b9fdad7c62b794070062b305115abbeb2c8ca5e8194a083e43eb0002"
+    },
+    "qualify_native.py": {
+      "source_sha256": "0ba9ac94a0bda4122127b558690fe49be51384f6dcf9d20feb3bab27ec6ce971",
+      "local_sha256": "deca8ac7994f0f47cd045d758b41254bfe039e20ef6ea23a4e473fa9c821997e"
+    }
+  },
+  "changes": [
+    "native6.0.1targetidentity",
+    "benchmark-customhostlabel",
+    "isolatedall_rulesstrengtheningprofile",
+    "NativeStackprofileargument",
+    "qualificationimportandnamespaceadaptation"
+  ],
+  "native_binary": {
+    "path": "/Users/entity002/.vestige/bin/v6.0.1-e4a255db/vestige-mcp",
+    "sha256": "3ecc40a08eedb2f74676fc688686afb8a0acd82607d6cb094046a799259e4840"
+  },
+  "ownership": "localcampaigncopyonly;originalexperimentsunchanged",
+  "source_license_sha256": "4285a071f2d382338e52b4fb0a186d952984a34d43a33d8872e1a1d8cb43401e",
+  "host_helpers": {
+    "source_directory": "/Users/entity002/Documents/Vestige/work/qwen36-opencode-agent",
+    "files": {
+      "kernel-broker.mjs": {
+        "copied_original_sha256": "b145adc6093646953ac71d47c0b4fe839ad0e9c2c6cb243bfa57cf934d62f0c5",
+        "local_sha256": "aa30100d8c28113bc021e908873a2754e1e2b1d5e78ad93de75fdcaee5128462",
+        "adaptation": "nativefallbackbinary/versionauditlabels6.0.1only"
+      },
+      "runtime.mjs": {
+        "copied_original_sha256": "5121a3c058dae5f931c2cc57c737a081270809a6bc1d21e8278892a32efb2624",
+        "local_sha256": "8e6bfce1b7e7ad67d21bf9fd15d74ee463d07c97f9a627f7de8c1a3a590c927b",
+        "adaptation": "nativefallbackbinary/versionauditlabels6.0.1only"
+      },
+      "audit-window.mjs": {
+        "copied_original_sha256": "b170e0be4d4a173818afddc09507da0d82d9a8e062c7b43f11a4c38343581bcf",
+        "local_sha256": "b170e0be4d4a173818afddc09507da0d82d9a8e062c7b43f11a4c38343581bcf",
+        "adaptation": "byte-identicalcopy"
+      },
+      "audit-recovery.mjs": {
+        "copied_original_sha256": "3af4fd491bbc35e2201ae78b02ddb59cdd71496cbccd1cdc6face135c8eb0bf8",
+        "local_sha256": "3af4fd491bbc35e2201ae78b02ddb59cdd71496cbccd1cdc6face135c8eb0bf8",
+        "adaptation": "byte-identicalcopy"
+      }
+    },
+    "import_policy": "relativefrozenlocalcopies;no runtime import from Qwen working directory"
+  }
+}

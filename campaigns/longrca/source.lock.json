@@ -1,0 +1,34 @@
+{
+  "schema": "longrca-source-lock-v1",
+  "checked_date": "2026-10-31",
+  "paper": "https://arxiv.org/html/2608.15242v4",
+  "project": "https://longrca-bench.github.io/",
+  "repository": "https://github.com/longrca-bench/longrca-bench.github.io",
+  "repository_commit": "7155849100c8698dfd26da7c472d77041891169f",
+  "dataset": "https://huggingface.co/datasets/CLoud5-real/longrca-bench",
+  "dataset_revision": "98e00bc71110d836457ea8f7def242908fe768c1",
+  "dataset_license": "NOT_DECLARED",
+  "repository_license": "NOT_DECLARED",
+  "paper_license": "arXiv perpetual non-exclusive license",
+  "files": {
+    "dataset-info.json": "a7a319987809fce609436d102469e66569d6dda19366680f983d76c6436b464f",
+    "dataset-tree.json": "f3676bdaf2689974c38c661340711ab4cee54166ef52a0e5e96c934e33f09fea",
+    "dataset-tree-page2.json": "2e07a24e1be8ffdbc37fdc78a28a882010b5d4addfc9cffe6a740a790a9a9902",
+    "dataset-README.md": "dfb6d7c7d384e643b93a4656ee1b9fb74e086c789297307ae19d1632d0f4d07a",
+    "project-repo.json": "dba4ea1eba023946c2e417190442a507c6d8290613a8cdbd828515bdf734a10b",
+    "project-tree.json": "59cfe824b094b3af1af021bde92a5b7fa6479c3d79e692c136449e4e26b566db",
+    "project.html": "6e47dff8088936a2fb629459f5dd2d3f085460b8e6e64c3f5cb207e7c43a8958",
+    "export_paper_results.py": "ee79af3cbfebe6723bc24dc0ffba622b6591d6e8aeb3b6df9a80049ff1fcef35",
+    "official-sample.json": "0deddc20a977ca5e59d459853f4372067e49c4f2bc7085f42869ba8ebf94ca9c"
+  },
+  "parquet": {
+    "longrca-full.parquet": {
+      "sha256": "908b021b2bf9dd974151cca22b82786dbde12253800cf8f0ae853639de65d706",
+      "bytes": 60903611
+    },
+    "longrca-mini.parquet": {
+      "sha256": "221c9fd6f05a6fafe5ac634eb770fc0becb51dedebbb3759202bf96ec5b91ad5",
+      "bytes": 12299942
+    }
+  }
+}
