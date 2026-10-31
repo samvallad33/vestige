@@ -180,8 +180,8 @@ class LocalBounds:
     model_digest: str = PINNED_DIGEST
     supports_thinking: bool = True
     max_requests: int = 40
-    context_tokens: int = 131072
-    max_input_tokens: int = 98304
+    context_tokens: int = 262144
+    max_input_tokens: int = 220000
     max_output_tokens: int = 16384
     input_overhead_tokens: int = 4096
 

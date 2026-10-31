@@ -178,6 +178,8 @@ class VestigeTerminalAgent(BaseAgent):
             "You MUST use the `Bash` tool to inspect directories, view and edit files, and run tests.\n"
             "Keep your thinking concise, focused, and under 200 words per turn. Do not deliberate in circles or output endless thinking.\n"
             "Once you diagnose an issue or plan a step, immediately output your `Bash` tool call to apply the edit or run tests.\n"
+            "You can edit files using `python3` scripts or `cat << 'EOF' > ...` via Bash.\n"
+            "When you have finished fixing all issues and verified that tests pass, provide a final concise explanation of your fixes without any tool calls to conclude your work.\n"
             "Use native vestige memory tools only if you need to query past memories.\n\n"
             f"Task Instruction:\n{instruction}"
         )
