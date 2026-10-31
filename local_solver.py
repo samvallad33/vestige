@@ -177,6 +177,7 @@ def inspect_model(transport):
 class LocalBounds:
     model: str = PINNED_MODEL
     model_digest: str = PINNED_DIGEST
+    supports_thinking: bool = False
     max_requests: int = 40
     context_tokens: int = 32768
     max_input_tokens: int = 24576
@@ -412,7 +413,6 @@ class OllamaLLM(BasePipelineElement):
                 ],
                 "tools": tools,
                 "stream": False,
-                "think": True,
                 "options": {
                     "num_ctx": bounds.context_tokens,
                     "num_predict": bounds.max_output_tokens,
@@ -420,6 +420,8 @@ class OllamaLLM(BasePipelineElement):
                     "seed": 0,
                 },
             }
+            if bounds.supports_thinking:
+                request["think"] = True
             rid = uuid.uuid4().hex
             body = _wire(request)
             reservation = self.budget.reserve(rid, request)
@@ -743,6 +745,7 @@ def factory(logs_dir, model_name, **kwargs):
     if model_name != PINNED_MODEL:
         raise ValueError("launch must explicitly select " + PINNED_MODEL)
     allowed = {
+        "supports_thinking",
         "max_requests",
         "context_tokens",
         "max_input_tokens",
