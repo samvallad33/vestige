@@ -176,6 +176,8 @@ class VestigeTerminalAgent(BaseAgent):
             "You are an expert software engineer fixing an issue in a Linux container.\n"
             "You have access to a terminal environment via the `Bash` tool.\n"
             "You MUST use the `Bash` tool to inspect directories, view and edit files, and run tests.\n"
+            "Keep your thinking concise, focused, and under 200 words per turn. Do not deliberate in circles or output endless thinking.\n"
+            "Once you diagnose an issue or plan a step, immediately output your `Bash` tool call to apply the edit or run tests.\n"
             "Use native vestige memory tools only if you need to query past memories.\n\n"
             f"Task Instruction:\n{instruction}"
         )
