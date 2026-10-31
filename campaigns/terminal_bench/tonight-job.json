@@ -16,16 +16,16 @@
     "max_retries": 0,
     "include_exceptions": null,
     "exclude_exceptions": [
-      "AgentSafetyRefusalError",
-      "ApiUsageLimitError",
-      "AgentTimeoutError",
-      "VerifierOutputParseError",
-      "UnsupportedModelParametersError",
-      "RewardFileNotFoundError",
-      "ModelNotFoundError",
       "RewardFileEmptyError",
+      "VerifierOutputParseError",
+      "AgentTimeoutError",
+      "ModelNotFoundError",
+      "VerifierTimeoutError",
+      "ApiUsageLimitError",
+      "UnsupportedModelParametersError",
       "AgentAuthenticationError",
-      "VerifierTimeoutError"
+      "AgentSafetyRefusalError",
+      "RewardFileNotFoundError"
     ],
     "wait_multiplier": 1.0,
     "min_wait_sec": 1.0,
@@ -59,7 +59,7 @@
     {
       "name": null,
       "import_path": "campaigns.terminal_bench.adapter:VestigeTerminalAgent",
-      "model_name": "qwen3.6:35b-a3b-q8_0",
+      "model_name": "qwen2.5-coder:14b",
       "base_url": null,
       "model_api_key_name": null,
       "model_api_format": null,

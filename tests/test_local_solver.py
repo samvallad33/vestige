@@ -44,15 +44,15 @@ def metadata():
             {
                 "name": PINNED_MODEL,
                 "digest": PINNED_DIGEST,
-                "size": 38704982915,
+                "size": 8988124298,
                 "details": {
                     "format": "gguf",
-                    "family": "qwen35moe",
-                    "parameter_size": "35.5B",
-                    "quantization_level": "Q8_0",
+                    "family": "qwen2",
+                    "parameter_size": "14.8B",
+                    "quantization_level": "Q4_K_M",
                     "context_length": PINNED_CONTEXT_MAX,
                 },
-                "capabilities": ["completion", "tools", "thinking"],
+                "capabilities": ["completion", "tools", "insert"],
             }
         ]
     }
@@ -182,7 +182,7 @@ class LocalSolverTests(unittest.TestCase):
             )
         self.assertTrue(request["think"])
         self.assertFalse(request["stream"])
-        self.assertEqual(request["options"]["num_ctx"], 65536)
+        self.assertEqual(request["options"]["num_ctx"], 32768)
         usage = result[-1][USAGE_KEY][0]["usage"]
         self.assertEqual(
             usage,
@@ -314,11 +314,11 @@ class LocalSolverTests(unittest.TestCase):
         self.assertEqual(transport.calls, [])
 
     def test_usage_breach_records_measured_counts_then_halts(self):
-        solver, _transport = self.solver({**response(), "eval_count": 4097})
+        solver, _transport = self.solver({**response(), "eval_count": 8193})
         with self.assertRaises(LocalSolverError):
             self.query(solver)
         self.assertEqual(solver.solver.budget.records[0]["status"], "bound_breached")
-        self.assertEqual(solver.solver.budget.records[0]["usage"]["eval_count"], 4097)
+        self.assertEqual(solver.solver.budget.records[0]["usage"]["eval_count"], 8193)
 
     def test_native_audit_has_truthful_provider_exact_request_and_raw_response(self):
         payload = response()
@@ -430,7 +430,7 @@ class LocalSolverTests(unittest.TestCase):
             elif change == "digest":
                 data["models"][0]["digest"] = "different"
             elif change == "quant":
-                data["models"][0]["details"]["quantization_level"] = "Q4_K_M"
+                data["models"][0]["details"]["quantization_level"] = "Q8_0"
             elif change == "context":
                 del data["models"][0]["details"]["context_length"]
             else:
@@ -440,9 +440,9 @@ class LocalSolverTests(unittest.TestCase):
         for kwargs in (
             {"max_requests": 41},
             {"max_requests": True},
-            {"context_tokens": 262145},
+            {"context_tokens": 32769},
             {"max_output_tokens": 60000},
-            {"max_input_tokens": 65536},
+            {"max_input_tokens": 32769},
             {"input_overhead_tokens": 0},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):

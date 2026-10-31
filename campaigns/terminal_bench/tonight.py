@@ -18,7 +18,7 @@ DOCKER_CONFIG = (
     ROOT
     / "campaigns/terminal_bench/evidence/oracle-session-window-debug-20261031/docker-config"
 )
-MODEL = "qwen3.6:35b-a3b-q8_0"
+MODEL = "qwen2.5-coder:14b"
 BUILDX_SHA = "6f20ba2437865311ef99015bf5d1039c3c8e4d2177c1c64aa41b134b5ecd3012"
 
 
