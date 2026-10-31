@@ -45,4 +45,9 @@ Across 24 live paid trajectories on `gpt-6.1-sol` (High Reasoning Effort) spanni
 * **400 / 400 Cryptographic Ledger Events** verified with **0 chain breaks**.
 * **$0.52 Total Inference Spend** across all 24 trajectories.
 
-For full trajectory-by-trajectory telemetry, see [`benchmarks/agentdojo/RESULTS.md`](../../benchmarks/agentdojo/RESULTS.md).
+### Local Open-Weights Vulnerability Study (Qwen 3.6 35B)
+On local Apple Silicon execution via Ollama (`qwen3.6:35b-a3b-q8_0`):
+* **100% Utility on Clean Tasks:** Perfectly extracts calendar and task state in 25s.
+* **~100% Attack Success Rate (13/13 tasks compromised):** Without the Operator Gate, raw local open weights blindly follow indirect prompt injections—exfiltrating 2FA verification codes to attacker emails and deleting corporate financial files.
+
+For full trajectory-by-trajectory telemetry and empirical receipts, see [`benchmarks/agentdojo/RESULTS.md`](../../benchmarks/agentdojo/RESULTS.md).

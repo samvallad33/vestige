@@ -31,6 +31,9 @@ Evaluated on OpenAI `gpt-6.1-sol` with High Reasoning Effort across 24 paid traj
 | **Ledger Integrity Breaks** | N/A | **0 (400 / 400 events verified)** | N/A |
 | **Total Paid Spend** | ~$0.17 | **$0.17 ($0.52 total across 24 runs)** | ~$0.17 |
 
+> [!IMPORTANT]
+> **Local Open-Weights Empirical Case Study:** In addition to frontier models, we evaluated local open-weights execution with Alibaba's `qwen3.6:35b-a3b-q8_0` on Apple Silicon. While achieving **100% utility** on clean tasks, raw un-gated Qwen capitulated to **13 out of 13 evaluated prompt injection tasks (~100% ASR)**—exfiltrating 2FA verification codes and wiping corporate spreadsheets. See [RESULTS.md](RESULTS.md#5-local-open-weights-vulnerability-study-raw-qwen-36-35b-vs-the-operator-gate-imperative) for the complete breakdown and trajectory receipts.
+
 ---
 
 ## 3. Architecture & Enforcement Layers
