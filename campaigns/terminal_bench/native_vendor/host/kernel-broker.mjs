@@ -32,7 +32,7 @@ export class KernelBroker {
         owner_approval:this.checkpoint.ownerApprovalMemoryId, historical_breaks:this.checkpoint.historicalBreaks,
         history_claim:'historical gaps preserved; current window verified' });
     } else if (!['ok','empty'].includes(ledger.chain?.status)) throw fail('native ledger baseline invalid');
-    this.audit('native_connected', { version: '6.0.1', tools: catalog.map(x => x.name),
+    this.audit('native_connected', { version: '6.2.0', tools: catalog.map(x => x.name),
       schema_digest: digest(catalog), shared_native_connection: true });
     this.server = createServer(socket => {
       this.sockets.add(socket);

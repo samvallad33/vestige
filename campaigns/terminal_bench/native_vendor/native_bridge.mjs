@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const HOST = fileURLToPath(new URL('./host', import.meta.url));
-const BINARY = '/Users/entity002/.vestige/bin/v6.0.1-e4a255db/vestige-mcp';
+const BINARY = '/Users/entity002/.vestige/bin/v6.2.0-d4598ab3/vestige-mcp';
 const GATE = '/Users/entity002/.operator/gate/operator-gate.py';
 const { KernelBroker, ROUTE_FIELD, argsDigest } = await import(pathToFileURL(join(HOST, 'kernel-broker.mjs')));
 const { auditWriter, checkReflexDecision } = await import(pathToFileURL(join(HOST, 'runtime.mjs')));
@@ -61,7 +61,7 @@ class NativeWire {
   }
   async initialize() {
     this.hello = await this.rpc('initialize',{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'vestige-benchmark-custom',version:'1'}});
-    if (this.hello.serverInfo?.name !== 'vestige' || this.hello.serverInfo?.version !== '6.0.1') throw fail('native identity mismatch');
+    if (this.hello.serverInfo?.name !== 'vestige' || this.hello.serverInfo?.version !== '6.2.0') throw fail('native identity mismatch');
     this.child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
     const list = await this.rpc('tools/list'); this.catalog = list.tools;
     if (JSON.stringify(this.catalog?.map(t=>t.name).sort()) !== JSON.stringify(EXPECTED)) throw fail('native catalog mismatch');

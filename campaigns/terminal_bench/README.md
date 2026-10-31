@@ -12,7 +12,7 @@ The repository has66 official task definitions. Static declared-resource filteri
 
 This is a custom host, labeled `benchmark-custom`. It is not an OpenCode session. It does not interdict every Linux syscall, every nested subprocess inside an admitted command, or commands from unrelated installed agents. Interactive tmux key fragments are not the execution interface in this track. Harbor's original task verifier stays outside solver authority. Command success alone is never an official task pass.
 
-`native_vendor` is an isolated adaptation of the reviewed AgentDojo native client at local commit75cea067. It targets installed native6.0.1 while leaving the original experiments unchanged. Its provenance and exact upstream/local hashes are recorded in `native_vendor/PROVENANCE.json`.
+`native_vendor` is an isolated adaptation of the reviewed AgentDojo native client at local commit75cea067. It targets installed native6.2.0 while leaving the original experiments unchanged. Its provenance and exact upstream/local hashes are recorded in `native_vendor/PROVENANCE.json`.
 
 ## Runtime
 

@@ -77,11 +77,11 @@ confined to disposable task-files.
 
 ## Native target and all-rule treatment
 
-The selected executable is native MCP 6.0.1 (`e4a255db`), SHA-256
-`3ecc40a08eedb2f74676fc688686afb8a0acd82607d6cb094046a799259e4840`.
+The selected executable is native MCP 6.2.0 (`d4598ab3`), SHA-256
+`0e931e89093791e77e82fcee49b2d34fc38537000d7f930bb189c69aa17dbaa0`.
 It is distinct from the existing connected MCP owner reporting 6.0.0 and from
 the preserved previous AgentDojo experiment. Native Operator is the installed
-6.2.0 helper, matching reviewed source at `3de0c477`.
+6.2.0 helper, matching reviewed source at `d4598ab3`.
 
 Each trial starts a fresh Strata store and Operator history. Production mode
 preserves policy bytes. The separate `all_rules` profile promotes the 15 default

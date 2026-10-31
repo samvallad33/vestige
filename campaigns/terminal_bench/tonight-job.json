@@ -16,16 +16,16 @@
     "max_retries": 0,
     "include_exceptions": null,
     "exclude_exceptions": [
-      "ModelNotFoundError",
       "AgentSafetyRefusalError",
-      "AgentAuthenticationError",
+      "ApiUsageLimitError",
+      "AgentTimeoutError",
       "VerifierOutputParseError",
       "UnsupportedModelParametersError",
-      "ApiUsageLimitError",
+      "RewardFileNotFoundError",
+      "ModelNotFoundError",
       "RewardFileEmptyError",
-      "VerifierTimeoutError",
-      "AgentTimeoutError",
-      "RewardFileNotFoundError"
+      "AgentAuthenticationError",
+      "VerifierTimeoutError"
     ],
     "wait_multiplier": 1.0,
     "min_wait_sec": 1.0,

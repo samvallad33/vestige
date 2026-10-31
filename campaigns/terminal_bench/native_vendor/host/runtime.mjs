@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 
-export const BINARY = '/Users/entity002/.vestige/bin/v6.0.1-e4a255db/vestige-mcp';
+export const BINARY = '/Users/entity002/.vestige/bin/v6.2.0-d4598ab3/vestige-mcp';
 export const EXPECTED = ['backfill','causal_walk','codebase','dedup','forgotten_lesson','gather','ghostlink','intention','maintain','memory','memory_status','precedent','project','recall','receipt','selftest','session_start','smart_ingest','suppress'];
 export const digest = value => createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('hex');
 export const fail = message => new Error('FAIL_CLOSED_INTERDICTION: ' + message);
@@ -73,7 +73,7 @@ export class NativeMCP {
   async initialize() {
     const result = await this.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {},
       clientInfo: { name: 'qwen-opencode-reflex', version: '1' } });
-    if (result.serverInfo?.name !== 'vestige' || result.serverInfo?.version !== '6.0.1') throw fail('unexpected native MCP identity');
+    if (result.serverInfo?.name !== 'vestige' || result.serverInfo?.version !== '6.2.0') throw fail('unexpected native MCP identity');
     this.hello = result;
     this.child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
     const list = await this.rpc('tools/list', {});

@@ -8,7 +8,7 @@
     },
     "native_bridge.mjs": {
       "source_sha256": "66a6325ce38dcfafab63c39e700ded4b33781a8382f27fb14405d3a89aff9994",
-      "local_sha256": "b0499c44b9fdad7c62b794070062b305115abbeb2c8ca5e8194a083e43eb0002"
+      "local_sha256": "88a1912e9b0e8cec056284b13615460692c916486217ddf99a2263a4b2a6073c"
     },
     "qualify_native.py": {
       "source_sha256": "0ba9ac94a0bda4122127b558690fe49be51384f6dcf9d20feb3bab27ec6ce971",
@@ -16,15 +16,15 @@
     }
   },
   "changes": [
-    "native6.0.1targetidentity",
+    "native6.2.0targetidentity",
     "benchmark-customhostlabel",
     "isolatedall_rulesstrengtheningprofile",
     "NativeStackprofileargument",
     "qualificationimportandnamespaceadaptation"
   ],
   "native_binary": {
-    "path": "/Users/entity002/.vestige/bin/v6.0.1-e4a255db/vestige-mcp",
-    "sha256": "3ecc40a08eedb2f74676fc688686afb8a0acd82607d6cb094046a799259e4840"
+    "path": "/Users/entity002/.vestige/bin/v6.2.0-d4598ab3/vestige-mcp",
+    "sha256": "0e931e89093791e77e82fcee49b2d34fc38537000d7f930bb189c69aa17dbaa0"
   },
   "ownership": "localcampaigncopyonly;originalexperimentsunchanged",
   "source_license_sha256": "4285a071f2d382338e52b4fb0a186d952984a34d43a33d8872e1a1d8cb43401e",
@@ -33,13 +33,13 @@
     "files": {
       "kernel-broker.mjs": {
         "copied_original_sha256": "b145adc6093646953ac71d47c0b4fe839ad0e9c2c6cb243bfa57cf934d62f0c5",
-        "local_sha256": "aa30100d8c28113bc021e908873a2754e1e2b1d5e78ad93de75fdcaee5128462",
-        "adaptation": "nativefallbackbinary/versionauditlabels6.0.1only"
+        "local_sha256": "e2b1896dfbb9982df01ebab17795ef3b77dadc4bda719bb7dea5c5398007ed14",
+        "adaptation": "nativefallbackbinary/versionauditlabels6.2.0only"
       },
       "runtime.mjs": {
         "copied_original_sha256": "5121a3c058dae5f931c2cc57c737a081270809a6bc1d21e8278892a32efb2624",
-        "local_sha256": "8e6bfce1b7e7ad67d21bf9fd15d74ee463d07c97f9a627f7de8c1a3a590c927b",
-        "adaptation": "nativefallbackbinary/versionauditlabels6.0.1only"
+        "local_sha256": "2a2c28741b90fe59e7ca3eff7d323d0380faab6f2aac507b0934748e5728c6ef",
+        "adaptation": "nativefallbackbinary/versionauditlabels6.2.0only"
       },
       "audit-window.mjs": {
         "copied_original_sha256": "b170e0be4d4a173818afddc09507da0d82d9a8e062c7b43f11a4c38343581bcf",
