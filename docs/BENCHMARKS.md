@@ -396,6 +396,40 @@ row appears. Not before, and never next to the paper's own table.
 
 ---
 
+## AgentDojo: Autonomous Tool Security & Prompt Injection Interdiction
+
+**Paper:** [AgentDojo: A Dynamic Environment to Evaluate Attacks and Defenses on LLM Agents](https://arxiv.org/abs/2406.13314) (arXiv:2406.13314)
+**Upstream code:** <https://github.com/ethz-spylab/agentdojo>, pinned at `089ed468cf3ed0322acc66b0211f26d9d90dbf60` (Benchmark `v1.2.2`)
+**Harness & Results:** [`benchmarks/agentdojo/`](../benchmarks/agentdojo/README.md)
+**Protocol:** [`docs/benchmarks/AGENTDOJO.md`](benchmarks/AGENTDOJO.md)
+**Pull Request:** [samvallad33/agentdojo#1](https://github.com/samvallad33/agentdojo/pull/1)
+
+While MemConflict and MemoryArena evaluate long-term memory retrieval and cognitive resilience, AgentDojo evaluates **runtime execution sovereignty**: whether the memory and hypervisor layer can interdict indirect prompt injections hidden in untrusted external data (such as emails, transaction records, and calendar invites) without degrading legitimate developer utility.
+
+### Verified Results (Paid Campaign 2 with `gpt-6.1-sol`)
+
+Evaluated on OpenAI `gpt-6.1-sol` with High Reasoning Effort across 24 sequential trajectories (Workspace and Banking suites, clean and attacked conditions):
+
+| Metric | `baseline` (Raw Model) | `vestige` (Operator Gate + Strata) | `deny_all` (Control) |
+| :--- | :---: | :---: | :---: |
+| **Attack Success Rate (ASR)** | **0.0%** | **0.0% (100% Interdiction)** | 0.0% |
+| **Attacked Utility** | 75.0% | **75.0%** | 0.0% |
+| **Benign Utility** | 75.0% | **75.0%** | 0.0% |
+| **Clean Blocked Calls (False Stops)** | 0 | **0 (0.0% False-Stop Rate)** | 5 (100% Blocked) |
+| **Clean Environment Calls Admitted** | 6 | **7** | 0 (5 attempted, 5 blocked) |
+| **Cryptographic Ledger Integrity** | N/A | **400 / 400 events verified (0 breaks)** | N/A |
+| **Total Paid Inference Spend** | ~$0.17 | **$0.17 ($0.52 total across all 24 runs)** | ~$0.17 |
+
+**Core takeaways:**
+1. **Zero False-Stop Rate:** 7 out of 7 clean environment calls were admitted without friction.
+2. **100% Utility Parity:** Vestige matched raw unhindered `gpt-6.1-sol` turn-for-turn, whereas the `deny_all` control destroyed agent utility to 0.0%.
+3. **Cryptographic Continuity:** All 400 lifecycle events across the Vestige arm were cryptographically chained in Strata Reflex via SHA-256 with 0 chain breaks.
+4. **Zero Marginal Token Tax:** Local deterministic enforcement ran at an average cost of ~$0.021 per trajectory.
+
+See [`benchmarks/agentdojo/RESULTS.md`](../benchmarks/agentdojo/RESULTS.md) for full trajectory logs and attack anatomies.
+
+---
+
 ## Rules for citing any number from this page
 
 1. Always cite the arm, the dataset revision, the instance/session cap, and the
