@@ -298,6 +298,38 @@ def _text(content):
     return "\n".join(x["content"] for x in content)
 
 
+def _extract_content_tool_calls(text, available_names):
+    if not text or not isinstance(text, str):
+        return []
+    s = text.strip()
+    match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", s)
+    if match:
+        s = match.group(1).strip()
+    elif not (s.startswith("{") and s.endswith("}")):
+        m2 = re.search(r"(\{[\s\S]*\})", s)
+        if m2:
+            s = m2.group(1).strip()
+    try:
+        data = json.loads(s)
+        if isinstance(data, dict) and "name" in data and "arguments" in data:
+            name = data["name"]
+            if name not in available_names:
+                for cand in available_names:
+                    if cand in name or name.startswith(cand):
+                        name = cand
+                        break
+            if name in available_names and isinstance(data["arguments"], dict):
+                return [
+                    {
+                        "type": "function",
+                        "function": {"name": name, "arguments": data["arguments"]},
+                    }
+                ]
+    except Exception:
+        pass
+    return []
+
+
 class OllamaLLM(BasePipelineElement):
     def __init__(self, transport, budget, *, timeout=600):
         if (
@@ -477,6 +509,15 @@ class OllamaLLM(BasePipelineElement):
                     "malformed/unsupported local assistant", raw_response=raw
                 )
             calls = assistant.get("tool_calls", [])
+            if not calls and assistant.get("content"):
+                available_names = {f.name for f in runtime.functions.values()}
+                extracted = _extract_content_tool_calls(
+                    assistant.get("content"), available_names
+                )
+                if extracted:
+                    calls = extracted
+                    assistant["tool_calls"] = copy.deepcopy(extracted)
+                    assistant["content"] = ""
             if not isinstance(calls, list) or len(calls) > 1:
                 raise LocalSolverError(
                     "serial tool-call contract violated", raw_response=raw
