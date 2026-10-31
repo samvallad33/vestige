@@ -12,7 +12,7 @@ from pathlib import Path
 
 from harbor.agents.base import BaseAgent
 from harbor.models.agent.context import AgentContext
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 LIBRARY = Path(__file__).resolve().parents[2] / "upstream" / "agentdojo-library"
 sys.path.insert(0, str(LIBRARY))
@@ -73,18 +73,18 @@ def validate_terminal_solver(solver, factory_path, model_name=None):
 
 
 class BashArguments(BaseModel):
-    command: str
-    timeout_sec: int = 30
+    command: str = Field(description="The shell command to execute in the task sandbox.")
+    timeout_sec: int = Field(30, ge=1, le=300, description="Command timeout in seconds (1 to 300).")
 
 
 def terminal_runtime(environment, loop):
     def execute(command, timeout_sec=30):
-        if (
-            not isinstance(command, str)
-            or not command.strip()
-            or not 1 <= timeout_sec <= 300
-        ):
-            raise ValueError("invalid complete command or timeout")
+        if not isinstance(command, str) or not command.strip():
+            raise ValueError("invalid complete command")
+        try:
+            timeout_sec = min(max(int(timeout_sec), 1), 300)
+        except (ValueError, TypeError):
+            timeout_sec = 30
         # The synchronous guarded tool loop runs in a worker thread; execution
         # itself returns to Harbor's original async environment implementation.
         pending = asyncio.run_coroutine_threadsafe(
@@ -172,14 +172,21 @@ class VestigeTerminalAgent(BaseAgent):
             native_factory=lambda root: NativeStack(root, profile=self.native_profile),
             max_iters=40,
         )
+        prompt = (
+            "You are an expert software engineer fixing an issue in a Linux container.\n"
+            "You have access to a terminal environment via the `Bash` tool.\n"
+            "You MUST use the `Bash` tool to inspect directories, view and edit files, and run tests.\n"
+            "Use native vestige memory tools only if you need to query past memories.\n\n"
+            f"Task Instruction:\n{instruction}"
+        )
         result = await asyncio.to_thread(
             pipeline.query,
-            instruction,
+            prompt,
             runtime,
             EmptyEnv(),
             [
                 ChatUserMessage(
-                    role="user", content=[text_content_block_from_string(instruction)]
+                    role="user", content=[text_content_block_from_string(prompt)]
                 )
             ],
         )
