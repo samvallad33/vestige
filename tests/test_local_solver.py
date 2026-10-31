@@ -23,6 +23,7 @@ from local_solver import (
     ENDPOINT,
     PINNED_CONTEXT_MAX,
     PINNED_DIGEST,
+    PINNED_METADATA_CONTEXT,
     PINNED_MODEL,
     USAGE_KEY,
     HTTPResult,
@@ -50,7 +51,7 @@ def metadata():
                     "family": "qwen2",
                     "parameter_size": "14.8B",
                     "quantization_level": "Q4_K_M",
-                    "context_length": PINNED_CONTEXT_MAX,
+                    "context_length": PINNED_METADATA_CONTEXT,
                 },
                 "capabilities": ["completion", "tools", "insert"],
             }
@@ -182,7 +183,7 @@ class LocalSolverTests(unittest.TestCase):
             )
         self.assertNotIn("think", request)
         self.assertFalse(request["stream"])
-        self.assertEqual(request["options"]["num_ctx"], 32768)
+        self.assertEqual(request["options"]["num_ctx"], 65536)
         usage = result[-1][USAGE_KEY][0]["usage"]
         self.assertEqual(
             usage,
@@ -440,9 +441,9 @@ class LocalSolverTests(unittest.TestCase):
         for kwargs in (
             {"max_requests": 41},
             {"max_requests": True},
-            {"context_tokens": 32769},
+            {"context_tokens": 65537},
             {"max_output_tokens": 60000},
-            {"max_input_tokens": 32769},
+            {"max_input_tokens": 65537},
             {"input_overhead_tokens": 0},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
