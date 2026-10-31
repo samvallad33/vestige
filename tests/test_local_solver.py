@@ -183,7 +183,7 @@ class LocalSolverTests(unittest.TestCase):
             )
         self.assertTrue(request.get("think"))
         self.assertFalse(request["stream"])
-        self.assertEqual(request["options"]["num_ctx"], 65536)
+        self.assertEqual(request["options"]["num_ctx"], 131072)
         usage = result[-1][USAGE_KEY][0]["usage"]
         self.assertEqual(
             usage,
@@ -308,7 +308,7 @@ class LocalSolverTests(unittest.TestCase):
         self.assertEqual(len(transport.calls), 1)
         solver, transport = self.solver(response())
         large = [
-            {"role": "user", "content": [text_content_block_from_string("雪" * 20000)]}
+            {"role": "user", "content": [text_content_block_from_string("雪" * 40000)]}
         ]
         with self.assertRaises(LocalSolverError):
             self.query(solver, large)
