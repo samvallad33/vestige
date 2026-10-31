@@ -56,10 +56,10 @@ from agentdojo.functions_runtime import EmptyEnv, FunctionCall
 from agentdojo.types import ChatAssistantMessage, text_content_block_from_string
 from vestige_eval.guarded_pipeline import AuditedSolver
 
-PINNED_MODEL = "qwen2.5-coder:14b"
-PINNED_DIGEST = "9ec8897f747e246e970bc5cfdda85d22f1123dc2e3d34978a010a75968716849"
-PINNED_METADATA_CONTEXT = 32768
-PINNED_CONTEXT_MAX = 65536
+PINNED_MODEL = "qwen3.6:35b-a3b-q8_0"
+PINNED_DIGEST = "53003244b9b5f589be78818aaaa646fa242472f776f62ed0ccc224e6c29ee5e2"
+PINNED_METADATA_CONTEXT = 262144
+PINNED_CONTEXT_MAX = 262144
 ENDPOINT = "http://127.0.0.1:11434/api/chat"
 STATE_KEY = "_vestige_ollama_state"
 USAGE_KEY = "_vestige_ollama_usage"
@@ -166,9 +166,9 @@ def inspect_model(transport):
     details = model.get("details") or {}
     if (
         model.get("digest") != PINNED_DIGEST
-        or details.get("quantization_level") != "Q4_K_M"
+        or details.get("quantization_level") != "Q8_0"
         or details.get("context_length") != PINNED_METADATA_CONTEXT
-        or not {"completion", "tools"} <= set(model.get("capabilities", []))
+        or not {"completion", "tools", "thinking"} <= set(model.get("capabilities", []))
     ):
         raise LocalSolverError("installed model differs from metadata pin")
     return copy.deepcopy(model)
@@ -178,11 +178,11 @@ def inspect_model(transport):
 class LocalBounds:
     model: str = PINNED_MODEL
     model_digest: str = PINNED_DIGEST
-    supports_thinking: bool = False
+    supports_thinking: bool = True
     max_requests: int = 40
     context_tokens: int = 65536
-    max_input_tokens: int = 57344
-    max_output_tokens: int = 4096
+    max_input_tokens: int = 49152
+    max_output_tokens: int = 16384
     input_overhead_tokens: int = 4096
 
     def validate(self):
