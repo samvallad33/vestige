@@ -699,11 +699,15 @@ def run(binary, output):
             tool("memory", {"action": "state", "id": node_id})
             receipt = tool("receipt", {"action": "get", "receipt_id": node_id})
             assert "receipt" in receipt
-            typed("recall", {"query": marker}, "similarity_disabled")
-            typed("recall", {"query": "which fixture handle did we store"}, "similarity_disabled")
+            lexical = tool("recall", {"query": marker})
+            assert lexical["mode"] == "lexical" and lexical["exact"] is False, lexical
+            assert lexical["ranking"] == "exact_token_bm25", lexical
+            assert [n["id"] for n in lexical["nodes"]][:1] == [node_id], lexical
+            miss = tool("recall", {"query": "zzqx unrelated words nowhere stored"})
+            assert miss["mode"] == "lexical" and not miss["nodes"], miss
             handle = tool("recall", {"handle": node_id})
             assert marker in json.dumps(handle) and handle["exact"] is True
-            passed("ingest, exact get, write receipt, and handle recall; query recall is refused")
+            passed("ingest, exact get, write receipt, and handle recall; free-text recall is exact-token lexical")
 
             created_intention = tool("intention", {
                 "action": "set",

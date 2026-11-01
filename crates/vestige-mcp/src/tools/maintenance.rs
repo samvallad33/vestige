@@ -124,7 +124,7 @@ pub fn system_status_schema() -> Value {
             "detail": {
                 "type": "string",
                 "enum": ["compact", "full"],
-                "description": "compact (default) omits scheduler dumps, FSRS preview and zero embedding counters so the reply stays small in model context. full returns those blocks.",
+                "description": "compact (default) omits scheduler, FSRS and embedding blocks; full returns them.",
                 "default": "compact"
             }
         }

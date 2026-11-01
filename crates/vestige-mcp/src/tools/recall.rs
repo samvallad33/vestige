@@ -66,7 +66,7 @@ pub fn schema() -> Value {
                 "handle".to_string(),
                 serde_json::json!({
                     "type": "string",
-                            "description": "[handle mode] Exact memory id or case-sensitive tag, including explicit person:Maya entities; a unique id prefix of 8+ characters also resolves. No fuzzy matching. Multi-memory results rank by updated salience, then recency, before limit. Recorded-edge neighbors are returned in full."
+                            "description": "[handle mode] Exact memory id or case-sensitive tag, including explicit person:Maya entities; a unique id prefix of 8+ characters also resolves. No fuzzy matching. Results rank by salience, then recency; edge neighbors come back whole."
                 }),
             );
             props.insert(
