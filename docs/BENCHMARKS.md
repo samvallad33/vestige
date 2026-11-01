@@ -434,6 +434,7 @@ See [`benchmarks/agentdojo/RESULTS.md`](../benchmarks/agentdojo/RESULTS.md) for 
 
 **Master Technical Report:** [`docs/papers/vestige_cognitive_memory_benchmark_report.md`](papers/vestige_cognitive_memory_benchmark_report.md) (`VESTIGE-TR-2026-COMPLETE`)  
 **Individual Technical Papers:**
+- [`docs/papers/memconflict_gpt54nano_rag_vs_vestige.md`](papers/memconflict_gpt54nano_rag_vs_vestige.md) (`VESTIGE-TR-2026-06`: MemConflict Showdown — `gpt-5.4-nano` RAG vs. Vestige Causal DAG)
 - [`docs/papers/david_vs_goliath_gpt54nano_vs_gpt61sol.md`](papers/david_vs_goliath_gpt54nano_vs_gpt61sol.md) (`VESTIGE-TR-2026-05`: David vs. Goliath Showdown)
 - [`docs/papers/memoryagentbench_gpt54mini_showdown.md`](papers/memoryagentbench_gpt54mini_showdown.md) (`VESTIGE-TR-2026-04`: `gpt-5.4-mini` 3-Way Showdown)
 - [`docs/papers/terminal_bench_astra_showdown.md`](papers/terminal_bench_astra_showdown.md) (`VESTIGE-TR-2026-03`: GPT-6 Astra on Terminal-Bench 4.0)
@@ -458,9 +459,18 @@ Evaluated on official MemoryAgentBench (`mab-context00022`, 455 facts, DrQA exac
   - Naive RAG: 0.000 reward (6 of 7 tests, 1 failure)
   - **Vestige Guarded Seam**: **1.000 reward (all 7 tests passed in 0.06s)** via Precedent Memory.
 
+### 4. MemConflict Showdown: `gpt-5.4-nano` RAG vs. Vestige Causal Memory
+Evaluated on upstream MemConflict (`Step4_4.jsonl`, arXiv:2605.20926) across dynamic mutations (relocation, career pivots, relationship evolution):
+- **Naive RAG (`gpt-5.4-nano` + Okapi BM25)**: **0.16 AA** (Failed 7 of 9 conflict questions; collapsed due to vocabulary gap e.g. "residence" vs. "relocated", and temporal inversion hallucinating obsolete marital states).
+- **Vestige Causal Memory (`gpt-5.4-nano` + Causal DAG)**: **1.00 AA (100.0% Exact Match)** across all questions in under 15 output tokens without CoT ($0.00003/query).
+- See full technical report: [`docs/papers/memconflict_gpt54nano_rag_vs_vestige.md`](papers/memconflict_gpt54nano_rag_vs_vestige.md).
+
 ### Reproduction Commands
 To rerun any benchmark live:
 ```sh
+# Run MemConflict Nano Showdown:
+sh benchmarks/memconflict/run-nano-showdown.sh
+
 # Run David vs. Goliath Showdown:
 sh benchmarks/memoryagentbench/run-david-vs-goliath.sh
 
