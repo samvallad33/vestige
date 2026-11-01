@@ -441,3 +441,69 @@ fn an_import_batch_is_indexed_oldest_first_and_keeps_each_original_moment() {
         "keeps the original moment: {school_row}"
     );
 }
+
+#[test]
+fn hook_capture_backfill_preview_writes_nothing_and_undo_restores_exact_stability() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Server::open(dir.path(), "off");
+    let reaction = s.hook(hook_fact(
+        "Maya felt off after dinner at Bangkok Garden",
+        json!(["person:Maya", "place:Bangkok Garden"]),
+        json!(["health:off"]),
+        json!(["memory-hook-utterance", "slot:health", "facts-of:Maya"]),
+    ));
+    let allergy = s.hook(hook_fact(
+        "Maya has a peanut allergy",
+        json!(["person:Maya"]),
+        json!(["allergy:peanut"]),
+        json!([
+            "memory-hook-utterance",
+            "slot:health",
+            "facts-of:Maya",
+            "avoid:peanut"
+        ]),
+    ));
+    let before = s.get(&reaction)["stability"].clone();
+    let preview = s.tool("backfill", json!({"trigger_id":allergy,"dry_run":true}));
+    assert_eq!(preview["changed"], 0, "{preview}");
+    assert!(preview["would_change"].as_u64().unwrap() >= 1, "{preview}");
+    assert!(
+        preview["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["receipt_id"].is_null())
+    );
+    assert_eq!(
+        s.get(&reaction)["stability"],
+        before,
+        "preview moves nothing"
+    );
+    let receipts = s.tool("backfill", json!({"action":"receipts"}));
+    assert!(
+        receipts["receipts"].as_array().unwrap().is_empty(),
+        "{receipts}"
+    );
+
+    let run = s.tool("backfill", json!({"trigger_id":allergy}));
+    assert!(run["changed"].as_u64().unwrap() >= 1, "{run}");
+    let receipt = s.receipt(&reaction, &allergy);
+    assert!(
+        s.get(&reaction)["stability"].as_f64() > before.as_f64(),
+        "run raises"
+    );
+
+    let undo = s.tool(
+        "backfill",
+        json!({"action":"undo","receipt_id":receipt["receipt_id"]}),
+    );
+    assert_eq!(
+        undo["new_stability_q"], receipt["old_stability_q"],
+        "{undo}"
+    );
+    assert_eq!(
+        s.get(&reaction)["stability"],
+        before,
+        "undo restores the exact stability"
+    );
+}
