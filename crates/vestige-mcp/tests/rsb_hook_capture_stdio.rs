@@ -387,3 +387,57 @@ fn a_named_persons_safety_fact_is_reserved_ahead_of_busier_lexical_hits() {
     );
     assert_eq!(packet["memories"][0]["id"], allergy, "{packet}");
 }
+
+#[test]
+fn an_import_batch_is_indexed_oldest_first_and_keeps_each_original_moment() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Server::open(dir.path(), "off");
+    let item = |content: &str, from: Option<&str>| {
+        let mut v = json!({"content":content,"node_type":"fact","tags":["imported"]});
+        if let Some(from) = from {
+            v["validFrom"] = json!(from);
+        }
+        v
+    };
+    let saved = s.tool(
+        "smart_ingest",
+        json!({"items":[
+            item("Undated import line about the garden", None),
+            item("Ana started the new job in Lisbon", Some("2024-06-01T12:00:00Z")),
+            item("Ana graduated from university in Porto", Some("2019-07-15T12:00:00Z")),
+        ]}),
+    );
+    let ids: Vec<String> = (0..3)
+        .map(|i| {
+            saved["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["index"] == i)
+                .and_then(|r| r["nodeId"].as_str())
+                .unwrap_or_else(|| panic!("{saved}"))
+                .to_string()
+        })
+        .collect();
+    let created = |s: &mut Server, id: &str| s.get(id)["createdAt"].as_str().unwrap().to_string();
+    let (undated, job, school) = (
+        created(&mut s, &ids[0]),
+        created(&mut s, &ids[1]),
+        created(&mut s, &ids[2]),
+    );
+    assert!(
+        school <= job && job <= undated,
+        "oldest first: {school} {job} {undated}"
+    );
+    let school_row = saved["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["index"] == 2)
+        .unwrap()
+        .to_string();
+    assert!(
+        school_row.contains("2019-07-15"),
+        "keeps the original moment: {school_row}"
+    );
+}
