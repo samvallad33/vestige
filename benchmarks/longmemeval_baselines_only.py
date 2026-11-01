@@ -12,7 +12,7 @@ from benchmarks.real_engine.runtime import Checkpoint,shard_id,record_key,status
 
 REPO=Path(__file__).resolve().parents[1]
 
-async def run(with_model_proof=False):
+async def run(with_model_proof=False,with_installed_vestige=False):
     runs=REPO/'runs';root=runs/'longmemeval';identity=json.loads((root/'identity.json').read_text())
     campaign=Campaign(runs,['longmemeval'],workers=30,max_inflight=40)
     items=load_longmemeval(runs/'upstream/longmemeval')
@@ -42,6 +42,9 @@ async def run(with_model_proof=False):
         if with_model_proof:
             from benchmarks.longmemeval_model_proof import run_model_proof
             jobs.append(run_model_proof(campaign))
+        if with_installed_vestige:
+            from benchmarks.longmemeval_installed_full import run_installed_vestige
+            jobs.append(run_installed_vestige(campaign))
         await asyncio.gather(*jobs)
         result={'timestamp':utc_now(),'vestige':'STOPPED_BY_OWNER','config_hash':campaign.config_hash,'arms':{a:{'done':sum(len(cp.done) for cp in cps),'missing_ids':[i.id for i in items if not cps[shard_id(i.id,30)].contains({'item_id':i.id,'trial':0})]} for a,cps in checkpoints.items()},'ledger':campaign.ledger.snapshot()}
         atomic_write(runs/'lme-baselines-finished.json',canonical(result)+'\n');print('BASELINES_FINISHED',canonical(result),flush=True)
@@ -52,8 +55,8 @@ async def run(with_model_proof=False):
 
 if __name__=='__main__':
     import argparse
-    parser=argparse.ArgumentParser();parser.add_argument('--with-model-proof',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--with-model-proof',action='store_true');parser.add_argument('--with-installed-vestige',action='store_true');args=parser.parse_args()
     asyncio.set_event_loop_policy(WorkerLoopPolicy())
     with (REPO/'runs/campaign.lock').open('a') as lock:
         fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
-        asyncio.run(run(args.with_model_proof))
+        asyncio.run(run(args.with_model_proof,args.with_installed_vestige))
