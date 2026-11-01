@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Operator gate: 102 STOP rules on `--guard`
+
+- Ship Operator 6.2.0 in `operator/operator-gate.py`. A fresh `npx @vestige/init --guard` installs it, with the repository's Operator Lite pinned beside it as `lite_core.py` (sha256 `3cd8385089f2cefbfc7a2d62a6dbf0938dbe211f06092966ce268c8ae743efe8`). An existing gate file is still left in place.
+- The numbered rules are OP-000 through OP-114 except the reserved gaps OP-086–OP-097 and OP-100: 102 STOP rules. `operator/test_rules.py` loads that set and fires each rule on one representative command. Nothing in that test is executed, and it makes no model or network call.
+- Wire the readers for OP-056–OP-062, OP-073–OP-075, OP-077–OP-079 and OP-106, which the rule table named and the earlier passes did not call.
+
 ### Proof-carrying pull requests
 
 - Record a signed test witness when an agent runs a command on the witness allowlist: the command, the

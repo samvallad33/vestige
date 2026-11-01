@@ -40,7 +40,7 @@ When something breaks, `causal_walk` follows the recorded links backward to the 
 
 ## It stops what you never approved
 
-**Operator Lite** is a free guard for your agent's tool calls. It stops force pushes, dropped tables, recursive deletes and production deploys before they run, even when the command is disguised. 30 rules: 15 stop the call, 15 record it for you to review.
+**Operator** is the guard for your agent's tool calls. `npx @vestige/init --guard` installs 102 STOP rules, OP-000 through OP-114, with OP-086–OP-097 and OP-100 reserved. It stops force pushes, dropped tables, recursive deletes, production deploys, credential reads and the rest of that closed list before they run, even when the command is disguised. Classification is deterministic: no model call and no network call. Operator Lite (numbered rules OP-000 through OP-025) is pinned beside the gate and judges every call too. An existing `~/.operator/gate/operator-gate.py` is left in place.
 
 ```bash
 mkdir -p ~/.operator/downloads && curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/operator-lite/operator-gate.py -o ~/.operator/downloads/operator-gate.py && python3 ~/.operator/downloads/operator-gate.py install
@@ -52,9 +52,7 @@ Install replays your last 30 days of agent history and shows what it would have 
 
 [![Watch Vestige Operator stop what Operator Lite lets through](operator-lite/media/from-lite-to-operator.gif)](operator-lite/media/from-lite-to-operator.mp4)
 
-The owner's version of the guard. Write your own laws, see a Board of today's stops, and get a weekly Letter of what your agents tried. $149 once, every future version included, and a 30-day refund if it is not for you.
-
-[Buy Vestige Operator](https://payhip.com/b/d4xvu)
+The 102-rule gate is in this repository and is what `--guard` installs. See [operator/README.md](operator/README.md). `board`, `letter`, `almost-forgot`, `onboard` and `briefing` load companion modules when those files sit next to the gate. [Buy Vestige Operator](https://payhip.com/b/d4xvu) is the owner's copy of those companions: $149 once, every later version included, and a 30-day refund.
 
 ## Works with
 
