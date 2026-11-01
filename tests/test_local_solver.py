@@ -181,7 +181,7 @@ class LocalSolverTests(unittest.TestCase):
             self.assertEqual(
                 tool["function"]["parameters"], function.parameters.model_json_schema()
             )
-        self.assertTrue(request.get("think"))
+        self.assertFalse(request.get("think"))
         self.assertFalse(request["stream"])
         self.assertEqual(request["options"]["num_ctx"], 262144)
         usage = result[-1][USAGE_KEY][0]["usage"]

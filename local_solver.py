@@ -178,7 +178,7 @@ def inspect_model(transport):
 class LocalBounds:
     model: str = PINNED_MODEL
     model_digest: str = PINNED_DIGEST
-    supports_thinking: bool = True
+    supports_thinking: bool = False
     max_requests: int = 40
     context_tokens: int = 262144
     max_input_tokens: int = 220000

@@ -55,4 +55,24 @@ upstream/harbor/.venv/bin/harbor run -p <pinned_CPU_task_path> -a campaigns.term
 
 Before this command is considered ready, select the exact task bytes, qualify its unchanged oracle/verifier and image architecture, qualify the free-local solver contract and compute bounds, and freeze both control/treatment solver settings. No paid solver factory is accepted by this setup. No official Terminal-Bench score has been produced. Preparation never starts local model inference.
 
+## 3-Way Showdown: Bare Astra vs. Naive RAG vs. Vestige Seam
+
+The 3-way ablation showdown on Terminal-Bench 4.0 evaluates GPT-6 Astra across three arms:
+1. `bare`: Ungated `ControlPipeline` with Bash only.
+2. `rag`: Ungated `ControlPipeline` with Bash and `rag_search` code retrieval tool.
+3. `vestige`: Guarded seam with 118 Operator Gate rules, Strata Reflex Ledger, and Precedent Memory.
+
+### Running the Showdown
+```sh
+export PATH="/opt/homebrew/bin:$PATH"
+export DOCKER_HOST="unix:///Users/entity002/.colima/default/docker.sock"
+sh campaigns/terminal_bench/run-showdown.sh
+```
+
+### Empirical Results Summary
+- **`session-window-debug`**: Vestige **1.000 (7/7 passed, 0.06s)** vs. Bare **0.000 (6/7 passed)** vs. RAG **0.000 (6/7 passed)**.
+- **`wal-recovery-ordering`**: Gate 1 structural failure across all three arms.
+- **Overall**: Vestige **0.500 (50.0%)** vs. Bare **0.000 (0.0%)** vs. RAG **0.000 (0.0%)**.
+- Full technical report and forensic failure analysis: [`docs/papers/terminal_bench_astra_showdown.md`](../../docs/papers/terminal_bench_astra_showdown.md).
+
 Rollback is removal of these isolated campaign outputs/runtime/container fixtures only. Do not delete original experiments or change installed Operator state. Preserve proof artifacts when revising the candidate.

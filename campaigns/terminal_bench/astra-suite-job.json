@@ -1,0 +1,721 @@
+{
+  "job_name": "astra-gpt6-terminal-suite",
+  "jobs_dir": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/evidence/astra-gpt6-terminal-suite/jobs",
+  "n_attempts": 1,
+  "install_only": false,
+  "skip_credential_checks": false,
+  "timeout_multiplier": 1.0,
+  "agent_timeout_multiplier": null,
+  "verifier_timeout_multiplier": null,
+  "agent_setup_timeout_multiplier": null,
+  "environment_build_timeout_multiplier": null,
+  "debug": true,
+  "n_concurrent_trials": 1,
+  "quiet": false,
+  "retry": {
+    "max_retries": 0,
+    "include_exceptions": null,
+    "exclude_exceptions": [
+      "AgentSafetyRefusalError",
+      "RewardFileNotFoundError",
+      "ApiUsageLimitError",
+      "VerifierTimeoutError",
+      "UnsupportedModelParametersError",
+      "VerifierOutputParseError",
+      "RewardFileEmptyError",
+      "AgentAuthenticationError",
+      "ModelNotFoundError",
+      "AgentTimeoutError"
+    ],
+    "wait_multiplier": 1.0,
+    "min_wait_sec": 1.0,
+    "max_wait_sec": 60.0
+  },
+  "environment": {
+    "type": "docker",
+    "import_path": null,
+    "force_build": false,
+    "delete": true,
+    "stream": false,
+    "cpu_enforcement_policy": "auto",
+    "memory_enforcement_policy": "auto",
+    "override_cpus": null,
+    "override_memory_mb": null,
+    "override_storage_mb": null,
+    "override_gpus": null,
+    "override_tpu": null,
+    "mounts": null,
+    "extra_docker_compose": [],
+    "kwargs": {},
+    "extra_allowed_hosts": []
+  },
+  "verifier": {
+    "override_timeout_sec": null,
+    "max_timeout_sec": null,
+    "disable": false
+  },
+  "metrics": [],
+  "agents": [
+    {
+      "name": null,
+      "import_path": "campaigns.terminal_bench.adapter:VestigeTerminalAgent",
+      "model_name": "gpt-6-astra",
+      "base_url": null,
+      "model_api_key_name": null,
+      "model_api_format": null,
+      "skip_model_parsing": true,
+      "n_concurrent": null,
+      "concurrency_group": null,
+      "skills": [],
+      "override_timeout_sec": null,
+      "override_setup_timeout_sec": null,
+      "max_timeout_sec": null,
+      "resume_trajectory": false,
+      "load_trajectory": null,
+      "extra_allowed_hosts": [],
+      "kwargs": {
+        "solver_factory": "astra_solver:factory",
+        "native_profile": "all_rules"
+      },
+      "mcp_servers": []
+    }
+  ],
+  "user_agent": null,
+  "datasets": [],
+  "tasks": [
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/atrx-vep-crispr",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/batched-eval-parity",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/biped-contact-dynamics",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/bun-sourcemap-leak",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/cad-model",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/cargo-flight-dispatch",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/coq-block-bound",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/ctr-optimization",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/cumulative-layout-shift",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/data-anonymization",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/distributed-dedup",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/embedding-drift-monitor",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/fin-saccr-rwa",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/foodstuff-beta-activity",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/formal-crypto",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/freecad-impeller",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/freecad-platform-drawing",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/freecad-spring-clip",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/freight-dispatch-shift",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/glycan-ms2-elucidation",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/gsea-proteomics",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/heat-pump-warranty",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/hof-topology-interpenetration",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/html-js-filter",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/interleaved-vigenere",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/intrastat-meldung",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/ks-solver-cpp",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/kv-live-surgery",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/lake-temp-glm",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/layout-config-recreation",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/layout-config-recreation2",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/legacy-utility-triage",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/live-database-cutover",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/medical-claims-processing",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/mp-checkpoint-consolidation",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/music-harmony",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/mvcc-lsm-compaction",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/nextjs-performance",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/ontology-kg-querying",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/payments-pipeline-fix",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/photonic-waveguide-routing",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/pretrain-shard-corruption",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/production-planning",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/protein-autointerp-disulfide",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/react-lead-form",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/retro-console-soc",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/risk-scorer-replay",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/roy-polymorph-cn",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/rs-archive-clone",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/satb-audio-transcription",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/session-window-debug",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/sglang-qwen-burst",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/shadow-relay",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/sound-change-cascade",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/takens-embedding-lean",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/telecom-entity-resolution",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/uefi-bootkit",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/vba-userform-port",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/vf2-speedup-networkx",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/vllm-deepseek-streaming",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/vpp-loss-divergence",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/wal-recovery-ordering",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    },
+    {
+      "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/terminal-bench/tasks/wdm-design",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": "tasks"
+    }
+  ],
+  "artifacts": [],
+  "extra_instruction_paths": [],
+  "extra_instructions": [],
+  "source_jobs": []
+}

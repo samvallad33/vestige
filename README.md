@@ -39,6 +39,7 @@ confined to disposable task-files.
   fit the static filter. Full 4.0 GPU/large-resource coverage is outside the local
   Colima profile. Image/oracle qualification is distinct from static compatibility.
   See [Terminal protocol](campaigns/terminal_bench/README.md),
+  [3-Way Showdown Paper (Bare vs RAG vs Vestige)](docs/papers/terminal_bench_astra_showdown.md),
   [official versions](https://www.tbench.ai/benchmarks), and
   [Harbor](https://github.com/harbor-framework/harbor).
 - **LongRCA**: all 1,140 Full and 200 Mini records are downloaded and verified.
