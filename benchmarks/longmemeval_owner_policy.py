@@ -5,6 +5,8 @@ Run with python -m benchmarks.longmemeval_owner_policy --benchmarks longmemeval
 is extended; all other audit checks and official scoring remain unchanged.
 """
 from pathlib import Path
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import re
@@ -82,7 +84,22 @@ def install():
     integrity.literal_overlap_audit = owner_static_overlap
 
 
+class WorkerLoopPolicy(asyncio.DefaultEventLoopPolicy):
+    """Keep blocking native workers from starving asyncio's DNS resolver.
+
+    Thirty engine/hook workers plus serialized BGE can occupy the host's
+    fourteen default executor threads. HTTP DNS uses that same executor.
+    This changes host scheduling only, not arm/model/tool/iteration budgets.
+    """
+    def new_event_loop(self):
+        loop = super().new_event_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=128,
+                                  thread_name_prefix='lme-native-and-dns'))
+        return loop
+
+
 if __name__ == '__main__':
+    asyncio.set_event_loop_policy(WorkerLoopPolicy())
     install()
     from benchmarks.real_engine.run import main
     main()
