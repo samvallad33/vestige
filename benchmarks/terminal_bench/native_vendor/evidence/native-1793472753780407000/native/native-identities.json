@@ -1,0 +1,1779 @@
+{
+  "host": "benchmark-custom",
+  "pins": {
+    "/Users/entity002/.vestige/bin/v6.0.1-e4a255db/vestige-mcp": "3ecc40a08eedb2f74676fc688686afb8a0acd82607d6cb094046a799259e4840",
+    "/Users/entity002/.operator/gate/almost_forgot.py": "67307f2a03648da05a12e0dacfb884a35a356700d80e0b4dc1090720687a5bd5",
+    "/Users/entity002/.operator/gate/board.py": "0fd5b23dd290ea4df9a95c44f382294951faa3ba3af5678382c16775030ac2e6",
+    "/Users/entity002/.operator/gate/briefing.py": "212b019a7de43d009b3826bfcb8b3b9a412b219f3c95e3702a40815e37350555",
+    "/Users/entity002/.operator/gate/cursor-hook.py": "0da6131507ea791e0d7f4fe6c44ab787011013d681c133775df79fb2c23e8c22",
+    "/Users/entity002/.operator/gate/gemini-wrapper.py": "eff8a84e340357ebff1a3a4179c8446d1c22bd45e6f577dfe7f19a7a185a8cc8",
+    "/Users/entity002/.operator/gate/letter.py": "853ae5de8f1e96f970514d296a284d08cdbf6b9bb35c618f8b03d1733c49a791",
+    "/Users/entity002/.operator/gate/lite_core.py": "e06bc5f0022f148f53c2dfc30fecb09bd8e6357b4c1b53c058ef88cc81c03f97",
+    "/Users/entity002/.operator/gate/onboard.py": "aaf7fca64fba761fb6406f4ad128e17ef417ec055a346ba5fcb32bce59549da1",
+    "/Users/entity002/.operator/gate/operator-gate.py": "8aac211ee017c070a3e4f6d29234728de059dd825ca38c72000231338089a64a",
+    "/Users/entity002/.operator/gate/replay.py": "4a2757bbaee0e26ce1b561d74a4fb55b67fe735e3056b5d41792193542887bc1",
+    "/Users/entity002/.operator/gate/sealed.py": "5f73641bf4ea29b1db6ad57f531f733f16e1c0c729b1a8c552e5d0b0c1113450",
+    "/Users/entity002/.operator/DISABLED": null,
+    "/Users/entity002/.operator/commitments.json": "38ef55f71d3ecf037c77f2116581df0b8adaceae4ea89836564f35664a2cd31d",
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/operator/commitments.json": "8e5c40f4b89c34588d90a3d5ef357b00cd94bdd4fff9454b77adc28c38c99022",
+    "/Users/entity002/.operator/state/commitments-validated.json": "cd0c8073379bb554af872f3d99f72ccd7db271126d7215d37e0b8f623034f6c2",
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/operator/state/commitments-validated.json": "cd0c8073379bb554af872f3d99f72ccd7db271126d7215d37e0b8f623034f6c2",
+    "/Users/entity002/.operator/mode": "3875c1bdb05e4cbf9e7072e2fcd76699ddd1fab8455c53a4007dbaca2a2920be",
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/operator/mode": "3875c1bdb05e4cbf9e7072e2fcd76699ddd1fab8455c53a4007dbaca2a2920be",
+    "/Users/entity002/.operator/STRICT": null,
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/operator/STRICT": null,
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/evidence/native-audit/operator-all-rules-profile.json": "30764f02a3c5099863b44a1a190fe895604959d72298530a4620c01de85cb36e",
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/operator-profile.json": "52ef46c8aaa241c7a9eb51cbba1ead81d8d5504101ee4863b4fd9139c5a6efff",
+    "/Users/entity002/Documents/Vestige/work/qwen36-opencode-agent/kernel-broker.mjs": "b145adc6093646953ac71d47c0b4fe839ad0e9c2c6cb243bfa57cf934d62f0c5",
+    "/Users/entity002/Documents/Vestige/work/qwen36-opencode-agent/runtime.mjs": "5121a3c058dae5f931c2cc57c737a081270809a6bc1d21e8278892a32efb2624",
+    "/Users/entity002/Documents/Vestige/work/qwen36-opencode-agent/audit-window.mjs": "b170e0be4d4a173818afddc09507da0d82d9a8e062c7b43f11a4c38343581bcf",
+    "/Users/entity002/Documents/Vestige/work/qwen36-opencode-agent/audit-recovery.mjs": "3af4fd491bbc35e2201ae78b02ddb59cdd71496cbccd1cdc6face135c8eb0bf8"
+  },
+  "enforcement": {
+    "mode": "enforce",
+    "strict": "1",
+    "mode_env": "enforce"
+  },
+  "profile": {
+    "treatment": "isolated-all-rules",
+    "rule_override_count": 118,
+    "promoted_from_shadow": [
+      "OP-S01",
+      "OP-S02",
+      "OP-S03",
+      "OP-S04",
+      "OP-S05",
+      "OP-S06",
+      "OP-S07",
+      "OP-S08",
+      "OP-S11",
+      "OP-S12",
+      "OP-S13",
+      "OP-S14",
+      "OP-S15",
+      "OP-S16",
+      "OP-S17"
+    ],
+    "profile_path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/evidence/native-audit/operator-all-rules-profile.json",
+    "profile_sha256": "30764f02a3c5099863b44a1a190fe895604959d72298530a4620c01de85cb36e",
+    "source_policy_sha256": "38ef55f71d3ecf037c77f2116581df0b8adaceae4ea89836564f35664a2cd31d",
+    "copy_policy_sha256": "8e5c40f4b89c34588d90a3d5ef357b00cd94bdd4fff9454b77adc28c38c99022"
+  },
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Re-score older memories through shared entities; preview, receipt, or undo.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "enum": [
+              "run",
+              "undo",
+              "receipts"
+            ],
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "failure_id": {
+            "type": "string"
+          },
+          "lookback_days": {
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "manual": {
+            "type": "boolean"
+          },
+          "receipt_id": {
+            "type": "string"
+          },
+          "scan_limit": {
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "trigger_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "backfill",
+      "title": "Retroactive Salience Backfill"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Walk a failure backward from explicit start points (failing_test, stack_frame, ci_run, logged_write, version_range); any kind carries node_id, the memory recording the symptom. A Strata log follows recorded causal edges only and says why when none lead upstream. Results are hypotheses, not proven causes. promote=true records trail edges on the legacy engine only.",
+      "inputSchema": {
+        "properties": {
+          "lookback_days": {
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "promote": {
+            "type": "boolean"
+          },
+          "scan_limit": {
+            "maximum": 5000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "start_points": {
+            "items": {
+              "properties": {
+                "broke_in": {
+                  "type": "string"
+                },
+                "frame": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "failing_test",
+                    "stack_frame",
+                    "ci_run",
+                    "logged_write",
+                    "version_range"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "node_id": {
+                  "type": "string"
+                },
+                "repo": {
+                  "type": "string"
+                },
+                "run_id": {
+                  "type": "string"
+                },
+                "worked_in": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "name": "causal_walk",
+      "title": "Causal Walk"
+    },
+    {
+      "_meta": {
+        "anthropic/maxResultSizeChars": 100000
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions marked current or stale, and the scopes holding them), 'verify' (re-check anchors and, with a codebase, change records), 'reanchor' (replace reviewed evidence), 'ingest_repo' (a checkout's commits as anchored change records; previews unless dryRun=false).",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "Save, list, and re-check code knowledge.",
+            "enum": [
+              "remember_pattern",
+              "remember_decision",
+              "get_context",
+              "verify",
+              "reanchor",
+              "ingest_repo"
+            ],
+            "type": "string"
+          },
+          "allScopes": {
+            "type": "boolean"
+          },
+          "alternatives": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "anchors": {
+            "items": {
+              "properties": {
+                "endLine": {
+                  "type": "integer"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "startLine": {
+                  "type": "integer"
+                },
+                "symbol": {
+                  "type": "string"
+                },
+                "symbolKind": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "codebase": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "memoryId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "repoPath": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          },
+          "until": {
+            "type": "string"
+          },
+          "verify": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "codebase",
+      "title": "Codebase"
+    },
+    {
+      "_meta": {
+        "anthropic/maxResultSizeChars": 150000
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Duplicates and exact tag maintenance. Actions: scan (default, read-only), plan_merge, plan_supersede, apply (confirm=true), undo, tag_rename, tag_merge (preview-token gated), protect, policy. Merges invalidate, never delete. Withheld on Strata in 4.0: plan_merge, plan_supersede, apply, verdict, protect.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "'scan' (default, read-only): exact-equality",
+            "enum": [
+              "scan",
+              "undo",
+              "tag_rename",
+              "tag_merge",
+              "policy"
+            ],
+            "type": "string"
+          },
+          "all_scopes": {
+            "type": "boolean"
+          },
+          "auto_apply": {
+            "type": "boolean"
+          },
+          "confirm": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "match_threshold": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "new_id": {
+            "type": "string"
+          },
+          "old_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "possible_threshold": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "preview_token": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "source_tag": {
+            "type": "string"
+          },
+          "source_tags": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 2,
+            "type": "array"
+          },
+          "survivor_id": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "target_tag": {
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "approve",
+              "reject",
+              "quarantine"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "dedup",
+      "title": "Dedup"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Earlier memories on recorded causal edges from a failure, lowest FSRS retrievability first.",
+      "inputSchema": {
+        "description": "Recorded causal edges from a failure, lowest FSRS R first.",
+        "properties": {
+          "failure_id": {
+            "type": "string"
+          },
+          "scan_limit": {
+            "maximum": 5000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "failure_id"
+        ],
+        "type": "object"
+      },
+      "name": "forgotten_lesson",
+      "title": "Forgotten Lesson"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "A GitHub issue's evidence as receipts, then the walk.",
+      "inputSchema": {
+        "description": "Record a GitHub issue hunt's evidence as labeled receipts",
+        "properties": {
+          "brokeIn": {
+            "type": "string"
+          },
+          "maxComments": {
+            "type": "integer"
+          },
+          "repoPath": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "workedIn": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "name": "gather",
+      "title": "Gather"
+    },
+    {
+      "_meta": {
+        "anthropic/maxResultSizeChars": 250000
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Never-composed memory pairs, each with its proof from recorded edges only. Modes: propose (lens bridge|divergent), bounty, weave (write), map, inspect, explore, predict, harden (write).",
+      "inputSchema": {
+        "properties": {
+          "center_id": {
+            "type": "string"
+          },
+          "context": {
+            "type": "object"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "depth": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "properties": {
+                "note": {
+                  "maxLength": 500,
+                  "type": "string"
+                },
+                "retrievedAt": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url",
+                "sha256",
+                "retrievedAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "first_id": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "includeCrossScope": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "chain",
+              "associations",
+              "bridges"
+            ],
+            "type": "string"
+          },
+          "lens": {
+            "enum": [
+              "bridge",
+              "divergent"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_nodes": {
+            "type": "integer"
+          },
+          "memory_id": {
+            "type": "string"
+          },
+          "mode": {
+            "description": "propose: never-composed pairs with proofs (lens",
+            "enum": [
+              "propose",
+              "bounty",
+              "weave",
+              "map",
+              "inspect",
+              "explore",
+              "predict",
+              "harden",
+              "heal"
+            ],
+            "type": "string"
+          },
+          "outcome_type": {
+            "enum": [
+              "helpful",
+              "dead_end",
+              "submitted",
+              "accepted",
+              "rejected",
+              "duplicate_risk",
+              "needs_poc",
+              "bad_severity",
+              "user_promoted",
+              "user_demoted",
+              "closed_by_scope",
+              "closed_by_duplicate",
+              "closed_by_false_assumption",
+              "closed_by_user",
+              "expired_lane"
+            ],
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "second_id": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "to": {
+            "type": "string"
+          },
+          "view": {
+            "description": "[inspect] Which composition view to read.",
+            "enum": [
+              "recent",
+              "get",
+              "memory",
+              "neighbors"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "type": "object"
+      },
+      "name": "ghostlink",
+      "title": "GhostLink"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans through a nested command. A trigger fires on a clock or on exact equality with a handle in the check context; descriptions are never parsed.",
+      "inputSchema": {
+        "description": "Unified intention management tool.",
+        "properties": {
+          "action": {
+            "description": "'set' creates, 'check' finds triggered, 'update'",
+            "enum": [
+              "set",
+              "check",
+              "update",
+              "list",
+              "graph"
+            ],
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          },
+          "command": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "plan",
+                  "revise",
+                  "observe",
+                  "evaluate",
+                  "explain",
+                  "portfolio",
+                  "complete",
+                  "cancel",
+                  "acknowledge",
+                  "replay",
+                  "memory_snapshot",
+                  "refresh_memory"
+                ],
+                "type": "string"
+              },
+              "basis": {
+                "properties": {
+                  "report": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "requirement_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "type": {
+                    "enum": [
+                      "user_report",
+                      "evidence"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              "conflict_keys": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "coverage_end": {
+                "type": "string"
+              },
+              "coverage_start": {
+                "type": "string"
+              },
+              "covered_events": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "description": {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
+              },
+              "event_id": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "expected_version": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "id": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "memory_id": {
+                "type": "string"
+              },
+              "min_attention_interval_seconds": {
+                "maximum": 31536000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "observed_events": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "priority": {
+                "enum": [
+                  "low",
+                  "normal",
+                  "high",
+                  "critical"
+                ]
+              },
+              "queue_id": {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "requirements": {
+                "items": {
+                  "type": "object"
+                },
+                "maxItems": 128,
+                "type": "array"
+              },
+              "source_key": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "source_revision": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "value": {
+                "type": [
+                  "boolean",
+                  "integer",
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          "context": {
+            "properties": {
+              "codebase": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "current_time": {
+                "type": "string"
+              },
+              "event": {
+                "type": "string"
+              },
+              "events": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "file": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "topics": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "deadline": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "filter_status": {
+            "enum": [
+              "active",
+              "fulfilled",
+              "cancelled",
+              "snoozed",
+              "all"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "include_snoozed": {
+            "type": "boolean"
+          },
+          "limit": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "priority": {
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "critical"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "snooze_minutes": {
+            "maximum": 525600,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "snooze",
+              "cancel"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "intention",
+      "title": "Intention"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Lifecycle: 'consolidate', 'dream', 'dream_compile', 'gc' (dry run default), 'importance_score', 'backup', 'export', 'restore'. Withheld on Strata in 4.0: consolidate, restore.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "enum": [
+              "dream",
+              "dream_compile",
+              "gc",
+              "importance_score",
+              "backup",
+              "export"
+            ],
+            "type": "string"
+          },
+          "after": {
+            "type": "string"
+          },
+          "allowAnyPath": {
+            "type": "boolean"
+          },
+          "batchSize": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "budgetMs": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "content": {
+            "type": "string"
+          },
+          "context_topics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "filters": {
+            "properties": {
+              "min_retention": {
+                "type": "number"
+              },
+              "min_similarity": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "format": {
+            "enum": [
+              "json",
+              "jsonl"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "max_age_days": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_pairs": {
+            "maximum": 124750,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "max_prs": {
+            "maximum": 50,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_count": {
+            "maximum": 500,
+            "minimum": 5,
+            "type": "integer"
+          },
+          "merge": {
+            "type": "boolean"
+          },
+          "min_retention": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "min_similarity": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "path": {
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "all",
+              "lifecycle",
+              "logs"
+            ],
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "maintain",
+      "title": "Maintain"
+    },
+    {
+      "_meta": {
+        "anthropic/maxResultSizeChars": 100000
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node). Erasure is withheld on Strata in 4.0.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node). Erasure is withheld on Strata in 4.0.",
+            "enum": [
+              "get",
+              "get_batch",
+              "state",
+              "promote",
+              "demote",
+              "edit"
+            ],
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          },
+          "content": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "memory",
+      "title": "Memory"
+    },
+    {
+      "_meta": {
+        "anthropic/maxResultSizeChars": 200000
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Store status. Views: 'health' (default), 'retention', 'timeline' (memories by day), 'changelog' (state-change audit trail), 'provenance' (memoryId), 'coverage', 'stats' (counts by type, tag, age, retention), 'tools' (advertised tools and actions; pass tool for one schema).",
+      "inputSchema": {
+        "properties": {
+          "all_scopes": {
+            "type": "boolean"
+          },
+          "detail_level": {
+            "enum": [
+              "brief",
+              "summary",
+              "full"
+            ],
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "memory_id": {
+            "type": "string"
+          },
+          "node_type": {
+            "type": "string"
+          },
+          "schema_introspection": {
+            "type": "boolean"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "view": {
+            "description": "'tools': current tool/action inventory, or one",
+            "enum": [
+              "health",
+              "retention",
+              "timeline",
+              "changelog",
+              "provenance",
+              "coverage",
+              "stats",
+              "tools"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "memory_status",
+      "outputSchema": {
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "title": "Memory Status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Operator stops and why.",
+      "inputSchema": {
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "precedent",
+      "title": "Precedent"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, one memory id per line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "'preview' (default) renders and diffs, writes",
+            "enum": [
+              "preview",
+              "write"
+            ],
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          },
+          "filters": {
+            "properties": {
+              "min_retention": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "format": {
+            "enum": [
+              "claude-md",
+              "memory-md"
+            ],
+            "type": "string"
+          },
+          "max_items": {
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "project",
+      "title": "Project"
+    },
+    {
+      "_meta": {
+        "anthropic/maxResultSizeChars": 300000,
+        "ui": {
+          "resourceUri": "ui://vestige/receipt/{id}"
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Find memories by exact handle: a full memory id or an exact tag; a unique id prefix of 8+ characters also resolves. Free text and the 'reason' / 'contradictions' modes return similarity_disabled.",
+      "inputSchema": {
+        "description": "Pass handle: a full memory id or an exact tag.",
+        "properties": {
+          "abstain_floor": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "detail_level": {
+            "enum": [
+              "brief",
+              "summary",
+              "full",
+              "full_neighbors"
+            ],
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "includeCrossScope": {
+            "type": "boolean"
+          },
+          "include_superseded": {
+            "type": "boolean"
+          },
+          "limit": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "description": "'lookup' (default): by handle. 'reason' and 'contradictions' return similarity_disabled in 4.0.",
+            "enum": [
+              "lookup",
+              "reason",
+              "contradictions"
+            ],
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "recall",
+      "outputSchema": {
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "title": "Recall"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "'get' shows what a write did from its receipt id; 'replay' re-derives that state from the log and reports any mismatch.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "get",
+              "replay"
+            ],
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
+          },
+          "receipt_id": {
+            "type": "string"
+          },
+          "remove_edge": {
+            "type": "string"
+          },
+          "withheld_slots": {
+            "items": {
+              "pattern": "^evidence_[1-9][0-9]*$",
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "receipt",
+      "outputSchema": {
+        "properties": {
+          "receiptId": {
+            "type": "string"
+          },
+          "retrieved": {
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "title": "Receipt"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Planted-cause selftest: walks recorded edges back to a planted cause in a throwaway log.",
+      "inputSchema": {
+        "description": "Planted-cause selftest; read-only.",
+        "properties": {},
+        "type": "object"
+      },
+      "name": "selftest",
+      "title": "Selftest"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Start-of-session context in one call: open intentions, status and code memories under one token budget.",
+      "inputSchema": {
+        "properties": {
+          "changed_files": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "type": "array"
+          },
+          "context": {
+            "properties": {
+              "codebase": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "repoPath": {
+                "type": "string"
+              },
+              "topics": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "filters": {
+            "properties": {
+              "token_budget": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "include_intentions": {
+            "type": "boolean"
+          },
+          "include_predictions": {
+            "type": "boolean"
+          },
+          "include_status": {
+            "type": "boolean"
+          },
+          "memory_hook": {
+            "properties": {
+              "limit": {
+                "maximum": 8,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "prompt": {
+                "maxLength": 65536,
+                "type": "string"
+              },
+              "trigger": {
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "queries": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "session_start",
+      "title": "Session Start"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Save one memory ('content') or up to 20 ('items'); each write passes the gate and returns a receipt. Secret-shaped content is refused unless allowSecrets is set.",
+      "inputSchema": {
+        "properties": {
+          "acceptedTagSuggestions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "allowSecrets": {
+            "type": "boolean"
+          },
+          "attributes": {
+            "items": {
+              "maxLength": 512,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "batchMergePolicy": {
+            "enum": [
+              "force_create",
+              "smart"
+            ],
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "entities": {
+            "items": {
+              "maxLength": 512,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "forceCreate": {
+            "type": "boolean"
+          },
+          "intent_id": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "properties": {
+                "acceptedTagSuggestions": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "allowSecrets": {
+                  "type": "boolean"
+                },
+                "attributes": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 64,
+                  "type": "array"
+                },
+                "content": {
+                  "type": "string"
+                },
+                "entities": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 64,
+                  "type": "array"
+                },
+                "forceCreate": {
+                  "type": "boolean"
+                },
+                "intent_id": {
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "links": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "maxItems": 16,
+                  "type": "array"
+                },
+                "node_type": {
+                  "type": "string"
+                },
+                "previewTagSuggestions": {
+                  "type": "boolean"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "validFrom": {
+                  "type": "string"
+                },
+                "validUntil": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "type": "array"
+          },
+          "links": {
+            "items": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "derived_from",
+                    "evidence_of",
+                    "closes",
+                    "supersedes"
+                  ],
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "to"
+              ],
+              "type": "object"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "node_type": {
+            "type": "string"
+          },
+          "outputProfile": {
+            "enum": [
+              "compact",
+              "standard",
+              "full"
+            ],
+            "type": "string"
+          },
+          "previewTagSuggestions": {
+            "type": "boolean"
+          },
+          "role": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "validFrom": {
+            "type": "string"
+          },
+          "validUntil": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "smart_ingest",
+      "outputSchema": {
+        "properties": {
+          "decision": {
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "title": "Smart Ingest"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Hide a memory from every read; the log keeps its bytes. On Strata in 4.0 it cannot be undone (reverse=true is refused) and is not erasure.",
+      "inputSchema": {
+        "description": "Hide a memory from every read; the log keeps its bytes.",
+        "properties": {
+          "cascade_derived_from": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reverse": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "suppress",
+      "title": "Suppress"
+    }
+  ]
+}

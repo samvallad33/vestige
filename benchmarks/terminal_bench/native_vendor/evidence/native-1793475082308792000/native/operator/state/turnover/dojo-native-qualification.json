@@ -1,0 +1,27 @@
+{
+ "acked": null,
+ "chit": {
+  "allowed": [],
+  "brake": false,
+  "gate_version": "6.2.0",
+  "law_digest": "2c8431b5fe08",
+  "laws": [
+   "never-live-billing",
+   "no-prod-deploys",
+   "publish-draft-only",
+   "recall-before-grep"
+  ],
+  "other_sessions": 0,
+  "permits": [],
+  "protected": [],
+  "rewind": [],
+  "sealed": "2026-10-31T19:31:33Z",
+  "session": "dojo-native-qualification",
+  "stops": [],
+  "trigger": "benchmark-custom"
+ },
+ "holds": false,
+ "id": "31924cf4150a44ba",
+ "receipt": "1356b7b7c9432312",
+ "sealed_t": 1793475093.693831
+}

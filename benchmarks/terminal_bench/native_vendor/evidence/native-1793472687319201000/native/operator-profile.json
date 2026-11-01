@@ -1,0 +1,25 @@
+{
+  "treatment": "isolated-all-rules",
+  "rule_override_count": 118,
+  "promoted_from_shadow": [
+    "OP-S01",
+    "OP-S02",
+    "OP-S03",
+    "OP-S04",
+    "OP-S05",
+    "OP-S06",
+    "OP-S07",
+    "OP-S08",
+    "OP-S11",
+    "OP-S12",
+    "OP-S13",
+    "OP-S14",
+    "OP-S15",
+    "OP-S16",
+    "OP-S17"
+  ],
+  "profile_path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/evidence/native-audit/operator-all-rules-profile.json",
+  "profile_sha256": "59504e2367548831af50999292e353d3fad262f3efe37c09183d8482e583e7d1",
+  "source_policy_sha256": "38ef55f71d3ecf037c77f2116581df0b8adaceae4ea89836564f35664a2cd31d",
+  "copy_policy_sha256": "8e5c40f4b89c34588d90a3d5ef357b00cd94bdd4fff9454b77adc28c38c99022"
+}
