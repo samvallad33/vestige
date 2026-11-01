@@ -19,15 +19,15 @@
   },
   "arm_b_vestige": {
     "tp": 7,
-    "fp": 2,
+    "fp": 1,
     "fn": 5,
-    "precision_pct": 77.77777777777779,
+    "precision_pct": 87.5,
     "recall_pct": 58.333333333333336,
-    "f1_pct": 66.66666666666667,
+    "f1_pct": 70.0,
     "hit": 7,
     "miss": 5,
-    "false_alarm": 2,
-    "exact_set_match_rate": 61.53846153846154
+    "false_alarm": 1,
+    "exact_set_match_rate": 69.23076923076923
   },
-  "financial_spend_usd": 0.0010676000000000001
+  "financial_spend_usd": 0.001072
 }

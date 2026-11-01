@@ -135,7 +135,9 @@ def main():
     client_ai = get_openai_client()
     dataset_path = HERE / "data" / "Step4_4.jsonl"
     if not dataset_path.exists():
-        sys.exit(f"Dataset not found at {dataset_path}")
+        dataset_path = HERE / "data" / "sample_Step4_4.jsonl"
+    if not dataset_path.exists():
+        sys.exit(f"Dataset not found at {HERE / 'data'}")
 
     instances = load_instances(dataset_path, args.instances)
     print("=" * 80)

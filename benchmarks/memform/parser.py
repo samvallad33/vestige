@@ -4,6 +4,8 @@ Pinned source commit0565117042a31a5f78576f89ff6b8a77c393ee09.
 See UPSTREAM-LICENSE.txt; parser AST is checked against pinned source at use.
 """
 
+from __future__ import annotations
+
 import re
 
 

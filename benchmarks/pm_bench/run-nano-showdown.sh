@@ -5,9 +5,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-PYTHON_BIN="/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/upstream/harbor/.venv/bin/python"
-if [ ! -x "$PYTHON_BIN" ]; then
-    PYTHON_BIN="python3"
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+    if [ -f "$REPO_ROOT/upstream/harbor/.venv/bin/python" ]; then
+        PYTHON_BIN="$REPO_ROOT/upstream/harbor/.venv/bin/python"
+    elif [ -f "$REPO_ROOT/.venv/bin/python" ]; then
+        PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+    else
+        PYTHON_BIN="python3"
+    fi
 fi
 
 echo "================================================================================"
@@ -18,6 +24,8 @@ echo "Runner:     $SCRIPT_DIR/run_nano_showdown.py"
 echo "Python:     $PYTHON_BIN"
 echo ""
 
-DAYS="${1:---days 2}"
+if [ "$#" -eq 0 ]; then
+    set -- --days 2
+fi
 
-"$PYTHON_BIN" "$SCRIPT_DIR/run_nano_showdown.py" $DAYS
+exec "$PYTHON_BIN" "$SCRIPT_DIR/run_nano_showdown.py" "$@"
