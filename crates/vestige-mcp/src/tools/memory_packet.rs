@@ -231,7 +231,15 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                 .collect();
             // A recorded identity the prompt names still qualifies when the
             // memory's other words do not repeat the prompt.
-            let index_hits = index_tags(prompt);
+            // A person card (salience-pro facts-of:): every lasting fact about
+            // each person the prompt names is index-joined as well.
+            let mut index_hits = index_tags(prompt);
+            index_hits.extend(
+                named
+                    .iter()
+                    .filter_map(|tag| tag.strip_prefix("person:"))
+                    .map(|name| format!("facts-of:{name}")),
+            );
             for (index, node) in nodes.iter().enumerate() {
                 if (node.tags.iter().any(|tag| entities.contains(tag))
                     || joins_index(node, &index_hits))
@@ -260,7 +268,20 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                         .any(|tag| index_hits.contains(tag))
                 })
                 .collect();
-            joined.sort_by(|a, b| compare(&nodes[*a], &nodes[*b], &scores));
+            // Safety first: an allergy, health, a condition or a medicine
+            // before a preference.
+            let guarded = |index: &usize| {
+                nodes[*index].tags.iter().any(|tag| {
+                    ["allergy:", "health:", "condition:", "medication:", "avoid:"]
+                        .iter()
+                        .any(|prefix| tag.starts_with(prefix))
+                })
+            };
+            joined.sort_by(|a, b| {
+                guarded(b)
+                    .cmp(&guarded(a))
+                    .then_with(|| compare(&nodes[*a], &nodes[*b], &scores))
+            });
             reserved.extend(joined.into_iter().take(MAX_RESERVED));
             indexes.sort_by(|a, b| {
                 raised(b)

@@ -357,3 +357,33 @@ fn a_date_joined_memory_is_reserved_ahead_of_busier_lexical_hits() {
     );
     assert_eq!(packet["memories"][0]["id"], dentist, "{packet}");
 }
+
+#[test]
+fn a_named_persons_safety_fact_is_reserved_ahead_of_busier_lexical_hits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Server::open(dir.path(), "on");
+    let allergy = s.hook(hook_fact(
+        "Maya has a peanut allergy",
+        json!(["person:Maya"]),
+        json!(["allergy:peanut"]),
+        json!([
+            "memory-hook-utterance",
+            "slot:health",
+            "facts-of:Maya",
+            "avoid:peanut"
+        ]),
+    ));
+    for i in 0..5 {
+        s.hook(hook_fact(
+            &format!("Maya dinner plans Thai restaurant downtown idea {i}"),
+            json!(["person:Maya"]),
+            json!([]),
+            json!(["memory-hook-utterance"]),
+        ));
+    }
+    let packet = s.tool(
+        "session_start",
+        json!({"memory_hook":{"prompt":"dinner plans with Maya at a Thai restaurant downtown","limit":2}}),
+    );
+    assert_eq!(packet["memories"][0]["id"], allergy, "{packet}");
+}
