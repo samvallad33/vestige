@@ -159,13 +159,38 @@ def source_bindings(history, pairs, nodes):
             raise RecallProofError("native admission reply does not cover its raw input batch")
         for record, admission in zip(batch, replies, strict=True):
             observed.append(record)
-            if not isinstance(admission, dict) or not isinstance(admission.get("nodeId"), str):
-                raise RecallProofError("a normal-path source record lacks a real admitted node id")
-            identity, content = admission["nodeId"], record.get("content")
-            if identity in bindings and bindings[identity]["content"] != content:
+            if not isinstance(admission, dict):
+                raise RecallProofError("a normal-path source record lacks a native admission")
+            content = record.get("content")
+            if admission.get("success") is True and admission.get("decision") == "reinforce":
+                # Native smart_ingest records a duplicate echo, not a new source
+                # node. Bind both ids to this item's earlier admission and the
+                # exact native canonical hash; never treat the echo as raw text.
+                original, identity = admission.get("duplicateOf"), admission.get("echoNodeId")
+                target = bindings.get(original)
+                digest = admission.get("canonicalHash")
+                if (not isinstance(identity, str) or not identity or target is None
+                        or not isinstance(digest, str) or len(digest) != 64
+                        or target.get("canonical_hash") != digest
+                        or not isinstance(admission.get("receiptId"), str)):
+                    raise RecallProofError("reinforced admission lacks same-item native target/hash/echo provenance")
+                line_count = len(content.split("\n")) - int(content.endswith("\n")) if content else 0
+                echo = f"duplicate of {original}\ncanonical_hash: {digest}\nsubmitted_line_count: {line_count}"
+                bound = {"content": echo, "content_sha256": text_hash(echo),
+                    "request_line": request_line, "response_line": response_line,
+                    "duplicate_of": original, "echo_node_id": identity,
+                    "submitted_content_sha256": text_hash(content), "canonical_hash": digest,
+                    "receipt_id": admission["receiptId"]}
+            else:
+                identity = admission.get("nodeId")
+                if not isinstance(identity, str):
+                    raise RecallProofError("a normal-path source record lacks a real admitted node id")
+                bound = {"content": content, "content_sha256": text_hash(content),
+                    "request_line": request_line, "response_line": response_line,
+                    "canonical_hash": admission.get("canonicalHash")}
+            if identity in bindings and bindings[identity]["content"] != bound["content"]:
                 raise RecallProofError("one admitted node was substituted for different raw source bytes")
-            bindings[identity] = {"content": content, "content_sha256": text_hash(content),
-                "request_line": request_line, "response_line": response_line}
+            bindings[identity] = bound
     if observed != expected:
         raise RecallProofError("native writes differ from the exact gold-free official history")
     for node in nodes:

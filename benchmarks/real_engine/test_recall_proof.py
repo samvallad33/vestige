@@ -80,6 +80,26 @@ class SourceBindingTests(unittest.TestCase):
             with self.assertRaises(RecallProofError):
                 source_bindings(["raw"], [self.pair()], returned)
 
+    def test_native_reinforcement_links_same_item_target_and_echo(self):
+        first = self.pair()
+        first[3]["result"]["canonicalHash"] = "a" * 64
+        second = deepcopy(first)
+        second[1]["arguments"].update(tags=["history", "session-1"], source="history:1")
+        second[3]["result"] = {"success": True, "decision": "reinforce",
+            "duplicateOf": "mem-test-one", "echoNodeId": "mem-test-echo",
+            "canonicalHash": "a" * 64, "receiptId": "eff-test"}
+        echo = "duplicate of mem-test-one\ncanonical_hash: " + "a" * 64 + "\nsubmitted_line_count: 1"
+        nodes = [node(text="raw"), node("mem-test-echo", echo)]
+        bound = source_bindings(["raw", "raw"], [first, second], nodes)
+        self.assertEqual(bound["mem-test-echo"]["duplicate_of"], "mem-test-one")
+        for field, value in [("success", False), ("duplicateOf", "foreign"),
+                             ("echoNodeId", None), ("canonicalHash", "b" * 64)]:
+            bad = deepcopy(second); bad[3]["result"][field] = value
+            with self.assertRaises(RecallProofError):
+                source_bindings(["raw", "raw"], [first, bad], nodes)
+        with self.assertRaises(RecallProofError):
+            source_bindings(["raw", "raw"], [first, second], nodes[:1])
+
     def test_changed_admission_or_missing_node_id_fails(self):
         for mutation in [lambda pair: pair[1]["arguments"].update(forceCreate=True),
                          lambda pair: pair[3]["result"].clear()]:
