@@ -458,9 +458,18 @@ Evaluated on official MemoryAgentBench (`mab-context00022`, 455 facts, DrQA exac
   - Naive RAG: 0.000 reward (6 of 7 tests, 1 failure)
   - **Vestige Guarded Seam**: **1.000 reward (all 7 tests passed in 0.06s)** via Precedent Memory.
 
+### 4. PM-Bench Prospective Memory Showdown (`gpt-5.4-nano`)
+- **Benchmark**: PM-Bench "Virtual Week" Paradigm (arXiv:2607.12385)
+- **Arm A (In-Context Baseline)**: Set Precision: 54.5% | Exact-Set Match: 30.8% | False Alarms: 5
+- **Arm B (Vestige Intention Memory)**: **Set Precision: 77.8%** | **Exact-Set Match: 61.5% (2.0x)** | **False Alarms: 2 (-60.0%)**
+- **Report**: [`docs/papers/pm_bench_gpt54nano_prospective_memory_showdown.md`](file:///Users/entity002/Developer/vestige-pr598-benchmarks/docs/papers/pm_bench_gpt54nano_prospective_memory_showdown.md) (`VESTIGE-TR-2026-08`)
+
 ### Reproduction Commands
 To rerun any benchmark live:
 ```sh
+# Run PM-Bench Prospective Memory Showdown:
+sh benchmarks/pm_bench/run-nano-showdown.sh --days 1
+
 # Run David vs. Goliath Showdown:
 sh benchmarks/memoryagentbench/run-david-vs-goliath.sh
 
