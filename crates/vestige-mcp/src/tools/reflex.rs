@@ -37,7 +37,7 @@
 //! routes around a stop, and nothing here reads or writes the gate's own files
 //! beyond reading its receipts.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -452,13 +452,27 @@ pub fn admit_injection(storage: &Arc<Storage>, hook: &Value, result: &mut Value)
     ctx.seq_now = seq_now;
     let (mut injected, mut skipped, mut dropped) = (Vec::new(), Vec::new(), Vec::new());
     let mut spent = 0usize;
+    // Retroactive Salience Backfill: a memory a receipt just raised came back,
+    // so it is served again even when this session already holds its body.
+    let came_back: HashSet<String> = result
+        .get("backfill_receipts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("direction").and_then(Value::as_str) == Some("raise"))
+        .filter_map(|r| {
+            r.get("memory_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
     if let Some(rows) = result.get_mut("memories").and_then(Value::as_array_mut) {
         rows.retain(|row| {
             let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) else {
                 return true;
             };
             let body = row.get("content").and_then(Value::as_str).unwrap_or("");
-            if ctx.get(&id).is_some_and(|h| h.chars >= body.len()) {
+            if !came_back.contains(&id) && ctx.get(&id).is_some_and(|h| h.chars >= body.len()) {
                 skipped.push(id);
                 return false;
             }

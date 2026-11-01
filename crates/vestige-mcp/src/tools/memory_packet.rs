@@ -55,6 +55,100 @@ fn phrase(text: &str, surface: &str) -> bool {
     })
 }
 
+/// salience-pro 0.3.7 `thing_words`: lower case, each plural read as its
+/// singular, so "Hot Tubs" and "hot tub" meet as `hot-tub`.
+fn thing_words(raw: &str) -> Vec<String> {
+    raw.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let w = w.to_lowercase();
+            let n = w.chars().count();
+            if n > 4 && w.ends_with("ies") {
+                format!("{}y", &w[..w.len() - 3])
+            } else if n > 4 && w.ends_with("oes") {
+                w[..w.len() - 2].to_string()
+            } else if n > 3 && w.ends_with('s') && !w.ends_with("ss") && !w.ends_with("us") {
+                w[..w.len() - 1].to_string()
+            } else {
+                w
+            }
+        })
+        .collect()
+}
+
+/// Every `avoid:` key a prompt phrase could meet: runs of one to three words.
+fn thing_keys(raw: &str) -> BTreeSet<String> {
+    let words = thing_words(raw);
+    let mut keys = BTreeSet::new();
+    for len in 1..=3 {
+        for run in words.windows(len) {
+            let key = run.join("-");
+            if key.chars().count() >= 3 {
+                keys.insert(key);
+            }
+        }
+    }
+    keys
+}
+
+const MONTHS: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+/// Index tags a prompt meets exactly: `avoid:<thing>`, `day:YYYY-MM-DD` and
+/// `yearly:MM-DD`. Deterministic; no model reads the prompt.
+pub(crate) fn index_tags(prompt: &str) -> BTreeSet<String> {
+    let mut tags: BTreeSet<String> = thing_keys(prompt)
+        .into_iter()
+        .map(|key| format!("avoid:{key}"))
+        .collect();
+    let lower = prompt.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    for (i, word) in words.iter().enumerate() {
+        let parts: Vec<&str> = word.split('-').collect();
+        if let [y, m, d] = parts.as_slice() {
+            let ok = y.len() == 4
+                && m.len() == 2
+                && d.len() == 2
+                && [y, m, d]
+                    .iter()
+                    .all(|s| s.bytes().all(|b| b.is_ascii_digit()));
+            if ok {
+                let (mm, dd) = (m.parse::<u32>().unwrap_or(0), d.parse::<u32>().unwrap_or(0));
+                if (1..=12).contains(&mm) && (1..=31).contains(&dd) {
+                    tags.insert(format!("day:{word}"));
+                    tags.insert(format!("yearly:{m}-{d}"));
+                }
+            }
+        }
+        if let Some(month) = MONTHS.iter().position(|name| name == word) {
+            let day = words.get(i + 1).map(|w| {
+                w.trim_end_matches(|c: char| c.is_alphabetic())
+                    .parse::<u32>()
+                    .unwrap_or(0)
+            });
+            if let Some(day @ 1..=31) = day {
+                tags.insert(format!("yearly:{:02}-{day:02}", month + 1));
+            }
+        }
+    }
+    tags
+}
+
 pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Value, String> {
     let prompt = args["prompt"].as_str().unwrap_or_default();
     if prompt.len() > 64 * 1024 {
@@ -120,18 +214,24 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                 .collect();
             // A recorded identity the prompt names still qualifies when the
             // memory's other words do not repeat the prompt.
+            let index_hits = index_tags(prompt);
             for (index, node) in nodes.iter().enumerate() {
-                if !entities.is_empty()
-                    && node.tags.iter().any(|tag| entities.contains(tag))
+                if (node.tags.iter().any(|tag| entities.contains(tag))
+                    || node.tags.iter().any(|tag| index_hits.contains(tag)))
                     && lexical::allows_person(node, &named)
                     && !indexes.contains(&index)
                 {
                     indexes.push(index);
                 }
             }
+            // Retroactive Salience Backfill comes first: a memory a backfill
+            // receipt raised outranks every lexical score, so the record that
+            // just came back is the first thing the hook serves.
+            let raised = |index: &usize| tie(&nodes[*index]) > 0;
             indexes.sort_by(|a, b| {
-                score_of(&nodes[*b].id)
-                    .cmp(&score_of(&nodes[*a].id))
+                raised(b)
+                    .cmp(&raised(a))
+                    .then_with(|| score_of(&nodes[*b].id).cmp(&score_of(&nodes[*a].id)))
                     .then_with(|| compare(&nodes[*a], &nodes[*b], &scores))
             });
             let packed_hits: Vec<lexical::LexicalHit> = indexes
@@ -225,6 +325,19 @@ fn raise_direction(receipt: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn index_tags_join_things_and_dates_exactly() {
+        let tags = index_tags("Can we try the Hot Tubs on March 3rd or 2026-11-03?");
+        assert!(tags.contains("avoid:hot-tub"));
+        assert!(tags.contains("avoid:hot"));
+        assert!(tags.contains("yearly:03-03"));
+        assert!(tags.contains("day:2026-11-03"));
+        assert!(tags.contains("yearly:11-03"));
+        assert!(!index_tags("strawberries").contains("avoid:strawberrie"));
+        assert!(index_tags("strawberries").contains("avoid:strawberry"));
+        assert!(!index_tags("march").iter().any(|t| t.starts_with("yearly:")));
+    }
+
     #[test]
     fn entity_surfaces_use_case_insensitive_whole_boundaries() {
         assert!(phrase("Where should MAYA go?", "Maya"));
