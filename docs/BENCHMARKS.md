@@ -430,6 +430,52 @@ See [`benchmarks/agentdojo/RESULTS.md`](../benchmarks/agentdojo/RESULTS.md) for 
 
 ---
 
+## MemoryAgentBench & Terminal-Bench 4.0: Cognitive Memory Showdowns
+
+**Master Technical Report:** [`docs/papers/vestige_cognitive_memory_benchmark_report.md`](papers/vestige_cognitive_memory_benchmark_report.md) (`VESTIGE-TR-2026-COMPLETE`)  
+**Individual Technical Papers:**
+- [`docs/papers/david_vs_goliath_gpt54nano_vs_gpt61sol.md`](papers/david_vs_goliath_gpt54nano_vs_gpt61sol.md) (`VESTIGE-TR-2026-05`: David vs. Goliath Showdown)
+- [`docs/papers/memoryagentbench_gpt54mini_showdown.md`](papers/memoryagentbench_gpt54mini_showdown.md) (`VESTIGE-TR-2026-04`: `gpt-5.4-mini` 3-Way Showdown)
+- [`docs/papers/terminal_bench_astra_showdown.md`](papers/terminal_bench_astra_showdown.md) (`VESTIGE-TR-2026-03`: GPT-6 Astra on Terminal-Bench 4.0)
+
+### 1. The David vs. Goliath Showdown (MemoryAgentBench)
+Evaluated on official MemoryAgentBench (`mab-context00022`, 455 facts, DrQA exact match):
+
+| Treatment | Model Tier | Reasoning Effort | MemoryAgentBench Score | Pass Rate | Compute Cost (10 Questions) | Cost Ratio vs. Vestige |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Bare Goliath** | `gpt-6.1-sol` | Medium (~250 tokens/q) | **0 / 10** | **0.0%** | \$0.0530 | 265x more expensive |
+| **Naive RAG Goliath** | `gpt-6.1-sol` | Medium (~250 tokens/q) | **0 / 10** | **0.0%** | \$0.0523 | 261x more expensive |
+| **David + VESTIGE** | **`gpt-5.4-nano`** | **Zero Reasoning Tokens** | **10 / 10** | **100.0%** | **\$0.0002** | **Baseline (1x)** |
+
+### 2. Compact Model Ablation (`gpt-5.4-mini`)
+- **Bare `gpt-5.4-mini`**: 0 / 10 (0.0%) | Cost: \$0.0004
+- **Naive RAG `gpt-5.4-mini`**: 0 / 10 (0.0%) | Cost: \$0.0012
+- **Vestige Memory `gpt-5.4-mini`**: **10 / 10 (100.0%)** | Cost: **\$0.0008** (33% cheaper than Naive RAG)
+
+### 3. Terminal-Bench 4.0 Showdown (`gpt-6-astra`)
+- **`session-window-debug` (7 Unit Tests)**:
+  - Bare Model: 0.000 reward (6 of 7 tests, 1 failure)
+  - Naive RAG: 0.000 reward (6 of 7 tests, 1 failure)
+  - **Vestige Guarded Seam**: **1.000 reward (all 7 tests passed in 0.06s)** via Precedent Memory.
+
+### Reproduction Commands
+To rerun any benchmark live:
+```sh
+# Run David vs. Goliath Showdown:
+sh benchmarks/memoryagentbench/run-david-vs-goliath.sh
+
+# Run MemoryAgentBench 3-way Showdown:
+sh benchmarks/memoryagentbench/run-showdown.sh
+
+# Run Terminal-Bench 4.0 Showdown:
+sh benchmarks/terminal_bench/run-showdown.sh
+
+# Run Master Suite:
+sh benchmarks/run-all-benchmarks.sh
+```
+
+---
+
 ## Rules for citing any number from this page
 
 1. Always cite the arm, the dataset revision, the instance/session cap, and the

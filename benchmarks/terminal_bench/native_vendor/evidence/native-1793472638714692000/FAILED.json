@@ -1,0 +1,15 @@
+{
+  "error_type": "NativeInterdictionError",
+  "error": "FAIL_CLOSED_INTERDICTION: FAIL_CLOSED_INTERDICTION: unadvertised profile environment",
+  "partial_results": {
+    "scope": "native callback and environment-boundary fixtures; no model or official task scores",
+    "inference_calls": 0,
+    "provider_cost_usd": 0,
+    "folder": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472638714692000",
+    "source_sha256": {
+      "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/qualify_native.py": "2829a31b15872cb4ecd0b0a71e95301f61783f74fa85238c25a98300f1e3e93e",
+      "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/native_bridge.mjs": "85d82f5701bc08b63880d96d77b1b542aeb87871d2e9eacf16d9260e6fcddd51",
+      "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/stack.py": "71aca2b2c9e4c12292a8d95a65daed1f63557d84f03aed816025c30e387a6b65"
+    }
+  }
+}

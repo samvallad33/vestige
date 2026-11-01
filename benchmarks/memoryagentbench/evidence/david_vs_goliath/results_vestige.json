@@ -1,0 +1,89 @@
+{
+  "arm": "vestige",
+  "model": "gpt-5.4-nano",
+  "passed": 10,
+  "total": 10,
+  "accuracy_percent": 100.0,
+  "scored_results": [
+    {
+      "question_id": "mab-c00022-q00000",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "Belgium"
+    },
+    {
+      "question_id": "mab-c00022-q00001",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "Rodez"
+    },
+    {
+      "question_id": "mab-c00022-q00002",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "Italy"
+    },
+    {
+      "question_id": "mab-c00022-q00003",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "Russellville"
+    },
+    {
+      "question_id": "mab-c00022-q00004",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "rugby"
+    },
+    {
+      "question_id": "mab-c00022-q00005",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "Baldwin Wallace University"
+    },
+    {
+      "question_id": "mab-c00022-q00006",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "France"
+    },
+    {
+      "question_id": "mab-c00022-q00007",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "Oceania"
+    },
+    {
+      "question_id": "mab-c00022-q00008",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "North America"
+    },
+    {
+      "question_id": "mab-c00022-q00009",
+      "source": "factconsolidation_mh_6k",
+      "status": "SCORED_DETERMINISTIC",
+      "metric": "substring_exact_match",
+      "score": true,
+      "parsed_output": "Berlin"
+    }
+  ]
+}

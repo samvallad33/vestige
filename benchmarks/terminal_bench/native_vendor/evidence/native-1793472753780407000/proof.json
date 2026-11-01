@@ -1,0 +1,1576 @@
+{
+  "scope": "native callback and environment-boundary fixtures; no model or official task scores",
+  "inference_calls": 0,
+  "provider_cost_usd": 0,
+  "folder": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000",
+  "source_sha256": {
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/qualify_native.py": "33dd516e129a9cc1abac5934b0e7065ef0dc52f38b0c13316b2f8ef776197611",
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/native_bridge.mjs": "a8493755641b7e03e84279a84145ff22c96207ebce676f06097e49c4477f1631",
+    "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/stack.py": "71aca2b2c9e4c12292a8d95a65daed1f63557d84f03aed816025c30e387a6b65"
+  },
+  "catalog": {
+    "availabilityNote": "Compiled features are not runtime readiness. Merge candidates, merge plans and plan apply need embeddings, which this build does not ship; the exact-equality dedup scan, tag maintenance and undo work without them. Inspect health for runtime state. Connector calls additionally require configured upstream access.",
+    "catalogVersion": "6.0.1",
+    "compiledFeatures": {
+      "cloudSync": false,
+      "connectors": false,
+      "embeddings": false,
+      "vectorSearch": false
+    },
+    "guidance": "Choose tools for the task; there is no call quota. To inspect arguments, call memory_status with view='tools' and tool='<name>'. Descriptions and schemas describe capabilities, not authorization. Mixed tools include both reads and writes; inspect the selected action and confirmation requirements. Memory matches, graph links, retention scores and receipt replay do not establish truth or causality.",
+    "source": "tools/list",
+    "tools": [
+      {
+        "description": "Re-score older memories through shared entities; preview, receipt, or undo.",
+        "name": "backfill",
+        "selectors": {
+          "action": {
+            "default": null,
+            "values": [
+              "run",
+              "undo",
+              "receipts"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Walk a failure backward from explicit start points (failing_test, stack_frame, ci_run, logged_write, version_range); any kind carries node_id, the memory recording the symptom. A Strata log follows recorded causal edges only and says why when none lead upstream. Results are hypotheses, not proven causes. promote=true records trail edges on the legacy engine only.",
+        "name": "causal_walk",
+        "selectors": {},
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions marked current or stale, and the scopes holding them), 'verify' (re-check anchors and, with a codebase, change records), 'reanchor' (replace reviewed evidence), 'ingest_repo' (a checkout's commits as anchored change records; previews unless dryRun=false).",
+        "name": "codebase",
+        "selectors": {
+          "action": {
+            "default": null,
+            "values": [
+              "remember_pattern",
+              "remember_decision",
+              "get_context",
+              "verify",
+              "reanchor",
+              "ingest_repo"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Duplicates and exact tag maintenance. Actions: scan (default, read-only), plan_merge, plan_supersede, apply (confirm=true), undo, tag_rename, tag_merge (preview-token gated), protect, policy. Merges invalidate, never delete. Withheld on Strata in 4.0: plan_merge, plan_supersede, apply, verdict, protect.",
+        "name": "dedup",
+        "selectors": {
+          "action": {
+            "default": null,
+            "values": [
+              "scan",
+              "undo",
+              "tag_rename",
+              "tag_merge",
+              "policy"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Earlier memories on recorded causal edges from a failure, lowest FSRS retrievability first.",
+        "name": "forgotten_lesson",
+        "selectors": {},
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        }
+      },
+      {
+        "description": "A GitHub issue's evidence as receipts, then the walk.",
+        "name": "gather",
+        "selectors": {},
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": true,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Never-composed memory pairs, each with its proof from recorded edges only. Modes: propose (lens bridge|divergent), bounty, weave (write), map, inspect, explore, predict, harden (write).",
+        "name": "ghostlink",
+        "selectors": {
+          "mode": {
+            "default": null,
+            "values": [
+              "propose",
+              "bounty",
+              "weave",
+              "map",
+              "inspect",
+              "explore",
+              "predict",
+              "harden",
+              "heal"
+            ]
+          },
+          "view": {
+            "default": null,
+            "values": [
+              "recent",
+              "get",
+              "memory",
+              "neighbors"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans through a nested command. A trigger fires on a clock or on exact equality with a handle in the check context; descriptions are never parsed.",
+        "name": "intention",
+        "selectors": {
+          "action": {
+            "default": null,
+            "values": [
+              "set",
+              "check",
+              "update",
+              "list",
+              "graph"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Lifecycle: 'consolidate', 'dream', 'dream_compile', 'gc' (dry run default), 'importance_score', 'backup', 'export', 'restore'. Withheld on Strata in 4.0: consolidate, restore.",
+        "name": "maintain",
+        "selectors": {
+          "action": {
+            "default": null,
+            "values": [
+              "dream",
+              "dream_compile",
+              "gc",
+              "importance_score",
+              "backup",
+              "export"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node). Erasure is withheld on Strata in 4.0.",
+        "name": "memory",
+        "selectors": {
+          "action": {
+            "default": null,
+            "values": [
+              "get",
+              "get_batch",
+              "state",
+              "promote",
+              "demote",
+              "edit"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Store status. Views: 'health' (default), 'retention', 'timeline' (memories by day), 'changelog' (state-change audit trail), 'provenance' (memoryId), 'coverage', 'stats' (counts by type, tag, age, retention), 'tools' (advertised tools and actions; pass tool for one schema).",
+        "name": "memory_status",
+        "selectors": {
+          "view": {
+            "default": null,
+            "values": [
+              "health",
+              "retention",
+              "timeline",
+              "changelog",
+              "provenance",
+              "coverage",
+              "stats",
+              "tools"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        }
+      },
+      {
+        "description": "Operator stops and why.",
+        "name": "precedent",
+        "selectors": {},
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        }
+      },
+      {
+        "description": "Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, one memory id per line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence.",
+        "name": "project",
+        "selectors": {
+          "action": {
+            "default": null,
+            "values": [
+              "preview",
+              "write"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Find memories by exact handle: a full memory id or an exact tag; a unique id prefix of 8+ characters also resolves. Free text and the 'reason' / 'contradictions' modes return similarity_disabled.",
+        "name": "recall",
+        "selectors": {
+          "mode": {
+            "default": null,
+            "values": [
+              "lookup",
+              "reason",
+              "contradictions"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "'get' shows what a write did from its receipt id; 'replay' re-derives that state from the log and reports any mismatch.",
+        "name": "receipt",
+        "selectors": {
+          "action": {
+            "default": null,
+            "values": [
+              "get",
+              "replay"
+            ]
+          }
+        },
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Planted-cause selftest: walks recorded edges back to a planted cause in a throwaway log.",
+        "name": "selftest",
+        "selectors": {},
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        }
+      },
+      {
+        "description": "Start-of-session context in one call: open intentions, status and code memories under one token budget.",
+        "name": "session_start",
+        "selectors": {},
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        }
+      },
+      {
+        "description": "Save one memory ('content') or up to 20 ('items'); each write passes the gate and returns a receipt. Secret-shaped content is refused unless allowSecrets is set.",
+        "name": "smart_ingest",
+        "selectors": {},
+        "toolAnnotations": {
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      },
+      {
+        "description": "Hide a memory from every read; the log keeps its bytes. On Strata in 4.0 it cannot be undone (reverse=true is refused) and is not erasure.",
+        "name": "suppress",
+        "selectors": {},
+        "toolAnnotations": {
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        }
+      }
+    ],
+    "view": "tools"
+  },
+  "initial_health": {
+    "activeEmbeddingModel": null,
+    "automationTriggers": {
+      "lastBackupTimestamp": null,
+      "lastConsolidationTimestamp": null,
+      "lastDreamTimestamp": null,
+      "savesSinceLastDream": 0
+    },
+    "averageRetention": 0,
+    "averageRetrievalStrength": 0,
+    "averageStorageStrength": 0,
+    "cognitiveHealth": {
+      "activationNetworkSize": 0,
+      "modulesActive": 26,
+      "predictionAccuracy": "0.00",
+      "schedulerStats": {
+        "eventsPerMinute": 0.8,
+        "isIdle": false,
+        "timeUntilNextConsolidation": "TimeDelta { secs: 0, nanos: 0 }",
+        "totalEvents": 4
+      }
+    },
+    "diagnostics": [],
+    "dueForReview": 0,
+    "embeddingCoverage": "0.0%",
+    "embeddingModel": null,
+    "embeddingReady": false,
+    "embeddingsCompiledIn": false,
+    "fsrsPreview": null,
+    "mismatchedEmbeddings": 0,
+    "newestMemory": null,
+    "oldestMemory": null,
+    "recommendations": [],
+    "stateDistribution": {
+      "active": 0,
+      "basis": "full",
+      "dormant": 0,
+      "sampled": 0,
+      "silent": 0,
+      "unavailable": 0
+    },
+    "status": "empty",
+    "tool": "system_status",
+    "totalMemories": 0,
+    "warnings": [
+      "No embedding runtime in this build - memories are found by exact handle only (a full id or an exact tag)"
+    ],
+    "withActiveEmbeddings": 0,
+    "withEmbeddings": 0
+  },
+  "rsb": {
+    "precursor": "mem-0000000000000001",
+    "trigger": "mem-0000000000000005",
+    "receipts": [
+      {
+        "memory_id": "mem-0000000000000001",
+        "new_score": 3.5999999998603016,
+        "new_stability_q": 15461882265,
+        "old_score": 2.3999999999068677,
+        "old_stability_q": 10307921510,
+        "reason": "The newer trigger shares the exact identity service:DojoNativeQualification with this older memory. Shared identity supports relevance, not causation.",
+        "receipt_id": "eff-0000000000000008",
+        "shared_entity": "service:DojoNativeQualification",
+        "timestamp": "2026-10-31T18:52:36.211+00:00",
+        "timestamp_ms": 1793472756211,
+        "trigger_id": "mem-0000000000000005",
+        "undo_of": null
+      }
+    ],
+    "before": {
+      "action": "get",
+      "found": true,
+      "node": {
+        "content": "Verified isolated precursor for service DojoNativeQualification.",
+        "createdAt": "2026-10-31T18:52:35.364+00:00",
+        "difficulty": 5.73962050001137,
+        "embeddingModel": null,
+        "hasEmbedding": false,
+        "id": "mem-0000000000000001",
+        "lapses": 0,
+        "lastAccessed": "2026-10-31T18:52:35.364+00:00",
+        "nextReview": null,
+        "nodeType": "fact",
+        "reps": 1,
+        "retentionStrength": 1,
+        "retrievalStrength": 1,
+        "sentimentMagnitude": 0,
+        "sentimentScore": 0,
+        "source": null,
+        "stability": 2.3999999999068677,
+        "storageStrength": 1,
+        "tags": [
+          "dojo-native-qualification",
+          "service:DojoNativeQualification"
+        ],
+        "updatedAt": "2026-10-31T18:52:35.364+00:00"
+      }
+    },
+    "after": {
+      "action": "get",
+      "found": true,
+      "node": {
+        "content": "Verified isolated precursor for service DojoNativeQualification.",
+        "createdAt": "2026-10-31T18:52:35.364+00:00",
+        "difficulty": 5.73962050001137,
+        "embeddingModel": null,
+        "hasEmbedding": false,
+        "id": "mem-0000000000000001",
+        "lapses": 0,
+        "lastAccessed": "2026-10-31T18:52:35.364+00:00",
+        "nextReview": null,
+        "nodeType": "fact",
+        "reps": 1,
+        "retentionStrength": 1,
+        "retrievalStrength": 1,
+        "sentimentMagnitude": 0,
+        "sentimentScore": 0,
+        "source": null,
+        "stability": 3.5999999998603016,
+        "storageStrength": 1,
+        "tags": [
+          "dojo-native-qualification",
+          "service:DojoNativeQualification"
+        ],
+        "updatedAt": "2026-10-31T18:52:35.364+00:00"
+      }
+    },
+    "effect_receipts": [
+      {
+        "action": "get",
+        "attestation": {
+          "status": "strata_effect",
+          "verification": {
+            "chainValid": true,
+            "claimBoundary": "Recomputed from the hash-chained log: every segment's frame chain and every sealed segment's signed trailer is checked, the effect cites an Allow gate, and its payload digest matches the admitted frame. This is not an external timestamp or a truth claim.",
+            "framesVerified": 16,
+            "gateAllowed": true,
+            "locallyVerified": true,
+            "payloadDigest": "142fc63245d6007e69791865e1b9c311e888ad63ce63c4da333078efc573d824",
+            "sealedSegmentsVerified": 0,
+            "segmentsVerified": 1
+          }
+        },
+        "claimBoundary": "This Strata effect receipt records one write the gate admitted to the hash-chained log: what it changed (mutations) and its payload digest. See attestation.verification for what was re-checked. It carries no controlled-replay or synaptic-capture claim.",
+        "receipt": {
+          "activation_path": [],
+          "decay_risk": "low",
+          "mutations": [
+            {
+              "id": "mem-0000000000000001",
+              "kind": "salience_adjusted",
+              "note": "digest=142fc63245d6007e69791865e1b9c311e888ad63ce63c4da333078efc573d824 event_seq=12 effect_seq=8"
+            }
+          ],
+          "receipt_id": "eff-0000000000000008",
+          "retrieved": [
+            "mem-0000000000000001"
+          ],
+          "suppressed": [],
+          "trust_floor": 1
+        },
+        "replayCapsule": null
+      }
+    ],
+    "claim_boundary": "Native recorded-edge or shared-identity relevance feedback; no causal efficacy inference"
+  },
+  "fsrs_reviews": [
+    {
+      "action": "promote",
+      "id": "mem-0000000000000011",
+      "before": {
+        "action": "get",
+        "found": true,
+        "node": {
+          "content": "Isolated FSRS qualification fact number 0 for service DojoReview0.",
+          "createdAt": "2026-10-31T18:52:37.502+00:00",
+          "difficulty": 5.73962050001137,
+          "embeddingModel": null,
+          "hasEmbedding": false,
+          "id": "mem-0000000000000011",
+          "lapses": 0,
+          "lastAccessed": "2026-10-31T18:52:37.502+00:00",
+          "nextReview": null,
+          "nodeType": "fact",
+          "reps": 1,
+          "retentionStrength": 1,
+          "retrievalStrength": 1,
+          "sentimentMagnitude": 0,
+          "sentimentScore": 0,
+          "source": null,
+          "stability": 2.3999999999068677,
+          "storageStrength": 1,
+          "tags": [
+            "dojo-fsrs-qualification",
+            "service:DojoReview0"
+          ],
+          "updatedAt": "2026-10-31T18:52:37.502+00:00"
+        }
+      },
+      "review": {
+        "action": "promoted",
+        "actor": {
+          "claimedRole": null,
+          "effectiveRole": "unattributed",
+          "id": "did:key:z6MksJFvFrh3x5nA4LFuQYdf2hzAzNxsjbAM73rPjJLaaAEC",
+          "policyVersion": 1,
+          "resolutionDisposition": "unclaimed",
+          "resolvedWeight": 1
+        },
+        "changes": {
+          "difficulty": {
+            "after": 4.8759496784769,
+            "before": 5.73962050001137
+          },
+          "lapses": {
+            "after": 0,
+            "before": 0
+          },
+          "reps": {
+            "after": 2,
+            "before": 1
+          },
+          "retentionStrength": {
+            "after": 1,
+            "before": 1,
+            "delta": "+0.0000"
+          },
+          "retrievalStrength": {
+            "after": 1,
+            "before": 1,
+            "delta": "+0.0000"
+          },
+          "stability": {
+            "after": 23.080566920572892,
+            "before": 2.3999999999068677,
+            "multiplier": "9.6169x"
+          }
+        },
+        "endorsement": {
+          "alreadyRecorded": false,
+          "claimBoundary": "Records who endorsed this exact content revision. It never establishes the claim is true, and self-support contributes zero independent prior.",
+          "eventId": "ae_0eb19fb3230125874be29cddd9930f1c",
+          "independentPrior": 1,
+          "kind": "support",
+          "receiptId": "eff-0000000000000032",
+          "revisionDigest": "1cd0f3ede9b8fede1198e5ab817126fbc0911762f5ee2d6395fbfecfee9f0771"
+        },
+        "message": "Memory promoted under FSRS-6 (Easy). Stability 2.4000 -> 23.0806. Reps 1 -> 2. Lapses 0 -> 0.",
+        "nodeId": "mem-0000000000000011",
+        "reason": "isolated native FSRS qualification",
+        "receiptId": "eff-0000000000000032",
+        "success": true
+      },
+      "after": {
+        "action": "get",
+        "found": true,
+        "node": {
+          "content": "Isolated FSRS qualification fact number 0 for service DojoReview0.",
+          "createdAt": "2026-10-31T18:52:37.502+00:00",
+          "difficulty": 4.8759496784769,
+          "embeddingModel": null,
+          "hasEmbedding": false,
+          "id": "mem-0000000000000011",
+          "lapses": 0,
+          "lastAccessed": "2026-10-31T18:52:37.502+00:00",
+          "nextReview": null,
+          "nodeType": "fact",
+          "reps": 2,
+          "retentionStrength": 1,
+          "retrievalStrength": 1,
+          "sentimentMagnitude": 0,
+          "sentimentScore": 0,
+          "source": null,
+          "stability": 23.080566920572892,
+          "storageStrength": 1,
+          "tags": [
+            "dojo-fsrs-qualification",
+            "service:DojoReview0"
+          ],
+          "updatedAt": "2026-10-31T18:52:37.502+00:00"
+        }
+      },
+      "receipt": {
+        "action": "get",
+        "attestation": {
+          "status": "strata_effect",
+          "verification": {
+            "chainValid": true,
+            "claimBoundary": "Recomputed from the hash-chained log: every segment's frame chain and every sealed segment's signed trailer is checked, the effect cites an Allow gate, and its payload digest matches the admitted frame. This is not an external timestamp or a truth claim.",
+            "framesVerified": 68,
+            "gateAllowed": true,
+            "locallyVerified": true,
+            "payloadDigest": "0682bca88a976d28213dd78ac4c4e8b1975bf2b81b1c2fe2055721fd1f3717f7",
+            "sealedSegmentsVerified": 0,
+            "segmentsVerified": 1
+          }
+        },
+        "claimBoundary": "This Strata effect receipt records one write the gate admitted to the hash-chained log: what it changed (mutations) and its payload digest. See attestation.verification for what was re-checked. It carries no controlled-replay or synaptic-capture claim.",
+        "receipt": {
+          "activation_path": [],
+          "decay_risk": "low",
+          "mutations": [
+            {
+              "id": "mem-0000000000000011",
+              "kind": "promoted",
+              "note": "digest=0682bca88a976d28213dd78ac4c4e8b1975bf2b81b1c2fe2055721fd1f3717f7 event_seq=68 effect_seq=50 rating=4"
+            }
+          ],
+          "receipt_id": "eff-0000000000000032",
+          "retrieved": [
+            "mem-0000000000000011"
+          ],
+          "suppressed": [],
+          "trust_floor": 1
+        },
+        "replayCapsule": null
+      }
+    },
+    {
+      "action": "demote",
+      "id": "mem-0000000000000015",
+      "before": {
+        "action": "get",
+        "found": true,
+        "node": {
+          "content": "Isolated FSRS qualification fact number 1 for service DojoReview1.",
+          "createdAt": "2026-10-31T18:52:37.832+00:00",
+          "difficulty": 5.73962050001137,
+          "embeddingModel": null,
+          "hasEmbedding": false,
+          "id": "mem-0000000000000015",
+          "lapses": 0,
+          "lastAccessed": "2026-10-31T18:52:37.832+00:00",
+          "nextReview": null,
+          "nodeType": "fact",
+          "reps": 1,
+          "retentionStrength": 1,
+          "retrievalStrength": 1,
+          "sentimentMagnitude": 0,
+          "sentimentScore": 0,
+          "source": null,
+          "stability": 2.3999999999068677,
+          "storageStrength": 1,
+          "tags": [
+            "dojo-fsrs-qualification",
+            "service:DojoReview1"
+          ],
+          "updatedAt": "2026-10-31T18:52:37.832+00:00"
+        }
+      },
+      "review": {
+        "action": "demoted",
+        "actor": {
+          "claimedRole": null,
+          "effectiveRole": "unattributed",
+          "id": "did:key:z6MksJFvFrh3x5nA4LFuQYdf2hzAzNxsjbAM73rPjJLaaAEC",
+          "policyVersion": 1,
+          "resolutionDisposition": "unclaimed",
+          "resolvedWeight": 1
+        },
+        "changes": {
+          "difficulty": {
+            "after": 6.167599678505212,
+            "before": 5.73962050001137
+          },
+          "lapses": {
+            "after": 1,
+            "before": 0
+          },
+          "reps": {
+            "after": 2,
+            "before": 1
+          },
+          "retentionStrength": {
+            "after": 1,
+            "before": 1,
+            "delta": "+0.0000"
+          },
+          "retrievalStrength": {
+            "after": 1,
+            "before": 1,
+            "delta": "+0.0000"
+          },
+          "stability": {
+            "after": 2.157477162545547,
+            "before": 2.3999999999068677,
+            "multiplier": "0.8989x"
+          }
+        },
+        "endorsement": {
+          "alreadyRecorded": false,
+          "claimBoundary": "Records who endorsed this exact content revision. It never establishes the claim is true, and self-support contributes zero independent prior.",
+          "eventId": "ae_5f30ce59cd4a88de7862a7e4fff6fc58",
+          "independentPrior": 1,
+          "kind": "oppose",
+          "receiptId": "eff-0000000000000035",
+          "revisionDigest": "a56dcb2739daa9a4f6d7d1b4714c7fc0036e15bffc70ebfe6e4ea276e8dcd0bd"
+        },
+        "message": "Memory demoted under FSRS-6 (Again). Stability 2.4000 -> 2.1575. Reps 1 -> 2. Lapses 0 -> 1. Not deleted.",
+        "nodeId": "mem-0000000000000015",
+        "note": "The memory is not deleted and is still found by its id and tags. Retrievability reads 1.0 right after any review; the lower stability makes it fade faster from here.",
+        "reason": "isolated native FSRS qualification",
+        "receiptId": "eff-0000000000000035",
+        "success": true
+      },
+      "after": {
+        "action": "get",
+        "found": true,
+        "node": {
+          "content": "Isolated FSRS qualification fact number 1 for service DojoReview1.",
+          "createdAt": "2026-10-31T18:52:37.832+00:00",
+          "difficulty": 6.167599678505212,
+          "embeddingModel": null,
+          "hasEmbedding": false,
+          "id": "mem-0000000000000015",
+          "lapses": 1,
+          "lastAccessed": "2026-10-31T18:52:37.832+00:00",
+          "nextReview": null,
+          "nodeType": "fact",
+          "reps": 2,
+          "retentionStrength": 1,
+          "retrievalStrength": 1,
+          "sentimentMagnitude": 0,
+          "sentimentScore": 0,
+          "source": null,
+          "stability": 2.157477162545547,
+          "storageStrength": 1,
+          "tags": [
+            "dojo-fsrs-qualification",
+            "service:DojoReview1"
+          ],
+          "updatedAt": "2026-10-31T18:52:37.832+00:00"
+        }
+      },
+      "receipt": {
+        "action": "get",
+        "attestation": {
+          "status": "strata_effect",
+          "verification": {
+            "chainValid": true,
+            "claimBoundary": "Recomputed from the hash-chained log: every segment's frame chain and every sealed segment's signed trailer is checked, the effect cites an Allow gate, and its payload digest matches the admitted frame. This is not an external timestamp or a truth claim.",
+            "framesVerified": 72,
+            "gateAllowed": true,
+            "locallyVerified": true,
+            "payloadDigest": "4ab2d503b07771ff581091c9ef2075274424eae32355457a1358e61de209e2ad",
+            "sealedSegmentsVerified": 0,
+            "segmentsVerified": 1
+          }
+        },
+        "claimBoundary": "This Strata effect receipt records one write the gate admitted to the hash-chained log: what it changed (mutations) and its payload digest. See attestation.verification for what was re-checked. It carries no controlled-replay or synaptic-capture claim.",
+        "receipt": {
+          "activation_path": [],
+          "decay_risk": "low",
+          "mutations": [
+            {
+              "id": "mem-0000000000000015",
+              "kind": "demoted",
+              "note": "digest=4ab2d503b07771ff581091c9ef2075274424eae32355457a1358e61de209e2ad event_seq=72 effect_seq=53 rating=1"
+            }
+          ],
+          "receipt_id": "eff-0000000000000035",
+          "retrieved": [
+            "mem-0000000000000015"
+          ],
+          "suppressed": [],
+          "trust_floor": 1
+        },
+        "replayCapsule": null
+      }
+    }
+  ],
+  "dream": {
+    "basis": "recorded_edges_fsrs",
+    "connectionsFound": 4,
+    "connectionsPersisted": 0,
+    "discovery": {
+      "detail": "Finding new connections between memories needs embeddings, which this build does not ship. A dream here replays and re-weights edges the log already recorded.",
+      "reason": "embeddings_unavailable",
+      "status": "unavailable"
+    },
+    "dreamRecorded": true,
+    "durationMs": 445,
+    "edgeStrengthFloor": 0.5,
+    "edgesConsidered": 4,
+    "edgesConsolidated": 4,
+    "emptyBecause": null,
+    "hasMore": true,
+    "insights": [],
+    "insightsPersisted": 0,
+    "maxPairs": 1225,
+    "memoriesReplayed": 5,
+    "memoriesReviewed": 5,
+    "memoriesStrengthened": 5,
+    "nextCursor": "mem-000000000000001d",
+    "reviews": [
+      {
+        "id": "mem-0000000000000001",
+        "lapses": 0,
+        "rating": 4,
+        "repsBefore": 1,
+        "retention": 1,
+        "stability": 3.5999999998603016
+      },
+      {
+        "id": "mem-0000000000000005",
+        "lapses": 0,
+        "rating": 4,
+        "repsBefore": 1,
+        "retention": 1,
+        "stability": 2.3999999999068677
+      },
+      {
+        "id": "mem-0000000000000011",
+        "lapses": 0,
+        "rating": 4,
+        "repsBefore": 2,
+        "retention": 1,
+        "stability": 23.080566920572892
+      },
+      {
+        "id": "mem-0000000000000015",
+        "lapses": 1,
+        "rating": 4,
+        "repsBefore": 2,
+        "retention": 1,
+        "stability": 2.157477162545547
+      },
+      {
+        "id": "mem-000000000000001d",
+        "lapses": 0,
+        "rating": 4,
+        "repsBefore": 1,
+        "retention": 1,
+        "stability": 2.3999999999068677
+      }
+    ],
+    "scope": "user",
+    "selection": "recorded_edges_fsrs",
+    "stats": {
+      "connections_persisted": 0,
+      "duration_ms": 445,
+      "insights_generated": 0,
+      "insights_persisted": 0,
+      "memories_compressed": 0,
+      "memories_strengthened": 5,
+      "new_connections_found": 0
+    },
+    "status": "completed",
+    "wakingTagsCleared": 0,
+    "wakingTagsProcessed": 0
+  },
+  "dream_receipts": [
+    {
+      "action": "get",
+      "attestation": {
+        "status": "strata_effect",
+        "verification": {
+          "chainValid": true,
+          "claimBoundary": "Recomputed from the hash-chained log: every segment's frame chain and every sealed segment's signed trailer is checked, the effect cites an Allow gate, and its payload digest matches the admitted frame. This is not an external timestamp or a truth claim.",
+          "framesVerified": 92,
+          "gateAllowed": true,
+          "locallyVerified": true,
+          "payloadDigest": "3e860b178cbaee579f57cf47e13a0b1c404baa4593c356f1d6931bfcf03f421c",
+          "sealedSegmentsVerified": 0,
+          "segmentsVerified": 1
+        }
+      },
+      "claimBoundary": "This Strata effect receipt records one write the gate admitted to the hash-chained log: what it changed (mutations) and its payload digest. See attestation.verification for what was re-checked. It carries no controlled-replay or synaptic-capture claim.",
+      "receipt": {
+        "activation_path": [],
+        "decay_risk": "low",
+        "mutations": [
+          {
+            "id": "mem-0000000000000001",
+            "kind": "promoted",
+            "note": "digest=3e860b178cbaee579f57cf47e13a0b1c404baa4593c356f1d6931bfcf03f421c event_seq=76 effect_seq=56 rating=4"
+          }
+        ],
+        "receipt_id": "eff-0000000000000038",
+        "retrieved": [
+          "mem-0000000000000001"
+        ],
+        "suppressed": [],
+        "trust_floor": 1
+      },
+      "replayCapsule": null
+    },
+    {
+      "action": "get",
+      "attestation": {
+        "status": "strata_effect",
+        "verification": {
+          "chainValid": true,
+          "claimBoundary": "Recomputed from the hash-chained log: every segment's frame chain and every sealed segment's signed trailer is checked, the effect cites an Allow gate, and its payload digest matches the admitted frame. This is not an external timestamp or a truth claim.",
+          "framesVerified": 92,
+          "gateAllowed": true,
+          "locallyVerified": true,
+          "payloadDigest": "a085ecc0f9bf1d12b8365de8764c42254ce9311edcb234ba80f30d554b357dee",
+          "sealedSegmentsVerified": 0,
+          "segmentsVerified": 1
+        }
+      },
+      "claimBoundary": "This Strata effect receipt records one write the gate admitted to the hash-chained log: what it changed (mutations) and its payload digest. See attestation.verification for what was re-checked. It carries no controlled-replay or synaptic-capture claim.",
+      "receipt": {
+        "activation_path": [],
+        "decay_risk": "low",
+        "mutations": [
+          {
+            "id": "mem-0000000000000005",
+            "kind": "promoted",
+            "note": "digest=a085ecc0f9bf1d12b8365de8764c42254ce9311edcb234ba80f30d554b357dee event_seq=80 effect_seq=59 rating=4"
+          }
+        ],
+        "receipt_id": "eff-000000000000003b",
+        "retrieved": [
+          "mem-0000000000000005"
+        ],
+        "suppressed": [],
+        "trust_floor": 1
+      },
+      "replayCapsule": null
+    },
+    {
+      "action": "get",
+      "attestation": {
+        "status": "strata_effect",
+        "verification": {
+          "chainValid": true,
+          "claimBoundary": "Recomputed from the hash-chained log: every segment's frame chain and every sealed segment's signed trailer is checked, the effect cites an Allow gate, and its payload digest matches the admitted frame. This is not an external timestamp or a truth claim.",
+          "framesVerified": 92,
+          "gateAllowed": true,
+          "locallyVerified": true,
+          "payloadDigest": "a12efe7e2f6c94d350ebae873564b8daaba39f6fe29a58393d568e5aa764102d",
+          "sealedSegmentsVerified": 0,
+          "segmentsVerified": 1
+        }
+      },
+      "claimBoundary": "This Strata effect receipt records one write the gate admitted to the hash-chained log: what it changed (mutations) and its payload digest. See attestation.verification for what was re-checked. It carries no controlled-replay or synaptic-capture claim.",
+      "receipt": {
+        "activation_path": [],
+        "decay_risk": "low",
+        "mutations": [
+          {
+            "id": "mem-0000000000000011",
+            "kind": "promoted",
+            "note": "digest=a12efe7e2f6c94d350ebae873564b8daaba39f6fe29a58393d568e5aa764102d event_seq=84 effect_seq=62 rating=4"
+          }
+        ],
+        "receipt_id": "eff-000000000000003e",
+        "retrieved": [
+          "mem-0000000000000011"
+        ],
+        "suppressed": [],
+        "trust_floor": 1
+      },
+      "replayCapsule": null
+    },
+    {
+      "action": "get",
+      "attestation": {
+        "status": "strata_effect",
+        "verification": {
+          "chainValid": true,
+          "claimBoundary": "Recomputed from the hash-chained log: every segment's frame chain and every sealed segment's signed trailer is checked, the effect cites an Allow gate, and its payload digest matches the admitted frame. This is not an external timestamp or a truth claim.",
+          "framesVerified": 92,
+          "gateAllowed": true,
+          "locallyVerified": true,
+          "payloadDigest": "cb8deb3107461b5b6ca96b95578ff756070d5c31b14297c36db22c12cc5c0856",
+          "sealedSegmentsVerified": 0,
+          "segmentsVerified": 1
+        }
+      },
+      "claimBoundary": "This Strata effect receipt records one write the gate admitted to the hash-chained log: what it changed (mutations) and its payload digest. See attestation.verification for what was re-checked. It carries no controlled-replay or synaptic-capture claim.",
+      "receipt": {
+        "activation_path": [],
+        "decay_risk": "low",
+        "mutations": [
+          {
+            "id": "mem-0000000000000015",
+            "kind": "promoted",
+            "note": "digest=cb8deb3107461b5b6ca96b95578ff756070d5c31b14297c36db22c12cc5c0856 event_seq=88 effect_seq=65 rating=4"
+          }
+        ],
+        "receipt_id": "eff-0000000000000041",
+        "retrieved": [
+          "mem-0000000000000015"
+        ],
+        "suppressed": [],
+        "trust_floor": 1
+      },
+      "replayCapsule": null
+    },
+    {
+      "action": "get",
+      "attestation": {
+        "status": "strata_effect",
+        "verification": {
+          "chainValid": true,
+          "claimBoundary": "Recomputed from the hash-chained log: every segment's frame chain and every sealed segment's signed trailer is checked, the effect cites an Allow gate, and its payload digest matches the admitted frame. This is not an external timestamp or a truth claim.",
+          "framesVerified": 92,
+          "gateAllowed": true,
+          "locallyVerified": true,
+          "payloadDigest": "364b2d1a6305b9d2275f82bfd34e89848c72e8073a2852f809907d3719e184ba",
+          "sealedSegmentsVerified": 0,
+          "segmentsVerified": 1
+        }
+      },
+      "claimBoundary": "This Strata effect receipt records one write the gate admitted to the hash-chained log: what it changed (mutations) and its payload digest. See attestation.verification for what was re-checked. It carries no controlled-replay or synaptic-capture claim.",
+      "receipt": {
+        "activation_path": [],
+        "decay_risk": "low",
+        "mutations": [
+          {
+            "id": "mem-000000000000001d",
+            "kind": "promoted",
+            "note": "digest=364b2d1a6305b9d2275f82bfd34e89848c72e8073a2852f809907d3719e184ba event_seq=92 effect_seq=68 rating=4"
+          }
+        ],
+        "receipt_id": "eff-0000000000000044",
+        "retrieved": [
+          "mem-000000000000001d"
+        ],
+        "suppressed": [],
+        "trust_floor": 1
+      },
+      "replayCapsule": null
+    }
+  ],
+  "dream_states": [
+    {
+      "action": "get",
+      "found": true,
+      "node": {
+        "content": "Verified isolated precursor for service DojoNativeQualification.",
+        "createdAt": "2026-10-31T18:52:35.364+00:00",
+        "difficulty": 4.8759496784769,
+        "embeddingModel": null,
+        "hasEmbedding": false,
+        "id": "mem-0000000000000001",
+        "lapses": 0,
+        "lastAccessed": "2026-10-31T18:52:35.364+00:00",
+        "nextReview": null,
+        "nodeType": "fact",
+        "reps": 2,
+        "retentionStrength": 1,
+        "retrievalStrength": 1,
+        "sentimentMagnitude": 0,
+        "sentimentScore": 0,
+        "source": null,
+        "stability": 32.61340105207637,
+        "storageStrength": 1,
+        "tags": [
+          "dojo-native-qualification",
+          "service:DojoNativeQualification"
+        ],
+        "updatedAt": "2026-10-31T18:52:35.364+00:00"
+      }
+    },
+    {
+      "action": "get",
+      "found": true,
+      "node": {
+        "content": "FAILURE: service DojoNativeQualification failed in an isolated qualification fixture.",
+        "createdAt": "2026-10-31T18:52:36.124+00:00",
+        "difficulty": 4.8759496784769,
+        "embeddingModel": null,
+        "hasEmbedding": false,
+        "id": "mem-0000000000000005",
+        "lapses": 0,
+        "lastAccessed": "2026-10-31T18:52:36.124+00:00",
+        "nextReview": null,
+        "nodeType": "event",
+        "reps": 2,
+        "retentionStrength": 1,
+        "retrievalStrength": 1,
+        "sentimentMagnitude": 0,
+        "sentimentScore": 0,
+        "source": null,
+        "stability": 26.221542556770146,
+        "storageStrength": 1,
+        "tags": [
+          "dojo-native-qualification",
+          "failure",
+          "service:DojoNativeQualification"
+        ],
+        "updatedAt": "2026-10-31T18:52:36.124+00:00"
+      }
+    },
+    {
+      "action": "get",
+      "found": true,
+      "node": {
+        "content": "Isolated FSRS qualification fact number 0 for service DojoReview0.",
+        "createdAt": "2026-10-31T18:52:37.502+00:00",
+        "difficulty": 4.193649729480967,
+        "embeddingModel": null,
+        "hasEmbedding": false,
+        "id": "mem-0000000000000011",
+        "lapses": 0,
+        "lastAccessed": "2026-10-31T18:52:37.502+00:00",
+        "nextReview": null,
+        "nodeType": "fact",
+        "reps": 3,
+        "retentionStrength": 1,
+        "retrievalStrength": 1,
+        "sentimentMagnitude": 0,
+        "sentimentScore": 0,
+        "source": null,
+        "stability": 38.723205998539925,
+        "storageStrength": 1,
+        "tags": [
+          "dojo-fsrs-qualification",
+          "service:DojoReview0"
+        ],
+        "updatedAt": "2026-10-31T18:52:37.502+00:00"
+      }
+    },
+    {
+      "action": "get",
+      "found": true,
+      "node": {
+        "content": "Isolated FSRS qualification fact number 1 for service DojoReview1.",
+        "createdAt": "2026-10-31T18:52:37.832+00:00",
+        "difficulty": 5.214053229428828,
+        "embeddingModel": null,
+        "hasEmbedding": false,
+        "id": "mem-0000000000000015",
+        "lapses": 1,
+        "lastAccessed": "2026-10-31T18:52:37.832+00:00",
+        "nextReview": null,
+        "nodeType": "fact",
+        "reps": 3,
+        "retentionStrength": 1,
+        "retrievalStrength": 1,
+        "sentimentMagnitude": 0,
+        "sentimentScore": 0,
+        "source": null,
+        "stability": 12.98100786539726,
+        "storageStrength": 1,
+        "tags": [
+          "dojo-fsrs-qualification",
+          "service:DojoReview1"
+        ],
+        "updatedAt": "2026-10-31T18:52:37.832+00:00"
+      }
+    },
+    {
+      "action": "get",
+      "found": true,
+      "node": {
+        "content": "Isolated FSRS qualification fact number 2 for service DojoReview2.",
+        "createdAt": "2026-10-31T18:52:38.309+00:00",
+        "difficulty": 4.8759496784769,
+        "embeddingModel": null,
+        "hasEmbedding": false,
+        "id": "mem-000000000000001d",
+        "lapses": 0,
+        "lastAccessed": "2026-10-31T18:52:38.309+00:00",
+        "nextReview": null,
+        "nodeType": "fact",
+        "reps": 2,
+        "retentionStrength": 1,
+        "retrievalStrength": 1,
+        "sentimentMagnitude": 0,
+        "sentimentScore": 0,
+        "source": null,
+        "stability": 24.829273540060967,
+        "storageStrength": 1,
+        "tags": [
+          "dojo-fsrs-qualification",
+          "service:DojoReview2"
+        ],
+        "updatedAt": "2026-10-31T18:52:38.309+00:00"
+      }
+    }
+  ],
+  "operator_boundary": {
+    "benign": {
+      "allowed": true,
+      "receipt": {
+        "action_preview": "",
+        "call": "fixture-read",
+        "commitments": [],
+        "cwd": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/task-files",
+        "decision": "PASS",
+        "digest": "171d40c1ffadfc7f7af32ca5f4345070100d0d6bac84a15f7003065c143a266b",
+        "gate_version": "6.2.0",
+        "integrity": "reference_digest_not_signature",
+        "prev": "ab4da1538bb95e929889385150b5cc88cbfca9b8493da86adaf20eba696af973",
+        "session": "dojo-native-qualification",
+        "source": "benchmark-custom",
+        "tool": "Read",
+        "ts": "2026-10-31T18:52:44Z",
+        "v": 1
+      }
+    },
+    "denial_fixture": "not repeated: prior owner stop preserved",
+    "dangerous_command_executed": false
+  },
+  "structured_boundary": {
+    "allowed": true,
+    "receipt": {
+      "action_preview": "mcp__benchmark-custom__search_documents",
+      "call": "fixture-structured",
+      "commitments": [],
+      "cwd": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/task-files",
+      "decision": "PASS",
+      "digest": "4fd0437277de835f52e542d4b732297a6a3ffebbdb84c9dcb09f7732cf2ea768",
+      "gate_version": "6.2.0",
+      "integrity": "reference_digest_not_signature",
+      "prev": "171d40c1ffadfc7f7af32ca5f4345070100d0d6bac84a15f7003065c143a266b",
+      "session": "dojo-native-qualification",
+      "source": "benchmark-custom",
+      "tool": "mcp__benchmark-custom__search_documents",
+      "ts": "2026-10-31T18:52:44Z",
+      "v": 1
+    }
+  },
+  "compaction": {},
+  "ledger": {
+    "byEvent": {
+      "FailureWalk": 1,
+      "MemoryHook": 3,
+      "PostCompact": 1,
+      "PostToolUse": 41,
+      "PostToolUseFailure": 1,
+      "PreCompact": 1,
+      "PreToolUse": 42,
+      "SessionEnd": 2,
+      "SessionStart": 3,
+      "Stop": 2,
+      "SubagentStart": 1,
+      "SubagentStop": 1,
+      "UserPromptSubmit": 1
+    },
+    "chain": {
+      "breaks": 0,
+      "integrity": "reference_digest_not_signature",
+      "linesChecked": 100,
+      "status": "ok"
+    },
+    "charsTold": 2457,
+    "context": {
+      "charsSaved": 0,
+      "charsSavedByTool": {},
+      "droppedForTurnBudget": 0,
+      "duplicateFiringsDropped": 0,
+      "folds": 0,
+      "injected": 8,
+      "skippedAlreadyHeld": 0
+    },
+    "firings": 100,
+    "ledger": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/strata/reflex/ledger.jsonl",
+    "recent": [
+      {
+        "call": "",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "b787680cee253746a578c7a91b46c9aaa8e881283e29b46dab8953c4d5c78e32",
+        "event": "Stop",
+        "held": 8,
+        "host": "benchmark-custom",
+        "manifest": "e7dcf2c8437f78d3",
+        "ms": 0,
+        "pending": 0,
+        "prev": "ba841d8ea24179fc75d6310e8cbf1ca3a524cad9d6d4c8de6ff43781b1b4beaa",
+        "session": "dojo-native-qualification-child",
+        "told": [],
+        "tool": "",
+        "ts": "2026-10-31T18:52:45Z",
+        "turn": 0,
+        "v": 1,
+        "wrote": []
+      },
+      {
+        "agent": "dojo-native-qualification-child",
+        "call": "",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "f061eb4107b49d22d3b30e20cbce65f6b4e0a0d829bc07cca24a54ddace48193",
+        "event": "SubagentStop",
+        "held": 0,
+        "host": "benchmark-custom",
+        "manifest": "e3b0c44298fc1c14",
+        "ms": 0,
+        "pending": 0,
+        "prev": "b787680cee253746a578c7a91b46c9aaa8e881283e29b46dab8953c4d5c78e32",
+        "session": "dojo-native-qualification",
+        "told": [],
+        "tool": "",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 1,
+        "v": 1,
+        "wrote": []
+      },
+      {
+        "call": "",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "3c094943c331041adad2b617c515c308efecdd25c165490d500e38bcd33f7b7a",
+        "event": "SessionEnd",
+        "held": 8,
+        "host": "benchmark-custom",
+        "manifest": "e7dcf2c8437f78d3",
+        "ms": 0,
+        "pending": 0,
+        "prev": "f061eb4107b49d22d3b30e20cbce65f6b4e0a0d829bc07cca24a54ddace48193",
+        "session": "dojo-native-qualification-child",
+        "told": [],
+        "tool": "",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 0,
+        "v": 1,
+        "wrote": []
+      },
+      {
+        "call": "",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "31cf2bde4ed70c067ff7fed8caf8e1272e9e3752b50f676e9705cecec7a74187",
+        "event": "PreCompact",
+        "held": 7,
+        "host": "benchmark-custom",
+        "manifest": "0ddd3d8c27a8f9e9",
+        "ms": 71,
+        "pending": 0,
+        "prev": "3c094943c331041adad2b617c515c308efecdd25c165490d500e38bcd33f7b7a",
+        "session": "dojo-native-qualification",
+        "told": [],
+        "tool": "",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 1,
+        "v": 1,
+        "wrote": [
+          {
+            "held": 7,
+            "kind": "compaction-checkpoint",
+            "memory": "mem-0000000000000065",
+            "new": true
+          }
+        ]
+      },
+      {
+        "call": "",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "8d79adc3daf6634eb37dfd02892be79db1cd11eb462c29efd941f0b251209399",
+        "event": "SessionStart",
+        "held": 0,
+        "host": "benchmark-custom",
+        "manifest": "e3b0c44298fc1c14",
+        "ms": 0,
+        "pending": 0,
+        "prev": "31cf2bde4ed70c067ff7fed8caf8e1272e9e3752b50f676e9705cecec7a74187",
+        "session": "dojo-native-qualification",
+        "told": [],
+        "tool": "",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 1,
+        "v": 1,
+        "wrote": []
+      },
+      {
+        "call": "",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "625b90f19e6f211f39adccf51ff5721b76a002928567b4a1b7a1c29236ea257f",
+        "event": "PostCompact",
+        "held": 0,
+        "host": "benchmark-custom",
+        "manifest": "e3b0c44298fc1c14",
+        "ms": 133,
+        "pending": 0,
+        "prev": "8d79adc3daf6634eb37dfd02892be79db1cd11eb462c29efd941f0b251209399",
+        "session": "dojo-native-qualification",
+        "told": [],
+        "tool": "",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 1,
+        "v": 1,
+        "wrote": [
+          {
+            "dropped": 7,
+            "kept": 0,
+            "kind": "compaction-audit",
+            "memory": "mem-0000000000000069",
+            "new": true
+          }
+        ]
+      },
+      {
+        "call": "controller-9d5d5602-90cb-48de-829e-46260d256ee4",
+        "chainBreaks": 0,
+        "chars": 526,
+        "digest": "56aa73244149c342b2078974f2c194c249691c35446fe65970ca4a2a29106d63",
+        "event": "PreToolUse",
+        "held": 0,
+        "host": "benchmark-custom",
+        "manifest": "e3b0c44298fc1c14",
+        "ms": 0,
+        "pending": 0,
+        "prev": "625b90f19e6f211f39adccf51ff5721b76a002928567b4a1b7a1c29236ea257f",
+        "session": "dojo-native-qualification",
+        "told": [],
+        "tool": "mcp__vestige__backfill",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 1,
+        "v": 1,
+        "wrote": [
+          {
+            "audit": "mem-0000000000000069",
+            "kind": "compaction-restore",
+            "new": false,
+            "told": 6
+          }
+        ]
+      },
+      {
+        "call": "controller-9d5d5602-90cb-48de-829e-46260d256ee4",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "88fdc119440fd3145f209d82686ec98dec9010e17c468d108c41cc72fb3b861e",
+        "event": "PostToolUse",
+        "held": 0,
+        "host": "benchmark-custom",
+        "manifest": "e3b0c44298fc1c14",
+        "ms": 0,
+        "pending": 0,
+        "prev": "56aa73244149c342b2078974f2c194c249691c35446fe65970ca4a2a29106d63",
+        "session": "dojo-native-qualification",
+        "told": [],
+        "tool": "mcp__vestige__backfill",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 1,
+        "v": 1,
+        "wrote": []
+      },
+      {
+        "call": "",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "1a58c65c32ba4dec9e06ac202360a8ed12140bf59ff64fb3daa049d71d981b1e",
+        "event": "Stop",
+        "held": 0,
+        "host": "benchmark-custom",
+        "manifest": "e3b0c44298fc1c14",
+        "ms": 0,
+        "pending": 0,
+        "prev": "88fdc119440fd3145f209d82686ec98dec9010e17c468d108c41cc72fb3b861e",
+        "session": "dojo-native-qualification",
+        "told": [],
+        "tool": "",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 1,
+        "v": 1,
+        "wrote": []
+      },
+      {
+        "call": "",
+        "chainBreaks": 0,
+        "chars": 0,
+        "digest": "cdf143d0cd5136355db6525d1415624caf123579cd8a1de02cfd887f771d7125",
+        "event": "SessionEnd",
+        "held": 0,
+        "host": "benchmark-custom",
+        "manifest": "e3b0c44298fc1c14",
+        "ms": 0,
+        "pending": 0,
+        "prev": "1a58c65c32ba4dec9e06ac202360a8ed12140bf59ff64fb3daa049d71d981b1e",
+        "session": "dojo-native-qualification",
+        "told": [],
+        "tool": "",
+        "ts": "2026-10-31T18:52:46Z",
+        "turn": 1,
+        "v": 1,
+        "wrote": []
+      }
+    ],
+    "resolutionsRecorded": 0,
+    "sessions": 2,
+    "since": "1h",
+    "stopsRecorded": 0,
+    "stopsTold": 0
+  },
+  "operator_history_isolation": {
+    "sessions": [
+      "dojo-native-qualification",
+      "dojo-native-qualification-child"
+    ],
+    "receipt_rows": 43,
+    "initial_memories": 0
+  },
+  "native_identities": {
+    "path": "/Users/entity002/Documents/Vestige/work/benchmark-campaigns-20261031/campaigns/terminal_bench/native_vendor/evidence/native-1793472753780407000/native/native-identities.json",
+    "sha256": "f6f335c194cc0a5792a22efead19bacc134b8f3b3699f568689b395f6411ab40"
+  },
+  "status": "PASS",
+  "hooks": [
+    "PostCompact",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PreCompact",
+    "PreToolUse",
+    "SessionEnd",
+    "SessionStart",
+    "Stop",
+    "SubagentStart",
+    "SubagentStop",
+    "UserPromptSubmit"
+  ],
+  "native_ack_count": 96
+}
