@@ -1,120 +1,96 @@
-# Four-benchmark real-engine campaign
+# LongMemEval-S real-engine campaign
 
-The current owner-authorized campaign contains only these official sets:
+The current owner-authorized run is **LongMemEval-S, all 500 official items**.
+LoCoMo, MemConflict, MPBench and every other benchmark remain stopped. Their
+existing evidence and all charges remain preserved.
 
-| Benchmark | Items per arm |
-|---|---:|
-| MemConflict | 3,750 |
-| LoCoMo | 1,986 questions from all ten conversations and all categories |
-| LongMemEval-S | 500 |
-| MPBench | 3,241 attacks plus 2,999 benign records |
+The four arms are bare, BM25, local BGE-small retrieval, and Vestige with the
+applicable memory-QA hooks. Every solver and judge request uses gpt-5.4-nano.
+The shared `runs/budget.db` retains its original $25 cap and all earlier spend.
 
-The four arms are bare, BM25, pinned local BGE-small retrieval, and one Vestige
-arm with the applicable **memory-QA hooks**. All solver and judge requests use
-`gpt-5.4-nano`. The shell entry point and Python argument guard cannot launch
-other benchmarks. Older adapters and evidence remain preserved outside this
-campaign's execution scope.
+## Full native MCP contract
 
-Source inventories and native-engine self-tests are preparation evidence.
-A scored result requires full coverage, current-configuration integrity checks,
-the pinned scorer, and its completed scoring receipt. Check `runs/STATUS.md`
-for current progress; a pending cell does not mean zero performance.
+Each independent Vestige item starts the repository-built, hashed
+`target/release/vestige-mcp` child with a fresh isolated store. Memory operations
+use stdio JSON-RPC through `benchmarks/memconflict/mcp_client.VestigeMCP`.
 
-## Native engine and hooks
+The model receives every tool returned by that child's `tools/list`, preserving
+all input schemas and native descriptions. The exact native `initialize`
+instructions are carried once in `memory_status.description`; system/user
+prompts retain their shared text and one neutral tools line. Startup logs bind
+the raw catalog, initialize response, model adaptation, binary and source hashes.
+There is no hand-selected tool subset, Python memory, rewritten lookup, answer
+hint or fallback. Exact-ID/tag lookup semantics remain native.
 
-Every independent memory lifetime starts the repository-built
-`target/release/vestige-mcp` child with its own data directory. All Vestige memory
-operations use stdio JSON-RPC through
-`benchmarks/memconflict/mcp_client.VestigeMCP`. The release build is locked and its
-SHA-256 is recorded in the build manifest and per-item records. No Python memory
-implementation is used on the Vestige path; the BM25 and BGE baselines have their
-own private corpora.
+Child HOME, XDG directories, temporary files, Operator state and actual working
+directory are item-local. Ambient credentials and loader overrides are removed.
+The full catalog stays visible while external collection and filesystem effects
+outside the worker are refused. Such refusals are separately logged host
+boundaries and terminate the actual episode; they are never called native gate
+responses or credited as security successes.
 
-`runs/HOOKS.md` inventories every script and settings fragment. The memory-QA
-profile selects the unchanged native SessionStart registration and pulse memory
-injection registration from those fragments. Tool-action veto, Operator stop,
-and preflight hooks are not applicable: no external action tool calls occur in
-these loops. MPBench's normal memory writes still pass through Strata's real
-write gate. An unavailable legacy pulse endpoint produces the original hook's
-natural empty output; there is no replacement retrieval path.
+`runs/HOOKS.md` inventories the original scripts/fragments. The unchanged native
+SessionStart and pulse registrations apply. Action/preflight/veto hooks remain
+outside the owner-selected memory-QA profile. No machine-wide memory/history is
+loaded. Unsupported native pulse endpoints retain their recorded empty output.
 
-Every MPBench memory-arm item submits the exact official gold-free raw input
-envelope through its normal initial write path before model inference. BM25/BGE
-store the same raw bytes. The auditor checks the native request/reply and actual
-write-operation log; coverage reads without a write cannot qualify. Bare has no
-persistent store. The earlier profile whose pilot never wrote is explicitly
-invalid and preserved in `runs/profile-history.jsonl` and `runs/INTEGRITY.md`.
+## Required proof before paid inference
 
-Hook HOME, state, working directory, engine and data paths are isolated. No
-machine-wide memory or Operator history is loaded. Raw historical dialogue is
-ingested through the engine during the current item's run. Gold targets and
-annotations remain separate from every solver input. System instructions differ
-only by one neutral tool-description line; raw retrieval results are arm-specific.
+A zero-provider proof uses the fixed-seed ten official items. Every item starts
+with an independent store, ingests only its raw gold-free history through normal
+native writes, calls exact `history`-tag recall and follows native pagination.
+Returned IDs and full contents must match this item's actual admissions.
+
+Only after retrieval finishes does the offline validator open official relevance
+annotations to check that the returned memories include relevant evidence. Gold
+labels never select writes, lookup handles or model inputs. This proves native
+memory reachability and relevant-evidence coverage, not semantic ranking or
+answer accuracy. Two raw examples, negative-handle controls, real child-kill
+controls and source hashes are retained in `runs/longmemeval/recall-proof.*`.
+
+The old five-tool Vestige profile is invalid for a full-product comparison. Its
+evidence remains in `runs/invalidated/restricted-mcp-profile-1449b1a9`.
+Every one of the 500 Vestige items is rerun under the corrected contract.
+
+## Saved baseline recovery
+
+Bare, BM25 and BGE answers are retained through an explicit pinned resume
+manifest. The verifier authenticates unchanged model, prompts, official data and
+scorer, aggregate budgets, retrieval implementation, actual provider message
+chains, response usage and settled ledger attempts. Original checkpoints,
+identities, phases, timestamps and raw API logs remain attributable through
+`origin`; only operational shard mapping changes. No Vestige answer is imported.
 
 ## Execution and reproduction
 
-Prerequisites are the recorded Python environment, pinned official sources/data
-under `runs/upstream`, source hook audit, and owner-only `runs/.env.openai`.
-Credentials are ignored by Git and never printed. Preserve the existing
-`runs/budget.db`; do not reset it to obtain another spending allowance.
+Keep the existing official data under `runs/upstream`, hook source audit and
+ignored owner-only `runs/.env.openai`. Never print credentials or reset the ledger.
 
 ```sh
-bash benchmarks/real_engine/reproduce.sh
-# Or one of the same four sets, using the same ledger and campaign lock:
-bash benchmarks/real_engine/reproduce.sh --benchmarks memconflict,locomo
+# First: zero-provider proof. Inspect its ten outcomes and two raw examples.
+bash benchmarks/real_engine/reproduce.sh --benchmarks longmemeval \
+  --native-proof-only --resume-baselines runs/lme-source-bundle.json
+# After proof: recover baselines, qualify the fresh Vestige pilot, run all500.
+bash benchmarks/real_engine/reproduce.sh --benchmarks longmemeval \
+  --resume-baselines runs/lme-source-bundle.json
 ```
 
-The entry point rebuilds the locked release binary, records its hash, and starts
-one controller. Each benchmark uses ten deterministic shards per arm. Sharding
-is SHA-256(item_id) modulo ten; the fixed pilot seed is 20261101. A single global
-semaphore limits requests to twenty, including judge calls. HTTP timeouts are
-sixty seconds, with up to six retries and exponential backoff with jitter for
-429, 5xx, timeout and transport failures.
+Both commands rebuild the locked release binary and use one campaign lock.
+Execution uses 30 deterministic workers per arm, SHA-256(item_id) modulo30,
+seed20261101, and at most40 API requests globally, including retries/judges.
+Timeouts are60seconds; transient failures have up to6 retries with jitter.
+BGE construction queues outside executor threads so its existing serialized
+model access cannot starve native MCP work. Retrieval values are unchanged.
 
-Each benchmark first collects ten unscored official items per arm, runs its real
-mid-run engine-kill control, and is independently audited. A passing benchmark
-immediately starts its full official set while other pilots continue. Equal
-aggregate call/output/context caps include hook model calls. Pilot evidence is
-bound to the exact source/configuration and checkpoint identity.
+Every finished item is flushed immediately. Errors and actual budget-limited
+responses/stores remain visible. Engine death aborts without a fallback.
+Equal per-item caps remain6calls,2048aggregateoutputtokens,32768contexttokens.
+Every API attempt reserves an upper charge before sending; actual usage settles
+it. Ambiguous reservations stay encumbered until reconciled with evidence.
 
-The three required checker regressions cover fabricated PID/hash plus
-request-only evidence, budget parity without actual settled usage, and obsolete
-pilot evidence. Native logs require matching engine startup, initially empty
-store, MCP requests and responses. MPBench's verified native security refusals
-are recorded as gate decisions, rather than mistaken for engine death.
-
-Each finished item is appended and flushed to its worker checkpoint. Failed
-native tool requests return their exact MCP error envelopes to the model within
-the common budget; transport failures still abort. Output, iteration and context
-caps end an episode with its actual partial response or store. The unchanged
-scorer assesses that real outcome, including losses; no replacement answer or
-metric is supplied. Episode termination reasons are recorded.
-
-Each finished item is appended and flushed to its worker checkpoint. Failed
-attempts are preserved separately and retry at the end. Restarts reuse only
-matching successful checkpoint identities. Signal handlers clean up owned child
-engines. A native death never enables a fallback memory implementation.
-
-Every API attempt reserves a conservative bound in the shared $25 SQLite ledger
-before sending. Actual response usage settles it. Ambiguous failed attempts keep
-their reservations; they are not asserted to be confirmed charges. The ledger
-includes superseded preparation. Forecasts are printed from one calibration
-item per arm; forecasts never reduce the full official manifests.
-
-The status writer updates `runs/STATUS.md` every five minutes. Exact completed
-and missing IDs are recorded in each benchmark's `coverage.json`. Official
-scoring starts only after all four arms have a complete duplicate-free merged
-file. Scorer source pins and one completed invocation receipt bind each scored
-output to that merge. Reports show means, bootstrap CIs, n, costs and hashes;
-missing or invalid results never populate a score cell.
-
-MPBench uses **scored with our implementation of the paper's metrics, no
-official scorer available**. The scorer is frozen in commit `c126b885`; its
-bytes must remain unchanged. Missing public targets and unobserved defense
-decisions are explicitly unscorable, with coverage/bounds disclosed. No
-synthetic labels are inserted.
-
-The separately launched `benchmarks/four_report_watch.py` makes no inference
-calls. After the existing controller exits, it re-audits these four benchmarks
-and writes the qualified-only summary, listing every unfinished/invalid set.
-No code or result is pushed automatically.
+`runs/STATUS.md` updates every5minutes. Exact finished/missing IDs are recorded
+in coverage artifacts. Official scoring runs once on each complete merged arm
+only after all four full merges and fresh integrity checks. Reports contain
+means,95%bootstrapCIs,n,costs,dataset/source/binaryhashes and termination counts.
+Partial checkpoints, native self-tests and proof files never become scores.
+Everything remains on the local `bench/real-engine` branch; no push is automatic.

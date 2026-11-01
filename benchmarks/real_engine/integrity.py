@@ -477,6 +477,55 @@ def _native_item(row, checkpoint, runs, manifest):
     return check("native_item", "PASS", f"Actual hashed child MCP calls={request_count}, writes={write_count}, reads={read_count}, verified write refusals={refusal_count}, unchanged forwarded tool errors={forwarded_error_count}; zero chosen writes is not fabricated admission.", observations)
 
 
+def _full_native_contract_check(row,checkpoint,requests,repo=None):
+    identity=row.get("engine") or {}
+    root=Path(identity.get("data_dir",".")).parent
+    log=root/"mcp.jsonl"
+    starts=[(number,event) for number,event in lines(log) if event.get("kind")=="engine_start"]
+    if len(starts)!=1:
+        return check("full_native_mcp_contract","FAIL","Full MCP contract lacks one actual child start.",[evidence(log)])
+    number,event=starts[0]
+    catalog=event.get("tools")
+    initialize=event.get("initialize")
+    if not isinstance(catalog,list) or not isinstance(initialize,dict) or not isinstance(initialize.get("instructions"),str) or not initialize["instructions"]:
+        return check("full_native_mcp_contract","FAIL","Actual complete native catalog/initialize instructions were not captured.",[evidence(log,number)])
+    names=[tool.get("name") for tool in catalog]
+    if not names or len(names)!=len(set(names)) or "memory_status" not in names:
+        return check("full_native_mcp_contract","FAIL","Native catalog is empty, duplicated or lacks discovery.",[evidence(log,number)])
+    expected=[]
+    for tool in catalog:
+        description=tool.get("description","")
+        if not isinstance(description,str) or not isinstance(tool.get("inputSchema"),dict):
+            return check("full_native_mcp_contract","FAIL","Actual native schema/description is malformed.",[evidence(log,number)])
+        if tool["name"]=="memory_status":description+="\n\nMCP server instructions:\n"+initialize["instructions"]
+        expected.append({"type":"function","function":{"name":tool["name"],"description":description,"parameters":tool["inputSchema"]}})
+    contract={"complete_catalog":True,"tool_count":len(catalog),
+        "catalog_sha256":hashlib.sha256(canonical(catalog).encode()).hexdigest(),
+        "initialize_sha256":hashlib.sha256(canonical(initialize).encode()).hexdigest(),
+        "model_tools_sha256":hashlib.sha256(canonical(expected).encode()).hexdigest(),
+        "instructions_sha256":hashlib.sha256(initialize["instructions"].encode()).hexdigest(),
+        "instructions_carrier":"memory_status.description"}
+    try:
+        captured_catalog=json_file(root/"mcp-tools.json",{}).get("tools")
+        captured_initialize=json_file(root/"mcp-initialize.json")
+    except (ValueError,TypeError,AttributeError):
+        captured_catalog=captured_initialize=None
+    if (catalog!=captured_catalog or initialize!=captured_initialize or event.get("model_tools")!=expected
+            or identity.get("native_contract")!=contract or event.get("identity",{}).get("native_contract")!=contract):
+        return check("full_native_mcp_contract","FAIL","Child catalog, initialize bytes, model adaptation or contract hashes disagree.",[evidence(log,number)])
+    raw=Path(row.get("raw_log",""))
+    if not raw.is_absolute() and repo is not None:raw=repo/raw
+    relevant=[request for request in requests if Path(request["path"]).resolve()==raw.resolve()
+              and "judge" not in str(request["row"].get("identity",{}).get("phase",""))]
+    if not relevant:
+        return check("full_native_mcp_contract","PENDING","No actual solver payload exposed this item's native client contract.",[evidence(raw)])
+    bad=[request for request in relevant if request["row"].get("payload",{}).get("tools")!=expected]
+    return check("full_native_mcp_contract","FAIL" if bad else "PASS",
+        "Every actual solver payload must expose all child-advertised native tools with exact schemas/descriptions and unchanged native initialize instructions.",
+        [evidence(log,number),evidence(root/"mcp-tools.json"),evidence(root/"mcp-initialize.json")]
+        +[evidence(Path(request["path"]),request["line"]) for request in bad or relevant[:1]])
+
+
 def _runtime_paths(completed):
     for checkpoint, number, row in completed:
         identities = row.get("engine_identities") or ([row["engine"]] if isinstance(row.get("engine"), dict) else [])
@@ -484,6 +533,32 @@ def _runtime_paths(completed):
             data = identity.get("data_dir")
             if data:
                 yield checkpoint, number, row, identity, Path(data).parent
+
+
+def _worker_mapping_check(repo,runs,name,plan,completed,official_items):
+    config=json_file(runs/"four-config.json",{})
+    workers=plan.get("workers",config.get("workers"))
+    path=runs/name/"shards.json"
+    if workers!=30 or type(workers) is not int:
+        return check("current_worker_mapping","FAIL","Current LongMemEval execution must use 30 deterministic worker shards.",[evidence(path)])
+    if official_items is None or not path.is_file():
+        return check("current_worker_mapping","PENDING","Independent full official set or current shard map missing.",[evidence(path)])
+    try:declared=json_file(path,{})
+    except (ValueError,OSError):
+        return check("current_worker_mapping","FAIL","Current shard map is unreadable.",[evidence(path)])
+    from .runtime import shard_id
+    expected={_item_value(item,"id"):shard_id(_item_value(item,"id"),workers) for item in official_items}
+    if declared.get("workers")!=workers or declared.get("items")!=expected:
+        return check("current_worker_mapping","FAIL","Current shard map does not exactly cover every official item under the 30-worker hash mapping.",[evidence(path)])
+    bad=[]
+    for checkpoint,number,row in completed:
+        worker=expected.get(row.get("item_id"))
+        filename=re.fullmatch(r"worker-(\d+)\.jsonl",checkpoint.name)
+        if (worker is None or type(row.get("worker_id")) is not int or row.get("worker_id")!=worker
+                or row.get("shard")!=worker or not filename or int(filename.group(1))!=worker):
+            bad.append(evidence(checkpoint,number,detail="Checkpoint worker/shard differs from current deterministic map"))
+    return check("current_worker_mapping","FAIL" if bad else "PASS",
+                 "Every current checkpoint uses the full official 30-worker map; prior worker identities survive only as source lineage.",bad or [evidence(path,count=len(expected))])
 
 
 def _mpbench_exposure(row, checkpoint, official_item, runs, repo):
@@ -588,6 +663,8 @@ def _native_provenance(completed):
                 catalog[key].extend({"text":text,"timestamp":event.get("timestamp"),"path":str(root/"mcp.jsonl"),"line":line} for text in texts)
             if event.get("kind") == "engine_start":
                 catalog[key].extend({"text":text,"timestamp":event.get("timestamp"),"path":str(root/"mcp.jsonl"),"line":line} for _,text in strings(event.get("tools",[])))
+                catalog[key].extend({"text":text,"timestamp":event.get("timestamp"),"path":str(root/"mcp.jsonl"),"line":line} for _,text in strings(event.get("model_tools",[])))
+                catalog[key].extend({"text":text,"timestamp":event.get("timestamp"),"path":str(root/"mcp.jsonl"),"line":line} for _,text in strings(event.get("initialize",{})))
         if len(identities_per_item[item])==1:
             catalog[item]=catalog[key]
     return catalog
@@ -911,7 +988,7 @@ def _parity(requests, plan, benchmark, official_items, responses=None, runs=None
     return check("prompt_budget_parity","PASS","Ten four-arm actual initial prompts match; aggregate solver-plus-hook caps verified against actual response usage and shared settled ledger.",observations)
 
 
-def _pilot_check(plan,arm,reqs,completed,official_items=None):
+def _pilot_check(plan,arm,reqs,completed,official_items=None,lineage=None):
     """Only the frozen ten IDs under this exact candidate can qualify it."""
     pilot=plan.get("pilot",{})
     config=plan.get("config_hash")
@@ -930,11 +1007,75 @@ def _pilot_check(plan,arm,reqs,completed,official_items=None):
               if r["row"].get("identity",{}).get("config_hash")==config}
     qualified={row.get("item_id") for _,_,row in completed
                if row.get("config_hash")==config and row.get("run_identity") in expected
-               and row.get("phase")=="integrity_preflight" and row.get("score") is None}
+               and row.get("phase")=="integrity_preflight" and row.get("score") is None and not row.get("origin")}
+    if arm in {"bare","bm25","embedding"}:
+        for _,_,row in completed:
+            original=(lineage or {}).get((arm,row.get("item_id"),row.get("trial",0)))
+            if not original or original.get("source_pilot") is not True:
+                continue
+            source=original["source_row"]
+            source_requests=[request for request in reqs if Path(request["path"]).resolve()==Path(original["raw_log_path"]).resolve()
+                             and request["row"].get("identity",{}).get("config_hash")==source.get("config_hash")
+                             and request["row"].get("identity",{}).get("item_id")==source.get("item_id")]
+            if (source_requests and source.get("phase")==row.get("phase")=="integrity_preflight"
+                    and row.get("run_identity") in expected and row.get("config_hash")==config and source.get("score") is None):
+                observed.add(row.get("item_id"));qualified.add(row.get("item_id"))
     refs=[evidence(path,number,detail={"item_id":row.get("item_id"),"run_identity":row.get("run_identity"),"config_hash":row.get("config_hash")})
           for path,number,row in completed if row.get("item_id") in ids and row.get("config_hash")==config]
     return check("ten_unscored_pilot","PASS" if set(ids)<=observed&qualified else "PENDING",
-                 "Exactly the frozen ten official IDs require unscored current-config requests and completed current-checkpoint records.",refs)
+                 "Frozen ten official IDs require fresh current-config evidence or independently authenticated original baseline pilots; imported Vestige or relabeled source phases cannot qualify.",refs)
+
+
+def _baseline_lineage_check(repo,runs,plan,completed,official_items):
+    imports=[(path,number,row) for path,number,row in completed if row.get("origin")]
+    if not imports:
+        return check("baseline_resume_lineage","PASS","No inherited checkpoint rows; current evidence is evaluated directly."),{}
+    spec=plan.get("baseline_resume") or {}
+    declared=Path(spec.get("path",""))
+    path=(declared if declared.is_absolute() else runs/declared).resolve()
+    refs=[evidence(path)]
+    if not spec or not path.is_relative_to(runs.resolve()) or not path.is_file() or sha(path)!=spec.get("sha256"):
+        return check("baseline_resume_lineage","FAIL","Imported baseline rows lack the exact pinned campaign-local lineage manifest.",refs),{}
+    if official_items is None:
+        return check("baseline_resume_lineage","PENDING","Independent official items unavailable for lineage verification.",refs),{}
+    try:
+        from .resume import validate_imported_baseline
+        manifest=json_file(path)
+        current_config=json_file(runs/"four-config.json")
+        identity=json_file(runs/"longmemeval/identity.json")
+        verified={}
+        for checkpoint,number,row in imports:
+            if row.get("arm") not in {"bare","bm25","embedding"} or row.get("benchmark")!="longmemeval":
+                raise ValueError("Only original LongMemEval baseline rows may be inherited; Vestige must be rerun")
+            if row["origin"].get("manifest_sha256")!=hashlib.sha256(canonical(manifest).encode()).hexdigest():
+                raise ValueError("Imported row manifest hash mismatch")
+            result=validate_imported_baseline(row,manifest,repo,current_config,plan,identity,official_items)
+            key=(row["arm"],row["item_id"],row.get("trial",0))
+            if key in verified:raise ValueError("Duplicate imported baseline identity")
+            verified[key]=result
+            refs.append(evidence(checkpoint,number,detail={"source_config_hash":result["source_row"].get("config_hash"),
+                "source_run_identity":result["source_row"].get("run_identity"),"source_pilot":result.get("source_pilot"),
+                "original_api_log":result["raw_log_path"]}))
+    except (ValueError,KeyError,TypeError,OSError,ImportError,RuntimeError) as exc:
+        return check("baseline_resume_lineage","FAIL","Original baseline lineage rejected: "+str(exc),refs),{}
+    return check("baseline_resume_lineage","PASS","Only source-pinned scientifically identical baseline rows inherited; original API identities, phases, responses, usage and ledger are preserved.",refs),verified
+
+
+def _native_retrieval_proof_check(repo,runs,plan,official_items):
+    spec=plan.get("native_retrieval_proof") or {}
+    if plan.get("full_native_mcp_required") is not True or not spec:
+        return check("native_ten_item_recall_proof","PENDING","The current full native MCP plan and fixed-ten native recall proof have not been recorded.")
+    if official_items is None:
+        return check("native_ten_item_recall_proof","PENDING","Independent complete official LongMemEval items unavailable.")
+    path=Path(spec.get("path",""))
+    try:
+        from .recall_proof import validate_recall_proof
+        result=validate_recall_proof(repo,runs,plan,official_items)
+    except (ValueError,KeyError,TypeError,OSError,ImportError,RuntimeError) as exc:
+        return check("native_ten_item_recall_proof","FAIL","Actual native recall proof rejected: "+str(exc),[evidence(path)])
+    return check("native_ten_item_recall_proof","PASS",
+        "Ten fixed official items independently replayed from raw native evidence: normal history writes, real admitted IDs/content, full exact-tag pagination, complete MCP initialization/catalog, nonexistent-handle and same-child kill controls. Reachability is not semantic ranking or answer accuracy.",
+        [evidence(path,count=len(result["items"]),detail={"sha256":spec["sha256"],"item_ids":result["item_ids"],"items":result["items"]})])
 
 
 def _candidate_config_check(repo,runs,plan):
@@ -1101,6 +1242,29 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
         source_plan=_scorer_source(repo,runs,name,plan)
         full_plan,expected=_full_set(repo,runs,name,plan,official_items)
         official_by_id={_item_value(item,"id"):item for item in official_items or []}
+        all_completed=[entry for arm in ARMS for entry in checkpoints[name,arm]]
+        lineage_check,lineage=_baseline_lineage_check(repo,runs,plan,all_completed,official_items)
+        # These are the original API events under their original config/model
+        # identity, never rewritten as new calls. The source-pinned verifier
+        # authenticates their immutable checkpoint/log lineage and ledger.
+        seen_api={(entry["path"],entry["line"]) for arm in ARMS for entry in requests[name,arm]+responses[name,arm]}
+        for result in lineage.values():
+            raw_path=Path(result["raw_log_path"]).resolve()
+            for number,event in lines(raw_path):
+                identity=event.get("identity",{})
+                arm=identity.get("arm")
+                if arm not in {"bare","bm25","embedding"} or identity.get("benchmark")!=name:
+                    continue
+                key=(str(raw_path),number)
+                if key in seen_api:continue
+                entry={"path":str(raw_path),"line":number,"row":event,"baseline_source_identity":True}
+                if event.get("event")=="request":requests[name,arm].append(entry)
+                elif event.get("event")=="response":responses[name,arm].append(entry)
+                else:continue
+                seen_api.add(key)
+        worker_check=(_worker_mapping_check(repo,runs,name,plan,all_completed,official_items)
+                      if name=="longmemeval" and plan.get("full_native_mcp_required") else None)
+        recall_proof_check=_native_retrieval_proof_check(repo,runs,plan,official_items) if name=="longmemeval" else None
         scaffold_map=_scaffolds(repo) if official_items is not None and any(requests[name,arm] for arm in ARMS) else {}
         # Failed/abandoned attempts remain visible to leakage checks below, but
         # their request-only logs cannot establish completed-attempt usage.
@@ -1116,14 +1280,16 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
         parity=_parity(parity_requests,plan,name,official_items,responses,runs)
         for arm in ARMS:
             reqs, completed = requests[name, arm], checkpoints[name, arm]
-            checks = [_source_check(repo, name),build_check,candidate_check]
+            checks = [_source_check(repo, name),build_check,candidate_check,lineage_check]
+            if worker_check:checks.append(worker_check)
+            if recall_proof_check:checks.append(recall_proof_check)
             if parse_failures[name]:
                 checks.append(check("evidence_parse", "FAIL", "Actual evidence is corrupt or official identity cannot be verified.", parse_failures[name]))
             else:
                 checks.append(check("evidence_parse", "PASS", "No malformed active evidence observed."))
             observed_ids={r['row'].get('identity',{}).get('item_id') for r in reqs if r['row'].get('identity',{}).get('item_id')}
             completed_ids={row.get('item_id') for _,_,row in completed if row.get('score') is None}
-            checks.append(_pilot_check(plan,arm,reqs,completed,official_items))
+            checks.append(_pilot_check(plan,arm,reqs,completed,official_items,lineage))
             bad = [r for r in reqs if r["row"].get("payload", {}).get("model") != MODEL or r["row"].get("payload", {}).get("temperature") != 0]
             checks.append(check("model_temperature", "FAIL" if bad else "PASS" if reqs else "PENDING",
                 "Every observed model request must use nano and temperature0.",
@@ -1189,6 +1355,9 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
             if arm == "vestige":
                 native = [_native_item(row, path, runs, manifest) for path, _, row in completed]
                 checks.extend(native or [check("native_item", "PENDING", "No actual current-profile completed item to inspect.")])
+                if name=="longmemeval":
+                    checks.extend([_full_native_contract_check(row,path,reqs,repo) for path,_,row in completed]
+                                  or [check("full_native_mcp_contract","PENDING","No fresh current-item full native MCP solver evidence.")])
                 checks.append(_kill_check(repo,runs,plan))
                 checks.append(_hook_checks(repo,runs,completed))
             checks.extend([parity,source_plan,full_plan])
@@ -1200,9 +1369,11 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
                          "ready_for_official_scorer":combine(pre_score+[merge])=="PASS",
                          "ready_to_report":status=="PASS", "checks": checks, "completed_items": len(completed),
                          "actual_model_requests": len(reqs), "literal_overlaps": overlaps,
+                         "inherited_baseline_items":sum(key[0]==arm for key in lineage),
                          "excluded_obsolete_profile_records":excluded_profiles[name,arm]}
         status = combine([{"status": value["status"]} for value in arms.values()])
         preflight_checks=[_source_check(repo,name),build_check,candidate_check]
+        if recall_proof_check:preflight_checks.append(recall_proof_check)
         hook_source=json_file(runs/"hook-audit.json",{})
         pins_match=bool(hook_source.get("source_pins")) and all((repo/p).is_file() and sha(repo/p)==digest for p,digest in hook_source.get("source_pins",{}).items())
         preflight_ok=(combine(preflight_checks)=="PASS" and hook_source.get("audit_complete") is True and pins_match and status!="FAIL")

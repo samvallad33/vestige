@@ -7,7 +7,7 @@ from collections import defaultdict
 from unittest.mock import patch
 
 from .integrity import (IntegrityInvalid, IntegrityPending, _full_set, _hook_checks,
-    _candidate_config_check, _kill_check, _merge_and_score, _merge_prior_reports, _native_item, _native_provenance, _mpbench_exposure, _parity, _pilot_check, _walk, audit, canonical, lines, literal_overlap_audit,
+    _baseline_lineage_check, _candidate_config_check, _full_native_contract_check, _kill_check, _merge_and_score, _merge_prior_reports, _native_item, _native_provenance, _native_retrieval_proof_check, _mpbench_exposure, _parity, _pilot_check, _walk, _worker_mapping_check, audit, canonical, lines, literal_overlap_audit,
     require, sha, strings)
 
 
@@ -136,6 +136,103 @@ class GateTests(unittest.TestCase):
 
 
 class CandidateBindingTests(unittest.TestCase):
+    def test_recall_proof_flag_without_raw_ten_item_evidence_never_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from types import SimpleNamespace
+            from .recall_proof import fixed_ids,SCHEMA,SEED
+            from .datasets import SOURCES
+            repo=Path(tmp);runs=repo/"runs";runs.mkdir()
+            items=[SimpleNamespace(id=str(i)) for i in range(500)]
+            self.assertEqual(_native_retrieval_proof_check(repo,runs,{},items)["status"],"PENDING")
+            (runs/"build-manifest.json").write_text(canonical({"binary_sha256":"binary"}))
+            proof={"schema":SCHEMA,"seed":SEED,"config_hash":"current","binary_sha256":"binary",
+                   "dataset_sha256":SOURCES["longmemeval"]["data_sha256"],"item_ids":fixed_ids(items),"items":[],"status":"PASS"}
+            path=runs/"proof.json";path.write_text(canonical(proof)+"\n")
+            plan={"config_hash":"current","full_native_mcp_required":True,"native_retrieval_proof":{"path":str(path),"sha256":sha(path)}}
+            self.assertEqual(_native_retrieval_proof_check(repo,runs,plan,items)["status"],"FAIL")
+
+    def test_auditor_authenticates_baseline_origin_and_original_usage(self):
+        # Reuse the source-pinned unit evidence constructor; no model or engine
+        # runs here. Its dataset/scorer pins are explicitly unit fixtures.
+        from .test_resume import BaselineResumeTests
+        fixture=BaselineResumeTests("test_unchanged_baselines_recover_with_explicit_original_identity")
+        fixture.setUp();self.addCleanup(fixture.doCleanups)
+        manifest,checkpoints,_,rows=fixture.imported()
+        manifest_path=fixture.runs/"baseline-resume.json"
+        manifest_path.write_text(canonical(manifest)+"\n")
+        (fixture.runs/"four-config.json").write_text(canonical(fixture.new))
+        identity_path=fixture.runs/"longmemeval/identity.json";identity_path.parent.mkdir(parents=True)
+        identity_path.write_text(canonical(fixture.new_id))
+        plan={**fixture.new_plan,"baseline_resume":{"path":str(manifest_path),"sha256":sha(manifest_path)}}
+        completed=[(cp.path,1,row) for cps in checkpoints.values() for cp in cps for row in cp.done.values()]
+        result,verified=_baseline_lineage_check(fixture.repo,fixture.runs,plan,completed,fixture.items)
+        self.assertEqual(result["status"],"PASS")
+        self.assertEqual(len(verified),3)
+        for original in verified.values():
+            self.assertEqual(original["source_row"]["config_hash"],fixture.old["config_hash"])
+            self.assertNotEqual(original["source_row"]["config_hash"],fixture.new["config_hash"])
+        changed=[(p,n,{**row,"response":"replacement answer"}) for p,n,row in completed]
+        self.assertEqual(_baseline_lineage_check(fixture.repo,fixture.runs,plan,changed,fixture.items)[0]["status"],"FAIL")
+        vestige=[(completed[0][0],1,{**completed[0][2],"arm":"vestige"})]
+        self.assertEqual(_baseline_lineage_check(fixture.repo,fixture.runs,plan,vestige,fixture.items)[0]["status"],"FAIL")
+        import sqlite3
+        with sqlite3.connect(fixture.ledger_path) as db:db.execute("UPDATE calls SET actual=actual+1")
+        self.assertEqual(_baseline_lineage_check(fixture.repo,fixture.runs,plan,completed,fixture.items)[0]["status"],"FAIL")
+
+    def test_full_native_contract_requires_every_catalog_tool_and_instructions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);native=root/"native";native.mkdir()
+            catalog=[{"name":"memory_status","description":"Discover tools.","inputSchema":{"type":"object"}},
+                     {"name":"recall","description":"Exact native recall.","inputSchema":{"type":"object","properties":{"handle":{"type":"string"}}}}]
+            initialize={"instructions":"Use the exact native handle contract.","serverInfo":{"name":"native"}}
+            from .native_contract import model_tools,contract_identity
+            tools=model_tools(catalog,initialize)
+            identity={"data_dir":str(native/"strata"),"native_contract":contract_identity(catalog,initialize)}
+            event={"kind":"engine_start","tools":catalog,"initialize":initialize,"model_tools":tools,"identity":identity}
+            (native/"mcp.jsonl").write_text(canonical(event)+"\n")
+            (native/"mcp-tools.json").write_text(canonical({"tools":catalog})+"\n")
+            (native/"mcp-initialize.json").write_text(canonical(initialize)+"\n")
+            row={"engine":identity,"raw_log":str(root/"api.jsonl")}
+            reqs=[{"path":row["raw_log"],"line":1,"row":{"identity":{"phase":"integrity_preflight"},"payload":{"tools":tools}}}]
+            self.assertEqual(_full_native_contract_check(row,root/"worker-0.jsonl",reqs)["status"],"PASS")
+            reqs[0]["row"]["payload"]["tools"]=tools[:1]
+            self.assertEqual(_full_native_contract_check(row,root/"worker-0.jsonl",reqs)["status"],"FAIL")
+            reqs[0]["row"]["payload"]["tools"]=[{"type":"function","function":{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]}} for tool in catalog]
+            self.assertEqual(_full_native_contract_check(row,root/"worker-0.jsonl",reqs)["status"],"FAIL")
+            reqs[0]["row"]["payload"]["tools"]=tools
+            (native/"mcp-initialize.json").write_text(canonical({**initialize,"instructions":"different"}))
+            self.assertEqual(_full_native_contract_check(row,root/"worker-0.jsonl",reqs)["status"],"FAIL")
+
+    def test_lme_30_worker_mapping_checks_imported_current_shards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);runs=root/"runs";runs.mkdir()
+            (runs/"four-config.json").write_text(canonical({"workers":30}))
+            items=[{"id":"a"},{"id":"b"}]
+            from .runtime import write_shard_map,shard_id
+            write_shard_map(runs/"longmemeval/shards.json",[item["id"] for item in items],workers=30)
+            worker=shard_id("a",30)
+            row={"item_id":"a","worker_id":worker,"shard":worker,"origin":{"source_worker_id":shard_id("a",10)}}
+            completed=[(runs/f"longmemeval/bare/worker-{worker}.jsonl",1,row)]
+            self.assertEqual(_worker_mapping_check(root,runs,"longmemeval",{},completed,items)["status"],"PASS")
+            row["worker_id"]=(worker+1)%30
+            self.assertEqual(_worker_mapping_check(root,runs,"longmemeval",{},completed,items)["status"],"FAIL")
+
+    def test_baseline_pilot_needs_authenticated_source_pilot_and_phase(self):
+        ids=[str(i) for i in range(10)]
+        plan={"config_hash":"new","run_identities":{"bare":"new-cp"},"pilot":{"seed":20261101,"config_hash":"new","item_ids":ids}}
+        reqs=[];completed=[];lineage={}
+        for item in ids:
+            raw=f"/source/{item}/api.jsonl"
+            source={"item_id":item,"config_hash":"old","phase":"integrity_preflight","score":None}
+            row={**source,"arm":"bare","trial":0,"config_hash":"new","run_identity":"new-cp","origin":{"source":"verified"}}
+            completed.append((Path("worker-0.jsonl"),1,row))
+            reqs.append({"path":raw,"line":1,"row":{"identity":{"item_id":item,"config_hash":"old"}}})
+            lineage["bare",item,0]={"source_row":source,"raw_log_path":raw,"source_pilot":True}
+        self.assertEqual(_pilot_check(plan,"bare",reqs,completed)["status"],"PENDING")
+        self.assertEqual(_pilot_check(plan,"bare",reqs,completed,lineage=lineage)["status"],"PASS")
+        lineage["bare","0",0]["source_pilot"]=False
+        self.assertEqual(_pilot_check(plan,"bare",reqs,completed,lineage=lineage)["status"],"PENDING")
+
     def test_partial_audit_prunes_other_benchmark_logs_before_reading(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo=Path(tmp);runs=repo/"runs";runs.mkdir()

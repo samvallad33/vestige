@@ -50,6 +50,8 @@ class VestigeMCP:
         warmup_seconds: float = DEFAULT_WARMUP_SECONDS,
         timeout: float = 300.0,
         extra_env: Optional[Dict[str, str]] = None,
+        cwd: Optional[str] = None,
+        clean_env: bool = False,
     ) -> None:
         self.binary = str(pathlib.Path(binary).resolve())
         self.data_dir = str(pathlib.Path(data_dir).resolve())
@@ -60,6 +62,8 @@ class VestigeMCP:
         self._out: "queue.Queue[Optional[str]]" = queue.Queue()
         self._stderr_lines: list[str] = []
         self._extra_env = dict(extra_env or {})
+        self.cwd = str(pathlib.Path(cwd).resolve()) if cwd is not None else None
+        self.clean_env = clean_env
         self.server_info: Dict[str, Any] = {}
         self.observed_warmup: Dict[str, Any] = {}
         self.last_tool_result: Dict[str, Any] = {}
@@ -75,7 +79,16 @@ class VestigeMCP:
 
     def start(self) -> None:
         pathlib.Path(self.data_dir).mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
+        if self.clean_env:
+            # A benchmark engine may expose host-facing native tools. Do not
+            # inherit API credentials, personal config overrides or loader/
+            # interpreter injection variables into that independent process.
+            essential = {"PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT", "WINDIR"}
+            env = {key: value for key, value in os.environ.items() if key in essential}
+            if not self.cwd or not pathlib.Path(self.cwd).is_dir() or "HOME" not in self._extra_env:
+                raise ValueError("clean_env requires an existing cwd and explicit isolated HOME")
+        else:
+            env = dict(os.environ)
         env["VESTIGE_DATA_DIR"] = self.data_dir
         env["VESTIGE_DASHBOARD_ENABLED"] = "false"
         env["VESTIGE_HTTP_ENABLED"] = "0"
@@ -87,6 +100,7 @@ class VestigeMCP:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
+            cwd=self.cwd,
             text=True,
             bufsize=1,
         )

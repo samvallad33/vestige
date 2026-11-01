@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import weakref
@@ -26,11 +27,8 @@ VestigeMCP = _CLIENT.VestigeMCP
 VestigeMCPError = _CLIENT.VestigeMCPError
 VestigeMCPToolError = _CLIENT.VestigeMCPToolError
 
-# Restrict host-facing tools, not the engine's memory semantics. In particular,
-# precedent/reflex/codebase are excluded: they can inspect machine-wide history.
-MEMORY_TOOLS = frozenset({"smart_ingest", "recall", "memory", "session_start",
-                          "memory_status", "causal_walk", "ghostlink", "receipt",
-                          "graph", "forgotten_lesson"})
+# Preserve the complete native catalog. Host-facing arguments are constrained
+# to this item's isolated working directory rather than hiding native tools.
 POLICY_FILES = ("commitments.json", "state/commitments-validated.json", "mode", "STRICT")
 ACTIVE_ENGINES = weakref.WeakSet()
 
@@ -144,6 +142,10 @@ class RealEngine:
         self._call_lock = threading.RLock()
         self._close_lock = threading.RLock()
         self.tools: list[dict] = []
+        self.initialize_result: dict = {}
+        self.cwd: Path | None = None
+        self.home: Path | None = None
+        self._cwd_scope = None
         self.identity: dict = {"binary_sha256": self.manifest["binary_sha256"], "source_commit": self.manifest["source_commit"]}
         self.audit = self.run_dir / "mcp.jsonl"
 
@@ -158,23 +160,47 @@ class RealEngine:
         ACTIVE_ENGINES.add(self)
         policy = isolate_policy(self.operator_source, self.run_dir / "operator")
         self.identity["operator_policy"] = policy
-        env = {"OPERATOR_HOME": str(self.run_dir / "operator"), "OPERATOR_MODE": policy["effective_mode"]}
+        home = self.run_dir / "home"
+        for path in (home, home / ".config", home / ".local/share", home / ".cache", self.run_dir / "tmp"):
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        env = {"OPERATOR_HOME": str(self.run_dir / "operator"), "OPERATOR_MODE": policy["effective_mode"],
+               "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"),
+               "XDG_DATA_HOME": str(home / ".local/share"), "XDG_CACHE_HOME": str(home / ".cache"),
+               "TMPDIR": str(self.run_dir / "tmp"), "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": "/dev/null"}
         if self.hooks_enabled:
             from .hooks import HookController
             self.hooks = HookController(self, self.hook_audit_path, self.hook_model_callback,
                                         profile=self.hook_profile)
             env.update(self.hooks.prepare())
-        self.client = VestigeMCP(str(self.binary), str(self.run_dir / "strata"), warmup_seconds=self.warmup, extra_env=env)
+            self.cwd = self.hooks.cwd
+        else:
+            self._cwd_scope = tempfile.TemporaryDirectory(prefix="vestige-engine-cwd-")
+            self.cwd = Path(self._cwd_scope.name).resolve()
+        self.home = Path(env["HOME"]).resolve()
+        if any((path / ".git").exists() for path in (self.cwd, *self.cwd.parents)):
+            raise RuntimeError("native engine working directory has a Git checkout ancestor")
+        env["GIT_CEILING_DIRECTORIES"] = str(self.cwd)
+        self.client = VestigeMCP(str(self.binary), str(self.run_dir / "strata"),
+                                warmup_seconds=self.warmup, extra_env=env,
+                                cwd=str(self.cwd), clean_env=True)
         try:
             self.client.start()
-            self.client.initialize()
-            native = self.client.request("tools/list")["tools"]
-            self.tools = [x for x in native if x["name"] in MEMORY_TOOLS]
-            if not {"smart_ingest", "recall", "memory"}.issubset({x["name"] for x in self.tools}):
+            self.initialize_result = self.client.initialize()
+            catalog = self.client.request("tools/list")
+            self.tools = catalog["tools"]
+            from .native_contract import contract_identity
+            contract = contract_identity(self.tools, self.initialize_result)
+            if not {"smart_ingest", "recall", "memory", "memory_status"}.issubset({x["name"] for x in self.tools}):
                 raise RuntimeError("required native memory tools missing")
+            from .runtime import atomic_write, canonical
+            atomic_write(self.run_dir / "mcp-initialize.json", canonical(self.initialize_result) + "\n")
+            atomic_write(self.run_dir / "mcp-tools.json", canonical(catalog) + "\n")
             self.identity.update({"pid": self.client._proc.pid, "data_dir": str(self.run_dir / "strata"),
                                   "operator_policy": policy, "server_info": self.client.server_info,
-                                  "transport": "stdio-jsonrpc", "client": "benchmarks/memconflict/mcp_client.VestigeMCP"})
+                                  "transport": "stdio-jsonrpc", "client": "benchmarks/memconflict/mcp_client.VestigeMCP",
+                                  "native_contract": contract, "workspace_dir": str(self.cwd),
+                                  "home_dir": str(self.home), "clean_environment": True})
             fresh = self._call("memory_status", {"view": "coverage"})
             self.identity["fresh_store_nodes"] = fresh["totalNodes"]
             if self.identity["fresh_store_nodes"] != 0:
@@ -189,7 +215,8 @@ class RealEngine:
                     "adapter_sha256": sha256(Path(__file__).with_name("hooks.py")),
                     "engine_adapter_sha256": sha256(Path(__file__)),
                     "native_endpoint_capabilities": self.hooks.native_status, "model": "gpt-5.4-nano"}
-            self._log({"kind": "engine_start", "identity": self.identity, "tools": self.tools})
+            self._log({"kind": "engine_start", "identity": self.identity, "tools": self.tools,
+                       "initialize": self.initialize_result, "model_tools": self.model_tools()})
             return self
         except BaseException:
             self.close()
@@ -208,6 +235,9 @@ class RealEngine:
                 if self.client:
                     self.client.close()
                     self.client = None
+                if self._cwd_scope is not None:
+                    self._cwd_scope.cleanup()
+                    self._cwd_scope = None
                 ACTIVE_ENGINES.discard(self)
 
     def __exit__(self, *exc):
@@ -233,7 +263,15 @@ class RealEngine:
         if not self.client or not self.client._proc or self.client._proc.poll() is not None:
             raise VestigeMCPError("benchmark engine is not running")
         if name not in {x["name"] for x in self.tools}:
-            raise ValueError(f"tool is outside memory boundary: {name}")
+            raise ValueError(f"tool was not advertised by the native server: {name}")
+        from .native_contract import NativeBoundaryViolation, validate_worker_arguments
+        try:
+            validate_worker_arguments(name, arguments, roots=(self.run_dir, self.cwd),
+                                      cwd=self.cwd, home=self.home)
+        except NativeBoundaryViolation as exc:
+            self._log({"kind": "boundary_refusal", "boundary": "worker_host_scope", "name": name,
+                       "arguments": arguments, "error": str(exc), "native_call_attempted": False})
+            raise
         self._log({"kind": "tool_request", "name": name, "arguments": arguments})
         try:
             result = self.client.call_tool(name, arguments)
@@ -243,6 +281,11 @@ class RealEngine:
             raise
         self._log({"kind": "tool_response", "name": name, "result": result, "raw_mcp_result": self.client.last_tool_result})
         return result
+
+    def model_tools(self) -> list[dict]:
+        """The complete initialized native contract for the model client."""
+        from .native_contract import model_tools
+        return model_tools(self.tools, self.initialize_result)
 
     def ingest_history(self, history: list[str]) -> list[dict]:
         results = []

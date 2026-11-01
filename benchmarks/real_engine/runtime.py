@@ -164,7 +164,7 @@ _loop_semaphores: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 def _global_semaphore() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
     if loop not in _loop_semaphores:
-        _loop_semaphores[loop] = asyncio.Semaphore(20)
+        _loop_semaphores[loop] = asyncio.Semaphore(40)
     return _loop_semaphores[loop]
 
 
@@ -184,12 +184,12 @@ class AsyncAPIPool:
     attempt stays reserved, including a 429/5xx, unless the caller later provides
     affirmative zero-charge evidence. No requests are issued by this module.
     """
-    def __init__(self, ledger: BudgetLedger, max_inflight: int = 20,
+    def __init__(self, ledger: BudgetLedger, max_inflight: int = 40,
                  max_retries: int = 6, base_delay: float = 1,
                  max_delay: float = 60, seed: int = 0,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
-        if not 1 <= max_inflight <= 20 or not 0 <= max_retries <= 6:
-            raise ValueError("max_inflight must be 1..20 and max_retries 0..6")
+        if not 1 <= max_inflight <= 40 or not 0 <= max_retries <= 6:
+            raise ValueError("max_inflight must be 1..40 and max_retries 0..6")
         self.ledger = ledger
         self.semaphore = asyncio.Semaphore(max_inflight)
         self.max_retries = max_retries

@@ -9,6 +9,30 @@ from .run import Campaign
 from .integrity import IntegrityInvalid
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_ten_item_native_proof_prevents_paid_lane(self):
+        from .recall_proof import RecallProofError
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign=Campaign.__new__(Campaign)
+            campaign.runs=Path(tmp);campaign.config_hash='unit-proof-gate'
+            campaign.benchmark=AsyncMock();campaign.autonomous=True
+            with patch('benchmarks.real_engine.datasets.load_longmemeval',return_value=[]), \
+                 patch('benchmarks.real_engine.recall_proof.run_recall_proof',new=AsyncMock(side_effect=RecallProofError('native evidence missing'))):
+                with self.assertRaises(RecallProofError):
+                    await campaign.pipeline('longmemeval')
+            campaign.benchmark.assert_not_awaited()
+
+    async def test_proof_only_exits_before_any_paid_benchmark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign=Campaign.__new__(Campaign)
+            campaign.runs=Path(tmp);campaign.config_hash='unit-proof-only'
+            campaign.benchmark=AsyncMock();campaign.autonomous=True;campaign.native_proof_only=True
+            root=campaign.runs/'longmemeval';root.mkdir()
+            (root/'recall-proof.json').write_text('{"test_fixture_only":true}')
+            with patch('benchmarks.real_engine.datasets.load_longmemeval',return_value=[]), \
+                 patch('benchmarks.real_engine.recall_proof.validate_recall_proof',return_value={'fixture':True}):
+                await campaign.pipeline('longmemeval')
+            campaign.benchmark.assert_not_awaited()
+
     async def check_transition(self,status):
         with tempfile.TemporaryDirectory() as tmp:
             campaign=Campaign.__new__(Campaign)
@@ -83,6 +107,14 @@ class ActualNativeProtocolTests(unittest.IsolatedAsyncioTestCase):
         row=await self.run_native_fixture([({'role':'assistant','content':'Actual partial model output'},'length')])
         self.assertEqual(row['status'],'complete');self.assertEqual(row['termination'],'output_limit')
         self.assertEqual(row['response'],'Actual partial model output');self.assertIsNone(row['score'])
+
+    async def test_actual_host_boundary_ends_episode_without_fake_native_response(self):
+        import json
+        row=await self.run_native_fixture([({'role':'assistant','content':None,'tool_calls':[
+            {'id':'outside-scope','type':'function','function':{'name':'gather','arguments':json.dumps({'action':'search','query':'outside'})}}]},'tool_calls')])
+        self.assertEqual(row['termination'],'host_boundary_refusal')
+        self.assertEqual(row['response'],'');self.assertIsNone(row['score'])
+        self.assertFalse(any(m.get('role')=='tool' for m in row['transcript']))
 
     async def test_engine_death_during_final_limited_reply_still_aborts(self):
         from .engine import VestigeMCPError

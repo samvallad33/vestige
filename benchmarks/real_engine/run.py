@@ -1,4 +1,4 @@
-"""Single-event-loop campaign: ten deterministic workers per memory arm."""
+"""Single-event-loop LongMemEval-S campaign with isolated native MCP memory."""
 from __future__ import annotations
 
 import argparse
@@ -59,12 +59,19 @@ def ci(scores, groups, seed=20261101):
 
 
 class Campaign:
-    def __init__(self, runs, names, preflight_count=0, autonomous=False):
-        if set(names)-set(FOUR):
-            raise ValueError("Owner scope permits only the four memory benchmarks")
+    def __init__(self, runs, names, preflight_count=0, autonomous=False, workers=30, max_inflight=40,
+                 resume_baselines=None, native_proof_only=False):
+        if names != ['longmemeval']:
+            raise ValueError("Owner scope permits only LongMemEval-S")
+        if workers != 30 or max_inflight != 40:
+            raise ValueError("Owner execution settings require30 workers and40 global in-flight requests")
         self.runs, self.names = runs, names
+        self.workers, self.max_inflight = workers, max_inflight
+        self.resume_baselines = Path(resume_baselines) if resume_baselines else None
+        self.native_proof_only = native_proof_only
+        self.embedding_preparation = asyncio.Semaphore(1)
         self.ledger = BudgetLedger(runs / "budget.db")
-        self.provider = NanoProvider(runs, self.ledger)
+        self.provider = NanoProvider(runs, self.ledger, max_inflight=max_inflight)
         self.progress = {}
         self.stop = asyncio.Event()
         self.prompts = audit_prompts()
@@ -79,8 +86,9 @@ class Campaign:
         source_files[str(client_source.relative_to(REPO))]=hashlib.sha256(client_source.read_bytes()).hexdigest()
         self.config={"schema":"four-memory-qa-v1","sources":source_files,
             "hooks":json.loads((runs/'hook-audit.json').read_text()),"profile":"memory_qa",
-            "model":MODEL,"temperature":0,"max_inflight":20,"http_timeout":60,
-            "workers":10,"limits":[MAX_ITERS,OUTPUT_BUDGET,CONTEXT_LIMIT],
+            "model":MODEL,"temperature":0,"max_inflight":max_inflight,"http_timeout":60,
+            "workers":workers,"limits":[MAX_ITERS,OUTPUT_BUDGET,CONTEXT_LIMIT],
+            "native_contract":"complete_tools_list_and_initialize_instructions_v1",
             "episode_policy":"native_tool_errors_forwarded_unchanged;score_actual_budget_limited_outputs_and_stores",
             "binary_sha256":self.manifest['binary_sha256'],"prompts":self.prompts}
         self.config_hash=h(self.config)
@@ -116,6 +124,16 @@ class Campaign:
             "budgets":{arm:{"max_calls":MAX_ITERS,"max_output":OUTPUT_BUDGET,"context":CONTEXT_LIMIT} for arm in ARMS},
             "scorer":scorer_spec,
             "kill_control":{"log":str(self.runs/name/'kill-control.jsonl')}}
+        plan['workers']=getattr(self,'workers',30)
+        plan['full_native_mcp_required']=name=='longmemeval'
+        proof=self.runs/name/'recall-proof.json'
+        if proof.exists():
+            plan['native_retrieval_proof']={'path':str(proof.resolve()),
+                'sha256':hashlib.sha256(proof.read_bytes()).hexdigest()}
+        resume=self.runs/name/'baseline-resume.json'
+        if resume.exists():
+            plan['baseline_resume']={'path':str(resume.resolve()),
+                'sha256':hashlib.sha256(resume.read_bytes()).hexdigest()}
         path=self.runs/'QUALIFICATION.json'
         old=json.loads(path.read_text()) if path.exists() else {}
         old.update(config_hash=self.config_hash,vestige_arm='memory_qa_hooks',
@@ -154,6 +172,7 @@ class Campaign:
 
     async def solve(self, benchmark, item, arm, trial, worker, attempt=0, kill_control=False):
         from .engine import HookedRealEngine,VestigeMCPToolError
+        from .native_contract import NativeBoundaryViolation
         from .retrieval import BM25Memory, BGEMemory
         safe_id = h(item.id)[:24]
         root = self.runs / benchmark / arm / f"worker-{worker}" / f"{safe_id}-trial-{trial}-attempt-{attempt}-{uuid.uuid4().hex[:8]}"
@@ -175,10 +194,7 @@ class Campaign:
                         manifest_path=self.runs / "build-manifest.json")
                 await asyncio.to_thread(engine.__enter__)
                 await asyncio.to_thread(engine.ingest_history, item.history)
-                allowed = {"recall", "memory", "session_start", "smart_ingest", "causal_walk"}
-                tools = [{"type": "function", "function": {"name": t["name"],
-                          "description": t.get("description", ""), "parameters": t["inputSchema"]}}
-                         for t in engine.tools if t["name"] in allowed]
+                tools = engine.model_tools()
                 if not any(t["function"]["name"] == "recall" for t in tools):
                     raise RuntimeError("real engine did not expose recall")
                 meta["engine"] = engine.identity
@@ -186,7 +202,14 @@ class Campaign:
                 memory = await asyncio.to_thread(BM25Memory, item.history)
                 tools = [SEARCH_TOOL]
             elif arm == "embedding":
-                memory = await asyncio.to_thread(BGEMemory, item.history)
+                # BGE already serializes model access. Queue outside executor
+                # threads so waiting embeddings cannot starve native MCP work.
+                semaphore=getattr(self,'embedding_preparation',None)
+                if semaphore is None:
+                    memory = await asyncio.to_thread(BGEMemory, item.history)
+                else:
+                    async with semaphore:
+                        memory = await asyncio.to_thread(BGEMemory, item.history)
                 tools = [SEARCH_TOOL]
             messages = [{"role": "system", "content": system_prompt(arm)},
                         {"role": "user", "content": item.question}]
@@ -249,6 +272,12 @@ class Campaign:
                     if engine:
                         try:
                             output = await asyncio.to_thread(engine.call, name, args)
+                        except NativeBoundaryViolation:
+                            # Preserve the actual episode/state on a host-scope
+                            # refusal. Never manufacture a native MCP response.
+                            response=message.get('content') or ''
+                            termination='host_boundary_refusal'
+                            break
                         except VestigeMCPToolError as exc:
                             # This is the exact native MCP response, not an
                             # alternate memory, repaired query, or answer hint.
@@ -266,6 +295,8 @@ class Campaign:
                         contexts=engine.hooks.pending_context[:]
                         engine.hooks.pending_context.clear()
                         messages.extend({"role":"user","content":x} for x in contexts)
+                if termination=='host_boundary_refusal':
+                    break
                 if remaining <= 0:
                     termination='output_limit'
                     break
@@ -334,7 +365,8 @@ class Campaign:
         trials = 3 if len(items) < 300 else 1
         root = self.runs / name
         root.mkdir(exist_ok=True)
-        write_shard_map(root / "shards.json", [i.id for i in items], workers=10, seed=20261101)
+        workers=getattr(self,'workers',30)
+        write_shard_map(root / "shards.json", [i.id for i in items], workers=workers, seed=20261101)
         groups={}
         for item in items:
             if item.group_id not in groups: groups[item.group_id]=h(item.history)
@@ -367,7 +399,30 @@ class Campaign:
             atomic_write(root/"integrity-pilot.json",canonical({"stage":"unscored_integrity_preflight",
                 "seed":20261101,"item_ids":sorted(pilot_ids),"official_full_count":len(items),
                 "full_manifest_preserved":True,"identity":identity})+"\n")
-        checkpoints = {arm: [Checkpoint(root / arm / f"worker-{k}.jsonl", {**identity,"arm":arm}) for k in range(10)] for arm in ARMS}
+        checkpoints = {arm: [Checkpoint(root / arm / f"worker-{k}.jsonl", {**identity,"arm":arm}) for k in range(workers)] for arm in ARMS}
+        resume_source=getattr(self,'resume_baselines',None)
+        if resume_source:
+            from .resume import prepare_baseline_resume,import_baseline_resume
+            bundle=json.loads(Path(resume_source).read_text())
+            current_config={'config_hash':self.config_hash,**self.config}
+            resume_path=root/'baseline-resume.json'
+            if resume_path.exists():
+                resume=json.loads(resume_path.read_text())
+            else:
+                resume=await asyncio.to_thread(prepare_baseline_resume,
+                    repo=REPO,source_root=bundle['source_root'],source_config_path=bundle['source_config_path'],
+                    source_plan=bundle['source_plan'],source_identity=bundle['source_identity'],
+                    current_config=current_config,current_plan=plan,current_identity=identity,
+                    official_items=items,workers=workers,source_original_root=bundle['source_original_root'],
+                    ledger_path=self.runs/'budget.db')
+                atomic_write(resume_path,canonical(resume)+'\n')
+            plan['baseline_resume']={'path':str(resume_path.resolve()),
+                'sha256':hashlib.sha256(resume_path.read_bytes()).hexdigest()}
+            q=json.loads(qualification.read_text());q['benchmarks'][name]=plan
+            atomic_write(qualification,canonical(q)+'\n')
+            await asyncio.to_thread(import_baseline_resume,resume,checkpoints,repo=REPO,
+                current_config=current_config,current_plan=plan,current_identity=identity,
+                official_items=items,ledger_path=self.runs/'budget.db')
         for arm in ARMS:
             self.progress[name,arm] = {"benchmark": name, "arm": arm,
                 "done":sum(len(c.done) for c in checkpoints[arm]), "total":len(items)*trials, "errors":0}
@@ -375,7 +430,7 @@ class Campaign:
         if not projection_path.exists():
             calibration_item=next(i for i in items if not pilot_ids or i.id in pilot_ids)
             async def calibrate(arm):
-                worker = shard_id(calibration_item.id)
+                worker = shard_id(calibration_item.id,workers)
                 cp=checkpoints[arm][worker]
                 key=record_key({"item_id":calibration_item.id,"trial":0})
                 if key in cp.done:
@@ -430,11 +485,11 @@ class Campaign:
             try:
                 for trial in range(trials):
                     for item in items:
-                        if (not pilot_ids or item.id in pilot_ids) and shard_id(item.id)==k: await do(item,trial,0)
+                        if (not pilot_ids or item.id in pilot_ids) and shard_id(item.id,workers)==k: await do(item,trial,0)
                 for item,trial in failed: await do(item,trial,1)
             except BudgetExceeded:
                 atomic_write(root/arm/f"worker-{k}.stopped.json",canonical({"reason":"budget","timestamp":utc_now()})+"\n")
-        await asyncio.gather(*(worker(arm,k) for arm in ARMS for k in range(10)))
+        await asyncio.gather(*(worker(arm,k) for arm in ARMS for k in range(workers)))
         wanted={i.id for i in items}
         populations={}
         for arm in ARMS:
@@ -528,7 +583,7 @@ class Campaign:
         from .integrity import audit,require
         require(await asyncio.to_thread(audit,REPO,self.runs,benchmarks=(name,)),name,'report')
         rows=['# '+name+' real-engine results','',
-            'Model and judge: gpt-5.4-nano. Temperature: 0. Trial/seed: 0. Ten deterministic workers per arm; global20-request limit.',
+            f'Model and judge: gpt-5.4-nano. Temperature: 0. Trial/seed: 0. {self.workers} deterministic workers per arm; global{self.max_inflight}-request limit.',
             '', '| Arm | Mean | 95% cluster bootstrap CI | n | API cost | Binary SHA-256 |',
             '|---|---:|---|---:|---:|---|']
         for s in summaries:
@@ -545,6 +600,23 @@ class Campaign:
 
     async def pipeline(self,name):
         from .integrity import audit,require
+        if name=='longmemeval':
+            from .datasets import load_longmemeval
+            from .recall_proof import run_recall_proof,validate_recall_proof
+            items=await asyncio.to_thread(load_longmemeval,self.runs/'upstream'/name)
+            root=self.runs/name
+            if not (root/'identity.json').exists():
+                atomic_write(root/'identity.json',canonical({'benchmark':name,'config_hash':self.config_hash,
+                    'stage':'native_proof_only'})+'\n')
+            proof_path=root/'recall-proof.json'
+            if not proof_path.exists():
+                await run_recall_proof(REPO,self.runs,items,self.config_hash,workers=10)
+            proof_plan={'config_hash':self.config_hash,'native_retrieval_proof':{
+                'path':str(proof_path.resolve()),'sha256':hashlib.sha256(proof_path.read_bytes()).hexdigest()}}
+            await asyncio.to_thread(validate_recall_proof,REPO,self.runs,proof_plan,items)
+            print(name,'TEN_NATIVE_RECALL_PROOFS_PASS',flush=True)
+            if getattr(self,'native_proof_only',False):
+                return
         if not self.autonomous:
             return await self.benchmark(name)
         await self.benchmark(name)
@@ -580,8 +652,17 @@ class Campaign:
             # Start calibration in the requested priority order. Once each cost
             # gate opens, benchmark workers run concurrently on the same pool.
             tasks=[]
+            async def lane(name):
+                try:
+                    return await self.pipeline(name)
+                except Exception as exc:
+                    append_jsonl(self.runs/'campaign-errors.jsonl',{'benchmark':name,
+                        'config_hash':self.config_hash,'error_type':type(exc).__name__,
+                        'error':str(exc)[:1000],'timestamp':utc_now()})
+                    print(name,'LANE_STOPPED',type(exc).__name__,str(exc)[:1000],flush=True)
+                    raise
             for name in self.names:
-                tasks.append(asyncio.create_task(self.pipeline(name)))
+                tasks.append(asyncio.create_task(lane(name)))
                 await asyncio.sleep(0)
             results=await asyncio.gather(*tasks,return_exceptions=True)
             for name,result in zip(self.names,results):
@@ -602,10 +683,14 @@ class Campaign:
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--benchmarks",default=','.join(FOUR))
+    parser.add_argument("--benchmarks",default='longmemeval')
     parser.add_argument("--runs",type=Path,default=REPO/"runs")
     parser.add_argument("--preflight",type=int,default=0,help="Unscored integrity pilot only; full official manifest retained")
     parser.add_argument('--autonomous',action='store_true',help='Fresh10pilot -> independent audit -> full set for each of the four benchmarks')
+    parser.add_argument('--workers',type=int,default=30)
+    parser.add_argument('--max-inflight',type=int,default=40)
+    parser.add_argument('--resume-baselines',type=Path)
+    parser.add_argument('--native-proof-only',action='store_true',help='Zero-provider ten-item native retrieval proof; no paid calls')
     args=parser.parse_args()
     os.environ.setdefault("TOKENIZERS_PARALLELISM","false")
     args.runs.mkdir(parents=True,exist_ok=True)
@@ -613,7 +698,8 @@ def main():
         try: fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError: raise SystemExit("A campaign already owns the global API semaphore; do not launch a second process")
         async def run():
-            campaign=Campaign(args.runs,args.benchmarks.split(','),args.preflight,args.autonomous)
+            campaign=Campaign(args.runs,args.benchmarks.split(','),args.preflight,args.autonomous,
+                args.workers,args.max_inflight,args.resume_baselines,args.native_proof_only)
             task=asyncio.current_task()
             loop=asyncio.get_running_loop()
             for sig in (signal.SIGINT,signal.SIGTERM):

@@ -174,7 +174,7 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
             return {"usage": {"input_tokens": 1}}
         await asyncio.gather(*(pools[i % 3].request(str(i), .001, send,
                                                    lambda r: (.0005, r["usage"])) for i in range(100)))
-        self.assertEqual(peak, 20)
+        self.assertEqual(peak, 40)
         self.assertEqual(self.ledger.snapshot()["spent"], .05)
 
     async def test_connect_timeout_retries_and_retains_ambiguous_reservations(self):

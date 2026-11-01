@@ -38,13 +38,13 @@ def account(response: dict) -> tuple[float, dict]:
 
 
 class NanoProvider:
-    def __init__(self, runs: Path, ledger: BudgetLedger):
+    def __init__(self, runs: Path, ledger: BudgetLedger, max_inflight: int = 40):
         self.runs, self.ledger = runs, ledger
         self.key = load_key(runs / ".env.openai")
         self.errors = {}
-        self.pool = AsyncAPIPool(ledger, max_inflight=20, max_retries=6)
+        self.pool = AsyncAPIPool(ledger, max_inflight=max_inflight, max_retries=6)
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(60.0),
-                                     limits=httpx.Limits(max_connections=20, max_keepalive_connections=20))
+                                     limits=httpx.Limits(max_connections=max_inflight, max_keepalive_connections=max_inflight))
 
     async def close(self):
         await self.http.aclose()
