@@ -312,7 +312,7 @@ class Campaign:
             raise RuntimeError("HOOK_AUDIT_REQUIRED: sole Vestige arm must use current memory-QA profile")
         if not self.is_preflight(name):
             from .integrity import audit,require
-            require(await asyncio.to_thread(audit,REPO,self.runs,stage='execute',benchmarks=self.names),name,'execute')
+            require(await asyncio.to_thread(audit,REPO,self.runs,stage='execute',benchmarks=(name,)),name,'execute')
         dispatch={
             "mpbench":("mpbench_runner","run_mpbench"),
             "pmbench":("pmbench_runner","run_pmbench"),
@@ -449,7 +449,7 @@ class Campaign:
             print(name,"UNSCORED_INTEGRITY_PILOT_FINISHED",flush=True)
             return
         from .integrity import audit,require
-        require(await asyncio.to_thread(audit,REPO,self.runs,benchmarks=self.names),name,"score")
+        require(await asyncio.to_thread(audit,REPO,self.runs,benchmarks=(name,)),name,"score")
         await self.score(name,items,trials,checkpoints)
 
     async def score(self,name,items,trials,checkpoints):
@@ -467,7 +467,7 @@ class Campaign:
                 atomic_write(root/'UNFINISHED.json',canonical({'reason':str(exc),'arm':arm,'timestamp':utc_now()})+'\n')
                 return
         from .integrity import audit,require
-        require(await asyncio.to_thread(audit,REPO,self.runs,benchmarks=self.names),name,'scorer')
+        require(await asyncio.to_thread(audit,REPO,self.runs,benchmarks=(name,)),name,'scorer')
         plan=json.loads((self.runs/'QUALIFICATION.json').read_text())['benchmarks'][name]
         for arm in ARMS:
             try:
@@ -526,7 +526,7 @@ class Campaign:
 
     async def write_report(self,name,summaries,plan):
         from .integrity import audit,require
-        require(await asyncio.to_thread(audit,REPO,self.runs,benchmarks=self.names),name,'report')
+        require(await asyncio.to_thread(audit,REPO,self.runs,benchmarks=(name,)),name,'report')
         rows=['# '+name+' real-engine results','',
             'Model and judge: gpt-5.4-nano. Temperature: 0. Trial/seed: 0. Ten deterministic workers per arm; global20-request limit.',
             '', '| Arm | Mean | 95% cluster bootstrap CI | n | API cost | Binary SHA-256 |',
@@ -561,7 +561,7 @@ class Campaign:
             loader={'locomo':load_locomo,'longmemeval':load_longmemeval,'memconflict':load_memconflict}[name]
             items=await asyncio.to_thread(loader,self.runs/'upstream'/name)
             await self.solve(name,items[0],'vestige',0,0,kill_control=True)
-        report=await asyncio.to_thread(audit,REPO,self.runs,stage='execute',benchmarks=self.names)
+        report=await asyncio.to_thread(audit,REPO,self.runs,stage='execute',benchmarks=(name,))
         require(report,name,'execute')
         append_jsonl(self.runs/'decisions.jsonl',{'benchmark':name,'timestamp':utc_now(),
             'decision':'Ten-item current-config pilot PASS; start full official set immediately','config_hash':self.config_hash})

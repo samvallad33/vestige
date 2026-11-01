@@ -60,7 +60,7 @@ def preflight_count(campaign):
 
 def integrity_state(campaign):
     from .integrity import audit
-    result = audit(REPO, campaign.runs, benchmarks=("locomo", "longmemeval", "memconflict", "mpbench"))
+    result = audit(REPO, campaign.runs, benchmarks=("mpbench",))
     if not isinstance(result, dict) or result.get("status") not in {"PASS", "FAIL", "PENDING"}:
         raise MPBenchIncomplete("independent integrity audit returned no explicit status")
     return result

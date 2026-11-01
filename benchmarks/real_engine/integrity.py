@@ -111,6 +111,8 @@ def combine(checks):
 
 
 def require(report: dict, benchmark: str, stage: str = "score"):
+    if "audited_benchmarks" in report and benchmark not in report["audited_benchmarks"]:
+        raise IntegrityPending(f"{benchmark}: retained as-of evidence is not a fresh audit for this action")
     entry = report["benchmarks"][benchmark]
     if entry["status"] == "FAIL":
         raise IntegrityInvalid(f"{benchmark} INVALID: integrity failure; stop and exclude metrics")
@@ -122,9 +124,11 @@ def require(report: dict, benchmark: str, stage: str = "score"):
         raise IntegrityPending(f"{benchmark}: integrity evidence incomplete; no {stage} permitted")
 
 
-def _walk(runs: Path):
+def _walk(runs: Path, selected=None):
+    selected=set(selected) if selected is not None else None
     for directory, folders, files in os.walk(runs):
-        folders[:] = [name for name in folders if name not in EXCLUDED and not name.startswith(".")]
+        folders[:] = [name for name in folders if name not in EXCLUDED and not name.startswith(".")
+                      and (Path(directory)!=runs or selected is None or _base(name) in selected)]
         for filename in files:
             yield Path(directory) / filename
 
@@ -297,6 +301,7 @@ def literal_overlap_audit(requests, items, native_strings=None, scaffolds=()):
     label use is explicitly recorded separately from solver authorization.
     """
     by_id = {_item_value(item, "id"): item for item in items}
+    gold_by_id={identity:_gold(item) for identity,item in by_id.items()}
     native_strings = native_strings or {}
     overlaps, missing = [], []
     for request in requests:
@@ -313,22 +318,33 @@ def literal_overlap_audit(requests, items, native_strings=None, scaffolds=()):
         # A single engine per item has an unambiguous backward-compatible key.
         actual_native+=list(native_strings.get((item_id,ident.get("engine_data_dir")),[]))
         actual_native+=list(native_strings.get(item_id,[]))
-        actual_native=_before(actual_native,request)
+        actual_native=list(dict.fromkeys(_before(actual_native,request)))
         conditions=_item_value(item,"condition_inputs",{})
         raw_inputs=conditions.get(condition,[]) if conditions else _item_value(item,"history",[])
         if ident.get("arm")=="vestige":raw_inputs=[]
-        permitted = list(raw_inputs) + [_item_value(item, "question", "")]
-        permitted += actual_native + list(scaffolds)
+        hook_permitted=list(raw_inputs)+[_item_value(item,"question","")]+actual_native+list(scaffolds)
+        # Exact matching is common for full native result bodies and schemas.
+        # Keep substring fallback identical, with cheap pinned/raw inputs first.
+        permitted=list(dict.fromkeys([value for value in list(scaffolds)+list(raw_inputs)
+                   +[_item_value(item,"question","")]+actual_native if isinstance(value,str)]))
+        permitted_set=set(permitted)
+        base_provenance={}
+        def permitted_substring(visible):
+            if visible not in base_provenance:
+                base_provenance[visible]=any(visible in allowed for allowed in permitted)
+            return base_provenance[visible]
         phase = str(ident.get("phase", ""))
         judge = "judge" in phase or "scorer" in phase
         for pointer, visible in strings(request["row"].get("payload", {})):
-            for target in _gold(item):
+            for target in gold_by_id[item_id]:
                 if target["literal"] not in visible:
                     continue
                 source = None
                 if judge:
                     source = "official_judge_input_requires_exact_scorer_provenance"
-                elif any(visible == allowed or visible in allowed for allowed in permitted if isinstance(allowed, str)):
+                elif visible in permitted_set:
+                    source = "exact_this_item_observed_input_or_native_output_or_pinned_scaffold"
+                elif permitted_substring(visible):
                     source = "exact_this_item_observed_input_or_native_output_or_pinned_scaffold"
                 elif pointer.endswith(".content") and any(target["literal"] in allowed and allowed in visible for allowed in actual_native if isinstance(allowed, str)):
                     source = "literal_within_THIS_item_actual_native_output"
@@ -337,7 +353,7 @@ def literal_overlap_audit(requests, items, native_strings=None, scaffolds=()):
                     # actual user question. Remove only long exact source/input
                     # blocks; token-sized strings cannot launder an oracle.
                     remainder=visible
-                    pieces=[p for p in permitted if isinstance(p,str) and len(p)>=25]
+                    pieces=[p for p in hook_permitted if isinstance(p,str) and len(p)>=25]
                     for piece in sorted(pieces,key=len,reverse=True):
                         remainder=remainder.replace(piece,"")
                     if not remainder.strip():
@@ -553,9 +569,11 @@ def _mpbench_exposure(row, checkpoint, official_item, runs, repo):
 def _native_provenance(completed):
     catalog = defaultdict(list)
     identities_per_item=defaultdict(set)
-    for _,_,row,identity,root in _runtime_paths(completed):
+    unique={}
+    for checkpoint,number,row,identity,root in _runtime_paths(completed):
         identities_per_item[row.get("item_id")].add(identity.get("data_dir"))
-    for checkpoint, number, row, identity, root in _runtime_paths(completed):
+        unique.setdefault((row.get("item_id"),identity.get("data_dir")),(checkpoint,number,row,identity,root))
+    for checkpoint, number, row, identity, root in unique.values():
         item = row.get("item_id")
         key=(item,identity.get("data_dir"))
         for line, event in lines(root / "mcp.jsonl"):
@@ -828,8 +846,8 @@ def _parity(requests, plan, benchmark, official_items, responses=None, runs=None
                             or any(type(usage.get(k)) is not int or usage[k]<0 for k in ("prompt_tokens","completion_tokens"))
                             or _money(result.get("cost"))!=_money(cost)):
                         raise ValueError("response usage/cost mismatch")
-                    matches=ledger.execute("SELECT * FROM calls WHERE substr(id,1,?)=? AND state='settled'",
-                        (len(str(result.get("call_id")))+9,str(result.get("call_id"))+"/attempt-")).fetchall()
+                    attempt_ids=[str(result.get("call_id"))+f"/attempt-{attempt}" for attempt in range(7)]
+                    matches=ledger.execute("SELECT * FROM calls WHERE id IN (?,?,?,?,?,?,?) AND state='settled'",attempt_ids).fetchall()
                     if len(matches)!=1 or matches[0]["actual"]!=_money(cost) or json.loads(matches[0]["usage"])!=usage:
                         raise ValueError("usage is not reconciled to exactly one settled shared-ledger attempt")
                     actual_output[key]+=usage["completion_tokens"]
@@ -983,6 +1001,36 @@ def _build_check(repo,runs,manifest):
 _AUDIT_LOCK=threading.RLock()
 
 
+def _merge_prior_reports(prior,current,approved,plans,selected,allow_retain=True):
+    """Retain other benchmarks only as dated evidence of this same candidate."""
+    merged=dict(current)
+    approved=dict(approved)
+    retained=[]
+    current_hashes={current.get(name,{}).get("config_hash") for name in selected}
+    if allow_retain and len(current_hashes)==1 and None not in current_hashes:
+        for name,entry in prior.get("benchmarks",{}).items():
+            expected=plans.get(name,{}).get("config_hash")
+            if name in selected or not expected or expected not in current_hashes or entry.get("config_hash")!=expected or not entry.get("checked_at"):
+                continue
+            merged[name]={**entry,"fresh_in_this_audit":False}
+            retained.append(name)
+            prior_ids=prior.get("approved_run_identities",{}).get(name,{})
+            approved[name]={arm:list(prior_ids.get(arm,[])) if entry.get("arms",{}).get(arm,{}).get("ready_to_score") else []
+                            for arm in ARMS}
+    return merged,approved,sorted(retained)
+
+
+def _unique_records(records):
+    seen=set()
+    result=[]
+    for record in records:
+        key=canonical(record)
+        if key not in seen:
+            seen.add(key)
+            result.append(record)
+    return result
+
+
 def audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks=None) -> dict:
     with _AUDIT_LOCK:
         return _audit(repo,runs,stage,benchmarks)
@@ -1005,7 +1053,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
     responses = defaultdict(list)
     parse_failures = defaultdict(list)
     excluded_profiles = defaultdict(int)
-    for path in _walk(runs):
+    for path in _walk(runs,selected):
         if path.name not in {"api.jsonl", "judge.jsonl", "hook-api.jsonl", "hooks-model.jsonl"} and not re.fullmatch(r"worker-\d+\.jsonl", path.name):
             continue
         try:
@@ -1051,6 +1099,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
         source_plan=_scorer_source(repo,runs,name,plan)
         full_plan,expected=_full_set(repo,runs,name,plan,official_items)
         official_by_id={_item_value(item,"id"):item for item in official_items or []}
+        scaffold_map=_scaffolds(repo) if official_items is not None and any(requests[name,arm] for arm in ARMS) else {}
         # Failed/abandoned attempts remain visible to leakage checks below, but
         # their request-only logs cannot establish completed-attempt usage.
         completed_roots=set()
@@ -1086,9 +1135,9 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
                 candidates=sorted(observed_ids)
                 chosen=set(random.Random(SAMPLE_SEED).sample(candidates,min(SAMPLE_ITEMS,len(candidates))))
                 sample=[r for r in reqs if r["row"].get("identity",{}).get("item_id") in chosen]
-                provenance_rows=list(completed)
+                provenance_rows=[entry for entry in completed if entry[2].get("item_id") in chosen]
                 if arm=="vestige":
-                    for request in reqs:
+                    for request in sample:
                         ident=request["row"].get("identity",{})
                         if isinstance(ident.get("engine"),dict):
                             provenance_rows.append((Path(request["path"]),request["line"],ident))
@@ -1110,10 +1159,10 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
                 for reply in responses[name,arm]:
                     identity=reply["row"].get("identity",{})
                     item=identity.get("item_id")
+                    if item not in chosen:continue
                     message=reply["row"].get("response",{}).get("choices",[{}])[0].get("message",{})
                     key=(item,identity.get("engine_data_dir"),identity.get("condition"))
                     native[key].extend({"text":text,"timestamp":reply["row"].get("timestamp"),"path":reply["path"],"line":reply["line"]} for _,text in strings(message))
-                scaffold_map=_scaffolds(repo)
                 # Baseline retrieval may expose only actual raw official
                 # records. Vestige retrieval must instead match native output.
                 if arm!="vestige":
@@ -1156,6 +1205,8 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
         pins_match=bool(hook_source.get("source_pins")) and all((repo/p).is_file() and sha(repo/p)==digest for p,digest in hook_source.get("source_pins",{}).items())
         preflight_ok=(combine(preflight_checks)=="PASS" and hook_source.get("audit_complete") is True and pins_match and status!="FAIL")
         benchmarks[name] = {"status": status, "excluded": status != "PASS", "arms": arms,
+                            "config_hash":plan.get("config_hash"),"checked_at":datetime.now(timezone.utc).isoformat(),
+                            "fresh_in_this_audit":True,
                             "ready_to_prequalify":preflight_ok,
                             "ready_to_score":status!="FAIL" and all(a["ready_to_score"] for a in arms.values()),
                             "ready_for_official_scorer":status!="FAIL" and all(a["ready_for_official_scorer"] for a in arms.values()),
@@ -1163,10 +1214,15 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
         if status == "FAIL":
             invalid.append(name)
         approved[name] = {arm: sorted({row.get("run_identity") for _, _, row in checkpoints[name, arm] if row.get("run_identity")}) if value["ready_to_score"] else [] for arm, value in arms.items()}
+    candidate_unchanged=all(any(c["id"]=="candidate_config_identity" and c["status"]=="PASS"
+                          for c in entry["arms"]["bare"]["checks"]) for entry in benchmarks.values())
+    benchmarks,approved,retained=_merge_prior_reports(prior_audit,benchmarks,approved,plans,selected,candidate_unchanged)
+    invalid=sorted(name for name,entry in benchmarks.items() if entry["status"]=="FAIL")
     report = {"schema": "vestige.real_engine.integrity.v1", "created_at": datetime.now(timezone.utc).isoformat(),
               "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
               "status": combine([{"status": b["status"]} for b in benchmarks.values()]),
-              "stage":stage,"ready_to_prequalify":any(b["ready_to_prequalify"] for b in benchmarks.values()),
+              "stage":stage,"audited_benchmarks":list(selected),"retained_benchmarks":retained,
+              "ready_to_prequalify":any(b["ready_to_prequalify"] for b in benchmarks.values()),
               "ready_to_score":any(b["ready_to_score"] for b in benchmarks.values()),
               "ready_to_report":any(b["ready_to_report"] for b in benchmarks.values()),
               "benchmarks": benchmarks, "invalid_benchmarks": invalid, "approved_run_identities": approved,
@@ -1177,7 +1233,8 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
     historical=runs/"invalidated/hook-cwd-git-negative-control/hooks.jsonl"
     report["historical_invalidations"]=[{"status":"FAIL_INVALID_PROFILE","path":str(historical),
           "count":len(lines(historical)),"reason":"Observed original hook leaked harness Git metadata; no official scored items associated. Old adapter hash unavailable; failure is preserved, not erased by a new candidate."}] if historical.is_file() else []
-    report['historical_profile_changes']=[entry for _,entry in lines(runs/'profile-history.jsonl')]
+    report["historical_invalidations"]=_unique_records(prior_audit.get("historical_invalidations",[])+report["historical_invalidations"])
+    report['historical_profile_changes']=_unique_records(prior_audit.get('historical_profile_changes',[])+[entry for _,entry in lines(runs/'profile-history.jsonl')])
     corrections=list(prior_audit.get("auditor_provenance_clarifications",[]))
     for name,bench in prior_audit.get("benchmarks",{}).items():
         for arm,old in bench.get("arms",{}).items():
@@ -1196,6 +1253,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
     from .runtime import atomic_write
     atomic_write(runs / "integrity.json",json.dumps(report, indent=2) + "\n")
     out = ["# Benchmark integrity gate", "", f"Status: **{report['status']}**. No missing runtime check is a PASS.", "",
+           "Fresh audit scope: "+", ".join(selected)+". Other same-configuration entries retain their original checked_at; they do not authorize an action without a fresh target audit.", "",
            "Ten unscored pilot items per arm qualify evidence only. Every scored benchmark still requires its full official set; the audit sample is not permission to shrink it.", "",
            "Observed FAIL requires stopping that benchmark, marking it INVALID, preserving evidence and excluding metrics. PENDING means unexecuted or incomplete evidence and also blocks scoring/report metrics.", "",
            "| Benchmark | Arm | Status | Completed items | Actual model requests |", "|---|---|---|---:|---:|"]
@@ -1203,7 +1261,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
         for arm, row in benchmark["arms"].items():
             out.append(f"| {name} | {arm} | {row['status']} | {row['completed_items']} | {row['actual_model_requests']} |")
     for name, benchmark in benchmarks.items():
-        out += ["", f"## {name}", ""]
+        out += ["", f"## {name}", "",f"Checked at: {benchmark.get('checked_at')}; config: {benchmark.get('config_hash')}; fresh in this audit: {benchmark.get('fresh_in_this_audit')}", ""]
         for arm, row in benchmark["arms"].items():
             out += [f"**{arm}: {row['status']}**", ""]
             for c in row["checks"]:

@@ -7,7 +7,7 @@ from collections import defaultdict
 from unittest.mock import patch
 
 from .integrity import (IntegrityInvalid, IntegrityPending, _full_set, _hook_checks,
-    _candidate_config_check, _kill_check, _merge_and_score, _native_item, _mpbench_exposure, _parity, _pilot_check, audit, canonical, literal_overlap_audit,
+    _candidate_config_check, _kill_check, _merge_and_score, _merge_prior_reports, _native_item, _native_provenance, _mpbench_exposure, _parity, _pilot_check, _walk, audit, canonical, lines, literal_overlap_audit,
     require, sha, strings)
 
 
@@ -120,6 +120,69 @@ class GateTests(unittest.TestCase):
 
 
 class CandidateBindingTests(unittest.TestCase):
+    def test_partial_audit_prunes_other_benchmark_logs_before_reading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo=Path(tmp);runs=repo/"runs";runs.mkdir()
+            other=runs/"longmemeval/vestige/worker-0/attempt/api.jsonl"
+            other.parent.mkdir(parents=True);other.write_text("corrupt unselected log must never be opened\n")
+            chosen=runs/"locomo/bare/worker-0/attempt/api.jsonl"
+            chosen.parent.mkdir(parents=True);chosen.write_text("")
+            self.assertEqual(list(_walk(runs,("locomo",))),[chosen])
+            def guarded(path):
+                self.assertNotEqual(path,other)
+                return lines(path)
+            with patch("benchmarks.real_engine.integrity.lines",side_effect=guarded),patch("benchmarks.real_engine.integrity.subprocess.check_output",return_value="fixture\n"):
+                result=audit(repo,runs,benchmarks=("locomo",))
+            self.assertEqual(result["audited_benchmarks"],["locomo"])
+            self.assertEqual(set(result["benchmarks"]),{"locomo"})
+
+    def test_duplicate_native_roots_are_parsed_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);native=root/"native";native.mkdir()
+            path=native/"mcp.jsonl"
+            path.write_text(canonical({"kind":"tool_response","timestamp":5,"result":{"answer":"actual native text"}})+"\n")
+            row={"item_id":"a","engine":{"data_dir":str(native/"strata")}}
+            entry=(root/"worker-0.jsonl",1,row)
+            with patch("benchmarks.real_engine.integrity.lines",wraps=lines) as parser:
+                catalog=_native_provenance([entry,entry,entry])
+            self.assertEqual(parser.call_count,1)
+            self.assertEqual(len(catalog["a"]),2)
+
+    def test_permitted_exact_set_keeps_unresolved_gold_as_failure(self):
+        item={"id":"a","question":"q","history":[],"scorer_payload":{"answer":"SECRET ANSWER","label":"PRIVATE LABEL"}}
+        req=request("SECRET ANSWER PRIVATE LABEL")
+        one,_=literal_overlap_audit([req],[item],native_strings={"a":["SECRET ANSWER"]})
+        repeated,_=literal_overlap_audit([req],[item],native_strings={"a":["SECRET ANSWER"]*100})
+        self.assertEqual(one,repeated)
+        self.assertEqual([entry["status"] for entry in repeated],["PASS","FAIL"])
+        exact,_=literal_overlap_audit([request("SECRET ANSWER")],[item],native_strings={"a":["SECRET ANSWER"]*100})
+        self.assertEqual(exact[0]["status"],"PASS")
+
+    def test_partial_report_retains_only_same_config_and_preserves_asof(self):
+        old={"config_hash":"same","checked_at":"earlier","status":"PENDING","ready_to_score":True,
+             "arms":{arm:{"ready_to_score":True} for arm in ("bare","bm25","embedding","vestige")}}
+        prior={"benchmarks":{"locomo":old,"longmemeval":{**old,"config_hash":"old"}},
+               "approved_run_identities":{"locomo":{"bare":["checkpoint"]}}}
+        current={"memconflict":{**old,"checked_at":"now","fresh_in_this_audit":True}}
+        plans={name:{"config_hash":"same"} for name in ("locomo","longmemeval","memconflict")}
+        merged,approved,retained=_merge_prior_reports(prior,current,{"memconflict":{}},plans,("memconflict",))
+        self.assertEqual(retained,["locomo"])
+        self.assertEqual(set(merged),{"memconflict","locomo"})
+        self.assertEqual(merged["locomo"]["checked_at"],"earlier")
+        self.assertFalse(merged["locomo"]["fresh_in_this_audit"])
+        self.assertEqual(approved["locomo"]["bare"],["checkpoint"])
+        report={"benchmarks":merged,"audited_benchmarks":["memconflict"]}
+        require(report,"memconflict","execute")
+        with self.assertRaises(IntegrityPending):require(report,"locomo","execute")
+        # Matching an obsolete per-benchmark plan is insufficient when the
+        # freshly audited candidate uses a different frozen configuration.
+        new_current={"memconflict":{**current["memconflict"],"config_hash":"new-candidate"}}
+        mixed_plans={**plans,"memconflict":{"config_hash":"new-candidate"}}
+        merged,approved,retained=_merge_prior_reports(prior,new_current,{"memconflict":{}},mixed_plans,("memconflict",))
+        self.assertEqual(retained,[])
+        self.assertEqual(set(merged),{"memconflict"})
+        self.assertNotIn("locomo",approved)
+
     def test_frozen_config_rejects_actual_source_edit_with_unchanged_claims(self):
         import hashlib
         with tempfile.TemporaryDirectory() as tmp:
