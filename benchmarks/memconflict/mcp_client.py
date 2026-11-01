@@ -50,6 +50,7 @@ class VestigeMCP:
         self._extra_env = dict(extra_env or {})
         self.server_info: Dict[str, Any] = {}
         self.observed_warmup: Dict[str, Any] = {}
+        self.last_tool_result: Dict[str, Any] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -69,7 +70,7 @@ class VestigeMCP:
         env.update(self._extra_env)
 
         self._proc = subprocess.Popen(
-            [self.binary],
+            [self.binary, "--data-dir", self.data_dir],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -105,17 +106,25 @@ class VestigeMCP:
         except Exception:
             try:
                 self._proc.kill()
+                self._proc.wait(timeout=15)
             except Exception:
                 pass
+        finally:
+            for stream in (self._proc.stdout, self._proc.stderr):
+                if stream is not None:
+                    stream.close()
         self._proc = None
 
     # -- transport ---------------------------------------------------------
 
     def _send(self, payload: Dict[str, Any]) -> None:
-        if not self._proc or not self._proc.stdin:
+        if not self._proc or self._proc.poll() is not None or not self._proc.stdin:
             raise VestigeMCPError("server not running")
-        self._proc.stdin.write(json.dumps(payload) + "\n")
-        self._proc.stdin.flush()
+        try:
+            self._proc.stdin.write(json.dumps(payload) + "\n")
+            self._proc.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            raise VestigeMCPError("server transport closed") from exc
 
     def _await_id(self, want_id: int, timeout: float) -> Dict[str, Any]:
         deadline = time.monotonic() + timeout
@@ -197,6 +206,9 @@ class VestigeMCP:
         result = self.request(
             "tools/call", {"name": name, "arguments": arguments}, timeout=timeout
         )
+        self.last_tool_result = result
+        if result.get("isError"):
+            raise VestigeMCPError(f"{name} tool failed: {result}")
         content = result.get("content") or []
         for block in content:
             if block.get("type") == "text":
