@@ -12,7 +12,7 @@ from benchmarks.real_engine.runtime import Checkpoint,shard_id,record_key,status
 
 REPO=Path(__file__).resolve().parents[1]
 
-async def run():
+async def run(with_model_proof=False):
     runs=REPO/'runs';root=runs/'longmemeval';identity=json.loads((root/'identity.json').read_text())
     campaign=Campaign(runs,['longmemeval'],workers=30,max_inflight=40)
     items=load_longmemeval(runs/'upstream/longmemeval')
@@ -38,14 +38,22 @@ async def run():
         except BudgetExceeded:
             atomic_write(root/arm/f'worker-{k}.stopped.json',canonical({'reason':'budget','timestamp':utc_now()})+'\n')
     try:
-        await asyncio.gather(*(worker(a,k) for a in checkpoints for k in range(30)))
+        jobs=[worker(a,k) for a in checkpoints for k in range(30)]
+        if with_model_proof:
+            from benchmarks.longmemeval_model_proof import run_model_proof
+            jobs.append(run_model_proof(campaign))
+        await asyncio.gather(*jobs)
         result={'timestamp':utc_now(),'vestige':'STOPPED_BY_OWNER','config_hash':campaign.config_hash,'arms':{a:{'done':sum(len(cp.done) for cp in cps),'missing_ids':[i.id for i in items if not cps[shard_id(i.id,30)].contains({'item_id':i.id,'trial':0})]} for a,cps in checkpoints.items()},'ledger':campaign.ledger.snapshot()}
         atomic_write(runs/'lme-baselines-finished.json',canonical(result)+'\n');print('BASELINES_FINISHED',canonical(result),flush=True)
     finally:
+        from benchmarks.real_engine.engine import close_all_engines
+        await asyncio.to_thread(close_all_engines)
         stopping.set();await status;await campaign.provider.close()
 
 if __name__=='__main__':
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument('--with-model-proof',action='store_true');args=parser.parse_args()
     asyncio.set_event_loop_policy(WorkerLoopPolicy())
     with (REPO/'runs/campaign.lock').open('a') as lock:
         fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
-        asyncio.run(run())
+        asyncio.run(run(args.with_model_proof))
