@@ -465,11 +465,20 @@ Evaluated on upstream MemConflict (`Step4_4.jsonl`, arXiv:2605.20926) across dyn
 - **Vestige Causal Memory (`gpt-5.4-nano` + Causal DAG)**: **1.00 AA (100.0% Exact Match)** across all questions in under 15 output tokens without CoT ($0.00003/query).
 - See full technical report: [`docs/papers/memconflict_gpt54nano_rag_vs_vestige.md`](papers/memconflict_gpt54nano_rag_vs_vestige.md).
 
+### 5. PM-Bench Prospective Memory Showdown (`gpt-5.4-nano`)
+- **Benchmark**: PM-Bench "Virtual Week" Paradigm (arXiv:2607.12385)
+- **Arm A (In-Context Baseline)**: Set Precision: 54.5% | Exact-Set Match: 30.8% | False Alarms: 5
+- **Arm B (Vestige Intention Memory)**: **Set Precision: 77.8%** | **Exact-Set Match: 61.5% (2.0x)** | **False Alarms: 2 (-60.0%)**
+- **Report**: [`docs/papers/pm_bench_gpt54nano_prospective_memory_showdown.md`](papers/pm_bench_gpt54nano_prospective_memory_showdown.md) (`VESTIGE-TR-2026-08`)
+
 ### Reproduction Commands
 To rerun any benchmark live:
 ```sh
 # Run MemConflict Nano Showdown:
 sh benchmarks/memconflict/run-nano-showdown.sh
+
+# Run PM-Bench Prospective Memory Showdown:
+sh benchmarks/pm_bench/run-nano-showdown.sh --days 1
 
 # Run David vs. Goliath Showdown:
 sh benchmarks/memoryagentbench/run-david-vs-goliath.sh

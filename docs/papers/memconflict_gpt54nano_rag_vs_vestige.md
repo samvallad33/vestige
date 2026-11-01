@@ -1,9 +1,9 @@
 # MemConflict Showdown: How Naive RAG Collapses on Sequential Life Mutations While GPT-5.4 Nano with Causal Memory Achieves Ground Truth
 
-**Technical Report VESTIGE-TR-2026-06**  
-*The Vestige Engineering & Research Team*  
-*Date: October 31, 2026*  
-*Benchmark Track: MemConflict (arXiv:2605.20926, Data/Step4_4.jsonl, 3,750 questions)*  
+**Technical Report VESTIGE-TR-2026-06**
+*The Vestige Engineering & Research Team*
+*Date: October 31, 2026*
+*Benchmark Track: MemConflict (arXiv:2605.20926, Data/Step4_4.jsonl, 3,750 questions)*
 *Models Evaluated: OpenAI `gpt-5.4-nano` ($0.10/1M in, $0.40/1M out) across Naive RAG vs. Vestige Causal Memory*
 
 ---
