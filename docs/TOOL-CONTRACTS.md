@@ -272,6 +272,14 @@ and makes no claim about the world. The receipt of one save's auto-connect edges
 (`autoConnect.receiptId`) lists every edge it wrote as an `edge_recorded` mutation, and
 `replay` re-derives them all. `save_walk` is withheld.
 
+`prove` builds the proof bundle for one commit: `repoPath` is the absolute path of the checkout,
+`commit` defaults to `HEAD`, and `out` is `file`, `notes`, `both` or `none`. It takes the Reflex test
+witnesses tagged with the commit's tree, without `.vestige/proof`, keeps the ones whose signature
+checks out and whose tree did not change during the run, and adds the Failure Pairing `closes` edges
+and the Operator stops of the same sessions. It returns the claims, a summary count per status, the
+signer's `did:key`, the paths written and the bundle's SHA-256. See
+[Proof-carrying pull requests](PROOF-CARRYING-PRS.md).
+
 ### `causal_walk`
 
 Walk a failure backward from explicit start points.

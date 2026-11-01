@@ -116,6 +116,26 @@ Anything shaped like a credential is masked before the command is saved.
 
 A first-time failure puts nothing in front of the agent.
 
+Failure, fix, stop and resolution memories also carry `reflex-session-<session id>`, so one exact tag
+lists everything Reflex recorded for a session.
+
+## Test witnesses
+
+When the whole shell command equals an entry on the witness allowlist, Reflex records a signed test
+witness. The allowlist is the `[witness]` table of `vestige.toml` in the data folder plus the
+repository's own `.vestige/witness.toml`.
+
+| Event | What Reflex does |
+|---|---|
+| `PreToolUse` | Takes the git tree of the working directory through a scratch copy of the index, so the user's index is only read |
+| `PostToolUse`, `PostToolUseFailure` | Takes the tree again, then signs and saves the witness: the command, the exit code, the SHA-256 of the output the host reported, both trees, and the test count when the runner reported one in JSON or junit |
+
+The witness is a DSSE envelope signed by the store's actor key, saved as an `event` memory tagged
+`reflex-witness`, `tree-<tree>` and `reflex-session-<session id>`. The agent is told one line naming the
+command, green, red or zero tests, the tree and the memory. A background run, an interrupted run and any
+command that is not exactly on the allowlist are not witnessed. `receipt(action='prove')` turns the
+witnesses of one commit into a proof bundle, see [Proof-carrying pull requests](PROOF-CARRYING-PRS.md).
+
 ## Stale-belief push
 
 Several agents share one store. When one of them retires a memory, every other agent already holding

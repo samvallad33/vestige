@@ -1,0 +1,51 @@
+name: Vestige proof-carrying PR
+description: Fails a pull request when the tree at its head has no green test witness signed by a key you pin. Offline, and it never opens a Vestige store.
+author: Sam Valladares
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  trusted-keys:
+    description: did:key values that may sign proof bundles, one per line. Added to the keys in .vestige/trusted-keys on the base branch.
+    required: false
+    default: ''
+  require:
+    description: Commands that must be green, one per line. Added to the commands in .vestige/witness.toml on the base branch.
+    required: false
+    default: ''
+  strict:
+    description: When true, every allowlisted command in the bundle must be green.
+    required: false
+    default: 'false'
+  commit:
+    description: The commit to check. Defaults to the pull request head, or the pushed commit.
+    required: false
+    default: ''
+  base:
+    description: The branch the keys and required commands are read from. Defaults to the pull request base branch.
+    required: false
+    default: ''
+
+outputs:
+  verified:
+    description: true when the bundle verified and every required command is green.
+    value: ${{ steps.verify.outputs.verified }}
+  tree:
+    description: The git tree that was checked, without .vestige/proof.
+    value: ${{ steps.verify.outputs.tree }}
+
+runs:
+  using: composite
+  steps:
+    - id: verify
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/run.sh"
+      env:
+        INPUT_TRUSTED_KEYS: ${{ inputs.trusted-keys }}
+        INPUT_REQUIRE: ${{ inputs.require }}
+        INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_COMMIT: ${{ inputs.commit }}
+        INPUT_BASE: ${{ inputs.base }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_BASE_REF: ${{ github.event.pull_request.base.ref }}

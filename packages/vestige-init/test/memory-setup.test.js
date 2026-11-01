@@ -315,6 +315,8 @@ test('the reflex shim maps host events and answers in each host shape', () => {
   const failed = shim.argumentsFor('codex', 'PostToolUseFailure', { session_id: 's1', error: 'Exit code 1\nboom', is_interrupt: true, cwd: '/repo', tool_input: { file_path: '/repo/a.rs' } });
   assert.deepEqual([failed.error, failed.interrupt, failed.file, failed.cwd], ['Exit code 1\nboom', 'true', '/repo/a.rs', '/repo']);
   assert.equal(shim.argumentsFor('codex', 'PreToolUse', { session_id: 's1' }).agent, '');
+  const ran = shim.argumentsFor('codex', 'PostToolUse', { session_id: 's1', tool_input: { command: 'cargo test', run_in_background: true }, tool_response: { stdout: ' ok\n', stderr: '', interrupted: false } });
+  assert.deepEqual([ran.stdout, ran.stderr, ran.interrupted, ran.background], [' ok\n', '', '', 'true']);
   assert.deepEqual(shim.hostOutput('claude', 'SessionStart', 'hi'), { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'hi' } });
   assert.deepEqual(shim.hostOutput('cursor', 'postToolUse', 'hi'), { additional_context: 'hi' });
   assert.deepEqual(shim.hostOutput('cursor', 'stop', 'hi'), {});

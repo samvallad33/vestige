@@ -275,6 +275,19 @@ enum Commands {
         expect_key: Option<String>,
     },
 
+    /// Verify a proof-carrying PR bundle offline, never opening the store
+    ///
+    /// The same verifier as the standalone `vestige-verify-proof` binary: it
+    /// checks the DSSE signature against the keys you pin, re-opens every
+    /// witness, recomputes the claims, and exits 0 only when the tree has a
+    /// green witness and nothing red. `vestige verify-proof --help` lists the
+    /// options.
+    #[command(disable_help_flag = true)]
+    VerifyProof {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     /// What the reflex hooks recorded: the Hook Ledger and the gate receipts read
     ///
     /// Reads only `<data dir>/reflex/`, never the log, so it works while a
@@ -788,6 +801,7 @@ fn main() -> anyhow::Result<()> {
         } => run_migrate_to_strata(from, to, dry_run, accept_wal_snapshot),
         Commands::StrataVerify { dir, expect_key } => run_strata_verify(dir, expect_key),
         Commands::Reflex { since, replay } => run_reflex(since, replay),
+        Commands::VerifyProof { args } => std::process::exit(vestige_proof::cli::run(&args)),
         Commands::Export {
             output,
             format,

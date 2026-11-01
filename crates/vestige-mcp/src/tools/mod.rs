@@ -140,6 +140,7 @@ pub mod tagging;
 pub mod intention_graph;
 
 pub mod project;
+pub mod prove;
 
 /// Ignored real-repo proof. `cargo test --workspace` does not run it.
 #[cfg(test)]

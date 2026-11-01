@@ -48,7 +48,7 @@ pub(super) struct Failure {
     pub sig: String,
 }
 
-fn is_shell(tool: &str) -> bool {
+pub(super) fn is_shell(tool: &str) -> bool {
     matches!(
         tool,
         "Bash" | "PowerShell" | "shell" | "exec_command" | "run_shell_command"
@@ -320,7 +320,7 @@ fn failure_item(inp: &Input, f: &Failure, last_write: Option<&str>) -> Value {
     }
     json!({
         "node_type": "event",
-        "tags": [format!("fail-{}", f.sig), "reflex-failure"],
+        "tags": [format!("fail-{}", f.sig), "reflex-failure", session_tag(&inp.session)],
         "source": format!("reflex {VERSION}, PostToolUseFailure {}", inp.call),
         "links": links,
         "content": content,
@@ -335,7 +335,7 @@ fn fix_item(inp: &Input, open: &OpenFailure) -> Value {
     };
     json!({
         "node_type": "event",
-        "tags": [format!("fix-{}", open.sig), "reflex-fix"],
+        "tags": [format!("fix-{}", open.sig), "reflex-fix", session_tag(&inp.session)],
         "source": format!("reflex {VERSION}, PostToolUse {}", inp.call),
         "links": [{"kind": "closes", "to": open.node}],
         "content": format!(

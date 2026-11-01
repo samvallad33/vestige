@@ -31,8 +31,21 @@ pub fn schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["get", "replay", "save_walk"],
-                "description": "'get': one receipt with its replay-capsule summary. 'replay': on a Strata log, re-derive state from the log and the receipt and report any mismatch (read-only). Legacy engine only: withhold named evidence slots from a frozen capsule, or re-execute a saved walk receipt (id 'wr_…'). 'save_walk' (legacy engine only): freeze a walk parameter envelope as a digest-addressed walk receipt."
+                "enum": ["get", "replay", "save_walk", "prove"],
+                "description": "'get': one receipt with its replay-capsule summary. 'replay': on a Strata log, re-derive state from the log and the receipt and report any mismatch (read-only). Legacy engine only: withhold named evidence slots from a frozen capsule, or re-execute a saved walk receipt (id 'wr_…'). 'save_walk' (legacy engine only): freeze a walk parameter envelope as a digest-addressed walk receipt. 'prove': the signed proof bundle for one commit, an in-toto Statement in a DSSE envelope built only from the test witnesses Reflex recorded at that commit's tree, with the Failure Pairing closes edges and Operator stops of the same sessions."
+            },
+            "commit": {
+                "type": "string",
+                "description": "[prove] The commit to prove (default HEAD)."
+            },
+            "repoPath": {
+                "type": "string",
+                "description": "[prove] Absolute path of the git checkout."
+            },
+            "out": {
+                "type": "string",
+                "enum": ["file", "notes", "both", "none"],
+                "description": "[prove] Write .vestige/proof/<tree>.intoto.jsonl (file, the default), a git note under refs/notes/vestige-proof, both, or none."
             },
             "receipt_id": {
                 "type": "string",
@@ -77,6 +90,16 @@ pub fn schema() -> Value {
                 ] }
             },
             {
+                "properties": { "action": { "const": "prove" } },
+                "required": ["repoPath"],
+                "not": { "anyOf": [
+                    { "required": ["receipt_id"] },
+                    { "required": ["withheld_slots"] },
+                    { "required": ["remove_edge"] },
+                    { "required": ["params"] }
+                ] }
+            },
+            {
                 "properties": { "action": { "const": "save_walk" } },
                 "required": ["params"],
                 "not": { "anyOf": [
@@ -100,6 +123,10 @@ struct ReceiptArgs {
     #[serde(alias = "removeEdge")]
     remove_edge: Option<String>,
     params: Option<Value>,
+    commit: Option<String>,
+    #[serde(alias = "repoPath")]
+    repo_path: Option<String>,
+    out: Option<String>,
 }
 
 pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
@@ -143,15 +170,44 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             }
         }
         "save_walk" => execute_save_walk(storage, args.params.as_ref().unwrap_or(&Value::Null)),
+        "prove" => {
+            let out = super::prove::Out::parse(args.out.as_deref())?;
+            let repo = std::path::PathBuf::from(args.repo_path.unwrap_or_default());
+            let rev = args.commit.unwrap_or_else(|| "HEAD".to_string());
+            let storage = Arc::clone(storage);
+            tokio::task::spawn_blocking(move || super::prove::prove(&storage, &repo, &rev, out))
+                .await
+                .map_err(|e| format!("prove did not finish: {e}"))?
+        }
         other => Err(format!(
-            "Unknown receipt action '{other}'. Use get|replay|save_walk."
+            "Unknown receipt action '{other}'. Use get|replay|save_walk|prove."
         )),
     }
 }
 
 fn validate_args(args: &ReceiptArgs) -> Result<(), String> {
     let receipt_id = args.receipt_id.as_deref().unwrap_or_default();
+    let prove_only = args.commit.is_some() || args.repo_path.is_some() || args.out.is_some();
+    if prove_only && args.action != "prove" {
+        return Err("commit, repoPath and out are only valid for action='prove'".into());
+    }
     match args.action.as_str() {
+        "prove" => {
+            if args.receipt_id.is_some()
+                || args.withheld_slots.is_some()
+                || args.remove_edge.is_some()
+                || args.params.is_some()
+            {
+                return Err(
+                    "prove takes commit, repoPath and out, and none of receipt_id, withheld_slots, remove_edge or params"
+                        .into(),
+                );
+            }
+            let repo = args.repo_path.as_deref().unwrap_or_default();
+            if !std::path::Path::new(repo).is_absolute() {
+                return Err("prove requires repoPath, the absolute path of a git checkout".into());
+            }
+        }
         "get" => {
             if receipt_id.trim().is_empty() {
                 return Err("receipt_id must not be empty".into());

@@ -55,8 +55,10 @@ use crate::cognitive::CognitiveEngine;
 mod compaction;
 mod pairing;
 mod stale;
+mod witness;
 
 pub use stale::record as record_retirement;
+pub(crate) use witness::{actor_for, config_for, session_tag};
 
 /// The dispatch name hooks call.
 pub const NAME: &str = "reflex";
@@ -708,6 +710,29 @@ struct Input {
     summary: String,
     /// PreCompact and PostCompact: manual or auto.
     trigger: String,
+    /// PostToolUse of a shell tool: what it printed, exactly as the host
+    /// reported it, for a witness's output digest.
+    stdout: String,
+    stderr: String,
+    /// PostToolUseFailure: the error text exactly as reported.
+    error_raw: String,
+    /// The shell call ran in the background, so its result is not the command's.
+    background: bool,
+}
+
+/// The exact text of one field, untrimmed and uncut: an absent field and a
+/// substitution the host left unfilled are empty.
+fn raw(args: &Value, keys: &[&str]) -> String {
+    for k in keys {
+        if let Some(s) = args.pointer(k).and_then(Value::as_str) {
+            let t = s.trim();
+            if t.starts_with("${") && t.ends_with('}') && !t.contains('\n') {
+                continue;
+            }
+            return s.to_string();
+        }
+    }
+    String::new()
 }
 
 /// A substitution the host left unfilled (`${...}`) counts as absent.
@@ -757,9 +782,11 @@ impl Input {
             since: field(a, &["since"]),
             error: field(a, &["error"]),
             interrupt: matches!(
-                a.get("interrupt").or_else(|| a.get("is_interrupt")),
+                a.get("interrupt")
+                    .or_else(|| a.get("is_interrupt"))
+                    .or_else(|| a.get("interrupted")),
                 Some(Value::Bool(true))
-            ) || field(a, &["interrupt", "is_interrupt"]) == "true",
+            ) || field(a, &["interrupt", "is_interrupt", "interrupted"]) == "true",
             file: {
                 let f = field(a, &["file", "file_path"]);
                 if f.is_empty() {
@@ -777,6 +804,12 @@ impl Input {
                 .map(|s| s.chars().take(200_000).collect())
                 .unwrap_or_default(),
             trigger: field(a, &["trigger"]),
+            stdout: raw(a, &["/stdout", "/tool_response/stdout"]),
+            stderr: raw(a, &["/stderr", "/tool_response/stderr"]),
+            error_raw: raw(a, &["/error"]),
+            background: matches!(a.get("background"), Some(Value::Bool(true)))
+                || field(a, &["background"]) == "true"
+                || nested.get("run_in_background") == Some(&Value::Bool(true)),
         }
     }
 }
@@ -1063,6 +1096,8 @@ struct SessionState {
     notes: Vec<String>,
     /// What the main agent held when compaction started.
     checkpoint: Option<compaction::Checkpoint>,
+    /// Allowlisted test commands between their PreToolUse and their result.
+    witness_pending: Vec<witness::Pending>,
 }
 
 impl SessionState {
@@ -1698,9 +1733,18 @@ fn stop_item(row: &GateRow, rule_node: &str, manifest: &[String], command: Optio
     if let Some(c) = command {
         content.push_str(&format!(" Command fingerprint {c}."));
     }
+    let mut tags = vec![
+        row.rule.clone(),
+        format!("op-receipt-{d16}"),
+        "operator".into(),
+        "operator-stop".into(),
+    ];
+    if !row.session.is_empty() {
+        tags.push(session_tag(&row.session));
+    }
     json!({
         "node_type": "event",
-        "tags": [row.rule, format!("op-receipt-{d16}"), "operator", "operator-stop"],
+        "tags": tags,
         "source": source_of(row),
         "links": [{"kind": "derived_from", "to": rule_node}],
         "content": content,
@@ -1713,9 +1757,18 @@ fn resolution_item(row: &GateRow, stop: &OpenStop, rule_node: Option<&str>) -> V
     if let Some(r) = rule_node {
         links.push(json!({"kind": "derived_from", "to": r}));
     }
+    let mut tags = vec![
+        stop.rule.clone(),
+        format!("op-resolution-{d16}"),
+        "operator".into(),
+        "operator-resolution".into(),
+    ];
+    if !row.session.is_empty() {
+        tags.push(session_tag(&row.session));
+    }
     json!({
         "node_type": "event",
-        "tags": [stop.rule, format!("op-resolution-{d16}"), "operator", "operator-resolution"],
+        "tags": tags,
         "source": source_of(row),
         "links": links,
         "content": format!(
@@ -2676,6 +2729,7 @@ pub async fn execute_with(
     }
     spawn_background(&global, storage, cognitive, output_config, background);
     let paired = pairing::on_event(&global, &ctx, &inp).await;
+    let witnessed = witness::on_event(&global, &ctx, &inp).await;
     let (compacted, restored) = compaction::on_event(&global, &ctx, &inp).await;
     let mut g = global.lock().map_err(|e| e.to_string())?;
     let mut wrote = Vec::new();
@@ -2685,8 +2739,13 @@ pub async fn execute_with(
         }
     }
     wrote.extend(paired.wrote);
+    wrote.extend(witnessed.wrote);
     wrote.extend(compacted);
-    let lead: Vec<String> = restored.into_iter().chain(paired.tell).collect();
+    let lead: Vec<String> = restored
+        .into_iter()
+        .chain(paired.tell)
+        .chain(witnessed.tell)
+        .collect();
     let (text, told) = compose(&mut g, &inp, &lead);
     let extra = if inp.session.is_empty() {
         json!({})
@@ -3439,6 +3498,512 @@ mod tests {
             .await;
         let view = fx.fire(json!({"action": "ledger"})).await;
         assert!(!view.to_string().contains("\"kind\":\"failure\""), "{view}");
+    }
+
+    // -- Witness receipts ----------------------------------------------------
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn git_repo() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "commit.gpgsign", "false"],
+        ] {
+            git(dir.path(), &args);
+        }
+        std::fs::write(dir.path().join("lib.rs"), "fn add() {}\n").unwrap();
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "first"]);
+        dir
+    }
+
+    fn allow(fx: &Fixture, commands: &[&str]) {
+        let list: Vec<String> = commands.iter().map(|c| format!("{c:?}")).collect();
+        std::fs::write(
+            fx.storage.data_dir().join("vestige.toml"),
+            format!("[witness]\ncommands = [{}]\n", list.join(", ")),
+        )
+        .unwrap();
+    }
+
+    fn run_args(event: &str, call: &str, command: &str, repo: &Path) -> Value {
+        json!({"event": event, "session": "s-witness", "tool": "Bash", "call": call,
+               "command": command, "cwd": repo.to_string_lossy()})
+    }
+
+    /// The witness Reflex recorded for this tree, opened against the store's key.
+    async fn witness_at(
+        fx: &Fixture,
+        tree: &str,
+    ) -> Option<(String, vestige_proof::witness::WitnessRecord)> {
+        let node = fx.tag(&format!("tree-{tree}")).await?;
+        let content = fx.storage.get_node(&node).unwrap().unwrap().content;
+        let line = content.lines().last().unwrap();
+        let env: vestige_proof::dsse::Envelope = serde_json::from_str(line).unwrap();
+        let actor = witness::actor_for(&fx.storage).unwrap();
+        let key = vestige_proof::didkey::TrustedKey::parse(actor.did()).unwrap();
+        let (record, did) = vestige_proof::witness::WitnessRecord::open(&env, &[key]).unwrap();
+        assert_eq!(did, actor.did());
+        Some((node, record))
+    }
+
+    #[tokio::test]
+    async fn an_allowlisted_test_run_becomes_a_signed_witness_bound_to_its_tree() {
+        let fx = Fixture::new();
+        allow(&fx, &["cargo test --workspace"]);
+        let repo = git_repo();
+        std::fs::write(repo.path().join("new.rs"), "fn sub() {}\n").unwrap();
+        let index = repo.path().join(".git").join("index");
+        let index_before = std::fs::read(&index).unwrap();
+        fx.fire(run_args(
+            "PreToolUse",
+            "toolu_w1",
+            "cargo test --workspace",
+            repo.path(),
+        ))
+        .await;
+        let mut post = run_args(
+            "PostToolUse",
+            "toolu_w1",
+            "cargo test --workspace",
+            repo.path(),
+        );
+        post["stdout"] = json!("test result: ok. 3 passed\n");
+        post["stderr"] = json!("   Compiling x\n");
+        let out = fx.fire(post).await;
+        let tree = vestige_proof::git::working_tree(repo.path()).unwrap();
+        let (node, r) = witness_at(&fx, &tree)
+            .await
+            .expect("a witness tagged with the tree");
+        assert_eq!(r.command, "cargo test --workspace");
+        assert_eq!(r.exit, Some(0));
+        assert_eq!(r.tree, tree);
+        assert!(r.bound_to(&tree), "{r:?}");
+        assert_eq!(r.tests, None, "plain text output carries no count");
+        assert_eq!(
+            r.output_sha256,
+            vestige_proof::witness::output_digest(
+                "test result: ok. 3 passed\n",
+                "   Compiling x\n",
+                None
+            )
+            .0
+        );
+        assert_eq!(
+            (r.session.as_str(), r.call.as_str(), r.dir.as_str()),
+            ("s-witness", "toolu_w1", "")
+        );
+        assert_eq!(
+            r.head.as_deref(),
+            Some(git(repo.path(), &["rev-parse", "HEAD"]).as_str())
+        );
+        assert!(fx.tag(&witness::session_tag("s-witness")).await.is_some());
+        let told = context(&out);
+        assert!(
+            told.contains("witnessed `cargo test --workspace` green") && told.contains(&node),
+            "{out}"
+        );
+        assert_eq!(
+            std::fs::read(&index).unwrap(),
+            index_before,
+            "the user's index is never written"
+        );
+        assert_eq!(
+            git(repo.path(), &["status", "--porcelain"]),
+            "?? new.rs",
+            "nothing was staged"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_run_is_witnessed_red_with_its_exit_code() {
+        let fx = Fixture::new();
+        allow(&fx, &["cargo test --workspace"]);
+        let repo = git_repo();
+        fx.fire(run_args(
+            "PreToolUse",
+            "toolu_w2",
+            "cargo test --workspace",
+            repo.path(),
+        ))
+        .await;
+        let mut post = run_args(
+            "PostToolUseFailure",
+            "toolu_w2",
+            "cargo test --workspace",
+            repo.path(),
+        );
+        post["error"] = json!("Exit code 101\ntest add ... FAILED\n");
+        let out = fx.fire(post).await;
+        let tree = vestige_proof::git::working_tree(repo.path()).unwrap();
+        let (_, r) = witness_at(&fx, &tree).await.unwrap();
+        assert_eq!(r.exit, Some(101));
+        assert_eq!(
+            r.output_sha256,
+            vestige_proof::witness::output_digest(
+                "",
+                "",
+                Some("Exit code 101\ntest add ... FAILED\n")
+            )
+            .0
+        );
+        assert!(context(&out).contains("red"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_json_report_that_ran_zero_tests_is_seen() {
+        let fx = Fixture::new();
+        allow(&fx, &["npx jest --json"]);
+        let repo = git_repo();
+        fx.fire(run_args(
+            "PreToolUse",
+            "toolu_w3",
+            "npx jest --json",
+            repo.path(),
+        ))
+        .await;
+        let mut post = run_args("PostToolUse", "toolu_w3", "npx jest --json", repo.path());
+        post["stdout"] = json!(r#"{"numTotalTests":0,"numPassedTests":0,"numFailedTests":0}"#);
+        let out = fx.fire(post).await;
+        let tree = vestige_proof::git::working_tree(repo.path()).unwrap();
+        let (_, r) = witness_at(&fx, &tree).await.unwrap();
+        let t = r.tests.expect("the JSON report is counted");
+        assert_eq!((t.collected, t.source.as_str()), (0, "jest-json"));
+        assert!(t.ran_none());
+        assert!(context(&out).contains("zero tests"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_junit_report_written_during_the_run_is_counted() {
+        let fx = Fixture::new();
+        let repo = git_repo();
+        std::fs::create_dir_all(repo.path().join(".vestige")).unwrap();
+        std::fs::write(repo.path().join(".gitignore"), "reports/\n").unwrap();
+        std::fs::write(
+            repo.path().join(".vestige/witness.toml"),
+            "[witness]\ncommands = [\"make check\"]\n\n[witness.junit]\n\"make check\" = \"reports/junit.xml\"\n",
+        )
+        .unwrap();
+        fx.fire(run_args(
+            "PreToolUse",
+            "toolu_w4",
+            "make check",
+            repo.path(),
+        ))
+        .await;
+        std::fs::create_dir_all(repo.path().join("reports")).unwrap();
+        std::fs::write(
+            repo.path().join("reports/junit.xml"),
+            r#"<testsuites tests="7" failures="0"><testsuite tests="7"/></testsuites>"#,
+        )
+        .unwrap();
+        fx.fire(run_args(
+            "PostToolUse",
+            "toolu_w4",
+            "make check",
+            repo.path(),
+        ))
+        .await;
+        let tree = vestige_proof::git::working_tree(repo.path()).unwrap();
+        let (_, r) = witness_at(&fx, &tree)
+            .await
+            .expect("the repository's own allowlist counts");
+        assert_eq!(
+            r.tests.map(|t| (t.collected, t.source)),
+            Some((7, "junit".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_that_changed_the_files_is_recorded_but_binds_to_no_tree() {
+        let fx = Fixture::new();
+        allow(&fx, &["cargo test --workspace"]);
+        let repo = git_repo();
+        fx.fire(run_args(
+            "PreToolUse",
+            "toolu_w5",
+            "cargo test --workspace",
+            repo.path(),
+        ))
+        .await;
+        std::fs::write(repo.path().join("lib.rs"), "fn add() { changed() }\n").unwrap();
+        fx.fire(run_args(
+            "PostToolUse",
+            "toolu_w5",
+            "cargo test --workspace",
+            repo.path(),
+        ))
+        .await;
+        let tree = vestige_proof::git::working_tree(repo.path()).unwrap();
+        let (_, r) = witness_at(&fx, &tree).await.unwrap();
+        assert!(r.tree_before.is_some() && r.tree_before.as_deref() != Some(tree.as_str()));
+        assert!(!r.bound_to(&tree));
+    }
+
+    #[tokio::test]
+    async fn only_the_exact_allowlisted_command_in_the_foreground_is_witnessed() {
+        let fx = Fixture::new();
+        allow(&fx, &["cargo test --workspace"]);
+        let repo = git_repo();
+        let tree = vestige_proof::git::working_tree(repo.path()).unwrap();
+        let mut piped = run_args(
+            "PostToolUse",
+            "toolu_w6",
+            "cargo test --workspace | tail -5",
+            repo.path(),
+        );
+        piped["stdout"] = json!("ok");
+        fx.fire(piped).await;
+        let mut bg = run_args(
+            "PostToolUse",
+            "toolu_w7",
+            "cargo test --workspace",
+            repo.path(),
+        );
+        bg["background"] = json!("true");
+        fx.fire(bg).await;
+        let mut cut = run_args(
+            "PostToolUse",
+            "toolu_w8",
+            "cargo test --workspace",
+            repo.path(),
+        );
+        cut["interrupted"] = json!("true");
+        fx.fire(cut).await;
+        let mut other = run_args(
+            "PostToolUse",
+            "toolu_w9",
+            "cargo test --workspace",
+            repo.path(),
+        );
+        other["tool"] = json!("Read");
+        fx.fire(other).await;
+        assert!(fx.tag(&format!("tree-{tree}")).await.is_none());
+        let view = fx.fire(json!({"action": "ledger"})).await;
+        assert!(!view.to_string().contains("\"kind\":\"witness\""), "{view}");
+    }
+
+    // -- Proof bundles -------------------------------------------------------
+
+    fn trusted(fx: &Fixture) -> vestige_proof::didkey::TrustedKey {
+        let actor = witness::actor_for(&fx.storage).unwrap();
+        vestige_proof::didkey::TrustedKey::parse(actor.did()).unwrap()
+    }
+
+    /// A red run, a fix, the same command green, one Operator stop, then a
+    /// commit of exactly the tested files.
+    async fn worked_session(fx: &mut Fixture, repo: &Path) {
+        let cmd = "cargo test --workspace";
+        fx.fire(run_args("PreToolUse", "toolu_p1", cmd, repo)).await;
+        let mut red = run_args("PostToolUseFailure", "toolu_p1", cmd, repo);
+        red["error"] = json!("Exit code 101\nerror[E0425]: cannot find function `sub`");
+        fx.fire(red).await;
+        std::fs::write(repo.join("lib.rs"), "fn add() {}\nfn sub() {}\n").unwrap();
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-witness", "tool": "Edit",
+                       "call": "toolu_e", "file": repo.join("lib.rs").to_string_lossy()}),
+        )
+        .await;
+        fx.receipt(stop("s-witness", "OP-003", "toolu_rm", "rm -rf build"));
+        fx.fire(run_args("PreToolUse", "toolu_p2", cmd, repo)).await;
+        let mut green = run_args("PostToolUse", "toolu_p2", cmd, repo);
+        green["stdout"] = json!("test result: ok. 2 passed\n");
+        fx.fire(green).await;
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-q", "-m", "add sub"]);
+    }
+
+    #[tokio::test]
+    async fn prove_bundles_the_witnesses_of_a_commit_with_its_pairings_and_stops() {
+        let mut fx = Fixture::new();
+        allow(&fx, &["cargo test --workspace", "pnpm test"]);
+        let repo = git_repo();
+        worked_session(&mut fx, repo.path()).await;
+        let head = git(repo.path(), &["rev-parse", "HEAD"]);
+        let tree = git(repo.path(), &["rev-parse", "HEAD^{tree}"]);
+        let out = super::super::prove::prove(
+            &fx.storage,
+            repo.path(),
+            "HEAD",
+            super::super::prove::Out::Both,
+        )
+        .unwrap();
+        assert_eq!(
+            (out["commit"].as_str(), out["tree"].as_str()),
+            (Some(head.as_str()), Some(tree.as_str()))
+        );
+        let summary = &out["summary"];
+        assert_eq!(summary["green"], 1, "{out}");
+        assert_eq!(summary["unwitnessed"], 1, "pnpm test was never run: {out}");
+        assert_eq!(
+            summary["witnesses"], 1,
+            "the red run was at another tree: {out}"
+        );
+        assert_eq!(summary["pairings"], 1, "{out}");
+        assert_eq!(summary["stops"], 1, "{out}");
+
+        let file = repo
+            .path()
+            .join(vestige_proof::PROOF_DIR)
+            .join(vestige_proof::bundle_file_name(&tree));
+        let bytes = std::fs::read(&file).unwrap();
+        assert_eq!(out["bundleSha256"], vestige_proof::sha256_hex(&bytes));
+        let note = vestige_proof::git::read_note(repo.path(), &head).unwrap();
+        assert_eq!(
+            format!("{note}\n").into_bytes(),
+            bytes,
+            "the note holds the same bundle"
+        );
+
+        let env = vestige_proof::statement::parse_bundle(&bytes).unwrap();
+        let key = trusted(&fx);
+        let (st, did) =
+            vestige_proof::statement::Statement::open(&env, std::slice::from_ref(&key)).unwrap();
+        assert_eq!(did, key.did);
+        let p = &st.predicate;
+        assert_eq!(st.subject[0].digest["gitTree"], tree);
+        assert_eq!(p.commit, head);
+        let green = p
+            .claims
+            .iter()
+            .find(|c| c.command == "cargo test --workspace")
+            .unwrap();
+        assert_eq!(green.status, vestige_proof::claims::Status::Green);
+        let w = &p.witnesses[0];
+        assert_eq!(green.witness.as_deref(), Some(w.memory.as_str()));
+        assert_eq!(w.strata_digest.as_ref().map(String::len), Some(64), "{w:?}");
+        let (record, _) =
+            vestige_proof::witness::WitnessRecord::open(&w.envelope, std::slice::from_ref(&key))
+                .unwrap();
+        assert!(record.bound_to(&tree));
+        let pairing = &p.pairings[0];
+        assert!(
+            pairing
+                .signature
+                .as_deref()
+                .is_some_and(|s| s.starts_with("fail-")),
+            "{pairing:?}"
+        );
+        assert_eq!(pairing.session, "s-witness");
+        assert!(
+            fx.storage
+                .get_node(&pairing.fix)
+                .unwrap()
+                .unwrap()
+                .tags
+                .contains(&"reflex-fix".to_string())
+        );
+        let stop = &p.stops[0];
+        assert_eq!(stop.rule, "OP-003");
+        assert!(stop.receipt.starts_with("op-receipt-"), "{stop:?}");
+        assert_eq!(p.sessions, vec!["s-witness".to_string()]);
+        assert_eq!(p.claim_boundary, vestige_proof::statement::CLAIM_BOUNDARY);
+
+        // The offline verifier accepts exactly this bundle for exactly this tree.
+        use vestige_proof::verify::{Policy, verify_bundle};
+        let trusted = std::slice::from_ref(&key);
+        let report = verify_bundle(&bytes, trusted, Some(&tree), &Policy::default());
+        assert!(report.ok, "{:?}", report.failures);
+        let strict = Policy {
+            require: vec![],
+            strict: true,
+        };
+        let report = verify_bundle(&bytes, trusted, Some(&tree), &strict);
+        assert!(
+            report
+                .failures
+                .iter()
+                .any(|f| f.contains("`pnpm test` is unwitnessed")),
+            "{:?}",
+            report.failures
+        );
+    }
+
+    #[tokio::test]
+    async fn a_committed_bundle_proves_the_same_tree_and_an_untested_commit_proves_nothing_green() {
+        let mut fx = Fixture::new();
+        allow(&fx, &["cargo test --workspace"]);
+        let repo = git_repo();
+        worked_session(&mut fx, repo.path()).await;
+        let first = super::super::prove::prove(
+            &fx.storage,
+            repo.path(),
+            "HEAD",
+            super::super::prove::Out::File,
+        )
+        .unwrap();
+        git(repo.path(), &["add", "-A"]);
+        git(repo.path(), &["commit", "-q", "-m", "proof"]);
+        let again = super::super::prove::prove(
+            &fx.storage,
+            repo.path(),
+            "HEAD",
+            super::super::prove::Out::None,
+        )
+        .unwrap();
+        assert_eq!(
+            again["tree"], first["tree"],
+            "the bundle never changes the tree it proves"
+        );
+        assert_eq!(again["claims"], first["claims"]);
+        std::fs::write(
+            repo.path().join("lib.rs"),
+            "fn add() {}\nfn sub() {}\nfn mul() {}\n",
+        )
+        .unwrap();
+        git(repo.path(), &["commit", "-qam", "untested change"]);
+        let untested = super::super::prove::prove(
+            &fx.storage,
+            repo.path(),
+            "HEAD",
+            super::super::prove::Out::None,
+        )
+        .unwrap();
+        assert_eq!(untested["summary"]["green"], 0, "{untested}");
+        assert_eq!(untested["claims"][0]["status"], "unwitnessed", "{untested}");
+        assert_eq!(untested["summary"]["pairings"], 0);
+    }
+
+    #[tokio::test]
+    async fn the_receipt_tool_runs_prove_and_refuses_mixed_arguments() {
+        let mut fx = Fixture::new();
+        allow(&fx, &["cargo test --workspace"]);
+        let repo = git_repo();
+        worked_session(&mut fx, repo.path()).await;
+        let path = repo.path().to_string_lossy().to_string();
+        let out = super::super::receipt::execute(
+            &fx.storage,
+            Some(json!({"action": "prove", "repoPath": path, "commit": "HEAD", "out": "none"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["summary"]["green"], 1, "{out}");
+        for bad in [
+            json!({"action": "prove"}),
+            json!({"action": "prove", "repoPath": "relative/path"}),
+            json!({"action": "prove", "repoPath": path, "out": "gist"}),
+            json!({"action": "prove", "repoPath": path, "receipt_id": "mem-1"}),
+            json!({"action": "get", "receipt_id": "mem-1", "commit": "HEAD"}),
+        ] {
+            assert!(
+                super::super::receipt::execute(&fx.storage, Some(bad.clone()))
+                    .await
+                    .is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[tokio::test]

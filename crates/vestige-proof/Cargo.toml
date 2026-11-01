@@ -1,0 +1,30 @@
+[package]
+name = "vestige-proof"
+version = "6.0.0"
+edition = "2024"
+rust-version = "1.91"
+authors = ["Sam Valladares"]
+description = "Proof-carrying pull requests: signed test witnesses bound to a git tree, as in-toto statements in DSSE envelopes, and an offline verifier that never opens a Vestige store"
+license = "AGPL-3.0-only"
+repository = "https://github.com/samvallad33/vestige"
+# Built from source by the composite GitHub Action; never published.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vestige-verify-proof"
+path = "src/bin/verify_proof.rs"
+
+# Kept small on purpose: the GitHub Action compiles this crate on every run,
+# and the verifier must never link the store.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+ed25519-dalek = "3"
+base64 = "0.23"
+
+[dev-dependencies]
+tempfile = "3"
