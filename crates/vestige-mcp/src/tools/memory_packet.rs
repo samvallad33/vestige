@@ -106,11 +106,25 @@ const MONTHS: [&str; 12] = [
     "december",
 ];
 
-/// Index tags a prompt meets exactly: `avoid:<thing>`, `day:YYYY-MM-DD` and
-/// `yearly:MM-DD`. Deterministic; no model reads the prompt.
+/// A memory joins the prompt's index tags through its stored tags or, for a
+/// memory saved before index tags existed, through an exact ISO day its own
+/// words carry. Avoid and yearly keys only come from stored tags: a word in a
+/// memory is not a rule against it, and a one-off date does not recur.
+fn joins_index(node: &KnowledgeNode, hits: &BTreeSet<String>) -> bool {
+    if hits.is_empty() {
+        return false;
+    }
+    node.tags.iter().any(|tag| hits.contains(tag))
+        || index_tags(&node.content)
+            .iter()
+            .any(|tag| tag.starts_with("day:") && hits.contains(tag))
+}
+
 /// Index-joined memories reserved ahead of lexical hits (salience-pro MAX_FILED_CANDIDATES).
 const MAX_RESERVED: usize = 4;
 
+/// Index tags a prompt meets exactly: `avoid:<thing>`, `day:YYYY-MM-DD` and
+/// `yearly:MM-DD`. Deterministic; no model reads the prompt.
 pub(crate) fn index_tags(prompt: &str) -> BTreeSet<String> {
     let mut tags: BTreeSet<String> = thing_keys(prompt)
         .into_iter()
@@ -220,7 +234,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             let index_hits = index_tags(prompt);
             for (index, node) in nodes.iter().enumerate() {
                 if (node.tags.iter().any(|tag| entities.contains(tag))
-                    || node.tags.iter().any(|tag| index_hits.contains(tag)))
+                    || joins_index(node, &index_hits))
                     && lexical::allows_person(node, &named)
                     && !indexes.contains(&index)
                 {
@@ -346,6 +360,16 @@ fn raise_direction(receipt: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_untagged_memory_joins_by_the_dates_in_its_words() {
+        let mut node = KnowledgeNode::default();
+        node.content = "Dentist on 2026-11-03".into();
+        assert!(joins_index(&node, &index_tags("what is on 2026-11-03")));
+        assert!(!joins_index(&node, &index_tags("plans for November 3")));
+        node.content = "hot tubs are fun".into();
+        assert!(!joins_index(&node, &index_tags("book a hot tub")));
+    }
+
     #[test]
     fn index_tags_join_things_and_dates_exactly() {
         let tags = index_tags("Can we try the Hot Tubs on March 3rd or 2026-11-03?");
