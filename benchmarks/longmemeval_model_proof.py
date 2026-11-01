@@ -9,12 +9,13 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import types
 
 from benchmarks.real_engine import engine as engine_module
 from benchmarks.real_engine.datasets import load_longmemeval,judge_longmemeval
 from benchmarks.real_engine.recall_proof import fixed_ids,_audit_rows,audit_relevance
 from benchmarks.real_engine.runtime import atomic_write,canonical,utc_now,read_jsonl
-from benchmarks.longmemeval_native_setup import NativeSetupEngine
+from benchmarks.longmemeval_native_setup import NativeSetupEngine,NativeSetupBudgetedProvider
 
 
 def observed_nodes(value):
@@ -52,9 +53,11 @@ def inspect_model_retrieval(row,raw):
 
 
 async def run_model_proof(campaign):
-    repo=Path(__file__).resolve().parents[1];root=repo/'runs/lme-model-driven-proof-v2';root.mkdir(exist_ok=True)
+    repo=Path(__file__).resolve().parents[1];root=repo/'runs/lme-model-driven-proof-v3';root.mkdir(exist_ok=True)
     if (root/'proof.json').exists():return json.loads((root/'proof.json').read_text())
     clone=copy.copy(campaign);clone.runs=root;clone.preflight_counts={'longmemeval':10};clone.preflight_count=10
+    def provider_for(self,meta,path,**limits):return NativeSetupBudgetedProvider(self.provider,meta,path,**limits)
+    clone.item_provider=types.MethodType(provider_for,clone)
     sources={str(p.relative_to(repo)):hashlib.sha256(p.read_bytes()).hexdigest() for p in [Path(__file__),repo/'benchmarks/longmemeval_native_setup.py',repo/'packages/vestige-init/hooks/memory.cjs',repo/'packages/vestige-init/lib/memory-triggers.cjs',repo/'docs/integrations/codex-intelligent-memory.md']}
     clone.config_hash=hashlib.sha256(canonical({'base_config':campaign.config_hash,'product_setup_sources':sources,'proof':'MODEL_retrieves_observed_ID_then_answers_v1'}).encode()).hexdigest()
     shutil.copy2(repo/'runs/build-manifest.json',root/'build-manifest.json')

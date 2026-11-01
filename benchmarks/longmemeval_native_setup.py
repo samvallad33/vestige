@@ -35,7 +35,7 @@ class NativeSetupEngine(HookedRealEngine):
         self.product_session=hashlib.sha256(str(self.run_dir).encode()).hexdigest()
         append_jsonl(self.product_log,{'event':'installed','timestamp':utc_now(),'source_pins':pins,'protocol_source':str(doc),'protocol_sha256':hashlib.sha256(self.product_protocol.encode()).hexdigest(),'source_wiring':str(REPO/'packages/vestige-init/lib/vestige-memory-setup.js'),'registrations':{'SessionStart':'session','UserPromptSubmit':'prompt','Stop':'turn','PreCompact':'compact','SessionEnd':'end'},'config':str(self.product_config),'worker_home':str(home),'engine_data_dir':str(self.run_dir/'strata')})
 
-    def product_event(self,event,prompt=''):
+    def product_event(self,event,prompt='',actor_session=None):
         self.prepare_product_setup()
         client=Path(self.product_config).parent/'hooks/memory.cjs'
         if event in {'turn','end'}:
@@ -58,7 +58,7 @@ rl.on('line',line=>{const x=JSON.parse(line);if(x.kind==='begin'){current=x;cons
             process.stdin.write(canonical(value)+'\n');process.stdin.flush()
             if not select.select([process.stdout],[],[],max(0,deadline-time.monotonic()))[0]:raise TimeoutError('product memory190ms deadline')
             return json.loads(process.stdout.readline())
-        request={'kind':'begin','event':event,'prompt':prompt,'session':self.product_session}
+        request={'kind':'begin','event':event,'prompt':prompt,'session':actor_session or self.product_session}
         context='';value={};error=None
         try:
             native=exchange(request)['arguments']
@@ -97,3 +97,20 @@ rl.on('line',line=>{const x=JSON.parse(line);if(x.kind==='begin'){current=x;cons
                 try:process.wait(timeout=2)
                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)
             super().close()
+
+
+from benchmarks.real_engine.full_hook_model import FullHookBudgetedProvider
+
+class NativeSetupBudgetedProvider(FullHookBudgetedProvider):
+    async def hook_request(self,payload,callback):
+        import asyncio
+        engine=callback.engine_getter() if callback.engine_getter else callback.engine
+        if engine is None:raise RuntimeError('hook agent has no live worker engine')
+        messages=list(payload['messages'])
+        prompt='\n'.join(m.get('content','') for m in messages if isinstance(m.get('content'),str))
+        actor=engine.product_session+'/hook/'+str(payload.get('hook','agent'))
+        context=await asyncio.to_thread(engine.product_event,'session',prompt,actor)
+        # The real installed client protocol and actual native packet precede
+        # the unchanged source hook prompt; no invented ids or source records.
+        payload={**payload,'messages':[{'role':'system','content':engine.product_protocol}]+[{'role':'user','content':c} for c in context]+messages}
+        return await super().hook_request(payload,callback)
