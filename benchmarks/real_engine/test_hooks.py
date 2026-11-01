@@ -21,6 +21,20 @@ def _test_audit(path):
 
 
 class HookContracts(unittest.TestCase):
+    def test_memory_qa_selects_only_source_registered_memory_hooks(self):
+        events,wired=merge_fragments(REPO,profile="memory_qa")
+        self.assertEqual([x["command"] for x in events["SessionStart"]],["vestige hook session-start"])
+        self.assertEqual([x["command"] for x in events["UserPromptSubmit"]],["$HOME/.claude/hooks/vestige-pulse-daemon.sh"])
+        self.assertEqual(events["PreToolUse"],[])
+        self.assertEqual(events["PostToolUse"],[])
+        self.assertEqual(events["Stop"],[])
+        self.assertEqual(len(wired),2)
+        self.assertTrue(all(x["fragment"].startswith("hooks/settings.") for x in wired))
+
+    def test_unknown_hook_profile_fails_loudly(self):
+        with self.assertRaisesRegex(HookViolation,"unknown hook profile"):
+            merge_fragments(REPO,profile="disable-everything")
+
     def test_all_fragment_commands_and_triggers_preserved(self):
         events,wired=merge_fragments(REPO)
         self.assertEqual(len(events["UserPromptSubmit"]),7)
@@ -47,6 +61,25 @@ class HookContracts(unittest.TestCase):
 
 @unittest.skipUnless((REPO/"target/release/vestige").exists(),"real native CLI build required")
 class NativeHookTests(unittest.TestCase):
+    def test_memory_qa_unchanged_hooks_read_only_this_native_store(self):
+        with tempfile.TemporaryDirectory(dir=REPO/"runs") as tmp:
+            root=Path(tmp);audit=_test_audit(root/"audit.json")
+            engine=HookedRealEngine(REPO,root/"engine",hook_audit_path=audit)
+            engine.hook_profile="memory_qa"
+            with engine:
+                self.assertEqual(engine.hooks.profile,"memory_qa")
+                self.assertEqual(len(engine.hooks.wired),2)
+                self.assertEqual(engine.begin_turn("What does the current record say?"),[])
+                engine.call("smart_ingest",{"content":"The current fixture uses a blue folder.","node_type":"decision","tags":["pinned"]})
+                output=engine.hooks.event("SessionStart",{"source":"resume"})
+                self.assertIn("blue folder","\n".join(output["context"]))
+                hookrows=[json.loads(line) for line in engine.hooks.log_path.read_text().splitlines()]
+                self.assertFalse(any(x.get("kind")=="model_bridge_request" for x in hookrows))
+                self.assertFalse(any(x.get("event") in {"PreToolUse","PostToolUse","Stop"} for x in hookrows))
+                self.assertTrue(any(x.get("kind")=="hook_mcp_request" for x in hookrows))
+                self.assertEqual(engine.hooks.native_status["/api/changelog"]["status"],501)
+                self.assertNotIn("/api/deep_reference",engine.hooks.native_status)
+
     def test_raw_prompt_preserved_and_ambient_evidence_never_injected(self):
         with tempfile.TemporaryDirectory(dir=REPO/"runs") as tmp:
             root=Path(tmp);audit=_test_audit(root/"audit.json")

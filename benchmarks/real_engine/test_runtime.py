@@ -174,8 +174,25 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
             return {"usage": {"input_tokens": 1}}
         await asyncio.gather(*(pools[i % 3].request(str(i), .001, send,
                                                    lambda r: (.0005, r["usage"])) for i in range(100)))
-        self.assertEqual(peak, 40)
+        self.assertEqual(peak, 20)
         self.assertEqual(self.ledger.snapshot()["spent"], .05)
+
+    async def test_connect_timeout_retries_and_retains_ambiguous_reservations(self):
+        import httpx
+        attempts=0
+        async def send():
+            nonlocal attempts
+            attempts+=1
+            if attempts<3:
+                raise httpx.ConnectTimeout('timeout')
+            return {'usage':{'prompt_tokens':1,'completion_tokens':1}}
+        async def sleep(delay):
+            pass
+        pool=AsyncAPIPool(self.ledger,sleep=sleep)
+        await pool.request('timeout-retry',.01,send,lambda r:(.001,r['usage']))
+        self.assertEqual(attempts,3)
+        self.assertEqual(self.ledger.snapshot()['reserved'],.02)
+        self.assertEqual(self.ledger.snapshot()['spent'],.001)
 
     async def test_six_retries_with_jitter_and_all_failed_attempts_reserved(self):
         delays, events = [], []

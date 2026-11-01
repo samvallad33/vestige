@@ -10,7 +10,7 @@ import asyncio
 from benchmarks.real_engine.mpbench import ATTACK_CLASSES
 from benchmarks.real_engine.mpbench_runner import (
     MPBenchIncomplete, complete_native_snapshot, run_item,
-    security_denial, write_security_decision, require_score_integrity, run_mpbench,
+    security_denial, write_security_decision, require_score_integrity, run_mpbench, score_merged_arm,
 )
 from benchmarks.real_engine.hook_model import BudgetedProvider
 
@@ -102,7 +102,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         rows = []
         for arm in ("bare", "bm25", "embedding"):
             provider = MockProvider()
-            with patch("benchmarks.real_engine.mpbench_runner.scorer_identity", return_value={"scorer_sha256": "frozen"}), \
+            with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
                  patch("benchmarks.real_engine.run.tokens", return_value=10):
                 rows.append(await run_item(self.campaign(provider), self.case, arm, 0))
         self.assertEqual(len({r["prompt"][1]["content"] for r in rows}), 1)
@@ -115,7 +115,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_baseline_snapshots_actual_write_result_without_fabricating_defense(self):
         provider = MockProvider(write=True)
-        with patch("benchmarks.real_engine.mpbench_runner.scorer_identity", return_value={"scorer_sha256": "frozen"}), \
+        with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
              patch("benchmarks.real_engine.run.tokens", return_value=10):
             row = await run_item(self.campaign(provider), self.case, "bm25", 0)
         self.assertEqual(row["persisted_entries"], ["raw saved record"])
@@ -132,7 +132,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                 self.identity = {"fresh_store_nodes": 0, "hooks": {"enabled": True}}
                 self.audit = Path(directory) / "mcp.jsonl"
                 self.audit.parent.mkdir()
-                self.audit.write_text("")
+                self.audit.write_text(json.dumps({"kind": "tool_request", "name": "memory_status"}) + "\n")
                 self.tools = []
                 self.finished = 0
                 self.begin_inputs = []
@@ -156,7 +156,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             def finish_turn(self, messages):
                 self.finished += 1
                 return {"blocked": self.finished == 1, "reasons": ["unit retry"], "context": []}
-        with patch("benchmarks.real_engine.mpbench_runner.scorer_identity", return_value={"scorer_sha256": "frozen"}), \
+        with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
              patch("benchmarks.real_engine.run.tokens", return_value=10), \
              patch("benchmarks.real_engine.engine.HookedRealEngine", UnitHookedEngine):
             row = await run_item(self.campaign(provider), self.case, "vestige", 0)
@@ -172,9 +172,9 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(MPBenchIncomplete, "scoring held"):
                 require_score_integrity(self.campaign(MockProvider()), {"arm": "bare", "run_identity": "unqualified"})
 
-    async def test_twenty_item_preflight_preserves_full_manifest_and_never_scores(self):
+    async def test_ten_item_preflight_preserves_full_manifest_and_never_scores(self):
         campaign = self.campaign(MockProvider())
-        campaign.preflight_count = 20
+        campaign.preflight_count = 10
         campaign.progress = {}
         campaign.ledger = SimpleNamespace(snapshot=lambda: {"remaining": 25})
         (self.root / "QUALIFICATION.json").write_text(json.dumps({"hooks_manifest_sha256": "unit-only"}))
@@ -184,7 +184,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             observed.append((case["id"], arm, worker))
             await asyncio.sleep(0)
             return {"item_id": case["id"], "arm": arm, "trial": trial, "status": "complete", "cost": 0}
-        with patch("benchmarks.real_engine.mpbench_runner.scorer_identity", return_value={"scorer_sha256": "frozen"}), \
+        with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
              patch("benchmarks.real_engine.mpbench_runner.load_mpbench", return_value=(fixtures, {"unit_fixture": True})), \
              patch("benchmarks.real_engine.mpbench_runner.run_item", side_effect=unit_run), \
              patch("benchmarks.real_engine.mpbench_runner.integrity_state", return_value={"status": "PENDING"}), \
@@ -192,14 +192,81 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             outcome = await run_mpbench(campaign)
         self.assertFalse(outcome["official_metrics_computed"])
         self.assertEqual(outcome["full_manifest_items"], 30)
-        self.assertEqual(len(observed), 80)
-        self.assertEqual(set(outcome["completed_preflight_items_per_arm"].values()), {20})
+        self.assertEqual(len(observed), 40)
+        self.assertEqual(set(outcome["completed_preflight_items_per_arm"].values()), {10})
         shards = json.loads((self.root / "mpbench/shards.json").read_text())
         self.assertEqual(len(shards["items"]), 30)
         self.assertEqual(shards["workers"], 10)
         coverage = json.loads((self.root / "mpbench/coverage.json").read_text())
-        self.assertEqual({a["uncompleted_n"] for a in coverage["arms"].values()}, {10})
+        self.assertEqual({a["uncompleted_n"] for a in coverage["arms"].values()}, {20})
         self.assertFalse((self.root / "mpbench/RESULTS.md").exists())
+
+    async def test_current_profile_and_config_reach_every_item_record(self):
+        campaign = self.campaign(MockProvider())
+        campaign.config_hash = "current-config"
+        campaign.preflight_for = lambda name: 10
+        with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
+             patch("benchmarks.real_engine.run.tokens", return_value=10):
+            row = await run_item(campaign, self.case, "bare", 0)
+        self.assertEqual(row["config_hash"], "current-config")
+        self.assertEqual(row["phase"], "integrity_preflight")
+
+    async def test_midrun_engine_death_aborts_before_solver_request(self):
+        from benchmarks.real_engine.engine import VestigeMCPError
+        provider = MockProvider()
+        class KillProtocolEngine:
+            def __init__(self, repo, directory, **kwargs):
+                self.identity = {"fresh_store_nodes": 0, "hooks": {"enabled": True}, "data_dir": str(directory)}
+                self.audit = Path(directory) / "mcp.jsonl"
+                self.tools = []
+                self.dead = False
+                self.closed = False
+                self.client = SimpleNamespace(_proc=SimpleNamespace(pid=123, kill=self.kill, wait=lambda **kwargs: -9))
+            def kill(self):
+                self.dead = True
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.closed = True
+            def begin_turn(self, prompt):
+                return []
+            def call(self, *args):
+                if self.dead:
+                    raise VestigeMCPError("benchmark engine is not running")
+                raise AssertionError("control called memory before kill")
+        campaign = self.campaign(provider)
+        campaign.config_hash = "current-config"
+        with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
+             patch("benchmarks.real_engine.engine.HookedRealEngine", KillProtocolEngine):
+            outcome = await run_item(campaign, self.case, "vestige", 0, kill_control=True)
+        self.assertEqual(outcome["status"], "kill_control_passed")
+        self.assertEqual(provider.calls, [])
+        receipts = [json.loads(line) for line in (self.root / "mpbench/kill-control.jsonl").read_text().splitlines()]
+        self.assertEqual([r["event"] for r in receipts], ["engine_started", "midrun_kill", "runner_aborted"])
+        self.assertFalse(receipts[-1]["fallback_used"])
+        self.assertEqual({r["config_hash"] for r in receipts}, {"current-config"})
+
+    async def test_completed_merged_scorer_is_not_run_twice(self):
+        campaign = self.campaign(MockProvider())
+        arm_root = self.root / "mpbench/bare"
+        arm_root.mkdir(parents=True)
+        merged = [{"item_id": self.case["id"], "trial": 0, "run_identity": "current"}]
+        (arm_root / "merged.jsonl").write_text(json.dumps(merged[0]) + "\n")
+        (self.root / "QUALIFICATION.json").write_text(json.dumps({"benchmarks": {"mpbench": {
+            "scorer": {"source_files": {"benchmarks/real_engine/mpbench.py": "frozen"}}}}}))
+        async def one_score(*args):
+            return {**merged[0], "kind": "adversarial", "attack_class": self.case["attack_class"], "asr": False}
+        with patch("benchmarks.real_engine.mpbench_runner._score", side_effect=one_score) as scorer:
+            initial = await score_merged_arm(campaign, [self.case], "bare", merged, {})
+            resumed = await score_merged_arm(campaign, [self.case], "bare", merged, {})
+        self.assertEqual(scorer.call_count, 1)
+        self.assertEqual(initial, resumed)
+        receipts = [json.loads(line) for line in (arm_root / "scorer-invocations.jsonl").read_text().splitlines()]
+        self.assertEqual([r["event"] for r in receipts], ["official_scorer_start", "official_scorer_complete"])
+        self.assertEqual(receipts[-1]["output_count"], 1)
+        (arm_root / "scored.jsonl").write_text(json.dumps({**initial[0], "asr": True}) + "\n")
+        with self.assertRaisesRegex(MPBenchIncomplete, "output changed"):
+            await score_merged_arm(campaign, [self.case], "bare", merged, {})
 
 
 if __name__ == "__main__":

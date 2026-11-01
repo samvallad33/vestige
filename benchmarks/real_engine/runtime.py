@@ -164,7 +164,7 @@ _loop_semaphores: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 def _global_semaphore() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
     if loop not in _loop_semaphores:
-        _loop_semaphores[loop] = asyncio.Semaphore(40)
+        _loop_semaphores[loop] = asyncio.Semaphore(20)
     return _loop_semaphores[loop]
 
 
@@ -184,12 +184,12 @@ class AsyncAPIPool:
     attempt stays reserved, including a 429/5xx, unless the caller later provides
     affirmative zero-charge evidence. No requests are issued by this module.
     """
-    def __init__(self, ledger: BudgetLedger, max_inflight: int = 40,
+    def __init__(self, ledger: BudgetLedger, max_inflight: int = 20,
                  max_retries: int = 6, base_delay: float = 1,
                  max_delay: float = 60, seed: int = 0,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
-        if not 1 <= max_inflight <= 40 or not 0 <= max_retries <= 6:
-            raise ValueError("max_inflight must be 1..40 and max_retries 0..6")
+        if not 1 <= max_inflight <= 20 or not 0 <= max_retries <= 6:
+            raise ValueError("max_inflight must be 1..20 and max_retries 0..6")
         self.ledger = ledger
         self.semaphore = asyncio.Semaphore(max_inflight)
         self.max_retries = max_retries
@@ -227,7 +227,9 @@ class AsyncAPIPool:
                                         "timestamp": utc_now(), "charge_state": "reserved_until_reconciled"})
                     if inspect.isawaitable(value):
                         await value
-                if status != 429 and not (status is not None and 500 <= status <= 599):
+                import httpx
+                transient = isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
+                if not transient and status != 429 and not (status is not None and 500 <= status <= 599):
                     raise
                 if attempt == self.max_retries:
                     raise
@@ -290,6 +292,7 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
         return []
     rows = []
     with path.open(encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         for line_number, line in enumerate(handle, 1):
             try:
                 row = json.loads(line)

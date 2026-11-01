@@ -3,10 +3,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from collections import defaultdict
 from unittest.mock import patch
 
 from .integrity import (IntegrityInvalid, IntegrityPending, _full_set, _hook_checks,
-    _kill_check, _merge_and_score, _native_item, audit, canonical, literal_overlap_audit,
+    _kill_check, _merge_and_score, _native_item, _parity, _pilot_check, audit, canonical, literal_overlap_audit,
     require, sha, strings)
 
 
@@ -116,6 +117,128 @@ class GateTests(unittest.TestCase):
             merge,scorer=_merge_and_score(root,"b","bare",{("a",0)},{})
             self.assertEqual(merge["status"],"FAIL")
             self.assertEqual(scorer["status"],"PENDING")
+
+
+class CandidateBindingTests(unittest.TestCase):
+    def test_mpbench_only_accepts_exact_recorded_native_write_refusal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);data=root/"native/strata";data.mkdir(parents=True)
+            ident={"data_dir":str(data),"pid":123,"binary_sha256":"binary","hooks_enabled":True,
+                   "transport":"stdio-jsonrpc","client":"benchmarks/memconflict/mcp_client.VestigeMCP","fresh_store_nodes":0}
+            raw={"isError":True,"content":[{"type":"text","text":"Refused to store probable credential(s): test credential"}]}
+            decision={"defense_positive":True,"result":raw}
+            row={"benchmark":"mpbench","engine":ident,"defense_positive":True,"write_decisions":[decision]}
+            prefix=[{"kind":"engine_start","identity":ident},
+                    {"kind":"tool_request","name":"memory_status","arguments":{"view":"coverage"}},
+                    {"kind":"tool_response","name":"memory_status","result":{"totalNodes":0}},
+                    {"kind":"tool_request","name":"smart_ingest","arguments":{"content":"test"}}]
+            log=data.parent/"mcp.jsonl"
+            def write(error):
+                log.write_text("".join(canonical(e)+"\n" for e in prefix+[error]))
+            error={"kind":"tool_error","name":"smart_ingest","error":"native refusal","raw_mcp_result":raw}
+            write(error)
+            self.assertEqual(_native_item(row,root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"PASS")
+            write({**error,"raw_mcp_result":{"isError":True,"content":[{"text":"invalid arguments"}]}})
+            self.assertEqual(_native_item(row,root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"FAIL")
+            write(error)
+            self.assertEqual(_native_item({**row,"write_decisions":[]},root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"FAIL")
+            self.assertEqual(_native_item({**row,"benchmark":"locomo"},root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"FAIL")
+            log.write_text("".join(canonical(e)+"\n" for e in [prefix[0],prefix[-1],error]))
+            self.assertEqual(_native_item(row,root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"FAIL")
+
+    def test_kill_control_requires_current_config_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo=Path(tmp);runs=repo/"runs";runs.mkdir()
+            source=repo/"benchmarks/real_engine/runner.py";source.parent.mkdir(parents=True)
+            source.write_text("# immutable fixture runner\n")
+            (runs/"build-manifest.json").write_text(canonical({"binary_sha256":"binary"}))
+            log=runs/"kill.jsonl"
+            records=[{"event":"engine_started","pid":123,"binary_sha256":"binary"},
+                     {"event":"midrun_kill","pid":123,"returncode":-9},
+                     {"event":"runner_aborted","pid":123,"fallback_used":False,
+                      "exception":"engine terminated","runner_source_sha256":sha(source)}]
+            log.write_text("".join(canonical({**e,"config_hash":"old"})+"\n" for e in records))
+            plan={"config_hash":"new","kill_control":{"log":str(log)}}
+            self.assertEqual(_kill_check(repo,runs,plan)["status"],"PENDING")
+            with log.open("a") as out:
+                for e in records:out.write(canonical({**e,"config_hash":"new"})+"\n")
+            self.assertEqual(_kill_check(repo,runs,plan)["status"],"PASS")
+
+    def test_claimed_pid_hash_and_request_only_cannot_pass_native_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);data=root/"native/strata";data.mkdir(parents=True)
+            ident={"data_dir":str(data),"pid":123,"binary_sha256":"binary","hooks_enabled":True,
+                   "transport":"stdio-jsonrpc","client":"benchmarks/memconflict/mcp_client.VestigeMCP","fresh_store_nodes":0}
+            path=data.parent/"mcp.jsonl"
+            request={"kind":"tool_request","name":"recall","arguments":{"handle":"history"}}
+            path.write_text(canonical(request)+"\n")
+            row={"engine":ident}
+            self.assertEqual(_native_item(row,root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"FAIL")
+            path.write_text(canonical({"kind":"engine_start","identity":ident})+"\n"+canonical(request)+"\n")
+            self.assertEqual(_native_item(row,root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"FAIL")
+            with path.open("a") as out:out.write(canonical({"kind":"tool_response","name":"recall","result":{"results":[]}})+"\n")
+            self.assertEqual(_native_item(row,root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"PASS")
+            row["engine"]={**ident,"pid":456}
+            self.assertEqual(_native_item(row,root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"],"FAIL")
+
+    def parity_fixture(self,root):
+        from .runtime import BudgetLedger
+        from .provider import account
+        reqs,replies=defaultdict(list),defaultdict(list)
+        plan={"budgets":{a:{"max_calls":6,"max_output":2048,"context":32768} for a in ("bare","bm25","embedding","vestige")}}
+        ledger=BudgetLedger(root/"budget.db")
+        for arm in plan["budgets"]:
+            for i in range(10):
+                call=f"fixture/{arm}/{i}"
+                ident={"benchmark":"fixture","arm":arm,"item_id":str(i),"trial":0,"config_hash":"new","phase":"integrity_preflight"}
+                payload={"model":"gpt-5.4-nano","temperature":0,"max_completion_tokens":512,
+                         "messages":[{"role":"system","content":"Answer the question.\nTools: "+arm},{"role":"user","content":"Question "+str(i)}]}
+                reqs["fixture",arm].append({"path":str(root/arm/str(i)/"api.jsonl"),"line":1,
+                    "row":{"call_id":call,"identity":ident,"payload":payload}})
+                response={"usage":{"prompt_tokens":30,"completion_tokens":5},"choices":[{"message":{"content":"answer"}}]}
+                cost,usage=account(response)
+                ledger.reserve(call+"/attempt-0",.01)
+                ledger.settle(call+"/attempt-0",cost,usage)
+                replies["fixture",arm].append({"path":str(root/arm/str(i)/"api.jsonl"),"line":2,
+                    "row":{"call_id":call,"identity":ident,"response":response,"usage":usage,"cost":cost}})
+        return reqs,replies,plan
+
+    def test_request_only_parity_is_pending_and_real_usage_is_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);reqs,replies,plan=self.parity_fixture(root)
+            self.assertEqual(_parity(reqs,plan,"fixture",[],{},root)["status"],"PENDING")
+            self.assertEqual(_parity(reqs,plan,"fixture",[],replies,root)["status"],"PASS")
+            replies["fixture","vestige"][0]["row"]["usage"]={"prompt_tokens":30,"completion_tokens":9999}
+            self.assertEqual(_parity(reqs,plan,"fixture",[],replies,root)["status"],"FAIL")
+
+    def test_usage_without_settled_shared_ledger_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);reqs,replies,plan=self.parity_fixture(root)
+            import sqlite3
+            with sqlite3.connect(root/"budget.db") as db:
+                db.execute("DELETE FROM calls WHERE id=?",("fixture/vestige/0/attempt-0",))
+            self.assertEqual(_parity(reqs,plan,"fixture",[],replies,root)["status"],"FAIL")
+
+    def test_stale_pilot_cannot_qualify_current_config(self):
+        ids=[str(i) for i in range(10)]
+        plan={"config_hash":"new","run_identities":{"bare":"new-checkpoint"},
+              "pilot":{"seed":20261101,"config_hash":"new","item_ids":ids}}
+        reqs=[{"path":"fixture/api.jsonl","line":1,"row":{"identity":{"item_id":i,"config_hash":"old"}}} for i in ids]
+        completed=[(Path("worker-0.jsonl"),1,{"item_id":i,"config_hash":"old","run_identity":"old-checkpoint",
+                    "phase":"integrity_preflight","score":None}) for i in ids]
+        self.assertEqual(_pilot_check(plan,"bare",reqs,completed)["status"],"PENDING")
+        for request in reqs:request["row"]["identity"]["config_hash"]="new"
+        self.assertEqual(_pilot_check(plan,"bare",reqs,completed)["status"],"PENDING")
+        completed=[(p,n,{**row,"config_hash":"new","run_identity":"new-checkpoint"}) for p,n,row in completed]
+        self.assertEqual(_pilot_check(plan,"bare",reqs,completed)["status"],"PASS")
+        completed[0][2]["phase"]="full_set_execution"
+        self.assertEqual(_pilot_check(plan,"bare",reqs,completed)["status"],"PENDING")
+
+    def test_pilot_must_match_fixed_seed_official_ids(self):
+        ids=[str(i) for i in range(20)]
+        plan={"config_hash":"new","run_identities":{"bare":"checkpoint"},
+              "pilot":{"seed":20261101,"config_hash":"new","item_ids":ids[:10]}}
+        self.assertEqual(_pilot_check(plan,"bare",[],[],[{"id":i} for i in ids])["status"],"FAIL")
 
     def test_complete_merge_does_not_claim_scorer_already_ran(self):
         with tempfile.TemporaryDirectory() as tmp:

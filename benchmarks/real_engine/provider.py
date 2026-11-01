@@ -41,8 +41,9 @@ class NanoProvider:
     def __init__(self, runs: Path, ledger: BudgetLedger):
         self.runs, self.ledger = runs, ledger
         self.key = load_key(runs / ".env.openai")
-        self.pool = AsyncAPIPool(ledger, max_inflight=40, max_retries=6)
-        self.http = httpx.AsyncClient(timeout=180, limits=httpx.Limits(max_connections=40))
+        self.pool = AsyncAPIPool(ledger, max_inflight=20, max_retries=6)
+        self.http = httpx.AsyncClient(timeout=httpx.Timeout(60.0),
+                                     limits=httpx.Limits(max_connections=20, max_keepalive_connections=20))
 
     async def close(self):
         await self.http.aclose()

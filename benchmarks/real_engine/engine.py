@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import threading
 import time
+import weakref
 from typing import Any
 
 _CLIENT_PATH = Path(__file__).resolve().parents[1] / "memconflict" / "mcp_client.py"
@@ -30,6 +31,30 @@ MEMORY_TOOLS = frozenset({"smart_ingest", "recall", "memory", "session_start",
                           "memory_status", "causal_walk", "ghostlink", "receipt",
                           "graph", "forgotten_lesson"})
 POLICY_FILES = ("commitments.json", "state/commitments-validated.json", "mode", "STRICT")
+ACTIVE_ENGINES = weakref.WeakSet()
+
+
+def close_all_engines():
+    """Close only children created by this campaign, including partial starts."""
+    engines = list(ACTIVE_ENGINES)
+    # End native pipes first so any pending MCP request exits before hook servers.
+    for engine in engines:
+        client=engine.client
+        proc=client._proc if client else None
+        if proc:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except (ProcessLookupError,OSError):
+                pass  # A concurrent item finally already ended this child.
+    failures=[]
+    for engine in engines:
+        try:
+            engine.close()
+        except Exception as exc:
+            failures.append(str(exc))
+    if failures:
+        raise RuntimeError('Owned engine cleanup failures: '+repr(failures))
 
 
 def sha256(path: Path) -> str:
@@ -101,7 +126,8 @@ class RealEngine:
                  operator_source: str | Path | None = None,
                  manifest_path: str | Path | None = None, warmup: float = 0,
                  hooks_enabled: bool = False, hook_model_callback=None,
-                 hook_audit_path: str | Path | None = None):
+                 hook_audit_path: str | Path | None = None,
+                 hook_profile: str = "all_applicable_hooks"):
         self.repo = Path(repo).resolve()
         self.run_dir = Path(run_dir).resolve()
         self.manifest = verify_build(self.repo, manifest_path)
@@ -111,29 +137,31 @@ class RealEngine:
         self.hooks_enabled = hooks_enabled
         self.hook_model_callback = hook_model_callback
         self.hook_audit_path = hook_audit_path
+        self.hook_profile = hook_profile
         self.hooks = None
         self.client = None
         self._call_lock = threading.RLock()
+        self._close_lock = threading.RLock()
         self.tools: list[dict] = []
         self.identity: dict = {"binary_sha256": self.manifest["binary_sha256"], "source_commit": self.manifest["source_commit"]}
         self.audit = self.run_dir / "mcp.jsonl"
 
     def _log(self, data: dict) -> None:
-        with self.audit.open("a") as f:
-            f.write(json.dumps({"timestamp": time.time(), **data}, ensure_ascii=False) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        from .runtime import append_jsonl
+        append_jsonl(self.audit,{'timestamp':time.time(),**data})
 
     def start(self):
         if self.run_dir.exists():
             raise RuntimeError("engine run_dir already exists; create a fresh attempt directory")
         self.run_dir.mkdir(parents=True, mode=0o700)
+        ACTIVE_ENGINES.add(self)
         policy = isolate_policy(self.operator_source, self.run_dir / "operator")
         self.identity["operator_policy"] = policy
         env = {"OPERATOR_HOME": str(self.run_dir / "operator"), "OPERATOR_MODE": policy["effective_mode"]}
         if self.hooks_enabled:
             from .hooks import HookController
-            self.hooks = HookController(self, self.hook_audit_path, self.hook_model_callback)
+            self.hooks = HookController(self, self.hook_audit_path, self.hook_model_callback,
+                                        profile=self.hook_profile)
             env.update(self.hooks.prepare())
         self.client = VestigeMCP(str(self.binary), str(self.run_dir / "strata"), warmup_seconds=self.warmup, extra_env=env)
         try:
@@ -170,17 +198,23 @@ class RealEngine:
         return self.start()
 
     def close(self):
-        if self.hooks:
-            self.hooks.close()
-            self.hooks = None
-        if self.client:
-            self.client.close()
-            self.client = None
+        with self._close_lock:
+            try:
+                if self.hooks:
+                    self.hooks.close()
+            finally:
+                self.hooks = None
+                if self.client:
+                    self.client.close()
+                    self.client = None
+                ACTIVE_ENGINES.discard(self)
 
     def __exit__(self, *exc):
         self.close()
 
     def call(self, name: str, arguments: dict) -> Any:
+        if not self.client or not self.client._proc or self.client._proc.poll() is not None:
+            raise VestigeMCPError('benchmark engine is not running')
         if self.hooks:
             before = self.hooks.event("PreToolUse", {"tool_name": "mcp__vestige__" + name, "tool_input": arguments})
             if before["blocked"]:
@@ -203,7 +237,8 @@ class RealEngine:
         try:
             result = self.client.call_tool(name, arguments)
         except BaseException as exc:
-            self._log({"kind": "tool_error", "name": name, "error": str(exc)})
+            self._log({"kind": "tool_error", "name": name, "error": str(exc),
+                       "raw_mcp_result": self.client.last_tool_result})
             raise
         self._log({"kind": "tool_response", "name": name, "result": result, "raw_mcp_result": self.client.last_tool_result})
         return result

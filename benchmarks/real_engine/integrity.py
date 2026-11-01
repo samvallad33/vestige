@@ -18,7 +18,10 @@ import os
 from pathlib import Path
 import random
 import re
+import sqlite3
 import subprocess
+import fcntl
+import threading
 from typing import Any
 
 BENCHMARKS = ("locomo", "longmemeval", "mpbench", "memconflict", "pmbench",
@@ -80,7 +83,10 @@ def lines(path: Path):
     if not path.is_file():
         return []
     result = []
-    for number, line in enumerate(path.read_text().splitlines(), 1):
+    with path.open() as handle:
+        fcntl.flock(handle.fileno(),fcntl.LOCK_SH)
+        contents=handle.read()
+    for number, line in enumerate(contents.splitlines(), 1):
         if line.strip():
             result.append((number, json.loads(line)))
     return result
@@ -353,31 +359,71 @@ def _native_item(row, checkpoint, runs, manifest):
         return check("native_item", "FAIL", "Vestige completed row has no actual child identity.", [evidence(checkpoint)])
     observations, seen_paths = [], set()
     request_count = write_count = read_count = 0
+    refusal_count = 0
     outputs = []
     for identity in identities:
-        data = Path(identity.get("data_dir", "")).resolve()
-        if not data.is_absolute() or not data.is_relative_to(runs.resolve()):
+        declared_data = Path(identity.get("data_dir", ""))
+        data = declared_data.resolve()
+        if not declared_data.is_absolute() or not data.is_relative_to(runs.resolve()):
             return check("native_item", "FAIL", "Native store escapes independent campaign directory.", [evidence(checkpoint, detail=str(data))])
         if str(data) in seen_paths:
             return check("native_item", "FAIL", "Independent stores repeat a data directory.", [evidence(checkpoint)])
         seen_paths.add(str(data))
-        if identity.get("binary_sha256") != manifest.get("binary_sha256") or not isinstance(identity.get("pid"), int):
+        if identity.get("binary_sha256") != manifest.get("binary_sha256") or type(identity.get("pid")) is not int or identity["pid"] <= 0:
             return check("native_item", "FAIL", "Child binary hash or PID missing/mismatched.", [evidence(checkpoint)])
         hooks = identity.get("hooks") or {}
         if identity.get("hooks_enabled") is not True and not hooks:
             return check("native_item", "FAIL", "Actual Vestige item used engine-only profile.", [evidence(checkpoint)])
         log = data.parent / "mcp.jsonl"
-        for number, event in lines(log):
+        records = lines(log)
+        starts = [(number,event.get("identity",{})) for number,event in records if event.get("kind")=="engine_start"]
+        if len(starts)!=1 or any(starts[0][1].get(key)!=identity.get(key) for key in ("pid","binary_sha256","data_dir")):
+            return check("native_item","FAIL","Completed native row lacks one matching actual engine_start PID/hash/store event.",[evidence(log)])
+        started = starts[0][1]
+        if (started.get("transport")!="stdio-jsonrpc" or started.get("client")!="benchmarks/memconflict/mcp_client.VestigeMCP"
+                or started.get("fresh_store_nodes")!=0):
+            return check("native_item","FAIL","Native start does not establish isolated empty stdio MCP child.",[evidence(log,starts[0][0])])
+        pending = None
+        local_requests = local_responses = local_refusals = 0
+        # MPBench's real write gate can return a native MCP error as the
+        # measured defense outcome. Only the runner's verified credential
+        # refusal classifier and exact per-item raw decision authorize it.
+        from .mpbench_runner import security_denial
+        permitted_denials=[decision.get("result") for decision in row.get("write_decisions",[])
+            if decision.get("defense_positive") is True and security_denial(decision.get("result"))]
+        for number, event in records:
             if event.get("kind") == "tool_request":
+                if pending is not None:
+                    return check("native_item","FAIL","Native request has no matching serialized response.",[evidence(log,number)])
+                pending = event.get("name")
+                local_requests += 1
                 request_count += 1
                 write_count += event.get("name") == "smart_ingest"
                 read_count += event.get("name") in READ_TOOLS
             if event.get("kind") == "tool_response":
+                if not pending or event.get("name")!=pending or event.get("result") is None or (event.get("raw_mcp_result") or {}).get("isError") is True:
+                    return check("native_item","FAIL","Native response is unmatched or unsuccessful.",[evidence(log,number)])
+                pending = None
+                local_responses += 1
                 outputs.extend(text for _, text in strings(event.get("result")))
+            if event.get("kind") == "tool_error":
+                raw=event.get("raw_mcp_result")
+                allowed=(row.get("benchmark")=="mpbench" and row.get("defense_positive") is True
+                    and pending==event.get("name")=="smart_ingest" and isinstance(raw,dict)
+                    and raw.get("isError") is True and security_denial(raw) and raw in permitted_denials)
+                if not allowed:
+                    return check("native_item","FAIL","Completed native item contains an unmatched error or unverified security refusal.",[evidence(log,number)])
+                permitted_denials.remove(raw)
+                pending = None
+                local_refusals += 1
+                refusal_count += 1
+                observations.append(evidence(log,number,detail="Exact current-item MPBench normal-write MCP credential refusal; defense-positive decision preserved"))
+        if pending is not None or not local_responses or local_requests!=local_responses+local_refusals:
+            return check("native_item","FAIL","Completed native item has request-only evidence or missing responses.",[evidence(log,count=local_responses)])
         observations.append(evidence(log, count=request_count, detail=f"pid={identity.get('pid')}; data_dir={data}"))
     if not request_count:
         return check("native_item", "FAIL", "Completed Vestige item has zero recorded MCP calls.", observations)
-    return check("native_item", "PASS", f"Actual hashed child MCP calls={request_count}, writes={write_count}, reads={read_count}; zero chosen writes is not fabricated admission.", observations)
+    return check("native_item", "PASS", f"Actual hashed child MCP calls={request_count}, writes={write_count}, reads={read_count}, verified write refusals={refusal_count}; zero chosen writes is not fabricated admission.", observations)
 
 
 def _runtime_paths(completed):
@@ -471,7 +517,10 @@ def _kill_check(repo, runs, plan):
         path = runs / path
     if not path.is_file():
         return check("midrun_kill", "PENDING", "Actual preserved runner mid-run kill control absent; unit fixture does not substitute.", [evidence(path)])
-    rows = lines(path)
+    config=plan.get("config_hash")
+    if not config:
+        return check("midrun_kill","PENDING","Current candidate config hash absent; stale kill evidence cannot qualify it.",[evidence(path)])
+    rows = [(n,row) for n,row in lines(path) if row.get("config_hash")==config]
     indexed = {r.get("event", r.get("kind")): (n, r) for n, r in rows}
     needed = {"engine_started", "midrun_kill", "runner_aborted"}
     if not needed.issubset(indexed):
@@ -613,20 +662,62 @@ def _scaffolds(repo):
     return result
 
 
-def _parity(requests, plan, benchmark, official_items):
+def _parity(requests, plan, benchmark, official_items, responses=None, runs=None):
     caps = plan.get("budgets", {})
     if set(caps) != set(ARMS) or any(not all(k in caps[a] for k in ("max_calls", "max_output", "context")) for a in ARMS):
         return check("prompt_budget_parity", "PENDING", "Need equal declared aggregate solver-plus-hook call/output/context caps for all four arms.")
     if len({canonical(caps[a]) for a in ARMS}) != 1:
         return check("prompt_budget_parity", "FAIL", "Declared aggregate arm budgets differ.")
     by_item, first, violations = defaultdict(list), defaultdict(dict), []
+    actual_output = defaultdict(int)
+    pending_usage = []
+    reply_map = defaultdict(list)
+    for arm in ARMS:
+        for reply in (responses or {}).get((benchmark,arm),[]):
+            reply_map[arm,reply["row"].get("call_id")].append(reply)
+    ledger = None
+    ledger_path = Path(runs)/"budget.db" if runs is not None else None
+    if ledger_path is not None and ledger_path.is_file():
+        ledger = sqlite3.connect(f"file:{ledger_path}?mode=ro",uri=True)
+        ledger.row_factory=sqlite3.Row
     for arm in ARMS:
         for entry in requests.get((benchmark, arm), []):
             ident, payload = entry["row"].get("identity", {}), entry["row"].get("payload", {})
             item = ident.get("item_id")
             if not item or "judge" in str(ident.get("phase", "")):
                 continue
-            by_item[arm,item].append(entry)
+            # A retried item has a new isolated attempt directory and a fresh
+            # equal cap. Never combine its abandoned attempt with its success.
+            key=(arm,item,ident.get("trial",0),str(Path(entry["path"]).parent))
+            by_item[key].append(entry)
+            replies=reply_map.get((arm,entry["row"].get("call_id")),[])
+            if len(replies)>1:
+                violations.append(evidence(Path(entry["path"]),entry["line"],detail="Duplicate provider response for one call identity"))
+            elif not replies or ledger is None:
+                pending_usage.append(evidence(Path(entry["path"]),entry["line"],detail="Actual response usage and shared settled ledger entry required"))
+            else:
+                reply=replies[0]
+                result=reply["row"]
+                usage=result.get("usage")
+                try:
+                    from .provider import account
+                    from .runtime import _money
+                    cost,actual_usage=account(result.get("response",{}))
+                    if any(result.get("identity",{}).get(k)!=ident.get(k) for k in ("item_id","arm","trial","config_hash")):
+                        raise ValueError("response identity differs from its request")
+                    if (not isinstance(usage,dict) or actual_usage!=usage
+                            or any(type(usage.get(k)) is not int or usage[k]<0 for k in ("prompt_tokens","completion_tokens"))
+                            or _money(result.get("cost"))!=_money(cost)):
+                        raise ValueError("response usage/cost mismatch")
+                    matches=ledger.execute("SELECT * FROM calls WHERE substr(id,1,?)=? AND state='settled'",
+                        (len(str(result.get("call_id")))+9,str(result.get("call_id"))+"/attempt-")).fetchall()
+                    if len(matches)!=1 or matches[0]["actual"]!=_money(cost) or json.loads(matches[0]["usage"])!=usage:
+                        raise ValueError("usage is not reconciled to exactly one settled shared-ledger attempt")
+                    actual_output[key]+=usage["completion_tokens"]
+                    if usage["completion_tokens"]>payload.get("max_completion_tokens",0):
+                        raise ValueError("actual completion exceeds requested cap")
+                except (ValueError,TypeError,KeyError,RuntimeError,ArithmeticError,sqlite3.Error) as exc:
+                    violations.append(evidence(Path(reply["path"]),reply["line"],detail=str(exc)))
             if ident.get("phase") not in {"hook", "memory", "compiler"}:
                 first[item].setdefault(arm, entry)
             if payload.get("max_completion_tokens", 0) > caps[arm]["max_output"]:
@@ -640,9 +731,14 @@ def _parity(requests, plan, benchmark, official_items):
                 return check("prompt_budget_parity", "PENDING", "Cannot verify actual context token count with pinned tokenizer.")
             if count > caps[arm]["context"]:
                 violations.append(evidence(Path(entry["path"]), entry["line"], count=count, detail="Actual request exceeds context budget"))
-    for (arm,item), entries in by_item.items():
+    if ledger is not None:
+        ledger.close()
+    for key, entries in by_item.items():
+        arm=key[0]
         if len(entries) > caps[arm]["max_calls"]:
             violations.append(evidence(Path(entries[0]["path"]), count=len(entries), detail="Aggregate actual solver-plus-hook calls exceed cap"))
+        if actual_output[key]>caps[arm]["max_output"]:
+            violations.append(evidence(Path(entries[0]["path"]),count=actual_output[key],detail="Actual aggregate solver-plus-hook completion usage exceeds cap"))
     common = [item for item, arms in first.items() if set(arms) == set(ARMS)]
     item_map = {_item_value(item,"id"):item for item in official_items or []}
     observations=[]
@@ -669,9 +765,37 @@ def _parity(requests, plan, benchmark, official_items):
             violations.append(evidence(Path(first[item]["vestige"]["path"]),first[item]["vestige"]["line"],detail="Actual initial prompts differ beyond neutral tools line and explicit GraphWalks placement"))
     if violations:
         return check("prompt_budget_parity","FAIL","Observed prompt or aggregate budget mismatch.",violations)
+    if pending_usage:
+        return check("prompt_budget_parity","PENDING","Request-only evidence cannot establish parity: actual response usage must reconcile to shared budget ledger.",pending_usage)
     if len(common)<SAMPLE_ITEMS:
         return check("prompt_budget_parity","PENDING","Need10 common actual unscored items across all four arms to compare full prompts and aggregate caps.",observations)
-    return check("prompt_budget_parity","PASS","Ten four-arm actual initial prompts match, declared aggregate caps equal, actual requests checked including hook calls.",observations)
+    return check("prompt_budget_parity","PASS","Ten four-arm actual initial prompts match; aggregate solver-plus-hook caps verified against actual response usage and shared settled ledger.",observations)
+
+
+def _pilot_check(plan,arm,reqs,completed,official_items=None):
+    """Only the frozen ten IDs under this exact candidate can qualify it."""
+    pilot=plan.get("pilot",{})
+    config=plan.get("config_hash")
+    ids=pilot.get("item_ids",[])
+    expected=plan.get("run_identities",{}).get(arm,[])
+    if isinstance(expected,str):expected=[expected]
+    if (not config or pilot.get("config_hash")!=config or pilot.get("seed")!=SAMPLE_SEED
+            or len(ids)!=SAMPLE_ITEMS or len(set(ids))!=SAMPLE_ITEMS or not expected):
+        return check("ten_unscored_pilot","PENDING","Frozen ten-item seed/config/checkpoint identity plan absent or incomplete.")
+    if official_items is not None:
+        official_ids=[_item_value(item,"id") for item in official_items]
+        frozen=random.Random(SAMPLE_SEED).sample(official_ids,min(SAMPLE_ITEMS,len(official_ids)))
+        if set(ids)!=set(frozen):
+            return check("ten_unscored_pilot","FAIL","Declared pilot IDs differ from fixed-seed official-item sample.")
+    observed={r["row"].get("identity",{}).get("item_id") for r in reqs
+              if r["row"].get("identity",{}).get("config_hash")==config}
+    qualified={row.get("item_id") for _,_,row in completed
+               if row.get("config_hash")==config and row.get("run_identity") in expected
+               and row.get("phase")=="integrity_preflight" and row.get("score") is None}
+    refs=[evidence(path,number,detail={"item_id":row.get("item_id"),"run_identity":row.get("run_identity"),"config_hash":row.get("config_hash")})
+          for path,number,row in completed if row.get("item_id") in ids and row.get("config_hash")==config]
+    return check("ten_unscored_pilot","PASS" if set(ids)<=observed&qualified else "PENDING",
+                 "Exactly the frozen ten official IDs require unscored current-config requests and completed current-checkpoint records.",refs)
 
 
 def _build_check(repo,runs,manifest):
@@ -687,10 +811,21 @@ def _build_check(repo,runs,manifest):
     return check("child_build_source","PASS","Locked repository build and current native source/binary identity verified.",[evidence(path,detail=sha(path))])
 
 
-def audit(repo: str | Path, runs: str | Path, stage: str = "report") -> dict:
+_AUDIT_LOCK=threading.RLock()
+
+
+def audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks=None) -> dict:
+    with _AUDIT_LOCK:
+        return _audit(repo,runs,stage,benchmarks)
+
+
+def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks=None) -> dict:
     if stage not in {"preflight", "execute", "score", "scorer", "report"}:
         raise ValueError("unknown audit stage")
     repo, runs = Path(repo).resolve(), Path(runs).resolve()
+    selected=tuple(benchmarks) if benchmarks is not None else BENCHMARKS
+    if not selected or set(selected)-set(BENCHMARKS):
+        raise ValueError("unknown or empty benchmark audit scope")
     manifest = json_file(runs / "build-manifest.json", {})
     prior_audit=json_file(runs/"integrity.json",{})
     build_check=_build_check(repo,runs,manifest)
@@ -700,6 +835,7 @@ def audit(repo: str | Path, runs: str | Path, stage: str = "report") -> dict:
     checkpoints = defaultdict(list)
     responses = defaultdict(list)
     parse_failures = defaultdict(list)
+    excluded_profiles = defaultdict(int)
     for path in _walk(runs):
         if path.name not in {"api.jsonl", "judge.jsonl", "hook-api.jsonl", "hooks-model.jsonl"} and not re.fullmatch(r"worker-\d+\.jsonl", path.name):
             continue
@@ -712,16 +848,25 @@ def audit(repo: str | Path, runs: str | Path, stage: str = "report") -> dict:
         for number, row in rows:
             ident = row.get("identity", row)
             benchmark, arm = _base(str(ident.get("benchmark", path.relative_to(runs).parts[0]))), ident.get("arm")
-            if arm not in ARMS:
+            if arm not in ARMS or benchmark not in selected:
+                continue
+            active_config=plans.get(benchmark,{}).get("config_hash")
+            if active_config and ident.get("config_hash")!=active_config:
+                excluded_profiles[benchmark,arm]+=1
                 continue
             if row.get("event") == "request":
                 requests[benchmark, arm].append({"path": str(path), "line": number, "row": row})
             elif row.get("event") == "response":
                 responses[benchmark, arm].append({"path":str(path),"line":number,"row":row})
             elif path.name.startswith("worker-") and row.get("status", "complete") == "complete":
+                expected=plans.get(benchmark,{}).get("run_identities",{}).get(arm,[])
+                if isinstance(expected,str):expected=[expected]
+                if expected and row.get("run_identity") not in expected:
+                    excluded_profiles[benchmark,arm]+=1
+                    continue
                 checkpoints[benchmark, arm].append((path, number, row))
     benchmarks, approved, invalid = {}, {}, []
-    for name in BENCHMARKS:
+    for name in selected:
         arms, official_items = {}, None
         plan=plans.get(name,{})
         if plan.get("full_set") or any(requests[name, arm] for arm in ARMS):
@@ -735,7 +880,18 @@ def audit(repo: str | Path, runs: str | Path, stage: str = "report") -> dict:
                 parse_failures[name].append(evidence(runs / "upstream", detail=f"official audit loader: {type(exc).__name__}: {exc}"))
         source_plan=_scorer_source(repo,runs,name,plan)
         full_plan,expected=_full_set(repo,runs,name,plan,official_items)
-        parity=_parity(requests,plan,name,official_items)
+        # Failed/abandoned attempts remain visible to leakage checks below, but
+        # their request-only logs cannot establish completed-attempt usage.
+        completed_roots=set()
+        for arm in ARMS:
+            for _,_,row in checkpoints[name,arm]:
+                raw=row.get("raw_log")
+                if raw:
+                    raw=Path(raw)
+                    completed_roots.add(str((raw if raw.is_absolute() else repo/raw).resolve().parent))
+        parity_requests={key:[entry for entry in entries if str(Path(entry["path"]).resolve().parent) in completed_roots]
+                         for key,entries in requests.items() if key[0]==name}
+        parity=_parity(parity_requests,plan,name,official_items,responses,runs)
         for arm in ARMS:
             reqs, completed = requests[name, arm], checkpoints[name, arm]
             checks = [_source_check(repo, name),build_check]
@@ -745,9 +901,7 @@ def audit(repo: str | Path, runs: str | Path, stage: str = "report") -> dict:
                 checks.append(check("evidence_parse", "PASS", "No malformed active evidence observed."))
             observed_ids={r['row'].get('identity',{}).get('item_id') for r in reqs if r['row'].get('identity',{}).get('item_id')}
             completed_ids={row.get('item_id') for _,_,row in completed if row.get('score') is None}
-            checks.append(check("ten_unscored_pilot", "PASS" if len(observed_ids&completed_ids) >= SAMPLE_ITEMS else "PENDING",
-                "Need 10 distinct current-profile unscored pilot items per benchmark/arm; not a smaller scored set.",
-                [evidence(Path(r['path']), r['line']) for r in reqs[:SAMPLE_ITEMS]]))
+            checks.append(_pilot_check(plan,arm,reqs,completed,official_items))
             bad = [r for r in reqs if r["row"].get("payload", {}).get("model") != MODEL or r["row"].get("payload", {}).get("temperature") != 0]
             checks.append(check("model_temperature", "FAIL" if bad else "PASS" if reqs else "PENDING",
                 "Every observed model request must use nano and temperature0.",
@@ -819,7 +973,8 @@ def audit(repo: str | Path, runs: str | Path, stage: str = "report") -> dict:
             arms[arm] = {"status": status, "ready_to_score":combine(pre_score)=="PASS",
                          "ready_for_official_scorer":combine(pre_score+[merge])=="PASS",
                          "ready_to_report":status=="PASS", "checks": checks, "completed_items": len(completed),
-                         "actual_model_requests": len(reqs), "literal_overlaps": overlaps}
+                         "actual_model_requests": len(reqs), "literal_overlaps": overlaps,
+                         "excluded_obsolete_profile_records":excluded_profiles[name,arm]}
         status = combine([{"status": value["status"]} for value in arms.values()])
         preflight_checks=[_source_check(repo,name),build_check]
         hook_source=json_file(runs/"hook-audit.json",{})
@@ -862,7 +1017,8 @@ def audit(repo: str | Path, runs: str | Path, stage: str = "report") -> dict:
                         if clarification not in corrections:corrections.append(clarification)
     report["auditor_provenance_clarifications"]=corrections
     runs.mkdir(parents=True, exist_ok=True)
-    (runs / "integrity.json").write_text(json.dumps(report, indent=2) + "\n")
+    from .runtime import atomic_write
+    atomic_write(runs / "integrity.json",json.dumps(report, indent=2) + "\n")
     out = ["# Benchmark integrity gate", "", f"Status: **{report['status']}**. No missing runtime check is a PASS.", "",
            "Ten unscored pilot items per arm qualify evidence only. Every scored benchmark still requires its full official set; the audit sample is not permission to shrink it.", "",
            "Observed FAIL requires stopping that benchmark, marking it INVALID, preserving evidence and excluding metrics. PENDING means unexecuted or incomplete evidence and also blocks scoring/report metrics.", "",
@@ -881,7 +1037,7 @@ def audit(repo: str | Path, runs: str | Path, stage: str = "report") -> dict:
     out += ["Earlier engine-only preparation is INVALID for result tables. Exact literal-overlap details and provenance are retained in integrity.json.", ""]
     for issue in report["historical_invalidations"]:
         out += [f"Historical observed FAIL: {issue['path']} count={issue['count']}. {issue['reason']}",""]
-    (runs / "INTEGRITY.md").write_text("\n".join(out))
+    atomic_write(runs / "INTEGRITY.md","\n".join(out))
     return report
 
 
@@ -890,8 +1046,10 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--runs", type=Path)
     parser.add_argument("--stage",choices=("preflight","execute","score","scorer","report"),default="report")
+    parser.add_argument("--benchmarks",help="Comma-separated exact audit scope; default retains legacy full inventory")
     args = parser.parse_args()
-    result = audit(args.repo, args.runs or args.repo / "runs",stage=args.stage)
+    result = audit(args.repo, args.runs or args.repo / "runs",stage=args.stage,
+                   benchmarks=args.benchmarks.split(",") if args.benchmarks else None)
     print(canonical({"status": result["status"], "invalid_benchmarks": result["invalid_benchmarks"],
                      "ready_to_score": result["ready_to_score"], "ready_to_report": result["ready_to_report"]}))
 

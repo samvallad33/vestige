@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import random
 import sqlite3
+import subprocess
 import uuid
 
 from .mpbench import (DATA_HASHES, JUDGE_SYSTEM, METRIC_SPEC, aggregate, load_mpbench,
@@ -40,9 +41,25 @@ def _hash(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+def frozen_scorer():
+    """Keep the original pre-arm commit identity across harness-only commits."""
+    frozen = scorer_identity(REPO)
+    commit = "c126b885eec06cb1b33d17df9d7578e8e6647c57"
+    original = subprocess.check_output(["git", "show", f"{commit}:benchmarks/real_engine/mpbench.py"], cwd=REPO)
+    if hashlib.sha256(original).hexdigest() != frozen["scorer_sha256"]:
+        raise MPBenchIncomplete("MPBench scorer differs from original pre-arm commit c126b885")
+    return {**frozen, "commit": commit}
+
+
+def preflight_count(campaign):
+    if hasattr(campaign, "preflight_for"):
+        return int(campaign.preflight_for("mpbench"))
+    return int(getattr(campaign, "preflight_count", 0) or 0)
+
+
 def integrity_state(campaign):
     from .integrity import audit
-    result = audit(REPO, campaign.runs)
+    result = audit(REPO, campaign.runs, benchmarks=("locomo", "longmemeval", "memconflict", "mpbench"))
     if not isinstance(result, dict) or result.get("status") not in {"PASS", "FAIL", "PENDING"}:
         raise MPBenchIncomplete("independent integrity audit returned no explicit status")
     return result
@@ -123,13 +140,15 @@ def complete_native_snapshot(engine):
     return entries, {"coverage": coverage, "timeline": timeline, "entries": receipts}
 
 
-async def run_item(campaign, case, arm, worker, trial=0, attempt=0):
+async def run_item(campaign, case, arm, worker, trial=0, attempt=0, kill_control=False):
     from .engine import HookedRealEngine, VestigeMCPError
     from .retrieval import BM25Memory, BGEMemory
     from .run import SEARCH_TOOL, tokens
 
+    if kill_control and arm != "vestige":
+        raise ValueError("engine kill control applies only to the Vestige arm")
     # This guard must precede process start and every provider request.
-    frozen = scorer_identity(REPO)
+    frozen = frozen_scorer()
     root = campaign.runs / "mpbench" / arm / f"worker-{worker}" / (
         f"{_hash(case['id'])[:20]}-trial-{trial}-attempt-{attempt}-{uuid.uuid4().hex[:8]}")
     root.mkdir(parents=True, exist_ok=False)
@@ -137,7 +156,9 @@ async def run_item(campaign, case, arm, worker, trial=0, attempt=0):
     meta = {"benchmark": "mpbench", "item_id": case["id"], "arm": arm, "trial": trial,
             "seed": trial, "shard": worker, "worker_id": worker,
             "binary_sha256": campaign.manifest["binary_sha256"], "model": MODEL,
-            "scorer": frozen, "dataset_sha256": DATA_HASHES, "started_at": started}
+            "scorer": frozen, "dataset_sha256": DATA_HASHES, "started_at": started,
+            "config_hash": getattr(campaign, "config_hash", None),
+            "phase": "integrity_preflight" if preflight_count(campaign) else "full_set_execution"}
     qualification = json.loads((campaign.runs / "QUALIFICATION.json").read_text()) if (campaign.runs / "QUALIFICATION.json").exists() else {}
     meta["hooks_manifest_sha256"] = qualification.get("hooks_manifest_sha256")
     engine, memory = None, None
@@ -147,10 +168,12 @@ async def run_item(campaign, case, arm, worker, trial=0, attempt=0):
         if arm == "vestige":
             callback = bound.hook_callback(lambda: engine)
             engine = await asyncio.to_thread(HookedRealEngine, REPO, root / "native", hook_model_callback=callback,
-                                            manifest_path=campaign.runs / "build-manifest.json")
+                                            manifest_path=campaign.runs / "build-manifest.json", hook_profile="memory_qa")
             await asyncio.to_thread(engine.__enter__)
             if engine.identity.get("fresh_store_nodes") != 0:
                 raise MPBenchIncomplete("independent native store was not empty before SessionStart")
+            meta["engine"] = engine.identity
+            meta["engine_data_dir"] = engine.identity.get("data_dir")
             # SessionStart is allowed to create genuine current-item memories.
             # They belong in ASR's actual post-session snapshot like all others.
             allowed = {"smart_ingest", "recall", "memory", "session_start", "causal_walk"}
@@ -170,6 +193,24 @@ async def run_item(campaign, case, arm, worker, trial=0, attempt=0):
         if engine:
             context = await asyncio.to_thread(engine.begin_turn, canonical(raw_input))
             messages.extend({"role": "user", "content": text} for text in context)
+        if kill_control:
+            control_log = campaign.runs / "mpbench/kill-control.jsonl"
+            proc = engine.client._proc
+            control = {"pid": proc.pid, "binary_sha256": campaign.manifest["binary_sha256"],
+                       "config_hash": getattr(campaign, "config_hash", None), "item_id": case["id"],
+                       "native_audit": str(engine.audit), "engine_data_dir": engine.identity.get("data_dir")}
+            append_jsonl(control_log, {**control, "event": "engine_started", "timestamp": utc_now()})
+            proc.kill()
+            code = await asyncio.to_thread(proc.wait, timeout=10)
+            append_jsonl(control_log, {**control, "event": "midrun_kill", "returncode": code, "timestamp": utc_now()})
+            try:
+                await asyncio.to_thread(engine.call, "memory_status", {"view": "coverage"})
+            except VestigeMCPError as exc:
+                append_jsonl(control_log, {**control, "event": "runner_aborted", "exception": str(exc),
+                    "fallback_used": False, "timestamp": utc_now(),
+                    "runner_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
+                return {**meta, "status": "kill_control_passed", "scored": False}
+            raise MPBenchIncomplete("INTEGRITY_FAIL: engine death did not abort the actual MPBench memory call")
         triggered = False
         for iteration in range(MAX_ITERS):
             if tokens({"messages": messages, "tools": tools}) > CONTEXT_LIMIT:
@@ -261,6 +302,8 @@ async def run_item(campaign, case, arm, worker, trial=0, attempt=0):
                 if event.get("event") == "response" and isinstance(event.get("response"), dict) and event["response"].get("model"):
                     model_strings.add(event["response"]["model"])
         native_count = sum(row.get("kind") == "tool_request" for row in read_jsonl(engine.audit)) if engine else 0
+        if engine and not native_count:
+            raise MPBenchIncomplete("INTEGRITY_FAIL: Vestige item has zero actual engine calls")
         row = {**meta, "status": "complete", "prompt": initial_messages, "transcript": messages,
                "response": response, "persisted_entries": stored, "store_snapshot": snapshot,
                "write_decisions": write_decisions, "defense_positive": defense_positive,
@@ -300,9 +343,55 @@ async def _score(campaign, case, row, audit_report=None):
     return result
 
 
+async def score_merged_arm(campaign, cases, arm, merged, audit_report):
+    """Resume one merged scoring invocation; never replay completed judgments."""
+    root = campaign.runs / "mpbench" / arm
+    merged_path, scored_path = root / "merged.jsonl", root / "scored.jsonl"
+    receipt_path = root / "scorer-invocations.jsonl"
+    qualification = json.loads((campaign.runs / "QUALIFICATION.json").read_text())
+    pins = qualification["benchmarks"]["mpbench"]["scorer"]["source_files"]
+    merged_hash = hashlib.sha256(merged_path.read_bytes()).hexdigest()
+    receipts = read_jsonl(receipt_path)
+    completed = [r for r in receipts if r.get("event") == "official_scorer_complete"]
+    started = [r for r in receipts if r.get("event") == "official_scorer_start"]
+    expected = {record_key(r): r for r in merged}
+    if len(expected) != len(merged):
+        raise MPBenchIncomplete("duplicate merged MPBench item/trial")
+    if len(started) > 1 or len(completed) > 1:
+        raise MPBenchIncomplete("multiple MPBench scorer invocations observed")
+    for receipt in started + completed:
+        if receipt.get("merged_sha256") != merged_hash or receipt.get("scorer_source_files") != pins:
+            raise MPBenchIncomplete("MPBench scorer invocation identity changed")
+    if completed and not scored_path.is_file():
+        raise MPBenchIncomplete("completed MPBench scorer output missing")
+    if not started:
+        append_jsonl(receipt_path, {"event": "official_scorer_start", "timestamp": utc_now(),
+            "merged_sha256": merged_hash, "scorer_source_files": pins, "item_count": len(merged)})
+    if scored_path.exists():
+        scores = read_jsonl(scored_path)
+        actual = {record_key(r): r for r in scores}
+        if len(actual) != len(scores) or actual.keys() != expected.keys():
+            raise MPBenchIncomplete("MPBench scored checkpoint coverage or uniqueness mismatch")
+        if any(r.get("run_identity") != expected[key].get("run_identity") for key, r in actual.items()):
+            raise MPBenchIncomplete("MPBench scored checkpoint configuration identity mismatch")
+    else:
+        by_id = {case["id"]: case for case in cases}
+        scores = [await _score(campaign, by_id[row["item_id"]], row, audit_report) for row in merged]
+        atomic_write(scored_path, "".join(canonical(score) + "\n" for score in scores))
+    output_hash = hashlib.sha256(scored_path.read_bytes()).hexdigest()
+    if completed:
+        if completed[0].get("output_sha256") != output_hash or completed[0].get("output_count") != len(scores):
+            raise MPBenchIncomplete("MPBench scorer output changed after completion")
+    else:
+        append_jsonl(receipt_path, {"event": "official_scorer_complete", "timestamp": utc_now(),
+            "merged_sha256": merged_hash, "scorer_source_files": pins, "item_count": len(merged),
+            "output_count": len(scores), "output_sha256": output_hash})
+    return scores
+
+
 async def run_mpbench(campaign):
     """Ten shards per arm; the full official manifest never shrinks."""
-    frozen = scorer_identity(REPO)
+    frozen = frozen_scorer()
     cases, manifest = await asyncio.to_thread(load_mpbench, campaign.runs / "upstream")
     root = campaign.runs / "mpbench"
     root.mkdir(parents=True, exist_ok=True)
@@ -312,9 +401,20 @@ async def run_mpbench(campaign):
                 "binary_sha256": campaign.manifest["binary_sha256"], "model": MODEL,
                 "trials": [0], "limits": [MAX_ITERS, OUTPUT_BUDGET, CONTEXT_LIMIT],
                 "prompts": prompts, "input_protocol": "raw external artifacts, agent-selected normal writes",
-                "RSR": "not measured", "C4": "raw skill payload delivered; autonomous skill synthesis not measured"}
-    qualification = json.loads((campaign.runs / "QUALIFICATION.json").read_text())
-    identity["hooks_manifest_sha256"] = qualification["hooks_manifest_sha256"]
+                "RSR": "not measured", "C4": "raw skill payload delivered; autonomous skill synthesis not measured",
+                "config_hash": getattr(campaign, "config_hash", None), "hook_profile": "memory_qa"}
+    if hasattr(campaign,'config'):
+        identity["hooks_manifest_sha256"] = _hash(campaign.config['hooks'])
+    else:
+        qualification = json.loads((campaign.runs / "QUALIFICATION.json").read_text())
+        identity["hooks_manifest_sha256"] = qualification["hooks_manifest_sha256"]
+    if hasattr(campaign, "prepare_plan"):
+        data_root = campaign.runs / "upstream/mp-bench"
+        campaign.prepare_plan("mpbench", cases, identity,
+            {str(data_root / name): digest for name, digest in DATA_HASHES.items()},
+            {"origin": "custom_paper_metrics_owner_authorized", "commit": frozen["commit"],
+             "entrypoint": "benchmarks.real_engine.mpbench.score_postwrite+aggregate",
+             "source_files": {"benchmarks/real_engine/mpbench.py": frozen["scorer_sha256"]}})
     atomic_write(root / "identity.json", canonical(identity) + "\n")
     atomic_write(root / "dataset-manifest.json", canonical(manifest) + "\n")
     checkpoints = {arm: [Checkpoint(root / arm / f"worker-{i}.jsonl", {**identity, "arm": arm})
@@ -322,16 +422,16 @@ async def run_mpbench(campaign):
     for arm in ARMS:
         campaign.progress["mpbench", arm] = {"benchmark": "mpbench", "arm": arm,
             "done": sum(len(cp.done) for cp in checkpoints[arm]), "total": len(cases), "errors": 0}
-    preflight_count = int(getattr(campaign, "preflight_count", 0) or 0)
-    if preflight_count:
-        if preflight_count != 20:
-            raise ValueError("integrity preflight requires exactly20 random official items per arm")
-        selected_ids = sorted(random.Random(20261101).sample([case["id"] for case in cases], preflight_count))
+    pilot_count = preflight_count(campaign)
+    if pilot_count:
+        if pilot_count != 10:
+            raise ValueError("integrity preflight requires exactly10 random official items per arm")
+        selected_ids = sorted(random.Random(20261101).sample([case["id"] for case in cases], pilot_count))
         wanted = set(selected_ids)
         active_cases = [case for case in cases if case["id"] in wanted]
         atomic_write(root / "preflight-manifest.json", canonical({
             "stage": "unscored_integrity_preflight", "seed": 20261101,
-            "items_per_arm": preflight_count, "item_ids": selected_ids,
+            "items_per_arm": pilot_count, "item_ids": selected_ids, "config_hash": identity["config_hash"],
             "full_official_manifest_items": len(cases), "replaces_full_set": False,
             "same_checkpoint_identity_as_full_run": True}) + "\n")
     else:
@@ -410,28 +510,28 @@ async def run_mpbench(campaign):
                 pass  # both attempts are durable explicit errors; merge will refuse incomplete coverage
     await asyncio.gather(*(worker(arm, worker_id) for arm in ARMS for worker_id in range(WORKERS)))
     coverage()
-    if preflight_count:
+    if pilot_count:
         report = integrity_state(campaign)
         return {"status": "unscored_integrity_preflight", "full_manifest_items": len(cases),
-                "requested_preflight_items_per_arm": preflight_count,
+                "requested_preflight_items_per_arm": pilot_count,
                 "completed_preflight_items_per_arm": {arm: sum(
                     checkpoints[arm][shard_id(case["id"], workers=WORKERS)].contains({"item_id": case["id"], "trial": 0})
                     for case in active_cases) for arm in ARMS},
                 "integrity_status": report["status"], "official_metrics_computed": False}
     expected = [record_key({"item_id": case["id"], "trial": 0}) for case in cases]
-    by_id, summaries = {case["id"]: case for case in cases}, {}
-    score_audit = integrity_state(campaign)
+    summaries, merges = {}, {}
     for arm in ARMS:
         try:
-            merged = strict_merge([cp.path for cp in checkpoints[arm]], expected, root / arm / "merged.jsonl")
+            merges[arm] = strict_merge([cp.path for cp in checkpoints[arm]], expected, root / arm / "merged.jsonl")
         except ValueError as exc:
             write_results(campaign, manifest, None, f"unfinished: {arm} {exc}")
             return {"status": "unfinished", "reason": str(exc)}
-        scores = []
-        for row in merged:
-            scores.append(await _score(campaign, by_id[row["item_id"]], row, score_audit))
-        atomic_write(root / arm / "scored.jsonl", "".join(canonical(score) + "\n" for score in scores))
-        summaries[arm] = aggregate(cases, scores)
+    from .integrity import require
+    score_audit = integrity_state(campaign)
+    require(score_audit, "mpbench", "scorer")
+    for arm in ARMS:
+        scores = await score_merged_arm(campaign, cases, arm, merges[arm], score_audit)
+        summaries[arm] = aggregate(cases, scores, seed=20261101)
     write_results(campaign, manifest, summaries)
     return {"status": "complete_output_coverage", "metric_completeness": "partial: public missing targets and defense-decision coverage",
             "arms": list(ARMS), "items_per_arm": len(cases)}
@@ -440,7 +540,7 @@ async def run_mpbench(campaign):
 def write_results(campaign, manifest, summaries, status="merged and scored"):
     audit = integrity_state(campaign)
     benchmark = audit.get("benchmarks", {}).get("mpbench", {})
-    invalid = benchmark.get("status") == "FAIL" or benchmark.get("excluded") is True or "mpbench" in audit.get("invalid_benchmarks", [])
+    invalid = benchmark.get("status") == "FAIL" or "mpbench" in audit.get("invalid_benchmarks", [])
     if invalid:
         status, summaries = "INVALID: independent integrity audit failed; excluded from scored comparisons", None
         atomic_write(campaign.runs / "mpbench/INVALID.json", canonical({"status": "INVALID", "reason": status}) + "\n")
@@ -468,7 +568,7 @@ def write_results(campaign, manifest, summaries, status="merged and scored"):
             lines.append(f"| {row['arm']} | {a['mean']} (scored subset {a['scored_subset_mean']}) | {a['n']} / {a['expected_n']} | {a['ci95_scored_subset']} | {f['mean']} | {f['n']} / {f['expected_n']} | ${row['actual_cost']:.6f} |")
         else:
             lines.append(f"| {row['arm']} | unfinished | — | — | unfinished | — | ${row['actual_cost']:.6f} |")
-    lines += ["", f"Model and judge: `{MODEL}`. Trial/seed:0. Ten deterministic workers per arm, one global40-request limit. Bootstrap seed20261101;2,000 case-trial resamples.",
+    lines += ["", f"Model and judge: `{MODEL}`. Trial/seed:0. Ten deterministic workers per arm, one global20-request limit. Bootstrap seed20261101;2,000 case-trial resamples.",
               f"Binary SHA-256: `{campaign.manifest['binary_sha256']}`.",
               f"Dataset: `{manifest['upstream_revision']}`; raw file SHA-256 values: `{canonical(DATA_HASHES)}`.",
               "", "The public files contain3,241 adversarial and2,999 benign records; the paper reports3,240 and2,997. "

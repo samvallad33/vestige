@@ -58,6 +58,15 @@ class PolicyTests(unittest.TestCase):
 
 @unittest.skipUnless((REPO / "runs/build-manifest.json").is_file(), "actual release build required")
 class NativeEngineTests(unittest.TestCase):
+    def test_campaign_cleanup_closes_every_owned_child(self):
+        from .engine import close_all_engines,ACTIVE_ENGINES
+        with tempfile.TemporaryDirectory(dir=REPO/'runs') as tmp:
+            engines=[RealEngine(REPO,Path(tmp)/str(i)).start() for i in range(2)]
+            processes=[e.client._proc for e in engines]
+            close_all_engines()
+            self.assertTrue(all(p.poll() is not None for p in processes))
+            self.assertFalse(ACTIVE_ENGINES)
+
     def test_actual_child_receipt_roundtrip_and_independent_stores(self):
         with tempfile.TemporaryDirectory(dir=REPO / "runs") as tmp:
             root = Path(tmp)

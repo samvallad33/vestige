@@ -30,6 +30,9 @@ FRAGMENTS=("settings.preflight.fragment.json","settings.rules.fragment.json",
            "settings.sanhedrin.fragment.json","settings.stop-memory.fragment.json")
 EVENTS={"SessionStart","UserPromptSubmit","PreToolUse","PostToolUse","Stop"}
 MODEL="gpt-5.4-nano"
+PROFILES={"all_applicable_hooks", "memory_qa"}
+MEMORY_QA_COMMANDS=frozenset({"vestige hook session-start",
+                            "$HOME/.claude/hooks/vestige-pulse-daemon.sh"})
 
 
 class HookViolation(RuntimeError):pass
@@ -57,7 +60,8 @@ def read_audit(repo,path):
     return audit
 
 
-def merge_fragments(repo):
+def merge_fragments(repo,profile="all_applicable_hooks"):
+    if profile not in PROFILES:raise HookViolation("unknown hook profile: "+str(profile))
     merged={event:[] for event in EVENTS}
     wired=[]
     for name in FRAGMENTS:
@@ -68,10 +72,14 @@ def merge_fragments(repo):
                 for hook in group.get("hooks",[]):
                     if hook.get("type")!="command":raise HookViolation("non-command hook needs native client adapter")
                     entry={**hook,"matcher":group.get("matcher"),"fragment":str(path.relative_to(repo))}
+                    # Select registrations, never rewrite the shipped script
+                    # or fragment command. Memory-Q&A has no external action
+                    # loop; its owner-selected profile excludes action gates.
+                    if profile=="memory_qa" and entry["command"] not in MEMORY_QA_COMMANDS:continue
                     merged[event].append(entry);wired.append(entry)
     # Fresh owner instruction enables these two generic public hooks in
     # addition to (without editing) the shipped settings fragments.
-    for script in ("synthesis-gate.sh", "load-all-memory.sh"):
+    for script in (("synthesis-gate.sh", "load-all-memory.sh") if profile=="all_applicable_hooks" else ()):
         entry={"type":"command","command":"$HOME/.claude/hooks/"+script,"timeout":8,
                "matcher":None,"fragment":"owner-all-applicable-hooks-profile", "source":"hooks/"+script}
         merged["UserPromptSubmit"].append(entry);wired.append(entry)
@@ -79,10 +87,11 @@ def merge_fragments(repo):
 
 
 class HookController:
-    def __init__(self,engine,audit_path=None,model_callback=None):
+    def __init__(self,engine,audit_path=None,model_callback=None,profile=None):
         self.engine=engine;self.repo=engine.repo;self.root=engine.run_dir/"hooks-runtime"
         self.audit=read_audit(self.repo,audit_path or self.repo/"runs/hook-audit.json")
-        self.events,self.wired=merge_fragments(self.repo)
+        self.profile=profile or getattr(engine,"hook_profile","all_applicable_hooks")
+        self.events,self.wired=merge_fragments(self.repo,self.profile)
         self.model_callback=model_callback
         if hasattr(model_callback,"bind_engine"):
             model_callback.bind_engine(engine)
@@ -173,7 +182,7 @@ print(value['output'])
             "VESTIGE_SANHEDRIN_BACKEND":"openai","VESTIGE_SANHEDRIN_PYTHON":sys.executable,
             "VESTIGE_SANHEDRIN_ALLOW_COMMAND_LEDGER":"0","VESTIGE_SANHEDRIN_ALLOW_LOOSE_LEDGER":"0",
             "VESTIGE_MEMORY_DIR":str(home/".vestige/unused-unwired-memory")}
-        self.log({"kind":"prepared","wired":self.wired,"source_pins":self.audit["source_pins"],
+        self.log({"kind":"prepared","hook_profile":self.profile,"wired":self.wired,"source_pins":self.audit["source_pins"],
             "cli_sha256":self.cli_sha,"profile_sha256":self.profile_sha,"adapter_sha256":digest(Path(__file__)),"model":MODEL,"legacy_model_labels_preserved_in_source":True,
             "memory_transports":["stdio-jsonrpc","HTTP-envelope-to-child-stdio","native-CLI-owner-IPC-envelope-to-child-stdio"],
             "paths":{"home":str(home),"cwd":str(self.cwd)},
@@ -301,8 +310,9 @@ print(value['output'])
     def probe_native(self):
         # Observe the real child endpoints, without inventing replacement
         # behavior for withheld legacy APIs. Results are telemetry, not scores.
-        for path,body in [("/api/health",None),("/api/changelog",None),
-                          ("/api/deep_reference",{"query":"hook capability check","depth":5})]:
+        endpoints=[("/api/health",None),("/api/changelog",None)]
+        if self.profile!="memory_qa":endpoints.append(("/api/deep_reference",{"query":"hook capability check","depth":5}))
+        for path,body in endpoints:
             url=(self.control_url if path=="/api/health" else f"http://127.0.0.1:{self.dashboard_port}")+path
             deadline=time.monotonic()+5
             while True:
