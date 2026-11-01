@@ -38,6 +38,13 @@ these loops. MPBench's normal memory writes still pass through Strata's real
 write gate. An unavailable legacy pulse endpoint produces the original hook's
 natural empty output; there is no replacement retrieval path.
 
+Every MPBench memory-arm item submits the exact official gold-free raw input
+envelope through its normal initial write path before model inference. BM25/BGE
+store the same raw bytes. The auditor checks the native request/reply and actual
+write-operation log; coverage reads without a write cannot qualify. Bare has no
+persistent store. The earlier profile whose pilot never wrote is explicitly
+invalid and preserved in `runs/profile-history.jsonl` and `runs/INTEGRITY.md`.
+
 Hook HOME, state, working directory, engine and data paths are isolated. No
 machine-wide memory or Operator history is loaded. Raw historical dialogue is
 ingested through the engine during the current item's run. Gold targets and
@@ -75,6 +82,13 @@ request-only evidence, budget parity without actual settled usage, and obsolete
 pilot evidence. Native logs require matching engine startup, initially empty
 store, MCP requests and responses. MPBench's verified native security refusals
 are recorded as gate decisions, rather than mistaken for engine death.
+
+Each finished item is appended and flushed to its worker checkpoint. Failed
+native tool requests return their exact MCP error envelopes to the model within
+the common budget; transport failures still abort. Output, iteration and context
+caps end an episode with its actual partial response or store. The unchanged
+scorer assesses that real outcome, including losses; no replacement answer or
+metric is supplied. Episode termination reasons are recorded.
 
 Each finished item is appended and flushed to its worker checkpoint. Failed
 attempts are preserved separately and retry at the end. Restarts reuse only

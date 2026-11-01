@@ -19,16 +19,21 @@ class SnapshotEngine:
     """Test double solely for the complete-snapshot protocol."""
     def __init__(self, count=13):
         self.count = count
+        self.entries = ["entry-" + str(i) for i in range(count)]
         self.calls = []
 
     def call(self, name, args):
         self.calls.append((name, args))
+        if name == "smart_ingest":
+            self.entries.append(args["content"])
+            self.count = len(self.entries)
+            return {"success": True, "nodeId": str(self.count-1)}
         if args.get("view") == "coverage":
             return {"totalNodes": self.count}
         if args.get("view") == "timeline":
             return {"truncated": False, "returned": self.count,
                     "timeline": [{"memories": [{"id": str(i)} for i in range(self.count)]}]}
-        return {"found": True, "node": {"id": args["id"], "content": "entry-" + args["id"]}}
+        return {"found": True, "node": {"id": args["id"], "content": self.entries[int(args["id"])]}}
 
 
 class SnapshotTests(unittest.TestCase):
@@ -80,6 +85,44 @@ class MockProvider:
                 "model": "gpt-5.4-nano", "finish_reason": "stop"}
 
 
+class EpisodeEngine(SnapshotEngine):
+    """Explicit unit protocol fixture; never accepted as runtime evidence."""
+    instances = []
+    def __init__(self, repo, directory, **kwargs):
+        super().__init__(1)
+        self.identity = {"fresh_store_nodes": 0, "hooks": {"enabled": True}, "data_dir": str(directory)}
+        self.audit = Path(directory) / "mcp.jsonl"
+        self.audit.parent.mkdir()
+        self.audit.write_text(json.dumps({"kind": "tool_request", "name": "memory_status"}) + "\n")
+        self.tools = []
+        self.closed = False
+        EpisodeEngine.instances.append(self)
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        self.closed = True
+    def begin_turn(self, prompt):
+        return []
+    def finish_turn(self, messages):
+        return {"blocked": False, "context": []}
+    def drain_context(self):
+        return []
+
+
+class EpisodeProvider(MockProvider):
+    """Finite scripted transport outputs for episode-boundary regression tests."""
+    def __init__(self, responses):
+        super().__init__()
+        self.responses = responses
+    async def chat(self, messages, **kwargs):
+        self.calls.append(json.loads(json.dumps(messages)))
+        if len(self.calls) > len(self.responses):
+            raise AssertionError("unexpected extra model call")
+        message, reason = self.responses[len(self.calls)-1]
+        return {"message": message, "usage": {"completion_tokens": 1}, "cost": 0,
+                "model": "gpt-5.4-nano", "finish_reason": reason}
+
+
 class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -111,17 +154,77 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["external_skill_md"], "raw external SKILL.md")
             self.assertNotIn("GOLD", row["prompt"][1]["content"])
             self.assertIsNone(row["defense_positive"])
-            self.assertEqual(row["persisted_entries"], [])
+            self.assertEqual(row["persisted_entries"], [] if row["arm"] == "bare" else [row["prompt"][1]["content"]])
 
     async def test_baseline_snapshots_actual_write_result_without_fabricating_defense(self):
         provider = MockProvider(write=True)
         with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
              patch("benchmarks.real_engine.run.tokens", return_value=10):
             row = await run_item(self.campaign(provider), self.case, "bm25", 0)
-        self.assertEqual(row["persisted_entries"], ["raw saved record"])
+        self.assertEqual(row["persisted_entries"], [row["prompt"][1]["content"], "raw saved record"])
         self.assertEqual(len(provider.calls), 2)
         self.assertIsNone(row["defense_positive"])
         self.assertFalse(row["defense_decision_coverage"])
+
+    async def test_every_memory_arm_initially_stores_exact_same_raw_input(self):
+        import hashlib
+        rows = []
+        for arm in ("bare", "bm25", "embedding", "vestige"):
+            provider = MockProvider()
+            with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
+                 patch("benchmarks.real_engine.engine.HookedRealEngine", EpisodeEngine), \
+                 patch("benchmarks.real_engine.run.tokens", return_value=10):
+                row = await run_item(self.campaign(provider), self.case, arm, 0)
+            rows.append(row)
+            raw = row["prompt"][1]["content"]
+            exposure = row["normal_write_exposure"]
+            self.assertEqual(exposure["content_sha256"], hashlib.sha256(raw.encode()).hexdigest())
+            self.assertEqual(exposure["source"], "user-input")
+            self.assertEqual(exposure["attempted"], arm != "bare")
+            self.assertEqual(len(provider.calls[0]), 2)  # no fabricated admission prelude
+            self.assertNotIn("GOLD", raw)
+            if arm == "bare":
+                self.assertEqual(row["persisted_entries"], [])
+            else:
+                self.assertIn(raw, row["persisted_entries"])
+                self.assertEqual(row["write_decisions"][0]["result"], exposure["result"])
+                if arm == "vestige":
+                    initial_calls = [(name, args) for name, args in EpisodeEngine.instances[-1].calls if name == "smart_ingest"]
+                    self.assertEqual(initial_calls, [("smart_ingest", {"content": raw, "node_type": "note", "tags": ["history"], "source": "user-input"})])
+                else:
+                    self.assertEqual(exposure["result"], {"success": True, "id": "memory-0"})
+        self.assertEqual(len({r["prompt"][1]["content"] for r in rows}), 1)
+
+    async def test_initial_native_security_denial_is_observed_and_not_prompt_guidance(self):
+        from benchmarks.real_engine.engine import VestigeMCPError, VestigeMCPToolError
+        denial = {"isError": True, "content": [{"type": "text", "text": "Refused to store probable credential(s): unit"}]}
+        class DenyingEngine(EpisodeEngine):
+            dead = False
+            def call(self, name, arguments):
+                if name == "smart_ingest":
+                    if self.dead:
+                        raise VestigeMCPError("benchmark engine is not running")
+                    raise VestigeMCPToolError(name, denial)
+                return super().call(name, arguments)
+        for dead in (False, True):
+            provider = MockProvider()
+            DenyingEngine.dead = dead
+            with self.subTest(dead=dead), \
+                 patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
+                 patch("benchmarks.real_engine.engine.HookedRealEngine", DenyingEngine), \
+                 patch("benchmarks.real_engine.run.tokens", return_value=10):
+                if dead:
+                    with self.assertRaises(VestigeMCPError):
+                        await run_item(self.campaign(provider), self.case, "vestige", 0)
+                    self.assertEqual(provider.calls, [])
+                else:
+                    row = await run_item(self.campaign(provider), self.case, "vestige", 0)
+                    self.assertTrue(row["normal_write_exposure"]["defense_positive"])
+                    self.assertEqual(row["normal_write_exposure"]["result"], denial)
+                    self.assertTrue(row["defense_positive"])
+                    self.assertTrue(row["defense_decision_coverage"])
+                    self.assertEqual(row["persisted_entries"], ["entry-0"])
+                    self.assertNotIn(denial["content"][0]["text"], json.dumps(provider.calls[0]))
 
     async def test_hooked_arm_keeps_sessionstart_memory_and_shares_model_budget(self):
         provider = MockProvider()
@@ -160,7 +263,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
              patch("benchmarks.real_engine.run.tokens", return_value=10), \
              patch("benchmarks.real_engine.engine.HookedRealEngine", UnitHookedEngine):
             row = await run_item(self.campaign(provider), self.case, "vestige", 0)
-        self.assertEqual(row["persisted_entries"], ["entry-0"])
+        self.assertEqual(row["persisted_entries"], ["entry-0", row["prompt"][1]["content"]])
         self.assertEqual(len(row["usage"]), 3)  # one hook plus two solver calls
         self.assertEqual(row["all_model_strings"], ["gpt-5.4-nano"])
         self.assertTrue(row["engine"]["hooks"]["enabled"])
@@ -211,6 +314,88 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["config_hash"], "current-config")
         self.assertEqual(row["phase"], "integrity_preflight")
 
+    async def test_length_snapshots_native_state_without_executing_incomplete_call(self):
+        partial = {"role": "assistant", "content": "partial actual response", "tool_calls": [{
+            "id": "incomplete", "type": "function", "function": {"name": "smart_ingest", "arguments": '{"content":'}}]}
+        provider = EpisodeProvider([(partial, "length")])
+        with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
+             patch("benchmarks.real_engine.engine.HookedRealEngine", EpisodeEngine), \
+             patch("benchmarks.real_engine.run.tokens", return_value=10):
+            row = await run_item(self.campaign(provider), self.case, "vestige", 0)
+        self.assertEqual(row["termination"], "output_limit")
+        self.assertEqual(row["response"], "partial actual response")
+        self.assertEqual(row["persisted_entries"], ["entry-0", row["prompt"][1]["content"]])
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(sum(name == "smart_ingest" for name, _ in EpisodeEngine.instances[-1].calls), 1)
+        self.assertTrue(EpisodeEngine.instances[-1].closed)
+
+    async def test_iteration_and_context_limits_keep_actual_store(self):
+        call = {"role": "assistant", "content": None, "tool_calls": [{"id": "read", "type": "function", "function": {
+            "name": "memory", "arguments": json.dumps({"action": "get", "id": "0"})}}]}
+        for context_count, expected, max_calls in ((10, "iteration_limit", 6), (32769, "context_limit", 0)):
+            provider = EpisodeProvider([(call, "tool_calls")]*6)
+            with self.subTest(termination=expected), \
+                 patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
+                 patch("benchmarks.real_engine.engine.HookedRealEngine", EpisodeEngine), \
+                 patch("benchmarks.real_engine.run.tokens", return_value=context_count):
+                row = await run_item(self.campaign(provider), self.case, "vestige", 0)
+            self.assertEqual(row["termination"], expected)
+            self.assertEqual(row["persisted_entries"], ["entry-0", row["prompt"][1]["content"]])
+            self.assertEqual(row["response"], "")
+            self.assertEqual(len(provider.calls), max_calls)
+
+    async def test_aggregate_output_cap_snapshots_exact_completed_writes(self):
+        message = {"role": "assistant", "content": None, "tool_calls": [{"id": "write", "type": "function", "function": {
+            "name": "memory_write", "arguments": json.dumps({"content": "actual written record"})}}]}
+        class FullOutputProvider(EpisodeProvider):
+            async def chat(self, messages, **kwargs):
+                self_limit = kwargs["max_tokens"]
+                if self_limit != 512:
+                    raise AssertionError("per-request output cap changed")
+                result = await super().chat(messages, **kwargs)
+                result["usage"]["completion_tokens"] = 512
+                return result
+        provider = FullOutputProvider([(message, "tool_calls")]*4)
+        with patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
+             patch("benchmarks.real_engine.run.tokens", return_value=10):
+            row = await run_item(self.campaign(provider), self.case, "bm25", 0)
+        self.assertEqual(row["termination"], "output_limit")
+        self.assertEqual(row["persisted_entries"], [row["prompt"][1]["content"]]+["actual written record"]*4)
+        self.assertEqual(sum(u["completion_tokens"] for u in row["usage"]), 2048)
+        self.assertEqual(len(provider.calls), 4)
+        self.assertEqual(row["response"], "")
+
+    async def test_native_error_envelope_forwarded_but_dead_transport_raises(self):
+        from benchmarks.real_engine.engine import VestigeMCPError, VestigeMCPToolError
+        call = {"role": "assistant", "content": None, "tool_calls": [{"id": "read", "type": "function", "function": {
+            "name": "recall", "arguments": json.dumps({"handle": "missing"})}}]}
+        envelope = {"isError": True, "content": [{"type": "text", "text": "native exact handle unavailable"}]}
+        class ToolErrorEngine(EpisodeEngine):
+            dead = False
+            def call(self, name, arguments):
+                if name == "recall":
+                    if self.dead:
+                        raise VestigeMCPError("benchmark engine is not running")
+                    raise VestigeMCPToolError(name, envelope)
+                return super().call(name, arguments)
+        for dead in (False, True):
+            provider = EpisodeProvider([(call, "tool_calls"), ({"role": "assistant", "content": "actual answer"}, "stop")])
+            ToolErrorEngine.dead = dead
+            with self.subTest(dead=dead), \
+                 patch("benchmarks.real_engine.mpbench_runner.frozen_scorer", return_value={"scorer_sha256": "frozen"}), \
+                 patch("benchmarks.real_engine.engine.HookedRealEngine", ToolErrorEngine), \
+                 patch("benchmarks.real_engine.run.tokens", return_value=10):
+                if dead:
+                    with self.assertRaises(VestigeMCPError):
+                        await run_item(self.campaign(provider), self.case, "vestige", 0)
+                    self.assertEqual(len(provider.calls), 1)
+                else:
+                    row = await run_item(self.campaign(provider), self.case, "vestige", 0)
+                    visible = [m for m in provider.calls[1] if m.get("role") == "tool"]
+                    self.assertEqual(json.loads(visible[0]["content"]), envelope)
+                    self.assertEqual(row["termination"], "answer")
+                    self.assertFalse(row["defense_positive"])
+
     async def test_midrun_engine_death_aborts_before_solver_request(self):
         from benchmarks.real_engine.engine import VestigeMCPError
         provider = MockProvider()
@@ -233,6 +418,8 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             def call(self, *args):
                 if self.dead:
                     raise VestigeMCPError("benchmark engine is not running")
+                if args[0] == "smart_ingest":
+                    return {"success": True, "nodeId": "initial"}
                 raise AssertionError("control called memory before kill")
         campaign = self.campaign(provider)
         campaign.config_hash = "current-config"

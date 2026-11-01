@@ -6,10 +6,33 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from benchmarks.real_engine.engine import RealEngine, VestigeMCPError, isolate_policy, verify_build
+from benchmarks.real_engine.engine import (RealEngine, VestigeMCP, VestigeMCPError,
+    VestigeMCPToolError, isolate_policy, verify_build)
 from benchmarks.real_engine.retrieval import BM25Memory
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+class ToolErrorBoundaryTests(unittest.TestCase):
+    def test_returned_mcp_error_carries_exact_current_result(self):
+        client = VestigeMCP('/unused/binary', '/unused/store', warmup_seconds=0)
+        raw = {'isError': True, 'content': [{'type': 'text', 'text': 'invalid action'}]}
+        with patch.object(client, 'request', return_value=raw):
+            with self.assertRaises(VestigeMCPToolError) as caught:
+                client.call_tool('memory', {'action': 'invalid'})
+        self.assertIs(caught.exception.result, raw)
+        self.assertIsInstance(caught.exception, VestigeMCPError)
+
+    def test_transport_failure_does_not_reuse_prior_tool_error(self):
+        client = VestigeMCP('/unused/binary', '/unused/store', warmup_seconds=0)
+        old = {'isError': True, 'content': [{'type': 'text', 'text': 'previous error'}]}
+        client.last_tool_result = old
+        with patch.object(client, 'request', side_effect=VestigeMCPError('transport closed')):
+            with self.assertRaises(VestigeMCPError) as caught:
+                client.call_tool('recall', {'handle': 'history'})
+        self.assertNotIsInstance(caught.exception, VestigeMCPToolError)
+        self.assertFalse(hasattr(caught.exception, 'result'))
+        self.assertIs(client.last_tool_result, old)
 
 
 class PolicyTests(unittest.TestCase):
@@ -101,8 +124,28 @@ class NativeEngineTests(unittest.TestCase):
             with RealEngine(REPO, Path(tmp) / "engine") as engine:
                 # Invalid action is an actual MCP tool error, not a simulated
                 # memory backend. It must propagate instead of becoming a score.
-                with self.assertRaises(VestigeMCPError):
+                with self.assertRaises(VestigeMCPToolError) as caught:
                     engine.call("memory", {"action": "not-an-action"})
+                raw = caught.exception.result
+                self.assertIs(raw, engine.client.last_tool_result)
+                self.assertIs(raw.get('isError'), True)
+                events = [json.loads(line) for line in engine.audit.read_text().splitlines()]
+                self.assertEqual(events[-1]['kind'], 'tool_error')
+                self.assertEqual(events[-1]['raw_mcp_result'], raw)
+                # A subsequent transport failure has no current MCP result;
+                # an old refusal cannot masquerade as a new returned error.
+                with patch.object(engine.client, 'request', side_effect=VestigeMCPError('transport closed')):
+                    with self.assertRaises(VestigeMCPError) as transport:
+                        engine.call('recall', {'handle': 'history'})
+                self.assertNotIsInstance(transport.exception, VestigeMCPToolError)
+                events = [json.loads(line) for line in engine.audit.read_text().splitlines()]
+                self.assertIsNone(events[-1]['raw_mcp_result'])
+                engine.client._proc.kill()
+                engine.client._proc.wait(timeout=10)
+                with self.assertRaises(VestigeMCPError) as dead:
+                    engine.call('recall', {'handle': 'history'})
+                self.assertNotIsInstance(dead.exception, VestigeMCPToolError)
+                self.assertFalse(hasattr(dead.exception, 'result'))
 
 
 if __name__ == "__main__":

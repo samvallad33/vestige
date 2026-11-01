@@ -30,6 +30,18 @@ class VestigeMCPError(RuntimeError):
     pass
 
 
+class VestigeMCPToolError(VestigeMCPError):
+    """A returned MCP tools/call result with isError, not a transport failure.
+
+    The original envelope belongs to this completed request. Callers may show
+    it to the model, but must never substitute a previous result after a child
+    exits or the JSON-RPC transport fails.
+    """
+    def __init__(self, name: str, result: Dict[str, Any]) -> None:
+        self.result = result
+        super().__init__(f"{name} tool failed: {result}")
+
+
 class VestigeMCP:
     def __init__(
         self,
@@ -208,7 +220,7 @@ class VestigeMCP:
         )
         self.last_tool_result = result
         if result.get("isError"):
-            raise VestigeMCPError(f"{name} tool failed: {result}")
+            raise VestigeMCPToolError(name, result)
         content = result.get("content") or []
         for block in content:
             if block.get("type") == "text":

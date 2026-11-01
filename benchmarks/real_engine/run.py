@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections import defaultdict
+from collections import defaultdict,Counter
 import hashlib
 import json
 import os
@@ -75,10 +75,13 @@ class Campaign:
         self.preflight_counts={name:10 if autonomous else preflight_count for name in names}
         source_files={str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in Path(__file__).parent.glob('*.py') if not p.name.startswith('test_')}
+        client_source=REPO/'benchmarks/memconflict/mcp_client.py'
+        source_files[str(client_source.relative_to(REPO))]=hashlib.sha256(client_source.read_bytes()).hexdigest()
         self.config={"schema":"four-memory-qa-v1","sources":source_files,
             "hooks":json.loads((runs/'hook-audit.json').read_text()),"profile":"memory_qa",
             "model":MODEL,"temperature":0,"max_inflight":20,"http_timeout":60,
             "workers":10,"limits":[MAX_ITERS,OUTPUT_BUDGET,CONTEXT_LIMIT],
+            "episode_policy":"native_tool_errors_forwarded_unchanged;score_actual_budget_limited_outputs_and_stores",
             "binary_sha256":self.manifest['binary_sha256'],"prompts":self.prompts}
         self.config_hash=h(self.config)
         atomic_write(runs/'four-config.json',canonical({"config_hash":self.config_hash,**self.config})+'\n')
@@ -150,7 +153,7 @@ class Campaign:
         return row
 
     async def solve(self, benchmark, item, arm, trial, worker, attempt=0, kill_control=False):
-        from .engine import HookedRealEngine
+        from .engine import HookedRealEngine,VestigeMCPToolError
         from .retrieval import BM25Memory, BGEMemory
         safe_id = h(item.id)[:24]
         root = self.runs / benchmark / arm / f"worker-{worker}" / f"{safe_id}-trial-{trial}-attempt-{attempt}-{uuid.uuid4().hex[:8]}"
@@ -211,9 +214,12 @@ class Campaign:
                     raise RuntimeError('INTEGRITY_FAIL: killed engine did not abort actual runner')
             total_cost, usage_rows, remaining = 0.0, [], OUTPUT_BUDGET
             response = ""
+            result=None
+            termination='answer'
             for iteration in range(MAX_ITERS):
                 if tokens({"messages": messages, "tools": tools}) > CONTEXT_LIMIT:
-                    raise RuntimeError("context budget exhausted; no silent truncation")
+                    termination='context_limit'
+                    break
                 result = await bound.chat(messages, tools=tools,
                          max_tokens=min(512, remaining), log=root / "api.jsonl",
                          identity={**meta, "iteration": iteration})
@@ -222,11 +228,16 @@ class Campaign:
                 remaining -= result["usage"]["completion_tokens"]
                 message = result["message"]
                 messages.append({k:v for k,v in message.items() if k in ("role", "content", "tool_calls")})
+                if result['finish_reason']=='length':
+                    # The real bounded episode ended. Preserve its actual
+                    # partial answer/state for the unchanged official scorer;
+                    # never execute a partially generated tool call.
+                    response=message.get('content') or ''
+                    termination='output_limit'
+                    break
                 calls = message.get("tool_calls") or []
                 if not calls:
                     response = message.get("content") or ""
-                    if result["finish_reason"] == "length":
-                        raise RuntimeError("model output truncated at token budget")
                     if engine:
                         verdict=await asyncio.to_thread(engine.finish_turn,messages)
                         if verdict["blocked"]:
@@ -236,7 +247,12 @@ class Campaign:
                 for call in calls:
                     name, args = call["function"]["name"], json.loads(call["function"]["arguments"])
                     if engine:
-                        output = await asyncio.to_thread(engine.call, name, args)
+                        try:
+                            output = await asyncio.to_thread(engine.call, name, args)
+                        except VestigeMCPToolError as exc:
+                            # This is the exact native MCP response, not an
+                            # alternate memory, repaired query, or answer hint.
+                            output=exc.result
                     elif memory and name == "memory_search":
                         output = await asyncio.to_thread(memory.search, args["query"], min(10,max(1,args.get("k",5))))
                     else:
@@ -251,11 +267,15 @@ class Campaign:
                         engine.hooks.pending_context.clear()
                         messages.extend({"role":"user","content":x} for x in contexts)
                 if remaining <= 0:
-                    raise RuntimeError("aggregate output budget exhausted")
+                    termination='output_limit'
+                    break
             else:
-                raise RuntimeError("iteration budget exhausted without an answer")
+                termination='iteration_limit'
             native_calls=0
             if engine:
+                # A real final native round-trip witnesses liveness even when
+                # a model/context limit ended the episode before Stop events.
+                await asyncio.to_thread(engine.call,'memory_status',{'view':'coverage'})
                 from .runtime import read_jsonl
                 native_calls=sum(x.get("kind")=="tool_request" for x in read_jsonl(root/"native/mcp.jsonl"))
                 hooklog=root/"native/hooks-runtime/hooks.jsonl"
@@ -266,10 +286,11 @@ class Campaign:
                 atomic_write(root/"native/startup-stderr.log","\n".join(engine.client.stderr_tail(10000))+"\n")
             return {**meta, "arm": arm, "status": "complete", "response": response,
                     "prompt": initial_messages, "transcript": messages, "score": None,
-                    "usage": bound.usage, "cost": bound.cost, "model": result["model"],
+                    "usage": bound.usage, "cost": bound.cost, "model": result["model"] if result else MODEL,
                     "finished_at": utc_now(), "raw_log": str((root / "api.jsonl").relative_to(REPO)),
                     "group_id": item.group_id, "category": item.category,
                     "engine_calls":native_calls if engine else None,
+                    "termination":termination,
                     "hooks_manifest_sha256":h(json.loads((self.runs/"hook-audit.json").read_text())),
                     "budget":{"limits":bound.limits,"remaining_calls":bound.remaining_calls,"remaining_output":bound.remaining_output}}
         finally:
@@ -353,8 +374,7 @@ class Campaign:
         projection_path = root / "projection.json"
         if not projection_path.exists():
             calibration_item=next(i for i in items if not pilot_ids or i.id in pilot_ids)
-            calibration=[]
-            for arm in ARMS:
+            async def calibrate(arm):
                 worker = shard_id(calibration_item.id)
                 cp=checkpoints[arm][worker]
                 key=record_key({"item_id":calibration_item.id,"trial":0})
@@ -376,7 +396,8 @@ class Campaign:
                         from .extra_datasets import memconflict_judge_prompt
                         judge_prompt=memconflict_judge_prompt(self.runs/'upstream'/name,calibration_item,record['response'])
                     judge_cost=(tokens(judge_prompt)*PRICING['input']+1024*PRICING['output'])/1e6
-                calibration.append({"arm":arm,"cost":record["cost"],"judge_cost":judge_cost})
+                return {"arm":arm,"cost":record["cost"],"judge_cost":judge_cost}
+            calibration=await asyncio.gather(*(calibrate(arm) for arm in ARMS))
             projected=sum(x["cost"] for x in calibration)*len(items)*trials
             judge_projection=sum(x["judge_cost"] for x in calibration)*len(items)*trials
             projection={"first_item":calibration_item.id,"calibration":calibration,
@@ -497,6 +518,7 @@ class Campaign:
                 "ci95":ci(scores,[r["group_id"].rsplit(":s",1)[0] if name=="memconflict" else r["group_id"] for r in scored]),"n":len(scores),"trials":trials,
                 "model":MODEL,"solver_cost":sum(r["cost"] for r in scored),
                 "cost_all_metered_calls":actual/1e9,"unreconciled_reservations":reserved/1e9,
+                "termination_counts":dict(Counter(r.get('termination','answer') for r in scored)),
                 "binary_sha256":self.manifest["binary_sha256"]})
         atomic_write(root/"results.json",canonical(summaries)+"\n")
         print(name,"RESULTS",canonical(summaries),flush=True)
@@ -515,6 +537,8 @@ class Campaign:
             '', 'Dataset files and SHA-256: `'+canonical(plan['full_set']['dataset_files'])+'`.',
             'Scorer source pins: `'+canonical(plan['scorer'])+'`.',
             'Configuration SHA-256: `'+self.config_hash+'`.',
+            'Episode termination counts by arm: `'+canonical({s['arm']:s['termination_counts'] for s in summaries})+'`.',
+            'Output, iteration and context caps end the actual episode. Its actual partial answer is scored by the unchanged official scorer; no successful answer or zero metric is inserted. Native tool errors are returned unchanged, while transport/engine death aborts.',
             '', 'Costs include all metered benchmark calls, including earlier preparation. Unresolved reservations are reported separately in STATUS.md.',
             'Published, different model or judge: see the independently sourced records in benchmarks/real_engine/published.json; no head-to-head ranking inferred.', '']
         atomic_write(self.runs/name/'RESULTS.md','\n'.join(rows))
@@ -547,7 +571,11 @@ class Campaign:
 
     async def run(self):
         atomic_write(self.runs/"prompt-audit.json",canonical(self.prompts)+"\n")
-        stop_task=asyncio.create_task(status_loop(self.runs/"STATUS.md",lambda:list(self.progress.values()),self.ledger,self.stop))
+        def progress_rows():
+            return [{**row,'stage':'10-item pilot' if self.is_preflight(row['benchmark']) else 'full official run',
+                     'api_errors':getattr(self.provider,'errors',{}).get((row['benchmark'],row['arm']),0)}
+                    for row in self.progress.values()]
+        stop_task=asyncio.create_task(status_loop(self.runs/"STATUS.md",progress_rows,self.ledger,self.stop))
         try:
             # Start calibration in the requested priority order. Once each cost
             # gate opens, benchmark workers run concurrently on the same pool.

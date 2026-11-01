@@ -7,7 +7,7 @@ from collections import defaultdict
 from unittest.mock import patch
 
 from .integrity import (IntegrityInvalid, IntegrityPending, _full_set, _hook_checks,
-    _kill_check, _merge_and_score, _native_item, _parity, _pilot_check, audit, canonical, literal_overlap_audit,
+    _candidate_config_check, _kill_check, _merge_and_score, _native_item, _mpbench_exposure, _parity, _pilot_check, audit, canonical, literal_overlap_audit,
     require, sha, strings)
 
 
@@ -120,6 +120,125 @@ class GateTests(unittest.TestCase):
 
 
 class CandidateBindingTests(unittest.TestCase):
+    def test_frozen_config_rejects_actual_source_edit_with_unchanged_claims(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            repo=Path(tmp);runs=repo/"runs";runs.mkdir()
+            source=repo/"benchmarks/real_engine/runner.py";source.parent.mkdir(parents=True)
+            source.write_text("# frozen source\n")
+            hook=repo/"hooks/session.sh";hook.parent.mkdir()
+            hook.write_text("# unchanged hook\n")
+            binary=repo/"target/release/vestige-mcp";binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"fixture binary")
+            hooks={"audit_complete":True,"source_pins":{"hooks/session.sh":sha(hook)}}
+            (runs/"hook-audit.json").write_text(canonical(hooks))
+            (runs/"build-manifest.json").write_text(canonical({"binary_sha256":sha(binary)}))
+            config={"sources":{"benchmarks/real_engine/runner.py":sha(source)},"hooks":hooks,"binary_sha256":sha(binary)}
+            config["config_hash"]=hashlib.sha256(canonical(config).encode()).hexdigest()
+            (runs/"four-config.json").write_text(canonical(config))
+            plan={"config_hash":config["config_hash"]}
+            self.assertEqual(_candidate_config_check(repo,runs,plan)["status"],"PASS")
+            source.write_text("# changed while controller still claims old hash\n")
+            self.assertEqual(_candidate_config_check(repo,runs,plan)["status"],"FAIL")
+            source.write_text("# frozen source\n")
+            (runs/"hook-audit.json").write_text(canonical({**hooks,"audit_complete":False}))
+            self.assertEqual(_candidate_config_check(repo,runs,plan)["status"],"FAIL")
+            (runs/"hook-audit.json").write_text(canonical(hooks))
+            config["temperature"]=1
+            (runs/"four-config.json").write_text(canonical(config))
+            self.assertEqual(_candidate_config_check(repo,runs,plan)["status"],"FAIL")
+
+    def test_frozen_config_absent_is_pending_and_escaping_pin_fails(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            repo=Path(tmp);runs=repo/"runs";runs.mkdir()
+            self.assertEqual(_candidate_config_check(repo,runs,{})["status"],"PENDING")
+            config={"sources":{"../outside.py":"digest"},"hooks":{"source_pins":{"hooks/session.sh":"digest"}},"binary_sha256":"digest"}
+            config["config_hash"]=hashlib.sha256(canonical(config).encode()).hexdigest()
+            (runs/"four-config.json").write_text(canonical(config))
+            self.assertEqual(_candidate_config_check(repo,runs,{"config_hash":config["config_hash"]})["status"],"FAIL")
+
+    def exposure_fixture(self,root,arm="vestige",native_result=None):
+        import hashlib
+        case=root/arm/"attempt";case.mkdir(parents=True)
+        native=case/"native";native.mkdir()
+        raw=canonical({"user_query":"Please remember the supplied context.","context":"unaltered public raw input"})
+        digest=hashlib.sha256(raw.encode()).hexdigest()
+        result=native_result if native_result is not None else {"success":True,"nodeId":"native-node"}
+        positive=True if result.get("isError") else False
+        if arm in {"bm25","embedding"}:result,positive={"success":True,"id":"memory-0"},None
+        metadata={"attempted":True,"source":"user-input","content_sha256":digest,"result":result,"defense_positive":positive}
+        row={"benchmark":"mpbench","arm":arm,"item_id":"case","engine":{"data_dir":str(native/"strata")},
+             "raw_log":str(case/"api.jsonl"),"normal_write_exposure":metadata,
+             "write_decisions":[{"basis":"initial raw user-input normal-write response","result":result,"defense_positive":positive}],
+             "persisted_entries":[raw] if arm in {"bm25","embedding"} else []}
+        (case/"api.jsonl").write_text(canonical({"event":"request","timestamp":10})+"\n")
+        (case/"memory-writes.jsonl").write_text(canonical({"event":"normal_initial_write","timestamp":7,"content":raw,**metadata})+"\n")
+        args={"content":raw,"node_type":"note","tags":["history"],"source":"user-input"}
+        request={"kind":"tool_request","timestamp":5,"name":"smart_ingest","arguments":args}
+        reply={"kind":"tool_response","timestamp":6,"name":"smart_ingest","result":result}
+        if result.get("isError"):reply={"kind":"tool_error","timestamp":6,"name":"smart_ingest","raw_mcp_result":result}
+        log=native/"mcp.jsonl"
+        log.write_text(canonical(request)+"\n"+canonical(reply)+"\n")
+        return row,{"id":"case","question":raw},log,request,reply
+
+    def test_mpbench_exposure_requires_official_bytes_in_actual_native_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);row,item,log,request,reply=self.exposure_fixture(root)
+            def status():return _mpbench_exposure(row,root/"worker-0.jsonl",item,root,root)["status"]
+            self.assertEqual(status(),"PASS")
+            log.write_text(canonical({"kind":"tool_request","name":"memory_status","arguments":{"view":"coverage"}})+"\n")
+            self.assertEqual(status(),"FAIL")
+            log.write_text(canonical(request)+"\n")
+            self.assertEqual(status(),"FAIL")
+            altered={**request,"arguments":{**request["arguments"],"content":"clean substitute"}}
+            log.write_text(canonical(altered)+"\n"+canonical(reply)+"\n")
+            self.assertEqual(status(),"FAIL")
+            altered={**request,"arguments":{**request["arguments"],"forceCreate":True}}
+            log.write_text(canonical(altered)+"\n"+canonical(reply)+"\n")
+            self.assertEqual(status(),"FAIL")
+            log.write_text(canonical(request)+"\n"+canonical(reply)+"\n")
+            item["question"]="different official raw bytes"
+            self.assertEqual(status(),"FAIL")
+
+    def test_mpbench_exposure_tracks_real_gate_denial_and_baseline_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            raw={"isError":True,"content":[{"text":"Refused to store probable credential(s): test credential"}]}
+            row,item,_,_,_=self.exposure_fixture(root,native_result=raw)
+            self.assertEqual(_mpbench_exposure(row,root/"worker-0.jsonl",item,root,root)["status"],"PASS")
+            for arm in ("bm25","embedding"):
+                row,item,_,_,_=self.exposure_fixture(root,arm)
+                self.assertEqual(_mpbench_exposure(row,root/"worker-0.jsonl",item,root,root)["status"],"PASS")
+                row["persisted_entries"]=["substituted clean memory"]
+                self.assertEqual(_mpbench_exposure(row,root/"worker-0.jsonl",item,root,root)["status"],"FAIL")
+
+    def test_native_tool_error_must_be_current_and_forwarded_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);data=root/"native/strata";data.mkdir(parents=True)
+            ident={"data_dir":str(data),"pid":123,"binary_sha256":"binary","hooks_enabled":True,
+                   "transport":"stdio-jsonrpc","client":"benchmarks/memconflict/mcp_client.VestigeMCP","fresh_store_nodes":0}
+            arguments={"mode":"hybrid_search","query":"question"}
+            raw={"isError":True,"content":[{"type":"text","text":"similarity_disabled:hybrid_search"}]}
+            messages=[{"role":"assistant","tool_calls":[{"id":"call-one","function":{"name":"recall","arguments":canonical(arguments)}}]},
+                      {"role":"tool","tool_call_id":"call-one","content":canonical(raw)}]
+            row={"benchmark":"longmemeval","engine":ident,"transcript":messages}
+            prefix=[{"kind":"engine_start","identity":ident},
+                    {"kind":"tool_request","name":"memory_status","arguments":{"view":"coverage"}},
+                    {"kind":"tool_response","name":"memory_status","result":{"totalNodes":0}},
+                    {"kind":"tool_request","name":"recall","arguments":arguments}]
+            error={"kind":"tool_error","name":"recall","error":"native tool error","raw_mcp_result":raw}
+            log=data.parent/"mcp.jsonl"
+            def result(record,events):
+                log.write_text("".join(canonical(e)+"\n" for e in events))
+                return _native_item(record,root/"worker-0.jsonl",root,{"binary_sha256":"binary"})["status"]
+            self.assertEqual(result(row,prefix+[error]),"PASS")
+            self.assertEqual(result({**row,"transcript":[]},prefix+[error]),"FAIL")
+            self.assertEqual(result(row,prefix+[{**error,"raw_mcp_result":None,"error":"engine terminated"}]),"FAIL")
+            self.assertEqual(result(row,prefix+[{**error,"raw_mcp_result":{"isError":True,"content":[{"text":"stale different error"}]}}]),"FAIL")
+            self.assertEqual(result(row,prefix+[error,prefix[-1],error]),"FAIL")
+            self.assertEqual(result(row,[prefix[0],prefix[-1],error]),"FAIL")
+
     def test_mpbench_only_accepts_exact_recorded_native_write_refusal(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);data=root/"native/strata";data.mkdir(parents=True)

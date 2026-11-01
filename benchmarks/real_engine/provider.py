@@ -41,6 +41,7 @@ class NanoProvider:
     def __init__(self, runs: Path, ledger: BudgetLedger):
         self.runs, self.ledger = runs, ledger
         self.key = load_key(runs / ".env.openai")
+        self.errors = {}
         self.pool = AsyncAPIPool(ledger, max_inflight=20, max_retries=6)
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(60.0),
                                      limits=httpx.Limits(max_connections=20, max_keepalive_connections=20))
@@ -69,8 +70,12 @@ class NanoProvider:
             result.raise_for_status()
             return result.json()
 
-        response = await self.pool.request(call_id, upper_cost, send, account,
-                     on_attempt=lambda row: append_jsonl(log, {"event": "attempt", **row}))
+        def attempt(row):
+            append_jsonl(log, {"event":"attempt",**row})
+            if row.get('status')=='error':
+                key=(identity.get('benchmark'),identity.get('arm'))
+                self.errors[key]=self.errors.get(key,0)+1
+        response = await self.pool.request(call_id, upper_cost, send, account,on_attempt=attempt)
         cost, usage = account(response)
         append_jsonl(log, {"event": "response", "call_id": call_id, "timestamp": utc_now(),
                            "identity": identity, "response": response, "cost": cost, "usage": usage})

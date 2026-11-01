@@ -392,7 +392,7 @@ def write_status(path: str | Path, progress: Iterable[Mapping[str, Any]],
              f"API spend: ${snapshot['spent']:.6f} / ${snapshot['limit']:.2f}; "
              f"outstanding reservations: ${snapshot['reserved']:.6f}; "
              f"available: ${snapshot['remaining']:.6f}.", "",
-             "| Benchmark | Arm | Done | Total | Errors | ETA |", "|---|---|---:|---:|---:|---|"]
+             "| Benchmark | Arm | Done | Full official total | Item errors | ETA | Stage | API attempt errors |", "|---|---|---:|---:|---:|---|---|---:|"]
     for row in rows:
         done, total = int(row["done"]), int(row["total"])
         if not 0 <= done <= total:
@@ -400,7 +400,7 @@ def write_status(path: str | Path, progress: Iterable[Mapping[str, Any]],
         eta = "complete" if done == total else (
             f"{elapsed * (total - done) / done / 60:.1f} min" if done and elapsed else "pending")
         benchmark, arm = str(row["benchmark"]).replace("|", "\\|"), str(row["arm"]).replace("|", "\\|")
-        lines.append(f"| {benchmark} | {arm} | {done} | {total} | {int(row.get('errors', 0))} | {eta} |")
+        lines.append(f"| {benchmark} | {arm} | {done} | {total} | {int(row.get('errors', 0))} | {eta} | {row.get('stage','unspecified')} | {int(row.get('api_errors',0))} |")
     lines += ["", "ETA uses observed completions since campaign start; setup and changing task lengths can shift it.",
               "Outstanding reservations include ambiguous failed attempts until provider usage is reconciled.", ""]
     atomic_write(path, "\n".join(lines))

@@ -353,13 +353,34 @@ def literal_overlap_audit(requests, items, native_strings=None, scaffolds=()):
     return overlaps, missing
 
 
+def _forwarded_native_errors(row):
+    """Bind raw model-visible tool replies to this transcript's actual calls."""
+    calls, forwarded = {}, []
+    for message in row.get("transcript",[]):
+        if message.get("role")=="assistant":
+            for call in message.get("tool_calls") or []:
+                function=call.get("function") or {}
+                try:
+                    arguments=json.loads(function.get("arguments",""))
+                except (ValueError,TypeError):
+                    continue
+                if call.get("id") and isinstance(arguments,dict):
+                    calls[call["id"]]=(function.get("name"),arguments)
+        elif message.get("role")=="tool":
+            call=calls.pop(message.get("tool_call_id"),None)
+            if call and isinstance(message.get("content"),str):
+                forwarded.append((*call,message["content"]))
+    return forwarded
+
+
 def _native_item(row, checkpoint, runs, manifest):
     identities = row.get("engine_identities") or ([row["engine"]] if isinstance(row.get("engine"), dict) else [])
     if not identities:
         return check("native_item", "FAIL", "Vestige completed row has no actual child identity.", [evidence(checkpoint)])
     observations, seen_paths = [], set()
     request_count = write_count = read_count = 0
-    refusal_count = 0
+    refusal_count = forwarded_error_count = 0
+    forwarded_errors=_forwarded_native_errors(row)
     outputs = []
     for identity in identities:
         declared_data = Path(identity.get("data_dir", ""))
@@ -383,8 +404,8 @@ def _native_item(row, checkpoint, runs, manifest):
         if (started.get("transport")!="stdio-jsonrpc" or started.get("client")!="benchmarks/memconflict/mcp_client.VestigeMCP"
                 or started.get("fresh_store_nodes")!=0):
             return check("native_item","FAIL","Native start does not establish isolated empty stdio MCP child.",[evidence(log,starts[0][0])])
-        pending = None
-        local_requests = local_responses = local_refusals = 0
+        pending, pending_arguments = None, None
+        local_requests = local_responses = local_refusals = local_forwarded_errors = 0
         # MPBench's real write gate can return a native MCP error as the
         # measured defense outcome. Only the runner's verified credential
         # refusal classifier and exact per-item raw decision authorize it.
@@ -396,6 +417,7 @@ def _native_item(row, checkpoint, runs, manifest):
                 if pending is not None:
                     return check("native_item","FAIL","Native request has no matching serialized response.",[evidence(log,number)])
                 pending = event.get("name")
+                pending_arguments = event.get("arguments")
                 local_requests += 1
                 request_count += 1
                 write_count += event.get("name") == "smart_ingest"
@@ -408,22 +430,33 @@ def _native_item(row, checkpoint, runs, manifest):
                 outputs.extend(text for _, text in strings(event.get("result")))
             if event.get("kind") == "tool_error":
                 raw=event.get("raw_mcp_result")
-                allowed=(row.get("benchmark")=="mpbench" and row.get("defense_positive") is True
+                security_refusal=(row.get("benchmark")=="mpbench" and pending=="smart_ingest" and security_denial(raw))
+                allowed_refusal=(security_refusal and row.get("defense_positive") is True
                     and pending==event.get("name")=="smart_ingest" and isinstance(raw,dict)
                     and raw.get("isError") is True and security_denial(raw) and raw in permitted_denials)
-                if not allowed:
+                forwarded=(pending,pending_arguments,canonical(raw))
+                allowed_error=(not security_refusal and pending and pending==event.get("name")
+                    and isinstance(raw,dict) and raw.get("isError") is True and forwarded in forwarded_errors)
+                if not allowed_refusal and not allowed_error:
                     return check("native_item","FAIL","Completed native item contains an unmatched error or unverified security refusal.",[evidence(log,number)])
-                permitted_denials.remove(raw)
+                if allowed_refusal:
+                    permitted_denials.remove(raw)
+                    local_refusals += 1
+                    refusal_count += 1
+                    detail="Exact current-item MPBench normal-write MCP credential refusal; defense-positive decision preserved"
+                else:
+                    forwarded_errors.remove(forwarded)
+                    local_forwarded_errors += 1
+                    forwarded_error_count += 1
+                    detail="Actual MCP tool error forwarded unchanged to this completed item's matching model tool call"
                 pending = None
-                local_refusals += 1
-                refusal_count += 1
-                observations.append(evidence(log,number,detail="Exact current-item MPBench normal-write MCP credential refusal; defense-positive decision preserved"))
-        if pending is not None or not local_responses or local_requests!=local_responses+local_refusals:
+                observations.append(evidence(log,number,detail=detail))
+        if pending is not None or not local_responses or local_requests!=local_responses+local_refusals+local_forwarded_errors:
             return check("native_item","FAIL","Completed native item has request-only evidence or missing responses.",[evidence(log,count=local_responses)])
         observations.append(evidence(log, count=request_count, detail=f"pid={identity.get('pid')}; data_dir={data}"))
     if not request_count:
         return check("native_item", "FAIL", "Completed Vestige item has zero recorded MCP calls.", observations)
-    return check("native_item", "PASS", f"Actual hashed child MCP calls={request_count}, writes={write_count}, reads={read_count}, verified write refusals={refusal_count}; zero chosen writes is not fabricated admission.", observations)
+    return check("native_item", "PASS", f"Actual hashed child MCP calls={request_count}, writes={write_count}, reads={read_count}, verified write refusals={refusal_count}, unchanged forwarded tool errors={forwarded_error_count}; zero chosen writes is not fabricated admission.", observations)
 
 
 def _runtime_paths(completed):
@@ -433,6 +466,88 @@ def _runtime_paths(completed):
             data = identity.get("data_dir")
             if data:
                 yield checkpoint, number, row, identity, Path(data).parent
+
+
+def _mpbench_exposure(row, checkpoint, official_item, runs, repo):
+    """Every memory arm must actually receive the same official raw envelope.
+
+    A model can answer without calling a write tool. Such a session never tests
+    the memory gate. Require the pre-model normal write and its real outcome,
+    rather than inferring exposure from coverage reads or a metadata hash.
+    """
+    arm=row.get("arm")
+    exposure=row.get("normal_write_exposure") or {}
+    if arm=="bare":
+        bad=exposure.get("attempted") is True or bool(row.get("persisted_entries"))
+        return check("mpbench_normal_write_exposure","FAIL" if bad else "PASS",
+                     "Bare arm has no persistent memory; normal write exposure is not applicable.",[evidence(checkpoint)])
+    if official_item is None or not isinstance(_item_value(official_item,"question"),str):
+        return check("mpbench_normal_write_exposure","PENDING","Independent official raw input envelope unavailable.",[evidence(checkpoint)])
+    raw=_item_value(official_item,"question")
+    digest=hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    if (exposure.get("attempted") is not True or exposure.get("source")!="user-input"
+            or exposure.get("content_sha256")!=digest):
+        return check("mpbench_normal_write_exposure","FAIL","Memory arm lacks actual normal-write exposure to independently loaded official raw bytes.",[evidence(checkpoint)])
+    initial=[decision for decision in row.get("write_decisions",[])
+        if decision.get("basis")=="initial raw user-input normal-write response"]
+    if (len(initial)!=1 or initial[0].get("result")!=exposure.get("result")
+            or initial[0].get("defense_positive")!=exposure.get("defense_positive")):
+        return check("mpbench_normal_write_exposure","FAIL","Initial normal-write result is absent or differs from the per-item defense decision.",[evidence(checkpoint)])
+    log_path=Path(row.get("raw_log",""))
+    if not log_path.is_absolute():log_path=repo/log_path
+    root=log_path.resolve().parent
+    if not root.is_relative_to(runs.resolve()):
+        return check("mpbench_normal_write_exposure","FAIL","Exposure log escapes this campaign.",[evidence(log_path)])
+    writes=root/"memory-writes.jsonl"
+    events=[(number,event) for number,event in lines(writes) if event.get("event")=="normal_initial_write"]
+    if (len(events)!=1 or events[0][1].get("content")!=raw
+            or any(events[0][1].get(key)!=exposure.get(key) for key in ("content_sha256","source","attempted","result","defense_positive"))):
+        return check("mpbench_normal_write_exposure","FAIL","Actual initial-write operation log does not contain exact official raw bytes and outcome.",[evidence(writes)])
+    event_time=_epoch(events[0][1].get("timestamp"))
+    calls=[_epoch(event.get("timestamp")) for _,event in lines(log_path) if event.get("event")=="request"]
+    calls=[when for when in calls if when is not None]
+    if event_time is None or (calls and event_time>min(calls)):
+        return check("mpbench_normal_write_exposure","FAIL","Actual raw exposure did not precede this item's first model request.",[evidence(writes,events[0][0])])
+    refs=[evidence(writes,events[0][0],detail={"official_content_sha256":digest})]
+    if arm in {"bm25","embedding"}:
+        stored=row.get("persisted_entries") or []
+        valid=(stored and stored[0]==raw and exposure.get("result")=={"success":True,"id":"memory-0"}
+               and exposure.get("defense_positive") is None)
+        return check("mpbench_normal_write_exposure","PASS" if valid else "FAIL",
+                     "Baseline initial admitted entry must retain the exact official raw envelope at memory-0; no detector is inferred.",refs)
+    if arm!="vestige":
+        return check("mpbench_normal_write_exposure","FAIL","Unknown persistent-memory arm.",refs)
+    identity=row.get("engine") or {}
+    declared=Path(identity.get("data_dir",""))
+    data=declared.resolve()
+    if not declared.is_absolute() or not data.is_relative_to(runs.resolve()):
+        return check("mpbench_normal_write_exposure","FAIL","Native exposure store is absent or outside this campaign.",refs)
+    native=data.parent/"mcp.jsonl"
+    expected={"content":raw,"node_type":"note","tags":["history"],"source":"user-input"}
+    pending=None
+    matches=[]
+    from .mpbench_runner import security_denial,write_security_decision
+    for number,event in lines(native):
+        kind=event.get("kind")
+        if kind=="tool_request":
+            pending=(number,event) if event.get("name")=="smart_ingest" and event.get("arguments")==expected else None
+        elif kind in {"tool_response","tool_error"}:
+            if pending and event.get("name")=="smart_ingest":
+                result=event.get("result") if kind=="tool_response" else event.get("raw_mcp_result")
+                successful=(kind=="tool_response" and result is not None
+                            and (event.get("raw_mcp_result") or {}).get("isError") is not True)
+                genuine_refusal=(kind=="tool_error" and isinstance(result,dict) and result.get("isError") is True and security_denial(result))
+                request_time=_epoch(pending[1].get("timestamp"))
+                response_time=_epoch(event.get("timestamp"))
+                if ((successful or genuine_refusal) and result==exposure.get("result")
+                        and write_security_decision(result)==exposure.get("defense_positive")
+                        and request_time is not None and response_time is not None and request_time<=response_time<=event_time):
+                    matches.append((pending[0],number))
+            pending=None
+    if not matches:
+        return check("mpbench_normal_write_exposure","FAIL","No matched actual native normal-user-write request/reply contains the exact official raw bytes; metadata or coverage-only calls cannot qualify.",refs+[evidence(native)])
+    refs.extend(evidence(native,number) for pair in matches for number in pair)
+    return check("mpbench_normal_write_exposure","PASS","Exact official raw envelope entered the live native normal-user write path before inference; actual admission/refusal outcome is bound to this item.",refs)
 
 
 def _native_provenance(completed):
@@ -446,6 +561,10 @@ def _native_provenance(completed):
         for line, event in lines(root / "mcp.jsonl"):
             if event.get("kind") == "tool_response":
                 texts=[canonical(event.get("result"))]+[text for _,text in strings(event.get("result"))]
+                catalog[key].extend({"text":text,"timestamp":event.get("timestamp"),"path":str(root/"mcp.jsonl"),"line":line} for text in texts)
+            if event.get("kind") == "tool_error" and isinstance(event.get("raw_mcp_result"),dict) and event["raw_mcp_result"].get("isError") is True:
+                raw=event["raw_mcp_result"]
+                texts=[canonical(raw)]+[text for _,text in strings(raw)]
                 catalog[key].extend({"text":text,"timestamp":event.get("timestamp"),"path":str(root/"mcp.jsonl"),"line":line} for text in texts)
             if event.get("kind") == "engine_start":
                 catalog[key].extend({"text":text,"timestamp":event.get("timestamp"),"path":str(root/"mcp.jsonl"),"line":line} for _,text in strings(event.get("tools",[])))
@@ -798,6 +917,56 @@ def _pilot_check(plan,arm,reqs,completed,official_items=None):
                  "Exactly the frozen ten official IDs require unscored current-config requests and completed current-checkpoint records.",refs)
 
 
+def _candidate_config_check(repo,runs,plan):
+    """Verify the actual frozen candidate, not merely rows claiming its hash."""
+    path=runs/"four-config.json"
+    expected=plan.get("config_hash")
+    if not expected or not path.is_file():
+        return check("candidate_config_identity","PENDING","Current frozen candidate configuration/plan absent.",[evidence(path)])
+    try:
+        config=json.loads(path.read_text())
+    except (ValueError,OSError) as exc:
+        return check("candidate_config_identity","FAIL","Frozen candidate configuration is unreadable/corrupt: "+type(exc).__name__,[evidence(path)])
+    if not isinstance(config,dict):
+        return check("candidate_config_identity","FAIL","Frozen candidate configuration is not an object.",[evidence(path)])
+    claimed=config.get("config_hash")
+    calculated=hashlib.sha256(canonical({key:value for key,value in config.items() if key!="config_hash"}).encode()).hexdigest()
+    if claimed!=calculated or claimed!=expected:
+        return check("candidate_config_identity","FAIL","Frozen configuration content hash differs from its claim or the qualification plan.",[evidence(path,detail={"calculated":calculated,"claimed":claimed,"plan":expected})])
+    pins=config.get("sources")
+    hooks=config.get("hooks")
+    if not isinstance(pins,dict) or not pins or not isinstance(hooks,dict) or not hooks.get("source_pins"):
+        return check("candidate_config_identity","PENDING","Frozen candidate source/hook pin inventory incomplete.",[evidence(path)])
+    refs=[evidence(path,detail=calculated)]
+    # Hook-script/native source pins are part of the candidate even if they are
+    # not Python harness files in config.sources. No absolute or escaping pin
+    # can authorize reading another checkout or machine-wide user state.
+    for catalog in (pins,hooks["source_pins"]):
+        if not isinstance(catalog,dict):
+            return check("candidate_config_identity","FAIL","Frozen source pin catalog is malformed.",refs)
+        for name,digest in catalog.items():
+            relative=Path(name)
+            source=(repo/relative).resolve()
+            if relative.is_absolute() or not source.is_relative_to(repo.resolve()):
+                return check("candidate_config_identity","FAIL","Frozen source pin escapes the repository.",refs+[evidence(source)])
+            if not source.is_file() or sha(source)!=digest:
+                return check("candidate_config_identity","FAIL","Actual candidate source changed after configuration freeze.",refs+[evidence(source,detail={"expected":digest,"actual":sha(source) if source.is_file() else None})])
+            refs.append(evidence(source,detail=digest))
+    hook_path=runs/"hook-audit.json"
+    try:
+        current_hooks=json_file(hook_path)
+    except (ValueError,OSError):
+        current_hooks=None
+    if current_hooks!=hooks:
+        return check("candidate_config_identity","FAIL","Current audited hook JSON differs from the exact frozen hook profile.",refs+[evidence(hook_path)])
+    binary=repo/"target/release/vestige-mcp"
+    manifest=json_file(runs/"build-manifest.json",{})
+    if (binary.is_symlink() or not binary.is_file() or not config.get("binary_sha256")
+            or config["binary_sha256"]!=manifest.get("binary_sha256") or sha(binary)!=config["binary_sha256"]):
+        return check("candidate_config_identity","FAIL","Actual built binary/build manifest differs from frozen candidate identity.",refs+[evidence(binary)])
+    return check("candidate_config_identity","PASS","Canonical frozen configuration, every repository/hook source pin, exact current hook audit, and actual built binary match the qualification plan.",refs+[evidence(binary,detail=config["binary_sha256"])])
+
+
 def _build_check(repo,runs,manifest):
     path=repo/"target/release/vestige-mcp"
     if not manifest or not path.is_file():
@@ -869,6 +1038,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
     for name in selected:
         arms, official_items = {}, None
         plan=plans.get(name,{})
+        candidate_check=_candidate_config_check(repo,runs,plan)
         if plan.get("full_set") or any(requests[name, arm] for arm in ARMS):
             try:
                 official_items = _load_items(repo, runs, name)
@@ -880,6 +1050,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
                 parse_failures[name].append(evidence(runs / "upstream", detail=f"official audit loader: {type(exc).__name__}: {exc}"))
         source_plan=_scorer_source(repo,runs,name,plan)
         full_plan,expected=_full_set(repo,runs,name,plan,official_items)
+        official_by_id={_item_value(item,"id"):item for item in official_items or []}
         # Failed/abandoned attempts remain visible to leakage checks below, but
         # their request-only logs cannot establish completed-attempt usage.
         completed_roots=set()
@@ -894,7 +1065,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
         parity=_parity(parity_requests,plan,name,official_items,responses,runs)
         for arm in ARMS:
             reqs, completed = requests[name, arm], checkpoints[name, arm]
-            checks = [_source_check(repo, name),build_check]
+            checks = [_source_check(repo, name),build_check,candidate_check]
             if parse_failures[name]:
                 checks.append(check("evidence_parse", "FAIL", "Actual evidence is corrupt or official identity cannot be verified.", parse_failures[name]))
             else:
@@ -906,6 +1077,10 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
             checks.append(check("model_temperature", "FAIL" if bad else "PASS" if reqs else "PENDING",
                 "Every observed model request must use nano and temperature0.",
                 [evidence(Path(r['path']), r['line']) for r in bad or reqs[:1]]))
+            if name=="mpbench":
+                checks.extend([_mpbench_exposure(row,path,official_by_id.get(row.get("item_id")),runs,repo)
+                               for path,_,row in completed] or [check("mpbench_normal_write_exposure","PENDING",
+                               "No completed current-profile normal-write exposure evidence to inspect.")])
             overlaps = []
             if reqs and official_items is not None:
                 candidates=sorted(observed_ids)
@@ -976,7 +1151,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
                          "actual_model_requests": len(reqs), "literal_overlaps": overlaps,
                          "excluded_obsolete_profile_records":excluded_profiles[name,arm]}
         status = combine([{"status": value["status"]} for value in arms.values()])
-        preflight_checks=[_source_check(repo,name),build_check]
+        preflight_checks=[_source_check(repo,name),build_check,candidate_check]
         hook_source=json_file(runs/"hook-audit.json",{})
         pins_match=bool(hook_source.get("source_pins")) and all((repo/p).is_file() and sha(repo/p)==digest for p,digest in hook_source.get("source_pins",{}).items())
         preflight_ok=(combine(preflight_checks)=="PASS" and hook_source.get("audit_complete") is True and pins_match and status!="FAIL")
@@ -1002,6 +1177,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
     historical=runs/"invalidated/hook-cwd-git-negative-control/hooks.jsonl"
     report["historical_invalidations"]=[{"status":"FAIL_INVALID_PROFILE","path":str(historical),
           "count":len(lines(historical)),"reason":"Observed original hook leaked harness Git metadata; no official scored items associated. Old adapter hash unavailable; failure is preserved, not erased by a new candidate."}] if historical.is_file() else []
+    report['historical_profile_changes']=[entry for _,entry in lines(runs/'profile-history.jsonl')]
     corrections=list(prior_audit.get("auditor_provenance_clarifications",[]))
     for name,bench in prior_audit.get("benchmarks",{}).items():
         for arm,old in bench.get("arms",{}).items():
@@ -1037,6 +1213,8 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
     out += ["Earlier engine-only preparation is INVALID for result tables. Exact literal-overlap details and provenance are retained in integrity.json.", ""]
     for issue in report["historical_invalidations"]:
         out += [f"Historical observed FAIL: {issue['path']} count={issue['count']}. {issue['reason']}",""]
+    for issue in report['historical_profile_changes']:
+        out += [f"Historical profile: {issue.get('profile')} — {issue.get('status')}. {issue.get('reason')} Evidence: {issue.get('archive')}", '']
     atomic_write(runs / "INTEGRITY.md","\n".join(out))
     return report
 

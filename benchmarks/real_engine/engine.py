@@ -24,6 +24,7 @@ assert _SPEC and _SPEC.loader
 _SPEC.loader.exec_module(_CLIENT)
 VestigeMCP = _CLIENT.VestigeMCP
 VestigeMCPError = _CLIENT.VestigeMCPError
+VestigeMCPToolError = _CLIENT.VestigeMCPToolError
 
 # Restrict host-facing tools, not the engine's memory semantics. In particular,
 # precedent/reflex/codebase are excluded: they can inspect machine-wide history.
@@ -238,7 +239,7 @@ class RealEngine:
             result = self.client.call_tool(name, arguments)
         except BaseException as exc:
             self._log({"kind": "tool_error", "name": name, "error": str(exc),
-                       "raw_mcp_result": self.client.last_tool_result})
+                       "raw_mcp_result": getattr(exc, "result", None)})
             raise
         self._log({"kind": "tool_response", "name": name, "result": result, "raw_mcp_result": self.client.last_tool_result})
         return result
