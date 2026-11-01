@@ -15,12 +15,12 @@ use chrono::Utc;
 use serde_json::{Value, json};
 use strata_store::{
     BridgeCandidate, BridgeReport, CompositionRecord, DivergentEval, GhostSnapshot, Lane, PathStep,
-    PoolFilter, StrataStore,
+    PoolFilter, StrataStore, W_CLOSED_BY, W_DERIVED_FROM, W_TOUCHED_ARTIFACT,
+    W_TOUCHED_ASSOCIATION,
 };
 use vestige_core::Storage;
 use vestige_core::composition::{
-    BridgeScore, OUTCOME_TYPES, bridge_score, composition_novelty, composition_trust,
-    outcome_score_adjustment, outcome_signal,
+    OUTCOME_TYPES, composition_novelty, composition_trust, outcome_score_adjustment, outcome_signal,
 };
 use vestige_core::storage::NeverComposedCandidate;
 
@@ -88,6 +88,9 @@ pub struct ProposeRequest {
     pub limit: usize,
     /// Divergent-lens cursor from the previous page.
     pub cursor: Option<String>,
+    /// Most pairs one memory may take on a page (`usize::MAX` is
+    /// uncapped).
+    pub per_memory: usize,
 }
 
 /// One invariant law to seed through `harden`.
@@ -191,19 +194,34 @@ fn filter_of(request: &ProposeRequest) -> PoolFilter {
 // Bridge lens
 // ----------------------------------------------------------------------
 
+/// Weight of the proof-strength term in a Strata bridge score.
+const STRENGTH_WEIGHT: f64 = 3.0;
+
+/// A Strata bridge score: `1.5 + 3 * strength + 1.5 * novelty + trust +
+/// outcomeAdjustment`. `strength` (0..=1) is the proof path's strength
+/// ([`GhostSnapshot::path_evidence`]); it takes the place the legacy score
+/// gives `1/hops`, so a strong 2-hop causal path outranks a 1-hop
+/// auto-connect association, and only a 1-hop causal pair between two
+/// memories nothing else touches can reach the 7.0 ceiling.
+pub fn strata_bridge_score(strength: f64, novelty: f64, trust: f64, adjustment: f64) -> f64 {
+    1.5 + STRENGTH_WEIGHT * strength + 1.5 * novelty + trust + adjustment
+}
+
 /// A bridge candidate with its score parts.
 struct ScoredBridge {
     candidate: BridgeCandidate,
-    score: BridgeScore,
+    score: f64,
+    strength: f64,
     novelty: f64,
     trust: f64,
     adjustment: f64,
     prior_outcomes: Vec<String>,
 }
 
-/// The best `limit` bridge pairs with their score parts, best first, plus
-/// the walk's report and how many pairs it admitted. Pairs are scored as
-/// the bounded walk finds them (`GhostSnapshot::bridge_top`), with
+/// The best `limit` bridge pairs with their score parts, best first, each
+/// memory at most `per_memory` times, plus the walk's report and how many
+/// pairs it admitted. Pairs are scored as the bounded walk finds them
+/// (`GhostSnapshot::bridge_ranked`), by their proof path's strength, with
 /// retention read at the log's head clock, so a page is a function of the
 /// log head and memory stays bounded by the page however many pairs a hub
 /// admits.
@@ -211,6 +229,7 @@ fn rank_bridges(
     store: &StrataStore,
     snapshot: &GhostSnapshot<'_>,
     limit: usize,
+    per_memory: usize,
 ) -> (BridgeReport, usize, Vec<ScoredBridge>) {
     let clock = store.head_clock_ms();
     let retention_of = |id: &str| {
@@ -222,24 +241,25 @@ fn rank_bridges(
     };
     let mut retention: HashMap<String, f64> = HashMap::new();
     let mut outcomes: HashMap<String, Vec<String>> = HashMap::new();
-    let (report, admitted) = snapshot.bridge_top(limit, |first, second, hops| {
-        let mut member = |id: &str| {
-            if !retention.contains_key(id) {
-                retention.insert(id.to_string(), retention_of(id));
-                outcomes.insert(id.to_string(), snapshot.prior_outcomes(id, id));
-            }
-            retention[id]
-        };
-        let trust = composition_trust(member(first), member(second));
-        let novelty =
-            composition_novelty(snapshot.weave_degree(first), snapshot.weave_degree(second));
-        let adjustment = if outcomes[first].is_empty() && outcomes[second].is_empty() {
-            0.0
-        } else {
-            outcome_score_adjustment(&snapshot.prior_outcomes(first, second))
-        };
-        bridge_score(hops, novelty, trust, adjustment).score
-    });
+    let (report, admitted) =
+        snapshot.bridge_ranked(limit, per_memory, |first, second, _, strength| {
+            let mut member = |id: &str| {
+                if !retention.contains_key(id) {
+                    retention.insert(id.to_string(), retention_of(id));
+                    outcomes.insert(id.to_string(), snapshot.prior_outcomes(id, id));
+                }
+                retention[id]
+            };
+            let trust = composition_trust(member(first), member(second));
+            let novelty =
+                composition_novelty(snapshot.weave_degree(first), snapshot.weave_degree(second));
+            let adjustment = if outcomes[first].is_empty() && outcomes[second].is_empty() {
+                0.0
+            } else {
+                outcome_score_adjustment(&snapshot.prior_outcomes(first, second))
+            };
+            strata_bridge_score(strength, novelty, trust, adjustment)
+        });
     let scored = report
         .candidates
         .iter()
@@ -255,10 +275,11 @@ fn rank_bridges(
             );
             let prior_outcomes = snapshot.prior_outcomes(&candidate.first_id, &candidate.second_id);
             let adjustment = outcome_score_adjustment(&prior_outcomes);
-            let score = bridge_score(candidate.hops, novelty, trust, adjustment);
+            let strength = snapshot.path_evidence(&candidate.path);
             ScoredBridge {
+                score: strata_bridge_score(strength, novelty, trust, adjustment),
                 candidate,
-                score,
+                strength,
                 novelty,
                 trust,
                 adjustment,
@@ -306,7 +327,7 @@ pub(super) fn bridge_trait_candidates(
         scope: scope.map(str::to_string),
         tags: tags.map(<[String]>::to_vec).unwrap_or_default(),
     });
-    let (_, _, scored) = rank_bridges(&store, &snapshot, limit);
+    let (_, _, scored) = rank_bridges(&store, &snapshot, limit, usize::MAX);
     scored
         .into_iter()
         .map(|item| {
@@ -315,9 +336,9 @@ pub(super) fn bridge_trait_candidates(
             NeverComposedCandidate {
                 first_id: item.candidate.first_id.clone(),
                 second_id: item.candidate.second_id.clone(),
-                score: item.score.score,
+                score: item.score,
                 novelty_score: item.novelty,
-                bridge_score: item.score.bridge,
+                bridge_score: item.strength,
                 trust_score: item.trust,
                 outcome_score_adjustment: item.adjustment,
                 shared_tags: Vec::new(),
@@ -348,6 +369,17 @@ pub(super) fn bridge_trait_candidates(
         .collect()
 }
 
+fn per_memory_json(per_memory: usize) -> Value {
+    if per_memory == usize::MAX {
+        json!({ "max": Value::Null, "rule": "uncapped" })
+    } else {
+        json!({
+            "max": per_memory,
+            "rule": "each memory takes at most this many pairs on a page, best first; bridge pairs over the cap only fill room the capped picks leave, divergent pairs over it wait for a later page",
+        })
+    }
+}
+
 fn pool_json(request: &ProposeRequest, size: usize) -> Value {
     json!({
         "size": size,
@@ -361,7 +393,8 @@ fn pool_json(request: &ProposeRequest, size: usize) -> Value {
 fn propose_bridge(memory: &StrataMemory, request: &ProposeRequest) -> Value {
     let store = memory.lock();
     let snapshot = store.ghost_snapshot(filter_of(request));
-    let (report, admitted, scored) = rank_bridges(&store, &snapshot, request.limit);
+    let (report, admitted, scored) =
+        rank_bridges(&store, &snapshot, request.limit, request.per_memory);
     let head = report.head_seq;
     let (pool_size, with_edges, touching, woven) = (
         report.pool_size,
@@ -377,9 +410,10 @@ fn propose_bridge(memory: &StrataMemory, request: &ProposeRequest) -> Value {
                 "firstId": c.first_id,
                 "secondId": c.second_id,
                 "lens": "bridge",
-                "score": item.score.score,
+                "score": item.score,
                 "noveltyScore": item.novelty,
-                "bridgeScore": item.score.bridge,
+                "bridgeScore": item.strength,
+                "proofStrength": item.strength,
                 "trustScore": item.trust,
                 "outcomeScoreAdjustment": item.adjustment,
                 "sharedTags": [],
@@ -399,6 +433,7 @@ fn propose_bridge(memory: &StrataMemory, request: &ProposeRequest) -> Value {
                     "headSeq": head,
                     "hops": c.hops,
                     "path": path_json(&c.path),
+                    "strength": item.strength,
                     "neverWoven": true,
                 },
             })
@@ -407,7 +442,10 @@ fn propose_bridge(memory: &StrataMemory, request: &ProposeRequest) -> Value {
     let mut admission = json!({
         "lens": "bridge",
         "admits": "pool pairs that reach each other within 3 undirected hops over recorded touched / derived_from / closed_by edges and were never woven",
-        "scoring": "(1.5 + 1/hops) + (1/hops)*2 + novelty*1.5 + trust + outcomeAdjustment; novelty = mean(1/(1+weaveDegree)), trust = mean FSRS retention",
+        "scoring": format!(
+            "1.5 + 3*proofStrength + 1.5*novelty + trust + outcomeAdjustment; proofStrength = product of step weights (closed_by {W_CLOSED_BY}, derived_from {W_DERIVED_FROM}, touched with a file or symbol {W_TOUCHED_ARTIFACT}, touched between two memories (auto-connect) {W_TOUCHED_ASSOCIATION}) x 1/log2(2 + extra degree) at every intermediate node x the endpoints' geometric-mean hub damping / hops, read off the proof path (the strongest shortest path); novelty = mean(1/(1+weaveDegree)), trust = mean FSRS retention"
+        ),
+        "perMemoryCap": per_memory_json(request.per_memory),
         "pool": pool_json(request, pool_size),
         "poolNodesWithAdmittingEdges": with_edges,
         "admittingEdgesTouchingPool": touching,
@@ -535,9 +573,13 @@ fn divergent_json(store: &StrataStore, head: u64, as_of_ms: i64, eval: &Divergen
 
 fn propose_divergent(memory: &StrataMemory, request: &ProposeRequest) -> Result<Value, String> {
     let store = memory.lock();
-    let snapshot = store.ghost_snapshot(filter_of(request));
+    // Every typed member is measured: block pairs seeded by the log head,
+    // walked across pages.
+    let snapshot = store
+        .ghost_snapshot(filter_of(request))
+        .with_rotating_window();
     let page = snapshot
-        .divergent_page(request.cursor.as_deref(), request.limit)
+        .divergent_page_with(request.cursor.as_deref(), request.limit, request.per_memory)
         .map_err(|err| err.to_string())?;
     let head = page.head_seq;
     let as_of = page.retention_as_of_ms;
@@ -553,7 +595,14 @@ fn propose_divergent(memory: &StrataMemory, request: &ProposeRequest) -> Result<
         "admits": "pool pairs joined by no recorded edge of any kind in either direction (typed, legacy_inferred, anchored_to, anything) and never woven",
         "pathMin": "shortest undirected path over every recorded edge, radius 6; beyond it counts as 7",
         "divergence": "1 - |Nt(a) & Nt(b)| / sqrt(|Nt(a)| * |Nt(b)|), Nt = neighbor ids over touched / derived_from / closed_by edges",
-        "lanes": "measured (both typed profiles exist): score = min(pathMin, 7) x divergence, best first. juxtaposition (a profile is empty): no score; a deterministic spread sampler picks pairs, preferring pairs beyond the radius",
+        "lanes": "measured (both typed profiles exist): score = min(pathMin, 7) x divergence, best first, ties to the pair whose weaker side has more typed neighbors (min(|Nt(a)|, |Nt(b)|)), then ids. juxtaposition (a profile is empty): no score; a deterministic spread sampler picks pairs, preferring pairs beyond the radius",
+        "measuredWindow": format!(
+            "every typed member is measured: up to {} members per window, in blocks seeded by the log head; the lane walks every block pair across pages (window {} of {} on this page)",
+            strata_store::MEASURED_MEMBER_CAP,
+            s.measured_window_index + 1,
+            s.measured_windows
+        ),
+        "perMemoryCap": per_memory_json(request.per_memory),
         "legacyEdges": "legacy_inferred edges only shorten pathMin: they can dampen a score or remove the one pair they join, never add a candidate or raise a score",
         "pool": pool_json(request, s.pool_size),
         "eligiblePairs": s.eligible_pairs,
@@ -592,6 +641,8 @@ fn propose_divergent(memory: &StrataMemory, request: &ProposeRequest) -> Result<
             "typedEdgesInPool": s.typed_edges_in_pool,
             "measuredMembersEvaluated": s.measured_members_evaluated,
             "measuredMembersBeyondCap": s.measured_members_beyond_cap,
+            "measuredWindows": s.measured_windows,
+            "measuredWindowIndex": s.measured_window_index,
             "positionsScanned": s.positions_scanned,
         },
         "nextCursor": page.next_cursor,

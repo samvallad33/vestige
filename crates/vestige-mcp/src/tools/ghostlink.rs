@@ -83,10 +83,10 @@ pub fn schema() -> Value {
                 "enum": KINDS,
                 "description": "[explore] Which recorded-path read to run."
             },
-            "from": { "type": "string", "description": "[explore] Source memory ID." },
+            "from": { "type": "string", "description": "[explore] Source memory ID (center_id is accepted as an alias)." },
             "to": { "type": "string", "description": "[explore:chain/bridges] Target memory ID." },
             "context": { "type": "object", "description": "[predict] current_file (exact path), codebase. current_topics is free text and is refused on Strata." },
-            "center_id": { "type": "string", "description": "[map] Exact center node id." },
+            "center_id": { "type": "string", "description": "[map] Exact center node id. [explore] Alias for from." },
             "query": { "type": "string", "description": "[map] Legacy SQLite only: pick the center by search. Refused on Strata (similarity_disabled)." },
             "depth": { "type": "integer", "minimum": 1, "maximum": 3, "description": "[map] Traversal depth (1-3, default 2)." },
             "max_nodes": { "type": "integer", "description": "[map] Max nodes (default 50, capped 200)." },
@@ -117,7 +117,8 @@ pub fn schema() -> Value {
             },
             "scope": { "type": "string", "default": "user", "description": "[propose/bounty] Exact project namespace." },
             "includeCrossScope": { "type": "boolean", "default": false, "description": "[propose/bounty] Consider every namespace." },
-            "limit": { "type": "integer", "description": "Max results (per-mode defaults, clamped).", "minimum": 1, "maximum": 100 }
+            "limit": { "type": "integer", "description": "Max results (per-mode defaults, clamped).", "minimum": 1, "maximum": 100 },
+            "max_per_memory": { "type": "integer", "minimum": 1, "default": 1, "description": "[propose/bounty] Most pairs one memory may take on a page, so a single memory cannot fill it." }
         },
         "required": ["mode"]
     })
@@ -872,6 +873,17 @@ fn scope_arg(args: &Value) -> Result<Option<String>, String> {
     }
 }
 
+/// `max_per_memory` (default [`strata_store::DEFAULT_PER_MEMORY_CAP`]).
+fn per_memory_arg(args: &Value) -> Result<usize, String> {
+    match args.get("max_per_memory") {
+        None | Some(Value::Null) => Ok(strata_store::DEFAULT_PER_MEMORY_CAP),
+        Some(value) => match value.as_u64() {
+            Some(cap) if cap >= 1 => Ok(usize::try_from(cap).unwrap_or(usize::MAX)),
+            _ => Err("max_per_memory must be an integer of at least 1".into()),
+        },
+    }
+}
+
 fn propose_request(args: &Value) -> Result<ProposeRequest, String> {
     Ok(ProposeRequest {
         lens: Lens::parse(args.get("lens").and_then(Value::as_str))?,
@@ -879,6 +891,7 @@ fn propose_request(args: &Value) -> Result<ProposeRequest, String> {
         tags: tags_arg(args),
         limit: limit_arg(args, 10),
         cursor: str_arg(args, "cursor").map(str::to_string),
+        per_memory: per_memory_arg(args)?,
     })
 }
 
@@ -893,6 +906,9 @@ fn check_mode_fields(mode: &str, args: &Value) -> Result<(), String> {
     }
     if mode != "propose" && args.get("cursor").is_some() {
         return Err("cursor applies only to mode propose with lens 'divergent'".into());
+    }
+    if !matches!(mode, "propose" | "bounty" | "heal") && args.get("max_per_memory").is_some() {
+        return Err("max_per_memory applies only to modes propose and bounty".into());
     }
     Ok(())
 }
@@ -987,7 +1003,12 @@ async fn execute_strata(storage: &Arc<Storage>, mode: &str, args: &Value) -> Res
         }
         "explore" => {
             let kind = sub_selector(mode, args)?;
-            let from = str_arg(args, "from").ok_or("Missing 'from'")?;
+            // center_id names the same exact handle map takes.
+            let from = str_arg(args, "from")
+                .or_else(|| str_arg(args, "center_id"))
+                .ok_or(
+                    "Missing 'from' (or its alias center_id): the exact memory id to explore from",
+                )?;
             engine::explore(
                 storage.as_ref(),
                 &kind,
