@@ -40,7 +40,11 @@ jobs:
         run: node operator-lite/npm/test.js
 
       - name: "@vestige/init bundles the same gate file"
-        run: cmp operator-lite/operator-gate.py packages/vestige-init/hooks/operator-lite.py
+        run: |
+          cmp operator-lite/operator-gate.py packages/vestige-init/hooks/operator-lite.py
+          cmp operator/operator-gate.py packages/vestige-init/hooks/operator-gate.py
+          cmp operator-lite/operator-gate.py packages/vestige-init/hooks/lite_core.py
+          cmp operator-lite/operator-gate.py operator/lite_core.py
 
       - name: Pack both packages (dry run)
         if: ${{ inputs.dry_run }}

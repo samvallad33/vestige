@@ -120,6 +120,33 @@ test('guard is opt-in, keeps an installed gate, and adapter fails closed', { ski
 test('bundled free Lite and stop reflex are exact copies of public sources', () => {
   assert.equal(fs.readFileSync(path.join(__dirname, '../hooks/operator-lite.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../operator-lite/operator-gate.py'), 'utf8'));
   assert.equal(fs.readFileSync(path.join(__dirname, '../hooks/operator-stop-memory.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../hooks/operator-stop-memory.py'), 'utf8'));
+  assert.equal(fs.readFileSync(path.join(__dirname, '../hooks/operator-gate.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../operator/operator-gate.py'), 'utf8'));
+  assert.equal(fs.readFileSync(path.join(__dirname, '../hooks/lite_core.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../operator-lite/operator-gate.py'), 'utf8'));
+  assert.equal(fs.readFileSync(path.join(__dirname, '../../../operator/lite_core.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../operator-lite/operator-gate.py'), 'utf8'));
+});
+
+test('a fresh guard installs all 102 Operator rules and stops a force push', { skip: process.platform === 'win32' }, () => {
+  const f = fixture();
+  const gate = path.join(f.home, '.operator', 'gate', 'operator-gate.py');
+  const lite = path.join(f.home, '.operator', 'gate', 'lite_core.py');
+  const p = setup.plan({ ...f, platform: 'linux', guard: true });
+  const gateChange = p.changes.find(c => c.file === gate);
+  const liteChange = p.changes.find(c => c.file === lite);
+  assert.equal(gateChange.after, fs.readFileSync(path.join(__dirname, '../hooks/operator-gate.py'), 'utf8'));
+  assert.equal(liteChange.after, fs.readFileSync(path.join(__dirname, '../hooks/lite_core.py'), 'utf8'));
+  assert.match(gateChange.description, /102 STOP rules/);
+  assert.match(gateChange.after, /OP-114/);
+  setup.apply(p);
+  const env = { ...process.env, HOME: f.home, USERPROFILE: f.home, OPERATOR_HOME: path.join(f.home, '.operator') };
+  for (const name of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'OPERATOR_AGENT_SESSION']) delete env[name];
+  const guard = path.join(f.home, '.operator', 'state', 'vestige-memory', 'guard.cjs');
+  const config = path.join(f.home, '.operator', 'state', 'vestige-memory', 'config.json');
+  const result = spawnSync(process.execPath, [guard, '--config', config, '--client', 'claude'], {
+    input: JSON.stringify({ cwd: f.home, session_id: 'fresh-guard', tool_name: 'Bash', tool_input: { command: 'git push --force origin main' } }),
+    env, encoding: 'utf8'
+  });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /OP-004/);
 });
 
 test('uninstall retains runtime files referenced by a user-edited guard hook', { skip: process.platform === 'win32' }, () => {
