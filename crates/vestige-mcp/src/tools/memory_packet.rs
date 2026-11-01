@@ -5,7 +5,7 @@
 //! records. Full record text is packed into about 3_000 tokens. A prompt that
 //! names a recorded person does not pull in a different person's records.
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use vestige_core::{KnowledgeNode, Storage};
 
 use super::lexical::{self, HOOK_CHAR_BUDGET};
@@ -108,6 +108,9 @@ const MONTHS: [&str; 12] = [
 
 /// Index tags a prompt meets exactly: `avoid:<thing>`, `day:YYYY-MM-DD` and
 /// `yearly:MM-DD`. Deterministic; no model reads the prompt.
+/// Index-joined memories reserved ahead of lexical hits (salience-pro MAX_FILED_CANDIDATES).
+const MAX_RESERVED: usize = 4;
+
 pub(crate) fn index_tags(prompt: &str) -> BTreeSet<String> {
     let mut tags: BTreeSet<String> = thing_keys(prompt)
         .into_iter()
@@ -228,9 +231,27 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             // receipt raised outranks every lexical score, so the record that
             // just came back is the first thing the hook serves.
             let raised = |index: &usize| tie(&nodes[*index]) > 0;
+            // salience-pro 0.3.7 candidate reservation: a memory joined to the
+            // prompt by a date or an avoid index tag is reserved a place right
+            // after the raised ones, at most MAX_RESERVED, so lexical scores on
+            // other words cannot crowd out the date or the thing ruled out.
+            let mut reserved: HashSet<usize> = HashSet::new();
+            let mut joined: Vec<usize> = indexes
+                .iter()
+                .copied()
+                .filter(|index| {
+                    nodes[*index]
+                        .tags
+                        .iter()
+                        .any(|tag| index_hits.contains(tag))
+                })
+                .collect();
+            joined.sort_by(|a, b| compare(&nodes[*a], &nodes[*b], &scores));
+            reserved.extend(joined.into_iter().take(MAX_RESERVED));
             indexes.sort_by(|a, b| {
                 raised(b)
                     .cmp(&raised(a))
+                    .then_with(|| reserved.contains(b).cmp(&reserved.contains(a)))
                     .then_with(|| score_of(&nodes[*b].id).cmp(&score_of(&nodes[*a].id)))
                     .then_with(|| compare(&nodes[*a], &nodes[*b], &scores))
             });

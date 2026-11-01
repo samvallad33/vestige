@@ -332,3 +332,28 @@ fn hook_index_tags_join_a_thing_and_a_yearly_date_from_the_prompt() {
         "{date}"
     );
 }
+
+#[test]
+fn a_date_joined_memory_is_reserved_ahead_of_busier_lexical_hits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Server::open(dir.path(), "on");
+    let dentist = s.hook(hook_fact(
+        "Dentist appointment for Sam",
+        json!([]),
+        json!([]),
+        json!(["memory-hook-utterance", "day:2026-11-03", "yearly:11-03"]),
+    ));
+    for i in 0..5 {
+        s.hook(hook_fact(
+            &format!("Weekend sauna spa trip packing list number {i}: sauna towels, spa sandals"),
+            json!([]),
+            json!([]),
+            json!(["memory-hook-utterance"]),
+        ));
+    }
+    let packet = s.tool(
+        "session_start",
+        json!({"memory_hook":{"prompt":"sauna spa trip packing on 2026-11-03","limit":2}}),
+    );
+    assert_eq!(packet["memories"][0]["id"], dentist, "{packet}");
+}
