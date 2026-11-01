@@ -102,6 +102,35 @@ rl.on('line',line=>{const x=JSON.parse(line);if(x.kind==='begin'){current=x;cons
 from benchmarks.real_engine.full_hook_model import FullHookBudgetedProvider
 
 class NativeSetupBudgetedProvider(FullHookBudgetedProvider):
+    def __init__(self,*args,**kwargs):
+        # Explicit owner override applies only to this Vestige client.
+        kwargs['max_calls']=12
+        super().__init__(*args,**kwargs)
+        self.answer_reserve_tokens=256
+
+    async def chat(self,messages,*,tools=None,max_tokens=512,log=None,identity=None):
+        from benchmarks.real_engine.hook_model import ItemModelBudget
+        from benchmarks.real_engine.run import tokens
+        identity=identity or {}
+        hook=identity.get('phase')=='hook'
+        async with self.lock:
+            if self.remaining_calls<=0 or self.remaining_output<=0:
+                raise ItemModelBudget('item budget exhausted')
+            final=(not hook and (self.remaining_calls==1 or self.remaining_output<=self.answer_reserve_tokens or identity.get('iteration',0)>=5))
+            if hook and (self.remaining_calls<=1 or self.remaining_output<=self.answer_reserve_tokens):
+                append_jsonl(self.root/'budget.jsonl',{'event':'answer_reservation_protected','remaining_calls':self.remaining_calls,'remaining_output':self.remaining_output,'identity':self.meta})
+                raise ItemModelBudget('last model call and answer tokens are reserved for the final answer')
+            if final:tools=None
+            allowance=self.remaining_output if final else self.remaining_output-self.answer_reserve_tokens
+            if allowance<=0:raise ItemModelBudget('final answer token reservation')
+            if tokens({'messages':messages,'tools':tools or []})>self.context:
+                raise ItemModelBudget('item context budget exceeded')
+            append_jsonl(self.root/'budget.jsonl',{'event':'budget_before','identity':self.meta,'limits':self.limits,'remaining_calls':self.remaining_calls,'remaining_output':self.remaining_output,'final_answer_call':final,'final_answer_reserved_calls':1,'final_answer_reserved_tokens':self.answer_reserve_tokens})
+            result=await self.provider.chat(messages,tools=tools,max_tokens=min(max_tokens,allowance),log=log or self.root/'api.jsonl',identity={**self.meta,**identity,'final_answer_call':final})
+            self.remaining_calls-=1;self.remaining_output-=result['usage']['completion_tokens'];self.cost+=result['cost'];self.usage.append(result['usage'])
+            append_jsonl(self.root/'budget.jsonl',{'event':'budget_after','identity':self.meta,'limits':self.limits,'remaining_calls':self.remaining_calls,'remaining_output':self.remaining_output,'usage':result['usage'],'aggregate_cost':self.cost,'final_answer_call':final})
+            return result
+
     async def hook_request(self,payload,callback):
         import asyncio
         engine=callback.engine_getter() if callback.engine_getter else callback.engine
