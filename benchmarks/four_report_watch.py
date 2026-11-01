@@ -19,6 +19,12 @@ ARMS=('bare','bm25','embedding','vestige')
 def load(path,default=None):
     return json.loads(path.read_text()) if path.exists() else default
 
+def published_context(repo,name):
+    label={'locomo':'LoCoMo','longmemeval':'LongMemEval'}.get(name)
+    records=load(repo/'benchmarks/real_engine/published.json',{}).get('sources',[])
+    selected=[r for r in records if label and r.get('benchmark')==label]
+    return '; '.join(f"[{r['system']} {r['score_percent']}%]({r['source']}) ({r['model']}; different metric/scope or judge)" for r in selected) or 'No source recorded for this benchmark'
+
 def generate(repo,runs,config):
     report=audit(repo,runs,benchmarks=NAMES)
     with sqlite3.connect(f'file:{runs / "budget.db"}?mode=ro',uri=True) as db:
@@ -67,12 +73,13 @@ def generate(repo,runs,config):
         else:
             by_arm={row['arm']:row for row in load(runs/name/'results.json',[])}
             cells=[f"mean={by_arm[a]['mean']:.6f}; CI={by_arm[a]['ci95']}; n={by_arm[a]['n']}" for a in ARMS]
-        text.append(f'| [{name}]({name}/RESULTS.md) | '+' | '.join(cells)+' | No same-setting published comparison claimed; see pinned published.json |')
+        text.append(f'| [{name}]({name}/RESULTS.md) | '+' | '.join(cells)+' | '+published_context(repo,name)+' |')
     text+=['','All non-qualified benchmarks are excluded from the score table:', '']
     for entry in unfinished:
         text.append(f"- **{entry['benchmark']}: {entry['status']}**. Coverage `{canonical(entry['coverage'])}`. Exact finished and missing IDs: `{entry['coverage_file']}`.")
         text.extend('- '+reason for reason in entry['reasons'])
     text+=['','MPBench uses “scored with our implementation of the paper’s metrics, no official scorer available.” Two missing public targets and unobserved defense decisions remain explicitly unscorable; no synthetic labels are inserted.',
+        '', 'Published cells quote the source-attributed records in benchmarks/real_engine/published.json, checked2026-11-01. Published metrics, scopes, model and judge differ from this campaign; no head-to-head ranking or delta is implied. Preserve the source caveats, including the recorded Zep headline/category-denominator discrepancy.',
         '', 'Only these four benchmarks were authorized in this run. Earlier broader-campaign material remains preserved and is outside the current score table.', '']
     # Every RESULTS write has a fresh audit above; metric rows require PASS.
     audit(repo,runs,benchmarks=NAMES)
