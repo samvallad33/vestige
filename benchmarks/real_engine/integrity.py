@@ -86,7 +86,9 @@ def lines(path: Path):
     with path.open() as handle:
         fcntl.flock(handle.fileno(),fcntl.LOCK_SH)
         contents=handle.read()
-    for number, line in enumerate(contents.splitlines(), 1):
+    # JSONL records are LF-delimited. str.splitlines() also splits literal
+    # U+2028/U+2029/U+0085 inside valid JSON strings and invents corrupt rows.
+    for number, line in enumerate(contents.split("\n"), 1):
         if line.strip():
             result.append((number, json.loads(line)))
     return result

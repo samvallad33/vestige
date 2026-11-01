@@ -18,6 +18,22 @@ def request(content, item="a", arm="vestige", data=None, condition=None, phase="
         "payload":{"model":"gpt-5.4-nano","messages":[{"role":"user","content":content}]}}}
 
 
+class JsonlFramingTests(unittest.TestCase):
+    def test_unicode_separators_inside_valid_json_are_not_record_boundaries(self):
+        rows = [{"content": "before\u2028middle\u2029after\u0085end"}, {"content": "next"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mcp.jsonl"
+            path.write_text("\n".join(canonical(row) for row in rows) + "\n")
+            self.assertEqual(lines(path), list(enumerate(rows, 1)))
+
+    def test_malformed_physical_record_still_fails_instead_of_being_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mcp.jsonl"
+            path.write_text(canonical({"content": "valid\u2028string"}) + '\n{"content":')
+            with self.assertRaises(json.JSONDecodeError):
+                lines(path)
+
+
 class ProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.item={"id":"a","question":"What changed?","history":["History contains SECRET ANSWER"],
