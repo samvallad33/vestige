@@ -1,6 +1,7 @@
 """Audit-helper fixtures only; these are never benchmark evidence."""
 from copy import deepcopy
 from pathlib import Path
+import json
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -8,6 +9,7 @@ import unittest
 from .recall_proof import (INITIAL_RECALL, RecallProofError, audit_relevance,
                           collect_recall_pages, fixed_ids, native_pairs, source_bindings, _run_item, _validate_item)
 from .recall_proof import require_independent_stores
+from .recall_proof import audit_hook_models
 
 
 def node(identity="mem-test-one", text="[date] user: original raw source"):
@@ -97,6 +99,52 @@ class SourceBindingTests(unittest.TestCase):
             with self.assertRaises(RecallProofError):
                 native_pairs(events)
 
+    def test_only_exact_later_forwarded_hook_error_is_accepted(self):
+        raw = {"isError": True, "content": [{"type": "text", "text": "unsupported native lookup"}]}
+        request = {"kind": "tool_request", "name": "recall", "arguments": {"mode": "reason"}}
+        error = {"kind": "tool_error", "name": "recall", "timestamp": 10, "raw_mcp_result": raw}
+        visible = {"name": "recall", "arguments": {"mode": "reason"}, "result": raw, "seen_at": 11}
+        self.assertEqual(native_pairs([request, error], [visible])[0][3]["result"], raw)
+        for mutation in [dict(visible, seen_at=9), dict(visible, arguments={"mode": "lookup"}),
+                         dict(visible, result={"isError": True, "content": []})]:
+            with self.assertRaises(RecallProofError):
+                native_pairs([request, error], [mutation])
+
+
+class MeteredHookProofTests(unittest.TestCase):
+    def test_actual_response_usage_caps_and_shared_ledger_are_required(self):
+        from .provider import MODEL, account
+        from .runtime import BudgetLedger, append_jsonl
+        from .recall_proof import ITEM_LIMITS
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp); root = runs / "proof"; root.mkdir()
+            identity = {"benchmark": "longmemeval", "arm": "vestige", "item_id": "unit",
+                        "config_hash": "config", "phase": "hook"}
+            result = {"usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                      "choices": [{"message": {"role": "assistant", "content": "fixture"}}]}
+            cost, usage = account(result)
+            request = {"event": "request", "call_id": "unit-hook-call", "identity": identity,
+                "payload": {"model": MODEL, "temperature": 0, "max_completion_tokens": 512,
+                            "messages": [{"role": "user", "content": "neutral fixture"}]}}
+            response = {"event": "response", "call_id": "unit-hook-call", "identity": identity,
+                        "response": result, "usage": usage, "cost": cost}
+            append_jsonl(root / "hook-api.jsonl", request)
+            append_jsonl(root / "hook-api.jsonl", response)
+            append_jsonl(root / "budget.jsonl", {"event": "budget_after", "limits": ITEM_LIMITS, "usage": usage})
+            ledger = BudgetLedger(runs / "budget.db")
+            ledger.reserve("unit-hook-call/attempt-0", 0.01)
+            with self.assertRaisesRegex(RecallProofError, "settled"):
+                audit_hook_models(root, runs, "unit", "config")
+            ledger.settle("unit-hook-call/attempt-0", cost, usage)
+            checked = audit_hook_models(root, runs, "unit", "config")
+            self.assertEqual(checked["successful_calls"], 1)
+            self.assertEqual(checked["cost"], cost)
+            self.assertEqual(checked["usage"], [usage])
+            request["payload"]["model"] = "wrong-model"
+            (root / "hook-api.jsonl").write_text(json.dumps(request) + "\n" + json.dumps(response) + "\n")
+            with self.assertRaisesRegex(RecallProofError, "different model"):
+                audit_hook_models(root, runs, "unit", "config")
+
 
 class OfflineRelevanceTests(unittest.TestCase):
     def setUp(self):
@@ -143,7 +191,8 @@ class ActualNativeProofHelperTests(unittest.TestCase):
             "[fixture-date] user: Native proof fixture: the calendar says Thursday.",
             "[fixture-date] user: Native proof fixture: the meeting room is Cedar."])
         with tempfile.TemporaryDirectory(dir=repo / "runs") as tmp:
-            result = _run_item(repo, repo / "runs", item, "unit-proof-only", Path(tmp) / "case")
+            result = _run_item(repo, repo / "runs", item, "unit-proof-only", Path(tmp) / "case",
+                               hook_profile="memory_qa")
             self.assertEqual(result["status"], "PASS", result.get("error"))
             events = read_jsonl(Path(result["native_log"]))
             pairs = native_pairs(events)
@@ -159,13 +208,15 @@ class ActualNativeProofHelperTests(unittest.TestCase):
                 "answer_session_ids": ["fixture-session"]}
             result["relevant_memories"] = audit_relevance(raw, nodes)
             summary = _validate_item(repo, repo / "runs", result, item, raw,
-                                     "unit-proof-only", result["engine"]["binary_sha256"])
+                                     "unit-proof-only", result["engine"]["binary_sha256"],
+                                     required_hook_profile="memory_qa")
             self.assertEqual(summary["returned_nodes"], 2)
             self.assertEqual(summary["relevant_memories"], 2)
             result["returned_nodes"] = 0
             with self.assertRaisesRegex(RecallProofError, "counts differ"):
                 _validate_item(repo, repo / "runs", result, item, raw,
-                               "unit-proof-only", result["engine"]["binary_sha256"])
+                               "unit-proof-only", result["engine"]["binary_sha256"],
+                               required_hook_profile="memory_qa")
 
 
 if __name__ == "__main__":

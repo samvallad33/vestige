@@ -371,9 +371,10 @@ def literal_overlap_audit(requests, items, native_strings=None, scaffolds=()):
     return overlaps, missing
 
 
-def _forwarded_native_errors(row):
+def _forwarded_native_errors(row,seen_ids=None):
     """Bind raw model-visible tool replies to this transcript's actual calls."""
     calls, forwarded = {}, []
+    seen_ids=set() if seen_ids is None else seen_ids
     for message in row.get("transcript",[]):
         if message.get("role")=="assistant":
             for call in message.get("tool_calls") or []:
@@ -383,10 +384,14 @@ def _forwarded_native_errors(row):
                 except (ValueError,TypeError):
                     continue
                 if call.get("id") and isinstance(arguments,dict):
-                    calls[call["id"]]=(function.get("name"),arguments)
+                    name=function.get("name")
+                    if isinstance(name,str):name=name.removeprefix("mcp__vestige__")
+                    calls[call["id"]]=(name,arguments)
         elif message.get("role")=="tool":
             call=calls.pop(message.get("tool_call_id"),None)
-            if call and isinstance(message.get("content"),str):
+            call_id=message.get("tool_call_id")
+            if call and isinstance(message.get("content"),str) and call_id not in seen_ids:
+                seen_ids.add(call_id)
                 forwarded.append((*call,message["content"]))
     return forwarded
 
@@ -398,7 +403,9 @@ def _native_item(row, checkpoint, runs, manifest):
     observations, seen_paths = [], set()
     request_count = write_count = read_count = 0
     refusal_count = forwarded_error_count = 0
-    forwarded_errors=_forwarded_native_errors(row)
+    seen_forwarded_ids=set()
+    forwarded_errors=_forwarded_native_errors(row,seen_forwarded_ids)
+    hook_forwarded_errors=[]
     outputs = []
     for identity in identities:
         declared_data = Path(identity.get("data_dir", ""))
@@ -414,6 +421,19 @@ def _native_item(row, checkpoint, runs, manifest):
         if identity.get("hooks_enabled") is not True and not hooks:
             return check("native_item", "FAIL", "Actual Vestige item used engine-only profile.", [evidence(checkpoint)])
         log = data.parent / "mcp.jsonl"
+        # Original hooks have their own model dialogue. Authenticate returned
+        # native errors against that item's actual subsequent API payloads,
+        # preserving original allowed-tool names and exact raw error bytes.
+        hook_api=data.parent.parent/"hook-api.jsonl"
+        if row.get("config_hash"):
+            for _,event in lines(hook_api):
+                ident=event.get("identity",{})
+                if (event.get("event")=="request" and ident.get("item_id")==row.get("item_id")
+                        and ident.get("arm")=="vestige" and ident.get("config_hash")==row["config_hash"]):
+                    when=_epoch(event.get("timestamp"))
+                    hook_forwarded_errors.extend((binding,when) for binding in
+                        _forwarded_native_errors({"transcript":event.get("payload",{}).get("messages",[])},seen_forwarded_ids)
+                        if when is not None)
         records = lines(log)
         starts = [(number,event.get("identity",{})) for number,event in records if event.get("kind")=="engine_start"]
         if len(starts)!=1 or any(starts[0][1].get(key)!=identity.get(key) for key in ("pid","binary_sha256","data_dir")):
@@ -453,8 +473,12 @@ def _native_item(row, checkpoint, runs, manifest):
                     and pending==event.get("name")=="smart_ingest" and isinstance(raw,dict)
                     and raw.get("isError") is True and security_denial(raw) and raw in permitted_denials)
                 forwarded=(pending,pending_arguments,canonical(raw))
+                error_time=_epoch(event.get("timestamp"))
+                hook_match=next((index for index,(binding,when) in enumerate(hook_forwarded_errors)
+                                 if binding==forwarded and error_time is not None and when>=error_time),None)
                 allowed_error=(not security_refusal and pending and pending==event.get("name")
-                    and isinstance(raw,dict) and raw.get("isError") is True and forwarded in forwarded_errors)
+                    and isinstance(raw,dict) and raw.get("isError") is True
+                    and (forwarded in forwarded_errors or hook_match is not None))
                 if not allowed_refusal and not allowed_error:
                     return check("native_item","FAIL","Completed native item contains an unmatched error or unverified security refusal.",[evidence(log,number)])
                 if allowed_refusal:
@@ -463,7 +487,8 @@ def _native_item(row, checkpoint, runs, manifest):
                     refusal_count += 1
                     detail="Exact current-item MPBench normal-write MCP credential refusal; defense-positive decision preserved"
                 else:
-                    forwarded_errors.remove(forwarded)
+                    if forwarded in forwarded_errors:forwarded_errors.remove(forwarded)
+                    else:hook_forwarded_errors.pop(hook_match)
                     local_forwarded_errors += 1
                     forwarded_error_count += 1
                     detail="Actual MCP tool error forwarded unchanged to this completed item's matching model tool call"
@@ -670,7 +695,46 @@ def _native_provenance(completed):
     return catalog
 
 
-def _hook_checks(repo, runs, completed):
+def _registered_hook_catalog(repo):
+    """Read the original four registration fragments without adapter additions."""
+    result=[]
+    fragments=("settings.preflight.fragment.json","settings.rules.fragment.json",
+               "settings.sanhedrin.fragment.json","settings.stop-memory.fragment.json")
+    for name in fragments:
+        path=repo/"hooks"/name
+        for event,groups in json_file(path,{}).get("hooks",{}).items():
+            for group_index,group in enumerate(groups):
+                for hook_index,hook in enumerate(group.get("hooks",[])):
+                    entry={**hook,"matcher":group.get("matcher"),"fragment":str(path.relative_to(repo)),
+                           "event":event,"registration_id":f"hooks/{name}:{event}:{group_index}:{hook_index}"}
+                    result.append(entry)
+    return result
+
+
+def _hook_profile_check(repo,runs,plan):
+    profile=plan.get("hooks_profile")
+    if profile is None:
+        return check("registered_hooks_profile","PENDING","Current all-active-hooks plan not yet recorded.")
+    if profile!="all_applicable_hooks":
+        return check("registered_hooks_profile","FAIL","Current Vestige arm is not the owner-required all-active-hooks profile.")
+    config=json_file(runs/"four-config.json",{})
+    source_audit=json_file(runs/"hook-audit.json",{})
+    if config.get("profile")!=profile or source_audit.get("active_profile")!=profile:
+        return check("registered_hooks_profile","FAIL","Frozen configuration or audited profile still selects a hook subset.")
+    from .hooks import merge_fragments
+    try:
+        expected=_registered_hook_catalog(repo)
+        _,actual=merge_fragments(repo,profile=profile)
+    except (ValueError,TypeError,OSError,RuntimeError) as exc:
+        return check("registered_hooks_profile","FAIL","Original hook registrations cannot be verified: "+str(exc))
+    if not expected or actual!=expected:
+        return check("registered_hooks_profile","FAIL","Runtime hook registration catalog differs from the original fragments (missing registrations or unwired additions).",
+                     [evidence(repo/"hooks",detail={"expected":expected,"actual":actual})])
+    return check("registered_hooks_profile","PASS","Exactly every original four-fragment registration is active; no unwired load-all-memory or synthesis-gate registration is added.",
+                 [evidence(repo/"hooks",count=len(expected),detail=expected)])
+
+
+def _hook_checks(repo, runs, completed,plan=None):
     audit_path = runs / "hook-audit.json"
     hook_audit = json_file(audit_path, {})
     if hook_audit.get("audit_complete") is not True:
@@ -679,6 +743,8 @@ def _hook_checks(repo, runs, completed):
                if not (repo/name).is_file() or sha(repo/name) != digest]
     if changed:
         return check("hook_five_samples", "FAIL", "Hook source changed after its source audit.", [evidence(repo/name) for name in changed])
+    strict=plan is not None
+    registered=_registered_hook_catalog(repo) if strict else None
     by_command, expected, paths_seen, problems = defaultdict(list), set(), {}, []
     seen_events=set()
     for checkpoint, number, row, identity, root in _runtime_paths(completed):
@@ -692,6 +758,8 @@ def _hook_checks(repo, runs, completed):
             problems.append(evidence(log, count=len(prepared), detail="Expected one prepared lifecycle"))
             continue
         setup = prepared[0]
+        if strict and (setup.get("hook_profile")!="all_applicable_hooks" or setup.get("wired")!=registered):
+            problems.append(evidence(log,detail="Actual prepared catalog/profile differs from exact original registrations"))
         home = Path(setup.get("paths", {}).get("home", "")).resolve()
         group=row.get("group_id") or row.get("item_id")
         if not home.is_relative_to(root.resolve()) or (str(home) in paths_seen and paths_seen[str(home)]!=group):
@@ -700,15 +768,38 @@ def _hook_checks(repo, runs, completed):
         ancestry = setup.get("cwd_git_ancestor_check") or {}
         if ancestry.get("git_ancestors") != []:
             problems.append(evidence(log, detail="No preserved successful physical no-Git-ancestor check"))
-        for entry in setup.get("wired", []):
-            expected.add(entry["command"])
+        item_expected={canonical(entry) if strict else entry["command"] for entry in setup.get("wired",[])}
+        expected.update(item_expected)
+        item_observed=set()
         for line, event in records:
             if (str(log),line) in seen_events:continue
             seen_events.add((str(log),line))
             if event.get("kind") == "bridge_error":
                 problems.append(evidence(log, line, detail="Actual hook bridge error: " + str(event.get("error"))))
             if event.get("kind") == "hook_event":
-                command = event["entry"]["command"]
+                entry=event["entry"]
+                command=canonical(entry) if strict else entry["command"]
+                item_observed.add(command)
+                if strict and (entry not in registered or event.get("event")!=entry.get("event")
+                        or not isinstance(event.get("injected_context"),list) or type(event.get("blocked")) is not bool
+                        or not isinstance(event.get("blocking_reasons"),list)):
+                    problems.append(evidence(log,line,detail="Hook event lacks exact registered occurrence/injection/block outcome"))
+                if strict:
+                    contexts=[];reasons=[];blocked=event.get("exit_code")==2
+                    stdout=event.get("stdout","");stderr=event.get("stderr","")
+                    if blocked:reasons.append(stderr or stdout)
+                    if stdout.strip():
+                        try:
+                            parsed=json.loads(stdout)
+                            if isinstance(parsed,dict):
+                                text=parsed.get("hookSpecificOutput",{}).get("additionalContext")
+                                if text:contexts.append(text)
+                                if parsed.get("decision")=="block":blocked=True;reasons.append(parsed.get("reason","hook blocked"))
+                        except ValueError:
+                            if event.get("event") in {"SessionStart","UserPromptSubmit"}:contexts.append(stdout.strip())
+                    if (event.get("injected_context")!=contexts or event.get("blocked") is not blocked
+                            or event.get("blocking_reasons")!=reasons):
+                        problems.append(evidence(log,line,detail="Declared injection/block outcome differs from actual hook stdout/stderr/exit contract"))
                 if event.get("exit_code") not in {0, 2}:
                     problems.append(evidence(log, line, detail="Actual hook subprocess failure"))
                 visible = event.get("stdout", "") + event.get("stderr", "")
@@ -717,7 +808,22 @@ def _hook_checks(repo, runs, completed):
                 by_command[command].append(evidence(log, line, detail={
                     "item_id": row.get("item_id"), "HOME": str(home),
                     "stdout": event.get("stdout", ""), "stderr": event.get("stderr", ""),
-                    "exit_code": event.get("exit_code")}))
+                    "exit_code": event.get("exit_code"),"event":event.get("event"),
+                    "registration_id":entry.get("registration_id"),"injected_context":event.get("injected_context"),
+                    "blocked":event.get("blocked"),"blocking_reasons":event.get("blocking_reasons")}))
+            if strict and event.get("kind") in {"hook_skipped","hook_not_applicable"}:
+                entry=event.get("entry")
+                if entry in registered and isinstance(event.get("reason"),str) and event["reason"].strip():
+                    item_observed.add(canonical(entry))
+                    # This preserves the exact reason, but does not count an
+                    # untriggered registration as an executed injection sample.
+                    observations=evidence(log,line,detail={"item_id":row.get("item_id"),"entry":entry,
+                        "status":event["kind"],"reason":event["reason"]})
+                    by_command.setdefault("documented-not-applicable",[]).append(observations)
+                elif entry is not None:
+                    problems.append(evidence(log,line,detail="Unregistered or unexplained hook skip"))
+        if strict and item_expected-item_observed:
+            problems.append(evidence(log,detail={"missing_registered_outcomes":sorted(item_expected-item_observed)}))
     if problems:
         return check("hook_five_samples", "FAIL", "Actual hook isolation/lifecycle failure; do not patch away evidence.", problems)
     missing = sorted(command for command in expected if len(by_command[command]) < 5)
@@ -1073,6 +1179,39 @@ def _native_retrieval_proof_check(repo,runs,plan,official_items):
         result=validate_recall_proof(repo,runs,plan,official_items)
     except (ValueError,KeyError,TypeError,OSError,ImportError,RuntimeError) as exc:
         return check("native_ten_item_recall_proof","FAIL","Actual native recall proof rejected: "+str(exc),[evidence(path)])
+    proof=json_file(path,{})
+    proof_rows=[];visible_requests=[];provider_outputs=[]
+    for item in proof.get("items",[]):
+        identity=item.get("engine",{})
+        root=Path(item["root"])
+        row={"item_id":item["item_id"],"group_id":item["item_id"],"engine":identity}
+        proof_rows.append((path,1,row))
+        for number,event in lines(root/"hook-api.jsonl"):
+            if event.get("event")=="request":
+                visible_requests.append({"path":str(root/"hook-api.jsonl"),"line":number,"row":event})
+            elif event.get("event")=="response":
+                provider_outputs.append((root/"hook-api.jsonl",number,event))
+        hook_log=root/"native/hooks-runtime/hooks.jsonl"
+        for number,event in lines(hook_log):
+            if event.get("kind")!="hook_event":continue
+            for context in event.get("injected_context",[]):
+                visible_requests.append({"path":str(hook_log),"line":number,"row":{"timestamp":event.get("timestamp"),
+                    "identity":{"benchmark":"longmemeval","arm":"vestige","item_id":item["item_id"],
+                        "engine_data_dir":identity.get("data_dir"),"phase":"hook_injection"},
+                    "payload":{"model":MODEL,"messages":[{"role":"user","content":context}]}}})
+    hooks_check=_hook_checks(repo,runs,proof_rows,plan)
+    provenance=_native_provenance(proof_rows)
+    for output_path,number,event in provider_outputs:
+        identity=event.get("identity",{})
+        key=(identity.get("item_id"),identity.get("engine_data_dir"),identity.get("condition"))
+        message=event.get("response",{}).get("choices",[{}])[0].get("message",{})
+        provenance[key].extend({"text":text,"timestamp":event.get("timestamp"),"path":str(output_path),"line":number}
+                              for _,text in strings(message))
+    overlaps,missing=literal_overlap_audit(visible_requests,official_items,provenance,_scaffolds(repo))
+    if hooks_check["status"]!="PASS" or missing or any(overlap["status"]!="PASS" for overlap in overlaps):
+        status="FAIL" if hooks_check["status"]=="FAIL" or any(overlap["status"]=="FAIL" for overlap in overlaps) else "PENDING"
+        return check("native_ten_item_recall_proof",status,"Native reachability succeeded but exact all-hook runtime/gold-isolation qualification is incomplete or failed.",
+            [evidence(path,detail={"hook_check":hooks_check,"gold_overlaps":overlaps,"missing_items":missing})])
     return check("native_ten_item_recall_proof","PASS",
         "Ten fixed official items independently replayed from raw native evidence: normal history writes, real admitted IDs/content, full exact-tag pagination, complete MCP initialization/catalog, nonexistent-handle and same-child kill controls. Reachability is not semantic ranking or answer accuracy.",
         [evidence(path,count=len(result["items"]),detail={"sha256":spec["sha256"],"item_ids":result["item_ids"],"items":result["items"]})])
@@ -1264,6 +1403,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
                 seen_api.add(key)
         worker_check=(_worker_mapping_check(repo,runs,name,plan,all_completed,official_items)
                       if name=="longmemeval" and plan.get("full_native_mcp_required") else None)
+        hooks_profile_check=_hook_profile_check(repo,runs,plan) if name=="longmemeval" else None
         recall_proof_check=_native_retrieval_proof_check(repo,runs,plan,official_items) if name=="longmemeval" else None
         scaffold_map=_scaffolds(repo) if official_items is not None and any(requests[name,arm] for arm in ARMS) else {}
         # Failed/abandoned attempts remain visible to leakage checks below, but
@@ -1282,6 +1422,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
             reqs, completed = requests[name, arm], checkpoints[name, arm]
             checks = [_source_check(repo, name),build_check,candidate_check,lineage_check]
             if worker_check:checks.append(worker_check)
+            if hooks_profile_check:checks.append(hooks_profile_check)
             if recall_proof_check:checks.append(recall_proof_check)
             if parse_failures[name]:
                 checks.append(check("evidence_parse", "FAIL", "Actual evidence is corrupt or official identity cannot be verified.", parse_failures[name]))
@@ -1359,7 +1500,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
                     checks.extend([_full_native_contract_check(row,path,reqs,repo) for path,_,row in completed]
                                   or [check("full_native_mcp_contract","PENDING","No fresh current-item full native MCP solver evidence.")])
                 checks.append(_kill_check(repo,runs,plan))
-                checks.append(_hook_checks(repo,runs,completed))
+                checks.append(_hook_checks(repo,runs,completed,plan if name=="longmemeval" else None))
             checks.extend([parity,source_plan,full_plan])
             pre_score=list(checks)
             merge,scored=_merge_and_score(runs,name,arm,expected,plan)
@@ -1373,6 +1514,7 @@ def _audit(repo: str | Path, runs: str | Path, stage: str = "report", benchmarks
                          "excluded_obsolete_profile_records":excluded_profiles[name,arm]}
         status = combine([{"status": value["status"]} for value in arms.values()])
         preflight_checks=[_source_check(repo,name),build_check,candidate_check]
+        if hooks_profile_check:preflight_checks.append(hooks_profile_check)
         if recall_proof_check:preflight_checks.append(recall_proof_check)
         hook_source=json_file(runs/"hook-audit.json",{})
         pins_match=bool(hook_source.get("source_pins")) and all((repo/p).is_file() and sha(repo/p)==digest for p,digest in hook_source.get("source_pins",{}).items())

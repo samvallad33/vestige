@@ -7,7 +7,7 @@ from collections import defaultdict
 from unittest.mock import patch
 
 from .integrity import (IntegrityInvalid, IntegrityPending, _full_set, _hook_checks,
-    _baseline_lineage_check, _candidate_config_check, _full_native_contract_check, _kill_check, _merge_and_score, _merge_prior_reports, _native_item, _native_provenance, _native_retrieval_proof_check, _mpbench_exposure, _parity, _pilot_check, _walk, _worker_mapping_check, audit, canonical, lines, literal_overlap_audit,
+    _baseline_lineage_check, _candidate_config_check, _full_native_contract_check, _hook_profile_check, _registered_hook_catalog, _kill_check, _merge_and_score, _merge_prior_reports, _native_item, _native_provenance, _native_retrieval_proof_check, _mpbench_exposure, _parity, _pilot_check, _walk, _worker_mapping_check, audit, canonical, lines, literal_overlap_audit,
     require, sha, strings)
 
 
@@ -136,6 +136,52 @@ class GateTests(unittest.TestCase):
 
 
 class CandidateBindingTests(unittest.TestCase):
+    def hook_catalog_fixture(self,repo):
+        hooks=repo/"hooks";hooks.mkdir()
+        names=("settings.preflight.fragment.json","settings.rules.fragment.json","settings.sanhedrin.fragment.json","settings.stop-memory.fragment.json")
+        for name,event,command in zip(names,("UserPromptSubmit","SessionStart","Stop","PostToolUse"),("hook-a","hook-b","hook-c","hook-b")):
+            (hooks/name).write_text(canonical({"hooks":{event:[{"hooks":[{"type":"command","command":command,"timeout":8}]}]}}))
+        return _registered_hook_catalog(repo)
+
+    def test_all_hook_profile_rejects_unwired_additions_and_memory_subset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo=Path(tmp);runs=repo/"runs";runs.mkdir()
+            expected=self.hook_catalog_fixture(repo)
+            (runs/"four-config.json").write_text(canonical({"profile":"all_applicable_hooks"}))
+            (runs/"hook-audit.json").write_text(canonical({"active_profile":"all_applicable_hooks"}))
+            plan={"hooks_profile":"all_applicable_hooks"}
+            with patch("benchmarks.real_engine.hooks.merge_fragments",return_value=({},expected)):
+                self.assertEqual(_hook_profile_check(repo,runs,plan)["status"],"PASS")
+            for actual in (expected[:-1],expected+[{"command":"synthesis-gate.sh"}],expected+[{"command":"load-all-memory.sh"}]):
+                with patch("benchmarks.real_engine.hooks.merge_fragments",return_value=({},actual)):
+                    self.assertEqual(_hook_profile_check(repo,runs,plan)["status"],"FAIL")
+            self.assertEqual(_hook_profile_check(repo,runs,{"hooks_profile":"memory_qa"})["status"],"FAIL")
+
+    def test_all_registered_hook_outcomes_bind_each_event_and_raw_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo=Path(tmp);runs=repo/"runs";runs.mkdir()
+            registered=self.hook_catalog_fixture(repo)
+            pins={str(path.relative_to(repo)):sha(path) for path in (repo/"hooks").iterdir()}
+            (runs/"hook-audit.json").write_text(canonical({"audit_complete":True,"source_pins":pins}))
+            completed=[];logs=[]
+            for index in range(5):
+                root=runs/f"item-{index}/native";runtime=root/"hooks-runtime";runtime.mkdir(parents=True)
+                setup={"kind":"prepared","hook_profile":"all_applicable_hooks","wired":registered,
+                       "paths":{"home":str(runtime/"home")},"cwd_git_ancestor_check":{"git_ancestors":[]}}
+                events=[setup]+[{"kind":"hook_event","event":entry["event"],"entry":entry,"exit_code":0,
+                    "stdout":"","stderr":"","injected_context":[],"blocked":False,"blocking_reasons":[]} for entry in registered]
+                log=runtime/"hooks.jsonl";log.write_text("".join(canonical(event)+"\n" for event in events))
+                logs.append((log,events))
+                completed.append((runs/"worker-0.jsonl",index+1,{"item_id":str(index),"engine":{"data_dir":str(root/"strata")}}))
+            plan={"hooks_profile":"all_applicable_hooks"}
+            self.assertEqual(_hook_checks(repo,runs,completed,plan)["status"],"PASS")
+            log,events=logs[0]
+            log.write_text("".join(canonical(event)+"\n" for event in events if event.get("event")!="Stop"))
+            self.assertEqual(_hook_checks(repo,runs,completed,plan)["status"],"FAIL")
+            events[1]["blocked"]=True
+            log.write_text("".join(canonical(event)+"\n" for event in events))
+            self.assertEqual(_hook_checks(repo,runs,completed,plan)["status"],"FAIL")
+
     def test_recall_proof_flag_without_raw_ten_item_evidence_never_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             from types import SimpleNamespace
@@ -414,6 +460,20 @@ class CandidateBindingTests(unittest.TestCase):
             self.assertEqual(result(row,prefix+[{**error,"raw_mcp_result":{"isError":True,"content":[{"text":"stale different error"}]}}]),"FAIL")
             self.assertEqual(result(row,prefix+[error,prefix[-1],error]),"FAIL")
             self.assertEqual(result(row,[prefix[0],prefix[-1],error]),"FAIL")
+            from copy import deepcopy
+            hook_messages=deepcopy(messages)
+            hook_messages[0]["tool_calls"][0]["function"]["name"]="mcp__vestige__recall"
+            hook_row={**row,"item_id":"current-item","config_hash":"current","transcript":[]}
+            hook_request={"event":"request","timestamp":11,"identity":{"item_id":"current-item","config_hash":"current","arm":"vestige"},
+                          "payload":{"messages":hook_messages}}
+            hook_api=root/"hook-api.jsonl"
+            hook_api.write_text(canonical(hook_request)+"\n")
+            timed_error={**error,"timestamp":10}
+            self.assertEqual(result(hook_row,prefix+[timed_error]),"PASS")
+            hook_api.write_text(canonical({**hook_request,"timestamp":9})+"\n")
+            self.assertEqual(result(hook_row,prefix+[timed_error]),"FAIL")
+            hook_api.write_text(canonical({**hook_request,"identity":{**hook_request["identity"],"config_hash":"stale"}})+"\n")
+            self.assertEqual(result(hook_row,prefix+[timed_error]),"FAIL")
 
     def test_mpbench_only_accepts_exact_recorded_native_write_refusal(self):
         with tempfile.TemporaryDirectory() as tmp:

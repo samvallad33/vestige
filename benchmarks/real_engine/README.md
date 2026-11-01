@@ -5,8 +5,10 @@ LoCoMo, MemConflict, MPBench and every other benchmark remain stopped. Their
 existing evidence and all charges remain preserved.
 
 The four arms are bare, BM25, local BGE-small retrieval, and Vestige with the
-applicable memory-QA hooks. Every solver and judge request uses gpt-5.4-nano.
-The shared `runs/budget.db` retains its original $25 cap and all earlier spend.
+all active hooks registered by the original settings fragments. Every solver and judge request uses gpt-5.4-nano.
+The shared `runs/budget.db` preserves all earlier spend and reservations. A new
+owner-authorized epoch permits at most $21 of new LongMemEval-only spending from
+2026-11-01T16:12:10Z, including every hook, solver and judge request.
 
 ## Full native MCP contract
 
@@ -29,14 +31,18 @@ outside the worker are refused. Such refusals are separately logged host
 boundaries and terminate the actual episode; they are never called native gate
 responses or credited as security successes.
 
-`runs/HOOKS.md` inventories the original scripts/fragments. The unchanged native
-SessionStart and pulse registrations apply. Action/preflight/veto hooks remain
-outside the owner-selected memory-QA profile. No machine-wide memory/history is
-loaded. Unsupported native pulse endpoints retain their recorded empty output.
+`runs/HOOKS.md` lists every original script/fragment and the exact 12 active
+registrations across nine commands. All registered hooks are wired unchanged;
+the unwired legacy load-all-memory loader is excluded. Other unwired helpers or
+client-inapplicable events receive explicit reasons. Each proof item records
+which hooks fired and their actual stdout, injections, blocks and model usage.
+No machine-wide memory/history is loaded. Native unsupported endpoints retain
+their recorded behavior; no replacement retrieval is invented.
 
 ## Required proof before paid inference
 
-A zero-provider proof uses the fixed-seed ten official items. Every item starts
+The proof uses the fixed-seed ten official items. Hook model calls, if fired,
+use metered gpt-5.4-nano; the proof makes no solver calls. Every item starts
 with an independent store, ingests only its raw gold-free history through normal
 native writes, calls exact `history`-tag recall and follows native pagination.
 Returned IDs and full contents must match this item's actual admissions.
@@ -67,10 +73,10 @@ Keep the existing official data under `runs/upstream`, hook source audit and
 ignored owner-only `runs/.env.openai`. Never print credentials or reset the ledger.
 
 ```sh
-# First: zero-provider proof. Inspect its ten outcomes and two raw examples.
+# First: native/hook proof. Inspect ten outcomes and two raw examples.
 bash benchmarks/real_engine/reproduce.sh --benchmarks longmemeval \
   --native-proof-only --resume-baselines runs/lme-source-bundle.json
-# After proof: recover baselines, qualify the fresh Vestige pilot, run all500.
+# After proof: recover baselines, qualify the fresh pilot, report estimated cost.
 bash benchmarks/real_engine/reproduce.sh --benchmarks longmemeval \
   --resume-baselines runs/lme-source-bundle.json
 ```
@@ -94,3 +100,7 @@ only after all four full merges and fresh integrity checks. Reports contain
 means,95%bootstrapCIs,n,costs,dataset/source/binaryhashes and termination counts.
 Partial checkpoints, native self-tests and proof files never become scores.
 Everything remains on the local `bench/real-engine` branch; no push is automatic.
+
+The full-run estimate prices only unfinished solver items plus all 2,000 official
+judgments and includes the new window's existing spend/reservations. It is printed
+before full execution; an estimate above the authorized allowance holds the run.

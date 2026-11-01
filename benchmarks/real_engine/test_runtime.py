@@ -28,6 +28,15 @@ def race_reserve(args):
         return False
 
 
+def race_epoch_reserve(args):
+    path,index=args
+    try:
+        BudgetLedger(path).reserve(f'longmemeval/vestige/race-{index}',4)
+        return True
+    except BudgetExceeded:
+        return False
+
+
 class LedgerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -82,6 +91,33 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(ledger.snapshot()["spent"], 1.01)
         with self.assertRaises(BudgetExceeded):
             ledger.reserve("next", 1)
+
+    def test_owner_epoch_preserves_history_and_cannot_reset_on_restart(self):
+        from .runtime import utc_now
+        ledger=BudgetLedger(self.path)
+        ledger.reserve('historical',20);ledger.settle('historical',12,{'tokens':1})
+        authority=dict(epoch_id='owner-lme',limit=21,starts_at=utc_now(),
+                       benchmark='longmemeval',authority_id='owner-new-allowance')
+        ledger.authorize_epoch(**authority)
+        ledger.reserve('longmemeval/vestige/new',21)
+        again=BudgetLedger(self.path);again.authorize_epoch(**authority)
+        self.assertEqual(again.snapshot()['reserved'],21)
+        self.assertEqual(again.snapshot()['historical_spent'],12)
+        with self.assertRaises(BudgetExceeded):again.reserve('longmemeval/judge/over',.001)
+        with self.assertRaises(BudgetExceeded):again.reserve('mpbench/bare/wrong',.001)
+        with self.assertRaises(ValueError):again.authorize_epoch(**{**authority,'limit':20})
+
+    def test_owner_epoch_includes_calls_since_anchor_and_enforces_process_race(self):
+        from .runtime import utc_now
+        ledger=BudgetLedger(self.path);anchor=utc_now()
+        ledger.reserve('longmemeval/hook/already',1)
+        ledger.authorize_epoch(epoch_id='owner-race',limit=21,starts_at=anchor,
+                               benchmark='longmemeval',authority_id='owner-new-allowance')
+        self.assertEqual(ledger.snapshot()['reserved'],1)
+        with ProcessPoolExecutor(max_workers=8) as pool:
+            accepted=list(pool.map(race_epoch_reserve,[(self.path,i) for i in range(20)]))
+        self.assertEqual(sum(accepted),5)
+        self.assertEqual(ledger.snapshot()['committed'],21)
 
 
 class CheckpointTests(unittest.TestCase):

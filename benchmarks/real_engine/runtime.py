@@ -64,6 +64,13 @@ class BudgetLedger:
             db.execute("""CREATE TABLE IF NOT EXISTS calls (
                 id TEXT PRIMARY KEY, reserved INTEGER NOT NULL, actual INTEGER,
                 state TEXT NOT NULL, usage TEXT, created TEXT NOT NULL, updated TEXT NOT NULL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS budget_epochs (
+                id TEXT PRIMARY KEY, limit_units INTEGER NOT NULL, starts_at TEXT NOT NULL,
+                benchmark TEXT NOT NULL, authority_id TEXT NOT NULL, created TEXT NOT NULL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS epoch_calls (
+                call_id TEXT PRIMARY KEY, epoch_id TEXT NOT NULL,
+                FOREIGN KEY(call_id) REFERENCES calls(id),
+                FOREIGN KEY(epoch_id) REFERENCES budget_epochs(id))""")
             db.execute("BEGIN IMMEDIATE")
             db.execute("INSERT OR IGNORE INTO settings VALUES ('limit', ?)", (str(self.limit_units),))
             found = int(db.execute("SELECT value FROM settings WHERE key='limit'").fetchone()[0])
@@ -82,12 +89,62 @@ class BudgetLedger:
             db.close()
 
     @staticmethod
-    def _totals(db: sqlite3.Connection) -> tuple[int, int]:
-        spent, reserved = db.execute("""SELECT
+    def _totals(db: sqlite3.Connection, epoch_id=None) -> tuple[int, int]:
+        query="""SELECT
             COALESCE(SUM(CASE WHEN state='settled' THEN actual ELSE 0 END),0),
             COALESCE(SUM(CASE WHEN state='reserved' THEN reserved ELSE 0 END),0)
-            FROM calls""").fetchone()
+            FROM calls"""
+        params=()
+        if epoch_id is not None:
+            query+=" JOIN epoch_calls ON epoch_calls.call_id=calls.id WHERE epoch_calls.epoch_id=?"
+            params=(epoch_id,)
+        spent, reserved = db.execute(query,params).fetchone()
         return int(spent), int(reserved)
+
+    def _context(self, db):
+        active=db.execute("SELECT value FROM settings WHERE key='active_epoch'").fetchone()
+        if not active:
+            return None,self.limit_units,None,None,None
+        epoch=db.execute("SELECT id,limit_units,benchmark,starts_at,authority_id FROM budget_epochs WHERE id=?",(active[0],)).fetchone()
+        if epoch is None:
+            raise BudgetExceeded("active budget epoch is missing; fail closed")
+        return tuple(epoch)
+
+    def authorize_epoch(self, *, epoch_id, limit, starts_at, benchmark, authority_id):
+        """Record a fresh explicit owner allowance without changing old calls.
+
+        Activation is idempotent for the identical authorization. A different
+        active authorization requires a separate owner instruction, never a
+        restart. Any calls already made since the owner's timestamp are included.
+        """
+        units=_money(limit)
+        if not epoch_id or not authority_id or benchmark!='longmemeval' or not 0<units<=_money(21):
+            raise ValueError("explicit LongMemEval owner authorization of at most $21 is required")
+        anchor=datetime.fromisoformat(starts_at.replace('Z','+00:00'))
+        if anchor.tzinfo is None or anchor>datetime.now(timezone.utc):
+            raise ValueError("budget epoch requires a past/current timezone-aware owner timestamp")
+        starts_at=anchor.astimezone(timezone.utc).isoformat()
+        expected=(epoch_id,units,starts_at,benchmark,authority_id)
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            active=db.execute("SELECT value FROM settings WHERE key='active_epoch'").fetchone()
+            if active:
+                old=db.execute('SELECT id,limit_units,starts_at,benchmark,authority_id FROM budget_epochs WHERE id=?',(active[0],)).fetchone()
+                if old!=expected:
+                    raise ValueError("another budget epoch is already active; never reset it on restart")
+                return self.snapshot()
+            candidates=db.execute('SELECT id,created FROM calls').fetchall()
+            scoped=[identity for identity,created in candidates
+                    if datetime.fromisoformat(created.replace('Z','+00:00'))>=anchor]
+            if any(not identity.startswith(benchmark+'/') for identity in scoped):
+                raise ValueError("calls outside LongMemEval exist after the owner budget timestamp")
+            db.execute('INSERT INTO budget_epochs VALUES (?,?,?,?,?,?)',(*expected,utc_now()))
+            db.executemany('INSERT INTO epoch_calls VALUES (?,?)',[(identity,epoch_id) for identity in scoped])
+            spent,reserved=self._totals(db,epoch_id)
+            if spent+reserved>units:
+                raise BudgetExceeded("newly authorized budget is already exhausted")
+            db.execute("INSERT INTO settings VALUES ('active_epoch',?)",(epoch_id,))
+        return self.snapshot()
 
     def reserve(self, id: str, upper_cost: Any) -> bool:
         """Atomically reserve a unique attempt; raise before sending if unavailable."""
@@ -100,12 +157,17 @@ class BudgetLedger:
                 raise BudgetExceeded("campaign halted after an attempt bound violation")
             if db.execute("SELECT 1 FROM calls WHERE id=?", (id,)).fetchone():
                 raise ReservationExists(f"attempt already recorded: {id}")
-            spent, outstanding = self._totals(db)
-            if spent + outstanding + units > self.limit_units:
-                raise BudgetExceeded("$25 campaign budget has insufficient unencumbered funds")
+            epoch_id,limit_units,benchmark,_,_=self._context(db)
+            if benchmark and not id.startswith(benchmark+'/'):
+                raise BudgetExceeded("owner budget is restricted to LongMemEval-S")
+            spent, outstanding = self._totals(db,epoch_id)
+            if spent + outstanding + units > limit_units:
+                raise BudgetExceeded("authorized campaign budget has insufficient unencumbered funds")
             now = utc_now()
             db.execute("INSERT INTO calls VALUES (?, ?, NULL, 'reserved', NULL, ?, ?)",
                        (id, units, now, now))
+            if epoch_id:
+                db.execute('INSERT INTO epoch_calls VALUES (?,?)',(id,epoch_id))
         return True
 
     def settle(self, id: str, actual_cost: Any, usage: Mapping[str, Any]) -> None:
@@ -149,13 +211,19 @@ class BudgetLedger:
 
     def snapshot(self) -> dict[str, Any]:
         with self._connect() as db:
-            spent, reserved = self._totals(db)
+            epoch_id,limit_units,benchmark,starts_at,authority_id=self._context(db)
+            spent, reserved = self._totals(db,epoch_id)
+            lifetime_spent,lifetime_reserved=self._totals(db)
             counts = dict(db.execute("SELECT state, COUNT(*) FROM calls GROUP BY state").fetchall())
             violation = db.execute("SELECT value FROM settings WHERE key='bound_violation'").fetchone()
-        return {"limit": self.limit_units / 1e9, "spent": spent / 1e9,
+        return {"limit": limit_units / 1e9, "spent": spent / 1e9,
                 "reserved": reserved / 1e9, "committed": (spent + reserved) / 1e9,
-                "remaining": max(0, self.limit_units - spent - reserved) / 1e9,
-                "calls": counts, "bound_violation": violation[0] if violation else None}
+                "remaining": max(0, limit_units - spent - reserved) / 1e9,
+                "calls": counts, "bound_violation": violation[0] if violation else None,
+                "epoch_id":epoch_id,"benchmark":benchmark,"starts_at":starts_at,"authority_id":authority_id,
+                "lifetime_spent":lifetime_spent/1e9,"lifetime_reserved":lifetime_reserved/1e9,
+                "historical_spent":(lifetime_spent-spent)/1e9,
+                "historical_reserved":(lifetime_reserved-reserved)/1e9}
 
 
 _loop_semaphores: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()

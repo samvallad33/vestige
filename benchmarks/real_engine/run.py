@@ -60,7 +60,7 @@ def ci(scores, groups, seed=20261101):
 
 class Campaign:
     def __init__(self, runs, names, preflight_count=0, autonomous=False, workers=30, max_inflight=40,
-                 resume_baselines=None, native_proof_only=False):
+                 resume_baselines=None, native_proof_only=False, pilot_only=False):
         if names != ['longmemeval']:
             raise ValueError("Owner scope permits only LongMemEval-S")
         if workers != 30 or max_inflight != 40:
@@ -69,8 +69,12 @@ class Campaign:
         self.workers, self.max_inflight = workers, max_inflight
         self.resume_baselines = Path(resume_baselines) if resume_baselines else None
         self.native_proof_only = native_proof_only
+        self.pilot_only = pilot_only
         self.embedding_preparation = asyncio.Semaphore(1)
         self.ledger = BudgetLedger(runs / "budget.db")
+        budget_window=self.ledger.snapshot()
+        if budget_window.get('epoch_id')!='longmemeval-owner-20261101T161210Z' or budget_window['limit']!=21:
+            raise RuntimeError('Owner-authorized LongMemEval $21 new-spend window must be activated before execution')
         self.provider = NanoProvider(runs, self.ledger, max_inflight=max_inflight)
         self.progress = {}
         self.stop = asyncio.Event()
@@ -85,9 +89,10 @@ class Campaign:
         client_source=REPO/'benchmarks/memconflict/mcp_client.py'
         source_files[str(client_source.relative_to(REPO))]=hashlib.sha256(client_source.read_bytes()).hexdigest()
         self.config={"schema":"four-memory-qa-v1","sources":source_files,
-            "hooks":json.loads((runs/'hook-audit.json').read_text()),"profile":"memory_qa",
+            "hooks":json.loads((runs/'hook-audit.json').read_text()),"profile":"all_applicable_hooks",
             "model":MODEL,"temperature":0,"max_inflight":max_inflight,"http_timeout":60,
             "workers":workers,"limits":[MAX_ITERS,OUTPUT_BUDGET,CONTEXT_LIMIT],
+            "budget_window":{k:budget_window[k] for k in ('epoch_id','limit','starts_at','benchmark','authority_id')},
             "native_contract":"complete_tools_list_and_initialize_instructions_v1",
             "episode_policy":"native_tool_errors_forwarded_unchanged;score_actual_budget_limited_outputs_and_stores",
             "binary_sha256":self.manifest['binary_sha256'],"prompts":self.prompts}
@@ -126,6 +131,7 @@ class Campaign:
             "kill_control":{"log":str(self.runs/name/'kill-control.jsonl')}}
         plan['workers']=getattr(self,'workers',30)
         plan['full_native_mcp_required']=name=='longmemeval'
+        plan['hooks_profile']='all_applicable_hooks'
         proof=self.runs/name/'recall-proof.json'
         if proof.exists():
             plan['native_retrieval_proof']={'path':str(proof.resolve()),
@@ -136,15 +142,15 @@ class Campaign:
                 'sha256':hashlib.sha256(resume.read_bytes()).hexdigest()}
         path=self.runs/'QUALIFICATION.json'
         old=json.loads(path.read_text()) if path.exists() else {}
-        old.update(config_hash=self.config_hash,vestige_arm='memory_qa_hooks',
+        old.update(config_hash=self.config_hash,vestige_arm='all_applicable_hooks',
                    hooks_manifest_sha256=h(self.config['hooks']))
         old.setdefault('benchmarks',{})[name]=plan
         atomic_write(path,canonical(old)+'\n')
         return plan
 
     def item_provider(self,meta,root,*,max_calls=6,max_output=2048,context=32768):
-        from .hook_model import BudgetedProvider
-        return BudgetedProvider(self.provider,meta,root,max_calls=max_calls,max_output=max_output,context=context)
+        from .full_hook_model import FullHookBudgetedProvider
+        return FullHookBudgetedProvider(self.provider,meta,root,max_calls=max_calls,max_output=max_output,context=context)
 
     def make_hook_callback(self,engine_getter,meta,root,budget=None):
         bound=budget or self.item_provider(meta,root)
@@ -190,7 +196,7 @@ class Campaign:
                 callback=bound.hook_callback(lambda:engine)
                 engine = await asyncio.to_thread(HookedRealEngine, REPO, root / "native",
                         hook_model_callback=callback,
-                        hook_profile='memory_qa',
+                        hook_profile='all_applicable_hooks',
                         manifest_path=self.runs / "build-manifest.json")
                 await asyncio.to_thread(engine.__enter__)
                 await asyncio.to_thread(engine.ingest_history, item.history)
@@ -239,7 +245,11 @@ class Campaign:
             response = ""
             result=None
             termination='answer'
+            stop_fired=False
             for iteration in range(MAX_ITERS):
+                if bound.remaining_calls<=0 or bound.remaining_output<=0:
+                    termination='aggregate_model_budget'
+                    break
                 if tokens({"messages": messages, "tools": tools}) > CONTEXT_LIMIT:
                     termination='context_limit'
                     break
@@ -262,10 +272,14 @@ class Campaign:
                 if not calls:
                     response = message.get("content") or ""
                     if engine:
+                        stop_fired=True
                         verdict=await asyncio.to_thread(engine.finish_turn,messages)
                         if verdict["blocked"]:
+                            response=''
+                            termination='hook_blocked'
                             messages.append({"role":"user","content":"\n".join(verdict["reasons"]+verdict["context"])})
                             continue
+                    termination='answer'
                     break
                 for call in calls:
                     name, args = call["function"]["name"], json.loads(call["function"]["arguments"])
@@ -304,6 +318,11 @@ class Campaign:
                 termination='iteration_limit'
             native_calls=0
             if engine:
+                if not stop_fired:
+                    verdict=await asyncio.to_thread(engine.finish_turn,messages)
+                    if verdict['blocked']:
+                        response=''
+                        termination='hook_blocked_after_'+termination
                 # A real final native round-trip witnesses liveness even when
                 # a model/context limit ended the episode before Stop events.
                 await asyncio.to_thread(engine.call,'memory_status',{'view':'coverage'})
@@ -333,14 +352,14 @@ class Campaign:
         if self.is_preflight(name):
             from .hooks import read_audit,digest
             read_audit(REPO,self.runs/"hook-audit.json")
-            qualified={"status":"unscored_preflight","vestige_arm":"memory_qa_hooks",
+            qualified={"status":"unscored_preflight","vestige_arm":"all_applicable_hooks",
                        "hooks_manifest_sha256":h(self.config['hooks'])}
         elif not qualification.exists():
             raise RuntimeError("HOOK_AUDIT_REQUIRED: no scored execution before full hook isolation qualification")
         else:
             qualified=json.loads(qualification.read_text())
-        if qualified.get("vestige_arm")!="memory_qa_hooks":
-            raise RuntimeError("HOOK_AUDIT_REQUIRED: sole Vestige arm must use current memory-QA profile")
+        if qualified.get("vestige_arm")!="all_applicable_hooks":
+            raise RuntimeError("HOOK_AUDIT_REQUIRED: sole Vestige arm must use all registered native hooks")
         if not self.is_preflight(name):
             from .integrity import audit,require
             require(await asyncio.to_thread(audit,REPO,self.runs,stage='execute',benchmarks=(name,)),name,'execute')
@@ -588,7 +607,7 @@ class Campaign:
             '|---|---:|---|---:|---:|---|']
         for s in summaries:
             rows.append(f"| {s['arm']} | {s['mean']:.6f} | {s['ci95']} | {s['n']} | ${s['cost_all_metered_calls']:.6f} | {s['binary_sha256']} |")
-        rows+=['','Vestige includes the source-wired memory-QA SessionStart and memory-injection hooks. Action hooks are not applicable to this loop.',
+        rows+=['','Vestige includes all source-registered active hooks from the repo settings fragments. Per-item fired events, injections, blocks and applicability are recorded in the hook evidence; the unwired legacy load-all-memory loader is excluded.',
             '', 'Dataset files and SHA-256: `'+canonical(plan['full_set']['dataset_files'])+'`.',
             'Scorer source pins: `'+canonical(plan['scorer'])+'`.',
             'Configuration SHA-256: `'+self.config_hash+'`.',
@@ -610,7 +629,8 @@ class Campaign:
                     'stage':'native_proof_only'})+'\n')
             proof_path=root/'recall-proof.json'
             if not proof_path.exists():
-                await run_recall_proof(REPO,self.runs,items,self.config_hash,workers=10)
+                await run_recall_proof(REPO,self.runs,items,self.config_hash,workers=10,
+                    hook_model_callback_factory=self.hook_model_callback_factory,hook_profile='all_applicable_hooks')
             proof_plan={'config_hash':self.config_hash,'native_retrieval_proof':{
                 'path':str(proof_path.resolve()),'sha256':hashlib.sha256(proof_path.read_bytes()).hexdigest()}}
             await asyncio.to_thread(validate_recall_proof,REPO,self.runs,proof_plan,items)
@@ -635,6 +655,19 @@ class Campaign:
             await self.solve(name,items[0],'vestige',0,0,kill_control=True)
         report=await asyncio.to_thread(audit,REPO,self.runs,stage='execute',benchmarks=(name,))
         require(report,name,'execute')
+        if name=='longmemeval':
+            from .estimate import estimate_longmemeval
+            identity=self.identities[name]
+            checkpoints={arm:[Checkpoint(self.runs/name/arm/f'worker-{k}.jsonl',{**identity,'arm':arm})
+                              for k in range(self.workers)] for arm in ARMS}
+            estimate=await asyncio.to_thread(estimate_longmemeval,REPO,self.runs,items,checkpoints,self.ledger.snapshot())
+            atomic_write(self.runs/name/'cost-estimate.json',canonical(estimate)+'\n')
+            print(name,'FULL_RUN_COST_ESTIMATE',canonical(estimate),flush=True)
+            if not estimate['can_start_full_run']:
+                atomic_write(self.runs/name/'COST_ESTIMATE_HOLD.json',canonical(estimate)+'\n')
+                return
+            if getattr(self,'pilot_only',False):
+                return
         append_jsonl(self.runs/'decisions.jsonl',{'benchmark':name,'timestamp':utc_now(),
             'decision':'Ten-item current-config pilot PASS; start full official set immediately','config_hash':self.config_hash})
         print(name,'PILOT_PASS_STARTING_FULL_SET',flush=True)
@@ -690,7 +723,8 @@ def main():
     parser.add_argument('--workers',type=int,default=30)
     parser.add_argument('--max-inflight',type=int,default=40)
     parser.add_argument('--resume-baselines',type=Path)
-    parser.add_argument('--native-proof-only',action='store_true',help='Zero-provider ten-item native retrieval proof; no paid calls')
+    parser.add_argument('--native-proof-only',action='store_true',help='Ten-item native retrieval and hook proof; metered hook models only, no solver calls')
+    parser.add_argument('--pilot-only',action='store_true',help='Complete the required unscored pilot and cost estimate before full execution')
     args=parser.parse_args()
     os.environ.setdefault("TOKENIZERS_PARALLELISM","false")
     args.runs.mkdir(parents=True,exist_ok=True)
@@ -699,7 +733,7 @@ def main():
         except BlockingIOError: raise SystemExit("A campaign already owns the global API semaphore; do not launch a second process")
         async def run():
             campaign=Campaign(args.runs,args.benchmarks.split(','),args.preflight,args.autonomous,
-                args.workers,args.max_inflight,args.resume_baselines,args.native_proof_only)
+                args.workers,args.max_inflight,args.resume_baselines,args.native_proof_only,args.pilot_only)
             task=asyncio.current_task()
             loop=asyncio.get_running_loop()
             for sig in (signal.SIGINT,signal.SIGTERM):

@@ -7,7 +7,7 @@ from unittest.mock import patch
 import urllib.request
 
 from .engine import HookedRealEngine
-from .hooks import HookViolation,digest,merge_fragments,read_audit
+from .hooks import FRAGMENTS,HookViolation,digest,merge_fragments,read_audit
 
 REPO=Path(__file__).resolve().parents[2]
 
@@ -37,12 +37,31 @@ class HookContracts(unittest.TestCase):
 
     def test_all_fragment_commands_and_triggers_preserved(self):
         events,wired=merge_fragments(REPO)
-        self.assertEqual(len(events["UserPromptSubmit"]),7)
+        self.assertEqual(len(events["UserPromptSubmit"]),5)
         self.assertEqual(len(events["Stop"]),4)
         self.assertEqual(len(events["SessionStart"]),2)
         self.assertEqual(events["PreToolUse"],[])
         self.assertTrue(any(x["command"]=="vestige hook session-start" for x in wired))
         self.assertTrue(any("preflight-swarm.sh" in x["command"] for x in wired))
+
+    def test_all_profile_is_exactly_the_source_fragment_registrations(self):
+        events,wired=merge_fragments(REPO,profile="all_applicable_hooks")
+        expected=[]
+        for name in FRAGMENTS:
+            for event,groups in json.loads((REPO/"hooks"/name).read_text())["hooks"].items():
+                for group_index,group in enumerate(groups):
+                    for hook_index,hook in enumerate(group["hooks"]):
+                        expected.append((event,hook["command"],hook["timeout"],group.get("matcher"),
+                                         "hooks/"+name))
+        actual=[(event,entry["command"],entry["timeout"],entry["matcher"],entry["fragment"])
+                for event,entries in events.items() for entry in entries]
+        self.assertCountEqual(actual,expected)
+        self.assertEqual(len(wired),12)
+        self.assertEqual(len({entry["command"] for entry in wired}),9)
+        self.assertEqual(len({entry["registration_id"] for entry in wired}),12)
+        self.assertTrue(all(entry["event"]==event for event,entries in events.items() for entry in entries))
+        self.assertFalse(any("load-all-memory.sh" in entry["command"] or
+                             "synthesis-gate.sh" in entry["command"] for entry in wired))
 
     def test_missing_or_drifted_source_audit_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -75,7 +94,8 @@ class NativeHookTests(unittest.TestCase):
                 self.assertIn("blue folder","\n".join(output["context"]))
                 hookrows=[json.loads(line) for line in engine.hooks.log_path.read_text().splitlines()]
                 self.assertFalse(any(x.get("kind")=="model_bridge_request" for x in hookrows))
-                self.assertFalse(any(x.get("event") in {"PreToolUse","PostToolUse","Stop"} for x in hookrows))
+                self.assertFalse(any(x.get("kind")=="hook_event" and
+                    x.get("event") in {"PreToolUse","PostToolUse","Stop"} for x in hookrows))
                 self.assertTrue(any(x.get("kind")=="hook_mcp_request" for x in hookrows))
                 self.assertEqual(engine.hooks.native_status["/api/changelog"]["status"],501)
                 self.assertNotIn("/api/deep_reference",engine.hooks.native_status)
@@ -154,6 +174,28 @@ class NativeHookTests(unittest.TestCase):
                 self.assertEqual(statuses["/api/deep_reference"]["status"],401)
                 result=engine.finish_turn([{"role":"user","content":"Hello"},{"role":"assistant","content":"Hello."}])
                 self.assertFalse(result["blocked"])
+                hookrows=[json.loads(x) for x in engine.hooks.log_path.read_text().splitlines()]
+                outcomes=[row for row in hookrows if row.get("kind")=="hook_event"]
+                fired={row["entry"]["registration_id"] for row in outcomes}
+                self.assertEqual(fired,{entry["registration_id"] for entry in engine.hooks.wired})
+                for row in outcomes:
+                    self.assertIsInstance(row["stdout"],str)
+                    self.assertIsInstance(row["stderr"],str)
+                    self.assertIsInstance(row["injected_context"],list)
+                    self.assertIsInstance(row["blocked"],bool)
+                    self.assertIsInstance(row["blocking_reasons"],list)
+                self.assertTrue(any(row.get("kind")=="hook_not_applicable" and row["event"]=="PreToolUse"
+                                    and row["reason"]=="no registration in source fragments" for row in hookrows))
+                engine.hooks.event("SessionStart",{"source":"not-a-registered-source"})
+                hookrows=[json.loads(x) for x in engine.hooks.log_path.read_text().splitlines()]
+                self.assertEqual(sum(row.get("kind")=="hook_skipped" for row in hookrows),2)
+                from .native_contract import NativeBoundaryViolation
+                with self.assertRaises(NativeBoundaryViolation):
+                    engine.hooks.forward_mcp({"jsonrpc":"2.0","id":10,"method":"tools/call",
+                        "params":{"name":"gather","arguments":{"url":"https://example.test/issue"}}})
+                hookrows=[json.loads(x) for x in engine.hooks.log_path.read_text().splitlines()]
+                self.assertEqual(hookrows[-1]["kind"],"boundary_refusal")
+                self.assertIs(hookrows[-1]["native_call_attempted"],False)
                 # A legacy Haiku request may not escape to ambient CLI/model.
                 with self.assertRaisesRegex(HookViolation,"nano model callback"):
                     engine.begin_turn("A longer neutral message that exercises the lateral hook transport.")

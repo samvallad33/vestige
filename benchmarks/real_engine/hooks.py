@@ -6,6 +6,7 @@ explicitly logged. No legacy retrieval operation is synthesized. Model bridges
 accept only the owner-selected nano callback, never ambient Claude or Ollama.
 """
 from __future__ import annotations
+import asyncio
 import hashlib
 import fcntl
 import secrets
@@ -38,6 +39,93 @@ MEMORY_QA_COMMANDS=frozenset({"vestige hook session-start",
 class HookViolation(RuntimeError):pass
 
 
+class TrackedHookCallback:
+    """Bind model requests to a live original-hook invocation and drain them.
+
+    Costs and usage remain owned by the existing BudgetedProvider. If a shell
+    hook's own timeout ends before its HTTP model request, cancel that owned
+    coroutine and fail the item rather than treating empty stdout as success.
+    """
+    def __init__(self,callback,log):
+        self.callback=callback;self.bound=getattr(callback,"bound",None);self.log=log
+        self._lock=threading.RLock();self._pending={};self._event=None;self._closed=False
+
+    @property
+    def cost(self):return self.bound.cost if self.bound is not None else getattr(self.callback,"cost",0.0)
+
+    @property
+    def usage(self):return self.bound.usage if self.bound is not None else getattr(self.callback,"usage",[])
+
+    def bind_engine(self,engine):
+        if hasattr(self.callback,"bind_engine"):self.callback.bind_engine(engine)
+
+    def begin_event(self,registration_id):
+        with self._lock:
+            if self._closed:raise HookViolation("hook model callback is closed")
+            if self._event is not None or self._pending:raise HookViolation("previous hook model invocation is not settled")
+            self._event=registration_id
+
+    def __call__(self,payload):
+        with self._lock:
+            if self._closed or self._event is None:
+                raise HookViolation("model request arrived outside a live hook invocation")
+            token=object();entry={"event":self._event,"future":None,"task":None}
+            self._pending[token]=entry
+            if self.bound is not None:
+                async def invoke():
+                    entry["task"]=asyncio.current_task()
+                    return await self.bound.hook_request(payload,self.callback)
+                entry["future"]=asyncio.run_coroutine_threadsafe(invoke(),self.bound.loop)
+        try:
+            if entry["future"] is None:return self.callback(payload)  # synchronous transport-test fixture
+            return entry["future"].result(timeout=180)
+        except BaseException as exc:
+            self.log({"kind":"hook_callback_failure","registration_id":entry["event"],
+                      "error_type":type(exc).__name__,"error":str(exc)})
+            if entry["future"] is not None and not entry["future"].done():
+                self._cancel([entry],"callback exception")
+            raise
+        finally:
+            with self._lock:self._pending.pop(token,None)
+
+    def _cancel(self,entries,reason):
+        if not entries:return
+        if any(entry["future"] is None for entry in entries):
+            raise HookViolation("unsettled synchronous hook callback cannot be cancelled")
+        for entry in entries:entry["future"].cancel()
+        async def drain():
+            # Let submitted callback/cancellation handles run before collecting
+            # the Tasks. A coroutine cancelled before its first step has made
+            # no provider request and has no task body to drain.
+            await asyncio.sleep(0)
+            tasks=[entry["task"] for entry in entries if entry["task"] is not None]
+            for task in tasks:
+                if not task.done():task.cancel()
+            if tasks:await asyncio.gather(*tasks,return_exceptions=True)
+        asyncio.run_coroutine_threadsafe(drain(),self.bound.loop).result(timeout=10)
+        self.log({"kind":"hook_callbacks_cancelled","reason":reason,
+                  "registration_ids":[entry["event"] for entry in entries],"count":len(entries),
+                  "aggregate_cost":self.cost,"usage_entries":len(self.usage),
+                  "reservations":"retained by shared ledger until provider reconciliation"})
+
+    def finish_event(self):
+        with self._lock:
+            event=self._event;self._event=None
+            pending=[entry for entry in self._pending.values() if entry["event"]==event]
+        if pending:
+            self._cancel(pending,"original hook returned with pending model transport")
+            self.log({"kind":"hook_transport_timeout","registration_id":event,"pending":len(pending),
+                      "aggregate_cost":self.cost,"usage_entries":len(self.usage)})
+            raise HookViolation("original hook returned before its model transport settled")
+
+    def close(self):
+        with self._lock:
+            self._closed=True;self._event=None;pending=list(self._pending.values())
+        self._cancel(pending,"hook controller closing")
+        self.log({"kind":"hook_callback_closed","cancelled":len(pending),
+                  "aggregate_cost":self.cost,"usage_entries":len(self.usage)})
+
+
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
@@ -68,21 +156,19 @@ def merge_fragments(repo,profile="all_applicable_hooks"):
         path=repo/"hooks"/name
         for event,groups in json.loads(path.read_text()).get("hooks",{}).items():
             if event not in EVENTS:raise HookViolation("unsupported hook event: "+event)
-            for group in groups:
-                for hook in group.get("hooks",[]):
+            for group_index,group in enumerate(groups):
+                for hook_index,hook in enumerate(group.get("hooks",[])):
                     if hook.get("type")!="command":raise HookViolation("non-command hook needs native client adapter")
-                    entry={**hook,"matcher":group.get("matcher"),"fragment":str(path.relative_to(repo))}
+                    fragment=str(path.relative_to(repo))
+                    entry={**hook,"matcher":group.get("matcher"),"fragment":fragment,"event":event,
+                           "registration_id":f"{fragment}:{event}:{group_index}:{hook_index}"}
                     # Select registrations, never rewrite the shipped script
                     # or fragment command. Memory-Q&A has no external action
                     # loop; its owner-selected profile excludes action gates.
                     if profile=="memory_qa" and entry["command"] not in MEMORY_QA_COMMANDS:continue
                     merged[event].append(entry);wired.append(entry)
-    # Fresh owner instruction enables these two generic public hooks in
-    # addition to (without editing) the shipped settings fragments.
-    for script in (("synthesis-gate.sh", "load-all-memory.sh") if profile=="all_applicable_hooks" else ()):
-        entry={"type":"command","command":"$HOME/.claude/hooks/"+script,"timeout":8,
-               "matcher":None,"fragment":"owner-all-applicable-hooks-profile", "source":"hooks/"+script}
-        merged["UserPromptSubmit"].append(entry);wired.append(entry)
+    # The product installation contract is exactly its source fragments.
+    # Unwired optional/legacy scripts are inventoried, never silently added.
     return merged,wired
 
 
@@ -92,9 +178,6 @@ class HookController:
         self.audit=read_audit(self.repo,audit_path or self.repo/"runs/hook-audit.json")
         self.profile=profile or getattr(engine,"hook_profile","all_applicable_hooks")
         self.events,self.wired=merge_fragments(self.repo,self.profile)
-        self.model_callback=model_callback
-        if hasattr(model_callback,"bind_engine"):
-            model_callback.bind_engine(engine)
         self.dashboard_port=free_port();self.bridge_token=secrets.token_hex(32);self.errors=[];self.server=None;self.thread=None
         self.transcript=self.root/"transcript.jsonl"
         self.log_path=self.root/"hooks.jsonl"
@@ -102,6 +185,9 @@ class HookController:
         self.native_status={}
         self.cli_server=None;self.cli_lock=None;self._cwd_scope=None
         self.pending_context=[]
+        self.active_model_token=None
+        self.model_callback=TrackedHookCallback(model_callback,self.log) if model_callback is not None else None
+        if self.model_callback is not None:self.model_callback.bind_engine(engine)
 
     def log(self,data):
         with self.log_path.open("a") as f:
@@ -218,8 +304,15 @@ print(value['output'])
                     controller.errors.append(str(exc));controller.log({"kind":"bridge_error","path":self.path,"error":str(exc)})
                     self.send_response(500);self.end_headers()
             def do_POST(self):
-                if self.path in {"/mcp","/lateral","/v1/chat/completions"} and not secrets.compare_digest(self.headers.get("Authorization", ""),"Bearer "+controller.bridge_token):
-                    self.send_response(403);self.end_headers();return
+                if self.path in {"/mcp","/lateral","/v1/chat/completions"}:
+                    # Per-invocation model tokens expire when the original
+                    # shell hook returns. A delayed old request cannot become
+                    # a new provider call during the next hook or after close.
+                    tokens=[controller.active_model_token] if self.path!="/mcp" else [controller.bridge_token,controller.active_model_token]
+                    if not any(token and secrets.compare_digest(self.headers.get("Authorization", ""),"Bearer "+token) for token in tokens):
+                        controller.log({"kind":"model_bridge_refused" if self.path!="/mcp" else "hook_bridge_refused",
+                                        "path":self.path,"reason":"no matching live invocation token","provider_call_started":False})
+                        self.send_response(403);self.end_headers();return
                 try:
                     value=json.loads(self.rfile.read(int(self.headers.get("Content-Length","0"))))
                     if self.path=="/api/deep_reference":
@@ -242,6 +335,15 @@ print(value['output'])
                     else:raise HookViolation("unsupported hook transport endpoint")
                     body=json.dumps(result).encode();self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers();self.wfile.write(body)
                 except BaseException as exc:
+                    from .hook_model import ItemModelBudget
+                    if isinstance(exc,ItemModelBudget):
+                        controller.log({"kind":"model_budget_exhausted","path":self.path,
+                                        "registration_id":getattr(controller.model_callback,"_event",None),
+                                        "error_type":type(exc).__name__,"error":str(exc),
+                                        "provider_call_started":False,"budget_extended":False})
+                        self.send_response(409);self.end_headers()
+                        self.wfile.write(json.dumps({"error":"model_budget_exhausted","detail":str(exc)}).encode())
+                        return
                     controller.errors.append(str(exc));controller.log({"kind":"bridge_error","path":self.path,"error":str(exc)})
                     self.send_response(500);self.end_headers();self.wfile.write(json.dumps({"error":str(exc)}).encode())
         return ThreadingHTTPServer(("127.0.0.1",0),Handler)
@@ -300,6 +402,17 @@ print(value['output'])
         if not client or not client._proc or client._proc.poll() is not None:raise HookViolation("hook engine process is not alive")
         with self.engine._call_lock:
             method=value["method"];params=value.get("params") or {}
+            if method=="tools/call":
+                # The original hook can see the complete native catalog, but
+                # this compatibility transport cannot escape item isolation.
+                from .native_contract import NativeBoundaryViolation,validate_worker_arguments
+                try:
+                    validate_worker_arguments(params.get("name"),params.get("arguments") or {},
+                        roots=(self.engine.run_dir,self.engine.cwd),cwd=self.engine.cwd,home=self.engine.home)
+                except NativeBoundaryViolation as exc:
+                    self.log({"kind":"boundary_refusal","boundary":"worker_host_scope",
+                              "request":value,"error":str(exc),"native_call_attempted":False})
+                    raise
             self.log({"kind":"hook_mcp_request","request":value})
             if value.get("id") is None:
                 client.notify(method,params);return {}
@@ -334,32 +447,72 @@ print(value['output'])
         value={"hook_event_name":event,"session_id":self.session,"cwd":str(self.cwd),
                "transcript_path":str(self.transcript),"source":"startup",**(payload or {})}
         context=[];blocked=False;reasons=[]
+        if not self.events[event]:
+            self.not_applicable(event,"no registration in source fragments")
         for entry in self.events[event]:
             matcher=entry.get("matcher")
             target=value.get("source","") if event=="SessionStart" else value.get("tool_name","")
-            if matcher and matcher!="*" and not re.search(matcher,target):continue
+            if matcher and matcher!="*" and not re.search(matcher,target):
+                self.log({"kind":"hook_skipped","event":event,"entry":entry,"input":value,
+                          "reason":"source matcher did not match this lifecycle event"})
+                continue
             before=len(self.errors)
+            self.active_model_token=secrets.token_hex(32)
+            hook_env={**self.env,"VESTIGE_HOOK_CONTROL_TOKEN":self.active_model_token,
+                      "VESTIGE_SANHEDRIN_API_KEY":self.active_model_token}
+            if self.model_callback is not None:self.model_callback.begin_event(entry["registration_id"])
+            transport_error=None
             try:
-                result=subprocess.run(entry["command"],shell=True,executable="/bin/bash",cwd=self.cwd,env=self.env,
+                result=subprocess.run(entry["command"],shell=True,executable="/bin/bash",cwd=self.cwd,env=hook_env,
                     input=json.dumps(value),text=True,capture_output=True,timeout=entry.get("timeout",30))
-            except subprocess.TimeoutExpired as exc:raise HookViolation("original hook timeout: "+entry["command"]) from exc
-            self.log({"kind":"hook_event","event":event,"entry":entry,"input":value,
-                      "exit_code":result.returncode,"stdout":result.stdout,"stderr":result.stderr})
-            if len(self.errors)>before:raise HookViolation("hook transport/model violation: "+self.errors[-1])
+            except subprocess.TimeoutExpired as exc:
+                self.active_model_token=None
+                if self.model_callback is not None:
+                    try:self.model_callback.finish_event()
+                    except HookViolation as callback_error:transport_error=str(callback_error)
+                def partial(text):return text.decode(errors="replace") if isinstance(text,bytes) else (text or "")
+                self.log({"kind":"hook_timeout","event":event,"entry":entry,"input":value,
+                          "stdout":partial(exc.stdout),"stderr":partial(exc.stderr),"exit_code":None,
+                          "timeout":entry.get("timeout",30),"status":"timeout","model_transport_error":transport_error})
+                raise HookViolation("original hook timeout: "+entry["command"]) from exc
+            finally:
+                self.active_model_token=None
+            if self.model_callback is not None:
+                try:self.model_callback.finish_event()
+                except HookViolation as exc:transport_error=str(exc)
+            injected=[];entry_blocked=False;entry_reasons=[]
             if result.returncode==2:
-                blocked=True;reasons.append(result.stderr or result.stdout)
-            elif result.returncode!=0:raise HookViolation(f"hook command failed {result.returncode}: {entry['command']}")
+                entry_blocked=True;entry_reasons.append(result.stderr or result.stdout)
             if result.stdout.strip():
                 try:
                     parsed=json.loads(result.stdout)
-                    text=parsed.get("hookSpecificOutput",{}).get("additionalContext")
-                    if text:context.append(text)
-                    if parsed.get("decision")=="block":blocked=True;reasons.append(parsed.get("reason","hook blocked"))
+                    if isinstance(parsed,dict):
+                        text=parsed.get("hookSpecificOutput",{}).get("additionalContext")
+                        if text:injected.append(text)
+                        if parsed.get("decision")=="block":
+                            entry_blocked=True;entry_reasons.append(parsed.get("reason","hook blocked"))
                 except json.JSONDecodeError:
                     # Claude command-hook contract injects successful stdout
                     # for SessionStart/UserPromptSubmit. Stop stdout is ignored.
-                    if event in {"SessionStart","UserPromptSubmit"}:context.append(result.stdout.strip())
+                    if event in {"SessionStart","UserPromptSubmit"}:injected.append(result.stdout.strip())
+            status="model_transport_timeout" if transport_error else "bridge_error" if len(self.errors)>before else "blocked" if entry_blocked else "ok" if result.returncode==0 else "error"
+            self.log({"kind":"hook_event","event":event,"entry":entry,"input":value,
+                      "exit_code":result.returncode,"stdout":result.stdout,"stderr":result.stderr,
+                      "injected_context":injected,"blocked":entry_blocked,"blocking_reasons":entry_reasons,
+                      "status":status,"bridge_errors":self.errors[before:],"model_transport_error":transport_error})
+            if transport_error:raise HookViolation(transport_error)
+            if len(self.errors)>before:raise HookViolation("hook transport/model violation: "+self.errors[-1])
+            if result.returncode not in {0,2}:raise HookViolation(f"hook command failed {result.returncode}: {entry['command']}")
+            context.extend(injected);blocked=blocked or entry_blocked;reasons.extend(entry_reasons)
         return {"context":context,"blocked":blocked,"reasons":reasons}
+
+    def not_applicable(self,event,reason):
+        """Record a lifecycle event that execution genuinely did not reach."""
+        if event not in EVENTS or not isinstance(reason,str) or not reason.strip():
+            raise HookViolation("not-applicable lifecycle evidence needs event and explicit reason")
+        for entry in self.events[event] or [None]:
+            self.log({"kind":"hook_not_applicable","event":event,"entry":entry,"reason":reason,
+                      "fired":False,"injected_context":[],"blocked":False,"blocking_reasons":[]})
 
     def begin_turn(self,prompt):
         with self.transcript.open("a") as f:f.write(json.dumps({"role":"user","content":prompt})+"\n")
@@ -380,7 +533,11 @@ print(value['output'])
         return self.event("Stop",{"stop_hook_active":False})
 
     def close(self):
-        if self.server:self.server.shutdown();self.server.server_close();self.server=None
-        if self.cli_server:self.cli_server.shutdown();self.cli_server.server_close();self.cli_server=None
-        if self.cli_lock:self.cli_lock.close();self.cli_lock=None
-        if self._cwd_scope:self._cwd_scope.cleanup();self._cwd_scope=None
+        self.active_model_token=None
+        try:
+            if self.model_callback is not None:self.model_callback.close()
+        finally:
+            if self.server:self.server.shutdown();self.server.server_close();self.server=None
+            if self.cli_server:self.cli_server.shutdown();self.cli_server.server_close();self.cli_server=None
+            if self.cli_lock:self.cli_lock.close();self.cli_lock=None
+            if self._cwd_scope:self._cwd_scope.cleanup();self._cwd_scope=None

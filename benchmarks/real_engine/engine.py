@@ -208,6 +208,9 @@ class RealEngine:
             if self.hooks:
                 self.hooks.probe_native()
                 output = self.hooks.event("SessionStart", {"source": "startup"})
+                if output["blocked"]:
+                    from .hooks import HookViolation
+                    raise HookViolation("SessionStart blocked: " + "\n".join(output["reasons"]))
                 self.hooks.pending_context.extend(output["context"])
                 self.identity["hooks"] = {"enabled": True, "wired": self.hooks.wired,
                     "source_pins": self.hooks.audit["source_pins"], "cli_sha256": self.hooks.cli_sha,
