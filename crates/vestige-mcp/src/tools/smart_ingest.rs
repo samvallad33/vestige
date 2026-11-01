@@ -1970,10 +1970,25 @@ async fn execute_batch(
         .iter()
         .map(|item| strata_store::canonical::canonical_hash_hex(&item.content))
         .collect();
+    // Imported history is indexed oldest first (salience-pro 0.3.7 import):
+    // an item with a valid validFrom goes before an undated one, earlier
+    // moments first, so a later fact meets the older ones already on the log.
+    // The key is the item's own data, so the order stays arrival-independent.
+    let moments: Vec<Option<DateTime<Utc>>> = items
+        .iter()
+        .map(|item| {
+            parse_validity_timestamp(item.valid_from.as_deref(), "validFrom")
+                .ok()
+                .flatten()
+        })
+        .collect();
     let mut processing_order: Vec<usize> = (0..items.len()).collect();
     processing_order.sort_by(|&left, &right| {
-        canonical_hashes[left]
-            .cmp(&canonical_hashes[right])
+        moments[left]
+            .is_none()
+            .cmp(&moments[right].is_none())
+            .then(moments[left].cmp(&moments[right]))
+            .then(canonical_hashes[left].cmp(&canonical_hashes[right]))
             .then(left.cmp(&right))
     });
     let mut items: Vec<Option<BatchItem>> = items.into_iter().map(Some).collect();

@@ -52,7 +52,7 @@ The three agents in `agents/` (`executioner`, `lateral-thinker`, `synthesis-comp
    - `synthesis-preflight.sh`: POSTs your prompt to `vestige-mcp` `/api/deep_reference`, injects the trust-scored reasoning chain (v3 only; see above)
    - `cwd-state-injector.sh`: captures git status, branch, open PRs/issues, modified files
    - `vestige-pulse-daemon.sh`: injects fresh dream insights from the dashboard changelog into the next prompt context (v3 only)
-   - `preflight-swarm.sh`: spawns the `lateral-thinker` subagent in fresh context to surface cross-disciplinary structural parallels
+   - `preflight-swarm.sh`: retired. It exits immediately and does not inject a lateral-thinker block.
 3. **Claude reads the assembled context and generates a draft.**
 4. **By default, no Vestige Stop hooks are installed.** If explicitly enabled, Stop hooks fire serially (any can VETO with `exit 2`, forcing a rewrite):
    - `veto-detector.sh`: fast regex against `veto`-tagged Vestige memories (~50ms)

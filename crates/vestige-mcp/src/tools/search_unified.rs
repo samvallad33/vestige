@@ -59,7 +59,7 @@ pub fn schema() -> Value {
             },
             "detail_level": {
                 "type": "string",
-                "description": "'brief': id, type, tags, createdAt (no content). 'summary': 240-char content preview. 'full' (default on handle recall): full node content; one-hop neighbors get a 200-char preview (80 when repeated; read one in full with memory(action='get')). 'full_neighbors': full content on both nodes and one-hop neighbors.",
+                "description": "'brief': id, type, tags, createdAt (no content). 'summary': 240-char content preview; neighbors stay short. 'full' (default on handle recall): full node content and full one-hop neighbor content. 'full_neighbors': the same full content on nodes and neighbors.",
                 "enum": ["brief", "summary", "full", "full_neighbors"],
                 "default": "summary"
             },

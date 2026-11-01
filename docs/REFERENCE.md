@@ -135,11 +135,11 @@ If you installed v3 with npm, make sure your agents now run the 4.x binary: `ves
 <a id="recall-by-handle-not-resemblance"></a>
 ## Recall by handle, not resemblance
 
-Since 4.0, Vestige does not rank text that resembles your query. There are no embeddings, no BM25 and no keyword search in the default binaries. `recall` takes a handle: a memory id, a unique id prefix of 8 or more characters, or an exact tag. A free-text query returns `similarity_disabled` and asks for a handle.
+Vestige does not rank text by meaning. There are no embeddings and no fuzzy match. `recall` takes a handle (a memory id, a unique id prefix of 8 or more characters, or an exact tag). A free-text query that is not a handle is ranked by exact-token BM25 over the stored text. `reason` and `contradictions` still return `similarity_disabled`.
 
 | | Resemblance search | Vestige 4.x |
 |---|---|---|
-| How a memory is found | Similarity to the query | An exact handle |
+| How a memory is found | Similarity to the query | An exact handle, or exact-token BM25 over stored text |
 | What counts as a link | Anything that scores close | Only an edge the log recorded. Imported v3 links are marked `legacy_inferred` |
 | Walking back from a failure | Nearest lookalikes | `causal_walk` from the memory that records the symptom, backward over recorded edges, at most 8 hops and 500 nodes by default. Any start point (failing test, stack frame, CI run, version range, or a plain `logged_write`) carries that memory's id as `node_id` |
 | Proof of a write | None | A receipt per write. `receipt replay` re-derives the state from the log |

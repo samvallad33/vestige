@@ -217,7 +217,7 @@ fn backup_refuses_a_directory_with_no_store() {
 }
 
 #[test]
-fn recall_resolves_exact_handles_and_refuses_free_text() {
+fn recall_resolves_exact_handles_and_ranks_free_text() {
     let seeded = seed();
     let dir = seeded.path();
 
@@ -270,17 +270,21 @@ fn recall_resolves_exact_handles_and_refuses_free_text() {
     );
 
     let free = vestige(dir, &["recall", "what failed near cli-tag"]);
-    assert!(!free.ok);
+    assert!(free.ok, "{}", free.text());
+    let alpha_at = free.stdout.find("CLI_STRATA_ALPHA");
+    let gamma_at = free.stdout.find("CLI_STRATA_GAMMA");
     assert!(
-        free.stderr.contains("similarity_disabled"),
-        "{}",
+        alpha_at.is_some(),
+        "the closer record is returned: {}",
         free.text()
     );
-    assert!(
-        free.stderr.contains("--handle cli-tag (tag, 2 memories)"),
-        "{}",
-        free.text()
-    );
+    if let (Some(alpha_at), Some(gamma_at)) = (alpha_at, gamma_at) {
+        assert!(
+            alpha_at < gamma_at,
+            "the closer record ranks first: {}",
+            free.text()
+        );
+    }
 }
 
 #[test]

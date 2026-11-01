@@ -56,7 +56,7 @@ message:
 
 | Code | Meaning |
 |------|---------|
-| `similarity_disabled` | The call asked for lookalike text: free-text `recall`, `recall` modes `reason` and `contradictions`, `session_start` `queries`, `ghostlink` `predict` with `current_topics`, `ghostlink` `map` with `query`. Pass an exact handle |
+| `similarity_disabled` | The call asked for lookalike text outside lexical recall: `recall` modes `reason` and `contradictions`, `session_start` `queries`, `ghostlink` `predict` with `current_topics`, `ghostlink` `map` with `query`. A free-text `recall` query is exact-token BM25, not this error |
 | `handle_required` | `recall` found no record under that handle |
 | `ambiguous` | A `recall` prefix matched more than one id. The response lists the `candidates`. Pass a longer prefix or the full id |
 | `needs_report` | `causal_walk` had no usable start point. It names the one missing piece and does not guess |
@@ -86,9 +86,8 @@ or an exact tag. Lookup order is exact id, then unique prefix, then exact tag.
 
 - A tag returns live records carrying it, from every scope, with `nodes` (`id`, `type`,
   `content`, `tags`, `createdAt`) and the one-hop recorded `neighbors` (direction,
-  `link_type`, strength, and a 200-character preview, 80 when repeated; at most 20 edges;
-  pass `detail_level: "full_neighbors"` or call `memory(action="get")` for full neighbor text).
-  Typed tags such as `person:Maya` are tags like any other.
+  `link_type`, strength, and the neighbor's full text on the default full detail; at most 20 edges.
+  `detail_level: "summary"` keeps a short neighbor preview. Typed tags such as `person:Maya` are tags like any other.
 - **Order (5.0.1).** Records are ranked by the net salience change their `backfill`
   receipts recorded (largest first), then FSRS stability (higher first), then newest
   first, then id. Before 5.0.1 a tag returned newest first. The order is the same on
@@ -96,10 +95,13 @@ or an exact tag. Lookup order is exact id, then unique prefix, then exact tag.
 - Honors `limit` (cutting after that ranking and reporting `totalNodes` when truncated)
   and `detail_level` (`brief`, `summary`, `full`, `full_neighbors`).
 - An ambiguous prefix is refused as `ambiguous`, with its `candidates`.
-- A miss is `handle_required` (with `candidates: []`), not an empty list. Free text is
-  never split into words to look for a tag or an id inside it (4.2.0): only the whole
-  string is tried as a handle.
-- `query`, `mode: "reason"` and `mode: "contradictions"` return `similarity_disabled`.
+- A miss on a declared handle is `handle_required` (with `candidates: []`), not an empty list.
+  The whole string is tried as a handle first. It is not split into words to invent a handle.
+- A free-text `query` that is not a handle is ranked by exact-token BM25 over stored memory
+  text and tags. Same log, same query, same order. There is no embedding, stemmer, or edit
+  distance. Hits are full records, with `lexicalScore` and up to four two-hop exact-tag
+  `bridges` (`person:`, `place:`, `food:`, `file:`, `service:`, `symbol:`).
+- `mode: "reason"` and `mode: "contradictions"` return `similarity_disabled`.
 - A read never changes strength. Promote what helped with `memory`.
 
 CLI: `vestige recall --handle <handle>`.

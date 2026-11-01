@@ -74,6 +74,9 @@ pub mod explore;
 pub mod predict;
 pub mod restore;
 
+// Exact-token BM25 over stored memory text. No embeddings, no fuzzy match.
+pub(crate) mod lexical;
+
 // v1.8: Context Packets
 mod memory_packet;
 pub mod session_context;
