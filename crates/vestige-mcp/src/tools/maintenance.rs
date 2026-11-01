@@ -120,6 +120,12 @@ pub fn system_status_schema() -> Value {
                 "type": "boolean",
                 "description": "When true, extends the response with a 'schema' block carrying the SQLite schema version, per-table row counts + column lists, and embedding-coverage convenience fields. Default: false (response shape unchanged). Use this for audit / migration-guard / downstream-upgrade scripts that otherwise have to read SQLite directly.",
                 "default": false
+            },
+            "detail": {
+                "type": "string",
+                "enum": ["compact", "full"],
+                "description": "compact (default) omits scheduler dumps, FSRS preview and zero embedding counters so the reply stays small in model context. full returns those blocks.",
+                "default": "compact"
             }
         }
     })
@@ -131,6 +137,7 @@ pub fn system_status_schema() -> Value {
 struct SystemStatusArgs {
     #[serde(alias = "schema_introspection")]
     schema_introspection: Option<bool>,
+    detail: Option<String>,
 }
 
 // ============================================================================
@@ -491,6 +498,41 @@ pub async fn execute_system_status(
             "lastConsolidationTimestamp": last_consolidation.map(|dt| dt.to_rfc3339()),
         },
     });
+
+    // The default reply is what an agent reads. Scheduler dumps, an FSRS
+    // preview of one card, and embedding counters that are zero in this build
+    // are available with detail=full and are not part of the compact reply.
+    if parsed.detail.as_deref() != Some("full") {
+        if let Some(object) = response.as_object_mut() {
+            object.remove("cognitiveHealth");
+            object.remove("fsrsPreview");
+            if !embeddings_compiled_in {
+                for key in [
+                    "embeddingReady",
+                    "withEmbeddings",
+                    "withActiveEmbeddings",
+                    "mismatchedEmbeddings",
+                    "embeddingCoverage",
+                    "embeddingModel",
+                    "activeEmbeddingModel",
+                ] {
+                    object.remove(key);
+                }
+            }
+        }
+        if let Some(warnings) = response["warnings"].as_array_mut() {
+            warnings.retain(|warning| {
+                !warning
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .contains("embedding")
+            });
+        }
+        if let Some(diagnostics) = response["diagnostics"].as_array_mut() {
+            diagnostics.retain(|row| !row["code"].as_str().unwrap_or("").starts_with("embedding_"));
+        }
+    }
 
     // v2.1.24+: optional schema introspection block. Default off; response
     // shape unchanged when omitted.

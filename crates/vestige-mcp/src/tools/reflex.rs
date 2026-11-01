@@ -77,9 +77,10 @@ const MAX_COMMANDS: usize = 2000;
 const RECENT_KEEP: usize = 20;
 const RECENT_SHOWN: usize = 5;
 const RECENT_DAYS: i64 = 7;
-/// Characters every Vestige hook together may add to one turn: reflex's own
-/// notices and the memory hook's injections share it.
-const TURN_BUDGET: usize = 8000;
+/// Characters every Vestige hook together may add to one turn. 12_000 of that
+/// is the memory hook (about 3_000 tokens at 4 bytes each). The rest stays
+/// available for reflex notices in the same turn.
+const TURN_BUDGET: usize = 13_500;
 /// What the memory hook leaves of the turn budget for reflex's notices.
 const NOTICE_RESERVE: usize = 1500;
 const MANIFEST_KEEP: usize = 400;
@@ -3368,14 +3369,14 @@ mod tests {
             p2["reflex"]["skippedAlreadyHeld"].as_array().unwrap().len(),
             3
         );
-        let mut p3 = packet(0xb0, 12, 700);
+        let mut p3 = packet(0xb0, 30, 700);
         admit_injection(&fx.storage, &hook, &mut p3);
         let kept = p3["memories"].as_array().unwrap().len();
         let dropped = p3["reflex"]["droppedForTurnBudget"]
             .as_array()
             .unwrap()
             .len();
-        assert!(kept > 0 && dropped > 0 && kept + dropped == 12, "{p3}");
+        assert!(kept > 0 && dropped > 0 && kept + dropped == 30, "{p3}");
         let view = fx.fire(json!({"action": "ledger"})).await;
         assert_eq!(view["context"]["injected"], 3 + kept as u64, "{view}");
         assert_eq!(view["context"]["skippedAlreadyHeld"], 3, "{view}");

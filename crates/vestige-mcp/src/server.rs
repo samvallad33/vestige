@@ -111,7 +111,7 @@ fn build_instructions() -> String {
     };
     instructions.push_str("\nIn a codebase, save durable conventions and design decisions with codebase(action='remember_pattern'|'remember_decision', files=['path.rs#symbol']); anchored code memories self-check against the source and are flagged when the code drifts.");
     instructions.push_str("\nghostlink(mode='propose') surfaces never-composed memory pairs from recorded edges, each with its proof; record what a tested pair showed with mode='weave'.");
-    instructions.push_str("\nDiscover all available actions with memory_status(view='tools'); pass tool='<name>' for its exact schema. Choose calls that serve the task; no tool-call quota is required.");
+    instructions.push_str("\nrecall finds a memory by exact handle, or by exact-token lexical rank over stored text when you pass query. It does not use embeddings. memory_status view='tools' lists names; pass tool='<name>' for one schema, and do not call it speculatively.");
     instructions.push_str("\nTo show the user one memory, read it with memory(action='get', id, reason='what you will tell them'): every open Vestige dashboard goes inside that memory and shows your words, and the reply carries its dashboard link.");
     instructions
 }
@@ -436,7 +436,7 @@ fn withhold_on_strata(tools: &mut Vec<ToolDescription>) {
         } else if tool.name == "recall" {
             // The v3 text sold keyword search and similarity modes, which a
             // Strata log answers with similarity_disabled.
-            tool.description = Some("Find memories by exact handle: a full memory id or an exact tag; a unique id prefix of 8+ characters also resolves. Free text and the 'reason' / 'contradictions' modes return similarity_disabled.".to_string());
+            tool.description = Some("Find memories by exact handle (full id, unique id prefix of 8+ characters, or exact tag) or by exact-token BM25 over stored text. No embeddings and no fuzzy match. Modes 'reason' and 'contradictions' return similarity_disabled.".to_string());
             if let Some(props) = tool
                 .input_schema
                 .pointer_mut("/properties")
@@ -540,7 +540,7 @@ fn strip_withheld_in(
         && let Some(description) = schema.pointer_mut("/properties/mode/description")
     {
         *description = serde_json::json!(
-            "'lookup' (default): by handle. 'reason' and 'contradictions' return similarity_disabled in 4.0."
+            "'lookup' (default): exact handle, or exact-token BM25 when query is free text. 'reason' and 'contradictions' return similarity_disabled."
         );
     }
     if tool == "maintain"
@@ -1083,7 +1083,7 @@ impl McpServer {
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Find memories by exact handle: a full memory id or an exact tag. A free-text 'query' and modes 'reason' and 'contradictions' are legacy engine only; Strata returns similarity_disabled. Retrieval never changes strength; promote what helped via memory.".to_string()),
+description: Some("Find memories by exact handle, or by exact-token BM25 over stored text when query is free text. No embeddings. Modes 'reason' and 'contradictions' return similarity_disabled on Strata. Retrieval never changes strength; promote what helped via memory.".to_string()),
                 input_schema: tools::compact::of(&tools::recall::schema()),
                 output_schema: Some(serde_json::json!({
                     "type": "object",

@@ -66,11 +66,10 @@ vestige recall --handle incident
 vestige recall --handle mem-0000000000000001
 ```
 
-Free text is refused, and the refusal tells you which handles it found in your words:
+Free text is ranked by exact tokens over stored memory text. It is not an embedding search:
 
 ```bash
 vestige recall "why are sessions dropping"
-# Error: similarity_disabled: ... Recall by exact handle instead
 ```
 
 Check the log itself. This reads every frame and verifies the hash chain:

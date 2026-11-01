@@ -935,8 +935,17 @@ mod strata_tests {
                 Some(serde_json::json!({"query": "replacement cause text"})),
             )
             .await
-            .unwrap_err();
-            assert!(query.contains("similarity_disabled"), "{query}");
+            .unwrap();
+            assert_eq!(query["mode"], "lexical", "{query}");
+            assert_eq!(query["nodes"][0]["id"], successor, "{query}");
+            assert!(
+                !query["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|node| node["content"] == "original cause text"),
+                "a superseded record is not a lexical hit: {query}"
+            );
             assert!(log_contains(dir.path(), "original cause text"));
             assert!(log_contains(dir.path(), "replacement cause text"));
             (

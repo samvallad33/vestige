@@ -1,8 +1,14 @@
-//! Read-only, bounded salience packets for local lifecycle hooks.
-//! Prompt words select explicit recorded entity handles; they never rank memories.
+//! Read-only packets for local lifecycle hooks.
+//!
+//! A prompt is ranked by exact-token BM25 over stored memory text. An empty
+//! prompt (session open, no words yet) still returns the highest-salience
+//! records. Full record text is packed into about 3_000 tokens. A prompt that
+//! names a recorded person does not pull in a different person's records.
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use vestige_core::{KnowledgeNode, Storage};
+
+use super::lexical::{self, HOOK_CHAR_BUDGET};
 
 pub(crate) fn scores(storage: &Storage) -> BTreeMap<String, i128> {
     let mut scores = BTreeMap::new();
@@ -65,31 +71,106 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             && n.valid_until.is_none_or(|t| t > now)
     });
     let count = nodes.len();
+    let scores = scores(storage);
+    let tie = |node: &KnowledgeNode| scores.get(&node.id).copied().unwrap_or_default();
+    let requested = args["limit"].as_u64().unwrap_or(8).clamp(1, 24) as usize;
+    let named = lexical::named_people(&nodes, prompt);
     let entities: BTreeSet<String> = nodes
         .iter()
         .flat_map(|n| n.tags.iter())
         .filter(|tag| {
             ["person:", "place:", "food:", "file:", "service:", "symbol:"]
                 .iter()
-                .any(|p| tag.starts_with(p))
+                .any(|prefix| tag.starts_with(prefix))
         })
         .filter(|tag| {
-            phrase(prompt, tag) || tag.split_once(':').is_some_and(|(_, s)| phrase(prompt, s))
+            phrase(prompt, tag)
+                || tag
+                    .split_once(':')
+                    .is_some_and(|(_, surface)| phrase(prompt, surface))
         })
         .cloned()
         .collect();
-    if !entities.is_empty() {
-        nodes.retain(|n| n.tags.iter().any(|t| entities.contains(t)));
-    }
-    let scores = scores(storage);
-    nodes.sort_by(|a, b| compare(a, b, &scores));
-    let limit = if !entities.is_empty() && args["trigger"]["mode"] == "light" {
-        8
-    } else {
-        args["limit"].as_u64().unwrap_or(3).clamp(1, 8) as usize
-    };
-    nodes.truncate(limit);
-    let ids: BTreeSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    let (selected, selection, ranking): (Vec<&KnowledgeNode>, &str, &str) =
+        if prompt.trim().is_empty() {
+            nodes.sort_by(|a, b| compare(a, b, &scores));
+            let packed_hits: Vec<lexical::LexicalHit> = (0..nodes.len())
+                .map(|index| lexical::LexicalHit {
+                    index,
+                    score_micro: 1,
+                })
+                .collect();
+            (
+                lexical::pack(&nodes, &packed_hits, HOOK_CHAR_BUDGET, requested.min(8)),
+                "top_salience",
+                "receipt_salience_then_stability_then_recency",
+            )
+        } else {
+            let hits = lexical::rank(&nodes, prompt, tie);
+            let score_of = |id: &str| {
+                hits.iter()
+                    .find(|hit| nodes[hit.index].id == id)
+                    .map(|hit| hit.score_micro)
+                    .unwrap_or(0)
+            };
+            let mut indexes: Vec<usize> = hits
+                .iter()
+                .map(|hit| hit.index)
+                .filter(|index| lexical::allows_person(&nodes[*index], &named))
+                .collect();
+            // A recorded identity the prompt names still qualifies when the
+            // memory's other words do not repeat the prompt.
+            for (index, node) in nodes.iter().enumerate() {
+                if !entities.is_empty()
+                    && node.tags.iter().any(|tag| entities.contains(tag))
+                    && lexical::allows_person(node, &named)
+                    && !indexes.contains(&index)
+                {
+                    indexes.push(index);
+                }
+            }
+            indexes.sort_by(|a, b| {
+                score_of(&nodes[*b].id)
+                    .cmp(&score_of(&nodes[*a].id))
+                    .then_with(|| compare(&nodes[*a], &nodes[*b], &scores))
+            });
+            let packed_hits: Vec<lexical::LexicalHit> = indexes
+                .into_iter()
+                .map(|index| lexical::LexicalHit {
+                    index,
+                    score_micro: 1,
+                })
+                .collect();
+            let packed = lexical::pack(&nodes, &packed_hits, HOOK_CHAR_BUDGET, requested);
+            let selection = if hits.is_empty() && !entities.is_empty() {
+                "exact_recorded_entities"
+            } else {
+                "exact_token_bm25"
+            };
+            (
+                packed,
+                selection,
+                "exact_token_bm25_then_salience_then_recency",
+            )
+        };
+    let ids: BTreeSet<&str> = selected.iter().map(|n| n.id.as_str()).collect();
+    let seed_indexes: Vec<usize> = selected
+        .iter()
+        .filter_map(|node| nodes.iter().position(|candidate| candidate.id == node.id))
+        .collect();
+    let bridge_rows = lexical::bridges(&nodes, &seed_indexes, 4);
+    let bridges: Vec<Value> = bridge_rows
+        .iter()
+        .map(|bridge| {
+            let node = &nodes[bridge.index];
+            json!({
+                "id": node.id,
+                "content": node.content,
+                "tags": node.tags,
+                "path": bridge.path,
+            })
+        })
+        .collect();
     let receipts: Vec<Value> = storage
         .salience_receipts()
         .map_err(|e| e.to_string())?
@@ -97,15 +178,48 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
         .rev()
         .filter(|r| r["memory_id"].as_str().is_some_and(|id| ids.contains(id)))
         .take(8)
+        .map(|receipt| {
+            json!({
+                "receipt_id": receipt["receipt_id"],
+                "memory_id": receipt["memory_id"],
+                "trigger_id": receipt["trigger_id"],
+                "reason": receipt["reason"],
+                "direction": raise_direction(&receipt),
+                "old_score": receipt["old_score"],
+                "new_score": receipt["new_score"],
+                "old_stability_q": receipt["old_stability_q"],
+                "new_stability_q": receipt["new_stability_q"],
+            })
+        })
         .collect();
-    Ok(
-        json!({"memory_count":count,"entities":entities,"memories":nodes.iter().map(|n|
-        json!({"id":n.id,"content":n.content.chars().take(700).collect::<String>(),"tags":n.tags,
-            "stability":n.stability,"salience_delta_q":scores.get(&n.id).copied().unwrap_or_default().to_string()})).collect::<Vec<_>>(),
-        "backfill_receipts":receipts,"backfill_autofire":super::backfill::autofire_enabled(),
-        "selection":if entities.is_empty(){"top_salience"}else{"exact_recorded_entities"},
-        "trigger":args.get("trigger"),"ranking_signal":"receipt_salience_then_stability_then_recency"}),
-    )
+    Ok(json!({
+        "memory_count": count,
+        "entities": entities,
+        "memories": selected.iter().map(|n| json!({
+            "id": n.id,
+            "content": n.content,
+            "tags": n.tags,
+            "stability": n.stability,
+            "salience_delta_q": scores.get(&n.id).copied().unwrap_or_default().to_string(),
+        })).collect::<Vec<_>>(),
+        "bridges": bridges,
+        "backfill_receipts": receipts,
+        "backfill_autofire": super::backfill::autofire_enabled(),
+        "selection": selection,
+        "token_budget": lexical::HOOK_TOKEN_BUDGET,
+        "ranking_signal": ranking,
+    }))
+}
+
+fn raise_direction(receipt: &Value) -> &'static str {
+    let raised = match (
+        receipt["new_stability_q"].as_i64(),
+        receipt["old_stability_q"].as_i64(),
+    ) {
+        (Some(new), Some(old)) => new > old,
+        _ => receipt["new_score"].as_f64() > receipt["old_score"].as_f64(),
+    };
+    if raised { "raise" } else { "lower" }
 }
 
 #[cfg(test)]

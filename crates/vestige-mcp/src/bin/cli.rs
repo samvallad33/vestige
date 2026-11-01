@@ -5497,21 +5497,10 @@ fn run_recall(
     let query = query.context("pass a QUERY or --handle")?;
 
     if is_strata(&storage) {
-        // Free text needs similarity, which a Strata log does not run.
-        if json {
-            // The MCP tool's handle_required payload, candidates included.
-            let value = recall_handle(serde_json::json!({ "handle": "", "query": query }))?;
-            println!("{}", serde_json::to_string_pretty(&value)?);
-        }
-        let suggestions = handle_suggestions(&storage, &query);
-        let found = if suggestions.is_empty() {
-            "No word in the text is a handle in this store.".to_string()
-        } else {
-            format!("Handles in your text: {}.", suggestions.join("; "))
-        };
-        anyhow::bail!(
-            "similarity_disabled: free-text recall is not a Strata operation in Vestige 4.0 (no embeddings, BM25, FTS or keyword matching). Recall by exact handle instead: vestige recall --handle <memory id | unique id prefix of 8+ chars | exact tag>. {found}"
-        );
+        // Exact-token ranking over stored text. An exact id or tag passed as
+        // the query still resolves as a handle inside the same call.
+        let value = recall_handle(serde_json::json!({ "query": query }))?;
+        return print_handle_recall(&query, &value, json);
     }
 
     let result = rt.block_on(async {
@@ -5581,40 +5570,6 @@ fn run_recall(
     }
 
     Ok(())
-}
-
-/// Words of `text` that resolve as exact handles, as `--handle` arguments.
-/// Same tokens the MCP tool mines (the whole text, then up to eight
-/// identifier-shaped words of 3+ chars), resolved exactly: no fuzzy match.
-fn handle_suggestions(storage: &Arc<Storage>, text: &str) -> Vec<String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let mut queries: Vec<&str> = vec![text];
-    queries.extend(
-        text.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.' | '/' | '-')))
-            .filter(|token| token.len() >= 3)
-            .take(8),
-    );
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for query in queries {
-        if !seen.insert(query) {
-            continue;
-        }
-        let resolution = storage.resolve_handle(query);
-        let count = resolution.ids.len();
-        if count == 0 {
-            continue;
-        }
-        out.push(format!(
-            "--handle {query} ({}, {count} memor{})",
-            resolution.kind.as_str(),
-            if count == 1 { "y" } else { "ies" }
-        ));
-    }
-    out
 }
 
 /// Most resolved memories printed for one handle; --json prints every one.

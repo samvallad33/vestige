@@ -46,7 +46,7 @@ Vestige is the log of what we decided and what happened. Use it automatically.
 3. Deal with any triggered intentions that `session_start` lists. Ask me before
    you cancel one.
 
-A miss returns `error: handle_required`. That means no such tag or id exists.
+A miss on a handle returns `error: handle_required`. That means no such tag or id exists. A free-text `query` is ranked by exact tokens over stored text and returns full records.
 
 ---
 

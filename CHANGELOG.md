@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Memory the hook can actually find
+
+- `recall` ranks a free-text query by exact-token BM25 over stored memory text and tags. An exact id, unique prefix, or exact tag still resolves as a handle. There are no embeddings, no stemmer, and no edit distance. `reason` and `contradictions` still return `similarity_disabled`.
+- Ranked hits and one-hop neighbors on the default full detail are whole records. The memory hook packs whole records into about 3,000 tokens, highest score first, and does not fill a prompt with unrelated high-salience records. A prompt that names one person does not pull in another person's records.
+- Recall can attach up to four two-hop exact-tag bridges (`person:`, `place:`, `food:`, `file:`, `service:`, `symbol:`). A backfill raise is labeled `Came back` in the hook context.
+- The hook no longer says "Verify facts before acting." Served records are framed as the user's own saved history. `hooks/preflight-swarm.sh` exits immediately and does not inject `<subconscious_preflight>`.
+- `memory_status` health defaults to a compact reply (scheduler dump, FSRS preview, and zero embedding counters move behind `detail=full`). `view=tools` without `tool` returns names and a short description, not every schema. The server instructions no longer tell the agent to load that inventory before answering.
+- The installer memory hook captures durable facts from ordinary prompts, including multi-line prompts and assistant turns: people, places, dates, jobs, relationships, possessions, plans, preferences, health, and changes. Typed tags use one `person:` plus `health:`, `condition:`, `medication:`, `diet:`, and `preference:key=value`, so salience backfill and conflicting-preference updates can fire. A single-valued change supersedes the previous record for that slot. A replayed `intent_id` (`decision: replay`, `replayOf`, no `nodeId`) is treated as admitted. A preflight or other non-write is quarantined. One failure does not abort the rest of the queue, and a deadline leaves the unattempted files queued.
+
 ### Proof-carrying pull requests
 
 - Record a signed test witness when an agent runs a command on the witness allowlist: the command, the

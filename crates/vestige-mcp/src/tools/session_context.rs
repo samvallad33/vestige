@@ -21,8 +21,8 @@ pub fn schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "memory_hook": {"type":"object", "description":"Read-only local-hook salience packet. Exact recorded entities select; salience ranks.",
-                "properties":{"prompt":{"type":"string","maxLength":65536},"limit":{"type":"integer","minimum":1,"maximum":8},
+            "memory_hook": {"type":"object", "description":"Read-only local-hook packet. Exact-token BM25 ranks stored text; an empty prompt returns top salience. Full records, about 3000 tokens.",
+                "properties":{"prompt":{"type":"string","maxLength":65536},"limit":{"type":"integer","minimum":1,"maximum":24},
                     "trigger":{"type":"object"}}},
             "queries": {
                 "type": "array",
