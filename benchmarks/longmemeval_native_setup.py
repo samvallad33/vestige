@@ -9,6 +9,8 @@ import json
 import re
 import shutil
 import subprocess
+import select
+import time
 
 from benchmarks.real_engine.engine import HookedRealEngine
 from benchmarks.real_engine.runtime import append_jsonl,canonical,utc_now
@@ -36,14 +38,38 @@ class NativeSetupEngine(HookedRealEngine):
     def product_event(self,event,prompt=''):
         self.prepare_product_setup()
         client=Path(self.product_config).parent/'hooks/memory.cjs'
-        # Invoke the product's exported lifecycle handler; its original190ms
-        # native work budget stays intact. Only transport/client payload adapts.
-        script="const fs=require('fs');const m=require(process.argv[1]);m.run(JSON.parse(fs.readFileSync(0,'utf8'))).then(v=>process.stdout.write(JSON.stringify(v))).catch(e=>{process.stderr.write(String(e));process.exitCode=1})"
-        payload={'event':event,'client':'codex','configFile':str(self.product_config),'input':{'session_id':self.product_session,'prompt':prompt,'cwd':str(self.cwd),'source':'startup' if event=='session' else ''}}
-        result=subprocess.run([self.product_node,'-e',script,str(client)],input=canonical(payload),capture_output=True,text=True,env=self.hooks.env,cwd=self.cwd,timeout=5)
-        if result.returncode:raise RuntimeError('actual product memory client failed: '+result.stderr[:400])
-        value=json.loads(result.stdout or '{}');context=value.get('hookSpecificOutput',{}).get('additionalContext','')
-        append_jsonl(self.product_log,{'event':event,'timestamp':utc_now(),'input':payload['input'],'stdout':result.stdout,'stderr':result.stderr,'exit_code':result.returncode,'injected_context':context,'native_client_source':str(client)})
+        if event in {'turn','end'}:
+            # Official history questions contain newlines; the unchanged
+            # explicitFact grammar cannot enqueue a fact from this prompt.
+            # No assistant-derived facts or pending synthetic saves exist.
+            if event=='end':self.hooks.native_call('session_start',{'memory_hook':{'limit':1}})
+            append_jsonl(self.product_log,{'event':event,'timestamp':utc_now(),'injected_context':'','queued_facts':0,'reason':'no explicit fact queued by the product declaration grammar'})
+            return []
+        if not hasattr(self,'product_formatter'):
+            script="""const readline=require('readline');const m=require(process.argv[1]);const t=require(process.argv[2]);const rl=readline.createInterface({input:process.stdin});let current;
+console.log(JSON.stringify({ready:true}));
+rl.on('line',line=>{const x=JSON.parse(line);if(x.kind==='begin'){current=x;const cause=t.trigger(x.prompt,t.defaults);console.log(JSON.stringify({arguments:{memory_hook:{prompt:x.prompt,limit:x.event==='session'?8:cause.limit,trigger:cause,session:x.session,host:'codex',event:x.event,source:x.event==='session'?'startup':''}}}));}else{console.log(JSON.stringify(m.output('codex',current.event,m.formatContext(x.packet))));}});"""
+            self.product_formatter=subprocess.Popen([self.product_node,'-e',script,str(client),str(client.parent.parent/'lib/memory-triggers.cjs')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=self.hooks.env,cwd=self.cwd)
+            if not select.select([self.product_formatter.stdout],[],[],5)[0] or not json.loads(self.product_formatter.stdout.readline()).get('ready'):
+                raise RuntimeError('unchanged product formatter failed startup')
+        started=time.monotonic();deadline=started+0.190
+        process=self.product_formatter
+        def exchange(value):
+            process.stdin.write(canonical(value)+'\n');process.stdin.flush()
+            if not select.select([process.stdout],[],[],max(0,deadline-time.monotonic()))[0]:raise TimeoutError('product memory190ms deadline')
+            return json.loads(process.stdout.readline())
+        request={'kind':'begin','event':event,'prompt':prompt,'session':self.product_session}
+        context='';value={};error=None
+        try:
+            native=exchange(request)['arguments']
+            # No host memory selection: the actual native packet is the only
+            # source. Reuse the required live child instead of another process.
+            packet=self.hooks.native_call('session_start',native)
+            value=exchange({'kind':'packet','packet':packet})
+            context=value.get('hookSpecificOutput',{}).get('additionalContext','')
+        except TimeoutError as exc:error=str(exc)
+        append_jsonl(self.product_log,{'event':event,'timestamp':utc_now(),'input':request,'stdout':canonical(value),'stderr':error or '',
+            'injected_context':context,'native_client_source':str(client),'transport':'persistent-original-JS-functions-to-existing-native-stdio','elapsed_ms':(time.monotonic()-started)*1000})
         return [context] if context else []
 
     def begin_turn(self,prompt):
@@ -57,3 +83,17 @@ class NativeSetupEngine(HookedRealEngine):
         verdict=super().finish_turn(messages)
         self.product_event('turn',getattr(self,'product_prompt',''))
         return verdict
+
+    def close(self):
+        try:
+            if hasattr(self,'product_config') and not getattr(self,'product_ended',False):
+                self.product_ended=True
+                if self.client and self.client._proc and self.client._proc.poll() is None:
+                    self.product_event('end',getattr(self,'product_prompt',''))
+        finally:
+            process=getattr(self,'product_formatter',None)
+            if process is not None:
+                process.terminate()
+                try:process.wait(timeout=2)
+                except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)
+            super().close()

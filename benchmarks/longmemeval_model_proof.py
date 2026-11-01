@@ -52,12 +52,13 @@ def inspect_model_retrieval(row,raw):
 
 
 async def run_model_proof(campaign):
-    repo=Path(__file__).resolve().parents[1];root=repo/'runs/lme-model-driven-proof-v1';root.mkdir(exist_ok=True)
+    repo=Path(__file__).resolve().parents[1];root=repo/'runs/lme-model-driven-proof-v2';root.mkdir(exist_ok=True)
     if (root/'proof.json').exists():return json.loads((root/'proof.json').read_text())
     clone=copy.copy(campaign);clone.runs=root;clone.preflight_counts={'longmemeval':10};clone.preflight_count=10
     sources={str(p.relative_to(repo)):hashlib.sha256(p.read_bytes()).hexdigest() for p in [Path(__file__),repo/'benchmarks/longmemeval_native_setup.py',repo/'packages/vestige-init/hooks/memory.cjs',repo/'packages/vestige-init/lib/memory-triggers.cjs',repo/'docs/integrations/codex-intelligent-memory.md']}
     clone.config_hash=hashlib.sha256(canonical({'base_config':campaign.config_hash,'product_setup_sources':sources,'proof':'MODEL_retrieves_observed_ID_then_answers_v1'}).encode()).hexdigest()
     shutil.copy2(repo/'runs/build-manifest.json',root/'build-manifest.json')
+    shutil.copy2(repo/'runs/hook-audit.json',root/'hook-audit.json')
     atomic_write(root/'config.json',canonical({'config_hash':clone.config_hash,'base_config_hash':campaign.config_hash,'sources':sources,'limits':{'max_calls':6,'max_output':2048,'context':32768},'full_run_authorized':False})+'\n')
     all_items=load_longmemeval(repo/'runs/upstream/longmemeval');ids=fixed_ids(all_items);items=[i for i in all_items if i.id in ids]
     engine_module.HookedRealEngine=NativeSetupEngine
