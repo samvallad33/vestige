@@ -1,7 +1,7 @@
 ---
 name: synthesis-composer
 description: Optional decision helper that turns Vestige retrievals into concise recommendations. Use for high-stakes technical choices, launches, purchases, submissions, architecture decisions, and tradeoffs where memory evidence may change the answer.
-tools: mcp__vestige__deep_reference, mcp__vestige__explore_connections, mcp__vestige__search
+tools: mcp__vestige__recall, mcp__vestige__causal_walk
 model: claude-haiku-4-5-20251001
 ---
 

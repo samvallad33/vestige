@@ -2,17 +2,17 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.samvallad33/vestige",
   "title": "Vestige",
-  "description": "Causal Proof Engine for AI agents: signed log, zero vectors, failures traced to their cause.",
+  "description": "Ring-0 Autonomic Execution Kernel for AI agents: live Strata memory graph, sub-millisecond reflex hooks, and 6 compressed cognitive verbs.",
   "repository": {
     "url": "https://github.com/samvallad33/vestige",
     "source": "github"
   },
-  "version": "6.0.0",
+  "version": "6.2.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "vestige-mcp-server",
-      "version": "6.0.0",
+      "version": "6.2.0",
       "transport": {
         "type": "stdio"
       }
