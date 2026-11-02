@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Vestige v6.2 Master Benchmark Runner: 3-Way Ablation Matrix ("David vs. Goliath")
-# Evaluates 8B Model Champions (Qwen3-Coder-8B / Llama-3.1-8B) across:
+# Evaluates Local Open-Weights Champions (Qwen2.5-3B-Instruct) across:
 #   Mode A (None): Baseline agent without memory/hooks
 #   Mode B (Forward-Only FSRS-6): Standard retention, RSB disabled
 #   Mode C (Full Vestige v6.2): FSRS-6 + Retroactive Salience Backfill + Reflex Hooks
@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-MODEL="${BENCHMARK_MODEL:-qwen3-coder:8b}"
+MODEL="${BENCHMARK_MODEL:-qwen2.5:3b-instruct}"
 MODE="${1:---ablation=C}"
 
 echo "================================================================================"
@@ -54,7 +54,7 @@ fi
 # 2. MemConflict Showdown
 echo ">>> STEP 2: Running MemConflict Showdown (${MODEL})..."
 if [ -f "$ROOT/benchmarks/memconflict/run-nano-showdown.sh" ]; then
-  sh "$ROOT/benchmarks/memconflict/run-nano-showdown.sh" --instances 1 --sessions 10 || true
+  sh "$ROOT/benchmarks/memconflict/run-nano-showdown.sh" --model "${MODEL}" --instances 1 --sessions 10 || true
 fi
 
 # 3. Cryptographically Seal Evaluation Run into Strata Log
