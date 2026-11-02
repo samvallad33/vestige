@@ -13,7 +13,7 @@ const CANONICAL = {
   gemini: { BeforeTool: 'PreToolUse', AfterTool: 'PostToolUse', BeforeAgent: 'UserPromptSubmit', AfterAgent: 'Stop', SessionStart: 'SessionStart', PreCompress: 'PreCompact' },
   cursor: { preToolUse: 'PreToolUse', postToolUse: 'PostToolUse', postToolUseFailure: 'PostToolUseFailure', beforeSubmitPrompt: 'UserPromptSubmit', sessionStart: 'SessionStart', subagentStart: 'SubagentStart', preCompact: 'PreCompact', stop: 'Stop' },
 };
-const CURSOR_CONTEXT = new Set(['sessionStart', 'postToolUse']);
+const CURSOR_CONTEXT = new Set(['sessionStart', 'postToolUse', 'postToolUseFailure']);
 
 function canonical(client, event) {
   return (CANONICAL[client] && CANONICAL[client][event]) || event;
@@ -23,16 +23,25 @@ function argumentsFor(client, event, input) {
   const pick = (...keys) => { for (const k of keys) if (typeof input[k] === 'string' && input[k]) return input[k]; return ''; };
   const toolInput = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
   const response = input.tool_response && typeof input.tool_response === 'object' ? input.tool_response : {};
+  const exitCode = typeof response.exit_code === 'number'
+    ? response.exit_code
+    : (typeof response.status === 'number' ? response.status : (response.error || response.stderr ? 1 : 0));
+  
+  let canonEvent = canonical(client, event);
+  if (canonEvent === 'PostToolUse' && exitCode !== 0) {
+    canonEvent = 'PostToolUseFailure';
+  }
+
   return {
     action: 'hook', host: client, format: 'plain',
-    event: canonical(client, event),
+    event: canonEvent,
     session: pick('session_id', 'sessionId', 'conversation_id'),
     tool: pick('tool_name', 'toolName'),
     call: pick('tool_use_id', 'toolUseId', 'call_id'),
     agent: pick('agent_id', 'agentId'),
     command: typeof toolInput.command === 'string' ? toolInput.command : pick('command'),
     source: pick('source'),
-    error: pick('error'),
+    error: pick('error') || (typeof response.stderr === 'string' ? response.stderr : ''),
     interrupt: input.is_interrupt === true ? 'true' : '',
     file: typeof toolInput.file_path === 'string' ? toolInput.file_path : '',
     cwd: pick('cwd'),
@@ -42,6 +51,7 @@ function argumentsFor(client, event, input) {
     stderr: typeof response.stderr === 'string' ? response.stderr : '',
     interrupted: response.interrupted === true ? 'true' : '',
     background: toolInput.run_in_background === true ? 'true' : '',
+    exit_code: exitCode,
   };
 }
 
@@ -62,7 +72,16 @@ async function run({ client, configFile, eventFlag, input, deadlineMs = 450 }) {
       { ...process.env, VESTIGE_HTTP_ENABLED: '0', VESTIGE_DASHBOARD_ENABLED: 'false', VESTIGE_AUTOPILOT_ENABLED: '0' });
     await transport.ready();
     const answer = await transport.tool('reflex', args);
-    return hostOutput(client, event, answer && typeof answer.context === 'string' ? answer.context : '');
+    let context = answer && typeof answer.context === 'string' ? answer.context : '';
+    
+    // Auto-Correction Prompt Append on Non-Zero Exit Code
+    if (args.event === 'PostToolUseFailure' || args.exit_code !== 0) {
+      const handle = (answer && (answer.memory || answer.failure_id)) || 'mem-failure';
+      const promptAppend = `\n\n⚡ VESTIGE REFLEX: Command failed. Retroactive Salience Backfill automatically triggered. Run causal_walk(action='walk', from_handle='${handle}') to inspect the upstream topological cause immediately.`;
+      context = (context ? context + '\n' : '') + promptAppend;
+    }
+
+    return hostOutput(client, event, context);
   } catch {
     return {};
   } finally {

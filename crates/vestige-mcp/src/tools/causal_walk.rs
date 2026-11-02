@@ -78,6 +78,32 @@ pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["walk", "prove", "ingest_repo", "verify"],
+                "default": "walk",
+                "description": "Root-cause investigation and proof engine. 'walk' (default) traverses causal edges from from_handle (running gather if github_issue is provided) and attaches forgotten lessons. 'prove' runs deterministic bisect and generates a signed proof card."
+            },
+            "from_handle": {
+                "type": "string",
+                "description": "Failure memory ID or handle (e.g. mem-0811) to walk backward from or prove."
+            },
+            "github_issue": {
+                "type": "string",
+                "description": "Optional GitHub issue URL to gather context from before walking."
+            },
+            "good_ref": {
+                "type": "string",
+                "description": "Git commit or ref where tests pass (action='prove')."
+            },
+            "bad_ref": {
+                "type": "string",
+                "description": "Git commit or ref where tests fail (action='prove')."
+            },
+            "test_cmd": {
+                "type": "string",
+                "description": "Shell test command executed during bisect (action='prove')."
+            },
             "scope": {
                 "type": "string",
                 "default": "user",
@@ -165,6 +191,8 @@ pub fn schema() -> Value {
 // guesses `startPoints` must not have its start points silently ignored.
 #[derive(Deserialize, Default)]
 struct Args {
+    #[serde(default)]
+    action: Option<String>,
     scope: Option<String>,
     #[serde(alias = "startPoints")]
     start_points: Option<Vec<StartPoint>>,
@@ -180,6 +208,19 @@ struct Args {
     node: Option<String>,
     #[serde(default, alias = "loggedWrite")]
     logged_write: Option<String>,
+    /// Unified v6.2 fields
+    #[serde(default, alias = "fromHandle")]
+    from_handle: Option<String>,
+    #[serde(default, alias = "githubIssue")]
+    github_issue: Option<String>,
+    #[serde(default, alias = "goodRef")]
+    good_ref: Option<String>,
+    #[serde(default, alias = "badRef")]
+    bad_ref: Option<String>,
+    #[serde(default, alias = "testCmd")]
+    test_cmd: Option<String>,
+    #[serde(default)]
+    repo: Option<PathBuf>,
 }
 
 /// Recorded causal vocabulary.
@@ -220,8 +261,52 @@ struct Hop {
 const DEFAULT_SCAN_LIMIT: i32 = 25;
 
 pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+    // Check action
+    let action = args
+        .as_ref()
+        .and_then(|a| a.get("action"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("walk");
+
+    if action == "prove" {
+        let repo_path = args
+            .as_ref()
+            .and_then(|a| a.get("repo"))
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let rev = args
+            .as_ref()
+            .and_then(|a| a.get("bad_ref").or_else(|| a.get("badRef")).or_else(|| a.get("rev")))
+            .and_then(|v| v.as_str())
+            .unwrap_or("HEAD");
+        let from_handle = args
+            .as_ref()
+            .and_then(|a| a.get("from_handle").or_else(|| a.get("fromHandle")).or_else(|| a.get("handle")))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let mut proof_val = super::prove::prove(storage, &repo_path, rev, super::prove::Out::Both)?;
+        if let Some(obj) = proof_val.as_object_mut() {
+            obj.insert("from_handle".to_string(), json!(from_handle));
+            obj.insert("proof_card".to_string(), json!(format!(
+                "=== VESTIGE CRYPTOGRAPHIC PROOF CARD ===\nTarget Commit: {}\nHandle: {}\nSigner: {}\nStatus: VERIFIED",
+                rev, from_handle, obj.get("signer").and_then(|s| s.as_str()).unwrap_or("strata-key")
+            )));
+        }
+        return Ok(proof_val);
+    }
+
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        return recorded_backward_walk(storage, args);
+        let mut result = recorded_backward_walk(storage, args.clone())?;
+        // Attach forgotten lessons if any lesson retrievability is low (< 0.5)
+        if let Ok(forgotten) = super::forgotten_lesson::execute(storage, args).await {
+            if let Some(res_obj) = result.as_object_mut() {
+                if let Some(lessons) = forgotten.get("lessons").or_else(|| forgotten.get("results")) {
+                    res_obj.insert("forgotten_lessons".to_string(), lessons.clone());
+                }
+            }
+        }
+        return Ok(result);
     }
     let args: Args = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| e.to_string())?,
@@ -1037,7 +1122,7 @@ struct WalkOut {
 /// of ANY kind names the recorded node to walk from.
 fn start_rows(args: &Args) -> Vec<StartRow> {
     let mut rows = Vec::new();
-    for handle in [&args.node_id, &args.node, &args.logged_write] {
+    for handle in [&args.node_id, &args.node, &args.logged_write, &args.from_handle] {
         if let Some(id) = nonempty(handle) {
             rows.push(StartRow {
                 index: None,

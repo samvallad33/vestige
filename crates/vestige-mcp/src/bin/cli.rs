@@ -156,11 +156,6 @@ enum Commands {
     /// Run health check with warnings and recommendations
     Health,
 
-    /// Run the memory consolidation cycle (a no-op on a Strata log in 4.0)
-    ///
-    /// A legacy SQLite store runs decay, promotion, pruning and dedup. A
-    /// Strata log runs none of those passes in 4.0, so nothing changes.
-    Consolidate,
 
     /// Import a v3 vestige.db into a Strata log by running vestige-upgrade
     ///
@@ -198,11 +193,6 @@ enum Commands {
         sandwich: SandwichInstallOptions,
     },
 
-    /// Manage optional Claude Code Cognitive Sandwich companion files.
-    Sandwich {
-        #[command(subcommand)]
-        command: SandwichCommands,
-    },
 
     /// Re-ingest memories from a JSON file (for example a `vestige export`)
     ///
@@ -325,63 +315,9 @@ enum Commands {
 
     /// Export an exact portable archive (legacy SQLite stores only)
     ///
-    /// A Strata log in 4.0 does not write portable archives and refuses. Use
-    /// `vestige export` for the memories or `vestige backup` for an exact copy
-    /// of the log.
-    PortableExport {
-        /// Output archive path
-        output: PathBuf,
-    },
 
-    /// Import an exact portable archive (legacy SQLite stores only)
-    ///
-    /// A Strata log in 4.0 does not read portable archives and refuses.
-    PortableImport {
-        /// Input archive path
-        input: PathBuf,
-        /// Merge into the current database instead of requiring an empty target
-        #[arg(long)]
-        merge: bool,
-    },
 
-    /// Two-way sync with a portable archive file or Vestige Cloud (legacy
-    /// SQLite stores only)
-    ///
-    /// Sync merges portable archives, which a Strata log in 4.0 does not write
-    /// or read, so it refuses there. Use `vestige export` or `vestige backup`.
-    Sync {
-        /// Sync archive path, often in Dropbox/iCloud/Syncthing/Git.
-        /// Omit when using --cloud.
-        archive: Option<PathBuf>,
-        /// Sync with the hosted Vestige Cloud managed-sync service instead of a
-        /// file. Requires a sync key (VESTIGE_CLOUD_SYNC_KEY) and endpoint
-        /// (--endpoint or VESTIGE_CLOUD_ENDPOINT).
-        #[arg(long)]
-        cloud: bool,
-        /// Vestige Cloud base endpoint (e.g. https://sync.vestige.dev).
-        /// Defaults to the VESTIGE_CLOUD_ENDPOINT env var.
-        #[arg(long)]
-        endpoint: Option<String>,
-    },
 
-    /// Delete stale memories below a retention threshold (legacy SQLite stores)
-    ///
-    /// Deletion is withheld on a Strata log in 4.0: the log is append-only.
-    /// --dry-run still lists the memories below the threshold.
-    Gc {
-        /// Minimum retention strength to keep (delete below this)
-        #[arg(long, default_value = "0.1")]
-        min_retention: f64,
-        /// Maximum age in days (delete memories older than this AND below retention threshold)
-        #[arg(long)]
-        max_age_days: Option<u64>,
-        /// Dry run - show what would be deleted without actually deleting
-        #[arg(long)]
-        dry_run: bool,
-        /// Skip confirmation prompt
-        #[arg(long)]
-        yes: bool,
-    },
 
     /// Launch the web dashboard
     Dashboard {
@@ -429,29 +365,6 @@ enum Commands {
         allow_secrets: bool,
     },
 
-    /// Ingest git commits as memory records (legacy SQLite stores only)
-    ///
-    /// One record per commit, upserted by repo and sha and dated to the commit
-    /// time, so re-running is idempotent. The Strata store in 4.0 exposes no
-    /// source upsert or creation-time rewrite, so it refuses before writing.
-    IngestGit {
-        /// Path to the git repository
-        path: PathBuf,
-        /// Only commits on/after this date (RFC 3339 or YYYY-MM-DD)
-        #[arg(long)]
-        since: Option<String>,
-        /// Only commits before this date (RFC 3339 or YYYY-MM-DD) — bound the
-        /// window above the failure date so post-cause commits don't eat the
-        /// max-commits budget
-        #[arg(long)]
-        until: Option<String>,
-        /// Stop after this many commits (newest first)
-        #[arg(long, default_value = "2000")]
-        max_commits: usize,
-        /// Machine-readable output
-        #[arg(long)]
-        json: bool,
-    },
 
     /// Create typed edges between memories that record the same exact identity
     ///
@@ -497,27 +410,6 @@ enum Commands {
         limit: Option<usize>,
     },
 
-    /// Re-score older memories through exact shared entities, or undo a receipt.
-    Backfill {
-        /// Trigger memory id, or the action `undo` / `receipts`
-        trigger: Option<String>,
-        /// Receipt id when the action is `undo`
-        receipt: Option<String>,
-        /// Legacy alias for the trigger memory id
-        #[arg(long)]
-        failure_id: Option<String>,
-        #[arg(long)]
-        manual: bool,
-        #[arg(long, default_value = "30")]
-        lookback_days: i64,
-        /// Preview without appending any store data
-        #[arg(long, alias = "no-promote")]
-        dry_run: bool,
-        #[arg(long, default_value = "user")]
-        scope: String,
-        #[arg(long)]
-        json: bool,
-    },
 
     /// Causal walk: investigate a failure from an explicit start point
     ///
@@ -754,6 +646,18 @@ enum Commands {
     },
 }
 
+
+/// Zero-lock command router: dispatches over reflex.sock / attach IPC if a server
+/// daemon is live, eliminating .serve.lock file collisions.
+fn route_cli_command(dir: &Path, tool: &str, args: serde_json::Value) -> anyhow::Result<Option<serde_json::Value>> {
+    if vestige_mcp::attach::probe_owner_blocking(dir).is_some() {
+        let response = vestige_mcp::attach::call_tool_blocking(dir, tool, args)
+            .map_err(|e| anyhow::anyhow!("IPC daemon call failed: {e}"))?;
+        return Ok(Some(response));
+    }
+    Ok(None)
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -769,8 +673,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Stats { tagging, states } => run_stats(tagging, states),
         Commands::Health => run_health(),
-        Commands::Consolidate => run_consolidate(),
-        Commands::Upgrade { dry_run } => run_upgrade(dry_run),
+                Commands::Upgrade { dry_run } => run_upgrade(dry_run),
         Commands::Update {
             version,
             install_dir,
@@ -786,11 +689,7 @@ fn main() -> anyhow::Result<()> {
             sandwich_companion,
             sandwich,
         ),
-        Commands::Sandwich { command } => match command {
-            SandwichCommands::Install { version, options } => {
-                run_sandwich_install(version.as_deref(), &options)
-            }
-        },
+                },
         Commands::Restore { file } => run_restore(file),
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
@@ -808,20 +707,7 @@ fn main() -> anyhow::Result<()> {
             tags,
             since,
         } => run_export(output, format, tags, since),
-        Commands::PortableExport { output } => run_portable_export(output),
-        Commands::PortableImport { input, merge } => run_portable_import(input, merge),
-        Commands::Sync {
-            archive,
-            cloud,
-            endpoint,
-        } => run_sync(archive, cloud, endpoint),
-        Commands::Gc {
-            min_retention,
-            max_age_days,
-            dry_run,
-            yes,
-        } => run_gc(min_retention, max_age_days, dry_run, yes),
-        Commands::Dashboard { port, no_open } => run_dashboard(port, !no_open),
+                                        Commands::Dashboard { port, no_open } => run_dashboard(port, !no_open),
         Commands::Ingest {
             content,
             tags,
@@ -839,14 +725,7 @@ fn main() -> anyhow::Result<()> {
             created_at,
             allow_secrets,
         ),
-        Commands::IngestGit {
-            path,
-            since,
-            until,
-            max_commits,
-            json,
-        } => run_ingest_git(path, since, until, max_commits, json),
-        Commands::Connect {
+                Commands::Connect {
             dry_run,
             min_shared,
             max_edges,
@@ -856,27 +735,20 @@ fn main() -> anyhow::Result<()> {
             include_suspected,
             json,
             limit,
-        } => run_scan_secrets(include_suspected, json, limit),
-        Commands::Backfill {
-            trigger,
-            receipt,
-            failure_id,
-            manual,
-            lookback_days,
-            dry_run,
-            scope,
-            json,
-        } => run_backfill(
-            trigger,
-            receipt,
-            failure_id,
-            manual,
-            lookback_days,
-            dry_run,
-            scope,
-            json,
-        ),
-        Commands::CausalWalk {
+        } => {
+            let data_dir = cli_data_dir()?;
+            let args = serde_json::json!({
+                "action": "scan_secrets",
+                "include_suspected": include_suspected,
+                "limit": limit
+            });
+            if let Some(resp) = route_cli_command(&data_dir, "precedent", args)? {
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+                return Ok(());
+            }
+            run_scan_secrets(include_suspected, json, limit)
+        }
+                Commands::CausalWalk {
             failing_test,
             stack_frame,
             ci_run,
@@ -945,6 +817,23 @@ fn main() -> anyhow::Result<()> {
             json,
         } => run_forgotten_lesson(failure_id, scope, json),
         Commands::Prove(args) => {
+            let data_dir = cli_data_dir()?;
+            let ipc_args = serde_json::json!({
+                "action": "prove",
+                "from_handle": args.logged_write,
+                "good_ref": args.good,
+                "bad_ref": args.bad,
+                "test_cmd": args.test,
+                "repo": args.repo
+            });
+            if let Some(resp) = route_cli_command(&data_dir, "causal_walk", ipc_args)? {
+                if let Some(card) = resp.get("proof_card").and_then(|c| c.as_str()) {
+                    println!("{card}");
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                }
+                return Ok(());
+            }
             let code =
                 vestige_mcp::walk_verify::run(&args, || Ok((open_storage()?, cli_data_dir()?)))?;
             if code != 0 {

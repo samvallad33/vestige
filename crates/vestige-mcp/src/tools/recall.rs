@@ -254,6 +254,20 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         .and_then(|v| v.as_u64())
         .map_or(0, |n| n as usize);
     if !object.contains_key("handle") {
+        // Check if an id was passed directly (absorbing memory(action="get", id=...))
+        if let Some(id) = object.get("id").and_then(|v| v.as_str()).map(str::trim) {
+            if !id.is_empty() {
+                let resolution = storage.resolve_handle(id);
+                return Some(Ok(handle_resolution_payload(
+                    storage,
+                    id,
+                    resolution,
+                    limit,
+                    detail_level,
+                    offset,
+                )));
+            }
+        }
         // A Strata log has no free-text search, so a `query` there can only be
         // an exact handle. Resolve it as one instead of refusing an id or a tag
         // because it arrived under the other parameter name.
@@ -267,7 +281,8 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         }
         let resolution = storage.resolve_handle(query);
         if resolution.ids.is_empty() && resolution.candidates.is_empty() {
-            return None; // not a handle: the search path answers similarity_disabled as before
+            // Strata returns structured handle discovery refusal on free-text query
+            return Some(Ok(handle_required_payload(storage, query)));
         }
         return Some(Ok(handle_resolution_payload(
             storage,
@@ -373,6 +388,8 @@ fn handle_resolution_payload(
         return out;
     }
     if !resolution.candidates.is_empty() {
+        let cands = candidate_json(&resolution);
+        let discovered = cands.clone();
         return serde_json::json!({
             "error": "ambiguous",
             "detail": format!(
@@ -381,7 +398,8 @@ fn handle_resolution_payload(
             ),
             "handle": handle,
             "kind": resolution.kind.as_str(),
-            "candidates": candidate_json(&resolution),
+            "candidates": cands,
+            "discovered_handles": discovered,
         });
     }
     // Nothing matched. The resolver's own message is more specific than the
@@ -393,6 +411,7 @@ fn handle_resolution_payload(
         "error": "handle_required",
         "detail": detail,
         "candidates": [],
+        "discovered_handles": [],
     })
 }
 
@@ -432,6 +451,14 @@ fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
         }
         candidates.truncate(MAX_CANDIDATES);
     }
+    let discovered: Vec<serde_json::Value> = candidates
+        .iter()
+        .map(|(id, kind)| serde_json::json!({
+            "id": id,
+            "kind": kind.as_str(),
+            "handle": id,
+        }))
+        .collect();
     serde_json::json!({
         "error": "handle_required",
         "detail": vestige_core::storage::HANDLE_REQUIRED_DETAIL,
@@ -439,6 +466,7 @@ fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
             .iter()
             .map(|(id, kind)| serde_json::json!({"id": id, "kind": kind.as_str()}))
             .collect::<Vec<_>>(),
+        "discovered_handles": discovered,
     })
 }
 

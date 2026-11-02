@@ -24,6 +24,13 @@ pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "query": {
+                "type": "string",
+                "enum": ["stops", "receipt", "replay", "verify_log", "scan_secrets", "selftest"],
+                "default": "stops",
+                "description": "'stops': Operator gate history; 'receipt'/'replay': inspect or re-derive a write receipt; 'verify_log': run live cryptographic log verification; 'scan_secrets': scan memories for secret patterns; 'selftest': run planted-cause self-calibration."
+            },
+            "receipt_id": {"type": "string", "description": "For 'receipt' or 'replay': receipt ID."},
             "since": {"type": "string", "default": "24h", "description": "Window, e.g. 30m, 24h, 7d."},
             "cwd": {"type": "string", "description": "Only receipts whose cwd starts with this path."},
             "source": {"type": "string", "description": "Exact source, e.g. claude, zcode."},
@@ -727,9 +734,70 @@ fn run(home: &Path, q: &Query) -> Result<Value, String> {
     Ok(out)
 }
 
-pub async fn execute(_storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    let q = parse_query(args)?;
-    run(&operator_home(), &q)
+pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+    let raw = args.unwrap_or_else(|| json!({}));
+    let query_type = raw.get("query")
+        .or_else(|| raw.get("action"))
+        .and_then(Value::as_str)
+        .unwrap_or("stops");
+
+    match query_type {
+        "receipt" | "replay" => {
+            let mut r_args = raw.clone();
+            if query_type == "replay" {
+                if let Some(obj) = r_args.as_object_mut() {
+                    obj.insert("action".to_string(), json!("replay"));
+                }
+            } else if r_args.get("action").is_none() {
+                if let Some(obj) = r_args.as_object_mut() {
+                    obj.insert("action".to_string(), json!("get"));
+                }
+            }
+            crate::tools::receipt::execute(storage, Some(r_args)).await
+        }
+        "verify_log" => {
+            let path = storage.data_dir().to_path_buf();
+            let report = tokio::task::spawn_blocking(move || {
+                strata_verify::verify_path(&path)
+            })
+            .await
+            .map_err(|e| format!("Join error: {e}"))?;
+            serde_json::from_str(&report.json).map_err(|e| format!("Invalid verify report JSON: {e}"))
+        }
+        "scan_secrets" => {
+            let storage_guard = storage.clone();
+            let findings = tokio::task::spawn_blocking(move || {
+                let mut results = Vec::new();
+                if let Ok(nodes) = storage_guard.get_all_nodes_in_scope("user", 500, 0) {
+                    for node in nodes {
+                        for finding in vestige_core::scan_secrets(&node.content) {
+                            results.push(json!({
+                                "node_id": node.id,
+                                "rule": finding.rule_id,
+                                "confidence": format!("{:?}", finding.confidence),
+                                "secret_preview": finding.secret_preview,
+                            }));
+                        }
+                    }
+                }
+                results
+            })
+            .await
+            .map_err(|e| format!("Join error: {e}"))?;
+            Ok(json!({
+                "action": "scan_secrets",
+                "findings_count": findings.len(),
+                "findings": findings,
+            }))
+        }
+        "selftest" => {
+            crate::tools::selftest::execute(storage, Some(raw)).await
+        }
+        "stops" | _ => {
+            let q = parse_query(Some(raw))?;
+            run(&operator_home(), &q)
+        }
+    }
 }
 
 /// The same reader with a wider cap, for the dashboard: it draws every stop
