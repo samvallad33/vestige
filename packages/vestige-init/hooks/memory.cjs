@@ -502,7 +502,9 @@ function formatContext(packet) {
   for (const row of rows) lines.push(JSON.stringify({ id: row.id, text: row.content, entities: shown(row.tags) }));
   const ids = new Set(rows.map(row => row.id));
   for (const receipt of packet.backfill_receipts || []) {
-    if (receipt.direction === 'raise' && receipt.reason && ids.has(receipt.memory_id)) lines.push(`Came back: ${receipt.memory_id} — ${receipt.reason}`);
+    if (!ids.has(receipt.memory_id)) continue;
+    lines.push(JSON.stringify({ backfill_receipt: receipt.receipt_id, memory_id: receipt.memory_id, reason: receipt.reason }));
+    if (receipt.direction === 'raise' && receipt.reason) lines.push(`Came back: ${receipt.memory_id} — ${receipt.reason}`);
   }
   for (const bridge of packet.bridges || []) {
     if (!samePerson(bridge, rows)) continue;
