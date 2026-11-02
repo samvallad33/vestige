@@ -65,3 +65,8 @@ for (const [name, prompt] of [['multi-line', 'Line one about nothing.\n\nWhat in
 test('edge: formatContext on an empty or malformed packet never throws', () => {
   for (const p of [{}, { memories: [] }, { memories: [{ id: 'x' }], backfill_receipts: [{}], bridges: [] }]) assert.equal(typeof m.formatContext(p), 'string');
 });
+test('edge: empty prompt never falls back to top salience', opt, async t => {
+  const s = await store(t); await s.add('Maya plays cello', ['person:Maya']);
+  const { p, out } = await s.ask('   ');
+  assert.equal(p.memories.length, 0); assert.equal(ids(out).length, 0);
+});
