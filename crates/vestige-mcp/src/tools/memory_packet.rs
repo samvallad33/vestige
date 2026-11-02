@@ -252,7 +252,16 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             // Retroactive Salience Backfill comes first: a memory a backfill
             // receipt raised outranks every lexical score, so the record that
             // just came back is the first thing the hook serves.
-            let raised = |index: &usize| tie(&nodes[*index]) > 0;
+            // Only on target: a raised memory jumps the queue when the prompt
+            // also joins it by an index tag or its own BM25 score is at least
+            // half the best score; a receipt alone on a stop-word match does not.
+            let top_score = hits.iter().map(|hit| hit.score_micro).max().unwrap_or(0);
+            let on_target = |index: &usize| {
+                let node = &nodes[*index];
+                node.tags.iter().any(|tag| index_hits.contains(tag) || entities.contains(tag))
+                    || score_of(&node.id) * 2 >= top_score
+            };
+            let raised = |index: &usize| tie(&nodes[*index]) > 0 && on_target(index);
             // salience-pro 0.3.7 candidate reservation: a memory joined to the
             // prompt by a date or an avoid index tag is reserved a place right
             // after the raised ones, at most MAX_RESERVED, so lexical scores on

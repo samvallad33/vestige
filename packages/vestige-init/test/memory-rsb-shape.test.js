@@ -56,16 +56,25 @@ test('0.3.7: a fact that ended or never was gets no fact tag; a question is not 
     assert.ok(!tags.some(tag => /^(?:allergy|avoid|health):/.test(tag)), `${text}: ${tags}`);
   }
 });
-test('0.3.7: context serves came-back first, safety facts next, and hides index tags', () => {
+test('0.3.7: context keeps the engine order (on-target came-back, then safety-first index joins, then BM25) and hides index tags', () => {
   const out = m.formatContext({
     memories: [
-      { id: 'a', content: 'Maya likes jazz', tags: ['person:Maya', 'preference:jazz=like', 'facts-of:Maya'] },
-      { id: 'b', content: 'Maya has a peanut allergy', tags: ['person:Maya', 'allergy:peanut', 'avoid:peanut'] },
       { id: 'c', content: 'Maya felt off at Bangkok Garden', tags: ['person:Maya', 'day:2026-10-01'] },
+      { id: 'b', content: 'Maya has a peanut allergy', tags: ['person:Maya', 'allergy:peanut', 'avoid:peanut'] },
+      { id: 'a', content: 'Maya likes jazz', tags: ['person:Maya', 'preference:jazz=like', 'facts-of:Maya'] },
+      { id: 'z', content: 'Unrelated raised record', tags: [] },
     ],
-    backfill_receipts: [{ receipt_id: 'r', memory_id: 'c', reason: 'x', direction: 'raise' }],
+    backfill_receipts: [{ receipt_id: 'r', memory_id: 'c', reason: 'x', direction: 'raise' }, { receipt_id: 'q', memory_id: 'z', reason: 'y', direction: 'raise' }],
   });
   const ids = out.split('\n').filter(line => line.startsWith('{"id"')).map(line => JSON.parse(line).id);
-  assert.deepEqual(ids, ['c', 'b', 'a']);
+  assert.deepEqual(ids, ['c', 'b', 'a', 'z']);
+  assert.ok(out.includes('Came back: c'), out);
   assert.ok(!/facts-of:|avoid:|day:|yearly:/.test(out), out);
+  assert.ok(!/already stated/.test(out) && /search memory/.test(out), out);
+});
+test('context stays near the baseline size and never claims to be complete', () => {
+  const memories = Array.from({ length: 24 }, (_, i) => ({ id: `m${i}`, content: 'x'.repeat(1500), tags: [] }));
+  const out = m.formatContext({ memories });
+  assert.ok(out.length <= 7000, String(out.length));
+  assert.ok(/^\{"id"/m.test(out) && /smart_ingest/.test(out));
 });
