@@ -410,6 +410,9 @@ pub fn unfold_arguments(tool: &str, args: &mut Value) {
 pub fn full_schema(name: &str) -> Option<Value> {
     use super::*;
     Some(match name {
+        "session" => session_unified::schema(),
+        "remember" => remember_unified::schema(),
+        "curate" => curate_unified::schema(),
         "recall" => recall::schema(),
         "receipt" => receipt::schema(),
         "memory" => memory_unified::schema(),
@@ -439,6 +442,9 @@ pub fn full_schema(name: &str) -> Option<Value> {
 /// Every tool name `full_schema` knows, for the guards below.
 #[cfg(test)]
 const ALL_TOOLS: &[&str] = &[
+    "session",
+    "remember",
+    "curate",
     "recall",
     "receipt",
     "memory",

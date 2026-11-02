@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Command shim for the `reflex` tool, for hosts without Claude Code's `mcp_tool`
+// Command shim for `session(action="reflex")`, for hosts without Claude Code's `mcp_tool`
 // hook type (Codex, Cursor, Gemini) and for Claude Code's SessionStart at launch,
 // which fires before MCP servers connect. It forwards the hook's own fields to
 // the Vestige server, which answers with the context to show, and maps that back
@@ -41,9 +41,9 @@ function argumentsFor(client, event, input) {
     agent: pick('agent_id', 'agentId'),
     command: typeof toolInput.command === 'string' ? toolInput.command : pick('command'),
     source: pick('source'),
-    error: pick('error') || (typeof response.stderr === 'string' ? response.stderr : ''),
+    error: pick('error', 'error_message') || (typeof response.stderr === 'string' ? response.stderr : ''),
     interrupt: input.is_interrupt === true ? 'true' : '',
-    file: typeof toolInput.file_path === 'string' ? toolInput.file_path : '',
+    file: typeof toolInput.file_path === 'string' ? toolInput.file_path : (typeof toolInput.path === 'string' ? toolInput.path : ''),
     cwd: pick('cwd'),
     summary: pick('compact_summary'),
     trigger: pick('trigger'),
@@ -71,14 +71,16 @@ async function run({ client, configFile, eventFlag, input, deadlineMs = 450 }) {
     transport = rpc(config.binary, config.binaryArgs || [], deadlineMs,
       { ...process.env, VESTIGE_HTTP_ENABLED: '0', VESTIGE_DASHBOARD_ENABLED: 'false', VESTIGE_AUTOPILOT_ENABLED: '0' });
     await transport.ready();
-    const answer = await transport.tool('reflex', args);
+    const answer = await transport.tool('session', { action: 'reflex', params: args });
     let context = answer && typeof answer.context === 'string' ? answer.context : '';
     
     // Auto-Correction Prompt Append on Non-Zero Exit Code
     if (args.event === 'PostToolUseFailure' || args.exit_code !== 0) {
-      const handle = (answer && (answer.memory || answer.failure_id)) || 'mem-failure';
-      const promptAppend = `\n\n⚡ VESTIGE REFLEX: Command failed. Retroactive Salience Backfill automatically triggered. Run causal_walk(action='walk', from_handle='${handle}') to inspect the upstream topological cause immediately.`;
-      context = (context ? context + '\n' : '') + promptAppend;
+      const handle = answer && (answer.memory || answer.failure_id);
+      if (typeof handle === 'string' && /^mem-[0-9a-f]{16}$/.test(handle)) {
+        const promptAppend = `⚡ VESTIGE REFLEX: Command failed. Inspect its recorded evidence with causal_walk(action='walk', start_points=[{kind:'logged_write',node_id:'${handle}'}], promote=false).`;
+        context = (context ? context + '\n\n' : '') + promptAppend;
+      }
     }
 
     return hostOutput(client, event, context);

@@ -80,30 +80,17 @@ pub fn schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["walk", "prove", "ingest_repo", "verify"],
+                "enum": ["walk", "prove"],
                 "default": "walk",
-                "description": "Root-cause investigation and proof engine. 'walk' (default) traverses causal edges from from_handle (running gather if github_issue is provided) and attaches forgotten lessons. 'prove' runs deterministic bisect and generates a signed proof card."
+                "description": "'walk' follows recorded causal edges from explicit starts. 'prove' bundles existing Reflex test witnesses for a commit using repoPath, commit, and out; it does not execute tests or bisect."
             },
             "from_handle": {
                 "type": "string",
-                "description": "Failure memory ID or handle (e.g. mem-0811) to walk backward from or prove."
+                "description": "For walk: exact failure memory ID to walk backward from."
             },
-            "github_issue": {
-                "type": "string",
-                "description": "Optional GitHub issue URL to gather context from before walking."
-            },
-            "good_ref": {
-                "type": "string",
-                "description": "Git commit or ref where tests pass (action='prove')."
-            },
-            "bad_ref": {
-                "type": "string",
-                "description": "Git commit or ref where tests fail (action='prove')."
-            },
-            "test_cmd": {
-                "type": "string",
-                "description": "Shell test command executed during bisect (action='prove')."
-            },
+            "commit": {"type":"string", "description":"For prove: commit/ref to bundle (default HEAD)."},
+            "repoPath": {"type":"string", "description":"For prove: absolute git checkout path."},
+            "out": {"type":"string", "enum":["file","notes","both","none"], "description":"For prove: proof artifact destination; file is the default."},
             "scope": {
                 "type": "string",
                 "default": "user",
@@ -211,16 +198,6 @@ struct Args {
     /// Unified v6.2 fields
     #[serde(default, alias = "fromHandle")]
     from_handle: Option<String>,
-    #[serde(default, alias = "githubIssue")]
-    github_issue: Option<String>,
-    #[serde(default, alias = "goodRef")]
-    good_ref: Option<String>,
-    #[serde(default, alias = "badRef")]
-    bad_ref: Option<String>,
-    #[serde(default, alias = "testCmd")]
-    test_cmd: Option<String>,
-    #[serde(default)]
-    repo: Option<PathBuf>,
 }
 
 /// Recorded causal vocabulary.
@@ -268,32 +245,45 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         .and_then(|v| v.as_str())
         .unwrap_or("walk");
 
-    if action == "prove" {
-        let repo_path = args
-            .as_ref()
-            .and_then(|a| a.get("repo"))
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let rev = args
-            .as_ref()
-            .and_then(|a| a.get("bad_ref").or_else(|| a.get("badRef")).or_else(|| a.get("rev")))
-            .and_then(|v| v.as_str())
-            .unwrap_or("HEAD");
-        let from_handle = args
-            .as_ref()
-            .and_then(|a| a.get("from_handle").or_else(|| a.get("fromHandle")).or_else(|| a.get("handle")))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let mut proof_val = super::prove::prove(storage, &repo_path, rev, super::prove::Out::Both)?;
-        if let Some(obj) = proof_val.as_object_mut() {
-            obj.insert("from_handle".to_string(), json!(from_handle));
-            obj.insert("proof_card".to_string(), json!(format!(
-                "=== VESTIGE CRYPTOGRAPHIC PROOF CARD ===\nTarget Commit: {}\nHandle: {}\nSigner: {}\nStatus: VERIFIED",
-                rev, from_handle, obj.get("signer").and_then(|s| s.as_str()).unwrap_or("strata-key")
-            )));
+    if !matches!(action, "walk" | "prove") {
+        return Err(format!(
+            "unknown causal_walk action '{action}'; use walk or prove. Repository ingest_repo/verify use session action='codebase' with the native payload in params; log verification uses precedent query='verify_log'"
+        ));
+    }
+
+    if let Some(raw) = args.as_ref() {
+        for field in [
+            "github_issue",
+            "githubIssue",
+            "good_ref",
+            "goodRef",
+            "bad_ref",
+            "badRef",
+            "test_cmd",
+            "testCmd",
+        ] {
+            if raw.get(field).is_some() {
+                return Err(format!(
+                    "unsupported causal_walk argument '{field}': this tool does not gather issues or run bisect/tests; prove bundles recorded witnesses using repoPath, commit, and out"
+                ));
+            }
         }
-        return Ok(proof_val);
+    }
+    if action == "prove" {
+        // Use the actual proof contract and result verbatim. The receipt
+        // handler validates the absolute repository path and output selector,
+        // runs blocking Git work off the async worker, and reports unwitnessed
+        // or failed claims without manufacturing a VERIFIED status.
+        return super::receipt::execute(storage, args).await;
+    }
+    if let Some(raw) = args.as_ref() {
+        for field in ["repo", "repoPath", "commit", "out"] {
+            if raw.get(field).is_some() {
+                return Err(format!(
+                    "causal_walk argument '{field}' is not valid for walk"
+                ));
+            }
+        }
     }
 
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
@@ -301,7 +291,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         // Attach forgotten lessons if any lesson retrievability is low (< 0.5)
         if let Ok(forgotten) = super::forgotten_lesson::execute(storage, args).await {
             if let Some(res_obj) = result.as_object_mut() {
-                if let Some(lessons) = forgotten.get("lessons").or_else(|| forgotten.get("results")) {
+                if let Some(lessons) = forgotten
+                    .get("lessons")
+                    .or_else(|| forgotten.get("results"))
+                {
                     res_obj.insert("forgotten_lessons".to_string(), lessons.clone());
                 }
             }
@@ -1122,7 +1115,12 @@ struct WalkOut {
 /// of ANY kind names the recorded node to walk from.
 fn start_rows(args: &Args) -> Vec<StartRow> {
     let mut rows = Vec::new();
-    for handle in [&args.node_id, &args.node, &args.logged_write, &args.from_handle] {
+    for handle in [
+        &args.node_id,
+        &args.node,
+        &args.logged_write,
+        &args.from_handle,
+    ] {
         if let Some(id) = nonempty(handle) {
             rows.push(StartRow {
                 index: None,

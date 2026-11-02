@@ -522,7 +522,7 @@ fn code_elsewhere_notice(
         named.push(format!("{} more", others.len() - ELSEWHERE_NAMED));
     }
     format!(
-        "codeContext: nothing for codebase '{codebase}' in scope '{scope}', but other scopes hold its code memories: {}. Read patterns and decisions with codebase action='get_context' codebase='{codebase}' scope=<name>; check change records (events) with codebase action='verify' and the same scope.",
+        "codeContext: nothing for codebase '{codebase}' in scope '{scope}', but other scopes hold its code memories: {}. Read patterns and decisions with session action='codebase' params={{action:'get_context',codebase:'{codebase}',scope:<name>}}; check change records (events) with session action='codebase' params={{action:'verify',codebase:'{codebase}',scope:<name>,repoPath:<checkout>}}.",
         named.join(", ")
     )
 }
@@ -879,7 +879,8 @@ mod strata_tests {
             "{notice}"
         );
         assert!(
-            notice.contains("codebase action='get_context' codebase='demo'"),
+            notice
+                .contains("session action='codebase' params={action:'get_context',codebase:'demo'"),
             "{notice}"
         );
 

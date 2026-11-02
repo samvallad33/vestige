@@ -60,6 +60,7 @@ pub fn schema() -> Value {
         obj.remove("required");
 
         if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
+            props.insert("id".into(), serde_json::json!({"type":"string", "description":"Exact memory id; alias for handle."}));
             // Handle mode (handle-based recall). Presence of the key — even
             // empty — activates the handle flow at entry, before mode dispatch.
             props.insert(
@@ -453,11 +454,13 @@ fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
     }
     let discovered: Vec<serde_json::Value> = candidates
         .iter()
-        .map(|(id, kind)| serde_json::json!({
-            "id": id,
-            "kind": kind.as_str(),
-            "handle": id,
-        }))
+        .map(|(id, kind)| {
+            serde_json::json!({
+                "id": id,
+                "kind": kind.as_str(),
+                "handle": id,
+            })
+        })
         .collect();
     serde_json::json!({
         "error": "handle_required",
@@ -500,12 +503,14 @@ fn node_payload_with_detail(node: KnowledgeNode, detail_level: &str) -> Value {
     match detail_level {
         "brief" => serde_json::json!({
             "id": node.id,
+            "stability": node.stability,
             "type": node.node_type,
             "tags": node.tags,
             "createdAt": node.created_at.to_rfc3339(),
         }),
         "summary" => serde_json::json!({
             "id": node.id,
+            "stability": node.stability,
             "type": node.node_type,
             "content": truncate_content(&node.content, 240),
             "tags": node.tags,
@@ -513,6 +518,7 @@ fn node_payload_with_detail(node: KnowledgeNode, detail_level: &str) -> Value {
         }),
         _ => serde_json::json!({
             "id": node.id,
+            "stability": node.stability,
             "type": node.node_type,
             "content": node.content,
             "tags": node.tags,

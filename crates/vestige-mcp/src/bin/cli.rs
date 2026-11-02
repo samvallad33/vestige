@@ -156,7 +156,6 @@ enum Commands {
     /// Run health check with warnings and recommendations
     Health,
 
-
     /// Import a v3 vestige.db into a Strata log by running vestige-upgrade
     ///
     /// vestige.db is read and left byte-identical. Once a Strata log exists in
@@ -192,7 +191,6 @@ enum Commands {
         #[command(flatten)]
         sandwich: SandwichInstallOptions,
     },
-
 
     /// Re-ingest memories from a JSON file (for example a `vestige export`)
     ///
@@ -316,9 +314,6 @@ enum Commands {
     /// Export an exact portable archive (legacy SQLite stores only)
     ///
 
-
-
-
     /// Launch the web dashboard
     Dashboard {
         /// Port to bind the dashboard server to
@@ -365,7 +360,6 @@ enum Commands {
         allow_secrets: bool,
     },
 
-
     /// Create typed edges between memories that record the same exact identity
     ///
     /// Scans all memories of a scope and creates a `touched` edge between
@@ -410,6 +404,28 @@ enum Commands {
         limit: Option<usize>,
     },
 
+    /// Re-score older memories through exact shared entities, or undo a receipt.
+    #[command(hide = true)]
+    Backfill {
+        /// Trigger memory id, or the action `undo` / `receipts`
+        trigger: Option<String>,
+        /// Receipt id when the action is `undo`
+        receipt: Option<String>,
+        /// Legacy alias for the trigger memory id
+        #[arg(long)]
+        failure_id: Option<String>,
+        #[arg(long)]
+        manual: bool,
+        #[arg(long, default_value = "30")]
+        lookback_days: i64,
+        /// Preview without appending any store data
+        #[arg(long, alias = "no-promote")]
+        dry_run: bool,
+        #[arg(long, default_value = "user")]
+        scope: String,
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Causal walk: investigate a failure from an explicit start point
     ///
@@ -646,10 +662,13 @@ enum Commands {
     },
 }
 
-
 /// Zero-lock command router: dispatches over reflex.sock / attach IPC if a server
 /// daemon is live, eliminating .serve.lock file collisions.
-fn route_cli_command(dir: &Path, tool: &str, args: serde_json::Value) -> anyhow::Result<Option<serde_json::Value>> {
+fn route_cli_command(
+    dir: &Path,
+    tool: &str,
+    args: serde_json::Value,
+) -> anyhow::Result<Option<serde_json::Value>> {
     if vestige_mcp::attach::probe_owner_blocking(dir).is_some() {
         let response = vestige_mcp::attach::call_tool_blocking(dir, tool, args)
             .map_err(|e| anyhow::anyhow!("IPC daemon call failed: {e}"))?;
@@ -673,7 +692,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Stats { tagging, states } => run_stats(tagging, states),
         Commands::Health => run_health(),
-                Commands::Upgrade { dry_run } => run_upgrade(dry_run),
+        Commands::Upgrade { dry_run } => run_upgrade(dry_run),
         Commands::Update {
             version,
             install_dir,
@@ -689,7 +708,6 @@ fn main() -> anyhow::Result<()> {
             sandwich_companion,
             sandwich,
         ),
-                },
         Commands::Restore { file } => run_restore(file),
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
@@ -707,7 +725,7 @@ fn main() -> anyhow::Result<()> {
             tags,
             since,
         } => run_export(output, format, tags, since),
-                                        Commands::Dashboard { port, no_open } => run_dashboard(port, !no_open),
+        Commands::Dashboard { port, no_open } => run_dashboard(port, !no_open),
         Commands::Ingest {
             content,
             tags,
@@ -725,7 +743,7 @@ fn main() -> anyhow::Result<()> {
             created_at,
             allow_secrets,
         ),
-                Commands::Connect {
+        Commands::Connect {
             dry_run,
             min_shared,
             max_edges,
@@ -748,7 +766,26 @@ fn main() -> anyhow::Result<()> {
             }
             run_scan_secrets(include_suspected, json, limit)
         }
-                Commands::CausalWalk {
+        Commands::Backfill {
+            trigger,
+            receipt,
+            failure_id,
+            manual,
+            lookback_days,
+            dry_run,
+            scope,
+            json,
+        } => run_backfill(
+            trigger,
+            receipt,
+            failure_id,
+            manual,
+            lookback_days,
+            dry_run,
+            scope,
+            json,
+        ),
+        Commands::CausalWalk {
             failing_test,
             stack_frame,
             ci_run,

@@ -8,7 +8,8 @@
 //! Day files that end before the window are not read. Before answering, the
 //! digest chain of the day files it reads is verified the way `operator-gate
 //! verify` does it, anchored to the last line of the newest file before them.
-//! Nothing here writes, approves, issues, or deletes anything.
+//! History queries never approve, issue, or reuse permits. The explicit
+//! `prove` query may write the same proof artifacts as the native proof handler.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,12 +22,12 @@ use vestige_core::Storage;
 const PERMIT_NOTE: &str = "history, not permission. Permits are single-use and cannot be reused or issued through this tool.";
 
 pub fn schema() -> Value {
-    json!({
+    let mut schema = json!({
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "enum": ["stops", "receipt", "replay", "verify_log", "scan_secrets", "selftest"],
+                "enum": ["stops", "receipt", "replay", "prove", "forgotten_lesson", "verify_log", "scan_secrets", "selftest"],
                 "default": "stops",
                 "description": "'stops': Operator gate history; 'receipt'/'replay': inspect or re-derive a write receipt; 'verify_log': run live cryptographic log verification; 'scan_secrets': scan memories for secret patterns; 'selftest': run planted-cause self-calibration."
             },
@@ -39,7 +40,20 @@ pub fn schema() -> Value {
             "decision": {"type": "string", "description": "STOP, ALLOW, SHADOW_STOP, PASS, another recorded decision, or all. Default: STOP plus ALLOW."},
             "limit": {"type": "integer", "default": 10, "description": "1 to 50, newest records first."}
         }
-    })
+    });
+    for native in [
+        crate::tools::receipt::schema(),
+        crate::tools::forgotten_lesson::schema(),
+    ] {
+        if let Some(properties) = native["properties"].as_object() {
+            for (name, value) in properties {
+                if name != "action" && schema["properties"].get(name).is_none() {
+                    schema["properties"][name] = value.clone();
+                }
+            }
+        }
+    }
+    schema
 }
 
 #[derive(Deserialize, Default)]
@@ -736,33 +750,43 @@ fn run(home: &Path, q: &Query) -> Result<Value, String> {
 
 pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
     let raw = args.unwrap_or_else(|| json!({}));
-    let query_type = raw.get("query")
+    let query_type = raw
+        .get("query")
         .or_else(|| raw.get("action"))
         .and_then(Value::as_str)
         .unwrap_or("stops");
 
     match query_type {
-        "receipt" | "replay" => {
+        "receipt" | "replay" | "prove" => {
             let mut r_args = raw.clone();
-            if query_type == "replay" {
-                if let Some(obj) = r_args.as_object_mut() {
-                    obj.insert("action".to_string(), json!("replay"));
-                }
-            } else if r_args.get("action").is_none() {
-                if let Some(obj) = r_args.as_object_mut() {
-                    obj.insert("action".to_string(), json!("get"));
-                }
+            if let Some(obj) = r_args.as_object_mut() {
+                obj.remove("query");
+                obj.insert(
+                    "action".to_string(),
+                    json!(if query_type == "receipt" {
+                        "get"
+                    } else {
+                        query_type
+                    }),
+                );
             }
             crate::tools::receipt::execute(storage, Some(r_args)).await
         }
+        "forgotten_lesson" => {
+            let mut f_args = raw.clone();
+            if let Some(obj) = f_args.as_object_mut() {
+                obj.remove("query");
+                obj.remove("action");
+            }
+            crate::tools::forgotten_lesson::execute(storage, Some(f_args)).await
+        }
         "verify_log" => {
             let path = storage.data_dir().to_path_buf();
-            let report = tokio::task::spawn_blocking(move || {
-                strata_verify::verify_path(&path)
-            })
-            .await
-            .map_err(|e| format!("Join error: {e}"))?;
-            serde_json::from_str(&report.json).map_err(|e| format!("Invalid verify report JSON: {e}"))
+            let report = tokio::task::spawn_blocking(move || strata_verify::verify_path(&path))
+                .await
+                .map_err(|e| format!("Join error: {e}"))?;
+            serde_json::from_str(&report.json)
+                .map_err(|e| format!("Invalid verify report JSON: {e}"))
         }
         "scan_secrets" => {
             let storage_guard = storage.clone();
@@ -773,9 +797,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                         for finding in vestige_core::scan_secrets(&node.content) {
                             results.push(json!({
                                 "node_id": node.id,
-                                "rule": finding.rule_id,
+                                "kind": format!("{:?}", finding.kind),
                                 "confidence": format!("{:?}", finding.confidence),
-                                "secret_preview": finding.secret_preview,
+                                "fingerprint": finding.fingerprint,
                             }));
                         }
                     }
@@ -790,13 +814,12 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                 "findings": findings,
             }))
         }
-        "selftest" => {
-            crate::tools::selftest::execute(storage, Some(raw)).await
-        }
-        "stops" | _ => {
+        "selftest" => crate::tools::selftest::execute(storage, Some(raw)).await,
+        "stops" => {
             let q = parse_query(Some(raw))?;
             run(&operator_home(), &q)
         }
+        other => Err(format!("unknown precedent query '{other}'")),
     }
 }
 

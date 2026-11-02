@@ -6718,24 +6718,8 @@ def write_receipt(rec):
                 CHAIN_PENDING["marks"] = []
                 if rec.get("session"):
                     BRAKE_TRIPPED["sid"] = rec["session"] if guarded(brake_note_stop, False, rec["session"]) else ""
-            # Send fire-and-forget IPC frame to reflex.sock if daemon is live
-            try:
-                _sock = os.path.expanduser("~/.vestige/reflex.sock")
-                if os.path.exists(_sock):
-                    import socket as _sock_mod
-                    _s = _sock_mod.socket(_sock_mod.AF_UNIX, _sock_mod.SOCK_STREAM)
-                    _s.settimeout(0.05)
-                    _s.connect(_sock)
-                    _frame = json.dumps({
-                        "jsonrpc": "2.0",
-                        "method": "tools/call",
-                        "params": {"name": "reflex", "arguments": {"action": "gate_receipt", "receipt": rec}}
-                    }) + "
-"
-                    _s.sendall(_frame.encode("utf-8"))
-                    _s.close()
-            except Exception:
-                pass
+            # Native Reflex reads the durable receipt chain through the host
+            # hook. Do not send unauthenticated frames under the writer lock.
             return rec["digest"]
         finally:
             unlock_file(lock)

@@ -49,9 +49,10 @@ core product promise is:
 - a call the Strata log cannot honor says so with a reason code
   (`unavailable_in_4_0`, `similarity_disabled`, `pending_strata`) instead of
   returning zeros
-- 18 tools, listed by `memory_status` with `view='tools'`: causal walks,
-  GitHub issue hunts (`gather`), GhostLink, receipts, Operator gate stops
-  (`precedent`), code anchors, intentions, suppression and maintenance
+- six advertised MCP tools: `session`, `remember`, `recall`, `causal_walk`,
+  `curate`, and `precedent`. Inspect `tools/list` and
+  `session(action="status", view="tools", tool="<name>")` for the installed
+  action schemas. Runtime support is determined by the active store owner.
 
 ## Working Rules
 

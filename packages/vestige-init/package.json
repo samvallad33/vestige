@@ -46,6 +46,7 @@
     "hooks/operator-stop-memory.py",
     "hooks/stop-memory.cjs",
     "hooks/memory.cjs",
+    "hooks/reflex.cjs",
     "hooks/guard.cjs",
     "hooks/operator-lite.py"
   ],

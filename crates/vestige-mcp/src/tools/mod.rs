@@ -17,15 +17,12 @@ pub mod compact;
 // Active unified tools
 mod code_context;
 pub mod codebase_unified;
+pub mod curate_unified;
 pub mod intention_unified;
 pub mod memory_unified;
+pub mod remember_unified;
 pub mod search_unified;
 pub mod session_unified;
-pub mod remember_unified;
-pub mod curate_unified;
-pub mod session_unified;
-pub mod remember_unified;
-pub mod curate_unified;
 
 // v2.2: Unified retrieval surface — folds search + deep_reference +
 // cross_reference + contradictions into one mode-dispatched tool.

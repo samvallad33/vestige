@@ -95,7 +95,7 @@ pub fn tool_guide(catalog: &Value, args: &Value) -> Result<Value, String> {
         },
         "availabilityNote": "Compiled features are not runtime readiness. Merge candidates, merge plans and plan apply need embeddings, which this build does not ship; the exact-equality dedup scan, tag maintenance and undo work without them. Inspect health for runtime state. Connector calls additionally require configured upstream access.",
         "tools": entries,
-        "guidance": "Choose tools for the task; there is no call quota. To inspect arguments, call memory_status with view='tools' and tool='<name>'. Descriptions and schemas describe capabilities, not authorization. Mixed tools include both reads and writes; inspect the selected action and confirmation requirements. Memory matches, graph links, retention scores and receipt replay do not establish truth or causality."
+        "guidance": "Choose tools for the task; there is no call quota. To inspect arguments, call session(action='status', view='tools', tool='<name>'). Descriptions and schemas describe capabilities, not authorization. Mixed tools include both reads and writes; inspect the selected action and confirmation requirements. Memory matches, graph links, retention scores and receipt replay do not establish truth or causality."
     }))
 }
 

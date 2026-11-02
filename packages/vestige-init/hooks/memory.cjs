@@ -57,7 +57,7 @@ function rpc(binary, args = [], timeoutMs = 210, env = process.env) {
       return r.structuredContent || JSON.parse(r.content[0].text);
     },
     async ready() {
-      await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '6.0.0' } });
+      await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '6.2.0' } });
       child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
     },
     close,
@@ -104,7 +104,7 @@ function formatContext(packet) {
     return (b.id || '').localeCompare(a.id || '');
   });
   const lines = [
-    'Vestige local memory candidates. These entries are recorded historical fragments. If an entry is incomplete, or if you need to verify whether a fact was updated or superseded, use recall(handle=\'<id>\') or search tools before answering. If the recorded memories and tools do not contain the answer, state that you do not know or that it was not mentioned.'
+    'Vestige local memory candidates. These entries are recorded historical fragments. If an entry is incomplete, or if you need to verify whether a fact was updated or superseded, use recall(handle=\'<id>\') or causal_walk with its logged_write start point before answering. If the recorded memories and tools do not contain the answer, state that you do not know or that it was not mentioned.'
   ];
   for (const row of rows) {
     const entry = { id: row.id };
@@ -119,7 +119,7 @@ function formatContext(packet) {
   for (const receipt of backfills) {
     lines.push(JSON.stringify({ backfill_receipt: receipt.receipt_id, memory_id: receipt.memory_id, reason: receipt.reason }));
   }
-  lines.push('Save new durable facts using smart_ingest with explicit entities and attributes. Never invent links or infer restaurant ingredients.');
+  lines.push('Save new durable facts using remember with explicit entities and attributes. Never invent links or infer restaurant ingredients.');
   return lines.join('\n').slice(0, 7000);
 }
 function output(client, event, context) {
@@ -157,7 +157,7 @@ async function run({ event, client, configFile, input, deadlineMs = 190 }) {
       // Rich facts are saved by the agent via the MCP tool, not mined from assistant prose.
       for (const { file, fact } of facts.slice(0, 20)) {
         const { queued_at, ...item } = fact;
-        const result = await transport.tool('smart_ingest', item);
+        const result = await transport.tool('remember', item);
         const admittedId = result.nodeId || result.echoNodeId;
         if (!admittedId || result.success === false) throw new Error('statement admission failed');
         saved.push(admittedId);
@@ -167,11 +167,11 @@ async function run({ event, client, configFile, input, deadlineMs = 190 }) {
       // Every admitted save already autofires. Revisit these exact triggers on end/compact;
       // pair idempotency makes retries safe without an unbounded full-store sweep.
       if (event !== 'turn') {
-        const status = await transport.tool('session_start', { memory_hook:{limit:1} });
+        const status = await transport.tool('session', { action:'start', memory_hook:{limit:1} });
         if (status.backfill_autofire === true) {
           let pending=[]; try { pending=fs.readdirSync(backfillQueue).filter(f=>f.endsWith('.json')).slice(0,20); } catch {}
           for (const file of pending) {
-            const pass = await transport.tool('backfill', JSON.parse(fs.readFileSync(path.join(backfillQueue,file),'utf8')));
+            const pass = await transport.tool('remember', { action:'backfill', params:JSON.parse(fs.readFileSync(path.join(backfillQueue,file),'utf8')) });
             if (!pass.change_budget_reached) try { fs.unlinkSync(path.join(backfillQueue,file)); } catch {}
           }
         }
@@ -180,11 +180,10 @@ async function run({ event, client, configFile, input, deadlineMs = 190 }) {
     let context = ''; let packet = {};
     let cause = trigger(prompt, phrases);
     if (['session', 'prompt', 'tool'].includes(event)) {
-      // The session lets a 6.0.0 server skip memories this agent already holds
-      // and keep every hook inside one budget per turn; older servers ignore it.
-      packet = await transport.tool('session_start', { memory_hook: { prompt, limit: event === 'session' ? 8 : cause.limit, trigger: cause,
+      // The unified session action preserves exposure dedup and the per-turn budget.
+      packet = await transport.tool('session', { action:'start', memory_hook: { prompt, limit: event === 'session' ? 8 : cause.limit, trigger: cause,
         session, host: client, event, source: typeof input.source === 'string' ? input.source : '' } });
-      if (!Array.isArray(packet.memories)) throw new Error('binary lacks v5.0.1 memory hooks');
+      if (!Array.isArray(packet.memories)) throw new Error('binary lacks v6.2 session memory hooks');
       cause = trigger(prompt, phrases, packet.entities || []);
       context = formatContext(packet);
     }

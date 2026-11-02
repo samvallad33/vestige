@@ -659,7 +659,7 @@ fn empty_answer_note(
             _ => ("scopes", "<scope>"),
         };
         note.push(format!(
-            "get_context lists patterns and decisions only; the change records (event memories) for codebase '{codebase}' are in {scopes_word} {listed}. Check them with codebase action='verify' codebase='{codebase}' scope='{verify_scope}' repoPath=<checkout>, or find one with recall handle='commit:<sha>'."
+            "get_context lists patterns and decisions only; the change records (event memories) for codebase '{codebase}' are in {scopes_word} {listed}. Check them with session action='codebase' params={{action:'verify',codebase:'{codebase}',scope:'{verify_scope}',repoPath:<checkout>}}, or find one with recall handle='commit:<sha>'."
         ));
     }
     (!note.is_empty()).then(|| note.join(" "))

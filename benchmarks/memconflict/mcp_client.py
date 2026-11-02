@@ -228,9 +228,13 @@ class VestigeMCP:
     # -- tools -------------------------------------------------------------
 
     def call_tool(self, name: str, arguments: Dict[str, Any],
-                  timeout: Optional[float] = None) -> Any:
+                  timeout: Optional[float] = None,
+                  meta: Optional[Dict[str, Any]] = None) -> Any:
+        params: Dict[str, Any] = {"name": name, "arguments": arguments}
+        if meta:
+            params["_meta"] = dict(meta)
         result = self.request(
-            "tools/call", {"name": name, "arguments": arguments}, timeout=timeout
+            "tools/call", params, timeout=timeout
         )
         self.last_tool_result = result
         if result.get("isError"):
