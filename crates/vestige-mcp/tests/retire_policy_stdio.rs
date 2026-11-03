@@ -414,8 +414,8 @@ fn log_files(dir: &Path) -> Vec<(String, Vec<u8>)> {
 /// 4.0 withholds erasure on Strata. Over real stdio: purge, the memory
 /// purge/delete actions and the hidden delete_knowledge alias all refuse,
 /// purge is not advertised, the log is byte-identical afterwards, and the
-/// memory is still readable after a restart. Suppress stays advertised as a
-/// destructive hide (it never erased).
+/// memory is still readable after a restart. Suppress stays a curate action
+/// with destructiveHint: it hides, it never erased, and it is not its own tool.
 #[test]
 fn stdio_erasure_is_withheld_and_writes_nothing() {
     let dir = std::env::temp_dir().join(format!("vestige-withheld-stdio-{}", std::process::id()));
@@ -443,28 +443,23 @@ fn stdio_erasure_is_withheld_and_writes_nothing() {
             .filter_map(|tool| tool["name"].as_str())
             .collect();
         assert!(!names.contains(&"purge"), "{names:?}");
-        let suppress = listed["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == "suppress")
-            .expect("suppress stays advertised: it hides, it never erased");
-        assert_eq!(
-            suppress["annotations"]["destructiveHint"],
-            serde_json::json!(true),
-            "{suppress}"
-        );
-        let memory = listed["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == "memory")
-            .expect("memory tool");
-        let actions = memory["inputSchema"]["properties"]["action"]["enum"].to_string();
         assert!(
-            !actions.contains("purge") && !actions.contains("delete"),
-            "{actions}"
+            !names.contains(&"suppress") && !names.contains(&"memory"),
+            "hide and memory mutations stay inside curate: {names:?}"
         );
+        let curate = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "curate")
+            .expect("curate");
+        assert_eq!(
+            curate["annotations"]["destructiveHint"],
+            serde_json::json!(true),
+            "{curate}"
+        );
+        let actions = curate["inputSchema"]["properties"]["action"]["enum"].to_string();
+        assert!(actions.contains("suppress"), "{actions}");
 
         for (name, args) in [
             (
