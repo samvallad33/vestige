@@ -254,6 +254,7 @@ def handler_extras(tool, action, ctx):
         ("intention", "update"): {"id": "intention-fixture", "status": "complete"},
         ("intention", "list"): {"limit": 1},
         ("smart_ingest", "default"): {"content": "ADMISSION_FIXTURE_ROW", "forceCreate": True, "tags": ["fixture-old"]},
+        ("remember", "save"): {"content": "ADMISSION_FIXTURE_ROW", "tags": ["fixture-old"]},
         ("source_sync", "github"): {"repo": "fixture-owner/fixture-repo", "max_pages": 1},
         ("source_sync", "redmine"): {"project": "fixture", "max_pages": 1},
         ("maintain", "consolidate"): {"phase": "lifecycle", "batchSize": 2},
