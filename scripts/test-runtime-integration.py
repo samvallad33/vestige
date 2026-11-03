@@ -32,14 +32,14 @@ def run(binary, output):
                 return result
 
             session = DeveloperSession(catalog, call)
-            session.discover(["smart_ingest", "recall"])
+            session.discover(["remember", "recall"])
             session.add_user("Remember the synthetic fixture timeout decision")
             created = session.execute_tool(
                 "ingest",
-                "smart_ingest",
+                "remember",
                 {
                     "content": "RUNTIME_FIXTURE_TIMEOUT uses 25 milliseconds.",
-                    "forceCreate": True,
+                    "tags": ["runtime-fixture"],
                 },
             )
             node_id = created["nodeId"]
