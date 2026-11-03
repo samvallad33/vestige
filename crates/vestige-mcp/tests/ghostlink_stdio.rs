@@ -339,30 +339,27 @@ fn ghostlink_is_the_advertised_composition_tool() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names.len(), 19, "{names:?}");
-    assert!(names.contains(&"backfill"), "{names:?}");
+    assert_eq!(names.len(), 6, "{names:?}");
+    assert!(names.contains(&"session"), "{names:?}");
+    assert!(names.contains(&"remember"), "{names:?}");
+    assert!(names.contains(&"recall"), "{names:?}");
     assert!(names.contains(&"causal_walk"), "{names:?}");
-    assert!(names.contains(&"ghostlink"), "{names:?}");
+    assert!(names.contains(&"curate"), "{names:?}");
     assert!(names.contains(&"precedent"), "{names:?}");
-    assert!(names.contains(&"gather"), "{names:?}");
-    assert!(
-        !names.contains(&"graph"),
-        "graph must be a hidden alias: {names:?}"
-    );
-    let ghostlink = listed["tools"]
+    let curate = listed["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|t| t["name"] == "ghostlink")
+        .find(|t| t["name"] == "curate")
         .unwrap();
-    assert_eq!(ghostlink["annotations"]["readOnlyHint"], json!(false));
-    let modes = &ghostlink["inputSchema"]["properties"]["mode"]["enum"];
-    for mode in [
-        "propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden",
+    assert_eq!(curate["annotations"]["readOnlyHint"], json!(false));
+    let actions = &curate["inputSchema"]["properties"]["action"]["enum"];
+    for action in [
+        "promote", "demote", "edit", "link", "bridge", "connect_identities", "suppress",
     ] {
         assert!(
-            modes.as_array().unwrap().iter().any(|m| m == mode),
-            "mode {mode} missing: {modes}"
+            actions.as_array().unwrap().iter().any(|m| m == action),
+            "action {action} missing: {actions}"
         );
     }
     server.shutdown();
@@ -374,45 +371,13 @@ fn backfill_discovery_exposes_run_preview_receipts_and_undo() {
     let home = data_dir();
     let mut server = spawn(dir.path(), home.path());
     let listed = server.result("tools/list", None);
-    let backfill = listed["tools"]
+    let remember = listed["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "backfill")
-        .expect("backfill is advertised independently");
-    assert_eq!(backfill["annotations"]["readOnlyHint"], json!(false));
-    let properties = &backfill["inputSchema"]["properties"];
-    for action in ["run", "undo", "receipts"] {
-        assert!(
-            properties["action"]["enum"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == action),
-            "missing {action}: {backfill}"
-        );
-    }
-    for field in [
-        "trigger_id",
-        "receipt_id",
-        "dry_run",
-        "manual",
-        "lookback_days",
-    ] {
-        assert!(
-            properties.get(field).is_some(),
-            "missing {field}: {backfill}"
-        );
-    }
-    let full = server.call_tool_ok(
-        "memory_status",
-        json!({"view": "tools", "tool": "backfill"}),
-    );
-    assert_eq!(full["tools"][0]["name"], json!("backfill"));
-    assert_eq!(
-        full["tools"][0]["inputSchema"]["properties"]["dry_run"]["default"],
-        json!(false)
-    );
+        .find(|tool| tool["name"] == "remember")
+        .expect("remember is advertised");
+    assert_eq!(remember["annotations"]["readOnlyHint"], json!(false));
     server.shutdown();
 }
 

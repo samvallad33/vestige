@@ -4,7 +4,7 @@
 
 The Operator gate (Lite or paid) writes a hash-chained receipt for every verdict to
 ~/.operator/receipts/<UTC date>.jsonl. This hook reads the STOP receipts it has not recorded yet and
-saves each one into Vestige through the MCP server's smart_ingest, so any agent on the same store can
+saves each one into Vestige through the MCP server's remember, so any agent on the same store can
 recall it later by exact handle:
 
   stop memory   node_type event; tags <rule>, op-receipt-<first 16 hex of the receipt digest>,
@@ -19,7 +19,7 @@ Write path: the hook starts `vestige-mcp` (the --mcp <path> argument, else VESTI
 PATH; `npx @vestige/init` registers it with --mcp so no PATH is needed). It attaches to the
 server that already owns the store, or opens the store when none does, and the hook speaks MCP over its
 stdin: initialize, notifications/initialized, then tools/call. A write from here passes the same gate and
-gets the same receipt as an agent's own smart_ingest.
+gets the same receipt as an agent's own remember.
 
 The hook never blocks a tool call. It works within a time budget, logs any failure to
 ~/.operator/state/stop-memory.log, tries that stop again on a later call, and always exits 0. On
@@ -32,7 +32,7 @@ Wire it after the gate's own PreToolUse hook: hooks/settings.stop-memory.fragmen
 `npx @vestige/init` do it, which copies this file to ~/.vestige/hooks/ once Operator Lite is installed.
 Env: OPERATOR_HOME (default ~/.operator), VESTIGE_MCP_BIN, OPERATOR_STOP_MEMORY_BUDGET (seconds, default 20).
 
-From Vestige 6.0.0 the server records these stops itself, through the `reflex` tool its hooks call. While
+The server can record these stops itself through `session(action="reflex")` on the v6.2 surface. While
 that server is active it touches <data dir>/reflex/heartbeat, and this hook steps aside so a stop is never
 handled twice. With an older server, or none, this hook works exactly as before.
 Env for that check: VESTIGE_DATA_DIR, else the platform's default Vestige data directory.
@@ -103,7 +103,7 @@ def data_dirs():
 
 
 def reflex_active(now=None):
-    """True while a Vestige 6.0.0+ server records gate stops itself through `reflex`."""
+    """True while the native Reflex service records gate stops itself."""
     now = time.time() if now is None else now
     for d in data_dirs():
         try:
@@ -287,11 +287,11 @@ def tagged(mcp, tag):
 
 
 def ingest(mcp, item):
-    out = mcp.tool("smart_ingest", {"items": [item]})
+    out = mcp.tool("remember", {"items": [item]})
     res = (out.get("results") or [{}])[0]
     node = str(res.get("nodeId") or "")
     if not NODE_RE.match(node):
-        raise RuntimeError("smart_ingest saved nothing: %s" % json.dumps(res)[:300])
+        raise RuntimeError("remember saved nothing: %s" % json.dumps(res)[:300])
     return node
 
 

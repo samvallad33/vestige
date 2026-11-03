@@ -13,13 +13,13 @@ const json = value => JSON.stringify(value, null, 2) + '\n';
 function supportedVersion(text) {
   const match = /\b(\d+)\.(\d+)\.(\d+)\b/.exec(text || '');
   if (!match) return false;
-  const [major, minor, patch] = match.slice(1).map(Number);
-  return major > 5 || major === 5 && (minor > 0 || patch >= 1);
+  const [major, minor] = match.slice(1).map(Number);
+  return major > 6 || major === 6 && minor >= 2;
 }
-// Reflex hooks call a server tool that ships in 6.0.0. An older binary would
+// Reflex hooks call the unified session action that ships in 6.2.0. An older binary would
 // answer every hook with an unknown-tool error, so they register only when the
 // installed server is new enough.
-const REFLEX_MIN = [6, 0, 0];
+const REFLEX_MIN = [6, 2, 0];
 function reflexReady(binaryPath, env) {
   if (!binaryPath) return false;
   let out = '';
@@ -30,7 +30,7 @@ function reflexReady(binaryPath, env) {
   for (let i = 0; i < 3; i++) if (have[i] !== REFLEX_MIN[i]) return have[i] > REFLEX_MIN[i];
   return true;
 }
-// Claude Code calls reflex straight from `mcp_tool` hooks on the agent's own MCP
+// Claude Code calls session(action="reflex") from `mcp_tool` hooks on the agent's own MCP
 // connection. SessionStart at launch fires before MCP servers connect, so it, and
 // every host without `mcp_tool` hooks, goes through the command shim.
 // `agent` is the subagent's id and empty for the main agent, so every Vestige
@@ -49,13 +49,13 @@ const REFLEX_EVENTS = {
   claude: [['PreToolUse', '*'], ['PostToolUse', '*'], ['PostToolUseFailure', '*'], ['UserPromptSubmit'], ['SubagentStart'], ['SubagentStop'], ['PreCompact'], ['PostCompact'], ['Stop']],
   codex: [['SessionStart'], ['UserPromptSubmit'], ['PreToolUse', '*'], ['PostToolUse', '*'], ['SubagentStart'], ['PreCompact'], ['Stop']],
   gemini: [['SessionStart'], ['BeforeAgent'], ['BeforeTool', '*'], ['AfterTool', '*'], ['PreCompress'], ['AfterAgent']],
-  cursor: [['sessionStart'], ['beforeSubmitPrompt'], ['preToolUse'], ['postToolUse'], ['subagentStart'], ['preCompact'], ['stop']],
+  cursor: [['sessionStart'], ['beforeSubmitPrompt'], ['preToolUse'], ['postToolUse'], ['postToolUseFailure'], ['subagentStart'], ['preCompact'], ['stop']],
 };
 function reflexHooks(dialect, shimCommand) {
   const shim = matcher => dialect === 'cursor' ? { command: shimCommand, timeout: 2, failClosed: false }
     : { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: shimCommand, timeout: 2 }] };
   const rows = (REFLEX_EVENTS[dialect] || []).map(([event, matcher]) => [event, dialect === 'claude'
-    ? { ...(matcher ? { matcher } : {}), hooks: [{ type: 'mcp_tool', server: 'vestige', tool: 'reflex', input: REFLEX_INPUT }] }
+    ? { ...(matcher ? { matcher } : {}), hooks: [{ type: 'mcp_tool', server: 'vestige', tool: 'session', input: { action: 'reflex', params: REFLEX_INPUT } }] }
     : shim(matcher)]);
   if (dialect === 'claude') rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact', hooks: [{ type: 'command', command: shimCommand, timeout: 2 }] }]);
   return rows;
@@ -174,6 +174,7 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
   if (!found) return { missing: true, detected, handAdd, changes: [], home, base, manifestFile };
   const previous = fs.existsSync(manifestFile) ? object(manifestFile) : { files: [] };
   const reflex = reflexReady(found, env);
+  if (!reflex) return { unsupported: true, detected, handAdd, changes: [], home, base, manifestFile, binary: found, previous };
   const changes = new Map();
   const change = (file, description) => {
     if (!changes.has(file)) {
@@ -198,6 +199,27 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
     } else if (cursor[key] === undefined) { cursor[key] = value; row.patches.push({ keys, value }); }
     row.after = json(value_);
   };
+  const migrateReflex = file => {
+    const row = change(file, 'upgrade Vestige Reflex to the unified session action');
+    const value = row.after === null || !row.after.trim() ? {} : JSON.parse(row.after);
+    for (const [event, groups] of Object.entries(value.hooks || {})) {
+      if (!Array.isArray(groups)) continue;
+      value.hooks[event] = groups.map(group => {
+        if (!Array.isArray(group?.hooks)) return group;
+        let changed = false;
+        const hooks = group.hooks.map(handler => {
+          if (handler.type !== 'mcp_tool' || handler.server !== 'vestige' || handler.tool !== 'reflex') return handler;
+          changed = true;
+          return { ...handler, tool: 'session', input: { action: 'reflex', params: handler.input || {} } };
+        });
+        if (!changed) return group;
+        const next = { ...group, hooks };
+        row.patches.push({ keys: ['hooks', event], value: next, previous: group, replace: true });
+        return next;
+      });
+    }
+    row.after = json(value);
+  };
   for (const client of detected) {
     if (client.id === 'codex') {
       const row = change(client.file, 'append MCP connection');
@@ -212,6 +234,7 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
       add(client.file, [...client.keys, 'vestige'], entry, 'merge MCP connection');
     }
     if (client.hookFile) {
+      migrateReflex(client.hookFile);
       if (client.dialect === 'cursor') add(client.hookFile, ['version'], 1, 'merge memory hooks');
       for (const [eventName, event] of Object.entries(EVENTS[client.dialect])) {
         const command = [node, path.join(base, 'hooks', 'memory.cjs'), '--config', path.join(base, 'config.json'), '--client', client.dialect, '--event', event].map(p => quote(p, platform)).join(' ');
@@ -332,7 +355,8 @@ function uninstall(home = os.homedir(), dryRun = false) {
         let cursor = value;
         for (const key of patch.keys.slice(0, -1)) cursor = cursor?.[key];
         if (!cursor) continue; const key = patch.keys.at(-1);
-        if (patch.append && Array.isArray(cursor[key])) cursor[key] = cursor[key].filter(v => JSON.stringify(v) !== JSON.stringify(patch.value));
+        if (patch.replace && Array.isArray(cursor[key])) cursor[key] = cursor[key].map(v => JSON.stringify(v) === JSON.stringify(patch.value) ? patch.previous : v);
+        else if (patch.append && Array.isArray(cursor[key])) cursor[key] = cursor[key].filter(v => JSON.stringify(v) !== JSON.stringify(patch.value));
         else if (JSON.stringify(cursor[key]) === JSON.stringify(patch.value)) delete cursor[key];
       }
       // Remove only empty containers introduced by our patches. A user's
@@ -378,7 +402,7 @@ async function inspect(home = os.homedir(), timeout = 2000) {
   add('installation manifest', manifest, 'Run npx @vestige/init');
   const bin = manifest?.binary || binary(home, os.platform(), process.env);
   const version = bin && spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 2000 });
-  add('vestige-mcp v5.0.1+', version?.status === 0 && supportedVersion(version.stdout), 'Install v5.0.1 from GitHub Releases, then rerun init');
+  add('vestige-mcp v6.2.0+', version?.status === 0 && supportedVersion(version.stdout), 'Install v6.2.0 or newer from GitHub Releases, then rerun init');
   for (const client of manifest?.clients || []) if (client.hookFile) {
     for (const event of Object.keys(EVENTS[client.id] || {})) {
       let live = false;
@@ -403,7 +427,7 @@ async function inspect(home = os.homedir(), timeout = 2000) {
   for (const relative of ['hooks/memory.cjs','lib/memory-triggers.cjs','config.json','triggers.json']) add(`memory runtime: ${relative}`, fs.existsSync(path.join(home,'.vestige','memory',relative)), 'Rerun init to restore missing runtime files');
   if (manifest?.guard) for (const relative of ['guard.cjs','config.json']) add(`protected guard runtime: ${relative}`,fs.existsSync(path.join(home,'.operator','state','vestige-memory',relative)),'Rerun init --guard in your terminal');
   let packet = null; let transport;
-  try { if (!bin) throw new Error('binary missing'); transport = rpc(bin, [], timeout); await transport.ready(); packet = await transport.tool('session_start', { memory_hook: { limit: 3 } }); }
+  try { if (!bin) throw new Error('binary missing'); transport = rpc(bin, [], timeout); await transport.ready(); packet = await transport.tool('session', { action: 'start', memory_hook: { limit: 3 } }); }
   catch { /* doctor renders the explicit failed check */ } finally { transport?.close(); }
   add('Strata responds with memory-hook schema', Array.isArray(packet?.memories), 'Start or repair vestige-mcp; inspect ~/.vestige/memory/errors.log');
   add('Backfill autofire enabled in responding process', packet?.backfill_autofire === true, 'Unset VESTIGE_BACKFILL_AUTOFIRE=off and restart MCP clients');
@@ -433,7 +457,7 @@ async function main(args = process.argv.slice(2)) {
   say(`FOUND ${initial.binary}`);
   const installed = spawnSync(initial.binary, ['--version'], { encoding: 'utf8', timeout: 2000 });
   if (installed.status !== 0 || !supportedVersion(installed.stdout)) {
-    const instructions = 'Memory hooks require vestige-mcp v5.0.1+. Install it from https://github.com/samvallad33/vestige/releases, then rerun init.';
+    const instructions = 'Unified memory hooks require vestige-mcp v6.2.0+. Install it from https://github.com/samvallad33/vestige/releases, then rerun init.';
     say(instructions); if (machine) console.log(json({ status: 'binary-upgrade-required', instructions, changed: [] })); return;
   }
   for (const c of initial.detected) say(`  ${c.name} — ${c.coverage}`);

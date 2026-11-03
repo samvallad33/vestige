@@ -162,3 +162,7 @@ docs/business/
 
 # Operator Lite test_destructive.py throwaway homes (removed at the end of a run)
 /operator-lite/oplite-destructive-*/
+
+# Real-engine campaign: raw evidence, credentials, external data, model caches.
+/runs/
+/.venv/

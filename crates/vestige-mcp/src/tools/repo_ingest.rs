@@ -3382,7 +3382,7 @@ pub fn parse_timeout(raw: &str) -> u32 {
         assert!(note.contains("in scope 'demo' (4)"), "{note}");
         assert!(
             note.contains(
-                "codebase action='verify' codebase='demo' scope='demo' repoPath=<checkout>"
+                "session action='codebase' params={action:'verify',codebase:'demo',scope:'demo',repoPath:<checkout>}"
             ),
             "{note}"
         );

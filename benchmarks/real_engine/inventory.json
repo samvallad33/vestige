@@ -1,0 +1,332 @@
+{
+  "schema_version": 1,
+  "verified_date": "2026-11-01",
+  "base_revision": "bdb7e5ba990969f64855cd315e17243f769f4cac",
+  "purpose": "Official source inventory, not benchmark results or completion claim",
+  "solver_and_judge_model": "gpt-5.4-nano",
+  "benchmarks": [
+    {
+      "id": "locomo",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://github.com/snap-research/locomo",
+      "availability": "public_official_dataset_and_scorer",
+      "revision": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+      "scope": "all10 conversations and all categories",
+      "details": "Dataset/scorer binding belongs to datasets.py and sources.json."
+    },
+    {
+      "id": "longmemeval_s",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://github.com/xiaowu0162/LongMemEval",
+      "availability": "public_official_dataset_and_scorer",
+      "scope": "all500",
+      "details": "Dataset/scorer binding belongs to datasets.py and sources.json."
+    },
+    {
+      "id": "mpbench",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://github.com/Digital-Trust-Lab/mp-bench",
+      "revision": "6886880a7c29625e0109e0ad91d0e095029f1577",
+      "availability": "public_data_owner_authorized_paper_metric_exception",
+      "paper": "https://arxiv.org/html/2606.04329v2",
+      "paper_version": "arXiv2606.04329v2 2026-06-18",
+      "scorer": "benchmarks/real_engine/mpbench.py (must be committed before any arm)",
+      "scorer_origin": "custom frozen implementation of paper ASR and benignFPR; owner exception; not an upstream scorer",
+      "files": {
+        "adversarial_data.jsonl.jsonl": {
+          "sha256": "f2d23a5a2d483889eb2fdd9a2a082f0759603bc0a17664814a7caafbd318f90d",
+          "records": 3241,
+          "physical_lines": 3240,
+          "parser": "JSONDecoder.raw_decode concatenated JSON stream; no content repair"
+        },
+        "benign_data.jsonl.jsonl": {
+          "sha256": "707ef7e311e147d9818a8a9e04293296fc6bf3390241e4cac23c8145765b62d5",
+          "records": 2999
+        }
+      },
+      "caveats": [
+        "Paper reports3240 attacks and2997 benign; public pinned bytes contain3241 attacks and2999 benign.",
+        "Raw attack_type contains9 aliases;240 skill_md-bearing records recover skill-procedure class, retaining raw labels.",
+        "Two raw cases lack target and retrieval query; preserve and mark unscorable, never silently drop or count as failure."
+      ],
+      "next_action": "Freeze reviewed paper scorer commit, route every attack through normal model-selected write path and real engine gate."
+    },
+    {
+      "id": "memconflict",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://github.com/TaoZhen1110/MemConflict",
+      "revision": "ec51d5d36e87f7665d1337f3a88cbde95fc2a964",
+      "availability": "public_official_dataset_and_scorer",
+      "files": {
+        "Data/Step4_4.jsonl": {
+          "sha256": "8ef9ec8589eccb86f63ab3a819a9180217405351a8d5846866721ea74babe092",
+          "bytes": 39671712,
+          "instances": 30,
+          "questions": 3750
+        }
+      },
+      "scorer": "official upstream evaluation interface via extra_datasets.py",
+      "details": "Existing dataset hash already covers3750 questions; expansion above300 requires no hash change. Temporal histories must exclude later answers."
+    },
+    {
+      "id": "pm_bench",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://github.com/genglinliu/PMBench",
+      "revision": "e1093c470c8981daf522d4ef047a7c3a71e077d7",
+      "availability": "public_official_dataset_and_scorer",
+      "scope": "full released7day scenario;3trials",
+      "files": {
+        "data/synthetic_week_v9.json": {
+          "sha256": "94a45937da1363be19ccfdc2c188d132f23093041e30abd3ec22d64d70da8f24",
+          "bytes": 98168,
+          "days": 7
+        },
+        "sim/pm_bench.py": {
+          "sha256": "d8ec27d8dcf4679d7a789c52fc305286df460844d47e9f116b81f2400ac254d8"
+        }
+      },
+      "scorer": "python sim/pm_bench.py score --scenario data/synthetic_week_v9.json --log <trajectory>",
+      "next_action": "Implement full interactive simulation lifecycle and bridge budgeted provider; do not flatten to QA."
+    },
+    {
+      "id": "memoryagentbench",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://github.com/HUST-AI-HYZ/MemoryAgentBench",
+      "revision": "538026089d1a8a8eff05121d0db89b388f360eba",
+      "dataset_source": "https://huggingface.co/datasets/ai-hyz/MemoryAgentBench",
+      "dataset_revision": "7ea066982b140a19337e17e60d45d4076e042faf",
+      "availability": "public_official_dataset_and_scorer",
+      "split_order": [
+        "Conflict_Resolution",
+        "Accurate_Retrieval",
+        "Test_Time_Learning",
+        "Long_Range_Understanding"
+      ],
+      "files": {
+        "data/Conflict_Resolution-00000-of-00001.parquet": {
+          "publisher_lfs_sha256": "24d5c3f09ce0ce15625cb9f8a98f44f0d864ca6c94d7b4ad04eb697ca3a5ff45",
+          "bytes": 1491588
+        },
+        "data/Accurate_Retrieval-00000-of-00001.parquet": {
+          "publisher_lfs_sha256": "56c3cd80fb6731a3e53cd1a6be3148f54df60ff2d290ee50e28f8acebf9655c1",
+          "bytes": 20024386
+        },
+        "data/Test_Time_Learning-00000-of-00001.parquet": {
+          "publisher_lfs_sha256": "5338753be48f925d03318eed66117286e3489025fabe050a547bd086cd7d79c0",
+          "bytes": 3947476
+        },
+        "data/Long_Range_Understanding-00000-of-00001.parquet": {
+          "publisher_lfs_sha256": "5ab175461954db67770d4a4cb69e569b513ebb96aceb9ee79b57f67488bcd539",
+          "bytes": 49342452
+        }
+      },
+      "scorer": "utils/eval_other_utils.py calculate_metrics/parse_output plus llm_based_eval/longmem_qa_evaluate.py and summarization_evaluate.py for corresponding sources",
+      "next_action": "Download pinned bytes and locally verify hashes, preserve incremental injection lifecycle and route official LLM judgment through shared ledger."
+    },
+    {
+      "id": "memform",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://github.com/opanhw/memform-code",
+      "revision": "0565117042a31a5f78576f89ff6b8a77c393ee09",
+      "availability": "public_official_dataset_and_scorer",
+      "files": {
+        "outputs/mcq_item_audit/accepted_cases.jsonl": {
+          "sha256": "fc9e76b051c21c378281ed4dcbb648f76820a2eaf086683b0c1d24db7fcaaee5",
+          "records": 994
+        },
+        "outputs/freeform_item_audit/accepted_cases.jsonl": {
+          "sha256": "10962a8deb9a6cbe2691714530b159755aef1d275cdeeafeddb6892bc7d3c129",
+          "records": 897
+        }
+      },
+      "interfaces": [
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5"
+      ],
+      "scorer": "memform/defenses/metrics.py score_on_eligibility; memform/freeform/evaluator.py official adjudicator",
+      "next_action": "Implement paired intervention lifecycle and normal gated writes; keep oracle_memory clean/poisoned and gold policies out of solver prompts."
+    },
+    {
+      "id": "terminal_bench",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 5,
+      "source": "https://github.com/harbor-framework/terminal-bench",
+      "revision": "452bf305c6daa62fc59061d22133a7cbc7c1572e",
+      "version": "4.0.0",
+      "availability": "public_official_dataset_and_scorer",
+      "official_tasks": 66,
+      "catalog_sha256": "fff6d209e08ba2442a40ce2af0fb706452c69441d4a9c21e9fd6b27e8a91f130",
+      "prepared_sample": {
+        "n": 20,
+        "seed": 20261101,
+        "path": "runs/terminal_bench/sample-frozen.json",
+        "sha256": "740d31375c1b70f5cbe6dff99df1cfe3eebaff3c6ac6fc92db9708efa23df83d",
+        "trials_per_task_arm": 3,
+        "rollouts": 240
+      },
+      "scorer": "official per-task tests/test.sh run inside Harbor task environment",
+      "earlier_session_window_debug_results": "INVALID: task-specific solution guidance in earlier Vestige arm",
+      "proof_json_classification": "engine self-tests, never benchmark scores",
+      "next_action": "Integrate clean adapter with Harbor isolated environments, official verifier and shared API ledger; manifest preparation alone is not a scored run."
+    },
+    {
+      "id": "graphwalks",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://huggingface.co/datasets/openai/graphwalks",
+      "dataset_revision": "be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7",
+      "availability": "public_official_dataset_and_scorer",
+      "scorer": "Official README Extraction and Grading code: last-line Final Answer list extraction and set precision/recall/F1",
+      "files": {
+        "graphwalks_128k_and_shorter.parquet": {
+          "publisher_lfs_sha256": "54036036c91d8e04bb2a5fcd9e36f8e2a852cacece5dfc2b1ee40e3a6182b516",
+          "bytes": 22128284
+        },
+        "graphwalks_256k_to_1mil.parquet": {
+          "publisher_lfs_sha256": "537879431c72a42e3b500f80efc3047e7facb90390b6063d33679b4320985911",
+          "bytes": 296903814
+        }
+      },
+      "caveats": [
+        "Pin includes2026-02-27 parent/BFS groundtruth/prompt bugfix; never use older flawed revision.",
+        "Publisher LFS hashes verified via primary metadata; data bytes not downloaded by inventory."
+      ],
+      "next_action": "Download pinned data and compare full context versus actual graph-memory route at one identical measured context cap; no answer-derived edges."
+    },
+    {
+      "id": "automationbench",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 5,
+      "source": "https://github.com/zapier/AutomationBench",
+      "revision": "4a8e1061254004d9dac807054eed33fad7d1ff14",
+      "version": "1.0.6",
+      "availability": "public_official_dataset_and_scorer",
+      "scope": "600 public scored tasks across6domains;200simple warmups excluded",
+      "scorer": "automationbench/rubric/__init__.py partial_credit then task_completed_correctly",
+      "requirements": [
+        "Python>=3.13",
+        "verifiers>=0.2.0",
+        "isolated official simulated SaaS world per task"
+      ],
+      "caveats": [
+        "Public task set is official published data; leaderboard uses separate private tasks and is not directly comparable."
+      ],
+      "next_action": "Integrate official state/tool lifecycle with all4memoryarms and budgeted nano provider; no real SaaS effects."
+    },
+    {
+      "id": "vals_finance_v2",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 5,
+      "source": "https://github.com/vals-ai/finance-agent-v2",
+      "revision": "03c7c432b645f42f81ef3c13957100b182217d7c",
+      "website": "https://www.vals.ai/benchmarks/fabv2",
+      "availability": "public_samples_no_public_official_scorer",
+      "campaign_disposition": "SKIP: official scorer requires gated platform; held-out official tasks private",
+      "files": {
+        "data/public.csv": {
+          "sha256": "27b48c08a6099bc076b4194cac7cefe295082b9aedcbc67f4fedfa70468b427e",
+          "records": 27
+        },
+        "data/public.txt": {
+          "sha256": "1c8957a6180ab0b200a3442212f37c03b4448ed201ea6dca6f5b870354e5a59e",
+          "records": 27
+        }
+      },
+      "caveats": [
+        "450validation samples licensed,450test private.",
+        "Official scoring uses GPT-5.4/Gemini3.1Pro/Sonnet4.6 panel, incompatible with owner nano-only judge unless official configurable scorer is released.",
+        "Do not substitute older vals-ai/finance-agent50question v1public corpus."
+      ],
+      "next_action": "Retain public27 sample identities; no substitute scorer or external platform signup/contact authorized."
+    },
+    {
+      "id": "cwe_bench",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 5,
+      "source": "https://cwe-bench.com/",
+      "version": "1",
+      "availability": "official_tasks_private",
+      "campaign_disposition": "SKIP: official tasks private",
+      "official_task_count": 120,
+      "details": "Official website explicitly states held-out set private to Collinear and unavailable externally. Public4000+training corpus is not v1held-out evaluation.",
+      "next_action": "Report skip and keep as secondary security benchmark if official tasks ever become available; no memory-poisoning claim."
+    },
+    {
+      "id": "agentdojo",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 5,
+      "source": "https://github.com/ethz-spylab/agentdojo",
+      "revision": "75cea0673940d6e5dc293e8aa22ea776a63f76e9",
+      "availability": "public_official_dataset_and_scorer",
+      "suite_version": "v1.2.2",
+      "suites": [
+        "workspace",
+        "travel",
+        "banking",
+        "slack"
+      ],
+      "scorer": "src/agentdojo/benchmark.py + official suite user_task.utility and injection_task.security predicates",
+      "next_action": "Run all official suite tasks with tooloutputs entering normal gated memory; own store and policy history per task; preserve attack identities."
+    },
+    {
+      "id": "injecagent",
+      "model": "gpt-5.4-nano",
+      "judge": "gpt-5.4-nano",
+      "results_status": "NOT_SCORED_BY_INVENTORY",
+      "workers": 10,
+      "source": "https://github.com/uiuc-kang-lab/InjecAgent",
+      "revision": "f19c9f2c79a41046eb13c03c51a24c567a8ffa07",
+      "availability": "public_official_dataset_and_scorer",
+      "scope": "base1054cases; enhanced separate variant",
+      "files": {
+        "data/test_cases_dh_base.json": {
+          "sha256": "0a8186468d21389af432e8c7b399ae42264d1b93a07b65c7a489468508604305",
+          "records": 510
+        },
+        "data/test_cases_ds_base.json": {
+          "sha256": "4daab35c62a3845e8b9400f4dca58b9c9f37e57cd33b2337552557fbb26282e9",
+          "records": 544
+        }
+      },
+      "scorer": "src/output_parsing.py + src/utils.py get_score; evaluate_prompted_agent.py official protocol",
+      "next_action": "Integrate official two-stage data-stealing evaluation plus direct harm and all4arms; shared nano judge/provider accounting."
+    }
+  ],
+  "hash_evidence": "sha256 means locally hashed bytes; publisher_lfs_sha256 means official primary metadata only and requires local byte verification before runs."
+}

@@ -1,0 +1,76 @@
+{
+  "checked_date": "2026-11-01",
+  "column_label": "published, different model or judge",
+  "purpose": "External context only. No ranking, pooled mean, head-to-head win or delta against this campaign is supported.",
+  "sources": [
+    {
+      "system": "Mem0",
+      "benchmark": "LoCoMo",
+      "score_percent": 66.88,
+      "metric": "Published overall LLM-as-Judge J score, Table2",
+      "model": "gpt-4o-mini",
+      "judge": "See paper section3.2; different scoring protocol from this campaign",
+      "n": null,
+      "scope": "10conversations; four non-adversarial question categories",
+      "published_uncertainty": "plus/minus0.15 percentage points as reported; not this campaign bootstrapCI",
+      "source": "https://arxiv.org/html/2504.19413v1",
+      "source_version": "arXiv2504.19413v1",
+      "comparable_to_current_campaign": false
+    },
+    {
+      "system": "Mem0-Graph",
+      "benchmark": "LoCoMo",
+      "score_percent": 68.44,
+      "metric": "Published overall LLM-as-Judge J score, Table2",
+      "model": "gpt-4o-mini",
+      "judge": "See paper section3.2; different scoring protocol from this campaign",
+      "n": null,
+      "scope": "10conversations; four non-adversarial question categories",
+      "published_uncertainty": "plus/minus0.17 percentage points as reported; not this campaign bootstrapCI",
+      "source": "https://arxiv.org/html/2504.19413v1",
+      "source_version": "arXiv2504.19413v1",
+      "comparable_to_current_campaign": false
+    },
+    {
+      "system": "Zep",
+      "benchmark": "LoCoMo",
+      "score_percent": 94.7,
+      "metric": "Vendor-published accuracy, multi-scope retrieval",
+      "model": "gpt-5.4, reasoning medium",
+      "judge": "gpt-5.4 with chain-of-thought grading",
+      "n": 1540,
+      "reported_correct": 1459,
+      "scope": "Four question categories; excludes adversarial category",
+      "source": "https://www.getzep.com/research/",
+      "source_version": "Live page checked2026-11-01",
+      "caveat": "Page category denominators sum1539 and numerators1436, while headline reports1459/1540. Preserve publisher headline verbatim as an attributed claim; do not recompute an aggregate from category rows.",
+      "comparable_to_current_campaign": false
+    },
+    {
+      "system": "Zep",
+      "benchmark": "LongMemEval",
+      "score_percent": 90.2,
+      "metric": "Vendor-published accuracy, multi-scope retrieval",
+      "model": "gpt-5.4, reasoning medium",
+      "judge": "gpt-5.4 with chain-of-thought grading",
+      "n": 500,
+      "reported_correct": 451,
+      "source": "https://www.getzep.com/research/",
+      "source_version": "Live page checked2026-11-01",
+      "comparable_to_current_campaign": false
+    },
+    {
+      "system": "Letta Filesystem",
+      "benchmark": "LoCoMo",
+      "score_percent": 74.0,
+      "metric": "Vendor-published accuracy",
+      "model": "gpt-4o-mini",
+      "judge": "Not specified in cited article; requires code-level scorer verification for judge identity",
+      "n": null,
+      "scope": "Filesystem agent; tools constrained to start with search_files and finish answer_question",
+      "source": "https://www.letta.com/blog/benchmarking-ai-agent-memory/",
+      "source_version": "Published2025-08-12; checked2026-11-01",
+      "comparable_to_current_campaign": false
+    }
+  ]
+}

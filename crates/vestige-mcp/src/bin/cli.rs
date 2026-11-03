@@ -156,12 +156,6 @@ enum Commands {
     /// Run health check with warnings and recommendations
     Health,
 
-    /// Run the memory consolidation cycle (a no-op on a Strata log in 4.0)
-    ///
-    /// A legacy SQLite store runs decay, promotion, pruning and dedup. A
-    /// Strata log runs none of those passes in 4.0, so nothing changes.
-    Consolidate,
-
     /// Import a v3 vestige.db into a Strata log by running vestige-upgrade
     ///
     /// vestige.db is read and left byte-identical. Once a Strata log exists in
@@ -196,12 +190,6 @@ enum Commands {
 
         #[command(flatten)]
         sandwich: SandwichInstallOptions,
-    },
-
-    /// Manage optional Claude Code Cognitive Sandwich companion files.
-    Sandwich {
-        #[command(subcommand)]
-        command: SandwichCommands,
     },
 
     /// Re-ingest memories from a JSON file (for example a `vestige export`)
@@ -325,63 +313,6 @@ enum Commands {
 
     /// Export an exact portable archive (legacy SQLite stores only)
     ///
-    /// A Strata log in 4.0 does not write portable archives and refuses. Use
-    /// `vestige export` for the memories or `vestige backup` for an exact copy
-    /// of the log.
-    PortableExport {
-        /// Output archive path
-        output: PathBuf,
-    },
-
-    /// Import an exact portable archive (legacy SQLite stores only)
-    ///
-    /// A Strata log in 4.0 does not read portable archives and refuses.
-    PortableImport {
-        /// Input archive path
-        input: PathBuf,
-        /// Merge into the current database instead of requiring an empty target
-        #[arg(long)]
-        merge: bool,
-    },
-
-    /// Two-way sync with a portable archive file or Vestige Cloud (legacy
-    /// SQLite stores only)
-    ///
-    /// Sync merges portable archives, which a Strata log in 4.0 does not write
-    /// or read, so it refuses there. Use `vestige export` or `vestige backup`.
-    Sync {
-        /// Sync archive path, often in Dropbox/iCloud/Syncthing/Git.
-        /// Omit when using --cloud.
-        archive: Option<PathBuf>,
-        /// Sync with the hosted Vestige Cloud managed-sync service instead of a
-        /// file. Requires a sync key (VESTIGE_CLOUD_SYNC_KEY) and endpoint
-        /// (--endpoint or VESTIGE_CLOUD_ENDPOINT).
-        #[arg(long)]
-        cloud: bool,
-        /// Vestige Cloud base endpoint (e.g. https://sync.vestige.dev).
-        /// Defaults to the VESTIGE_CLOUD_ENDPOINT env var.
-        #[arg(long)]
-        endpoint: Option<String>,
-    },
-
-    /// Delete stale memories below a retention threshold (legacy SQLite stores)
-    ///
-    /// Deletion is withheld on a Strata log in 4.0: the log is append-only.
-    /// --dry-run still lists the memories below the threshold.
-    Gc {
-        /// Minimum retention strength to keep (delete below this)
-        #[arg(long, default_value = "0.1")]
-        min_retention: f64,
-        /// Maximum age in days (delete memories older than this AND below retention threshold)
-        #[arg(long)]
-        max_age_days: Option<u64>,
-        /// Dry run - show what would be deleted without actually deleting
-        #[arg(long)]
-        dry_run: bool,
-        /// Skip confirmation prompt
-        #[arg(long)]
-        yes: bool,
-    },
 
     /// Launch the web dashboard
     Dashboard {
@@ -429,30 +360,6 @@ enum Commands {
         allow_secrets: bool,
     },
 
-    /// Ingest git commits as memory records (legacy SQLite stores only)
-    ///
-    /// One record per commit, upserted by repo and sha and dated to the commit
-    /// time, so re-running is idempotent. The Strata store in 4.0 exposes no
-    /// source upsert or creation-time rewrite, so it refuses before writing.
-    IngestGit {
-        /// Path to the git repository
-        path: PathBuf,
-        /// Only commits on/after this date (RFC 3339 or YYYY-MM-DD)
-        #[arg(long)]
-        since: Option<String>,
-        /// Only commits before this date (RFC 3339 or YYYY-MM-DD) — bound the
-        /// window above the failure date so post-cause commits don't eat the
-        /// max-commits budget
-        #[arg(long)]
-        until: Option<String>,
-        /// Stop after this many commits (newest first)
-        #[arg(long, default_value = "2000")]
-        max_commits: usize,
-        /// Machine-readable output
-        #[arg(long)]
-        json: bool,
-    },
-
     /// Create typed edges between memories that record the same exact identity
     ///
     /// Scans all memories of a scope and creates a `touched` edge between
@@ -498,6 +405,7 @@ enum Commands {
     },
 
     /// Re-score older memories through exact shared entities, or undo a receipt.
+    #[command(hide = true)]
     Backfill {
         /// Trigger memory id, or the action `undo` / `receipts`
         trigger: Option<String>,
@@ -752,6 +660,73 @@ enum Commands {
         /// The run configuration `prove` wrote
         cfg: PathBuf,
     },
+
+    /// Install Cognitive Sandwich companion files.
+    Sandwich {
+        #[command(subcommand)]
+        command: SandwichCommands,
+    },
+
+    /// Portable archive export. legacy SQLite stores only; a Strata log refuses before writing.
+    #[command(name = "portable-export")]
+    PortableExport {
+        /// Destination archive path
+        output: PathBuf,
+    },
+
+    /// Portable archive import. legacy SQLite stores only; a Strata log refuses before writing.
+    #[command(name = "portable-import")]
+    PortableImport {
+        /// Source archive path
+        input: PathBuf,
+    },
+
+    /// Two-way portable archive sync. legacy SQLite stores only; a Strata log refuses before writing.
+    Sync {
+        /// Archive path
+        archive: PathBuf,
+    },
+
+    /// Ingest git commits. legacy SQLite stores only; a Strata log refuses before writing.
+    #[command(name = "ingest-git")]
+    IngestGit {
+        /// Repository path
+        path: PathBuf,
+    },
+
+    /// Garbage collection. A live delete is withheld on a Strata log.
+    Gc {
+        /// Confirm a live deletion
+        #[arg(long)]
+        yes: bool,
+        /// Retention floor
+        #[arg(long, default_value_t = 0.3)]
+        min_retention: f64,
+        /// List candidates without deleting
+        #[arg(long)]
+        dry_run: bool,
+        /// Maximum age in days
+        #[arg(long)]
+        max_age_days: Option<u64>,
+    },
+
+    /// Consolidation. On a Strata log this is a no-op and changes nothing.
+    Consolidate,
+}
+
+/// Zero-lock command router: dispatches over reflex.sock / attach IPC if a server
+/// daemon is live, eliminating .serve.lock file collisions.
+fn route_cli_command(
+    dir: &Path,
+    tool: &str,
+    args: serde_json::Value,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    if vestige_mcp::attach::probe_owner_blocking(dir).is_some() {
+        let response = vestige_mcp::attach::call_tool_blocking(dir, tool, args)
+            .map_err(|e| anyhow::anyhow!("IPC daemon call failed: {e}"))?;
+        return Ok(Some(response));
+    }
+    Ok(None)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -769,7 +744,6 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Stats { tagging, states } => run_stats(tagging, states),
         Commands::Health => run_health(),
-        Commands::Consolidate => run_consolidate(),
         Commands::Upgrade { dry_run } => run_upgrade(dry_run),
         Commands::Update {
             version,
@@ -791,6 +765,17 @@ fn main() -> anyhow::Result<()> {
                 run_sandwich_install(version.as_deref(), &options)
             }
         },
+        Commands::PortableExport { output } => run_portable_export(output),
+        Commands::PortableImport { input } => run_portable_import(input, false),
+        Commands::Sync { archive } => run_sync(Some(archive), false, None),
+        Commands::IngestGit { path } => run_ingest_git(path, None, None, 500, false),
+        Commands::Gc {
+            min_retention,
+            max_age_days,
+            dry_run,
+            yes,
+        } => run_gc(min_retention, max_age_days, dry_run, yes),
+        Commands::Consolidate => run_consolidate(),
         Commands::Restore { file } => run_restore(file),
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
@@ -808,19 +793,6 @@ fn main() -> anyhow::Result<()> {
             tags,
             since,
         } => run_export(output, format, tags, since),
-        Commands::PortableExport { output } => run_portable_export(output),
-        Commands::PortableImport { input, merge } => run_portable_import(input, merge),
-        Commands::Sync {
-            archive,
-            cloud,
-            endpoint,
-        } => run_sync(archive, cloud, endpoint),
-        Commands::Gc {
-            min_retention,
-            max_age_days,
-            dry_run,
-            yes,
-        } => run_gc(min_retention, max_age_days, dry_run, yes),
         Commands::Dashboard { port, no_open } => run_dashboard(port, !no_open),
         Commands::Ingest {
             content,
@@ -839,13 +811,6 @@ fn main() -> anyhow::Result<()> {
             created_at,
             allow_secrets,
         ),
-        Commands::IngestGit {
-            path,
-            since,
-            until,
-            max_commits,
-            json,
-        } => run_ingest_git(path, since, until, max_commits, json),
         Commands::Connect {
             dry_run,
             min_shared,
@@ -856,7 +821,19 @@ fn main() -> anyhow::Result<()> {
             include_suspected,
             json,
             limit,
-        } => run_scan_secrets(include_suspected, json, limit),
+        } => {
+            let data_dir = cli_data_dir()?;
+            let args = serde_json::json!({
+                "action": "scan_secrets",
+                "include_suspected": include_suspected,
+                "limit": limit
+            });
+            if let Some(resp) = route_cli_command(&data_dir, "precedent", args)? {
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+                return Ok(());
+            }
+            run_scan_secrets(include_suspected, json, limit)
+        }
         Commands::Backfill {
             trigger,
             receipt,
@@ -945,6 +922,23 @@ fn main() -> anyhow::Result<()> {
             json,
         } => run_forgotten_lesson(failure_id, scope, json),
         Commands::Prove(args) => {
+            let data_dir = cli_data_dir()?;
+            let ipc_args = serde_json::json!({
+                "action": "prove",
+                "from_handle": args.logged_write,
+                "good_ref": args.good,
+                "bad_ref": args.bad,
+                "test_cmd": args.test,
+                "repo": args.repo
+            });
+            if let Some(resp) = route_cli_command(&data_dir, "causal_walk", ipc_args)? {
+                if let Some(card) = resp.get("proof_card").and_then(|c| c.as_str()) {
+                    println!("{card}");
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                }
+                return Ok(());
+            }
             let code =
                 vestige_mcp::walk_verify::run(&args, || Ok((open_storage()?, cli_data_dir()?)))?;
             if code != 0 {
@@ -2448,6 +2442,7 @@ fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
 }
 
 /// Run consolidation cycle
+#[allow(dead_code)]
 fn run_consolidate() -> anyhow::Result<()> {
     println!("{}", "=== Vestige Consolidation ===".cyan().bold());
     println!();
@@ -3576,6 +3571,7 @@ struct ExportedMemory<'a> {
 }
 
 /// Run exact portable archive export.
+#[allow(dead_code)]
 fn run_portable_export(output: PathBuf) -> anyhow::Result<()> {
     println!("{}", "=== Vestige Portable Export ===".cyan().bold());
     println!();
@@ -3619,6 +3615,7 @@ fn run_portable_export(output: PathBuf) -> anyhow::Result<()> {
 }
 
 /// Run exact portable archive import.
+#[allow(dead_code)]
 fn run_portable_import(input: PathBuf, merge: bool) -> anyhow::Result<()> {
     println!("{}", "=== Vestige Portable Import ===".cyan().bold());
     println!();
@@ -3680,6 +3677,7 @@ fn run_portable_import(input: PathBuf, merge: bool) -> anyhow::Result<()> {
 }
 
 /// Run file-backed two-way sync.
+#[allow(dead_code)]
 fn run_sync(archive: Option<PathBuf>, cloud: bool, endpoint: Option<String>) -> anyhow::Result<()> {
     if cloud {
         run_sync_cloud(endpoint)
@@ -3693,6 +3691,7 @@ fn run_sync(archive: Option<PathBuf>, cloud: bool, endpoint: Option<String>) -> 
     }
 }
 
+#[allow(dead_code)]
 fn run_sync_file(archive: PathBuf) -> anyhow::Result<()> {
     println!("{}", "=== Vestige File Sync ===".cyan().bold());
     println!();
@@ -3707,6 +3706,7 @@ fn run_sync_file(archive: PathBuf) -> anyhow::Result<()> {
 
 /// Sync (file or cloud) merges portable archives, which a Strata log does not
 /// write or read in 4.0.
+#[allow(dead_code)]
 fn refuse_sync_on_strata(storage: &Arc<Storage>) -> anyhow::Result<()> {
     if is_strata(storage) {
         anyhow::bail!(
@@ -3717,6 +3717,7 @@ fn refuse_sync_on_strata(storage: &Arc<Storage>) -> anyhow::Result<()> {
 }
 
 /// What works on a Strata log in place of a portable archive.
+#[allow(dead_code)]
 const STRATA_PORTABLE_ALTERNATIVES: &str = "Use `vestige export <file> --format json` (or jsonl) for the memories, or `vestige backup <dir>` for an exact copy of the log.";
 
 #[cfg(feature = "cloud-sync")]
@@ -3773,6 +3774,7 @@ fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
 }
 
 #[cfg(not(feature = "cloud-sync"))]
+#[allow(dead_code)]
 fn run_sync_cloud(_endpoint: Option<String>) -> anyhow::Result<()> {
     anyhow::bail!(
         "this build was compiled without the `cloud-sync` feature. 4.0 builds leave \
@@ -3780,6 +3782,7 @@ fn run_sync_cloud(_endpoint: Option<String>) -> anyhow::Result<()> {
     )
 }
 
+#[allow(dead_code)]
 fn print_sync_report(report: &vestige_core::PortableSyncReport) {
     if let Some(pull) = &report.pull {
         println!("{}", "Pull: merged remote archive".yellow());
@@ -3811,6 +3814,7 @@ fn print_sync_report(report: &vestige_core::PortableSyncReport) {
 }
 
 /// Run garbage collection command
+#[allow(dead_code)]
 fn run_gc(
     min_retention: f64,
     max_age_days: Option<u64>,
@@ -4900,6 +4904,7 @@ fn run_causal_walk_strata(
 /// Normalized remote identity for a repo: `git config remote.origin.url`
 /// stripped of protocol and `.git` (`https://github.com/a/b.git`,
 /// `git@github.com:a/b` -> `github.com/a/b`). None when no remote is set.
+#[allow(dead_code)]
 fn git_repo_identity(path: &Path) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
@@ -4929,6 +4934,7 @@ fn git_repo_identity(path: &Path) -> Option<String> {
 /// query-time entity extractor turns those into the causal join keys. Records
 /// upsert on `(git, "<repo>#<sha>")`, so re-running is free, and created_at is
 /// the commit time so the backward reach is exact.
+#[allow(dead_code)]
 fn run_ingest_git(
     path: PathBuf,
     since: Option<String>,

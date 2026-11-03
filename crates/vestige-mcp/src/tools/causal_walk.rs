@@ -78,6 +78,19 @@ pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["walk", "prove"],
+                "default": "walk",
+                "description": "'walk' follows recorded causal edges from explicit starts. 'prove' bundles existing Reflex test witnesses for a commit using repoPath, commit, and out; it does not execute tests or bisect."
+            },
+            "from_handle": {
+                "type": "string",
+                "description": "For walk: exact failure memory ID to walk backward from."
+            },
+            "commit": {"type":"string", "description":"For prove: commit/ref to bundle (default HEAD)."},
+            "repoPath": {"type":"string", "description":"For prove: absolute git checkout path."},
+            "out": {"type":"string", "enum":["file","notes","both","none"], "description":"For prove: proof artifact destination; file is the default."},
             "scope": {
                 "type": "string",
                 "default": "user",
@@ -180,6 +193,9 @@ struct Args {
     node: Option<String>,
     #[serde(default, alias = "loggedWrite")]
     logged_write: Option<String>,
+    /// Unified v6.2 fields
+    #[serde(default, alias = "fromHandle")]
+    from_handle: Option<String>,
 }
 
 /// Recorded causal vocabulary.
@@ -220,8 +236,66 @@ struct Hop {
 const DEFAULT_SCAN_LIMIT: i32 = 25;
 
 pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+    // Check action
+    let action = args
+        .as_ref()
+        .and_then(|a| a.get("action"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("walk");
+
+    if !matches!(action, "walk" | "prove") {
+        return Err(format!(
+            "unknown causal_walk action '{action}'; use walk or prove. Repository ingest_repo/verify use session action='codebase' with the native payload in params; log verification uses precedent query='verify_log'"
+        ));
+    }
+
+    if let Some(raw) = args.as_ref() {
+        for field in [
+            "github_issue",
+            "githubIssue",
+            "good_ref",
+            "goodRef",
+            "bad_ref",
+            "badRef",
+            "test_cmd",
+            "testCmd",
+        ] {
+            if raw.get(field).is_some() {
+                return Err(format!(
+                    "unsupported causal_walk argument '{field}': this tool does not gather issues or run bisect/tests; prove bundles recorded witnesses using repoPath, commit, and out"
+                ));
+            }
+        }
+    }
+    if action == "prove" {
+        // Use the actual proof contract and result verbatim. The receipt
+        // handler validates the absolute repository path and output selector,
+        // runs blocking Git work off the async worker, and reports unwitnessed
+        // or failed claims without manufacturing a VERIFIED status.
+        return super::receipt::execute(storage, args).await;
+    }
+    if let Some(raw) = args.as_ref() {
+        for field in ["repo", "repoPath", "commit", "out"] {
+            if raw.get(field).is_some() {
+                return Err(format!(
+                    "causal_walk argument '{field}' is not valid for walk"
+                ));
+            }
+        }
+    }
+
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        return recorded_backward_walk(storage, args);
+        let mut result = recorded_backward_walk(storage, args.clone())?;
+        // Attach forgotten lessons if any lesson retrievability is low (< 0.5)
+        if let Ok(forgotten) = super::forgotten_lesson::execute(storage, args).await
+            && let Some(res_obj) = result.as_object_mut()
+            && let Some(lessons) = forgotten
+                .get("lessons")
+                .or_else(|| forgotten.get("results"))
+        {
+            res_obj.insert("forgotten_lessons".to_string(), lessons.clone());
+        }
+        return Ok(result);
     }
     let args: Args = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| e.to_string())?,
@@ -1037,7 +1111,12 @@ struct WalkOut {
 /// of ANY kind names the recorded node to walk from.
 fn start_rows(args: &Args) -> Vec<StartRow> {
     let mut rows = Vec::new();
-    for handle in [&args.node_id, &args.node, &args.logged_write] {
+    for handle in [
+        &args.node_id,
+        &args.node,
+        &args.logged_write,
+        &args.from_handle,
+    ] {
         if let Some(id) = nonempty(handle) {
             rows.push(StartRow {
                 index: None,
