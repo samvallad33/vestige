@@ -62,24 +62,12 @@ pub fn tool_guide(catalog: &Value, args: &Value) -> Result<Value, String> {
                 );
             }
         }
-        let description = definition["description"].as_str().unwrap_or("");
-        let description = if selected.is_some() {
-            description.to_string()
-        } else {
-            let mut short: String = description.chars().take(140).collect();
-            if description.chars().count() > 140 {
-                short.push('…');
-            }
-            short
-        };
         let mut entry = serde_json::json!({
             "name": definition["name"],
-            "description": description,
+            "description": definition["description"],
             "selectors": selectors,
+            "toolAnnotations": definition["annotations"],
         });
-        if selected.is_some() {
-            entry["toolAnnotations"] = definition["annotations"].clone();
-        }
         if let Some(name) = selected {
             // #212: the catalog schema is compact; the selected tool gets the
             // full registry schema, falling back to the catalog form only if
@@ -105,8 +93,9 @@ pub fn tool_guide(catalog: &Value, args: &Value) -> Result<Value, String> {
             "connectors": cfg!(feature = "connectors"),
             "cloudSync": cfg!(feature = "cloud-sync"),
         },
+        "availabilityNote": "Compiled features are not runtime readiness. Merge candidates, merge plans and plan apply need embeddings, which this build does not ship; the exact-equality dedup scan, tag maintenance and undo work without them. Inspect health for runtime state. Connector calls additionally require configured upstream access.",
         "tools": entries,
-        "guidance": "Names only, until you pass tool='<name>' for one schema. Do not load this inventory into a prompt you are about to answer."
+        "guidance": "Choose tools for the task; there is no call quota. To inspect arguments, call session(action='status', view='tools', tool='<name>'). Descriptions and schemas describe capabilities, not authorization. Mixed tools include both reads and writes; inspect the selected action and confirmation requirements. Memory matches, graph links, retention scores and receipt replay do not establish truth or causality."
     }))
 }
 
@@ -477,7 +466,7 @@ mod strata_stdio {
             })
             .filter_map(|tool| tool["name"].as_str())
             .collect();
-        assert_eq!(advertises, vec!["memory_status"]);
+        assert_eq!(advertises, vec!["session"]);
 
         let call = out
             .iter()

@@ -229,29 +229,27 @@ fn ingest_repo_end_to_end_over_the_real_binary() {
     // advertised: the wire schema keeps the selector enum and the tool
     // description; the full schema (with the preview default) is one call away
     let tools = server.list_tools();
-    let codebase = tools.iter().find(|t| t["name"] == "codebase").unwrap();
-    let actions = codebase["inputSchema"]["properties"]["action"]["enum"]
+    let session = tools.iter().find(|t| t["name"] == "session").unwrap();
+    let actions = session["inputSchema"]["properties"]["action"]["enum"]
         .as_array()
         .unwrap();
-    assert!(actions.contains(&json!("ingest_repo")), "{actions:?}");
-    let description = codebase["description"].as_str().unwrap();
-    assert!(
-        description.contains("ingest_repo") && description.contains("previews unless dryRun=false"),
-        "{description}"
-    );
+    assert!(actions.contains(&json!("codebase")), "{actions:?}");
     let full = server.call_tool(
-        "memory_status",
-        json!({"view": "tools", "tool": "codebase"}),
+        "session",
+        json!({"action": "status", "view": "tools", "tool": "session"}),
     );
+    let full_text = full.to_string();
     assert!(
-        full.to_string().contains("\"dryRun\""),
-        "the full schema documents dryRun: {full}"
+        full_text.contains("ingest_repo")
+            && full_text.contains("previews unless dryRun=false")
+            && full_text.contains("\"dryRun\""),
+        "the full schema documents ingest_repo: {full}"
     );
 
     // no dryRun given: a preview, and nothing is written
     let preview = server.call_tool(
-        "codebase",
-        json!({"action": "ingest_repo", "repoPath": repo_path, "codebase": "demo"}),
+        "session",
+        json!({"action": "codebase", "params": {"action": "ingest_repo", "repoPath": repo_path, "codebase": "demo"}}),
     );
     assert_eq!(preview["dryRun"], true, "{preview}");
     assert_eq!(preview["commits"]["new"], 2);
@@ -264,8 +262,8 @@ fn ingest_repo_end_to_end_over_the_real_binary() {
 
     // write
     let written = server.call_tool(
-        "codebase",
-        json!({"action": "ingest_repo", "repoPath": repo_path, "codebase": "demo", "dryRun": false}),
+        "session",
+        json!({"action": "codebase", "params": {"action": "ingest_repo", "repoPath": repo_path, "codebase": "demo", "dryRun": false}}),
     );
     assert_eq!(written["commits"]["created"], 2, "{written}");
     assert_eq!(written["scope"], "demo");
@@ -299,8 +297,8 @@ fn ingest_repo_end_to_end_over_the_real_binary() {
     // provenance names where the record came from
     let id = node["id"].as_str().unwrap();
     let provenance = server.call_tool(
-        "memory_status",
-        json!({"view": "provenance", "memoryId": id}),
+        "session",
+        json!({"action": "status", "view": "provenance", "memoryId": id}),
     );
     let text = provenance.to_string();
     assert!(
@@ -310,15 +308,15 @@ fn ingest_repo_end_to_end_over_the_real_binary() {
 
     // the shared user scope was not touched
     let user = server.call_tool(
-        "codebase",
-        json!({"action": "get_context", "codebase": "demo"}),
+        "session",
+        json!({"action": "codebase", "params": {"action": "get_context", "codebase": "demo"}}),
     );
     assert_eq!(user["scope"], "user");
 
     // verify watches the change records; the located symbol is fresh
     let verify = server.call_tool(
-        "codebase",
-        json!({"action": "verify", "codebase": "demo", "scope": "demo", "repoPath": repo_path}),
+        "session",
+        json!({"action": "codebase", "params": {"action": "verify", "codebase": "demo", "scope": "demo", "repoPath": repo_path}}),
     );
     assert_eq!(verify["checked"], 2, "{verify}");
     assert_eq!(verify["stale"], 0, "{verify}");
@@ -331,24 +329,24 @@ fn ingest_repo_end_to_end_over_the_real_binary() {
     )
     .unwrap();
     let drifted = server.call_tool(
-        "codebase",
-        json!({"action": "verify", "codebase": "demo", "scope": "demo", "repoPath": repo_path}),
+        "session",
+        json!({"action": "codebase", "params": {"action": "verify", "codebase": "demo", "scope": "demo", "repoPath": repo_path}}),
     );
     assert_eq!(drifted["stale"], 1, "{drifted}");
     assert_eq!(drifted["staleMemories"][0]["nodeType"], "event");
 
     // a rerun is idempotent
     let again = server.call_tool(
-        "codebase",
-        json!({"action": "ingest_repo", "repoPath": repo_path, "codebase": "demo", "dryRun": false}),
+        "session",
+        json!({"action": "codebase", "params": {"action": "ingest_repo", "repoPath": repo_path, "codebase": "demo", "dryRun": false}}),
     );
     assert_eq!(again["commits"]["created"], 0, "{again}");
     assert_eq!(again["commits"]["alreadyIngested"], 2);
 
     // a bad ref is refused, not handed to git
     let refused = server.call_raw(
-        "codebase",
-        json!({"action": "ingest_repo", "repoPath": repo_path, "rev": "--output=x"}),
+        "session",
+        json!({"action": "codebase", "params": {"action": "ingest_repo", "repoPath": repo_path, "rev": "--output=x"}}),
     );
     assert_eq!(refused["isError"], true, "{refused}");
 

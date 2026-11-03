@@ -15,7 +15,17 @@ class DeveloperSession:
         self.mcp_call = mcp_call
         self.instructions = instructions
         self.max_context_bytes = max_context_bytes
-        self.selected = {"memory_status"}
+        names = {
+            tool.get("name")
+            for tool in self.catalog
+            if isinstance(tool, dict)
+        }
+        if "memory_status" in names:
+            self.selected = {"memory_status"}
+        elif "session" in names:
+            self.selected = {"session"}
+        else:
+            raise ValueError("catalog has no discovery tool")
         select_tool_definitions(self.catalog, self.selected)
         self.cache = PacketCache()
         self.events = []

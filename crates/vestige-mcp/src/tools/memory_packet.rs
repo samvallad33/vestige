@@ -471,8 +471,10 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                 })
                 .collect();
             let packed = lexical::pack(&nodes, &packed_hits, HOOK_CHAR_BUDGET, requested);
-            let selection = if hits.is_empty() && !entities.is_empty() {
+            let selection = if !entities.is_empty() {
                 "exact_recorded_entities"
+            } else if hits.is_empty() {
+                "top_salience"
             } else {
                 "exact_token_bm25"
             };

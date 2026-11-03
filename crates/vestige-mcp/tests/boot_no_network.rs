@@ -143,23 +143,15 @@ fn default_boot_opens_no_outbound_socket_or_dns() {
         .filter_map(|tool| tool["name"].as_str())
         .collect();
     assert!(
-        names.contains(&"memory_status"),
-        "tools/list missing memory_status: {names:?}"
+        names.contains(&"session"),
+        "tools/list missing session: {names:?}"
     );
-    assert!(
-        !names.contains(&"source_sync"),
-        "source_sync is absent unless --features connectors: {names:?}"
-    );
-    // 4.0 withholds purge on Strata until erasure ships; suppress (a hide,
-    // never erasure) stays advertised.
-    assert!(
-        !names.contains(&"purge"),
-        "purge is withheld on Strata: {names:?}"
-    );
-    assert!(names.contains(&"suppress"), "{names:?}");
-    assert!(names.contains(&"backfill"), "{names:?}");
+    assert!(names.contains(&"remember"), "{names:?}");
+    assert!(names.contains(&"recall"), "{names:?}");
     assert!(names.contains(&"causal_walk"), "{names:?}");
-    assert_eq!(names.len(), 19, "default tools/list: {names:?}");
+    assert!(names.contains(&"curate"), "{names:?}");
+    assert!(names.contains(&"precedent"), "{names:?}");
+    assert_eq!(names.len(), 6, "default tools/list: {names:?}");
 
     let called = session.result(
         "tools/call",

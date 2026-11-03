@@ -49,9 +49,13 @@ core product promise is:
 - a call the Strata log cannot honor says so with a reason code
   (`unavailable_in_4_0`, `similarity_disabled`, `pending_strata`) instead of
   returning zeros
-- 18 tools, listed by `memory_status` with `view='tools'`: causal walks,
-  GitHub issue hunts (`gather`), GhostLink, receipts, Operator gate stops
-  (`precedent`), code anchors, intentions, suppression and maintenance
+- 6 cognitive verbs, advertised directly in tools/list:
+  - `session`: lifecycle boot, status, intentions, and lock-free projection
+  - `remember`: single gated write, codebase anchoring, and inline backfill
+  - `recall`: exact-handle retrieval and structured candidate discovery
+  - `causal_walk`: root-cause backtracking, forgotten lessons, and deterministic bisect proof cards (`action="prove"`)
+  - `curate`: state mutations, promotions, demotions, edits, and identity bridges
+  - `precedent`: Operator guard stops, receipts, replay, BLAKE3/Ed25519 log verification, and secret scanning
 
 ## Working Rules
 

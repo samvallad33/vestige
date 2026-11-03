@@ -46,10 +46,10 @@ VERSION = "6.2.0"
 INTEGRITY = "reference_digest_not_signature"
 # Operator is a strict superset of Operator Lite: the Lite gate ships beside this file, byte for byte,
 # and every call is also judged by it. A copy whose bytes differ from the pin is not loaded.
-# The pin is operator-lite/operator-gate.py in this repository (Operator Lite 6.0.0).
+# The pin is operator-lite/operator-gate.py in this repository (Operator Lite 6.2.0).
 LITE_CORE_FILE = "lite_core.py"
-LITE_CORE_VERSION = "6.0.0"
-LITE_CORE_SHA256 = "3cd8385089f2cefbfc7a2d62a6dbf0938dbe211f06092966ce268c8ae743efe8"
+LITE_CORE_VERSION = "6.2.0"
+LITE_CORE_SHA256 = "d8180d766febdbb9a3d65fdd22510507f44a20db934951d368bb53b3f612830a"
 IS_WINDOWS = os.name == "nt"
 
 

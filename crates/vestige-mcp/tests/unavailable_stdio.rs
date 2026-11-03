@@ -186,21 +186,13 @@ fn consolidate_is_withheld_not_a_zero_success() {
     server.handshake();
     seed(&mut server, 4);
 
-    // not advertised, and the description says so
+    // The six-tool catalog does not advertise maintain. The call below still
+    // refuses consolidate with the stable code.
     let tools = server.list_tools();
-    let maintain = tools.iter().find(|t| t["name"] == "maintain").unwrap();
-    let actions: Vec<&str> = maintain["inputSchema"]["properties"]["action"]["enum"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a.as_str().unwrap())
-        .collect();
-    assert!(!actions.contains(&"consolidate"), "{actions:?}");
-    assert!(actions.contains(&"dream"), "{actions:?}");
-    let description = maintain["description"].as_str().unwrap();
+    let names: Vec<&str> = tools.iter().filter_map(|tool| tool["name"].as_str()).collect();
     assert!(
-        description.contains("Withheld on Strata in 4.0:") && description.contains("consolidate"),
-        "{description}"
+        !names.contains(&"maintain") && !names.contains(&"consolidate"),
+        "{names:?}"
     );
 
     // called anyway: refused with the stable code, and nothing that looks like a count

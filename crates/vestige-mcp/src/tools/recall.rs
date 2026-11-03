@@ -53,20 +53,21 @@ pub fn schema() -> Value {
         obj.insert(
             "description".to_string(),
             serde_json::json!(
-                "Pass handle for an exact memory id, unique id prefix of 8+ characters, or exact tag. A free-text query is ranked by exact-token BM25 over stored memory text (no embeddings, no fuzzy match) and returns full records. Modes reason and contradictions still return similarity_disabled on Strata. reason takes query, depth, limit, scope/includeCrossScope, the retention/score/type/tag/validAt/source filters and token_budget, and rejects lookup-only controls. contradictions takes topic, since, min_trust, limit and scope/includeCrossScope, and rejects token_budget and the lookup/reason filters instead of silently ignoring them."
+                "Pass handle: a full memory id or an exact tag. Every other field belongs to the legacy engine's lookup, reason and contradictions modes; Strata returns similarity_disabled for them. reason takes query, depth, limit, scope/includeCrossScope, the retention/score/type/tag/validAt/source filters and token_budget, and rejects lookup-only controls. contradictions takes topic, since, min_trust, limit and scope/includeCrossScope, and rejects token_budget and the lookup/reason filters instead of silently ignoring them."
             ),
         );
         // Drop the global `query` requirement — contradictions uses `topic`.
         obj.remove("required");
 
         if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
+            props.insert("id".into(), serde_json::json!({"type":"string", "description":"Exact memory id; alias for handle."}));
             // Handle mode (handle-based recall). Presence of the key — even
             // empty — activates the handle flow at entry, before mode dispatch.
             props.insert(
                 "handle".to_string(),
                 serde_json::json!({
                     "type": "string",
-                            "description": "[handle mode] Exact memory id or case-sensitive tag, including explicit person:Maya entities; a unique id prefix of 8+ characters also resolves. No fuzzy matching. Results rank by salience, then recency; edge neighbors come back whole."
+                            "description": "[handle mode] Exact memory id or case-sensitive tag, including explicit person:Maya entities; a unique id prefix of 8+ characters also resolves. No fuzzy or lexical matching. Multi-memory results rank by updated salience, then recency, before limit, with recorded-edge neighbors."
                 }),
             );
             props.insert(
@@ -75,7 +76,7 @@ pub fn schema() -> Value {
                     "type": "string",
                     "enum": ["lookup", "reason", "contradictions"],
                     "default": "lookup",
-                    "description": "'lookup' (default): exact handle, or exact-token BM25 over stored text when query is free text. 'reason' and 'contradictions' are legacy engine only and return similarity_disabled on Strata."
+                    "description": "'lookup' (default): by handle; a free-text 'query' is legacy engine only. 'reason': legacy engine only; scoped supersession and contradiction analysis of 'query'; verify material claims against current sources. 'contradictions': legacy engine only; disagreement pairs for a 'topic', or recent memories."
                 }),
             );
             // reason (deep_reference) extra field.
@@ -254,8 +255,23 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         .and_then(|v| v.as_u64())
         .map_or(0, |n| n as usize);
     if !object.contains_key("handle") {
-        // An exact id or tag passed as `query` still resolves as a handle.
-        // Anything else on a Strata log is exact-token lexical ranking.
+        // Check if an id was passed directly (absorbing memory(action="get", id=...))
+        if let Some(id) = object.get("id").and_then(|v| v.as_str()).map(str::trim)
+            && !id.is_empty()
+        {
+            let resolution = storage.resolve_handle(id);
+            return Some(Ok(handle_resolution_payload(
+                storage,
+                id,
+                resolution,
+                limit,
+                detail_level,
+                offset,
+            )));
+        }
+        // A Strata log has no free-text search, so a `query` there can only be
+        // an exact handle. Resolve it as one instead of refusing an id or a tag
+        // because it arrived under the other parameter name.
         let query = object
             .get("query")
             .and_then(|v| v.as_str())
@@ -266,10 +282,8 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         }
         let resolution = storage.resolve_handle(query);
         if resolution.ids.is_empty() && resolution.candidates.is_empty() {
-            if !is_lookup(object) {
-                return None;
-            }
-            return Some(lexical_flow(storage, object, query, limit, detail_level));
+            // Strata returns structured handle discovery refusal on free-text query
+            return Some(Ok(handle_required_payload(storage, query)));
         }
         return Some(Ok(handle_resolution_payload(
             storage,
@@ -296,133 +310,13 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
             offset,
         )));
     }
-    // `handle` present but empty: free text. An exact handle still resolves.
-    // Other text is ranked by exact tokens instead of `handle_required`.
+    // `handle` present but empty/non-string: free text with no handle — the
+    // handle_required payload, with candidates mined from the free text.
     let free_text = object
         .get("query")
         .and_then(|v| v.as_str())
-        .map(str::trim)
         .unwrap_or_default();
-    if free_text.is_empty() || !crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        return Some(Ok(handle_required_payload(storage, free_text)));
-    }
-    if !is_lookup(object) {
-        return None;
-    }
-    let resolution = storage.resolve_handle(free_text);
-    if resolution.ids.is_empty() && resolution.candidates.is_empty() {
-        return Some(lexical_flow(
-            storage,
-            object,
-            free_text,
-            limit,
-            detail_level,
-        ));
-    }
-    Some(Ok(handle_resolution_payload(
-        storage,
-        free_text,
-        resolution,
-        limit,
-        detail_level,
-        offset,
-    )))
-}
-
-fn is_lookup(object: &serde_json::Map<String, Value>) -> bool {
-    object
-        .get("mode")
-        .and_then(Value::as_str)
-        .unwrap_or("lookup")
-        == "lookup"
-}
-
-fn scope_of(object: &serde_json::Map<String, Value>) -> Result<String, String> {
-    let scope = object
-        .get("scope")
-        .and_then(Value::as_str)
-        .unwrap_or("user")
-        .trim();
-    if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
-        return Err("scope must be a non-empty identifier of at most 200 visible bytes".into());
-    }
-    Ok(scope.to_string())
-}
-
-fn lexical_flow(
-    storage: &Arc<Storage>,
-    object: &serde_json::Map<String, Value>,
-    query: &str,
-    limit: Option<usize>,
-    detail_level: Option<&str>,
-) -> Result<Value, String> {
-    let scope = scope_of(object)?;
-    let mut nodes = storage
-        .get_all_nodes_in_scope(&scope, i32::MAX, 0)
-        .map_err(|e| e.to_string())?;
-    let retired = storage.superseded_node_ids().map_err(|e| e.to_string())?;
-    let now = chrono::Utc::now();
-    nodes.retain(|node| {
-        !retired.contains(&node.id)
-            && node.valid_from.is_none_or(|t| t <= now)
-            && node.valid_until.is_none_or(|t| t > now)
-    });
-    let salience = super::memory_packet::scores(storage.as_ref());
-    let hits = super::lexical::rank(&nodes, query, |node| {
-        salience.get(&node.id).copied().unwrap_or_default()
-    });
-    let limit = limit.unwrap_or(8).clamp(1, 24);
-    let detail = detail_level.unwrap_or("full");
-    let selected: Vec<(i64, KnowledgeNode)> = hits
-        .iter()
-        .take(limit)
-        .filter_map(|hit| {
-            nodes
-                .get(hit.index)
-                .cloned()
-                .map(|node| (hit.score_micro, node))
-        })
-        .collect();
-    let seed_indexes: Vec<usize> = hits
-        .iter()
-        .take(selected.len())
-        .map(|hit| hit.index)
-        .collect();
-    let bridges = super::lexical::bridges(&nodes, &seed_indexes, 4);
-    let bridge_json: Vec<Value> = bridges
-        .iter()
-        .filter_map(|bridge| {
-            let node = nodes.get(bridge.index)?;
-            Some(serde_json::json!({
-                "id": node.id,
-                "type": node.node_type,
-                "content": node.content,
-                "tags": node.tags,
-                "path": bridge.path,
-            }))
-        })
-        .collect();
-    let nodes_json: Vec<Value> = selected
-        .iter()
-        .map(|(score, node)| {
-            let mut payload = node_payload_with_detail(node.clone(), detail);
-            if let Some(object) = payload.as_object_mut() {
-                object.insert("lexicalScore".into(), serde_json::json!(score));
-            }
-            payload
-        })
-        .collect();
-    Ok(serde_json::json!({
-        "mode": "lexical",
-        "kind": "lexical",
-        "exact": false,
-        "query": query,
-        "ranking": "exact_token_bm25",
-        "scope": scope,
-        "nodes": nodes_json,
-        "totalNodes": hits.len(),
-        "bridges": bridge_json,
-    }))
+    Some(Ok(handle_required_payload(storage, free_text)))
 }
 
 /// Response payload for a resolved (or ambiguous, or unresolved) handle.
@@ -495,6 +389,8 @@ fn handle_resolution_payload(
         return out;
     }
     if !resolution.candidates.is_empty() {
+        let cands = candidate_json(&resolution);
+        let discovered = cands.clone();
         return serde_json::json!({
             "error": "ambiguous",
             "detail": format!(
@@ -503,7 +399,8 @@ fn handle_resolution_payload(
             ),
             "handle": handle,
             "kind": resolution.kind.as_str(),
-            "candidates": candidate_json(&resolution),
+            "candidates": cands,
+            "discovered_handles": discovered,
         });
     }
     // Nothing matched. The resolver's own message is more specific than the
@@ -515,6 +412,7 @@ fn handle_resolution_payload(
         "error": "handle_required",
         "detail": detail,
         "candidates": [],
+        "discovered_handles": [],
     })
 }
 
@@ -554,6 +452,16 @@ fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
         }
         candidates.truncate(MAX_CANDIDATES);
     }
+    let discovered: Vec<serde_json::Value> = candidates
+        .iter()
+        .map(|(id, kind)| {
+            serde_json::json!({
+                "id": id,
+                "kind": kind.as_str(),
+                "handle": id,
+            })
+        })
+        .collect();
     serde_json::json!({
         "error": "handle_required",
         "detail": vestige_core::storage::HANDLE_REQUIRED_DETAIL,
@@ -561,6 +469,7 @@ fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
             .iter()
             .map(|(id, kind)| serde_json::json!({"id": id, "kind": kind.as_str()}))
             .collect::<Vec<_>>(),
+        "discovered_handles": discovered,
     })
 }
 
@@ -594,12 +503,14 @@ fn node_payload_with_detail(node: KnowledgeNode, detail_level: &str) -> Value {
     match detail_level {
         "brief" => serde_json::json!({
             "id": node.id,
+            "stability": node.stability,
             "type": node.node_type,
             "tags": node.tags,
             "createdAt": node.created_at.to_rfc3339(),
         }),
         "summary" => serde_json::json!({
             "id": node.id,
+            "stability": node.stability,
             "type": node.node_type,
             "content": truncate_content(&node.content, 240),
             "tags": node.tags,
@@ -607,6 +518,7 @@ fn node_payload_with_detail(node: KnowledgeNode, detail_level: &str) -> Value {
         }),
         _ => serde_json::json!({
             "id": node.id,
+            "stability": node.stability,
             "type": node.node_type,
             "content": node.content,
             "tags": node.tags,
@@ -659,9 +571,7 @@ fn one_hop_neighbors(storage: &Arc<Storage>, ids: &[String], detail_level: &str)
                 edge.source_id.clone()
             };
             let first_seen = seen_nodes.insert(other.clone());
-            // Full records on the default full detail. Summary and brief keep
-            // a short neighbor so a tag page of many edges stays bounded.
-            let max_chars = if full_neighbors || detail_level == "full" {
+            let max_chars = if full_neighbors {
                 None
             } else if first_seen {
                 Some(200)
@@ -749,95 +659,87 @@ mod strata_query {
         let nodes = out["nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), 1, "{out}");
         assert_eq!(nodes[0]["id"], serde_json::json!(tagged));
-        // Tags are exact and case-sensitive: another spelling is not a tag
-        // handle. It falls through to exact-token lexical ranking instead.
-        let other = handle_flow(
+        // Tags are exact and case-sensitive: another spelling is a refusal,
+        // not a resolved handle.
+        let wrong_case = handle_flow(
             &storage,
             &Some(serde_json::json!({ "query": "Deploy-Env" })),
         )
-        .expect("free text is ranked lexically")
-        .unwrap();
-        assert_eq!(other["kind"], "lexical", "{other}");
-        assert_eq!(other["exact"], false, "{other}");
+        .expect("a query on Strata stays in handle mode");
+        let wrong_case = wrong_case.expect("case mismatch is a structured refusal");
+        assert_eq!(wrong_case["error"], "handle_required", "{wrong_case}");
+        assert!(wrong_case["nodes"].as_array().is_none_or(|nodes| nodes.is_empty()), "{wrong_case}");
     }
 
     #[tokio::test]
-    async fn free_text_is_exact_token_rank_not_a_split_handle() {
-        let (storage, _dir, tagged, other) = store();
-        // The sentence shares tokens with the tag `deploy-env` and is not
-        // itself a handle. It comes back as a lexical hit, not as a tag
-        // resolution and not as handle_required.
+    async fn free_text_is_never_split_into_words_to_find_a_tag_inside_it() {
+        let (storage, _dir, tagged, _other) = store();
+        // One word of this sentence equals a stored tag. Before 4.2.0 that
+        // word was looked up on its own and the tagged memory came back as a
+        // candidate: a keyword match.
         let sentence = serde_json::json!({
             "handle": "", "query": "what changed in deploy-env yesterday",
         });
         let out = recall(&storage, sentence.clone()).await.unwrap();
-        assert_eq!(out["mode"], "lexical", "{out}");
-        assert!(out.get("error").is_none(), "{out}");
-        let ids: Vec<_> = out["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|node| node["id"].as_str())
-            .collect();
-        assert!(ids.contains(&tagged.as_str()), "{out}");
-        assert!(!ids.contains(&other.as_str()), "{out}");
-        assert_ne!(out["kind"], "tag");
+        assert_eq!(out["error"], "handle_required", "{out}");
+        assert_eq!(out["candidates"], serde_json::json!([]), "{out}");
+        assert!(!out.to_string().contains(&tagged), "{out}");
 
-        // The whole string as an exact tag is still a declared handle.
+        // The whole string as an exact tag is a declared handle.
         let whole = recall(
             &storage,
             serde_json::json!({"handle": "", "query": " deploy-env "}),
         )
         .await
         .unwrap();
-        assert_eq!(whole["kind"], "tag", "{whole}");
-        assert_eq!(whole["nodes"][0]["id"], tagged, "{whole}");
+        assert_eq!(
+            whole["candidates"],
+            serde_json::json!([{"id": tagged, "kind": "tag"}]),
+            "{whole}"
+        );
 
+        // Same store, same call, same bytes.
         let again = recall(&storage, sentence).await.unwrap();
         assert_eq!(out.to_string(), again.to_string());
     }
 
     #[tokio::test]
-    async fn free_text_query_returns_ranked_full_records() {
-        let (storage, _dir, tagged, other) = store();
+    async fn free_text_passed_as_query_is_still_not_answered_as_a_handle() {
+        let (storage, _dir, _tagged, _other) = store();
+        let args = Some(serde_json::json!({ "query": "what is the deploy timeout" }));
+        let flow = handle_flow(&storage, &args).expect("free text on Strata stays in handle mode");
+        let flow = flow.expect("free text is a structured refusal");
+        assert_eq!(flow["error"], "handle_required", "{flow}");
         let out = recall(
             &storage,
             serde_json::json!({ "query": "what is the deploy timeout" }),
         )
         .await
-        .unwrap();
-        assert_eq!(out["mode"], "lexical", "{out}");
-        assert_eq!(out["ranking"], "exact_token_bm25", "{out}");
-        let nodes = out["nodes"].as_array().unwrap();
-        assert!(!nodes.is_empty(), "{out}");
-        assert_eq!(nodes[0]["id"], tagged, "{out}");
-        assert!(
-            nodes[0]["content"]
-                .as_str()
-                .unwrap()
-                .contains("deploy timeout"),
-            "the hit is the full record: {out}"
-        );
-        assert!(
-            nodes.iter().all(|node| node["id"] != other),
-            "an unrelated note does not score: {out}"
-        );
+        .expect("free text returns the handle refusal");
+        let text = out.to_string();
+        assert!(text.contains("handle_required"), "{text}");
+        assert!(!text.contains("RECALL_QUERY"), "{text}");
     }
 
+    /// The refusal is a refusal. Before 4.2.1 it was wrapped in the store's
+    /// `Init` error and read "Initialization error: similarity_disabled: ...",
+    /// as if the store had failed to start.
     #[tokio::test]
-    async fn reason_mode_is_still_refused_on_strata() {
+    async fn free_text_refusal_starts_with_its_code_and_is_not_an_init_failure() {
         let (storage, _dir, _tagged, _other) = store();
-        let err = recall(
+        let out = recall(
             &storage,
-            serde_json::json!({ "mode": "reason", "query": "what is the deploy timeout" }),
+            serde_json::json!({ "query": "what is the deploy timeout" }),
         )
         .await
-        .expect_err("reason is not a lexical lookup");
-        assert!(err.starts_with("similarity_disabled: "), "{err}");
+        .expect("free text is a structured refusal on a Strata log");
+        assert_eq!(out["error"], "handle_required", "{out}");
+        let text = out.to_string();
         assert!(
-            !err.to_lowercase().contains("initialization error"),
-            "{err}"
+            !text.to_lowercase().contains("initialization error"),
+            "{text}"
         );
+        assert!(text.contains("pass a memory id") || text.contains("exact tag"), "{text}");
     }
 
     #[tokio::test]
@@ -902,10 +804,8 @@ mod strata_query {
         let preview = default_out["neighbors"][0]["node"]["content"]
             .as_str()
             .unwrap();
-        assert_eq!(
-            preview, long_neighbor_text,
-            "default recall returns the neighbor whole"
-        );
+        assert_eq!(preview.chars().count(), 201, "200 chars + ellipsis");
+        assert!(preview.ends_with('…'));
 
         let full_out = recall(
             &storage,

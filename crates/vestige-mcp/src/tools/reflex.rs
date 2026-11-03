@@ -255,7 +255,7 @@ fn attach_fold_block(original: &str, folded: &[String], result: &mut Value) -> V
         "originalChars": original.len(),
         "foldedChars": result.to_string().len(),
         "originalSha256": sha256_hex(original),
-        "note": "These memories are already in your context word for word, so their bodies are folded. memory(action='get', id=...) returns any of them whole.",
+        "note": "These memories are already in your context word for word, so their bodies are folded. recall(id=..., detail_level='full') returns any of them whole.",
     });
     if let Some(o) = result.as_object_mut() {
         o.insert("reflexFold".into(), block.clone());
@@ -649,7 +649,7 @@ fn walk(
 fn stub(body: &str, id: &str, held: &Held) -> String {
     let opening: String = body.chars().take(FOLD_OPENING).collect();
     format!(
-        "{}… [held since turn {} via {}; memory(action='get', id='{id}') unfolds it]",
+        "{}… [held since turn {} via {}; recall(id='{id}', detail_level='full') unfolds it]",
         opening.trim_end(),
         held.turn,
         held.via
@@ -3187,7 +3187,7 @@ mod tests {
             .await;
         let stub = second["nodes"][0]["content"].as_str().unwrap();
         assert!(
-            stub.contains(&format!("memory(action='get', id='{A}')")),
+            stub.contains(&format!("recall(id='{A}', detail_level='full')")),
             "{stub}"
         );
         assert!(stub.len() < full.len());
@@ -3208,12 +3208,12 @@ mod tests {
                 "s1",
                 "toolu_3",
                 "",
-                "memory",
-                json!({"action": "get", "id": A}),
-                json!({"id": A, "content": full}),
+                "recall",
+                json!({"id": A, "detail_level": "full"}),
+                recall_result(A, &full),
             )
             .await;
-        assert_eq!(unfolded["content"], full.as_str());
+        assert_eq!(unfolded["nodes"][0]["content"], full.as_str());
         assert!(unfolded.get("reflexFold").is_none());
         let view = fx.fire(json!({"action": "ledger"})).await;
         assert_eq!(view["context"]["folds"], 1, "{view}");

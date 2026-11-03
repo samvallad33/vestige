@@ -30,6 +30,18 @@ class VestigeMCPError(RuntimeError):
     pass
 
 
+class VestigeMCPToolError(VestigeMCPError):
+    """A returned MCP tools/call result with isError, not a transport failure.
+
+    The original envelope belongs to this completed request. Callers may show
+    it to the model, but must never substitute a previous result after a child
+    exits or the JSON-RPC transport fails.
+    """
+    def __init__(self, name: str, result: Dict[str, Any]) -> None:
+        self.result = result
+        super().__init__(f"{name} tool failed: {result}")
+
+
 class VestigeMCP:
     def __init__(
         self,
@@ -38,6 +50,8 @@ class VestigeMCP:
         warmup_seconds: float = DEFAULT_WARMUP_SECONDS,
         timeout: float = 300.0,
         extra_env: Optional[Dict[str, str]] = None,
+        cwd: Optional[str] = None,
+        clean_env: bool = False,
     ) -> None:
         self.binary = str(pathlib.Path(binary).resolve())
         self.data_dir = str(pathlib.Path(data_dir).resolve())
@@ -48,8 +62,11 @@ class VestigeMCP:
         self._out: "queue.Queue[Optional[str]]" = queue.Queue()
         self._stderr_lines: list[str] = []
         self._extra_env = dict(extra_env or {})
+        self.cwd = str(pathlib.Path(cwd).resolve()) if cwd is not None else None
+        self.clean_env = clean_env
         self.server_info: Dict[str, Any] = {}
         self.observed_warmup: Dict[str, Any] = {}
+        self.last_tool_result: Dict[str, Any] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -62,18 +79,28 @@ class VestigeMCP:
 
     def start(self) -> None:
         pathlib.Path(self.data_dir).mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
+        if self.clean_env:
+            # A benchmark engine may expose host-facing native tools. Do not
+            # inherit API credentials, personal config overrides or loader/
+            # interpreter injection variables into that independent process.
+            essential = {"PATH", "LANG", "LC_ALL", "TZ", "SYSTEMROOT", "WINDIR"}
+            env = {key: value for key, value in os.environ.items() if key in essential}
+            if not self.cwd or not pathlib.Path(self.cwd).is_dir() or "HOME" not in self._extra_env:
+                raise ValueError("clean_env requires an existing cwd and explicit isolated HOME")
+        else:
+            env = dict(os.environ)
         env["VESTIGE_DATA_DIR"] = self.data_dir
         env["VESTIGE_DASHBOARD_ENABLED"] = "false"
         env["VESTIGE_HTTP_ENABLED"] = "0"
         env.update(self._extra_env)
 
         self._proc = subprocess.Popen(
-            [self.binary],
+            [self.binary, "--data-dir", self.data_dir],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
+            cwd=self.cwd,
             text=True,
             bufsize=1,
         )
@@ -105,17 +132,25 @@ class VestigeMCP:
         except Exception:
             try:
                 self._proc.kill()
+                self._proc.wait(timeout=15)
             except Exception:
                 pass
+        finally:
+            for stream in (self._proc.stdout, self._proc.stderr):
+                if stream is not None:
+                    stream.close()
         self._proc = None
 
     # -- transport ---------------------------------------------------------
 
     def _send(self, payload: Dict[str, Any]) -> None:
-        if not self._proc or not self._proc.stdin:
+        if not self._proc or self._proc.poll() is not None or not self._proc.stdin:
             raise VestigeMCPError("server not running")
-        self._proc.stdin.write(json.dumps(payload) + "\n")
-        self._proc.stdin.flush()
+        try:
+            self._proc.stdin.write(json.dumps(payload) + "\n")
+            self._proc.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            raise VestigeMCPError("server transport closed") from exc
 
     def _await_id(self, want_id: int, timeout: float) -> Dict[str, Any]:
         deadline = time.monotonic() + timeout
@@ -193,10 +228,17 @@ class VestigeMCP:
     # -- tools -------------------------------------------------------------
 
     def call_tool(self, name: str, arguments: Dict[str, Any],
-                  timeout: Optional[float] = None) -> Any:
+                  timeout: Optional[float] = None,
+                  meta: Optional[Dict[str, Any]] = None) -> Any:
+        params: Dict[str, Any] = {"name": name, "arguments": arguments}
+        if meta:
+            params["_meta"] = dict(meta)
         result = self.request(
-            "tools/call", {"name": name, "arguments": arguments}, timeout=timeout
+            "tools/call", params, timeout=timeout
         )
+        self.last_tool_result = result
+        if result.get("isError"):
+            raise VestigeMCPToolError(name, result)
         content = result.get("content") or []
         for block in content:
             if block.get("type") == "text":

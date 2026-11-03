@@ -1,7 +1,7 @@
 ---
 name: executioner
 description: Optional Sanhedrin fallback verifier. Decomposes a draft into check-worthy claims, checks high-trust durable Vestige evidence, and returns a pass/veto verdict.
-tools: mcp__vestige__deep_reference, mcp__vestige__memory, mcp__vestige__search
+tools: mcp__vestige__recall, mcp__vestige__curate, mcp__vestige__precedent
 model: claude-haiku-4-5-20251001
 ---
 

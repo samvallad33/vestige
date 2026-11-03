@@ -39,7 +39,7 @@ try:
 except ImportError:                                  # Windows: receipts lock through msvcrt instead
     fcntl = None
 
-VERSION = "6.0.0"
+VERSION = "6.2.0"
 EDITION = "lite"                 # the paid gate is "operator"; install never replaces a gate that outranks this one
 INTEGRITY = "reference_digest_not_signature"
 IS_WINDOWS = os.name == "nt"
@@ -6718,6 +6718,8 @@ def write_receipt(rec):
                 CHAIN_PENDING["marks"] = []
                 if rec.get("session"):
                     BRAKE_TRIPPED["sid"] = rec["session"] if guarded(brake_note_stop, False, rec["session"]) else ""
+            # Native Reflex reads the durable receipt chain through the host
+            # hook. Do not send unauthenticated frames under the writer lock.
             return rec["digest"]
         finally:
             unlock_file(lock)
@@ -7638,7 +7640,14 @@ def cmd_replay(argv):
 def cmd_corpus(argv):
     """Run an eval corpus through classify(). Pure classification; nothing executes."""
     name = argv[0] if argv else "guardfall"
-    path = pj(os.path.dirname(os.path.abspath(__file__)), "corpora", name + ".json")
+    cand_paths = [
+        pj(os.path.dirname(os.path.abspath(__file__)), "corpora", name + ".json"),
+        pj(os.path.dirname(os.path.abspath(__file__)), "..", "corpora", name + ".json"),
+        pj(OP_HOME, "corpora", name + ".json"),
+        pj(HOME, ".operator", "corpora", name + ".json"),
+        pj(HOME, "Developer", "vestige", "operator-lite", "corpora", name + ".json"),
+    ]
+    path = next((p for p in cand_paths if os.path.exists(p)), cand_paths[0])
     try:
         with open(path, encoding="utf-8") as f:
             corpus = json.load(f)

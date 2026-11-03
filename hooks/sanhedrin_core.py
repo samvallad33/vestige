@@ -48,6 +48,7 @@ VERIFICATION_HEDGE_LEFT_RE = re.compile(
     re.IGNORECASE,
 )
 COMMAND_FAMILY_PATTERNS = {
+    "syntax": re.compile(r"\b(py_compile|compileall|bash\s+-n|node\s+--check|ast\.parse\s*\()", re.I),
     "test": re.compile(r"\b(pytest|cargo\s+test|npm\s+(run\s+)?test|pnpm\s+(run\s+)?test|vitest|jest|playwright\s+test)\b", re.I),
     "build": re.compile(r"\b(cargo\s+build|npm\s+(run\s+)?build|pnpm\s+(run\s+)?build|next\s+build|vite\s+build)\b", re.I),
     "lint": re.compile(r"\b(cargo\s+clippy|npm\s+(run\s+)?lint|pnpm\s+(run\s+)?lint|eslint|ruff|flake8)\b", re.I),
@@ -86,6 +87,10 @@ def strip_non_assertive_regions(text: str) -> str:
     text = text[:16_384]
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
     text = re.sub(r"`[^`\n]+`", " ", text)
+    # Emphasis is formatting, not an assertion boundary. Unwrap it before
+    # recognizing quoted examples and splitting prose into claims.
+    text = re.sub(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", r"\2", text, flags=re.DOTALL)
+    text = re.sub(r"“[^”\n]*”|‘[^’\n]*’", " ", text)
     kept_lines = []
     for line in text.splitlines():
         stripped = line.lstrip()
@@ -197,9 +202,9 @@ def infer_subject(text: str) -> str:
 
 def command_families_for_claim(text: str) -> list[str]:
     low = text.lower()
-    if re.search(r"\b(all\s+checks?|checks)\s+(passed|passes|passing|green|succeeded|succeeds|clean)\b", low) and "cargo check" not in low:
-        return ["test", "build", "lint", "typecheck"]
     families: list[str] = []
+    if re.search(r"\bsyntax\b", low):
+        families.append("syntax")
     if any(word in low for word in ("test", "pytest", "vitest", "jest", "playwright")):
         families.append("test")
     if any(word in low for word in ("build", "compiled", "compile")):
@@ -208,9 +213,9 @@ def command_families_for_claim(text: str) -> list[str]:
         families.append("lint")
     if any(word in low for word in ("typecheck", "tsc", "mypy", "pyright", "cargo check")):
         families.append("typecheck")
-    if "check" in low and "cargo check" not in low and "checks" not in low:
-        families.append("typecheck")
-    return families or ["test"]
+    # Generic checks do not assert that every possible verification category ran.
+    # Resolve them from actual receipts below; explicit categories stay strict.
+    return families or ["check"]
 
 
 def load_command_receipts() -> list[dict[str, Any]]:
@@ -440,7 +445,13 @@ def apply_receipt_lock(manifest: dict[str, Any]) -> str | None:
         failed_family: tuple[str, dict[str, Any]] | None = None
         supported_families: list[tuple[str, dict[str, Any]]] = []
 
-        for family in command_families_for_claim(claim["text"]):
+        families = command_families_for_claim(claim["text"])
+        if families == ["check"]:
+            families = [
+                family for family in COMMAND_FAMILY_PATTERNS
+                if any(receipt_matches_family(r, family) for r in receipts)
+            ] or ["check"]
+        for family in families:
             matching = [r for r in receipts if receipt_matches_family(r, family)]
             latest = matching[-1] if matching else None
             if latest is None:

@@ -8,7 +8,8 @@
 //! Day files that end before the window are not read. Before answering, the
 //! digest chain of the day files it reads is verified the way `operator-gate
 //! verify` does it, anchored to the last line of the newest file before them.
-//! Nothing here writes, approves, issues, or deletes anything.
+//! History queries never approve, issue, or reuse permits. The explicit
+//! `prove` query may write the same proof artifacts as the native proof handler.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,9 +22,16 @@ use vestige_core::Storage;
 const PERMIT_NOTE: &str = "history, not permission. Permits are single-use and cannot be reused or issued through this tool.";
 
 pub fn schema() -> Value {
-    json!({
+    let mut schema = json!({
         "type": "object",
         "properties": {
+            "query": {
+                "type": "string",
+                "enum": ["stops", "receipt", "replay", "prove", "forgotten_lesson", "verify_log", "scan_secrets", "selftest"],
+                "default": "stops",
+                "description": "'stops': Operator gate history; 'receipt'/'replay': inspect or re-derive a write receipt; 'verify_log': run live cryptographic log verification; 'scan_secrets': scan memories for secret patterns; 'selftest': run planted-cause self-calibration."
+            },
+            "receipt_id": {"type": "string", "description": "For 'receipt' or 'replay': receipt ID."},
             "since": {"type": "string", "default": "24h", "description": "Window, e.g. 30m, 24h, 7d."},
             "cwd": {"type": "string", "description": "Only receipts whose cwd starts with this path."},
             "source": {"type": "string", "description": "Exact source, e.g. claude, zcode."},
@@ -32,7 +40,20 @@ pub fn schema() -> Value {
             "decision": {"type": "string", "description": "STOP, ALLOW, SHADOW_STOP, PASS, another recorded decision, or all. Default: STOP plus ALLOW."},
             "limit": {"type": "integer", "default": 10, "description": "1 to 50, newest records first."}
         }
-    })
+    });
+    for native in [
+        crate::tools::receipt::schema(),
+        crate::tools::forgotten_lesson::schema(),
+    ] {
+        if let Some(properties) = native["properties"].as_object() {
+            for (name, value) in properties {
+                if name != "action" && schema["properties"].get(name).is_none() {
+                    schema["properties"][name] = value.clone();
+                }
+            }
+        }
+    }
+    schema
 }
 
 #[derive(Deserialize, Default)]
@@ -727,9 +748,79 @@ fn run(home: &Path, q: &Query) -> Result<Value, String> {
     Ok(out)
 }
 
-pub async fn execute(_storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    let q = parse_query(args)?;
-    run(&operator_home(), &q)
+pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+    let raw = args.unwrap_or_else(|| json!({}));
+    let query_type = raw
+        .get("query")
+        .or_else(|| raw.get("action"))
+        .and_then(Value::as_str)
+        .unwrap_or("stops");
+
+    match query_type {
+        "receipt" | "replay" | "prove" => {
+            let mut r_args = raw.clone();
+            if let Some(obj) = r_args.as_object_mut() {
+                obj.remove("query");
+                obj.insert(
+                    "action".to_string(),
+                    json!(if query_type == "receipt" {
+                        "get"
+                    } else {
+                        query_type
+                    }),
+                );
+            }
+            crate::tools::receipt::execute(storage, Some(r_args)).await
+        }
+        "forgotten_lesson" => {
+            let mut f_args = raw.clone();
+            if let Some(obj) = f_args.as_object_mut() {
+                obj.remove("query");
+                obj.remove("action");
+            }
+            crate::tools::forgotten_lesson::execute(storage, Some(f_args)).await
+        }
+        "verify_log" => {
+            let path = storage.data_dir().to_path_buf();
+            let report = tokio::task::spawn_blocking(move || strata_verify::verify_path(&path))
+                .await
+                .map_err(|e| format!("Join error: {e}"))?;
+            serde_json::from_str(&report.json)
+                .map_err(|e| format!("Invalid verify report JSON: {e}"))
+        }
+        "scan_secrets" => {
+            let storage_guard = storage.clone();
+            let findings = tokio::task::spawn_blocking(move || {
+                let mut results = Vec::new();
+                if let Ok(nodes) = storage_guard.get_all_nodes_in_scope("user", 500, 0) {
+                    for node in nodes {
+                        for finding in vestige_core::scan_secrets(&node.content) {
+                            results.push(json!({
+                                "node_id": node.id,
+                                "kind": format!("{:?}", finding.kind),
+                                "confidence": format!("{:?}", finding.confidence),
+                                "fingerprint": finding.fingerprint,
+                            }));
+                        }
+                    }
+                }
+                results
+            })
+            .await
+            .map_err(|e| format!("Join error: {e}"))?;
+            Ok(json!({
+                "action": "scan_secrets",
+                "findings_count": findings.len(),
+                "findings": findings,
+            }))
+        }
+        "selftest" => crate::tools::selftest::execute(storage, Some(raw)).await,
+        "stops" => {
+            let q = parse_query(Some(raw))?;
+            run(&operator_home(), &q)
+        }
+        other => Err(format!("unknown precedent query '{other}'")),
+    }
 }
 
 /// The same reader with a wider cap, for the dashboard: it draws every stop

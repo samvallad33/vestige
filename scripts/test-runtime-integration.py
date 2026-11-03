@@ -32,14 +32,14 @@ def run(binary, output):
                 return result
 
             session = DeveloperSession(catalog, call)
-            session.discover(["smart_ingest", "recall"])
+            session.discover(["remember", "recall"])
             session.add_user("Remember the synthetic fixture timeout decision")
             created = session.execute_tool(
                 "ingest",
-                "smart_ingest",
+                "remember",
                 {
                     "content": "RUNTIME_FIXTURE_TIMEOUT uses 25 milliseconds.",
-                    "forceCreate": True,
+                    "tags": ["runtime-fixture"],
                 },
             )
             node_id = created["nodeId"]
@@ -48,11 +48,10 @@ def run(binary, output):
             assert handle.get("isError") is not True, handle
             body = handle.get("structuredContent") or json.loads(handle["content"][0]["text"])
             assert "RUNTIME_FIXTURE_TIMEOUT" in json.dumps(body), body
-            lexical = call("recall", {"query": "RUNTIME_FIXTURE_TIMEOUT", "mode": "lookup"})
-            assert lexical.get("isError") is not True, lexical
-            found = lexical.get("structuredContent") or json.loads(lexical["content"][0]["text"])
-            assert found["mode"] == "lexical" and found["ranking"] == "exact_token_bm25", found
-            assert [n["id"] for n in found["nodes"]][:1] == [node_id], found
+            refused = call("recall", {"query": "RUNTIME_FIXTURE_TIMEOUT", "mode": "lookup"})
+            assert refused.get("isError") is not True, refused
+            refused_body = refused.get("structuredContent") or json.loads(refused["content"][0]["text"])
+            assert refused_body.get("error") == "handle_required", refused
             requests = {
                 provider: session.request(
                     provider,
@@ -79,7 +78,7 @@ def run(binary, output):
             if output:
                 output.write_text(json.dumps(proof, indent=2) + "\n")
             print(
-                "PASS installed runtime, real stdio, handle recall, lexical free-text recall; zero provider model calls"
+                "PASS installed runtime, real stdio, handle recall, query refusal; zero provider model calls"
             )
 
 

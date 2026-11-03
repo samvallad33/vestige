@@ -936,16 +936,7 @@ mod strata_tests {
             )
             .await
             .unwrap();
-            assert_eq!(query["mode"], "lexical", "{query}");
-            assert_eq!(query["nodes"][0]["id"], successor, "{query}");
-            assert!(
-                !query["nodes"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|node| node["content"] == "original cause text"),
-                "a superseded record is not a lexical hit: {query}"
-            );
+            assert_eq!(query["error"], "handle_required", "{query}");
             assert!(log_contains(dir.path(), "original cause text"));
             assert!(log_contains(dir.path(), "replacement cause text"));
             (
