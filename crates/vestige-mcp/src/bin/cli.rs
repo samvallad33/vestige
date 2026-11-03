@@ -666,6 +666,52 @@ enum Commands {
         #[command(subcommand)]
         command: SandwichCommands,
     },
+
+    /// Portable archive export. legacy SQLite stores only; a Strata log refuses before writing.
+    #[command(name = "portable-export")]
+    PortableExport {
+        /// Destination archive path
+        output: PathBuf,
+    },
+
+    /// Portable archive import. legacy SQLite stores only; a Strata log refuses before writing.
+    #[command(name = "portable-import")]
+    PortableImport {
+        /// Source archive path
+        input: PathBuf,
+    },
+
+    /// Two-way portable archive sync. legacy SQLite stores only; a Strata log refuses before writing.
+    Sync {
+        /// Archive path
+        archive: PathBuf,
+    },
+
+    /// Ingest git commits. legacy SQLite stores only; a Strata log refuses before writing.
+    #[command(name = "ingest-git")]
+    IngestGit {
+        /// Repository path
+        path: PathBuf,
+    },
+
+    /// Garbage collection. A live delete is withheld on a Strata log.
+    Gc {
+        /// Confirm a live deletion
+        #[arg(long)]
+        yes: bool,
+        /// Retention floor
+        #[arg(long, default_value_t = 0.3)]
+        min_retention: f64,
+        /// List candidates without deleting
+        #[arg(long)]
+        dry_run: bool,
+        /// Maximum age in days
+        #[arg(long)]
+        max_age_days: Option<u64>,
+    },
+
+    /// Consolidation. On a Strata log this is a no-op and changes nothing.
+    Consolidate,
 }
 
 /// Zero-lock command router: dispatches over reflex.sock / attach IPC if a server
@@ -719,6 +765,17 @@ fn main() -> anyhow::Result<()> {
                 run_sandwich_install(version.as_deref(), &options)
             }
         },
+        Commands::PortableExport { output } => run_portable_export(output),
+        Commands::PortableImport { input } => run_portable_import(input, false),
+        Commands::Sync { archive } => run_sync(Some(archive), false, None),
+        Commands::IngestGit { path } => run_ingest_git(path, None, None, 500, false),
+        Commands::Gc {
+            min_retention,
+            max_age_days,
+            dry_run,
+            yes,
+        } => run_gc(min_retention, max_age_days, dry_run, yes),
+        Commands::Consolidate => run_consolidate(),
         Commands::Restore { file } => run_restore(file),
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
@@ -6297,10 +6354,8 @@ mod strata_cli_tests {
         assert!(recall.contains("--handle"), "{recall}");
         assert!(recall.contains("exact tag"), "{recall}");
         for sub in ["portable-export", "portable-import", "sync"] {
-            assert!(
-                Cli::command().find_subcommand(sub).is_none(),
-                "{sub} is not a command on this build"
-            );
+            let page = long_help(&[sub]);
+            assert!(page.contains("legacy SQLite stores only"), "{sub}: {page}");
         }
         let compose = long_help(&["compose"]);
         assert!(compose.contains("no recorded edge"), "{compose}");

@@ -901,7 +901,7 @@ def run(binary, output):
             suppress_id = doomed_suppress["nodeId"]
             typed("blast_radius", {"action": "retire", "ids": [suppress_id], "reason": "fixture"}, "unavailable_in_4_0")
             passed("purge and delete are withheld on Strata and change nothing")
-            assert annotations["suppress"]["destructiveHint"] is True
+            assert "suppress" not in annotations
             suppressed = tool("suppress", {"id": suppress_id, "reason": "fixture"})
             assert suppressed["success"] is True and suppressed["rule"] == "suppress"
             assert str(suppressed["receiptId"]).startswith("eff-")
