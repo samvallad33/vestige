@@ -265,9 +265,12 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
     });
     if (!python) throw new Error('Memory plus guard needs Python 3.9+. Install Python, then rerun with --guard.');
     const gate = path.join(home, '.operator', 'gate', 'operator-gate.py');
+    const liteCore = path.join(home, '.operator', 'gate', 'lite_core.py');
     if (!fs.existsSync(gate)) {
-      const source = path.join(__dirname, '..', 'hooks', 'operator-lite.py');
-      const row = change(gate, 'install bundled free Operator Lite 6.0.0 (owner terminal required)'); row.after = fs.readFileSync(source, 'utf8');
+      const source = path.join(__dirname, '..', 'hooks', 'operator-gate.py');
+      const liteSource = path.join(__dirname, '..', 'hooks', 'lite_core.py');
+      const row = change(gate, 'install Operator gate 6.2.0 with 102 STOP rules (owner terminal required)'); row.after = fs.readFileSync(source, 'utf8');
+      const lite = change(liteCore, 'install pinned Operator Lite 6.0.0 core beside the gate'); lite.after = fs.readFileSync(liteSource, 'utf8');
       const mode = change(path.join(home, '.operator', 'mode'), 'start new guard in enforce mode');
       if (mode.before === null) mode.after = 'enforce\n';
       guardInstall = { source, python };
@@ -434,7 +437,7 @@ async function main(args = process.argv.slice(2)) {
   const home = os.homedir(); const has = flag => args.includes(flag); const machine = has('--json');
   const say = line => { if (!machine) console.log(line); };
   const command = args[0];
-  if (has('--help') || has('-h')) { console.log('vestige-init [--yes] [--guard] [--dry-run] [--json]\nvestige-init doctor | status | uninstall [--yes] [--dry-run]\nMemory only is the default. --guard requests the optional Operator Lite setup.'); return; }
+  if (has('--help') || has('-h')) { console.log('vestige-init [--yes] [--guard] [--dry-run] [--json]\nvestige-init doctor | status | uninstall [--yes] [--dry-run]\nMemory only is the default. --guard requests the optional Operator gate (102 STOP rules).'); return; }
   if (command === 'doctor' || command === 'status') {
     const result = await inspect(home); if (machine) console.log(json(result)); else { say(`Vestige ${VERSION} · ${command}`); for (const check of result.checks) say(`${check.ok ? 'GREEN' : 'RED  '} ${check.name}${check.ok ? '' : ` — fix: ${check.fix}`}`); say(`Memories: ${result.memory_count ?? 'unavailable'}`); say(`Recent Backfill receipts: ${result.last_backfill_receipts.map(r => r.receipt_id).join(', ') || 'none'}`); }
     if (command === 'doctor' && result.checks.some(c => !c.ok)) process.exitCode = 1; return;

@@ -135,11 +135,11 @@ If you installed v3 with npm, make sure your agents now run the 4.x binary: `ves
 <a id="recall-by-handle-not-resemblance"></a>
 ## Recall by handle, not resemblance
 
-Since 4.0, Vestige does not rank text that resembles your query. There are no embeddings, no BM25 and no keyword search in the default binaries. `recall` takes a handle: a memory id, a unique id prefix of 8 or more characters, or an exact tag. A free-text query returns `similarity_disabled` and asks for a handle.
+Vestige does not rank text by meaning. There are no embeddings and no fuzzy match. `recall` takes a handle (a memory id, a unique id prefix of 8 or more characters, or an exact tag). A free-text query that is not a handle is ranked by exact-token BM25 over the stored text. `reason` and `contradictions` still return `similarity_disabled`.
 
 | | Resemblance search | Vestige 4.x |
 |---|---|---|
-| How a memory is found | Similarity to the query | An exact handle |
+| How a memory is found | Similarity to the query | An exact handle, or exact-token BM25 over stored text |
 | What counts as a link | Anything that scores close | Only an edge the log recorded. Imported v3 links are marked `legacy_inferred` |
 | Walking back from a failure | Nearest lookalikes | `causal_walk` from the memory that records the symptom, backward over recorded edges, at most 8 hops and 500 nodes by default. Any start point (failing test, stack frame, CI run, version range, or a plain `logged_write`) carries that memory's id as `node_id` |
 | Proof of a write | None | A receipt per write. `receipt replay` re-derives the state from the log |
@@ -205,6 +205,7 @@ platform archives, checksums, package review, and rollback requirements.
 - **The PRECEDENT journey.** `npx @vestige/init precedent` follows one real stop from your machine around the loop: the stop, its receipt re-derived from its own bytes, the precedent and the verdict.
 - **A rebuilt dashboard** on WebGPU, with the gate's receipts in its Guard view.
 - **Operator Lite 0.3.10.** It blocks from install with 30 rules, reads the shell commands inside `python -c` and `node -e` code, sees through wrappers such as `sudo -u root`, `env -S` and `busybox`, and stops an agent from throwing away uncommitted git work.
+- **Operator gate, 102 STOP rules.** `npx @vestige/init --guard` installs Operator 6.2.0 when no gate is present: OP-000 through OP-114, with OP-086–OP-097 and OP-100 reserved. The pinned Operator Lite core sits beside it and judges every call. Classification does not call a model and does not open a network connection. An existing gate file is left as it is.
 - **Tested end to end.** [`full_flow_stdio.rs`](../crates/vestige-mcp/tests/full_flow_stdio.rs) runs the whole loop on the shipped binaries in CI on Linux and macOS: the gate stops a call, the stop is recorded, a second agent recalls it and walks it back to its rule, and an ALLOW ONCE runs exactly once.
 
 <a id="ghostlink-the-negative-space"></a>

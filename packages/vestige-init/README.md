@@ -1,6 +1,6 @@
 # @vestige/init
 
-Local memory setup for supported AI clients, with optional free Operator Lite.
+Local memory setup for supported AI clients, with an optional Operator gate of 102 STOP rules.
 
 ## Three steps
 
@@ -64,7 +64,9 @@ stable idempotency key. Pre-compaction and end hooks flush pending declarations
 and revisit their exact Backfill triggers; every admitted save already runs
 Backfill. Queueing does not promise that a crashed client emitted its end hook.
 The optional guard has a separate fail-closed adapter and keeps the existing
-Operator decision/permit logic. Existing paid/newer gates are preserved.
+Operator decision/permit logic. `--guard` writes `operator-gate.py` (102 STOP
+rules) and the pinned `lite_core.py` only when `~/.operator/gate/operator-gate.py`
+is absent. An existing gate, including a paid or newer one, is preserved.
 Existing native gate registrations are kept single, so one permit is consumed
 once. The adapter and its routing config live under the gate-protected
 `~/.operator/state/vestige-memory/`; editable memory settings cannot redirect
@@ -108,7 +110,7 @@ One stop from your own machine: what the agent tried and the gate stopping it, i
 |---|---|
 | `--dry-run` | Preview all planned files and write nothing |
 | `--yes` | Memory-only setup without prompts |
-| `--guard` | Add the optional pre-tool guard |
+| `--guard` | Install the Operator gate when none is present: 102 STOP rules (OP-000 through OP-114, with OP-086–OP-097 and OP-100 reserved) plus the pinned Operator Lite core. An existing gate file is kept. |
 | `--client <id>` | Limit setup to selected detected clients |
 | `--json` | Machine-readable result |
 | `--clients-only` | Compatibility path for the previous connection-only wizard |

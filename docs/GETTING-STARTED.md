@@ -75,7 +75,7 @@ vestige recall --handle incident
 vestige recall --handle mem-0000000000000001
 ```
 
-Check the cryptographic Strata log:
+Check the cryptographic Strata log. This reads every frame and verifies the hash chain:
 
 ```bash
 vestige strata-verify "<your data directory>"

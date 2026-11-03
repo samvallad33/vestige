@@ -36,7 +36,9 @@ When an autonomous coding agent breaks a build at 3:00 PM because a configuratio
 
 ## ⚡ Quick Start (30 Seconds)
 
-One command installs the `vestige-mcp` Rust daemon, wires the 4 autonomic `Reflex` hooks into your IDE (Claude Code, Cursor, Codex, Windsurf, Gemini CLI), and replays your last 30 days of agent transcripts against our **114-rule gate** to show every destructive command or failure loop Vestige would have stopped:
+One command installs the `vestige-mcp` Rust daemon, wires the 4 autonomic `Reflex` hooks into your IDE (Claude Code, Cursor, Codex, Windsurf, Gemini CLI), and replays your last 30 days of agent transcripts against our **114-rule gate** to show every destructive command or failure loop Vestige would have stopped.
+
+**Operator** is the guard for your agent's tool calls. `npx @vestige/init --guard` installs 102 STOP rules, OP-000 through OP-114, with OP-086–OP-097 and OP-100 reserved. It stops force pushes, dropped tables, recursive deletes, production deploys, credential reads and the rest of that closed list before they run, even when the command is disguised. Classification is deterministic: no model call and no network call. Operator Lite (numbered rules OP-000 through OP-025) is pinned beside the gate and judges every call too. An existing `~/.operator/gate/operator-gate.py` is left in place.
 
 ```bash
 npx @vestige/init
@@ -51,6 +53,8 @@ vestige precedent --query verify_log
 ---
 
 ## 🏛️ S.T.R.A.T.A. — The World's First Causal Proof Engine
+
+The 102-rule gate is in this repository and is what `--guard` installs. See [operator/README.md](operator/README.md). `board`, `letter`, `almost-forgot`, `onboard` and `briefing` load companion modules when those files sit next to the gate. [Buy Vestige Operator](https://payhip.com/b/d4xvu) is the owner's copy of those companions: $149 once, every later version included, and a 30-day refund.
 
 Underneath Vestige sits **S.T.R.A.T.A.** (*Sequential Topological Reasoning for Autonomous Transaction Authorization*)—an append-only, cryptographic execution ledger that replaces fuzzy similarity with mathematical provenance:
 

@@ -215,7 +215,7 @@ There is no search. `recall` takes a handle:
 | `commit:<sha>` | The change record `ingest_repo` made for that commit |
 | `evidence:<sha256>` | The GhostLink composition record that cites that hash |
 
-A free-text query returns `similarity_disabled`, and a miss returns `handle_required`.
+A free-text query is ranked by exact-token BM25 over stored text. A handle that matches nothing returns `handle_required`. `reason` and `contradictions` still return `similarity_disabled`.
 </details>
 
 <details>
@@ -558,8 +558,9 @@ server and run the command again. `vestige backup`, `vestige strata-verify` and
 
 ### `similarity_disabled` or `handle_required`
 
-You passed free text. `recall` takes an id, a unique prefix of 8 or more characters, or an
-exact tag. The error text lists handles it found in your words, if any. See
+`handle_required` means the handle you passed is not an id, a unique prefix, or an exact tag.
+A free-text `query` is ranked by exact tokens over stored memory text instead. `reason` and
+`contradictions` still return `similarity_disabled`. See
 [Getting Started](GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
 
 ### `unavailable_in_4_0`

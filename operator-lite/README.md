@@ -8,6 +8,8 @@ every decision.
 Part of [Vestige](https://github.com/samvallad33/vestige). Free and standalone:
 copy one file, wire one hook, and your agent has a deterministic gate.
 
+This directory is Operator Lite. Its numbered STOP rules are OP-000 through OP-025 (26), plus the canary and 15 SHADOW rules. `npx @vestige/init --guard` installs the [full Operator gate](../operator/README.md), 102 STOP rules, and pins this file beside it as `lite_core.py`.
+
 ## From Lite to Operator, in 88 seconds
 
 [![From Lite to Operator](media/from-lite-to-operator.gif)](media/from-lite-to-operator.mp4)
@@ -45,7 +47,7 @@ before you trust the gate, and again after any upgrade.
 | Claim | Check it | It prints |
 |---|---|---|
 | It blocks from your agent's first tool call | `operator-gate status` | `Operator Lite 6.0.0   mode: enforce (blocking)   Claude Code hook: registered` |
-| What it stops is a closed list you can read | `operator-gate status --rules` | all 30 rules: 15 STOP, 15 SHADOW |
+| What it stops is a closed list you can read | `operator-gate status --rules` | all 42 rules: 27 STOP (OP-000 through OP-025 and the canary), 15 SHADOW |
 | It sees through 50 adapted GuardFall bypass cases | `npx operator-lite test` | `corpus=guardfall cases=50 passed=50 failed=0` |
 | A fresh install stops 234 destructive commands and lets 72 normal ones run | `python3 operator-lite/test_destructive.py`, from a clone | `failures: 0 of 306` |
 | An upgrade from 0.3.7 blocks too | `python3 operator-lite/test_upgrade.py`, from a clone | `all upgrade checks passed` |

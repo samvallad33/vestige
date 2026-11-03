@@ -1,7 +1,7 @@
 {
   "name": "@vestige/init",
   "version": "6.0.0",
-  "description": "Local memory setup for AI agents: merge MCP connections and memory hooks, with optional free Operator Lite",
+  "description": "Local memory setup for AI agents: merge MCP connections and memory hooks, with an optional Operator gate of 102 STOP rules",
   "bin": {
     "vestige-init": "bin/init.js"
   },
@@ -48,7 +48,9 @@
     "hooks/memory.cjs",
     "hooks/reflex.cjs",
     "hooks/guard.cjs",
-    "hooks/operator-lite.py"
+    "hooks/operator-lite.py",
+    "hooks/operator-gate.py",
+    "hooks/lite_core.py"
   ],
   "scripts": {
     "test": "node --test test/*.test.js"

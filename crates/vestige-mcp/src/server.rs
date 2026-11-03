@@ -597,7 +597,7 @@ fn withhold_on_strata(tools: &mut Vec<ToolDescription>) {
         } else if tool.name == "recall" {
             // The v3 text sold keyword search and similarity modes, which a
             // Strata log answers with similarity_disabled.
-            tool.description = Some("Find memories by exact handle: a full memory id or an exact tag; a unique id prefix of 8+ characters also resolves. Free text and the 'reason' / 'contradictions' modes return similarity_disabled.".to_string());
+            tool.description = Some("Exact handle (id, 8+ char prefix, tag) or exact-token BM25 over stored text. No embeddings.".to_string());
             if let Some(props) = tool
                 .input_schema
                 .pointer_mut("/properties")
@@ -701,7 +701,7 @@ fn strip_withheld_in(
         && let Some(description) = schema.pointer_mut("/properties/mode/description")
     {
         *description = serde_json::json!(
-            "'lookup' (default): by handle. 'reason' and 'contradictions' return similarity_disabled in 4.0."
+            "'lookup' (default). 'reason'/'contradictions': similarity_disabled."
         );
     }
     if tool == "maintain"

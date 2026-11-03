@@ -70,11 +70,12 @@ core product promise is:
   `delete_knowledge` return `unavailable_in_4_0`. `suppress` hides a record
   from every read, keeps its bytes, and cannot be undone. Never describe
   either as erasure.
-- Treat exact lookup semantics carefully. Do not add embedding, similarity,
-  fuzzy or keyword behavior to recall, ranking, pairing or explanation. A
-  handle resolves exactly: an id, a unique id prefix, or an exact,
-  case-sensitive tag. Env vars, paths, UUIDs and code identifiers must reach
-  the log unchanged.
+- Treat exact lookup semantics carefully. Do not add embeddings, vectors,
+  fuzzy matching, or semantic similarity to recall, ranking, pairing, or
+  explanation. A handle still resolves exactly: an id, a unique id prefix, or
+  an exact, case-sensitive tag. Free text on `recall` and the memory hook is
+  exact-token BM25 over stored text, not a meaning match. Env vars, paths,
+  UUIDs and code identifiers must reach the log unchanged.
 
 ## Common Checks
 
