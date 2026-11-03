@@ -478,13 +478,13 @@ fn full_schemas_resolve_every_embedded_local_json_pointer() {
     fn validate(root: &Value, value: &Value) {
         match value {
             Value::Object(object) => {
-                if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-                    if let Some(pointer) = reference.strip_prefix('#') {
-                        assert!(
-                            root.pointer(pointer).is_some(),
-                            "unresolved local schema reference {reference}"
-                        );
-                    }
+                if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+                    && let Some(pointer) = reference.strip_prefix('#')
+                {
+                    assert!(
+                        root.pointer(pointer).is_some(),
+                        "unresolved local schema reference {reference}"
+                    );
                 }
                 for child in object.values() {
                     validate(root, child);

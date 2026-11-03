@@ -256,18 +256,18 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         .map_or(0, |n| n as usize);
     if !object.contains_key("handle") {
         // Check if an id was passed directly (absorbing memory(action="get", id=...))
-        if let Some(id) = object.get("id").and_then(|v| v.as_str()).map(str::trim) {
-            if !id.is_empty() {
-                let resolution = storage.resolve_handle(id);
-                return Some(Ok(handle_resolution_payload(
-                    storage,
-                    id,
-                    resolution,
-                    limit,
-                    detail_level,
-                    offset,
-                )));
-            }
+        if let Some(id) = object.get("id").and_then(|v| v.as_str()).map(str::trim)
+            && !id.is_empty()
+        {
+            let resolution = storage.resolve_handle(id);
+            return Some(Ok(handle_resolution_payload(
+                storage,
+                id,
+                resolution,
+                limit,
+                detail_level,
+                offset,
+            )));
         }
         // A Strata log has no free-text search, so a `query` there can only be
         // an exact handle. Resolve it as one instead of refusing an id or a tag
@@ -659,14 +659,16 @@ mod strata_query {
         let nodes = out["nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), 1, "{out}");
         assert_eq!(nodes[0]["id"], serde_json::json!(tagged));
-        // Tags are exact and case-sensitive: another spelling is not a handle.
-        assert!(
-            handle_flow(
-                &storage,
-                &Some(serde_json::json!({ "query": "Deploy-Env" }))
-            )
-            .is_none()
-        );
+        // Tags are exact and case-sensitive: another spelling is a refusal,
+        // not a resolved handle.
+        let wrong_case = handle_flow(
+            &storage,
+            &Some(serde_json::json!({ "query": "Deploy-Env" })),
+        )
+        .expect("a query on Strata stays in handle mode");
+        let wrong_case = wrong_case.expect("case mismatch is a structured refusal");
+        assert_eq!(wrong_case["error"], "handle_required", "{wrong_case}");
+        assert!(wrong_case["nodes"].as_array().is_none_or(|nodes| nodes.is_empty()), "{wrong_case}");
     }
 
     #[tokio::test]
@@ -705,20 +707,17 @@ mod strata_query {
     async fn free_text_passed_as_query_is_still_not_answered_as_a_handle() {
         let (storage, _dir, _tagged, _other) = store();
         let args = Some(serde_json::json!({ "query": "what is the deploy timeout" }));
-        assert!(
-            handle_flow(&storage, &args).is_none(),
-            "free text must fall through to the search path"
-        );
+        let flow = handle_flow(&storage, &args).expect("free text on Strata stays in handle mode");
+        let flow = flow.expect("free text is a structured refusal");
+        assert_eq!(flow["error"], "handle_required", "{flow}");
         let out = recall(
             &storage,
             serde_json::json!({ "query": "what is the deploy timeout" }),
         )
-        .await;
-        let text = match out {
-            Ok(value) => value.to_string(),
-            Err(err) => err,
-        };
-        assert!(text.contains("similarity_disabled"), "{text}");
+        .await
+        .expect("free text returns the handle refusal");
+        let text = out.to_string();
+        assert!(text.contains("handle_required"), "{text}");
         assert!(!text.contains("RECALL_QUERY"), "{text}");
     }
 
@@ -728,18 +727,19 @@ mod strata_query {
     #[tokio::test]
     async fn free_text_refusal_starts_with_its_code_and_is_not_an_init_failure() {
         let (storage, _dir, _tagged, _other) = store();
-        let err = recall(
+        let out = recall(
             &storage,
             serde_json::json!({ "query": "what is the deploy timeout" }),
         )
         .await
-        .expect_err("free text is refused on a Strata log");
-        assert!(err.starts_with("similarity_disabled: "), "{err}");
+        .expect("free text is a structured refusal on a Strata log");
+        assert_eq!(out["error"], "handle_required", "{out}");
+        let text = out.to_string();
         assert!(
-            !err.to_lowercase().contains("initialization error"),
-            "{err}"
+            !text.to_lowercase().contains("initialization error"),
+            "{text}"
         );
-        assert!(err.contains("pass an exact handle"), "{err}");
+        assert!(text.contains("pass a memory id") || text.contains("exact tag"), "{text}");
     }
 
     #[tokio::test]

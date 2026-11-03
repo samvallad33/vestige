@@ -178,8 +178,6 @@ pub fn schema() -> Value {
 // guesses `startPoints` must not have its start points silently ignored.
 #[derive(Deserialize, Default)]
 struct Args {
-    #[serde(default)]
-    action: Option<String>,
     scope: Option<String>,
     #[serde(alias = "startPoints")]
     start_points: Option<Vec<StartPoint>>,
@@ -289,15 +287,13 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
         let mut result = recorded_backward_walk(storage, args.clone())?;
         // Attach forgotten lessons if any lesson retrievability is low (< 0.5)
-        if let Ok(forgotten) = super::forgotten_lesson::execute(storage, args).await {
-            if let Some(res_obj) = result.as_object_mut() {
-                if let Some(lessons) = forgotten
-                    .get("lessons")
-                    .or_else(|| forgotten.get("results"))
-                {
-                    res_obj.insert("forgotten_lessons".to_string(), lessons.clone());
-                }
-            }
+        if let Ok(forgotten) = super::forgotten_lesson::execute(storage, args).await
+            && let Some(res_obj) = result.as_object_mut()
+            && let Some(lessons) = forgotten
+                .get("lessons")
+                .or_else(|| forgotten.get("results"))
+        {
+            res_obj.insert("forgotten_lessons".to_string(), lessons.clone());
         }
         return Ok(result);
     }

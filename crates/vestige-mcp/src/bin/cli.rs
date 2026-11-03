@@ -2374,6 +2374,7 @@ fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
 }
 
 /// Run consolidation cycle
+#[allow(dead_code)]
 fn run_consolidate() -> anyhow::Result<()> {
     println!("{}", "=== Vestige Consolidation ===".cyan().bold());
     println!();
@@ -3502,6 +3503,7 @@ struct ExportedMemory<'a> {
 }
 
 /// Run exact portable archive export.
+#[allow(dead_code)]
 fn run_portable_export(output: PathBuf) -> anyhow::Result<()> {
     println!("{}", "=== Vestige Portable Export ===".cyan().bold());
     println!();
@@ -3545,6 +3547,7 @@ fn run_portable_export(output: PathBuf) -> anyhow::Result<()> {
 }
 
 /// Run exact portable archive import.
+#[allow(dead_code)]
 fn run_portable_import(input: PathBuf, merge: bool) -> anyhow::Result<()> {
     println!("{}", "=== Vestige Portable Import ===".cyan().bold());
     println!();
@@ -3606,6 +3609,7 @@ fn run_portable_import(input: PathBuf, merge: bool) -> anyhow::Result<()> {
 }
 
 /// Run file-backed two-way sync.
+#[allow(dead_code)]
 fn run_sync(archive: Option<PathBuf>, cloud: bool, endpoint: Option<String>) -> anyhow::Result<()> {
     if cloud {
         run_sync_cloud(endpoint)
@@ -3619,6 +3623,7 @@ fn run_sync(archive: Option<PathBuf>, cloud: bool, endpoint: Option<String>) -> 
     }
 }
 
+#[allow(dead_code)]
 fn run_sync_file(archive: PathBuf) -> anyhow::Result<()> {
     println!("{}", "=== Vestige File Sync ===".cyan().bold());
     println!();
@@ -3633,6 +3638,7 @@ fn run_sync_file(archive: PathBuf) -> anyhow::Result<()> {
 
 /// Sync (file or cloud) merges portable archives, which a Strata log does not
 /// write or read in 4.0.
+#[allow(dead_code)]
 fn refuse_sync_on_strata(storage: &Arc<Storage>) -> anyhow::Result<()> {
     if is_strata(storage) {
         anyhow::bail!(
@@ -3643,6 +3649,7 @@ fn refuse_sync_on_strata(storage: &Arc<Storage>) -> anyhow::Result<()> {
 }
 
 /// What works on a Strata log in place of a portable archive.
+#[allow(dead_code)]
 const STRATA_PORTABLE_ALTERNATIVES: &str = "Use `vestige export <file> --format json` (or jsonl) for the memories, or `vestige backup <dir>` for an exact copy of the log.";
 
 #[cfg(feature = "cloud-sync")]
@@ -3699,6 +3706,7 @@ fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
 }
 
 #[cfg(not(feature = "cloud-sync"))]
+#[allow(dead_code)]
 fn run_sync_cloud(_endpoint: Option<String>) -> anyhow::Result<()> {
     anyhow::bail!(
         "this build was compiled without the `cloud-sync` feature. 4.0 builds leave \
@@ -3706,6 +3714,7 @@ fn run_sync_cloud(_endpoint: Option<String>) -> anyhow::Result<()> {
     )
 }
 
+#[allow(dead_code)]
 fn print_sync_report(report: &vestige_core::PortableSyncReport) {
     if let Some(pull) = &report.pull {
         println!("{}", "Pull: merged remote archive".yellow());
@@ -3737,6 +3746,7 @@ fn print_sync_report(report: &vestige_core::PortableSyncReport) {
 }
 
 /// Run garbage collection command
+#[allow(dead_code)]
 fn run_gc(
     min_retention: f64,
     max_age_days: Option<u64>,
@@ -4826,6 +4836,7 @@ fn run_causal_walk_strata(
 /// Normalized remote identity for a repo: `git config remote.origin.url`
 /// stripped of protocol and `.git` (`https://github.com/a/b.git`,
 /// `git@github.com:a/b` -> `github.com/a/b`). None when no remote is set.
+#[allow(dead_code)]
 fn git_repo_identity(path: &Path) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
@@ -4855,6 +4866,7 @@ fn git_repo_identity(path: &Path) -> Option<String> {
 /// query-time entity extractor turns those into the causal join keys. Records
 /// upsert on `(git, "<repo>#<sha>")`, so re-running is free, and created_at is
 /// the commit time so the backward reach is exact.
+#[allow(dead_code)]
 fn run_ingest_git(
     path: PathBuf,
     since: Option<String>,

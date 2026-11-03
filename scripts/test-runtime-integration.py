@@ -49,8 +49,9 @@ def run(binary, output):
             body = handle.get("structuredContent") or json.loads(handle["content"][0]["text"])
             assert "RUNTIME_FIXTURE_TIMEOUT" in json.dumps(body), body
             refused = call("recall", {"query": "RUNTIME_FIXTURE_TIMEOUT", "mode": "lookup"})
-            assert refused.get("isError") is True, refused
-            assert "similarity_disabled" in json.dumps(refused)
+            assert refused.get("isError") is not True, refused
+            refused_body = refused.get("structuredContent") or json.loads(refused["content"][0]["text"])
+            assert refused_body.get("error") == "handle_required", refused
             requests = {
                 provider: session.request(
                     provider,

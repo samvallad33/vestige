@@ -466,7 +466,7 @@ mod strata_stdio {
             })
             .filter_map(|tool| tool["name"].as_str())
             .collect();
-        assert_eq!(advertises, vec!["memory_status"]);
+        assert_eq!(advertises, vec!["session"]);
 
         let call = out
             .iter()

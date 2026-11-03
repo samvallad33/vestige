@@ -935,8 +935,8 @@ mod strata_tests {
                 Some(serde_json::json!({"query": "replacement cause text"})),
             )
             .await
-            .unwrap_err();
-            assert!(query.contains("similarity_disabled"), "{query}");
+            .unwrap();
+            assert_eq!(query["error"], "handle_required", "{query}");
             assert!(log_contains(dir.path(), "original cause text"));
             assert!(log_contains(dir.path(), "replacement cause text"));
             (

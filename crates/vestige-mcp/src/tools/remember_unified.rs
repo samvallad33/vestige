@@ -96,14 +96,12 @@ pub async fn execute(
         .map_err(|e| format!("Invalid remember arguments: {e}"))?;
 
     let is_codebase =
-        parsed.repo_path.is_some() || (parsed.files.as_ref().map_or(false, |f| !f.is_empty()));
+        parsed.repo_path.is_some() || parsed.files.as_ref().is_some_and(|f| !f.is_empty());
     let mut extra_tags = Vec::new();
 
-    if is_codebase {
-        if let Some(files) = &parsed.files {
-            for f in files {
-                extra_tags.push(format!("file:{f}"));
-            }
+    if is_codebase && let Some(files) = &parsed.files {
+        for f in files {
+            extra_tags.push(format!("file:{f}"));
         }
     }
 
@@ -190,10 +188,10 @@ pub async fn execute(
     let has_pinned = parsed
         .tags
         .as_ref()
-        .map_or(false, |tags| tags.iter().any(|t| t == "pinned"));
+        .is_some_and(|tags| tags.iter().any(|t| t == "pinned"));
     let mut recompiled_fence = false;
-    if has_pinned {
-        if let Ok(_) = tools::project::execute(
+    if has_pinned
+        && tools::project::execute(
             storage,
             Some(json!({
                 "action": "write",
@@ -202,9 +200,9 @@ pub async fn execute(
             })),
         )
         .await
-        {
-            recompiled_fence = true;
-        }
+        .is_ok()
+    {
+        recompiled_fence = true;
     }
 
     // Step 5: Format upgraded response

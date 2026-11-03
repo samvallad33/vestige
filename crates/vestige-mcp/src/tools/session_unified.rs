@@ -19,10 +19,10 @@ pub(crate) fn embedded_schema(mut schema: Value, pointer: &str) -> Value {
     fn visit(value: &mut Value, pointer: &str) {
         match value {
             Value::Object(object) => {
-                if let Some(Value::String(reference)) = object.get_mut("$ref") {
-                    if reference == "#" || reference.starts_with("#/") {
-                        *reference = format!("#{pointer}{}", &reference[1..]);
-                    }
+                if let Some(Value::String(reference)) = object.get_mut("$ref")
+                    && (reference == "#" || reference.starts_with("#/"))
+                {
+                    *reference = format!("#{pointer}{}", &reference[1..]);
                 }
                 for child in object.values_mut() {
                     visit(child, pointer);

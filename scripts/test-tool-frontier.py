@@ -641,13 +641,12 @@ def run(binary, output):
             handshake()
             catalog = rpc("tools/list", {})["tools"]
             names = [x["name"] for x in catalog]
-            assert len(names) == 19, names
-            assert "backfill" in names and "causal_walk" in names, names
-            assert "precedent" in names and "gather" in names, names
-            assert "source_sync" not in names, names
-            assert "purge" not in names and "suppress" in names, names
-            memory_actions = next(x for x in catalog if x["name"] == "memory")["inputSchema"]["properties"]["action"]["enum"]
-            assert "purge" not in memory_actions and "delete" not in memory_actions, memory_actions
+            assert names == [
+                "causal_walk", "curate", "precedent", "recall", "remember", "session",
+            ], names
+            assert "backfill" not in names and "gather" not in names, names
+            assert "source_sync" not in names and "purge" not in names, names
+            assert "maintain" not in names and "memory" not in names and "suppress" not in names, names
             guide = tool("memory_status", {"view": "tools"})["tools"]
             assert [x["name"] for x in guide] == names
             for entry, definition in zip(guide, catalog):
@@ -676,9 +675,7 @@ def run(binary, output):
             # Every consolidate phase is a no-op on a Strata log, and the zeros a
             # no-op returns read as a completed pass. It is withheld: off the
             # advertised list and refused with the stable code, whatever the phase.
-            maintain_actions = next(x for x in catalog if x["name"] == "maintain")[
-                "inputSchema"]["properties"]["action"]["enum"]
-            assert "consolidate" not in maintain_actions, maintain_actions
+            assert "maintain" not in names and "consolidate" not in names, names
             for args in (
                 {"action": "consolidate", "batchSize": 2},
                 {"action": "consolidate", "phase": "embeddings", "batchSize": 2},
@@ -699,8 +696,9 @@ def run(binary, output):
             tool("memory", {"action": "state", "id": node_id})
             receipt = tool("receipt", {"action": "get", "receipt_id": node_id})
             assert "receipt" in receipt
-            typed("recall", {"query": marker}, "similarity_disabled")
-            typed("recall", {"query": "which fixture handle did we store"}, "similarity_disabled")
+            for query in (marker, "which fixture handle did we store"):
+                refused_query = tool("recall", {"query": query})
+                assert refused_query.get("error") == "handle_required", refused_query
             handle = tool("recall", {"handle": node_id})
             assert marker in json.dumps(handle) and handle["exact"] is True
             passed("ingest, exact get, write receipt, and handle recall; query recall is refused")
@@ -731,7 +729,8 @@ def run(binary, output):
             assert_no_sqlite()
             passed("empty-dir restart keeps the node and creates no sqlite file")
 
-            typed("recall", {"mode": "reason", "query": marker}, "similarity_disabled")
+            refused_reason = tool("recall", {"mode": "reason", "query": marker})
+            assert refused_reason.get("error") == "handle_required", refused_reason
             typed("recall", {"mode": "contradictions"}, "similarity_disabled")
             replay_args = {"action": "replay", "receipt_id": node_id, "withheld_slots": []}
             replayed = tool("receipt", replay_args)

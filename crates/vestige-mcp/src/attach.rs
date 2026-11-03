@@ -1337,11 +1337,11 @@ pub fn call_tool_blocking(data_dir: &Path, name: &str, arguments: Value) -> io::
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+            .map_err(io::Error::other)?
             .block_on(call_tool(&dir, &name, arguments))
     })
     .join()
-    .map_err(|_| io::Error::new(io::ErrorKind::Other, "call_tool thread panicked"))?
+    .map_err(|_| io::Error::other("call_tool thread panicked"))?
 }
 
 async fn call_over(attachment: Attachment, name: &str, arguments: Value) -> io::Result<Value> {
