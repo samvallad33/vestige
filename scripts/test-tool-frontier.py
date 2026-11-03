@@ -668,8 +668,8 @@ def run(binary, output):
             for invalid in ("search", "", 12):
                 tool("memory_status", {"view": "tools", "tool": invalid}, error=True)
             annotations = {x["name"]: x["annotations"] for x in catalog}
-            assert annotations["recall"]["readOnlyHint"] is False
-            assert annotations["recall"]["idempotentHint"] is False
+            assert annotations["recall"]["readOnlyHint"] is True
+            assert annotations["recall"]["idempotentHint"] is True
             passed("all installed tool and action definitions match progressive discovery")
 
             # Every consolidate phase is a no-op on a Strata log, and the zeros a

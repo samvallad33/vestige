@@ -660,6 +660,12 @@ enum Commands {
         /// The run configuration `prove` wrote
         cfg: PathBuf,
     },
+
+    /// Install Cognitive Sandwich companion files.
+    Sandwich {
+        #[command(subcommand)]
+        command: SandwichCommands,
+    },
 }
 
 /// Zero-lock command router: dispatches over reflex.sock / attach IPC if a server
@@ -708,6 +714,11 @@ fn main() -> anyhow::Result<()> {
             sandwich_companion,
             sandwich,
         ),
+        Commands::Sandwich { command } => match command {
+            SandwichCommands::Install { version, options } => {
+                run_sandwich_install(version.as_deref(), &options)
+            }
+        },
         Commands::Restore { file } => run_restore(file),
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
@@ -6286,8 +6297,10 @@ mod strata_cli_tests {
         assert!(recall.contains("--handle"), "{recall}");
         assert!(recall.contains("exact tag"), "{recall}");
         for sub in ["portable-export", "portable-import", "sync"] {
-            let page = long_help(&[sub]);
-            assert!(page.contains("legacy SQLite stores only"), "{sub}: {page}");
+            assert!(
+                Cli::command().find_subcommand(sub).is_none(),
+                "{sub} is not a command on this build"
+            );
         }
         let compose = long_help(&["compose"]);
         assert!(compose.contains("no recorded edge"), "{compose}");
