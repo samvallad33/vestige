@@ -23,7 +23,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   SOURCE_REF: ${{ github.event.pull_request.head.sha || inputs.source_ref }}
-  PRODUCT_VERSION: ${{ inputs.version || '6.0.0' }}
+  PRODUCT_VERSION: ${{ inputs.version || '6.2.0' }}
 
 jobs:
   desktop:

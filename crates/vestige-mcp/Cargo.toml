@@ -54,7 +54,7 @@ path = "src/bin/cli.rs"
 # `legacy-sqlite` feature so `--no-default-features` builds a sqlite-free
 # crate (build/t5-legacy-isolation). `embeddings` and `vector-search` are
 # always-off stubs (w1b).
-vestige-core = { version = "6.0.0", path = "../vestige-core", default-features = false }
+vestige-core = { version = "6.2.0", path = "../vestige-core", default-features = false }
 # Witness records, DSSE envelopes and tree hashes for proof-carrying PRs. The
 # same crate builds the standalone offline verifier.
 vestige-proof = { path = "../vestige-proof" }

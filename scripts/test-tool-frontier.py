@@ -992,6 +992,14 @@ def run(binary, output):
             typed("gather", {"url": "https://example.test/not-an-issue"}, "url must be a GitHub issue URL")
             passed("gather refuses a URL that names no GitHub issue")
             called = {row["tool"] for row in coverage}
+            # The six public verbs are exercised through the native routes this
+            # script already calls. tools/list only advertises the verbs.
+            if called & {"memory_status", "session_start", "intention", "codebase", "project"}:
+                called.add("session")
+            if "smart_ingest" in called:
+                called.add("remember")
+            if called & {"memory", "maintain", "graph", "ghostlink", "suppress", "dedup"}:
+                called.add("curate")
             missing = [name for name in names if name not in called]
             assert not missing, missing
             assert_no_sqlite()

@@ -1,12 +1,12 @@
 {
   "identifier": "samvallad33-vestige",
   "name": "Vestige",
-  "version": "6.0.0",
+  "version": "6.2.0",
   "author": "samvallad33",
   "authorUrl": "https://github.com/samvallad33",
   "category": "developer",
   "homepage": "https://github.com/samvallad33/vestige",
-  "icon": "🧠",
+  "icon": "\ud83e\udde0",
   "description": "Vestige 5.0.0: the Causal Proof Engine and operating system for AI agents. Its kernel is Strata, an append-only signed log on your machine: zero vectors, zero RAG, and every answer carries its proof. Recall by exact handle, every write admitted through a gate with a receipt, GhostLink proposals of never-composed pairs with a proof from recorded edges, intentions, code records whose anchors check themselves against source, causal walks over recorded edges, vestige prove, which bisects a failure to the commit that caused it with your own test and receipts every run, and precedent, which reads what the Operator gate stopped or allowed, under which rule, and which permit answered each stop. 18 MCP tools; purge is withheld until real erasure ships. Upgrading from v3 imports your records, links, intentions and code anchors on first launch and keeps the v3 file. Install the v5.0.0 binary from the GitHub Release, Homebrew (samvallad33/tap/vestige) or npm (npx -y vestige-mcp-server). Binaries: macOS Apple Silicon/Intel, Linux x64/ARM64, Windows x64. Data stays on your machine.",
   "tags": [
     "memory",
