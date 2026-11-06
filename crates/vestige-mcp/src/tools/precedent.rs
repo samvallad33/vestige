@@ -27,11 +27,15 @@ pub fn schema() -> Value {
         "properties": {
             "query": {
                 "type": "string",
-                "enum": ["stops", "receipt", "replay", "prove", "forgotten_lesson", "verify_log", "scan_secrets", "selftest"],
+                "enum": ["stops", "receipt", "replay", "prove", "forgotten_lesson", "verify_log", "scan_secrets", "selftest", "compile_receipt"],
                 "default": "stops",
                 "description": "'stops': Operator gate history; 'receipt'/'replay': inspect or re-derive a write receipt; 'verify_log': run live cryptographic log verification; 'scan_secrets': scan memories for secret patterns; 'selftest': run planted-cause self-calibration."
             },
             "receipt_id": {"type": "string", "description": "For 'receipt' or 'replay': receipt ID."},
+            "log_offset": {"type":"integer","minimum":0,"description":"For compile_receipt: exact admitted log prefix offset; omitted means current head."},
+            "compile_options": {"type":"object","description":"Exact query, symbols, source-time today and explicit identity bindings used to compile the packet."},
+            "draft": {"type":"string","description":"Optional generated draft to verify against the compiled receipt."},
+            "expected_receipt_hash": {"type":"string","description":"Bind output verification to the receipt the reader actually saw."},
             "since": {"type": "string", "default": "24h", "description": "Window, e.g. 30m, 24h, 7d."},
             "cwd": {"type": "string", "description": "Only receipts whose cwd starts with this path."},
             "source": {"type": "string", "description": "Exact source, e.g. claude, zcode."},
@@ -757,6 +761,35 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         .unwrap_or("stops");
 
     match query_type {
+        "compile_receipt" => {
+            let options: vestige_core::h2sk::CompileOptions = serde_json::from_value(
+                raw.get("compile_options")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            )
+            .map_err(|e| format!("invalid_compile_options:{e}"))?;
+            if raw.get("log_offset").is_some() && raw["log_offset"].as_u64().is_none() {
+                return Err("invalid_log_offset".into());
+            }
+            let receipt = crate::strata_memory::compile_memory_receipt(
+                storage.as_ref(),
+                "user",
+                raw["log_offset"].as_u64(),
+                &options,
+            )?;
+            if let Some(draft) = raw["draft"].as_str() {
+                let input = vestige_core::h2sk::GateInput {
+                    draft: draft.to_string(),
+                    expected_receipt_hash: raw["expected_receipt_hash"]
+                        .as_str()
+                        .map(str::to_string),
+                };
+                return Ok(
+                    json!({"receipt_hash":receipt.hash,"verdict":vestige_core::h2sk::verify_draft(&receipt,&options,&input)}),
+                );
+            }
+            serde_json::to_value(receipt).map_err(|e| e.to_string())
+        }
         "receipt" | "replay" | "prove" => {
             let mut r_args = raw.clone();
             if let Some(obj) = r_args.as_object_mut() {
