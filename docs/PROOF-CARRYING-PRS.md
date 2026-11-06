@@ -64,7 +64,16 @@ Reflex: witnessed `npm test` green at tree 61151e05a092, signed receipt mem-0000
 ### 4. Prove the commit
 
 ```json
-{"name": "receipt", "arguments": {"action": "prove", "repoPath": "/path/to/repo", "commit": "HEAD"}}
+{"name": "causal_walk", "arguments": {"action": "prove", "repoPath": "/path/to/repo", "commit": "HEAD"}}
+```
+
+(The legacy alias `{"name": "receipt", "arguments": {"action": "prove", ...}}` remains supported).
+
+You can also prove directly from the CLI or verify the cryptographic log:
+
+```bash
+vestige prove --repo . --good main~1 --bad HEAD --test "npm test"
+vestige precedent --query verify_log
 ```
 
 This writes `.vestige/proof/<tree>.intoto.jsonl`. Commit it with the pull request. The folder

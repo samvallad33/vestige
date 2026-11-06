@@ -38,7 +38,7 @@ test('edge: overflow truncates by rank and stays under the cap', opt, async t =>
   assert.ok(out.length <= 7000, String(out.length));
   const shown = ids(out); assert.ok(shown.length >= 1);
   assert.deepEqual(shown, p.memories.map(r => r.id).filter(id => shown.includes(id)));
-  assert.match(out, /smart_ingest/);
+  assert.match(out, /remember/);
 });
 test('edge: superseded fact — newest first, old still available', opt, async t => {
   const s = await store(t);

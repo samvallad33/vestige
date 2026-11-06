@@ -214,15 +214,24 @@ fn autofire_off_manual_dry_run_exact_undo_idempotency_and_reopen() {
     );
     assert_eq!(s.get(&target)["stability"].as_f64().unwrap(), before);
     let frozen = snapshot(dir.path());
-    let preview = s.tool("backfill", json!({"trigger_id":trigger,"dry_run":true}));
+    let preview = s.tool(
+        "remember",
+        json!({"action":"backfill","params":{"trigger_id":trigger,"dry_run":true}}),
+    );
     assert_eq!(preview["changed"], 0);
     assert_eq!(preview["would_change"], 1, "{preview}");
     assert_eq!(snapshot(dir.path()), frozen, "dry run wrote to the store");
-    let applied = s.tool("backfill", json!({"trigger_id":trigger,"manual":true}));
+    let applied = s.tool(
+        "remember",
+        json!({"action":"backfill","params":{"trigger_id":trigger,"manual":true}}),
+    );
     assert_eq!(applied["changed"], 1, "{applied}");
     let receipt = applied["changes"][0].clone();
     assert_eq!(
-        s.tool("backfill", json!({"trigger_id":trigger,"manual":true}))["changed"],
+        s.tool(
+            "remember",
+            json!({"action":"backfill","params":{"trigger_id":trigger,"manual":true}}),
+        )["changed"],
         0
     );
     // Exercise the real CLI while this MCP owner holds the store lock.
@@ -247,7 +256,10 @@ fn autofire_off_manual_dry_run_exact_undo_idempotency_and_reopen() {
     let mut reopened = Server::open(dir.path(), "off");
     assert_eq!(reopened.get(&target)["stability"].as_f64().unwrap(), before);
     assert_eq!(
-        reopened.tool("backfill", json!({"trigger_id":trigger,"manual":true}))["changed"],
+        reopened.tool(
+            "remember",
+            json!({"action":"backfill","params":{"trigger_id":trigger,"manual":true}}),
+        )["changed"],
         0
     );
 }

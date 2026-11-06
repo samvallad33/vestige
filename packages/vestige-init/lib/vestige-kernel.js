@@ -178,6 +178,12 @@ function startStore(binaryPath, { clientVersion = '0.0.0', timeoutMs = 30000 } =
       } else if (message.id === 2) {
         if (message.error) return finish({ ok: false, reason: message.error.message || 'tools/list failed' });
         const tools = (message.result && message.result.tools) || [];
+        const EXPECTED_TOOLS = ['session', 'remember', 'recall', 'causal_walk', 'curate', 'precedent'];
+        const names = tools.map((t) => t.name);
+        const missing = EXPECTED_TOOLS.filter((name) => !names.includes(name));
+        if (missing.length > 0) {
+          return finish({ ok: false, reason: `missing unified tools: ${missing.join(', ')}` });
+        }
         finish({ ok: true, server: serverInfo.name || 'vestige', serverVersion: serverInfo.version || null, tools: tools.length });
       }
     });

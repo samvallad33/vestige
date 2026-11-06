@@ -171,17 +171,19 @@ fn smart_ingest_refuses_a_credential_in_tags_source_or_scope_without_echo() {
         json!({"items": [{"content": "Synthetic note", "source": secret}]}),
         json!({"items": [{"content": "Synthetic note", "scope": secret}]}),
     ];
-    for (index, arguments) in cases.into_iter().enumerate() {
-        let result = session.call("smart_ingest", arguments);
-        let text = result.to_string();
-        assert!(
-            !text.contains(&secret),
-            "case {index}: the response must not echo the credential: {text}"
-        );
-        assert!(
-            is_refusal(&result) || text.contains("rejected"),
-            "case {index}: a credential-bearing write must be refused: {text}"
-        );
+    for tool in ["smart_ingest", "remember"] {
+        for (index, arguments) in cases.iter().enumerate() {
+            let result = session.call(tool, arguments.clone());
+            let text = result.to_string();
+            assert!(
+                !text.contains(&secret),
+                "case {index}: the response must not echo the credential: {text}"
+            );
+            assert!(
+                is_refusal(&result) || text.contains("rejected"),
+                "case {index}: a credential-bearing write must be refused: {text}"
+            );
+        }
     }
 
     session.shutdown();

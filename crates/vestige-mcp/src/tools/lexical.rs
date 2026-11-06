@@ -153,8 +153,9 @@ pub fn rank(
 }
 
 /// Take whole records until `char_budget` is spent. The first hit is kept
-/// even when it is the only record and it is long; later records are added
-/// only while they still fit. `max_items` is a hard cap.
+/// even when it is the only record and it is long; later records that fit
+/// the remaining budget are added while skipping any oversized intermediate
+/// record. `max_items` is a hard cap.
 pub fn pack<'a>(
     nodes: &'a [KnowledgeNode],
     hits: &[LexicalHit],
@@ -174,7 +175,7 @@ pub fn pack<'a>(
             .saturating_add(node.id.len())
             .saturating_add(32);
         if !out.is_empty() && used.saturating_add(cost) > char_budget {
-            break;
+            continue;
         }
         used = used.saturating_add(cost);
         out.push(node);
@@ -388,8 +389,8 @@ mod tests {
     fn packing_keeps_whole_records_inside_the_budget() {
         let nodes = vec![
             node("a", &"a".repeat(100), &[]),
-            node("b", &"b".repeat(100), &[]),
-            node("c", &"c".repeat(5_000), &[]),
+            node("b", &"b".repeat(5_000), &[]),
+            node("c", &"c".repeat(100), &[]),
         ];
         let hits = vec![
             LexicalHit {
@@ -407,7 +408,7 @@ mod tests {
         ];
         let packed = pack(&nodes, &hits, 300, 8);
         let ids: Vec<_> = packed.iter().map(|n| n.id.as_str()).collect();
-        assert_eq!(ids, ["a", "b"]);
+        assert_eq!(ids, ["a", "c"], "oversized middle record is skipped so later fitting records still pack");
         assert_eq!(packed[0].content.len(), 100, "the record is whole");
     }
 }

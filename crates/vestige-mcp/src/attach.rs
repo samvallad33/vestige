@@ -60,6 +60,8 @@ pub const LOCK_FILE: &str = ".serve.lock";
 pub const ENDPOINT_FILE: &str = ".serve.endpoint";
 /// The owner's Unix socket, in the data directory.
 pub const SOCKET_FILE: &str = ".serve.sock";
+/// The canonical reflex IPC socket for hooks and CLI commands.
+pub const REFLEX_SOCKET_FILE: &str = "reflex.sock";
 /// A socket address holds 104 bytes on macOS and 108 on Linux, NUL
 /// included. A longer socket path falls back to loopback TCP.
 #[cfg(unix)]
@@ -364,6 +366,21 @@ fn publish_endpoint(data_dir: &Path, endpoint: &Endpoint) -> io::Result<()> {
     })();
     if written.is_err() {
         let _ = fs::remove_file(&staged);
+        return written;
+    }
+    #[cfg(unix)]
+    if endpoint.addr == Addr::Unix {
+        let reflex_path = data_dir.join(REFLEX_SOCKET_FILE);
+        let _ = fs::remove_file(&reflex_path);
+        let _ = std::os::unix::fs::symlink(SOCKET_FILE, &reflex_path);
+        if let Some(base) = directories::BaseDirs::new() {
+            let user_vestige = base.home_dir().join(".vestige");
+            if user_vestige.is_dir() && user_vestige != data_dir {
+                let user_reflex = user_vestige.join(REFLEX_SOCKET_FILE);
+                let _ = fs::remove_file(&user_reflex);
+                let _ = std::os::unix::fs::symlink(data_dir.join(SOCKET_FILE), &user_reflex);
+            }
+        }
     }
     written
 }
@@ -377,6 +394,13 @@ fn retire_endpoint(data_dir: &Path, endpoint: &Endpoint) {
     }
     if endpoint.addr == Addr::Unix {
         let _ = fs::remove_file(data_dir.join(SOCKET_FILE));
+        let _ = fs::remove_file(data_dir.join(REFLEX_SOCKET_FILE));
+        if let Some(base) = directories::BaseDirs::new() {
+            let user_vestige = base.home_dir().join(".vestige");
+            if user_vestige.is_dir() && user_vestige != data_dir {
+                let _ = fs::remove_file(user_vestige.join(REFLEX_SOCKET_FILE));
+            }
+        }
     }
 }
 
@@ -1303,6 +1327,21 @@ pub async fn call_tool(data_dir: &Path, name: &str, arguments: Value) -> io::Res
                 format!("{name} did not answer within {}s", CALL_TIMEOUT.as_secs()),
             )
         })?
+}
+
+/// Synchronous blocking wrapper for [`call_tool`].
+pub fn call_tool_blocking(data_dir: &Path, name: &str, arguments: Value) -> io::Result<Value> {
+    let dir = data_dir.to_path_buf();
+    let name = name.to_string();
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(io::Error::other)?
+            .block_on(call_tool(&dir, &name, arguments))
+    })
+    .join()
+    .map_err(|_| io::Error::other("call_tool thread panicked"))?
 }
 
 async fn call_over(attachment: Attachment, name: &str, arguments: Value) -> io::Result<Value> {

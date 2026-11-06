@@ -76,5 +76,5 @@ test('context stays near the baseline size and never claims to be complete', () 
   const memories = Array.from({ length: 24 }, (_, i) => ({ id: `m${i}`, content: 'x'.repeat(1500), tags: [] }));
   const out = m.formatContext({ memories });
   assert.ok(out.length <= 7000, String(out.length));
-  assert.ok(/^\{"id"/m.test(out) && /smart_ingest/.test(out));
+  assert.ok(/^\{"id"/m.test(out) && /remember/.test(out));
 });

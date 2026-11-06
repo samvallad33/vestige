@@ -57,7 +57,14 @@ const RECEIPT_ATTESTATION_ALGORITHM_V1: &str = "mcp-retrieval-receipt-v1";
 fn is_write_tool(tool: &str) -> bool {
     matches!(
         tool,
-        "smart_ingest" | "ingest" | "session_checkpoint" | "memory" | "codebase" | "purge"
+        "remember"
+            | "curate"
+            | "smart_ingest"
+            | "ingest"
+            | "session_checkpoint"
+            | "memory"
+            | "codebase"
+            | "purge"
     )
 }
 
@@ -476,6 +483,9 @@ fn pending_memory_mutation(
     args: &Option<serde_json::Value>,
 ) -> Option<PendingMemoryMutation> {
     let args = args.as_ref()?;
+    if tool == "curate" && args["action"] == "suppress" {
+        return pending_memory_mutation("suppress", &Some(args.clone()));
+    }
     match tool {
         "memory" => {
             let action = args.get("action")?.as_str()?.to_ascii_lowercase();
@@ -1294,7 +1304,11 @@ pub fn hash_args(args: &Option<Value>) -> String {
 const REDACTED_SMART_INGEST_SECRET_ARGS_HASH: &str = "redacted_secret_input";
 
 fn trace_args_hash(tool: &str, args: &Option<Value>) -> String {
-    if tool == "smart_ingest" && smart_ingest_has_blocking_secret(args) {
+    if matches!(
+        tool,
+        "smart_ingest" | "remember" | "ingest" | "session_checkpoint"
+    ) && smart_ingest_has_blocking_secret(args)
+    {
         return REDACTED_SMART_INGEST_SECRET_ARGS_HASH.to_string();
     }
     hash_args(args)

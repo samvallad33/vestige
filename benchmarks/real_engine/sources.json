@@ -1,0 +1,33 @@
+{
+  "locomo": {
+    "repository": "https://github.com/snap-research/locomo",
+    "commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "data_file": "data/locomo10.json",
+    "data_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "scorer_file": "task_eval/evaluation.py",
+    "scorer_sha256": "8e3be5d57ff2ff9ec5cd05939592f468c5f3f1fd95d13e431932bdf6bf0fd6fd",
+    "questions": 1986,
+    "conversations": 10,
+    "categories": {
+      "1": 282,
+      "2": 321,
+      "3": 96,
+      "4": 841,
+      "5": 446
+    },
+    "license_file": "LICENSE.txt"
+  },
+  "longmemeval": {
+    "repository": "https://github.com/xiaowu0162/LongMemEval",
+    "commit": "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+    "dataset": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned",
+    "dataset_revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "data_file": "data/longmemeval_s_cleaned.json",
+    "data_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "scorer_file": "src/evaluation/evaluate_qa.py",
+    "scorer_sha256": "ecce9c4c79dc89d99534ac17b383a5cbb5b9f0c69ee98adaf0684742e3d95251",
+    "questions": 500,
+    "license_file": "LICENSE",
+    "judge_note": "Official get_anscheck_prompt and yes parsing; user-required gpt-5.4-nano replaces published GPT-4o judge through shared budgeted callback."
+  }
+}

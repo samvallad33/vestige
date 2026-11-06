@@ -34,14 +34,14 @@ test('memory-first dry run previews installed binary connections and writes noth
   fs.mkdirSync(path.join(home, '.cursor'));
   fs.writeFileSync(path.join(home, '.cursor', 'mcp.json'), '{}\n');
   const bundled = scratch('dry-bundle');
-  for (const name of ['vestige-mcp', 'vestige', 'vestige-restore', 'vestige-upgrade']) fakeBinary(bundled, name, '5.0.0');
+  for (const name of ['vestige-mcp', 'vestige', 'vestige-restore', 'vestige-upgrade']) fakeBinary(bundled, name, '6.2.0');
   const target = path.join(home, '.local', 'bin');
 
   const { status, report, stderr } = run(INIT, ['--dry-run', '--json', '--client', 'cursor'], {
     HOME: home,
     VESTIGE_BUNDLED_BIN_DIR: bundled,
     VESTIGE_INSTALL_DIR: target,
-    VESTIGE_MCP_PATH: fakeBinary(bundled, 'vestige-mcp', '5.0.1'),
+    VESTIGE_MCP_PATH: fakeBinary(bundled, 'vestige-mcp', '6.2.0'),
   });
   assert.equal(status, 0, stderr);
   assert.equal(report.status, 'preview');

@@ -21,12 +21,14 @@ Codex reads `AGENTS.md` files as workspace instructions. Put a file at the repo 
 
 ```markdown
 At the start of a task, call Vestige `session_start` with include_intentions and
-include_status, and with context.codebase and context.repoPath for the checkout you
-are editing. Then call `recall` with handle set to the task's narrow topic tag.
-Recall by exact tag or id only; a free-text query returns similarity_disabled.
-Compose what you find into actions; do not summarize retrievals. Save decisions,
-corrections and verified facts with `smart_ingest`, tagged with the project and one
-narrow topic.
+include_status, unless the installed SessionStart hook already supplied a native
+memory packet for this turn. For a stored fact, use an exact memory id or tag
+already returned by Vestige. Never invent a handle from the question's wording.
+If the needed handle is unknown, inspect `memory_status` with view `stats` for
+recorded tags or view `timeline` for memory ids, then call `recall` with a returned
+handle. Inspect and use the returned evidence before answering. A free-text query
+returns similarity_disabled. Save decisions, corrections and verified facts with
+`smart_ingest`, tagged with the project and one narrow topic.
 ```
 
 ## 3. Use a router

@@ -167,16 +167,15 @@ fn dream_compile_stdio_completes_from_recorded_edges() {
         let mut server = Server::spawn(dir.path());
         server.handshake();
         let listed = server.request("tools/list", json!({}));
-        let maintain = listed["tools"]
+        let names: Vec<&str> = listed["tools"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|tool| tool["name"] == "maintain")
-            .expect("maintain");
-        let advertised = maintain.to_string();
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
         assert!(
-            advertised.contains("dream_compile"),
-            "maintain must advertise dream_compile"
+            !names.contains(&"maintain"),
+            "dream_compile stays off the six-tool catalog: {names:?}"
         );
         for index in 0..6 {
             let created = server.call(

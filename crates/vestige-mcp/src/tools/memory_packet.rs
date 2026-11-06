@@ -4,6 +4,7 @@
 //! prompt (session open, no words yet) still returns the highest-salience
 //! records. Full record text is packed into about 3_000 tokens. A prompt that
 //! names a recorded person does not pull in a different person's records.
+use chrono::{Datelike, Days, NaiveDate, Weekday};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use vestige_core::{KnowledgeNode, Storage};
@@ -106,25 +107,127 @@ const MONTHS: [&str; 12] = [
     "december",
 ];
 
+/// Whether a stored identity tag (`person:`, `place:`, `food:`, `file:`,
+/// `service:`, `symbol:`) is named in `prompt`. Hierarchical `symbol:<ns>:<leaf>`
+/// tags also match on their leaf token (or space-joined bigram leaf).
+fn entity_matches_prompt(prompt: &str, tag: &str) -> bool {
+    if phrase(prompt, tag)
+        || tag
+            .split_once(':')
+            .is_some_and(|(_, surface)| phrase(prompt, surface))
+    {
+        return true;
+    }
+    if tag.starts_with("symbol:")
+        && let Some((_, leaf)) = tag.rsplit_once(':')
+        && !leaf.is_empty()
+    {
+        if phrase(prompt, leaf) {
+            return true;
+        }
+        if leaf.contains('~') {
+            let spaced = leaf.replace('~', " ");
+            if phrase(prompt, &spaced) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Parse an exact `YYYY-MM-DD` or `YYYY/MM/DD` token into a [`NaiveDate`].
+fn parse_iso_or_slash_date(word: &str) -> Option<NaiveDate> {
+    let sep = if word.contains('-') { '-' } else { '/' };
+    let parts: Vec<&str> = word.split(sep).collect();
+    let [y, m, d] = parts.as_slice() else {
+        return None;
+    };
+    if y.len() != 4
+        || m.len() != 2
+        || d.len() != 2
+        || ![y, m, d]
+            .iter()
+            .all(|s| s.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    let year = y.parse::<i32>().ok()?;
+    let month = m.parse::<u32>().ok()?;
+    let day = d.parse::<u32>().ok()?;
+    NaiveDate::from_ymd_opt(year, month, day)
+}
+
+fn insert_date_keys(tags: &mut BTreeSet<String>, date: NaiveDate) {
+    let y = date.year();
+    let m = date.month();
+    let d = date.day();
+    tags.insert(format!("day:{y:04}-{m:02}-{d:02}"));
+    tags.insert(format!("date:{y:04}-{m:02}-{d:02}"));
+    tags.insert(format!("date:{y:04}/{m:02}/{d:02}"));
+    tags.insert(format!("yearly:{m:02}-{d:02}"));
+}
+
+fn word_number(token: &str) -> Option<u64> {
+    if let Ok(n) = token.parse::<u64>() {
+        return (1..=365).contains(&n).then_some(n);
+    }
+    match token {
+        "a" | "an" | "one" => Some(1),
+        "couple" | "two" => Some(2),
+        "three" => Some(3),
+        "four" => Some(4),
+        "five" => Some(5),
+        "six" => Some(6),
+        "seven" => Some(7),
+        "eight" => Some(8),
+        "nine" => Some(9),
+        "ten" => Some(10),
+        "eleven" => Some(11),
+        "twelve" => Some(12),
+        _ => None,
+    }
+}
+
+fn parse_weekday(token: &str) -> Option<Weekday> {
+    match token {
+        "monday" => Some(Weekday::Mon),
+        "tuesday" => Some(Weekday::Tue),
+        "wednesday" => Some(Weekday::Wed),
+        "thursday" => Some(Weekday::Thu),
+        "friday" => Some(Weekday::Fri),
+        "saturday" => Some(Weekday::Sat),
+        "sunday" => Some(Weekday::Sun),
+        _ => None,
+    }
+}
+
 /// A memory joins the prompt's index tags through its stored tags or, for a
-/// memory saved before index tags existed, through an exact ISO day its own
-/// words carry. Avoid and yearly keys only come from stored tags: a word in a
-/// memory is not a rule against it, and a one-off date does not recur.
+/// memory saved before index tags existed, through an exact ISO/slash day its
+/// own words or `date:` tags carry. Avoid and yearly keys only come from
+/// stored tags: a word in a memory is not a rule against it, and a one-off
+/// date does not recur.
 fn joins_index(node: &KnowledgeNode, hits: &BTreeSet<String>) -> bool {
     if hits.is_empty() {
         return false;
     }
-    node.tags.iter().any(|tag| hits.contains(tag))
-        || index_tags(&node.content)
-            .iter()
-            .any(|tag| tag.starts_with("day:") && hits.contains(tag))
+    node.tags.iter().any(|tag| {
+        hits.contains(tag)
+            || ((tag.starts_with("date:") || tag.starts_with("day:"))
+                && index_tags(tag)
+                    .iter()
+                    .any(|d| d.starts_with("day:") && hits.contains(d)))
+    }) || index_tags(&node.content)
+        .iter()
+        .any(|tag| tag.starts_with("day:") && hits.contains(tag))
 }
 
 /// Index-joined memories reserved ahead of lexical hits (salience-pro MAX_FILED_CANDIDATES).
 const MAX_RESERVED: usize = 4;
 
-/// Index tags a prompt meets exactly: `avoid:<thing>`, `day:YYYY-MM-DD` and
-/// `yearly:MM-DD`. Deterministic; no model reads the prompt.
+/// Index tags a prompt meets exactly: `avoid:<thing>`, `day:YYYY-MM-DD`,
+/// `date:YYYY-MM-DD` / `date:YYYY/MM/DD`, `yearly:MM-DD`, and relative date
+/// windows anchored to the prompt's date (or today). Deterministic; no model
+/// reads the prompt.
 pub(crate) fn index_tags(prompt: &str) -> BTreeSet<String> {
     let mut tags: BTreeSet<String> = thing_keys(prompt)
         .into_iter()
@@ -132,25 +235,14 @@ pub(crate) fn index_tags(prompt: &str) -> BTreeSet<String> {
         .collect();
     let lower = prompt.to_lowercase();
     let words: Vec<&str> = lower
-        .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+        .split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '/'))
         .filter(|w| !w.is_empty())
         .collect();
+    let mut explicit_dates = Vec::new();
     for (i, word) in words.iter().enumerate() {
-        let parts: Vec<&str> = word.split('-').collect();
-        if let [y, m, d] = parts.as_slice() {
-            let ok = y.len() == 4
-                && m.len() == 2
-                && d.len() == 2
-                && [y, m, d]
-                    .iter()
-                    .all(|s| s.bytes().all(|b| b.is_ascii_digit()));
-            if ok {
-                let (mm, dd) = (m.parse::<u32>().unwrap_or(0), d.parse::<u32>().unwrap_or(0));
-                if (1..=12).contains(&mm) && (1..=31).contains(&dd) {
-                    tags.insert(format!("day:{word}"));
-                    tags.insert(format!("yearly:{m}-{d}"));
-                }
-            }
+        if let Some(date) = parse_iso_or_slash_date(word) {
+            insert_date_keys(&mut tags, date);
+            explicit_dates.push(date);
         }
         if let Some(month) = MONTHS.iter().position(|name| name == word) {
             let day = words.get(i + 1).map(|w| {
@@ -160,6 +252,89 @@ pub(crate) fn index_tags(prompt: &str) -> BTreeSet<String> {
             });
             if let Some(day @ 1..=31) = day {
                 tags.insert(format!("yearly:{:02}-{day:02}", month + 1));
+            }
+        }
+    }
+
+    // Do not expand relative offsets when the question is asking "how many days/weeks/months ago"
+    let asks_how_long_ago = words.windows(4).any(|w| {
+        w[0] == "how"
+            && matches!(w[1], "many" | "long")
+            && matches!(
+                w[2],
+                "day" | "days" | "week" | "weeks" | "month" | "months" | "year" | "years"
+            )
+            && matches!(w[3], "ago" | "passed" | "have" | "had")
+    });
+    if !asks_how_long_ago {
+        let anchor = explicit_dates
+            .first()
+            .copied()
+            .unwrap_or_else(|| chrono::Utc::now().date_naive());
+        for (i, word) in words.iter().enumerate() {
+            if *word == "yesterday"
+                && let Some(d) = anchor.checked_sub_days(Days::new(1))
+            {
+                tags.insert(format!("day:{}", d.format("%Y-%m-%d")));
+            }
+            if *word == "ago" && i >= 2 {
+                let unit = words[i - 1];
+                let raw_n = if i >= 4 && words[i - 3] == "couple" && words[i - 2] == "of" {
+                    Some(2)
+                } else {
+                    word_number(words[i - 2])
+                };
+                if let Some(n) = raw_n {
+                    let center_tol = if unit.starts_with("day") {
+                        Some((n, 1u64))
+                    } else if unit.starts_with("week") {
+                        Some((7 * n, 3u64))
+                    } else if unit.starts_with("month") {
+                        Some((30 * n, 5u64))
+                    } else {
+                        None
+                    };
+                    if let Some((days_back, tol)) = center_tol
+                        && let Some(center) = anchor.checked_sub_days(Days::new(days_back))
+                    {
+                        for delta in 0..=tol {
+                            if let Some(d) = center.checked_sub_days(Days::new(delta)) {
+                                tags.insert(format!("day:{}", d.format("%Y-%m-%d")));
+                            }
+                            if let Some(d) = center.checked_add_days(Days::new(delta)) {
+                                tags.insert(format!("day:{}", d.format("%Y-%m-%d")));
+                            }
+                        }
+                    }
+                }
+            }
+            if matches!(*word, "last" | "past" | "previous")
+                && let Some(&next) = words.get(i + 1)
+            {
+                if let Some(target_wd) = parse_weekday(next) {
+                    let cur = anchor.weekday().num_days_from_monday();
+                    let tgt = target_wd.num_days_from_monday();
+                    let diff = (cur + 7 - tgt) % 7;
+                    let diff = if diff == 0 { 7 } else { diff };
+                    if let Some(center) = anchor.checked_sub_days(Days::new(u64::from(diff))) {
+                        for delta in 0..=1u64 {
+                            if let Some(d) = center.checked_sub_days(Days::new(delta)) {
+                                tags.insert(format!("day:{}", d.format("%Y-%m-%d")));
+                            }
+                            if let Some(d) = center.checked_add_days(Days::new(delta)) {
+                                tags.insert(format!("day:{}", d.format("%Y-%m-%d")));
+                            }
+                        }
+                    }
+                } else if next == "weekend" {
+                    for back in 1..=7u64 {
+                        if let Some(d) = anchor.checked_sub_days(Days::new(back))
+                            && matches!(d.weekday(), Weekday::Sat | Weekday::Sun)
+                        {
+                            tags.insert(format!("day:{}", d.format("%Y-%m-%d")));
+                        }
+                    }
+                }
             }
         }
     }
@@ -194,17 +369,12 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                 .iter()
                 .any(|prefix| tag.starts_with(prefix))
         })
-        .filter(|tag| {
-            phrase(prompt, tag)
-                || tag
-                    .split_once(':')
-                    .is_some_and(|(_, surface)| phrase(prompt, surface))
-        })
+        .filter(|tag| entity_matches_prompt(prompt, tag))
         .cloned()
         .collect();
     let (selected, selection, ranking): (Vec<&KnowledgeNode>, &str, &str) =
         if prompt.trim().is_empty() {
-            // No prompt, no target: never fall back to top salience.
+            // No prompt, no target: never inject unrelated salience.
             (Vec::new(), "none_empty_prompt", "none")
         } else {
             let hits = lexical::rank(&nodes, prompt, tie);
@@ -239,17 +409,16 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                     indexes.push(index);
                 }
             }
-            // Retroactive Salience Backfill comes first: a memory a backfill
-            // receipt raised outranks every lexical score, so the record that
-            // just came back is the first thing the hook serves.
-            // Only on target: a raised memory jumps the queue when the prompt
-            // also joins it by an index tag or its own BM25 score is at least
-            // half the best score; a receipt alone on a stop-word match does not.
+            // Retroactive Salience Backfill comes first only when on-target:
+            // a memory a backfill receipt raised outranks lexical score when
+            // it also joins the prompt by an entity or date/avoid index tag,
+            // or its own BM25 score is at least half the top hit.
             let top_score = hits.iter().map(|hit| hit.score_micro).max().unwrap_or(0);
             let on_target = |index: &usize| {
                 let node = &nodes[*index];
-                node.tags.iter().any(|tag| index_hits.contains(tag) || entities.contains(tag))
-                    || score_of(&node.id) * 2 >= top_score
+                joins_index(node, &index_hits)
+                    || node.tags.iter().any(|tag| entities.contains(tag))
+                    || (top_score > 0 && score_of(&node.id) * 2 >= top_score)
             };
             let raised = |index: &usize| tie(&nodes[*index]) > 0 && on_target(index);
             // salience-pro 0.3.7 candidate reservation: a memory joined to the
@@ -260,12 +429,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             let mut joined: Vec<usize> = indexes
                 .iter()
                 .copied()
-                .filter(|index| {
-                    nodes[*index]
-                        .tags
-                        .iter()
-                        .any(|tag| index_hits.contains(tag))
-                })
+                .filter(|index| joins_index(&nodes[*index], &index_hits))
                 .collect();
             // Safety first: an allergy, health, a condition or a medicine
             // before a preference.
@@ -297,8 +461,10 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                 })
                 .collect();
             let packed = lexical::pack(&nodes, &packed_hits, HOOK_CHAR_BUDGET, requested);
-            let selection = if hits.is_empty() && !entities.is_empty() {
+            let selection = if !entities.is_empty() {
                 "exact_recorded_entities"
+            } else if hits.is_empty() {
+                "top_salience"
             } else {
                 "exact_token_bm25"
             };
@@ -409,5 +575,26 @@ mod tests {
         assert!(!phrase("Mayakovsky", "Maya"));
         assert!(phrase("try Bangkok Garden?", "Bangkok Garden"));
         assert!(!phrase("Bangkok Gardens", "Bangkok Garden"));
+        assert!(entity_matches_prompt(
+            "What recipe did I try?",
+            "symbol:lme:recipe"
+        ));
+        assert!(entity_matches_prompt(
+            "How is Tokyo transit?",
+            "symbol:lme:tokyo~transit"
+        ));
+        assert!(!entity_matches_prompt(
+            "What recipe did I try?",
+            "symbol:lme:garden"
+        ));
+    }
+
+    #[test]
+    fn slash_dates_date_tags_and_relative_offsets_join_index() {
+        let mut node = KnowledgeNode::default();
+        node.tags = vec!["date:2023/03/15 (Wed) 11:56".into()];
+        let hits = index_tags("Current Date: 2023/03/25. What appliance did I buy 10 days ago?");
+        assert!(hits.contains("day:2023-03-15"), "{hits:?}");
+        assert!(joins_index(&node, &hits));
     }
 }

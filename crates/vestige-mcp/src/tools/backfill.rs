@@ -69,6 +69,15 @@ fn salience_view(node: &KnowledgeNode) -> SalienceMemory {
     }
 }
 
+/// Cheap mirror of the planner's trigger bounds, before graph/store scans.
+/// Retrieval indexing retains every original tag.
+pub(crate) fn salience_eligible(node: &KnowledgeNode) -> bool {
+    let tags = retroactive_backfill::salience_metadata_tags(&node.tags);
+    node.content.len() <= retroactive_backfill::MAX_SALIENCE_CONTENT_BYTES
+        && tags.len() <= retroactive_backfill::MAX_SALIENCE_TAGS_PER_MEMORY
+        && tags.iter().all(|tag| tag.len() <= 512)
+}
+
 fn preview(change: &SalienceChange) -> Value {
     json!({"memory_id":change.memory_id,"trigger_id":change.trigger_id,
         "shared_entity":change.shared_entity,"reason":change.reason,
@@ -102,6 +111,13 @@ fn run(storage: &Storage, args: &Args, trigger_id: &str, scope: &str) -> Result<
             json!({"trigger_id":trigger_id,"scope":scope,"dry_run":dry_run,
             "changes":[],"changed":0,"would_change":0,"scanned":0,"truncated":false,
             "reason":"no salient personal attribute or recorded failure","causality_verified":false}),
+        );
+    }
+    if !salience_eligible(&trigger) {
+        return Ok(
+            json!({"trigger_id":trigger_id,"scope":scope,"dry_run":dry_run,
+            "changes":[],"changed":0,"would_change":0,"scanned":0,"truncated":false,
+            "reason":"trigger exceeds native salience bounds","causality_verified":false}),
         );
     }
     let receipts = storage.salience_receipts().map_err(|e| e.to_string())?;

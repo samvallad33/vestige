@@ -25,6 +25,90 @@ use crate::resources;
 use crate::tools;
 use vestige_core::{OutputConfig, Storage, VestigeConfig};
 
+const CANONICAL_TOOLS: [&str; 6] = [
+    "session",
+    "remember",
+    "recall",
+    "causal_walk",
+    "curate",
+    "precedent",
+];
+static ALIAS_AUDIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// Migration audit only: never persist arguments, prompts, or credentials.
+// Separate from Strata evidence receipts; these operational receipts are unsigned.
+fn audit_legacy_call(storage: &Storage, name: &str) {
+    if CANONICAL_TOOLS.contains(&name) {
+        return;
+    }
+    let receipt = serde_json::json!({
+        "receipt_id":format!("legacy-{}", uuid::Uuid::new_v4()),
+        "timestamp":Utc::now().to_rfc3339(), "pid":std::process::id(),
+        "tool":name, "event":"legacy_tool_call", "signed":false,
+        "message":"Non-canonical MCP name called; migrate to the six-tool catalog."
+    });
+    let result = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let _guard = ALIAS_AUDIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(storage.data_dir().join("legacy-tool-calls.jsonl"))?;
+        writeln!(file, "{receipt}")?;
+        file.sync_data()
+    })();
+    match result {
+        Ok(()) => warn!(tool = name, receipt_id = %receipt["receipt_id"], "Legacy MCP tripwire"),
+        Err(error) => warn!(tool = name, %error, "Legacy MCP tripwire persistence failed"),
+    }
+}
+
+fn migration_runtime_status(storage: &Storage) -> serde_json::Value {
+    use std::io::{BufRead, BufReader};
+    let path = storage.data_dir().join("legacy-tool-calls.jsonl");
+    let mut counts = std::collections::BTreeMap::<String, u64>::new();
+    let mut first = None;
+    let mut last = None;
+    let mut read_error = None;
+    let _guard = ALIAS_AUDIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    match std::fs::File::open(&path) {
+        Ok(file) => {
+            for line in BufReader::new(file).lines() {
+                match line.and_then(|l| {
+                    serde_json::from_str::<serde_json::Value>(&l).map_err(std::io::Error::other)
+                }) {
+                    Ok(row) => {
+                        *counts
+                            .entry(row["tool"].as_str().unwrap_or("unknown").to_owned())
+                            .or_default() += 1;
+                        if first.is_none() {
+                            first = Some(row["timestamp"].clone());
+                        }
+                        last = Some(row["timestamp"].clone());
+                    }
+                    Err(e) => {
+                        read_error = Some(e.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => read_error = Some(e.to_string()),
+    }
+    serde_json::json!({
+        "pid":std::process::id(), "version":env!("CARGO_PKG_VERSION"),
+        "executable":std::env::current_exe().ok(),
+        "legacy_aliases":{"total":counts.values().sum::<u64>(), "by_tool":counts,
+            "first_call":first,"last_call":last,"receipts_path":path,"read_error":read_error,
+            "receipt_kind":"unsigned operational warning; includes unknown non-canonical names"}
+    })
+}
+
 /// A `memory` get that carries a non-empty `reason` and found its memory: the
 /// agent is showing that memory to its user. Returns the memory id (as the
 /// store resolved it) and the reason.
@@ -88,15 +172,15 @@ fn build_instructions() -> String {
          \n\nCOMPOSITION MANDATE: When you receive memories from recall or ghostlink, your response MUST follow this shape. \
          (a) Composing: [memory IDs], followed by a brief composition rationale \
          about how the memories relate, NOT a restatement of their contents). \
-         (b) Never-composed detected: list pairs ghostlink(mode='propose') proves from recorded \
+         (b) Never-composed detected: list pairs curate(action='bridge') proves from recorded \
          edges (bridge) or forces with no recorded relation (divergent), or write 'None.' \
          (c) Recommendation: what the user should DO, as a concrete executable action. \
          If your draft begins 'Memory A says X. Memory B says Y.' STOP and rewrite.\
          \n\nBLOCKING PHRASE: If retrieved high-trust memories (retention > 0.7, reps > 0) \
          contradict what you were about to say, start your response with 'Vestige is blocking this:' \
          and surface the contradiction before proceeding. FSRS scores reflect memory history, not truth; verify against current evidence.\
-         \n\nFEEDBACK: If the user confirms a memory was helpful, call memory(action='promote'). \
-         If they correct it, call memory(action='demote'). Do not ask permission, just act."
+         \n\nFEEDBACK: If the user confirms a memory was helpful, call curate(action='promote'). \
+         If they correct it, call curate(action='demote'). Do not ask permission, just act."
             .to_string()
     } else {
         "Vestige is the Causal Proof Engine and the operating system for AI agents. Its kernel, \
@@ -105,14 +189,13 @@ fn build_instructions() -> String {
          result carries its proof (memory id, edge path, receipt). \
          Compose retrievals into recommendations \
          rather than listing their contents when the user is making a decision. \
-         On user feedback, call memory(action='promote') for helpful retrievals and \
-         memory(action='demote') for wrong ones — do not ask permission, just act."
+         On user feedback, call curate(action='promote') for helpful retrievals and \
+         curate(action='demote') for wrong ones — do not ask permission, just act."
             .to_string()
     };
-    instructions.push_str("\nIn a codebase, save durable conventions and design decisions with codebase(action='remember_pattern'|'remember_decision', files=['path.rs#symbol']); anchored code memories self-check against the source and are flagged when the code drifts.");
-    instructions.push_str("\nghostlink(mode='propose') surfaces never-composed memory pairs from recorded edges, each with its proof; record what a tested pair showed with mode='weave'.");
-    instructions.push_str("\nrecall finds a memory by exact handle, or by exact-token lexical rank over stored text when you pass query. It does not use embeddings. memory_status view='tools' lists names; pass tool='<name>' for one schema, and do not call it speculatively.");
-    instructions.push_str("\nTo show the user one memory, read it with memory(action='get', id, reason='what you will tell them'): every open Vestige dashboard goes inside that memory and shows your words, and the reply carries its dashboard link.");
+    instructions.push_str("\nUse session for boot, intentions and status; remember for gated saves and inline salience receipts; recall for exact handles or ids; causal_walk for recorded evidence; curate for memory changes; precedent for receipts and verification.");
+    instructions.push_str("\nDiscover actions with session(action='status', view='tools'); pass tool='<name>' for its exact schema. Choose calls that serve the task; no tool-call quota is required.");
+    instructions.push_str("\nUse recall(id='<memory-id>') to read a memory. Native stability is a ranking signal, not proof of truth. Verify retrieved claims against current evidence.");
     instructions
 }
 
@@ -357,6 +440,84 @@ const STRATA_WITHHELD_ACTIONS: &[(&str, &str, Option<&str>)] = &[
 /// The refusal for a call a Strata log withholds in 4.0, or `None`.
 fn strata_withheld_call(tool: &str, arguments: Option<&serde_json::Value>) -> Option<String> {
     withheld_call_in(STRATA_WITHHELD_ACTIONS, tool, arguments)
+}
+
+/// Resolve a six-tool operation to its existing implementation. This is an
+/// internal route only: tools/list and the opening MCP trace retain the public
+/// six-tool name. Review gates, receipt builders, and Reflex must observe the
+/// same effective operation/arguments as the implementation they protect.
+fn unified_operation(request: &CallToolRequest) -> Result<CallToolRequest, String> {
+    let mut name = request.name.clone();
+    let mut args = request.arguments.clone();
+    let action = args
+        .as_ref()
+        .and_then(|a| a.get("action"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let nested = match (name.as_str(), action) {
+        ("session", "reflex") => Some("reflex"),
+        ("session", "intention") => Some("intention"),
+        ("session", "codebase") => Some("codebase"),
+        ("remember", "backfill") => Some("backfill"),
+        ("curate", "memory") => Some("memory"),
+        ("curate", "graph") => Some("graph"),
+        ("curate", "ghostlink") => Some("ghostlink"),
+        ("curate", "dream") => Some("dream"),
+        ("curate", "maintain") => Some("maintain"),
+        _ => None,
+    };
+    if let Some(target) = nested {
+        let raw = args.as_ref().unwrap();
+        let mut params = raw
+            .get("params")
+            .filter(|p| p.is_object())
+            .cloned()
+            .ok_or_else(|| format!("{} action={action} requires object 'params'", request.name))?;
+        // Outer fields are never silently dropped: in particular a misplaced
+        // confirm/scope must not be mistaken for authority on the inner action.
+        if raw
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k != "action" && k != "params")
+        {
+            return Err(format!(
+                "{} action={action} takes only action and params; put operation fields inside params",
+                request.name
+            ));
+        }
+        tools::compact::unfold_arguments(target, &mut params);
+        name = target.into();
+        args = Some(params);
+    } else if name == "session"
+        && action == "start"
+        && args
+            .as_ref()
+            .is_some_and(tools::session_unified::uses_context_packet)
+    {
+        name = "session_start".into();
+        args.as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("action");
+    } else if name == "session"
+        && (action == "status" || action.is_empty())
+        && args
+            .as_ref()
+            .is_none_or(|a| a["view"] != "tools" && a["view"] != "memory_prs")
+    {
+        name = "memory_status".into();
+        let raw = args.get_or_insert_with(|| serde_json::json!({}));
+        raw.as_object_mut().unwrap().remove("action");
+        if raw.get("view").is_none() || raw["view"] == "system" {
+            raw["view"] = serde_json::json!("health");
+        }
+    }
+    Ok(CallToolRequest {
+        name,
+        arguments: args,
+    })
 }
 
 /// `ghostlink` is keyed by `mode` (+ `view` / `kind`), `graph` and
@@ -1069,427 +1230,107 @@ impl McpServer {
     /// function and that registry name-for-name identical.
     fn tool_catalog() -> Vec<ToolDescription> {
         vec![
-            // ================================================================
-            // RECALL — unified retrieval tool (v2.2). HOT PATH.
-            // Folds search + deep_reference + cross_reference + contradictions.
-            // mode='lookup' (default) is a zero-overhead pass-through to search.
-            // ================================================================
             ToolDescription {
-                name: "recall".to_string(),
-                title: Some("Recall".to_string()),
+                name: "session".to_string(),
+                title: Some("Session".to_string()),
                 annotations: Some(ToolAnnotations {
                     read_only_hint: false,
                     destructive_hint: false,
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Find memories by exact handle, or by exact-token BM25 over stored text when query is free text. No embeddings. Modes 'reason' and 'contradictions' return similarity_disabled on Strata. Retrieval never changes strength; promote what helped via memory.".to_string()),
+                description: Some(
+                    "Session lifecycle, memory hooks, Reflex, intentions, codebase context and rule projection. Use params for action=reflex/intention/codebase; other actions use root fields.".to_string(),
+                ),
+                input_schema: tools::compact::of(&tools::session_unified::schema()),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "remember".to_string(),
+                title: Some("Remember".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+                description: Some(
+                    "Single gated write and inline backfill. Save uses root fields; action=backfill takes its native payload in params. Anchors codebase records and recompiles fences on 'pinned'.".to_string(),
+                ),
+                input_schema: tools::compact::of(&tools::remember_unified::schema()),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "recall".to_string(),
+                title: Some("Recall".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: true,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: false,
+                }),
+                description: Some(
+                    "Single exact-handle & context reader. Parameters must be flat JSON keys. Do not nest arguments. Returns discovered_handles on refusal if an unindexed identifier is passed.".to_string(),
+                ),
                 input_schema: tools::compact::of(&tools::recall::schema()),
                 output_schema: Some(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "results": {"type": "array"},
-                        "query": {"type": "string"}
+                        "query": {"type": "string"},
+                        "discovered_handles": {"type": "array"}
                     }
                 })),
-                // MCP Apps (SEP-1865): `recall` produces a persisted retrieval
-                // receipt, and the per-result `_meta.ui.resourceUri` that
-                // `decorate_modern_result` attaches points at this template
-                // filled with the concrete receipt id. Hosts that support the
-                // extension (Claude Desktop, Cursor) fetch
-                // `ui://vestige/receipt/{id}` and render the card inline.
                 meta: Some(serde_json::json!({
                     "ui": { "resourceUri": "ui://vestige/receipt/{id}" }
                 })),
             },
             ToolDescription {
-                name: "receipt".to_string(),
-                title: Some("Receipt".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: false,
-                    idempotent_hint: true,
-                    open_world_hint: false,
-                }),
-description: Some("Inspect a receipt ('get') or 'replay' it: on Strata, re-derive state from the log and report any mismatch. Legacy engine only: ablate a frozen evidence pack (named slots withheld, no rerun, no model, no causal claim), re-execute a saved walk receipt ('wr_…'), and 'save_walk'.".to_string()),
-                input_schema: tools::compact::of(&tools::receipt::schema()),
-                output_schema: Some(serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "receiptId": {"type": "string"},
-                        "retrieved": {"type": "array"}
-                    }
-                })),
-                ..Default::default()
-            },
-            // ================================================================
-            // UNIFIED TOOLS (v1.1+)
-            // ================================================================
-            ToolDescription {
-                name: "memory".to_string(),
-                title: Some("Memory".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: true,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (admit a successor, retire the previous node). 'purge' and 'delete' (confirm=true) are legacy engine only; Strata withholds erasure.".to_string()),
-                input_schema: tools::compact::of(&tools::memory_unified::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // PURGE (#219): its own tool so a host can prompt without prompting
-            // on the reads that share `memory`. Same path as memory(action='purge').
-            // ================================================================
-            ToolDescription {
-                name: "purge".to_string(),
-                title: Some("Purge".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: true,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-                description: Some("Retire one memory so it can't be retrieved. confirm=true required; the client prompts. Same path as memory(action='purge').".to_string()),
-                input_schema: tools::compact::of(&tools::memory_unified::purge_schema()),
-                meta: Some(serde_json::json!({ "anthropic/requiresUserInteraction": true })),
-                ..Default::default()
-            },
-            ToolDescription {
-                name: "codebase".to_string(),
-                title: Some("Codebase".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: true,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions marked current or stale, and the scopes holding them), 'verify' (re-check anchors and, with a codebase, change records), 'reanchor' (replace reviewed evidence), 'ingest_repo' (a checkout's commits as anchored change records; previews unless dryRun=false).".to_string()),
-                input_schema: tools::compact::of(&tools::codebase_unified::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // PROJECT: the durable subset of a scope rendered into the rule
-            // files other clients already read. Preview by default; write
-            // replaces only the fenced region and needs confirm=true.
-            // ================================================================
-            ToolDescription {
-                name: "project".to_string(),
-                title: Some("Project".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: false,
-                    idempotent_hint: true,
-                    open_world_hint: false,
-                }),
-                description: Some("Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, one memory id per line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence.".to_string()),
-                input_schema: tools::compact::of(&tools::project::schema()),
-                ..Default::default()
-            },
-            ToolDescription {
-                name: "intention".to_string(),
-                title: Some("Intention".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: true,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans through a nested command. A trigger fires on a clock or on exact equality with a handle in the check context; descriptions are never parsed.".to_string()),
-                input_schema: tools::compact::of(&tools::intention_graph::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // CORE MEMORY (v1.7: smart_ingest absorbs ingest + checkpoint)
-            // ================================================================
-            ToolDescription {
-                name: "smart_ingest".to_string(),
-                title: Some("Smart Ingest".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: false,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-description: Some("Save one memory ('content') or up to 20 ('items'); each write passes the gate and returns a receipt. Secret-shaped content is refused unless allowSecrets is set. Legacy engine only: merge into or supersede an existing memory.".to_string()),
-                input_schema: tools::compact::of(&tools::smart_ingest::schema()),
-                output_schema: Some(serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "decision": {"type": "string"},
-                        "nodeId": {"type": "string"}
-                    }
-                })),
-                ..Default::default()
-            },
-            // ================================================================
-            // EXTERNAL-SOURCE CONNECTORS (#57)
-            // Absent unless `--features connectors`. A default build must not
-            // advertise a tool whose dispatch would leave the machine.
-            // ================================================================
-            #[cfg(feature = "connectors")]
-            ToolDescription {
-                name: "source_sync".to_string(),
-                title: Some("Source Sync".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: false,
-                    idempotent_hint: true,
-                    open_world_hint: true,
-                }),
-description: Some("Index an external system into local memories that cite the source. source='github' (repo, GITHUB_TOKEN) or 'redmine' (project, REDMINE_URL, REDMINE_API_KEY). Re-runs update; reconcile=true tombstones removals.".to_string()),
-                input_schema: tools::compact::of(&tools::source_sync::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // STATUS / TEMPORAL — unified `memory_status` tool (v2.2)
-            // Folds system_status + memory_health + memory_timeline +
-            // memory_changelog into one view-dispatched surface, plus the
-            // full-store hygiene-statistics view.
-            // ================================================================
-            ToolDescription {
-                name: "memory_status".to_string(),
-                title: Some("Memory Status".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
-                    destructive_hint: false,
-                    idempotent_hint: true,
-                    open_world_hint: false,
-                }),
-description: Some("Store status. Views: 'health' (default), 'retention', 'timeline' (memories by day), 'changelog' (state-change audit trail), 'provenance' (memoryId), 'coverage', 'stats' (counts by type, tag, age, retention), 'tools' (advertised tools and actions; pass tool for one schema).".to_string()),
-                input_schema: tools::compact::of(&tools::memory_status::schema()),
-                output_schema: Some(serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "view": {"type": "string"}
-                    }
-                })),
-                ..Default::default()
-            },
-            // ================================================================
-            // MAINTAIN — unified maintenance/lifecycle tool (v2.2)
-            // Folds consolidate + dream + gc + importance_score + backup +
-            // export + restore into one action-dispatched surface.
-            // ================================================================
-            ToolDescription {
-                name: "maintain".to_string(),
-                title: Some("Maintain".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: true,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-description: Some("Lifecycle: 'consolidate', 'dream', 'dream_compile', 'gc' (dry run default), 'importance_score', 'backup', 'export', 'restore'.".to_string()),
-                input_schema: tools::compact::of(&tools::maintain::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // DEDUP / MERGE / SUPERSEDE — unified `dedup` tool (v2.2)
-            // Folds find_duplicates + the 7 Phase-3 merge tools into one
-            // action-dispatched surface. Diff-previewed, confidence-gated,
-            // reversible, never silent; bitemporal-never-delete preserved.
-            // ================================================================
-            ToolDescription {
-                name: "dedup".to_string(),
-                title: Some("Dedup".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: true,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-description: Some("Duplicates and exact tag maintenance. Actions: scan (default, read-only), plan_merge, plan_supersede, apply (confirm=true), undo, tag_rename, tag_merge (preview-token gated), protect, policy. Merges invalidate, never delete.".to_string()),
-                input_schema: tools::compact::of(&tools::dedup::unified_schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // COGNITIVE TOOLS (v1.5+)
-            // (dream folded into `maintain` action='dream' in v2.2)
-            // ================================================================
-            // ================================================================
-            // GHOSTLINK — the composition surface (4.0). Replaces the
-            // advertised `graph` tool, which stays a hidden alias. Every
-            // candidate carries its proof from recorded structure only.
-            // ================================================================
-            ToolDescription {
-                name: "ghostlink".to_string(),
-                title: Some("GhostLink".to_string()),
-                // Reads, except 'weave' and 'harden', which write through the
-                // gate with receipts: not read-only, not destructive, and not
-                // idempotent (a re-weave appends a record).
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: false,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-description: Some("Never-composed memory pairs, each with its proof from recorded edges only. Modes: propose (lens bridge|divergent), bounty, weave (write), map, inspect, explore, predict, harden (write).".to_string()),
-                input_schema: tools::compact::of(&tools::ghostlink::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // RESTORE TOOL (v1.5+)
-            // (folded into `maintain` action='restore' in v2.2)
-            // ================================================================
-            // ================================================================
-            // CONTEXT PACKETS (v1.8+)
-            // ================================================================
-            ToolDescription {
-                name: "session_start".to_string(),
-                title: Some("Session Start".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
-                    destructive_hint: false,
-                    idempotent_hint: true,
-                    open_world_hint: false,
-                }),
-description: Some("Start-of-session context in one call: open intentions, status and code memories under one token budget.".to_string()),
-                input_schema: tools::compact::of(&tools::session_context::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // AUTONOMIC TOOLS (v1.9+)
-            // (memory_health → `memory_status` view='retention';
-            //  memory_graph + composed_graph → `graph`, all in v2.2)
-            // ================================================================
-            // ================================================================
-            // DEEP REFERENCE (v2.0.4+) — folded into `recall` (mode='reason' /
-            // 'contradictions') in v2.2. deep_reference/cross_reference/
-            // contradictions remain hidden dispatch aliases.
-            // ================================================================
-            // ================================================================
-            // ACTIVE FORGETTING (v2.0.5) — top-down suppression
-            // Anderson et al. 2025 Nat Rev Neurosci + Davis Rac1
-            // ================================================================
-            ToolDescription {
-                name: "suppress".to_string(),
-                title: Some("Suppress".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: false,
-                    idempotent_hint: false,
-                    open_world_hint: false,
-                }),
-description: Some("Inhibit a memory without deleting it: out of retrieval, faster decay, compounding per call, neighbours affected over 72 hours. reverse=true undoes it within 24 hours.".to_string()),
-                input_schema: tools::compact::of(&tools::suppress::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // BACKFILL — re-score earlier memories through explicit shared
-            // entities. This is salience revision, not a causal verdict.
-            // ================================================================
-            ToolDescription {
-                name: "backfill".to_string(),
-                title: Some("Retroactive Salience Backfill".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: false,
-                    destructive_hint: false,
-                    idempotent_hint: true,
-                    open_world_hint: false,
-                }),
-                description: Some("Re-score older memories through shared entities; preview, receipt, or undo.".to_string()),
-                input_schema: tools::compact::of(&tools::backfill::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // CAUSAL WALK — investigate "what caused this?" through explicit
-            // recorded evidence handles. Backfill revises salience separately.
-            // ================================================================
-            ToolDescription {
                 name: "causal_walk".to_string(),
-                title: Some("Causal Walk".to_string()),
+                title: Some("Causal Walk & Prove".to_string()),
                 annotations: Some(ToolAnnotations {
                     read_only_hint: false,
                     destructive_hint: false,
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Walk a failure backward from explicit start points (failing_test, stack_frame, ci_run, logged_write, version_range); any kind carries node_id, the memory recording the symptom. A Strata log follows recorded causal edges only and says why when none lead upstream. Results are hypotheses, not proven causes. promote=true records trail edges on the legacy engine only.".to_string()),
+                description: Some(
+                    "Recorded causal investigation and commit witness bundles. action='walk' follows explicit starts; action='prove' bundles already recorded test witnesses using repoPath, commit and out. It does not run tests or bisect.".to_string(),
+                ),
                 input_schema: tools::compact::of(&tools::causal_walk::schema()),
                 ..Default::default()
             },
-            // ================================================================
-            // GATHER — GitHub issue receipt factory (MCP-only). Records the
-            // issue, its comments, cross-referenced PRs and the repo commit
-            // window as labeled receipts in one scope (commits first, so
-            // auto-connect edges point failure-ward), then proposes
-            // ghostlink leads and runs causal_walk. Gathering is dynamic;
-            // judging is deterministic over recorded edges. When the walk
-            // returns nothing, missingReceipts names what to fetch next.
-            // ================================================================
             ToolDescription {
-                name: "gather".to_string(),
-                title: Some("Gather".to_string()),
+                name: "curate".to_string(),
+                title: Some("Curate".to_string()),
                 annotations: Some(ToolAnnotations {
                     read_only_hint: false,
-                    destructive_hint: false,
+                    destructive_hint: true,
                     idempotent_hint: false,
-                    open_world_hint: true,
-                }),
-                description: Some("A GitHub issue's evidence as receipts, then the walk.".to_string()),
-                input_schema: tools::compact::of(&tools::gather::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // w3d SELF-CALIBRATION — planted-cause selftest. Verifies the
-            // backfill surface end-to-end against a temp COPY of the store
-            // (backup_to snapshot): plants quiet causes + failures, scores
-            // hit@1/hit@3, and checks the gap report fires on a no-anchor
-            // round. Read-only with respect to the live store.
-            // ================================================================
-            ToolDescription {
-                name: "selftest".to_string(),
-                title: Some("Selftest".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
-                    destructive_hint: false,
-                    idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Planted-cause selftest: walks recorded edges back to a planted cause in a throwaway log.".to_string()),
-                input_schema: tools::compact::of(&tools::selftest::schema()),
+                description: Some(
+                    "Graph and state operations: promote, demote, edit, native typed link, bridge and suppress. Complete memory/graph/ghostlink/dream/maintain operations use action plus params.".to_string(),
+                ),
+                input_schema: tools::compact::of(&tools::curate_unified::schema()),
                 ..Default::default()
             },
-            // ================================================================
-            // w3d FORGOTTEN LESSON — decayed corrective-memory detection.
-            // Earlier fix/lesson memories that share an exact anchor with a
-            // failure but had FSRS retrievability < 0.5 at failure time.
-            // Pure query: no graph, strength, or FSRS state is written.
-            // ================================================================
-            ToolDescription {
-                name: "forgotten_lesson".to_string(),
-                title: Some("Forgotten Lesson".to_string()),
-                annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
-                    destructive_hint: false,
-                    idempotent_hint: true,
-                    open_world_hint: false,
-                }),
-description: Some("Earlier memories on recorded causal edges from a failure, lowest FSRS retrievability first.".to_string()),
-                input_schema: tools::compact::of(&tools::forgotten_lesson::schema()),
-                ..Default::default()
-            },
-            // ================================================================
-            // OPERATOR STOPS — what the Operator gate stopped, and why.
-            // Read-only view of ~/.operator receipts and permits; touches
-            // no store state, approves nothing, issues nothing.
-            // ================================================================
             ToolDescription {
                 name: "precedent".to_string(),
                 title: Some("Precedent".to_string()),
                 annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
+                    read_only_hint: false,
                     destructive_hint: false,
-                    idempotent_hint: true,
+                    idempotent_hint: false,
                     open_world_hint: false,
                 }),
-                description: Some("Operator stops and why.".to_string()),
+                description: Some(
+                    "Guard stops, receipts, replay, commit proof, forgotten lessons, BLAKE3/Ed25519 verify_log, scan_secrets, and selftest. Proof may write artifacts when explicitly requested.".to_string(),
+                ),
                 input_schema: tools::compact::of(&tools::precedent::schema()),
                 ..Default::default()
             },
-            ]
+        ]
     }
 
     /// Handle tools/list request
@@ -1628,16 +1469,24 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
             tools::compact::unfold_arguments(&request.name, arguments);
         }
 
+        let operation =
+            unified_operation(&request).map_err(|error| JsonRpcError::invalid_params(&error))?;
+        // Inspect the public name, never the normalized internal operation.
+        // Runs before Reflex and withheld-call early returns and with tracing off.
+        audit_legacy_call(self.storage.as_ref(), &request.name);
+        let operation_name = operation.name.clone();
+        let operation_args = operation.arguments.clone();
+
         // Hook-only: `reflex` answers hooks in hook JSON. It skips the trace
         // recorder, the review gate, the consolidation counter and dashboard
         // events, so hook firings never count as agent activity.
-        if request.name == tools::reflex::NAME {
+        if operation_name == tools::reflex::NAME {
             let value = tools::reflex::execute(
                 &self.storage,
                 &self.cognitive,
                 &self.output_config,
                 &self.reflex,
-                request.arguments,
+                operation.arguments,
             )
             .await
             .unwrap_or_else(|error| {
@@ -1660,7 +1509,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
         // tracing and before the Memory-PR review gate, so a withheld call
         // cannot open a pending purge or suppress review either.
         if crate::strata_memory::is_strata_backend(self.storage.as_ref())
-            && let Some(message) = strata_withheld_call(&request.name, request.arguments.as_ref())
+            && let Some(message) = strata_withheld_call(&operation_name, operation_args.as_ref())
         {
             let error_content = serde_json::json!({ "error": message });
             let call_result = CallToolResult {
@@ -1688,8 +1537,8 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
         let saved_args = request.arguments.clone();
         // Backfill previews promise zero durable writes, including the generic
         // call/result recorder. A normal run keeps its trace and own receipts.
-        let backfill_preview = request.name == "backfill"
-            && saved_args
+        let backfill_preview = operation_name == "backfill"
+            && operation_args
                 .as_ref()
                 .and_then(|args| args.get("dry_run"))
                 .and_then(serde_json::Value::as_bool)
@@ -1701,7 +1550,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
         // from the args (an explicit runId, or a fresh id) so record_result below
         // can attach the downstream memory events (retrieve/suppress/veto) to the
         // same run.
-        let trace_run_id = crate::trace_recorder::run_id_for(&saved_args);
+        let trace_run_id = crate::trace_recorder::run_id_for(&operation_args);
         if trace_this_call {
             crate::trace_recorder::record_call(
                 &self.storage,
@@ -1724,8 +1573,8 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
             &self.storage,
             self.event_tx.as_ref(),
             &trace_run_id,
-            &request.name,
-            &saved_args,
+            &operation_name,
+            &operation_args,
             mode,
         );
         match pending {
@@ -1733,7 +1582,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
                 // The pre-gate already emitted MemoryPrOpened. `success`
                 // is false, so emitting the normal tool event cannot claim
                 // a deletion or suppression that did not happen.
-                self.emit_tool_event(&request.name, &saved_args, &content);
+                self.emit_tool_event(&operation_name, &operation_args, &content);
                 let call_result = CallToolResult {
                     content: vec![crate::protocol::messages::ToolResultContent {
                         content_type: "text".to_string(),
@@ -1763,17 +1612,30 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
 
         // `mut` so the post-call block can annotate a successful result with any
         // Memory PRs or receipts it attaches to a successful result.
-        let tool_name = request.name.clone();
         // Outer layer: protocol errors (unknown tool). Inner layer: the
         // tool's own result, where `Err` becomes an is_error CallToolResult.
-        let mut result = match self.dispatch_tool(request).await {
+        let is_session_status = request.name == "session"
+            && request
+                .arguments
+                .as_ref()
+                .and_then(|a| a["action"].as_str())
+                .unwrap_or("status")
+                == "status";
+        let mut result = match self.dispatch_tool(operation).await {
             Ok(result) => result,
             Err(protocol_error) => return Err(protocol_error),
         };
+        if is_session_status && let Ok(content) = &mut result {
+            content["runtime"] = migration_runtime_status(self.storage.as_ref());
+        }
 
         // Purge rebuilds this cache inside the tool. Suppress retires through
         // the same read filter, so the in-process graph has to drop the id too.
-        if tool_name == "suppress"
+        if (operation_name == "suppress"
+            || (operation_name == "curate"
+                && operation_args
+                    .as_ref()
+                    .is_some_and(|a| a["action"] == "suppress")))
             && crate::strata_memory::is_strata_backend(self.storage.as_ref())
             && result
                 .as_ref()
@@ -1801,7 +1663,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
                     &self.storage,
                     self.event_tx.as_ref(),
                     &trace_run_id,
-                    &tool_name,
+                    &operation_name,
                     content,
                 );
                 // Persist the receipt for this exact retrieval run, then attach
@@ -1813,14 +1675,14 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
                 // #252 Phase A: the receipt records who made the call —
                 // process identity + the resolution of the call's CLAIMED
                 // role. Claims never override identity or grant authority.
-                let claimed_role = saved_args
+                let claimed_role = operation_args
                     .as_ref()
                     .and_then(|args| args.get("role"))
                     .and_then(|r| r.as_str())
                     .map(str::trim)
                     .filter(|role| !role.is_empty())
                     .or_else(|| {
-                        saved_args
+                        operation_args
                             .as_ref()
                             .and_then(|args| args.get("claimedRole"))
                             .and_then(|r| r.as_str())
@@ -1835,7 +1697,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
                 if let Some(receipt) = crate::trace_recorder::build_and_save_receipt(
                     &self.storage,
                     &trace_run_id,
-                    &tool_name,
+                    &operation_name,
                     content,
                     actor_provenance,
                 ) && let Some(obj) = content.as_object_mut()
@@ -1874,7 +1736,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
                     &self.storage,
                     self.event_tx.as_ref(),
                     &trace_run_id,
-                    &tool_name,
+                    &operation_name,
                     content,
                     mode,
                 );
@@ -1939,7 +1801,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
             // A memory read with a reason is an agent showing that memory to
             // its user: the reply carries the dashboard view of it, and the
             // emit below takes every open dashboard inside it.
-            if let Some((id, _)) = shown_memory(&tool_name, &saved_args, content)
+            if let Some((id, _)) = shown_memory(&operation_name, &operation_args, content)
                 && let Some(object) = content.as_object_mut()
             {
                 object.insert(
@@ -1952,25 +1814,25 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
             }
             // Emit after receipt attachment and gating so the dashboard sees the
             // same final evidence and review state returned to the calling agent.
-            self.emit_tool_event(&tool_name, &saved_args, content);
+            self.emit_tool_event(&operation_name, &operation_args, content);
             // Last, so receipts and the dashboard keep the whole result: reflex
             // records what this read put in front of the agent, folds bodies it
             // already holds word for word, and keeps the memory hook from
             // injecting a memory twice.
-            tools::reflex::record_retirement(&self.reflex, &self.storage, &tool_name, content);
-            let hook = saved_args
+            tools::reflex::record_retirement(&self.reflex, &self.storage, &operation_name, content);
+            let hook = operation_args
                 .as_ref()
                 .and_then(|a| a.get("memory_hook"))
                 .filter(|h| h.get("session").is_some());
             match hook {
-                Some(hook) if tool_name == "session_start" => {
+                Some(hook) if operation_name == "session_start" => {
                     tools::reflex::admit_injection(&self.storage, hook, content)
                 }
                 _ => tools::reflex::fold(
                     &self.reflex,
                     &self.storage,
-                    &tool_name,
-                    saved_args.as_ref(),
+                    &operation_name,
+                    operation_args.as_ref(),
                     call_id.as_deref(),
                     content,
                 ),
@@ -2082,6 +1944,17 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
         request: CallToolRequest,
     ) -> Result<Result<serde_json::Value, String>, JsonRpcError> {
         let result = match request.name.as_str() {
+            "session" if request.arguments.as_ref().is_some_and(|a| (a["action"] == "status" || a.get("action").is_none()) && a["view"] == "tools") => {
+                let catalog = self.handle_tools_list(None, Era::LegacyHandshake).await?;
+                tools::memory_status::tool_guide(&catalog, request.arguments.as_ref().unwrap())
+            }
+            "session" if request.arguments.as_ref().is_some_and(|a| (a["action"] == "status" || a.get("action").is_none()) && a["view"] == "memory_prs") => {
+                tools::session_unified::memory_prs(&self.storage, request.arguments.as_ref().unwrap())
+            }
+            "session" => tools::session_unified::execute(&self.storage, &self.cognitive, request.arguments).await,
+            "remember" => tools::remember_unified::execute(&self.storage, &self.cognitive, request.arguments).await,
+            "curate" => tools::curate_unified::execute(&self.storage, &self.cognitive, request.arguments).await,
+
             // ================================================================
             // UNIFIED TOOLS (v1.1+) - Preferred API
             // ================================================================
@@ -2182,7 +2055,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
             }
 
             // ================================================================
-            // DEPRECATED (v1.7): promote_memory → memory(action='promote')
+            // DEPRECATED (v1.7): promote_memory → curate(action='promote')
             // ================================================================
             "promote_memory" => {
                 warn!(
@@ -3111,7 +2984,7 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
 
         match tool_name {
             // -- smart_ingest: memory created/updated --
-            "smart_ingest" | "ingest" | "session_checkpoint" => {
+            "remember" | "smart_ingest" | "ingest" | "session_checkpoint" => {
                 // Single mode: result has "decision" (create/update/supersede/reinforce/merge/replace/add_context)
                 if let Some(decision) = result.get("decision").and_then(|a| a.as_str()) {
                     let id = result
@@ -3437,3 +3310,31 @@ description: Some("Earlier memories on recorded causal edges from a failure, low
 // ============================================================================
 // TESTS
 // ============================================================================
+
+#[cfg(test)]
+mod unified_operation_tests {
+    use super::*;
+
+    #[test]
+    fn nested_native_run_id_survives_public_six_tool_envelope() {
+        for field in ["runId", "run_id"] {
+            let mut params = serde_json::json!({"action":"get", "id":"mem-example"});
+            params[field] = serde_json::json!("native-hook-run");
+            let request = CallToolRequest {
+                name: "curate".into(),
+                arguments: Some(serde_json::json!({"action":"memory", "params":params})),
+            };
+            let operation = unified_operation(&request).unwrap();
+            assert_eq!(request.name, "curate");
+            assert_eq!(operation.name, "memory");
+            assert_eq!(
+                crate::trace_recorder::run_id_for(&operation.arguments),
+                "native-hook-run"
+            );
+            assert_eq!(
+                request.arguments.as_ref().unwrap()["params"][field],
+                "native-hook-run"
+            );
+        }
+    }
+}
