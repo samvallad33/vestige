@@ -213,6 +213,117 @@ pub fn schema() -> Value {
 
 /// Fold caller-declared identities and attributes into the existing exact tag
 /// representation. Validate every batch item before its first write.
+fn h2sk_admission(storage: &Arc<Storage>, args: Option<Value>) -> Result<Option<Value>, String> {
+    use serde_json::json;
+    use vestige_core::h2sk::{EdgeKind, LogEdge, LogEvent, admit::admit_statement};
+    fn one(storage: &Arc<Storage>, item: &mut Value, default_scope: &str) -> Result<(), String> {
+        let Some(content) = item["content"].as_str() else {
+            return Ok(());
+        };
+        let tags: Vec<String> = item["tags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        let source_date = tags.iter().find_map(|tag| {
+            tag.strip_prefix("date:")
+                .and_then(vestige_core::h2sk::pragmatics::date)
+                .map(|date| date.to_string())
+        });
+        let source = LogEvent {
+            id: "pending".into(),
+            seq: u64::MAX,
+            text: content.to_string(),
+            tags,
+            source_date,
+            stability_q: None,
+        };
+        let (parsed, _) = admit_statement(source.clone(), &[], &[]);
+        let slots: Vec<_> = parsed
+            .tags
+            .iter()
+            .filter(|tag| tag.starts_with("slot:"))
+            .cloned()
+            .collect();
+        let scope = item["scope"].as_str().unwrap_or(default_scope);
+        let prior = if slots.is_empty() {
+            Vec::new()
+        } else {
+            storage
+                .get_all_nodes_in_scope(scope, 100_000, 0)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|node| node.tags.iter().any(|tag| slots.contains(tag)))
+                .map(|node| LogEvent {
+                    id: node.id,
+                    seq: 0,
+                    text: node.content,
+                    tags: node.tags,
+                    source_date: None,
+                    stability_q: None,
+                })
+                .collect()
+        };
+        let prior_edges = if slots.is_empty() {
+            Vec::new()
+        } else {
+            storage
+                .get_all_connections()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter_map(|edge| {
+                    let kind = match edge.link_type.as_str() {
+                        "supersedes" => EdgeKind::Supersedes,
+                        "corrects" => EdgeKind::Corrects,
+                        _ => return None,
+                    };
+                    Some(LogEdge {
+                        from: edge.source_id,
+                        to: edge.target_id,
+                        kind,
+                        seq: 0,
+                    })
+                })
+                .collect()
+        };
+        let (parsed, edges) = admit_statement(source, &prior, &prior_edges);
+        item["tags"] = json!(parsed.tags);
+        if !edges.is_empty() {
+            let object = item
+                .as_object_mut()
+                .ok_or("ingest item must be an object")?;
+            let links = object
+                .entry("links")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or("links must be an array")?;
+            for edge in edges {
+                let link = json!({"kind":if edge.kind==EdgeKind::Corrects{"corrects"}else{"supersedes"},"to":edge.to});
+                if !links.contains(&link) {
+                    links.push(link);
+                }
+            }
+        }
+        Ok(())
+    }
+    let Some(mut args) = args else {
+        return Ok(None);
+    };
+    let scope = args["scope"]
+        .as_str()
+        .unwrap_or(DEFAULT_MEMORY_SCOPE)
+        .to_string();
+    one(storage, &mut args, &scope)?;
+    if let Some(items) = args.get_mut("items").and_then(Value::as_array_mut) {
+        for item in items {
+            one(storage, item, &scope)?;
+        }
+    }
+    Ok(Some(args))
+}
+
 fn personal_metadata(args: Option<Value>) -> Result<Option<Value>, String> {
     fn normalize(item: &mut Value) -> Result<(), String> {
         let object = item
@@ -654,7 +765,7 @@ pub async fn execute(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
-    let args = personal_metadata(args)?;
+    let args = h2sk_admission(storage, personal_metadata(args)?)?;
     // Agents get the proof fields by default; `standard` and `full` add the
     // entities, importance and auto-connect detail on request.
     let compact_profile = args
@@ -723,6 +834,25 @@ fn take_links(
             .and_then(|i| args["items"][i].get("scope").and_then(Value::as_str))
             .unwrap_or(&default_scope);
         strata_memory::check_links(storage.as_ref(), scope, links)?;
+        let source = index.map(|i| &args["items"][i]).unwrap_or(&args);
+        let tags: Vec<_> = source["tags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        for (kind, target) in links {
+            if matches!(kind, strata_memory::DeclaredLink::ExactCorrection) {
+                strata_memory::check_exact_correction_input(
+                    storage.as_ref(),
+                    scope,
+                    source["content"].as_str().unwrap_or_default(),
+                    &tags,
+                    target,
+                )?;
+            }
+        }
     }
     Ok((Some(args), pending))
 }

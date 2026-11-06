@@ -78,3 +78,17 @@ test('context stays near the baseline size and never claims to be complete', () 
   assert.ok(out.length <= 7000, String(out.length));
   assert.ok(/^\{"id"/m.test(out) && /remember/.test(out));
 });
+
+test('compiled reader evidence replaces raw quotes and preserves controlling successors', () => {
+  const context = m.formatContext({
+    memories: [{ id: 'old', content: 'Mia lives in Austin', tags: ['person:Mia'] }],
+    compile_receipt: { hash: 'synthetic' },
+    reader_context: 'H2SK receipt=synthetic\n' +
+      JSON.stringify({ id: 'old', text: 'Mia lives in Austin', banner: 'OVERRULED BY current' }) + '\n' +
+      JSON.stringify({ id: 'current', text: 'Mia lives in Denver', banner: 'CONTROLLING' }),
+  });
+  assert.equal(context.match(/Mia lives in Austin/g).length, 1);
+  assert.equal(context.match(/Mia lives in Denver/g).length, 1);
+  assert.match(context, /CONTROLLING/);
+  assert.ok(context.length <= 7000);
+});
