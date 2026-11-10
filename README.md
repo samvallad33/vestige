@@ -41,9 +41,9 @@ Vestige v6.2.1 integrates the zero-LLM, zero-vector deterministic retrieval kern
 | Benchmark | Dataset | Metric | Vestige v6.2.1 | Baseline (Pure BM25) | Speed / Resources |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **LongMemEval_S** | 500 questions | **Overall Recall@5** | **98.60%** | 68.40% | 8.21 ms / question |
-| **LongMemEval_S** | 500 questions | **Overall Recall@1** | **90.40%** | 48.20% | 78 MB RAM |
+| **LongMemEval_S** | 500 questions | **Overall Recall@1** | **90.60%** | 48.20% | 78 MB RAM |
 | **LongMemEval_S** | 500 questions | **Overall Recall@10** | **99.40%** | 76.80% | Pure CPU Math |
-| **LongMemEval_S** | 500 questions | **NDCG@10** | **0.9255** | 0.5840 | 0% GPU / $0.00 |
+| **LongMemEval_S** | 500 questions | **NDCG@10** | **0.9259** | 0.5840 | 0% GPU / $0.00 |
 | **LongMemEval_S** | 70 questions | `single-session-user` R@5 | **100.00%** | 64.28% | Group-Aware Hypernyms |
 | **LongMemEval_S** | 56 questions | `single-session-assistant` R@5 | **100.00%** | 69.64% | Dynamic BM25F Routing |
 | **LongMemEval_S** | 78 questions | `knowledge-update` R@5 | **100.00%** | 72.10% | Causal Supersession |
