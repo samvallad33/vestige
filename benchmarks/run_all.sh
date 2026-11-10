@@ -35,9 +35,13 @@ ${PYTHON_CMD} benchmarks/baseline_bm25.py --json="${RESULTS_DIR}/baseline_python
 echo "=== Running Rust kernel in baseline mode ==="
 node benchmarks/run_stage1_retrieval.mjs --baseline --json="${RESULTS_DIR}/baseline_rust_kernel.json"
 
-# 6. Run full Vestige v6.2.1 engine (official metric, all 500, held-out, ablations)
-echo "=== Running Vestige v6.2.1 full benchmark (with held-out and ablations) ==="
-node benchmarks/run_stage1_retrieval.mjs --held-out --ablations --json="${RESULTS_DIR}/vestige_v6.2.1_full.json"
+# 6. Run held-out evaluation (LoCoMo tune convs 1-5 vs test convs 6-10)
+echo "=== Running LoCoMo held-out evaluation ==="
+bash benchmarks/run_heldout.sh
+
+# 7. Run full Vestige v6.2.1 engine (official metric, all 500, per-category breakdown)
+echo "=== Running Vestige v6.2.1 full benchmark ==="
+node benchmarks/run_stage1_retrieval.mjs --json="${RESULTS_DIR}/vestige_v6.2.1_full.json"
 
 echo "================================================================================"
 echo "  ALL BENCHMARKS COMPLETED SUCCESSFULLY"
