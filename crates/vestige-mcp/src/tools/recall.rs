@@ -341,29 +341,6 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         }
         let resolution = storage.resolve_handle(query);
         if resolution.ids.is_empty() && resolution.candidates.is_empty() {
-            let ranked = rank_nodes_lexical(storage.as_ref(), query, limit.unwrap_or(10));
-            if !ranked.is_empty() {
-                let ranked_ids: Vec<String> = ranked.iter().map(|(id, _)| id.clone()).collect();
-                let candidates: Vec<(String, HandleKind)> = ranked
-                    .into_iter()
-                    .map(|(id, _)| (id, HandleKind::Memory))
-                    .collect();
-                let ranked_res = HandleResolution {
-                    kind: HandleKind::Memory,
-                    ids: ranked_ids,
-                    exact: false,
-                    candidates,
-                    handle_required: None,
-                };
-                return Some(Ok(handle_resolution_payload(
-                    storage,
-                    query,
-                    ranked_res,
-                    limit,
-                    detail_level,
-                    offset,
-                )));
-            }
             return Some(Ok(handle_required_payload(storage, query)));
         }
         return Some(Ok(handle_resolution_payload(
