@@ -1,0 +1,148 @@
+{
+  "description": "LoCoMo-10 Held-Out Evaluation: Current frozen params evaluated on Tune (dialogues 1-5) vs Test (dialogues 6-10)",
+  "note": "All parameters were frozen before scoring the test split.",
+  "tune": {
+    "dialogues": 5,
+    "core": {
+      "scored_questions": 760,
+      "session_r5": 93.03,
+      "turn_exact_r5": 68.03,
+      "turn_soft_r5": 78.03
+    },
+    "total": {
+      "scored_questions": 997,
+      "session_r5": 94.18,
+      "turn_exact_r5": 70.61,
+      "turn_soft_r5": 80.44
+    },
+    "categories": {
+      "Multi-Hop": {
+        "n": 142,
+        "noEvidence": 0,
+        "session_r1": 57.04,
+        "session_r5": 89.44,
+        "turn_exact_r1": 21.13,
+        "turn_exact_r5": 52.82,
+        "turn_exact_r10": 66.2,
+        "turn_soft_r1": 29.58,
+        "turn_soft_r5": 65.49
+      },
+      "Temporal": {
+        "n": 156,
+        "noEvidence": 0,
+        "session_r1": 81.41,
+        "session_r5": 96.79,
+        "turn_exact_r1": 49.36,
+        "turn_exact_r5": 75,
+        "turn_exact_r10": 82.05,
+        "turn_soft_r1": 60.26,
+        "turn_soft_r5": 84.62
+      },
+      "Open-Domain": {
+        "n": 44,
+        "noEvidence": 2,
+        "session_r1": 43.18,
+        "session_r5": 70.45,
+        "turn_exact_r1": 13.64,
+        "turn_exact_r5": 36.36,
+        "turn_exact_r10": 50,
+        "turn_soft_r1": 27.27,
+        "turn_soft_r5": 50
+      },
+      "Single-Hop": {
+        "n": 418,
+        "noEvidence": 0,
+        "session_r1": 82.3,
+        "session_r5": 95.22,
+        "turn_exact_r1": 43.54,
+        "turn_exact_r5": 73.92,
+        "turn_exact_r10": 82.3,
+        "turn_soft_r1": 57.66,
+        "turn_soft_r5": 82.78
+      },
+      "Adversarial": {
+        "n": 237,
+        "noEvidence": 0,
+        "session_r1": 84.39,
+        "session_r5": 97.89,
+        "turn_exact_r1": 45.99,
+        "turn_exact_r5": 78.9,
+        "turn_exact_r10": 88.19,
+        "turn_soft_r1": 60.76,
+        "turn_soft_r5": 88.19
+      }
+    }
+  },
+  "test": {
+    "dialogues": 5,
+    "core": {
+      "scored_questions": 776,
+      "session_r5": 91.11,
+      "turn_exact_r5": 64.82,
+      "turn_soft_r5": 73.07
+    },
+    "total": {
+      "scored_questions": 985,
+      "session_r5": 92.08,
+      "turn_exact_r5": 67.72,
+      "turn_soft_r5": 75.74
+    },
+    "categories": {
+      "Multi-Hop": {
+        "n": 140,
+        "noEvidence": 0,
+        "session_r1": 55,
+        "session_r5": 86.43,
+        "turn_exact_r1": 22.14,
+        "turn_exact_r5": 47.14,
+        "turn_exact_r10": 60.71,
+        "turn_soft_r1": 32.14,
+        "turn_soft_r5": 60
+      },
+      "Temporal": {
+        "n": 165,
+        "noEvidence": 0,
+        "session_r1": 67.88,
+        "session_r5": 86.67,
+        "turn_exact_r1": 24.85,
+        "turn_exact_r5": 55.76,
+        "turn_exact_r10": 66.67,
+        "turn_soft_r1": 38.18,
+        "turn_soft_r5": 66.06
+      },
+      "Open-Domain": {
+        "n": 48,
+        "noEvidence": 2,
+        "session_r1": 35.42,
+        "session_r5": 68.75,
+        "turn_exact_r1": 12.5,
+        "turn_exact_r5": 29.17,
+        "turn_exact_r10": 39.58,
+        "turn_soft_r1": 18.75,
+        "turn_soft_r5": 37.5
+      },
+      "Single-Hop": {
+        "n": 423,
+        "noEvidence": 0,
+        "session_r1": 81.09,
+        "session_r5": 96.93,
+        "turn_exact_r1": 43.5,
+        "turn_exact_r5": 78.25,
+        "turn_exact_r10": 86.05,
+        "turn_soft_r1": 59.57,
+        "turn_soft_r5": 84.16
+      },
+      "Adversarial": {
+        "n": 209,
+        "noEvidence": 0,
+        "session_r1": 81.34,
+        "session_r5": 95.69,
+        "turn_exact_r1": 43.06,
+        "turn_exact_r5": 78.47,
+        "turn_exact_r10": 88.52,
+        "turn_soft_r1": 60.29,
+        "turn_soft_r5": 85.65
+      }
+    }
+  }
+}

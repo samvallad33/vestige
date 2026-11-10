@@ -1,0 +1,192 @@
+{
+  "system": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpus": "Intel(R) Core(TM) i5-2520M CPU @ 2.50GHz",
+    "total_mem_mb": 8126
+  },
+  "params": {
+    "enable_stemming": false,
+    "enable_proximity": false,
+    "enable_coverage": false,
+    "enable_roles": false,
+    "enable_preference": false,
+    "enable_hypernyms": false,
+    "enable_recency": false,
+    "enable_window": false,
+    "enable_carry": false,
+    "enable_deictic": false,
+    "enable_funnel": false,
+    "enable_dyad": false,
+    "enable_bridge": false,
+    "enable_scene": false,
+    "enable_sniper": false,
+    "enable_ppr": false,
+    "enable_submodular": false,
+    "idf_power": 1
+  },
+  "lme": {
+    "all": {
+      "n": 500,
+      "r1": 442,
+      "r5": 485,
+      "r10": 493,
+      "all5": 411,
+      "all10": 448,
+      "ndcg10": 451.80931056428653
+    },
+    "nonAbs": {
+      "n": 470,
+      "r1": 420,
+      "r5": 455,
+      "r10": 463,
+      "all5": 390,
+      "all10": 425,
+      "ndcg10": 428.11988008362897
+    },
+    "buckets": {
+      "single-session-user": {
+        "n": 70,
+        "r1": 65,
+        "r5": 69,
+        "r10": 69,
+        "all5": 69,
+        "all10": 69,
+        "ndcg10": 66.87913567695279
+      },
+      "multi-session": {
+        "n": 133,
+        "r1": 117,
+        "r5": 129,
+        "r10": 131,
+        "all5": 87,
+        "all10": 105,
+        "ndcg10": 115.26803635312882
+      },
+      "single-session-preference": {
+        "n": 30,
+        "r1": 17,
+        "r5": 25,
+        "r10": 28,
+        "all5": 25,
+        "all10": 28,
+        "ndcg10": 22.636249659391485
+      },
+      "temporal-reasoning": {
+        "n": 133,
+        "r1": 112,
+        "r5": 128,
+        "r10": 131,
+        "all5": 98,
+        "all10": 113,
+        "ndcg10": 115.23288421281576
+      },
+      "knowledge-update": {
+        "n": 78,
+        "r1": 75,
+        "r5": 78,
+        "r10": 78,
+        "all5": 76,
+        "all10": 77,
+        "ndcg10": 75.79300466199764
+      },
+      "single-session-assistant": {
+        "n": 56,
+        "r1": 56,
+        "r5": 56,
+        "r10": 56,
+        "all5": 56,
+        "all10": 56,
+        "ndcg10": 56
+      }
+    }
+  },
+  "locomo": {
+    "core": {
+      "n": 1536,
+      "noEvidence": 4,
+      "sR1": 988,
+      "sR5": 1340,
+      "tR1": 477,
+      "tR5": 832,
+      "tR10": 958,
+      "softR1": 686,
+      "softR5": 1075,
+      "fracR5": 753.3791530966456
+    },
+    "total": {
+      "n": 1982,
+      "noEvidence": 4,
+      "sR1": 1318,
+      "sR5": 1754,
+      "tR1": 619,
+      "tR5": 1091,
+      "tR10": 1254,
+      "softR1": 920,
+      "softR5": 1432,
+      "fracR5": 1009.3791530966458
+    },
+    "cats": {
+      "1": {
+        "n": 282,
+        "noEvidence": 0,
+        "sR1": 136,
+        "sR5": 223,
+        "tR1": 48,
+        "tR5": 103,
+        "tR10": 143,
+        "softR1": 80,
+        "softR5": 150,
+        "fracR5": 50.92817270448851
+      },
+      "2": {
+        "n": 321,
+        "noEvidence": 0,
+        "sR1": 203,
+        "sR5": 276,
+        "tR1": 126,
+        "tR5": 203,
+        "tR10": 226,
+        "softR1": 155,
+        "softR5": 224,
+        "fracR5": 192.58333333333334
+      },
+      "3": {
+        "n": 92,
+        "noEvidence": 4,
+        "sR1": 32,
+        "sR5": 62,
+        "tR1": 12,
+        "tR5": 29,
+        "tR10": 34,
+        "softR1": 19,
+        "softR5": 36,
+        "fracR5": 21.534313725490193
+      },
+      "4": {
+        "n": 841,
+        "noEvidence": 0,
+        "sR1": 617,
+        "sR5": 779,
+        "tR1": 291,
+        "tR5": 497,
+        "tR10": 555,
+        "softR1": 432,
+        "softR5": 665,
+        "fracR5": 488.33333333333337
+      },
+      "5": {
+        "n": 446,
+        "noEvidence": 0,
+        "sR1": 330,
+        "sR5": 414,
+        "tR1": 142,
+        "tR5": 259,
+        "tR10": 296,
+        "softR1": 234,
+        "softR5": 357,
+        "fracR5": 256
+      }
+    }
+  }
+}

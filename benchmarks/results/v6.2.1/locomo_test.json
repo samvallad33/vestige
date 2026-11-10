@@ -1,0 +1,179 @@
+{
+  "system": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpus": "Intel(R) Core(TM) i5-2520M CPU @ 2.50GHz",
+    "total_mem_mb": 8126
+  },
+  "params": {},
+  "locomo": {
+    "dialogues": 5,
+    "core": {
+      "n": 776,
+      "noEvidence": 2,
+      "session_r1": 70.75,
+      "session_r5": 91.11,
+      "turn_exact_r1": 33.76,
+      "turn_exact_r5": 64.82,
+      "turn_exact_r10": 74.48,
+      "turn_soft_r1": 47.55,
+      "turn_soft_r5": 73.07
+    },
+    "total": {
+      "n": 985,
+      "noEvidence": 2,
+      "session_r1": 72.99,
+      "session_r5": 92.08,
+      "turn_exact_r1": 35.74,
+      "turn_exact_r5": 67.72,
+      "turn_exact_r10": 77.46,
+      "turn_soft_r1": 50.25,
+      "turn_soft_r5": 75.74
+    },
+    "categories": {
+      "Multi-Hop": {
+        "n": 140,
+        "noEvidence": 0,
+        "session_r1": 55,
+        "session_r5": 86.43,
+        "turn_exact_r1": 22.14,
+        "turn_exact_r5": 47.14,
+        "turn_exact_r10": 60.71,
+        "turn_soft_r1": 32.14,
+        "turn_soft_r5": 60
+      },
+      "Temporal": {
+        "n": 165,
+        "noEvidence": 0,
+        "session_r1": 67.88,
+        "session_r5": 86.67,
+        "turn_exact_r1": 24.85,
+        "turn_exact_r5": 55.76,
+        "turn_exact_r10": 66.67,
+        "turn_soft_r1": 38.18,
+        "turn_soft_r5": 66.06
+      },
+      "Open-Domain": {
+        "n": 48,
+        "noEvidence": 2,
+        "session_r1": 35.42,
+        "session_r5": 68.75,
+        "turn_exact_r1": 12.5,
+        "turn_exact_r5": 29.17,
+        "turn_exact_r10": 39.58,
+        "turn_soft_r1": 18.75,
+        "turn_soft_r5": 37.5
+      },
+      "Single-Hop": {
+        "n": 423,
+        "noEvidence": 0,
+        "session_r1": 81.09,
+        "session_r5": 96.93,
+        "turn_exact_r1": 43.5,
+        "turn_exact_r5": 78.25,
+        "turn_exact_r10": 86.05,
+        "turn_soft_r1": 59.57,
+        "turn_soft_r5": 84.16
+      },
+      "Adversarial": {
+        "n": 209,
+        "noEvidence": 0,
+        "session_r1": 81.34,
+        "session_r5": 95.69,
+        "turn_exact_r1": 43.06,
+        "turn_exact_r5": 78.47,
+        "turn_exact_r10": 88.52,
+        "turn_soft_r1": 60.29,
+        "turn_soft_r5": 85.65
+      }
+    },
+    "raw": {
+      "core": {
+        "n": 776,
+        "noEvidence": 2,
+        "sR1": 549,
+        "sR5": 707,
+        "tR1": 262,
+        "tR5": 503,
+        "tR10": 578,
+        "softR1": 369,
+        "softR5": 567,
+        "fracR5": 449.75301991610024
+      },
+      "total": {
+        "n": 985,
+        "noEvidence": 2,
+        "sR1": 719,
+        "sR5": 907,
+        "tR1": 352,
+        "tR5": 667,
+        "tR10": 763,
+        "softR1": 495,
+        "softR5": 746,
+        "fracR5": 611.2530199161002
+      },
+      "cats": {
+        "1": {
+          "n": 140,
+          "noEvidence": 0,
+          "sR1": 77,
+          "sR5": 121,
+          "tR1": 31,
+          "tR5": 66,
+          "tR10": 85,
+          "softR1": 45,
+          "softR5": 84,
+          "fracR5": 29.82654932786511
+        },
+        "2": {
+          "n": 165,
+          "noEvidence": 0,
+          "sR1": 112,
+          "sR5": 143,
+          "tR1": 41,
+          "tR5": 92,
+          "tR10": 110,
+          "softR1": 63,
+          "softR5": 109,
+          "fracR5": 86
+        },
+        "3": {
+          "n": 48,
+          "noEvidence": 2,
+          "sR1": 17,
+          "sR5": 33,
+          "tR1": 6,
+          "tR5": 14,
+          "tR10": 19,
+          "softR1": 9,
+          "softR5": 18,
+          "fracR5": 9.593137254901961
+        },
+        "4": {
+          "n": 423,
+          "noEvidence": 0,
+          "sR1": 343,
+          "sR5": 410,
+          "tR1": 184,
+          "tR5": 331,
+          "tR10": 364,
+          "softR1": 252,
+          "softR5": 356,
+          "fracR5": 324.3333333333333
+        },
+        "5": {
+          "n": 209,
+          "noEvidence": 0,
+          "sR1": 170,
+          "sR5": 200,
+          "tR1": 90,
+          "tR5": 164,
+          "tR10": 185,
+          "softR1": 126,
+          "softR5": 179,
+          "fracR5": 161.5
+        }
+      }
+    }
+  }
+}
