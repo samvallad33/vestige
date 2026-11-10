@@ -12,7 +12,7 @@ on:
       version:
         description: 'Product version (no v prefix)'
         required: true
-        default: '6.2.0'
+        default: '6.2.1'
         type: string
 
 # This workflow only uploads Actions artifacts. It cannot create a release,
@@ -23,7 +23,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   SOURCE_REF: ${{ github.event.pull_request.head.sha || inputs.source_ref }}
-  PRODUCT_VERSION: ${{ inputs.version || '6.2.0' }}
+  PRODUCT_VERSION: ${{ inputs.version || '6.2.1' }}
 
 jobs:
   desktop:
