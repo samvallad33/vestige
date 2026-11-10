@@ -4,6 +4,8 @@ This benchmark suite rigorously validates the deterministic lexical retrieval en
 1. **LongMemEval_S** (500 long-term multi-session questions across 6 core categories; ~47.7 sessions and ~494 turns per question)
 2. **LoCoMo-10** (10 long-context multi-party conversational dialogues across 5 categories, containing 1,536 CORE questions)
 
+**Top no-embedding retrieval result we know of on LongMemEval_S:** **87.87% official `RecallAll@5`** (470 non-abstention questions; 93.62% `RecallAll@10`, 0.9291 `NDCG@10`) and **98.60% `RecallAny@5`** (500 total questions) using zero embeddings, zero GPU, and pure CPU math ([1-command repro](run_all.sh) · [raw JSON](results/v6.2.1/vestige_v6.2.1_full.json)).
+
 > [!NOTE]
 > **Scope**: All tables report **retrieval recall** (whether the gold session or turn was retrieved in top-$k$), not downstream LLM QA generation accuracy.
 > Hardware: Benchmarked using native Rust release binary `retrieval_bench` on Windows 11 x64 (pure CPU math, 0% GPU, 0 external APIs, ~352 MB RSS).

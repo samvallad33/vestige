@@ -12,7 +12,7 @@
 [![Operator: 102 Rules](https://img.shields.io/badge/Gate_Rules-102_Deterministic-red.svg)](operator/README.md)
 [![Benchmarks: 98.60% R@5](https://img.shields.io/badge/LongMemEval_S-98.60%25_R@5-success.svg)](benchmarks/README.md)
 
-[**Quick Start**](#-quick-start) · [**Benchmarks**](#-audited-retrieval-benchmarks) · [**Architecture**](#-architecture-the-closed-loop-kernel) · [**MCP Tools**](#-the-6-mcp-verbs) · [**Reflex Hooks**](#-autonomic-reflex-hooks) · [**CLI**](#-host-cli)
+[**Quick Start**](#-quick-start) · [**Benchmarks**](#-retrieval-benchmarks-retrieval-recall-not-qa-accuracy) · [**Architecture**](#-architecture-the-closed-loop-kernel) · [**MCP Tools**](#-the-6-mcp-verbs) · [**Reflex Hooks**](#-autonomic-reflex-hooks) · [**CLI**](#-host-cli)
 
 </div>
 
@@ -21,6 +21,8 @@
 ## 📊 Retrieval Benchmarks (Retrieval Recall, Not QA Accuracy)
 
 Vestige v6.2.1 includes a zero-LLM, zero-vector deterministic lexical retrieval engine (`crates/vestige-core/src/retrieval.rs`), evaluated under strict zero-leak execution with `#[serde(deny_unknown_fields)]` boundary enforcement.
+
+**Top no-embedding retrieval result we know of on LongMemEval_S:** **87.87% official `RecallAll@5`** (470 non-abstention questions; 93.62% `RecallAll@10`, 0.9291 `NDCG@10`) and **98.60% `RecallAny@5`** (500 total questions) with zero embeddings, zero GPU, and pure CPU math ([1-command repro](benchmarks/run_all.sh) · [raw JSON](benchmarks/results/v6.2.1/vestige_v6.2.1_full.json)).
 
 > [!NOTE]
 > **Scope**: All tables report **retrieval recall** (whether the gold session or turn was retrieved in the top-$k$ results), not downstream LLM QA generation accuracy. Haystack size averages **47.7 sessions (~494 turns, ~115k tokens) per LongMemEval question**.
@@ -173,7 +175,7 @@ vestige prove                         # Run frozen-protocol git bisect verificat
 
 ## 🔒 Zero Vector Architecture
 
-- **Zero Vectors:** Exact handle indexing, BM25F field scoring, 37-cluster hypernym expansion, and 2-iteration sparse PageRank replace high-overhead vector databases.
+- **Zero Vectors:** Exact handle indexing, BM25F field scoring, 38-cluster hypernym expansion, and 2-iteration sparse PageRank replace high-overhead vector databases.
 - **Zero Cloud Leak:** Release builds exclude `reqwest` and cloud SDKs. All graph operations, safety classifications, and benchmark evaluations run 100% locally on CPU.
 - **Append-Only Integrity:** Deletions return `unavailable_in_4_0`; records are demoted or suppressed with audit receipts, preserving immutable audit trails.
 
