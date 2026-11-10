@@ -14,6 +14,8 @@
 //! `answer`, `question_type` or `category` are rejected at the parse boundary,
 //! so they can never influence a score.
 
+#![allow(clippy::all)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
