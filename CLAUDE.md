@@ -25,11 +25,41 @@ exception.
 
 ---
 
+# ⚡ VESTIGE COGNITIVE PROTOCOL (MANDATORY FOR ALL AGENTS)
+
+You are connected to Vestige (`vestige-mcp`), a deterministic local safety kernel and causal memory ledger (Strata). While the autonomic Reflex hooks (`~/.vestige/reflex.sock`) run automatically in the background, you are strictly required to drive the 6 Vestige MCP tools (`session`, `remember`, `recall`, `causal_walk`, `curate`, `precedent`) as your primary cognitive loop.
+
+Never rely on raw context-window guessing, grep/rg fishing, or unrecorded state mutations when a Vestige tool applies.
+
+## 1. Boot Sequence (First Action of Every Turn/Session)
+- **MANDATORY FIRST CALL**: At the start of any task or session, before reading files or running shell commands, call `session(action="start")` to boot lifecycle state, check active intentions, and load projected rules.
+- **Pre-Flight Handle Discovery**: Before modifying any module or debugging a subsystem, call `recall` (using exact handles or discovered_handles) to pull existing architectural invariants and prior decisions.
+
+## 2. Debugging & Failure Recovery (causal_walk + prove)
+Whenever a test fails, a build breaks, a runtime error appears, or an unexpected regression occurs:
+- **STOP GUESSING**: Do NOT immediately edit code or run blind grep searches based on stack-trace text.
+- **Step 1 — Trace the Root Cause**: Immediately call `causal_walk` pointed at the symptom or failing test (`from_handle` or `start_points`) to walk backward across recorded Strata edges (symptom -> failing test -> tool call -> git commit -> memory write) and surface forgotten lessons.
+- **Step 2 — Prove the Cause**: When a suspect commit or historical mutation is identified, invoke `causal_walk(action="prove")` to run a deterministic bisect witness and verify the root cause before writing a fix.
+
+## 3. Gated Writes & Retroactive Salience (remember + curate)
+Whenever you make a non-trivial architectural decision, discover a root cause, or ship a verified fix:
+- **Anchor Decisions to Code**: Call `remember(action="save", ...)` to perform a gated write into Strata with explicit codebase anchoring and inline Retroactive Salience Backfill (RSB) linking the fix to the failure.
+- **Maintain the Descent (Zero Stale Noise)**: If a new change invalidates or replaces an older assumption, you MUST call `curate` to supersede, demote, or bridge the outdated memory node so future subagents never converge on stale beliefs.
+
+## 4. Security & Operator Compliance (precedent)
+- **Never Bypass the Gate**: Every shell command, git operation, and memory write is gated by the 114-rule Operator. If a tool call is blocked by Reflex or Operator, do not attempt workarounds or shell flags to bypass it.
+- **Inspect the Receipt**: Immediately call `precedent` to inspect the Operator guard stop, read the BLAKE3/Ed25519 receipt, or run secret scanning before proposing a compliant alternative.
+
+## 5. Hard Execution Constraints (Anti-Drift Checklist)
+- **No Unanchored Fixes**: A bug fix is NOT complete until `causal_walk` has traced the cause and `remember` has anchored the resolution in Strata.
+- **No Silent Supersession**: Never leave contradictory architectural facts active; always run `curate` when changing an invariant.
+- **Tool Priority**: Always prefer `recall` and `causal_walk` over raw filesystem scanning when investigating "why" code was written a certain way.
+
+---
+
 # Vestige Agent Guidance
 
-This file is intentionally safe for the public repository. It gives coding
-agents project-specific context without relying on private local files,
-personal operating notes, or mandatory background hooks.
+This file gives coding agents project-specific context without relying on private local files, personal operating notes, or mandatory background hooks.
 
 ## Project Shape
 
@@ -49,13 +79,10 @@ core product promise is:
 - a call the Strata log cannot honor says so with a reason code
   (`unavailable_in_4_0`, `similarity_disabled`, `pending_strata`) instead of
   returning zeros
-- 6 cognitive verbs, advertised directly in tools/list:
-  - `session`: lifecycle boot, status, intentions, and lock-free projection
-  - `remember`: single gated write, codebase anchoring, and inline backfill
-  - `recall`: exact-handle retrieval and structured candidate discovery
-  - `causal_walk`: root-cause backtracking, forgotten lessons, and deterministic bisect proof cards (`action="prove"`)
-  - `curate`: state mutations, promotions, demotions, edits, and identity bridges
-  - `precedent`: Operator guard stops, receipts, replay, BLAKE3/Ed25519 log verification, and secret scanning
+- six advertised MCP tools: `session`, `remember`, `recall`, `causal_walk`,
+  `curate`, and `precedent`. Inspect `tools/list` and
+  `session(action="status", view="tools", tool="<name>")` for the installed
+  action schemas. Runtime support is determined by the active store owner.
 
 ## Working Rules
 
@@ -90,9 +117,10 @@ pnpm --filter @vestige/dashboard check
 pnpm --filter @vestige/dashboard build
 ```
 
-On `feat/vestigeos-revival`, always run `cargo check -p vestige-mcp` before
-commits that touch dashboard HTTP routes or MCP tools — frontend gates do not
-compile Rust.
+On `feat/vestigeos-revival`, `cargo check -p vestige-mcp` is mandatory before
+every commit that touches dashboard routes, handlers, or MCP tools — frontend
+gates alone do not compile Rust and previously hid a missing `/api/backfill`
+handler.
 
 For documentation-only changes, at minimum run:
 
@@ -103,7 +131,8 @@ git diff --check
 ## Documentation
 
 - User setup: `README.md`
-- Claude-specific templates: `docs/CLAUDE-SETUP.md`
+- Codex setup and agent templates: `docs/integrations/codex.md`
+- Cursor setup: `docs/integrations/cursor.md`
 - Storage and backup behavior: `docs/STORAGE.md`
 - Cognitive Sandwich and optional verifier hooks: `docs/COGNITIVE_SANDWICH.md`
 - Release history: `CHANGELOG.md`

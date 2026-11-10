@@ -1,6 +1,6 @@
 [package]
 name = "strata-migrate"
-version = "6.2.0"
+version = "6.2.1"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "One-shot migration tool: empties the Vestige SQLite store into a STRATA log"
