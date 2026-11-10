@@ -322,6 +322,27 @@ pub async fn execute(
     let _valid_at = parse_valid_at(args.valid_at.as_deref())?;
 
     let limit = args.limit.unwrap_or(10).clamp(1, 100);
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        let ranked = super::recall::rank_nodes_lexical(storage.as_ref(), &args.query, limit as usize);
+        let mut results = Vec::new();
+        for (id, score) in ranked {
+            if let Ok(Some(node)) = storage.get_node(&id) {
+                let mut val = serde_json::to_value(&node).unwrap_or_default();
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert("score".to_string(), serde_json::json!(score));
+                }
+                results.push(val);
+            }
+        }
+        apply_output_masks(&mut results, output_config);
+        return Ok(serde_json::json!({
+            "results": results,
+            "total": results.len(),
+            "query": args.query,
+            "engine": vestige_core::retrieval::ENGINE,
+        }));
+    }
+
     storage
         .hybrid_search_filtered(
             &args.query,

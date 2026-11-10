@@ -166,3 +166,7 @@ docs/business/
 # Real-engine campaign: raw evidence, credentials, external data, model caches.
 /runs/
 /.venv/
+benchmarks/outputs/
+benchmarks/LongMemEval/
+benchmarks/locomo/
+benchmarks/data/*.json
