@@ -169,6 +169,11 @@ docs/business/
 benchmarks/outputs/
 benchmarks/LongMemEval/
 benchmarks/locomo/
+benchmarks/BEAM/
+benchmarks/MemoryAgentBench/
+benchmarks/CORE-Bench/
+benchmarks/hotpot/
+benchmarks/LongMemEval-V2/
 benchmarks/data/*.json
 !benchmarks/results/
 !benchmarks/results/**

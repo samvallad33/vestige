@@ -1,0 +1,70 @@
+{
+  "benchmark": "BEAM",
+  "split": "100K",
+  "version": "v6.2.1",
+  "timestamp": "2026-11-10T18:46:08.947Z",
+  "elapsed_seconds": 33.12,
+  "cost_usd": 0,
+  "competitor_estimated_cost_usd": "$50 - $300+",
+  "metrics": {
+    "total_questions": 40,
+    "scored_questions": 36,
+    "recall_at_1": 0,
+    "recall_at_3": 2.78,
+    "recall_at_5": 16.67,
+    "recall_at_10": 30.56,
+    "mrr": 0.066
+  },
+  "category_breakdown": {
+    "abstention": {
+      "total": 0,
+      "hitsAt5": 0,
+      "hitsAt10": 0
+    },
+    "contradiction_resolution": {
+      "total": 4,
+      "hitsAt5": 1,
+      "hitsAt10": 2
+    },
+    "event_ordering": {
+      "total": 4,
+      "hitsAt5": 0,
+      "hitsAt10": 0
+    },
+    "information_extraction": {
+      "total": 4,
+      "hitsAt5": 1,
+      "hitsAt10": 2
+    },
+    "instruction_following": {
+      "total": 4,
+      "hitsAt5": 0,
+      "hitsAt10": 0
+    },
+    "knowledge_update": {
+      "total": 4,
+      "hitsAt5": 1,
+      "hitsAt10": 2
+    },
+    "multi_session_reasoning": {
+      "total": 4,
+      "hitsAt5": 0,
+      "hitsAt10": 0
+    },
+    "preference_following": {
+      "total": 4,
+      "hitsAt5": 1,
+      "hitsAt10": 1
+    },
+    "summarization": {
+      "total": 4,
+      "hitsAt5": 2,
+      "hitsAt10": 3
+    },
+    "temporal_reasoning": {
+      "total": 4,
+      "hitsAt5": 0,
+      "hitsAt10": 1
+    }
+  }
+}
