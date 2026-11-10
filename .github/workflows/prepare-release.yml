@@ -101,8 +101,16 @@ jobs:
         run: |
           [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
           [[ "$PRODUCT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev
+          opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          for attempt in 1 2 3 4; do
+            if timeout 120 apt-get $opts update && timeout 240 DEBIAN_FRONTEND=noninteractive apt-get $opts install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev; then
+              break
+            fi
+            [ "$attempt" -lt 4 ] || exit 1
+            apt-get clean || true
+            rm -rf /var/lib/apt/lists/*
+            sleep 5
+          done
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SOURCE_REF }}

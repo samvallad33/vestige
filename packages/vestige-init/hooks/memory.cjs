@@ -57,7 +57,7 @@ function rpc(binary, args = [], timeoutMs = 210, env = process.env) {
       return r.structuredContent || JSON.parse(r.content[0].text);
     },
     async ready() {
-      await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '6.2.0' } });
+      await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '6.2.1' } });
       child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
     },
     close,

@@ -239,7 +239,20 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Install build dependencies
-        run: bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev"
+        run: |
+          bash -lc '
+            opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+            for attempt in 1 2 3 4; do
+              if timeout 120 apt-get $opts update && timeout 240 apt-get $opts install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev; then
+                exit 0
+              fi
+              echo "::warning::apt build-deps attempt $attempt failed or timed out; clearing lists and retrying..."
+              apt-get clean || true
+              rm -rf /var/lib/apt/lists/*
+              sleep 5
+            done
+            exit 1
+          '
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -266,9 +279,23 @@ jobs:
       # dynamic symbol table only).
       - name: Install GCC 13 (ONNX 1.28 libstdc++ requirements)
         run: |
-          bash -lc "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common gnupg"
-          bash -lc "add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update"
-          bash -lc "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends g++-13"
+          bash -lc '
+            opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+            for attempt in 1 2 3; do
+              if timeout 120 apt-get $opts update \
+                && timeout 180 apt-get $opts install -y --no-install-recommends software-properties-common gnupg \
+                && timeout 120 add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+                && timeout 120 apt-get $opts update \
+                && timeout 180 apt-get $opts install -y --no-install-recommends g++-13; then
+                exit 0
+              fi
+              echo "::warning::GCC 13 apt attempt $attempt failed or timed out; retrying..."
+              apt-get clean || true
+              rm -rf /var/lib/apt/lists/*
+              sleep 5
+            done
+            exit 1
+          '
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -451,7 +478,20 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Install build dependencies
-        run: bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev"
+        run: |
+          bash -lc '
+            opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+            for attempt in 1 2 3 4; do
+              if timeout 120 apt-get $opts update && timeout 240 apt-get $opts install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev; then
+                exit 0
+              fi
+              echo "::warning::apt build-deps attempt $attempt failed or timed out; clearing lists and retrying..."
+              apt-get clean || true
+              rm -rf /var/lib/apt/lists/*
+              sleep 5
+            done
+            exit 1
+          '
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -478,9 +518,23 @@ jobs:
       # dynamic symbol table only).
       - name: Install GCC 13 (ONNX 1.28 libstdc++ requirements)
         run: |
-          bash -lc "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common gnupg"
-          bash -lc "add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update"
-          bash -lc "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends g++-13"
+          bash -lc '
+            opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+            for attempt in 1 2 3; do
+              if timeout 120 apt-get $opts update \
+                && timeout 180 apt-get $opts install -y --no-install-recommends software-properties-common gnupg \
+                && timeout 120 add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+                && timeout 120 apt-get $opts update \
+                && timeout 180 apt-get $opts install -y --no-install-recommends g++-13; then
+                exit 0
+              fi
+              echo "::warning::GCC 13 apt attempt $attempt failed or timed out; retrying..."
+              apt-get clean || true
+              rm -rf /var/lib/apt/lists/*
+              sleep 5
+            done
+            exit 1
+          '
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
