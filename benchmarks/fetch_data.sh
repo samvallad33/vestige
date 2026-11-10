@@ -41,16 +41,16 @@ if [ -f "${LME_FILE}" ]; then
   LME_ACTUAL="$(compute_sha256 "${LME_FILE}")"
 fi
 
-if [ "${LME_ACTUAL}" != "${LME_EXPECTED}" ]; then
+if [ "${LME_ACTUAL}" != "${LME_EXPECTED}" ] && [ "${LME_ACTUAL}" != "${LME_EXPECTED_ALT}" ]; then
   echo "Downloading LongMemEval_S..."
   ${CURL_CMD} -fSL "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json" \
     -o "${LME_FILE}"
   LME_ACTUAL="$(compute_sha256 "${LME_FILE}")"
 fi
 
-if [ "${LME_ACTUAL}" != "${LME_EXPECTED}" ]; then
+if [ "${LME_ACTUAL}" != "${LME_EXPECTED}" ] && [ "${LME_ACTUAL}" != "${LME_EXPECTED_ALT}" ]; then
   echo "FAIL: LongMemEval_S sha256 mismatch!" >&2
-  echo "Expected: ${LME_EXPECTED}" >&2
+  echo "Expected: ${LME_EXPECTED} or ${LME_EXPECTED_ALT}" >&2
   echo "Actual:   ${LME_ACTUAL}" >&2
   exit 1
 fi

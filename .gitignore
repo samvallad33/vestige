@@ -170,3 +170,5 @@ benchmarks/outputs/
 benchmarks/LongMemEval/
 benchmarks/locomo/
 benchmarks/data/*.json
+!benchmarks/results/
+!benchmarks/results/**
