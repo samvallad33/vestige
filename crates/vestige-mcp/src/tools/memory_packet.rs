@@ -374,18 +374,8 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
         .collect();
     let (selected, selection, ranking): (Vec<&KnowledgeNode>, &str, &str) =
         if prompt.trim().is_empty() {
-            nodes.sort_by(|a, b| compare(a, b, &scores));
-            let packed_hits: Vec<lexical::LexicalHit> = (0..nodes.len())
-                .map(|index| lexical::LexicalHit {
-                    index,
-                    score_micro: 1,
-                })
-                .collect();
-            (
-                lexical::pack(&nodes, &packed_hits, HOOK_CHAR_BUDGET, requested.min(8)),
-                "top_salience",
-                "receipt_salience_then_stability_then_recency",
-            )
+            // No prompt, no target: never inject unrelated salience.
+            (Vec::new(), "none_empty_prompt", "none")
         } else {
             let hits = lexical::rank(&nodes, prompt, tie);
             let score_of = |id: &str| {

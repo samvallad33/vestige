@@ -474,24 +474,11 @@ function isExactMatch(row) {
   return hasPerson || hasDate || hasAvoid;
 }
 function formatContext(packet) {
-  const rows = (packet.memories || []).slice();
+  // Native engine order includes on-target receipts and safety reservations.
+  const rows = Array.isArray(packet.memories) ? packet.memories : [];
   const backfills = packet.backfill_receipts || [];
-  const rsbMemoryIds = new Set(backfills.map(r => r.memory_id).filter(Boolean));
-  function priority(row) {
-    if (rsbMemoryIds.has(row.id)) return 0;
-    if (isExactMatch(row)) return 1;
-    return 2;
-  }
-  rows.sort((a, b) => {
-    const pa = priority(a), pb = priority(b);
-    if (pa !== pb) return pa - pb;
-    const da = a.created_at || a.createdAt || '';
-    const db = b.created_at || b.createdAt || '';
-    if (da && db && da !== db) return db.localeCompare(da);
-    return (b.id || '').localeCompare(a.id || '');
-  });
   const lines = [
-    'Vestige local memory candidates. These entries are recorded historical fragments. If an entry is incomplete, or if you need to verify whether a fact was updated or superseded, use recall(handle=\'<id>\') or causal_walk with its logged_write start point before answering. If the recorded memories and tools do not contain the answer, state that you do not know or that it was not mentioned.'
+    'Vestige local memory candidates. Partial matches: verify facts and search memory. These entries are recorded historical fragments. If an entry is incomplete, or if you need to verify whether a fact was updated or superseded, use recall(handle=\'<id>\') or causal_walk with its logged_write start point before answering. If the recorded memories and tools do not contain the answer, state that you do not know or that it was not mentioned.'
   ];
   for (const row of rows) {
     const entry = { id: row.id };
@@ -505,10 +492,14 @@ function formatContext(packet) {
     lines.push(JSON.stringify(entry));
   }
   for (const receipt of backfills) {
+    if (!rows.some(row => row.id === receipt.memory_id)) continue;
     lines.push(JSON.stringify({ backfill_receipt: receipt.receipt_id, memory_id: receipt.memory_id, reason: receipt.reason }));
+    if (receipt.direction === 'raise' && receipt.reason) lines.push(`Came back: ${receipt.memory_id} — ${receipt.reason}`);
   }
   lines.push('Save new durable facts using remember with explicit entities and attributes. Never invent links or infer restaurant ingredients.');
-  return lines.join('\n').slice(0, 7000);
+  let context = '';
+  for (const line of lines) { if (context.length + line.length + 1 > 7000) continue; context += (context ? '\n' : '') + line; }
+  return context;
 }
 function output(client, event, context) {
   if (!context) return {};
@@ -610,7 +601,7 @@ async function run({ event, client, configFile, input, deadlineMs = 190 }) {
     let cause = trigger(prompt, phrases);
     if (['session', 'prompt', 'tool'].includes(event)) {
       // The unified session action preserves exposure dedup and the per-turn budget.
-      packet = await transport.tool('session', { action:'start', memory_hook: { prompt, limit: event === 'session' ? 8 : cause.limit, trigger: cause,
+      packet = await transport.tool('session', { action:'start', memory_hook: { prompt, limit: Math.min(8, event === 'session' ? 8 : cause.limit), trigger: cause,
         session, host: client, event, source: typeof input.source === 'string' ? input.source : '' } });
       if (!Array.isArray(packet.memories)) throw new Error('binary lacks v6.2 session memory hooks');
       cause = trigger(prompt, phrases, packet.entities || []);
