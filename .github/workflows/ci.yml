@@ -280,12 +280,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             cargo_flags: ""
           # 4.0 has no ONNX runtime: Intel Mac builds the default features,
           # the same set release.yml ships.
-          - os: macos-14
+          - os: macos-latest
             target: x86_64-apple-darwin
             cargo_flags: ""
     steps:
