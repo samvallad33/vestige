@@ -480,6 +480,15 @@ pub fn stem(word: &str) -> String {
 
 /// Parse the free-form date strings used by real conversation logs into Unix seconds (UTC).
 pub fn parse_date(s: &str) -> i64 {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return dt.timestamp();
+    }
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return dt.and_utc().timestamp();
+    }
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0);
+    }
     let cleaned: String = s
         .chars()
         .map(|c| if c.is_alphanumeric() || c == ':' { c.to_ascii_lowercase() } else { ' ' })
@@ -1484,6 +1493,20 @@ mod tests {
         assert_eq!(calendar_tokens(b)[..3], ["8".to_string(), "may".into(), "2023".into()]);
         assert_eq!(calendar_tokens(b)[3], "monday");
         assert!(calendar_tokens(a).contains(&"__DATE__2023_05_20".to_string()));
+    }
+
+    #[test]
+    fn parses_rfc3339_production_dates() {
+        let now = chrono::Utc::now();
+        let s = now.to_rfc3339();
+        let ts = parse_date(&s);
+        assert_eq!(ts, now.timestamp());
+
+        let fixed = "2026-11-09T20:35:54Z";
+        let ts2 = parse_date(fixed);
+        assert!(ts2 > 0);
+        let tokens = calendar_tokens(ts2);
+        assert!(tokens.contains(&"__DATE__2026_11_09".to_string()));
     }
 
     #[test]

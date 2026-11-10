@@ -464,6 +464,8 @@ pub fn endorsement_event_id(actor_did: &str, memory_id: &str, digest: &str, kind
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     // ------------------------------------------------------------------
     // base58btc
@@ -601,7 +603,6 @@ mod tests {
         std::fs::write(&path, [3_u8; 32]).expect("write");
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
             assert!(matches!(
                 ProcessActor::load(&path),
