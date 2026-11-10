@@ -22,10 +22,6 @@ encryption = []
 connectors = ["dep:reqwest"]
 cloud-sync = ["dep:reqwest", "reqwest/blocking", "dep:chacha20poly1305", "dep:argon2"]
 
-[[bin]]
-name = "retrieval-bench"
-path = "src/bin/retrieval_bench.rs"
-
 [dependencies]
 # Serialization
 serde = { version = "1", features = ["derive"] }
