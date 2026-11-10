@@ -1,0 +1,17 @@
+{
+  "benchmark": "MemoryAgentBench",
+  "track": "Accurate_Retrieval",
+  "version": "v6.2.1",
+  "timestamp": "2026-11-10T23:38:20.076Z",
+  "elapsed_seconds": 26.09,
+  "cost_usd": 0,
+  "competitor_estimated_cost_usd": "$35 - $150",
+  "metrics": {
+    "total_questions_scored": 25,
+    "recall_at_1": 52,
+    "recall_at_3": 80,
+    "recall_at_5": 84,
+    "recall_at_10": 96,
+    "mrr": 0.6767
+  }
+}
