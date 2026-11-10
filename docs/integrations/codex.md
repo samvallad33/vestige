@@ -1,6 +1,6 @@
 # Codex
 
-> Written for Vestige 4.x.
+> Written for Vestige 6.x.
 
 > Give Codex a record of what you decided, that carries across sessions.
 
@@ -39,7 +39,7 @@ Start Codex and ask:
 
 > "What MCP tools do you have access to?"
 
-You should see Vestige's 18 tools listed, including `session_start`, `recall`, `smart_ingest`, `memory` and `receipt`.
+You should see Vestige's 6 tools listed: `session`, `remember`, `recall`, `causal_walk`, `curate`, and `precedent`.
 
 ---
 
@@ -53,7 +53,7 @@ Start a **new session**, then ask:
 
 > "Recall the `stack` tag from Vestige."
 
-It comes back, with its memory id. Vestige 4.x finds a record by an exact handle (its id or an exact tag), not by resemblance, so name the tag when you save and when you ask. See [Getting Started](../GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
+It comes back, with its memory id. Vestige finds a record by an exact handle (its id, an 8+ character prefix, or an exact tag), not by resemblance, so name the tag when you save and when you ask. See [Getting Started](../GETTING-STARTED.md#2-the-one-rule-you-find-a-memory-by-its-handle).
 
 ---
 
@@ -65,7 +65,7 @@ Minimal config:
 
 ```toml
 [mcp_servers.vestige]
-command = "<absolute path from which vestige-mcp>"
+command = "<absolute path from which vestige-mcp or where vestige-mcp>"
 ```
 
 After saving, restart Codex or start a new session.
@@ -95,17 +95,39 @@ args = ["--data-dir", "/Users/you/projects/my-app/.vestige"]
 
 MCP registration makes Vestige tools available to Codex. It does not, by itself, make Codex call them before it answers.
 
-For workspaces where Codex should consult Vestige, add an `AGENTS.md` file at the workspace or repo root:
+Codex reads `AGENTS.md` at the workspace root or repo root. Embed the mandatory **VESTIGE COGNITIVE PROTOCOL** directly into `AGENTS.md`:
 
 ```markdown
-At the start of a task, call Vestige `session_start` with include_intentions and
-include_status, and with context.codebase and context.repoPath for the checkout you
-are editing. Then call `recall` with handle set to the task's narrow topic tag.
-Recall by exact tag or id only. Compose what you find into actions; do not
-summarize retrievals.
-```
+# ⚡ VESTIGE COGNITIVE PROTOCOL (MANDATORY FOR ALL AGENTS)
 
-Then use the full protocol in [`codex-intelligent-memory.md`](./codex-intelligent-memory.md).
+You are connected to Vestige (vestige-mcp), a deterministic local safety kernel and causal memory ledger (Strata). While the autonomic Reflex hooks (~/.vestige/reflex.sock) run automatically in the background, you are strictly required to drive the 6 Vestige MCP tools (session, remember, recall, causal_walk, curate, precedent) as your primary cognitive loop.
+
+Never rely on raw context-window guessing, grep/rg fishing, or unrecorded state mutations when a Vestige tool applies.
+
+1. Boot Sequence (First Action of Every Turn/Session)
+- MANDATORY FIRST CALL: At the start of any task or session, before reading files or running shell commands, call session(action="start") to boot lifecycle state, check active intentions, and load projected rules.
+- Pre-Flight Handle Discovery: Before modifying any module or debugging a subsystem, call recall (using exact handles or discovered_handles) to pull existing architectural invariants and prior decisions.
+
+2. Debugging & Failure Recovery (causal_walk + prove)
+Whenever a test fails, a build breaks, a runtime error appears, or an unexpected regression occurs:
+- STOP GUESSING: Do NOT immediately edit code or run blind grep searches based on stack-trace text.
+- Step 1 — Trace the Root Cause: Immediately call causal_walk pointed at the symptom or failing test (from_handle or start_points) to walk backward across recorded Strata edges (symptom -> failing test -> tool call -> git commit -> memory write) and surface forgotten lessons.
+- Step 2 — Prove the Cause: When a suspect commit or historical mutation is identified, invoke causal_walk(action="prove") to run a deterministic bisect witness and verify the root cause before writing a fix.
+
+3. Gated Writes & Retroactive Salience (remember + curate)
+Whenever you make a non-trivial architectural decision, discover a root cause, or ship a verified fix:
+- Anchor Decisions to Code: Call remember(action="save", ...) to perform a gated write into Strata with explicit codebase anchoring and inline Retroactive Salience Backfill (RSB) linking the fix to the failure.
+- Maintain the Descent (Zero Stale Noise): If a new change invalidates or replaces an older assumption, you MUST call curate to supersede, demote, or bridge the outdated memory node so future subagents never converge on stale beliefs.
+
+4. Security & Operator Compliance (precedent)
+- Never Bypass the Gate: Every shell command, git operation, and memory write is gated by the 114-rule Operator. If a tool call is blocked by Reflex or Operator, do not attempt workarounds or shell flags to bypass it.
+- Inspect the Receipt: Immediately call precedent to inspect the Operator guard stop, read the BLAKE3/Ed25519 receipt, or run secret scanning before proposing a compliant alternative.
+
+5. Hard Execution Constraints (Anti-Drift Checklist)
+- No Unanchored Fixes: A bug fix is NOT complete until causal_walk has traced the cause and remember has anchored the resolution in Strata.
+- No Silent Supersession: Never leave contradictory architectural facts active; always run curate when changing an invariant.
+- Tool Priority: Always prefer recall and causal_walk over raw filesystem scanning when investigating "why" code was written a certain way.
+```
 
 ---
 

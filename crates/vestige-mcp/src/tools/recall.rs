@@ -240,6 +240,65 @@ const DEFAULT_TAG_LIMIT: usize = 20;
 /// Entry gate for handle mode. Returns `None` when the args carry no `handle`
 /// key (legacy mode dispatch proceeds unchanged); otherwise the complete
 /// handle-mode response.
+/// Rank nodes in storage using the Total-Recall deterministic lexical retrieval engine.
+pub fn rank_nodes_lexical(
+    storage: &Storage,
+    query: &str,
+    top_k: usize,
+) -> Vec<(String, f32)> {
+    let nodes = storage.get_all_nodes(10000, 0).unwrap_or_default();
+    if nodes.is_empty() || query.trim().is_empty() {
+        return Vec::new();
+    }
+    let turns: Vec<vestige_core::retrieval::Turn> = nodes
+        .into_iter()
+        .map(|node| {
+            let role = if node.tags.iter().any(|t| t == "assistant" || t == "system") {
+                "assistant".to_string()
+            } else {
+                "user".to_string()
+            };
+            vestige_core::retrieval::Turn {
+                id: node.id,
+                role,
+                content: format!("{} {}", node.content, node.tags.join(" ")),
+            }
+        })
+        .collect();
+
+    let now = chrono::Utc::now();
+    let session = vestige_core::retrieval::Session {
+        id: "strata".to_string(),
+        date: now.to_rfc3339(),
+        timestamp: now.timestamp(),
+        turns,
+    };
+
+    let req = vestige_core::retrieval::RankRequest {
+        sessions: vec![session],
+        queries: vec![vestige_core::retrieval::Query {
+            text: query.to_string(),
+            date: now.to_rfc3339(),
+        }],
+        top_k: top_k.max(1),
+        params: vestige_core::retrieval::Params::default(),
+    };
+
+    let resp = vestige_core::retrieval::rank(&req);
+    resp.results
+        .into_iter()
+        .next()
+        .map(|q_res| {
+            q_res
+                .turns
+                .into_iter()
+                .filter(|hit| hit.score > 0.0)
+                .map(|hit| (hit.id, hit.score))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Value, String>> {
     let object = args.as_ref()?.as_object()?;
     let limit = object
@@ -282,7 +341,29 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         }
         let resolution = storage.resolve_handle(query);
         if resolution.ids.is_empty() && resolution.candidates.is_empty() {
-            // Strata returns structured handle discovery refusal on free-text query
+            let ranked = rank_nodes_lexical(storage.as_ref(), query, limit.unwrap_or(10));
+            if !ranked.is_empty() {
+                let ranked_ids: Vec<String> = ranked.iter().map(|(id, _)| id.clone()).collect();
+                let candidates: Vec<(String, HandleKind)> = ranked
+                    .into_iter()
+                    .map(|(id, _)| (id, HandleKind::Memory))
+                    .collect();
+                let ranked_res = HandleResolution {
+                    kind: HandleKind::Memory,
+                    ids: ranked_ids,
+                    exact: false,
+                    candidates,
+                    handle_required: None,
+                };
+                return Some(Ok(handle_resolution_payload(
+                    storage,
+                    query,
+                    ranked_res,
+                    limit,
+                    detail_level,
+                    offset,
+                )));
+            }
             return Some(Ok(handle_required_payload(storage, query)));
         }
         return Some(Ok(handle_resolution_payload(

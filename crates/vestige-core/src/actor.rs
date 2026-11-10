@@ -596,7 +596,6 @@ mod tests {
 
     #[test]
     fn permissive_key_file_is_rejected() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("actor.key");
         std::fs::write(&path, [3_u8; 32]).expect("write");

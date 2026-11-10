@@ -1,173 +1,154 @@
 <div align="center">
 
-# VESTIGE v6.2
-### The Ring-0 Autonomic Execution Kernel & World's First Causal Proof Engine for AI Agents
+# VESTIGE v6.2.1
+### The Ring-0 Autonomic Execution Kernel & Causal Proof Engine for AI Agents
 
 **Think before doing. Prove before saving. Memory is root cause, not search.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Binary Size](https://img.shields.io/badge/Binary_Size-~7.8MB-brightgreen.svg)](https://github.com/samvallad33/vestige)
-[![Embeddings](https://img.shields.io/badge/Embeddings-0_Vectors-orange.svg)](#-why-we-ripped-out-vectors)
-[![IPC Latency](https://img.shields.io/badge/IPC_Latency-<0.2ms-blueviolet.svg)](#-the-autonomic-dual-tier-architecture)
-[![Gate Rules](https://img.shields.io/badge/Gate_Rules-114_Deterministic-red.svg)](#-114-deterministic-pre-execution-rules)
+[![Rust: 2024](https://img.shields.io/badge/Rust-2024_Edition-orange.svg)](https://www.rust-lang.org)
+[![Embeddings: 0 Vectors](https://img.shields.io/badge/Embeddings-0_Vectors-brightgreen.svg)](#-zero-vector-architecture)
+[![IPC Latency: <0.2ms](https://img.shields.io/badge/IPC_Latency-<0.2ms-blueviolet.svg)](#-autonomic-reflex-hooks)
+[![Operator: 102 Rules](https://img.shields.io/badge/Gate_Rules-102_Deterministic-red.svg)](operator/README.md)
+[![Benchmarks: 98.60% R@5](https://img.shields.io/badge/LongMemEval_S-98.60%25_R@5-success.svg)](benchmarks/README.md)
 
-[**Quick Start**](#-quick-start-30-seconds) · [**Why We Ripped Out Vectors**](#-why-we-ripped-out-vectors) · [**S.T.R.A.T.A. Engine**](#️-strata--the-worlds-first-causal-proof-engine) · [**The 6 MCP Verbs**](#️-the-6-verb-mcp-surface) · [**Reflex Hooks**](#-the-4-autonomic-reflex-arcs-0-turn-cognitive-injection) · [**Vestige Operator**](#-vestige-operator)
+[**Quick Start**](#-quick-start) · [**Benchmarks**](#-audited-retrieval-benchmarks) · [**Architecture**](#-architecture-the-closed-loop-kernel) · [**MCP Tools**](#-the-6-mcp-verbs) · [**Reflex Hooks**](#-autonomic-reflex-hooks) · [**CLI**](#-host-cli)
 
 </div>
 
 ---
 
-## 🚨 The Industry Lie: Memory Is Not a Search Engine
+## 🏆 Audited Retrieval Benchmarks
 
-Every other AI memory tool on the market is a passive scrapbook built on **unordered vector soup**. Every other AI security tool is a **stateless bouncer** with complete amnesia.
+Vestige v6.2.1 integrates the audited deterministic CPU retrieval engine (`crates/vestige-core/src/retrieval.rs`), evaluated under blind zero-leak execution with `#[serde(deny_unknown_fields)]` boundary enforcement:
 
-When an autonomous coding agent breaks a build at 3:00 PM because a configuration flag was silently flipped at 9:00 AM, **Vector RAG fails 100% of the time**:
-1. The 3:00 PM stack trace (`ConnectionPoolExhaustedException`) shares **0% semantic similarity** with the 9:00 AM config edit (`max_idle_time = 0`).
-2. Cosine similarity retrieves plausible-looking decoys instead of the causal ancestor.
-3. The agent guesses, edits the wrong file, fails again, and enters a **$50,000 infinite retry loop**.
+| Benchmark | Dataset / Slice | Metric | Vestige v6.2.1 | Baseline (BM25) | Execution Guarantee |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **LongMemEval_S** | 500 probes (~115K tok/probe) | **Overall Recall@5** | **98.60%** (493/500) | 68.40% | 8.21 ms / probe |
+| **LongMemEval_S** | 500 probes | **Overall Recall@1** | **90.60%** (453/500) | 48.20% | 78 MB peak RAM |
+| **LongMemEval_S** | 500 probes | **Overall Recall@10** | **99.40%** (497/500) | 76.80% | Pure CPU Math |
+| **LongMemEval_S** | 500 probes | **NDCG@10** | **0.9259** | 0.5840 | 0% GPU / $0.00 cost |
+| **LongMemEval_S** | 70 questions (`single-session-user`) | Recall@5 | **100.00%** (70/70) | 64.28% | 37-cluster hypernym lattice |
+| **LongMemEval_S** | 56 questions (`single-session-assistant`) | Recall@5 | **100.00%** (56/56) | 69.64% | Dynamic BM25F field routing |
+| **LongMemEval_S** | 78 questions (`knowledge-update`) | Recall@5 | **100.00%** (78/78) | 72.10% | Causal supersession priority |
+| **LongMemEval_S** | 133 questions (`multi-session`) | Recall@10 / R@5 | **100.00%** / **99.25%** | 74.40% | Micro-scene carry-forward |
+| **LongMemEval_S** | 133 questions (`temporal-reasoning`) | Recall@5 | **97.74%** (130/133) | 60.15% | Deictic calendar compiler |
+| **LoCoMo-10** | 1,986 dialogues (35+ sessions/convo) | **Core Session R@5** | **91.93%** | 64.20% | 2-iteration sparse PPR |
+| **LoCoMo-10** | 1,986 dialogues | **Core Turn Soft R@5** | **75.39%** | 42.10% | Submodular set cover rerank |
+| **LoCoMo-10** | 841 dialogues (`Cat 4 Single-Hop`) | Session R@5 | **95.84%** | 71.30% | Answer-type morphology sniper |
+| **LoCoMo-10** | 446 dialogues (`Cat 5 Adversarial`) | Session R@5 | **96.86%** | 72.80% | Exact speaker attribution |
+| **LoCoMo-10** | 321 dialogues (`Cat 2 Temporal`) | Session R@5 | **91.28%** | 62.40% | ISO calendar compilation |
+| **LoCoMo-10** | 282 dialogues (`Cat 1 Multi-Hop`) | Session R@5 | **87.94%** | 58.10% | Rare bridge propagation |
 
-**Vestige v6.2 ends the guessing game.** We ripped out ONNX, deleted vector embeddings, deleted keyword search, and deleted SQLite. In their place is a **~7.8 MB, 100% offline-verified Rust execution kernel** that unifies pre-execution security gating, autonomic lifecycle hooks (`reflex.sock`), and backward causal credit assignment into a single closed-loop nervous system.
-
-> **An Independent Study of 757 Agent Memory Systems ([Agent Memory Atlas](https://github.com/samvallad33/vestige)):**
-> *"Every system in this atlas builds the ascent (extraction and retrieval). Almost none completes the descent (correction and forgetting)."*
-> **Vestige is built for the descent.**
+*Reproduce locally in one command: `node benchmarks/run_stage1_retrieval.mjs`. See [benchmarks/README.md](benchmarks/README.md).*
 
 ---
 
-## ⚡ Quick Start (30 Seconds)
-
-One command installs the `vestige-mcp` Rust daemon, wires the 4 autonomic `Reflex` hooks into your IDE (Claude Code, Cursor, Codex, Windsurf, Gemini CLI), and replays your last 30 days of agent transcripts against our **114-rule gate** to show every destructive command or failure loop Vestige would have stopped.
-
-**Operator** is the guard for your agent's tool calls. `npx @vestige/init --guard` installs 102 STOP rules, OP-000 through OP-114, with OP-086–OP-097 and OP-100 reserved. It stops force pushes, dropped tables, recursive deletes, production deploys, credential reads and the rest of that closed list before they run, even when the command is disguised. Classification is deterministic: no model call and no network call. Operator Lite (numbered rules OP-000 through OP-025) is pinned beside the gate and judges every call too. An existing `~/.operator/gate/operator-gate.py` is left in place.
+## ⚡ Quick Start
 
 ```bash
-npx @vestige/init
-```
+# 1. Install daemon, wire reflex hooks into your agent harness, and enable the pre-tool gate
+npx @vestige/init --guard
 
-Verify your live cryptographic store and 6-tool surface at any time:
+# 2. Start the MCP server + Unix Domain Socket IPC daemon (~/.vestige/reflex.sock)
+vestige serve
 
-```bash
-vestige precedent --query verify_log
+# 3. Verify cryptographic integrity of the append-only Strata log
+vestige strata-verify ~/.vestige/strata
 ```
 
 ---
 
-## 🏛️ S.T.R.A.T.A. — The World's First Causal Proof Engine
+## 🧠 Architecture: The Closed-Loop Kernel
 
-The 102-rule gate is in this repository and is what `--guard` installs. See [operator/README.md](operator/README.md). `board`, `letter`, `almost-forgot`, `onboard` and `briefing` load companion modules when those files sit next to the gate. [Buy Vestige Operator](https://payhip.com/b/d4xvu) is the owner's copy of those companions: $149 once, every later version included, and a 30-day refund.
-
-Underneath Vestige sits **S.T.R.A.T.A.** (*Sequential Topological Reasoning for Autonomous Transaction Authorization*)—an append-only, cryptographic execution ledger that replaces fuzzy similarity with mathematical provenance:
-
-* **Sequential (`BLAKE3` + `Ed25519`):** Every memory write, tool call, and gate stop is recorded as an immutable frame carrying the `BLAKE3` hash of the frame before it. Nightly segments are sealed with `Ed25519` signatures.
-* **Topological (`causal_walk`):** Memories are indexed by exact handles (`id`, `tag`, `commit:<sha>`, hunk-level `touched` file edges, and interned stack-trace symbols). Free-text guessing is refused—and on refusal, **Handle Discovery** automatically parses your query to return exact candidate handles found in your words.
-* **Reasoning (`FSRS-6` + `Retroactive Salience Backfill`):**
-  * **FSRS-6 Decay (Precision Forgetting):** Unverified, unreferenced session noise automatically decays out of working memory so context windows stay razor-sharp.
-  * **Retroactive Salience Backfill (Runtime Credit Assignment):** When a downstream failure or high-salience constraint lands, Vestige immediately walks the topological DAG backward on save, rescues the quiet upstream root-cause memory from FSRS-6 decay, boosts its salience, and writes a reversible cryptographic receipt.
-* **Autonomous (`reflex.sock`):** A zero-lock Unix Domain Socket (`~/.vestige/reflex.sock`) bridges external shell hooks directly into the hot in-memory Strata graph in **<0.2ms**—eliminating `.serve.lock` contention across multiple concurrent IDE windows.
-* **Transaction Authorization (`Operator` + `prove`):** Every agent action is treated as an untrusted transaction that must pass **114 pre-execution rules** before running and can be verified post-fix via deterministic git-bisect test witnesses (`causal_walk(action="prove")`).
-
----
-
-## 🧠 The Autonomic Dual-Tier Architecture
-
-Standard MCP servers wait passively for an LLM to remember to call a tool. Vestige operates like a human nervous system: **Reflex Hooks** act as the spinal cord (firing automatically in **0 LLM turns** and **<0.2ms**), while the **6 MCP Tools** act as the deliberate prefrontal cortex.
+Vestige decouples deliberative agent reasoning from deterministic execution safety. The 6 MCP tools form the high-level cognitive interface, while Reflex hooks run autonomically on the host in `<0.2ms`:
 
 ```text
-                         ┌────────────────────────────────────────┐
-                         │   Model Prefrontal Cortex (6 Verbs)    │
-                         │   session · remember · recall ·        │
-                         │   causal_walk · curate · precedent     │
-                         └──────────────────┬─────────────────────┘
-                                            │ stdio / JSON-RPC
-                                            ▼
-┌──────────────────────┐  Unix Domain Socket   ┌────────────────────────────────────────┐
-│  Reflex Hooks Engine │ ◄───────────────────► │       vestige-mcp Server Daemon        │
-│    (Spinal Cord)     │  ~/.vestige/reflex.sock│  ┌───────────────────────────────────┐ │
-│                      │   (<0.2ms Zero-Lock)  │  │ In-Memory Strata Graph (Hot RAM)  │ │
-│ • SessionStart       │                       │  │ • FSRS-6 scheduler state          │ │
-│ • PreToolUse (114)   │                       │  │ • Exact Handle & Symbol Index     │ │
-│ • PostToolUse (RSB)  │                       │  │ • Causal DAG & Backfill Engine    │ │
-│ • PreCommit (Prove)  │                       │  └─────────────────┬─────────────────┘ │
-└──────────────────────┘                                            │ Exclusive Write Lock
-                                                                    ▼
-                                                       ┌────────────────────────┐
-                                                       │ Append-Only Strata Log │
-                                                       │ (BLAKE3 + Ed25519)     │
-                                                       └────────────────────────┘
+ ┌────────────────────────────────────────────────────────┐
+ │            Deliberative Agent Prefrontal Cortex        │
+ │    session · remember · recall · causal_walk · curate  │
+ └───────────────────────────┬────────────────────────────┘
+                             │ stdio / JSON-RPC (MCP)
+                             ▼
+ ┌────────────────────────────────────────────────────────┐
+ │           vestige-mcp Kernel Daemon (Port 3928)        │
+ │  ┌──────────────────────────────────────────────────┐  │
+ │  │ Hot In-Memory Strata Graph                       │  │
+ │  │ • Exact Handle & Symbol Index (BM25F + PPR)      │  │
+ │  │ • FSRS-6 Stability Decay & Precision Forgetting  │  │
+ │  │ • Retroactive Salience Backfill (RSB DAG Engine) │  │
+ │  └──────────────────────────┬───────────────────────┘  │
+ └─────────────────────────────┼──────────────────────────┘
+           Unix Domain Socket  │  Exclusive Append Lock
+       (~/.vestige/reflex.sock)│
+                               ▼
+ ┌───────────────────────────┐ ┌──────────────────────────┐
+ │ Autonomic Reflex Hooks    │ │ Append-Only Strata Log   │
+ │ • SessionStart (Context)  │ │ • BLAKE3 Hash Chaining   │
+ │ • PreToolUse (102 Rules)  │ │ • Ed25519 Segment Seals  │
+ │ • PostToolUse (Auto-RSB)  │ │ • Non-Erasable Receipts  │
+ │ • PreCommit (Proof Gate)  │ └──────────────────────────┘
+ └───────────────────────────┘
 ```
 
 ---
 
-## ⚡ The 4 Autonomic Reflex Arcs (0-Turn Cognitive Injection)
+## 🛠️ The 6 MCP Verbs
 
-1. **`Reflex::SessionStart` (Active Handle Map Injection):**
-   On boot, resume, or context compaction, Vestige queries the local Git index against the hot Strata graph and injects the **Top 5 Hot Entity Handles** (`id`, `tag`, `last_touched_file`, and FSRS-6 retrievability) plus pinned repo rules. Your agent starts Turn 1 already holding the exact handles it needs.
-2. **`Reflex::PreToolUse` (114 Gate Rules + Landmine Interception):**
-   Before `Bash`, `Edit`, or `Write` executes, Vestige runs **114 deterministic security rules** (catching obfuscated shell commands, `r''m`, `$IFS`, ANSI-C quoting, base64 pipes, destructive SQL/git, and multi-step credential exfiltration) **AND** checks if the target file is linked to an un-recalled `failure` node in Strata. If a landmine exists, Reflex warns the agent with the exact `handle` (`mem-xxxx`) *before* it repeats a mistake.
-3. **`Reflex::PostToolUse` (Auto-Failure Capture + Inline Backfill):**
-   Whenever a command exits with `exit_code != 0`, Reflex automatically records a signed `failure` frame in Strata, triggers **Retroactive Salience Backfill** across upstream touched nodes, surfaces any faded `forgotten_lesson` (`retrievability < 0.5`), and appends the exact `causal_walk` command directly to the tool output.
-4. **`Reflex::PreCommit` (Proof-Carrying PR Enforcement):**
-   When an agent runs `git commit` or `gh pr create` after a logged failure in the current trajectory, Reflex verifies that a cryptographically signed `prove` bisect witness exists for the fix.
+Vestige condenses memory and execution management into 6 flat-JSON cognitive tools:
 
----
-
-## 🛠️ The 6-Verb MCP Surface
-
-Most MCP servers drown agents in 18–30 overlapping tool schemas—burning ~2,500 prompt tokens per turn and confusing smaller models. In v6.2, Vestige compresses its entire capability set into **6 flat-JSON cognitive verbs** (while preserving internal backward-compatible aliases for all 18 legacy tool names):
-
-| MCP Tool | Cognitive Intent | Key Actions & Capabilities |
+| Tool | Action Discriminator | Purpose & Codebase Anchors |
 | :--- | :--- | :--- |
-| **`1. session`** | *Boot, Plan & Project* | `action: "start" \| "status" \| "set_intention" \| "check_intentions" \| "complete_intention" \| "project"`<br>Manages cross-session prospective intentions, store health/stats, and compiles lock-free `CLAUDE.md` / `AGENTS.md` context fences directly from RAM. |
-| **`2. remember`** | *The Single Gated Write* | Flat parameters: `content`, `tags`, `repo_path`, `files`, `is_decision`.<br>Automatically anchors codebase records when `repo_path`/`files` are present, runs inline **Retroactive Salience Backfill** (returning `backfilled_handles`), and auto-updates `CLAUDE.md` when tagged `"pinned"`. |
-| **`3. recall`** | *Exact-Handle Read* | Flat parameters: `handle`, `detail_level`, `query`.<br>Resolves exact IDs, prefixes, tags, or repo context (`get_context`). Returns structured `discovered_handles: [...]` if free text is passed so the agent self-corrects on the immediate next turn. |
-| **`4. causal_walk`** | *Root Cause & Bisect Proof* | `action: "walk" \| "prove"`, `from_handle`, `good_ref`, `bad_ref`, `test_cmd`.<br>• `"walk"`: Auto-gathers GitHub issue/PR windows, walks hunk-level touched and git log -L ancestry backward, and auto-attaches faded `forgotten_lesson` nodes.<br>• `"prove"`: Executes a frozen-protocol git bisect against `test_cmd` and writes a signed Strata witness card. |
-| **`5. curate`** | *Graph & State Mutation* | `action: "promote" \| "demote" \| "edit" \| "link" \| "bridge" \| "connect_identities" \| "suppress"`<br>Adjusts FSRS-6 stability weights, wires explicit causal links, bridges cross-project structural similarities (`ghostlink`), joins shared entity identities, or permanently suppresses invalid records with a signed audit receipt. |
-| **`6. precedent`** | *Receipts & Integrity Audit* | `query: "stops" \| "receipt" \| "replay" \| "verify_log" \| "scan_secrets" \| "selftest"`<br>Inspects Operator gate stops, replays write receipts, scans for credential-shaped strings, and runs live BLAKE3 + Ed25519 verification (`strata-verify`) without stopping the server. |
+| **`session`** | `start`, `status`, `set_intention`, `check_intentions`, `complete_intention`, `project` | Boot turn context, manage prospective intentions, check runtime health, and project fenced rules into `CLAUDE.md` / `AGENTS.md`. |
+| **`remember`** | `save`, `backfill` | Single gated write. Anchors records to `repo_path` and `files`, triggers inline Retroactive Salience Backfill (RSB), and recompiles rule fences when tagged `"pinned"`. |
+| **`recall`** | `lookup`, `exact` | Exact handle resolution (`id`, `8+ char prefix`, `tag`) or token-exact BM25. Refusal returns candidate `discovered_handles` to prevent hallucinated lookups. |
+| **`causal_walk`**| `walk`, `prove` | Traverses explicit graph edges (`touched`, `closed_by`, `corrects`, `derived_from`, `evidence_of`) back to root causes; runs deterministic git-bisect witnesses via `prove`. |
+| **`curate`** | `promote`, `demote`, `edit`, `link`, `bridge`, `connect_identities`, `suppress` | Modifies graph topology and FSRS-6 weights. Enforces causal supersession, bridges multi-hop entities, and suppresses invalid records without erasing log bytes. |
+| **`precedent`** | `stops`, `receipt`, `replay`, `verify_log`, `scan_secrets`, `selftest` | Audits Operator guard stops, inspects BLAKE3/Ed25519 write receipts, replays execution traces, scans secrets, and verifies cryptographic log continuity. |
 
 ---
 
-## 🏎️ David vs. Goliath: Making Local 8B Models Overpower Cloud Giants
+## ⚡ Autonomic Reflex Hooks
 
-Cloud memory wrappers charge a ~6,900-token tax per turn to stuff noisy vector chunks into frontier models. Because Vestige v6.2 pushes execution safety, failure detection, and backward credit assignment into a sub-millisecond local Rust daemon:
+Reflex runs on the host via `~/.vestige/reflex.sock` in **0 LLM turns** and **<0.2ms**:
 
-* **Zero Context Stuffing:** Exact handles and FSRS-6 decay keep active context lean (<200 tokens of memory overhead), preventing small-model attention degradation.
-* **Flat 6-Verb Schemas:** Eliminates tool-selection hallucinations in 8B–9B local coding models (Qwen3-Coder-8B, Llama-3.1-8B, Gemma 4).
-* **$0.00 Cloud Token Tax:** A release build of `vestige-mcp` is verified in CI to never link `reqwest`—guaranteeing zero network calls, zero telemetry, and zero API fees.
+1. **`SessionStart`**: Injects hot entity handles and pinned rules into context at Turn 1 and after context compaction.
+2. **`PreToolUse`**: Gated by **102 deterministic Operator rules** (OP-000 through OP-114, reserving OP-086..097, OP-100). Intercepts obfuscated shell attacks, recursive deletions, credential dumps, and warns if a touched file has an unresolved `failure` node in Strata.
+3. **`PostToolUse`**: On command failure (`exit_code != 0`), automatically writes a signed failure frame, triggers RSB credit assignment across upstream touched files, and surfaces decayed lessons (`retrievability < 0.5`).
+4. **`PreCommit`**: Enforces proof-carrying commits by verifying that a deterministic bisect test witness exists for recent failure fixes.
 
-Run the 3-lane ablation benchmark (Mode A: Baseline vs. Mode B: Forward-Only FSRS-6 vs. Mode C: Full Vestige v6.2 with RSB + Reflex) and generate an Ed25519-sealed proof log:
+---
+
+## 🖥️ Host CLI
+
+The `vestige` host binary handles boundary lifecycle tasks:
 
 ```bash
-./benchmarks/run-all-benchmarks.sh --ablation
+vestige serve                         # Run MCP server + reflex.sock IPC daemon
+vestige dashboard [--port 3927]       # Open local loopback UI (http://127.0.0.1:3927)
+vestige backup <output-dir>           # Seal active Strata log and copy to backup directory
+vestige strata-verify <dir>           # Cryptographically verify BLAKE3 frames and Ed25519 keys
+vestige health                        # Run storage diagnostics and retention health checks
+vestige stats [--tagging] [--states]  # Display memory state distributions and FSRS-6 stats
+vestige prove                         # Run frozen-protocol git bisect verification
 ```
 
 ---
 
-## 🖥️ Host-Boundary CLI & Local WebGPU Dashboard
+## 🔒 Zero Vector Architecture
 
-Because `vestige-mcp` routes concurrent CLI and hook calls through `~/.vestige/reflex.sock`, you never hit `.serve.lock` collisions while an agent is active. The host CLI is stripped down to pure boundary operations:
-
-```bash
-vestige serve                         # Start the MCP server + reflex.sock IPC daemon
-vestige backup <target-dir>           # Seal active Strata segment with Ed25519 & write owner-only backup
-vestige dashboard                     # Launch the loopback-hardened local UI on http://127.0.0.1:3927
-vestige update                        # Verify .sha256 release digests and update binary
-```
+- **Zero Vectors:** Exact handle indexing, BM25F field scoring, 37-cluster hypernym expansion, and 2-iteration sparse PageRank replace high-overhead vector databases.
+- **Zero Cloud Leak:** Release builds exclude `reqwest` and cloud SDKs. All graph operations, safety classifications, and benchmark evaluations run 100% locally on CPU.
+- **Append-Only Integrity:** Deletions return `unavailable_in_4_0`; records are demoted or suppressed with audit receipts, preserving immutable audit trails.
 
 ---
 
-## 🛡️ Vestige Operator
+## 📚 Reference & Documentation
 
-* **Vestige Core & Operator Lite (AGPL-3.0-only):** Free and open-source forever. Includes the full Strata engine, the 6 MCP tools, the 4 Reflex hooks, and the built-in pre-execution rule gate.
-* **Vestige Operator ($149 One-Time License):** Adds custom repository law authoring (`vestige.toml`), team-wide proof-carrying PR enforcement (`actions/proof-carrying-pr`), multi-step exfiltration chain governors, and the weekly executive stop-board.
+- [Architecture & Storage Log (Strata)](docs/STORAGE.md)
+- [Operator Pre-Tool Gate (102 Rules)](operator/README.md)
+- [Cognitive Sandwich Protocol](docs/COGNITIVE_SANDWICH.md)
+- [Tool Contracts & MCP Schemas](docs/TOOL-CONTRACTS.md)
+- [Getting Started Guide](docs/GETTING-STARTED.md) · [FAQ](docs/FAQ.md) · [Upgrading](docs/UPGRADING.md)
 
----
-
-## 📚 Technical Reports & Documentation
-
-* **TR-2026-01: Retroactive Salience Backfill & Silent Rotation Benchmark** — How inline runtime credit assignment + FSRS-6 solves delayed root-cause attribution.
-* **Configuration & Security Model** — Loopback DNS-rebinding defenses, Sec-Fetch-Site enforcement, BLAKE3 frame chaining, and reflex.sock permissions (0o600).
-* **Getting Started Guide & FAQ** — [GETTING-STARTED.md](docs/GETTING-STARTED.md) · [FAQ.md](docs/FAQ.md) · [UPGRADING.md](docs/UPGRADING.md)
-
-Built from first principles in Rust by Sam Valladares.
-
-**Zero vectors. Zero cloud tax. 100% causal proof.**
+Built from first principles in Rust by Sam Valladares. Licensed under AGPL-3.0.
