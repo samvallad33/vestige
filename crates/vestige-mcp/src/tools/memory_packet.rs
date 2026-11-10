@@ -513,7 +513,36 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             })
         })
         .collect();
+    let options = vestige_core::h2sk::CompileOptions {
+        query: prompt.to_string(),
+        symbols: args["symbols"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .chain(
+                prompt
+                    .split_whitespace()
+                    .filter(|word| word.starts_with("symbol:"))
+                    .map(|word| word.trim_end_matches(['.', ',', '?', '!']).to_string()),
+            )
+            .collect(),
+        today: args["today"].as_str().map(str::to_string),
+        view_ids: Some(selected.iter().map(|node| node.id.clone()).collect()),
+        ..Default::default()
+    };
+    let compiled = crate::strata_memory::compile_memory_receipt(storage, scope, None, &options)?;
+    let selected_ids = selected.iter().map(|node| node.id.clone()).collect();
+    let reader_context =
+        vestige_core::h2sk::compile::prepare_payload(&compiled, &selected_ids, 7000);
+    let compiled_summary = json!({"hash":compiled.hash,"offset":compiled.offset,"source_root":compiled.source_root,
+        "currency":compiled.currency,"frustration":compiled.frustration,"gate":compiled.gate,
+        "receipt_scope":"full admitted log prefix; replay through precedent query=compile_receipt"});
     Ok(json!({
+        "compile_receipt":compiled_summary,
+        "compile_options":options,
+        "reader_context":reader_context,
         "memory_count": count,
         "entities": entities,
         "memories": selected.iter().map(|n| json!({

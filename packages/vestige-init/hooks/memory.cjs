@@ -480,7 +480,12 @@ function formatContext(packet) {
   const lines = [
     'Vestige local memory candidates. Partial matches: verify facts and search memory. These entries are recorded historical fragments. If an entry is incomplete, or if you need to verify whether a fact was updated or superseded, use recall(handle=\'<id>\') or causal_walk with its logged_write start point before answering. If the recorded memories and tools do not contain the answer, state that you do not know or that it was not mentioned.'
   ];
-  for (const row of rows) {
+  // The native compiler supplies state/modality/time annotations before the
+  // reader speaks. Keep one bounded source-carrying view, never duplicate its quotes.
+  if (packet.compile_receipt && typeof packet.reader_context === 'string') {
+    lines.push(...packet.reader_context.split('\n').filter(Boolean));
+  }
+  else for (const row of rows) {
     const entry = { id: row.id };
     const role = row.role || (row.source && row.source.includes('user') ? 'user' : (row.source && row.source.includes('assistant') ? 'assistant' : undefined));
     if (role) entry.role = role;
