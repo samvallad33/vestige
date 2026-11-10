@@ -1,6 +1,6 @@
 # Frequently Asked Questions
 
-> Answers for Vestige 6.2.0
+> Answers for Vestige 6.2.1
 
 Vestige is the Causal Proof Engine and the operating system for AI agents. Its kernel is
 Strata, an append-only, hash-chained, signed log. In the engine there are no vectors, no

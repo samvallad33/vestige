@@ -1,7 +1,7 @@
 # Getting Started with Vestige
 
 Your first 15 minutes on Vestige v6.2, start to finish. Every command on this page
-runs against the v6.2.0 release binaries.
+runs against the v6.2.1 release binaries.
 
 Vestige is local-first: an append-only, cryptographic Strata memory kernel, your data
 on your disk, no account, no cloud, and sub-millisecond reflex hooks over a single
@@ -20,7 +20,7 @@ Install is two commands and connecting is one line or one JSON block:
 Confirm it is alive:
 
 ```bash
-vestige-mcp --version     # vestige-mcp 6.2.0
+vestige-mcp --version     # vestige-mcp 6.2.1
 vestige stats             # Total Memories: 0 on a fresh install
 ```
 

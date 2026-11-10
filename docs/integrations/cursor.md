@@ -150,7 +150,7 @@ Or place a `.cursor/mcp.json` in the project root for project-level config.
    which vestige-mcp          # macOS / Linux
    where vestige-mcp          # Windows
    ```
-2. Test the binary manually. It should print `vestige-mcp 6.2.0` or newer:
+2. Test the binary manually. It should print `vestige-mcp 6.2.1` or newer:
    ```bash
    vestige-mcp --version
    ```

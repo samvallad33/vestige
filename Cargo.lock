@@ -2773,7 +2773,7 @@ dependencies = [
 
 [[package]]
 name = "vestige-proof"
-version = "6.0.0"
+version = "6.2.1"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",

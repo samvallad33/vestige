@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> Environment variables, CLI commands, and setup options for Vestige v6.2.0
+> Environment variables, CLI commands, and setup options for Vestige v6.2.1
 
 ---
 

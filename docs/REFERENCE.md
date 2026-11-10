@@ -205,7 +205,7 @@ platform archives, checksums, package review, and rollback requirements.
 - **The PRECEDENT journey.** `npx @vestige/init precedent` follows one real stop from your machine around the loop: the stop, its receipt re-derived from its own bytes, the precedent and the verdict.
 - **A rebuilt dashboard** on WebGPU, with the gate's receipts in its Guard view.
 - **Operator Lite 0.3.10.** It blocks from install with 30 rules, reads the shell commands inside `python -c` and `node -e` code, sees through wrappers such as `sudo -u root`, `env -S` and `busybox`, and stops an agent from throwing away uncommitted git work.
-- **Operator gate, 102 STOP rules.** `npx @vestige/init --guard` installs Operator 6.2.0 when no gate is present: OP-000 through OP-114, with OP-086–OP-097 and OP-100 reserved. The pinned Operator Lite core sits beside it and judges every call. Classification does not call a model and does not open a network connection. An existing gate file is left as it is.
+- **Operator gate, 102 STOP rules.** `npx @vestige/init --guard` installs Operator 6.2.1 when no gate is present: OP-000 through OP-114, with OP-086–OP-097 and OP-100 reserved. The pinned Operator Lite core sits beside it and judges every call. Classification does not call a model and does not open a network connection. An existing gate file is left as it is.
 - **Tested end to end.** [`full_flow_stdio.rs`](../crates/vestige-mcp/tests/full_flow_stdio.rs) runs the whole loop on the shipped binaries in CI on Linux and macOS: the gate stops a call, the stop is recorded, a second agent recalls it and walks it back to its rule, and an ALLOW ONCE runs exactly once.
 
 <a id="ghostlink-the-negative-space"></a>

@@ -1,6 +1,6 @@
 [package]
 name = "vestige-proof"
-version = "6.0.0"
+version = "6.2.1"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Sam Valladares"]

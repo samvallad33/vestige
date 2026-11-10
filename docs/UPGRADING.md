@@ -1,4 +1,4 @@
-# Upgrading to Vestige v6.2.0
+# Upgrading to Vestige v6.2.1
 
 This guide covers historical transitions from v3 and v4 to the v6.2 Autonomic Execution Kernel.
 
