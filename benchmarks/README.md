@@ -10,17 +10,21 @@ This benchmark suite rigorously validates the deterministic lexical retrieval en
 
 | Benchmark | Dataset | Metric | Vestige Score | Baseline (Pure BM25) | Speed / Hardware |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **LongMemEval_S** | 500 questions | **Overall Recall@5** | **98.20%** | 68.40% | 8.21 ms / question |
-| **LongMemEval_S** | 500 questions | **Overall Recall@1** | **88.60%** | 48.20% | 78 MB RAM |
-| **LongMemEval_S** | 500 questions | **NDCG@10** | **0.9149** | 0.5840 | 0% GPU (Pure CPU Math) |
+| **LongMemEval_S** | 500 questions | **Overall Recall@5** | **98.60%** | 68.40% | 8.21 ms / question |
+| **LongMemEval_S** | 500 questions | **Overall Recall@1** | **90.40%** | 48.20% | 78 MB RAM |
+| **LongMemEval_S** | 500 questions | **Overall Recall@10** | **99.40%** | 76.80% | Pure CPU Math |
+| **LongMemEval_S** | 500 questions | **NDCG@10** | **0.9255** | 0.5840 | 0% GPU / $0.00 |
+| **LongMemEval_S** | 70 questions | `single-session-user` R@5 | **100.00%** | 64.28% | Group-Aware Hypernyms |
 | **LongMemEval_S** | 56 questions | `single-session-assistant` R@5 | **100.00%** | 69.64% | Deterministic |
 | **LongMemEval_S** | 78 questions | `knowledge-update` R@5 | **100.00%** | 72.10% | Zero-Hallucination |
-| **LongMemEval_S** | 133 questions | `multi-session` R@5 | **99.25%** | 66.90% | Zero Embeddings |
-| **LoCoMo-10** | 1,986 questions | **CORE (Cat 1–4) Session R@5** | **91.54%** | 64.20% | 8.21 ms / question |
-| **LoCoMo-10** | 1,986 questions | **CORE (Cat 1–4) Turn Soft R@5** | **75.46%** | 42.10% | Submodular Set Cover |
-| **LoCoMo-10** | 711 questions | **Cat 4 (Single-Hop) Session R@5** | **95.48%** | 71.30% | Answer-Type Sniper |
-| **LoCoMo-10** | 642 questions | **Cat 2 (Temporal) Session R@5** | **91.59%** | 62.40% | Deictic Calendar Compiler |
-| **LoCoMo-10** | 282 questions | **Cat 1 (Multi-Hop) Session R@5** | **87.23%** | 58.10% | 2-Iteration Sparse PPR |
+| **LongMemEval_S** | 133 questions | `multi-session` R@10 | **100.00%** | 74.40% | Zero Embeddings |
+| **LongMemEval_S** | 133 questions | `temporal-reasoning` R@5 | **97.74%** | 60.15% | Deictic Calendar Compiler |
+| **LoCoMo-10** | 1,986 questions | **CORE (Cat 1–4) Session R@5** | **91.93%** | 64.20% | 8.21 ms / question |
+| **LoCoMo-10** | 1,986 questions | **CORE (Cat 1–4) Turn Soft R@5** | **75.39%** | 42.10% | Submodular Set Cover |
+| **LoCoMo-10** | 841 questions | **Cat 4 (Single-Hop) Session R@5** | **95.84%** | 71.30% | Answer-Type Sniper |
+| **LoCoMo-10** | 446 questions | **Cat 5 (Adversarial) Session R@5** | **96.86%** | 72.80% | Precision Role Scorer |
+| **LoCoMo-10** | 321 questions | **Cat 2 (Temporal) Session R@5** | **91.28%** | 62.40% | Pinpoint Deictic Dates |
+| **LoCoMo-10** | 282 questions | **Cat 1 (Multi-Hop) Session R@5** | **87.94%** | 58.10% | 2-Iteration Sparse PPR |
 
 ---
 

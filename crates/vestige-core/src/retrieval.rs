@@ -240,6 +240,7 @@ const STOPWORDS: &[&str] = &[
     "mentioned", "mention", "talked", "talk", "discussed", "chat", "actually", "sure", "great",
     "thanks", "thank", "hey", "hi", "hello", "wow", "like", "want", "wanted", "need", "needed",
     "use", "used", "using", "try", "tried", "trying", "new", "good", "help", "recently",
+    "suggest", "recommend", "useful", "interesting", "past", "times",
 ];
 
 const PREF_MARKERS: &[&str] = &[
@@ -310,41 +311,46 @@ const CONTINUATIONS: &[&str] = &[
     "indeed", "agreed", "same",
 ];
 
-/// 32-cluster deterministic hypernym lattice (coarse life domains).
+/// 37-cluster deterministic hypernym lattice (coarse life domains + software systems architecture).
 const HYPERNYM_LATTICE: &[(&str, &[&str])] = &[
-    ("CULINARY", &["sourdough", "croissant", "baking", "bake", "baker", "bread", "loaf", "recipe", "dinner", "lunch", "breakfast", "vegan", "vegetarian", "pescatarian", "roast", "chef", "cook", "cooking", "kitchen", "cuisine", "meal", "dining", "restaurant", "food", "foodie", "dish", "spice", "pasta", "cheese", "dessert", "chocolate", "pastry", "culinary", "pizza", "sushi", "taco", "burger", "salad", "soup", "grill", "bbq", "cake", "cookie"]),
+    ("CULINARY", &["sourdough", "croissant", "baking", "bake", "baker", "bread", "loaf", "recipe", "dinner", "lunch", "breakfast", "vegan", "vegetarian", "pescatarian", "roast", "chef", "cook", "cooking", "kitchen", "cuisine", "meal", "dining", "restaurant", "food", "foodie", "dish", "spice", "pasta", "cheese", "dessert", "chocolate", "pastry", "culinary", "pizza", "sushi", "taco", "burger", "salad", "soup", "grill", "bbq", "cake", "cookie", "appliance", "appliances", "smoker", "fryer", "blender", "microwave", "toaster", "fridge", "refrigerator", "oven", "stove", "ingredient", "ingredients", "produce", "homegrown", "harvest"]),
     ("BEVERAGE", &["coffee", "espresso", "latte", "cappuccino", "roastery", "bean", "brew", "brewing", "tea", "matcha", "chai", "cafe", "barista", "aeropress", "pourover", "wine", "beer", "cocktail", "whiskey", "smoothie", "juice"]),
-    ("OUTDOORS", &["hike", "hiking", "trail", "kayak", "kayaking", "camping", "camp", "tent", "backpack", "backpacking", "outdoor", "outdoors", "gear", "park", "wilderness", "climb", "climbing", "mountain", "beach", "lake", "fishing", "nature", "roadtrip", "road trip"]),
-    ("FITNESS", &["gym", "weight", "workout", "running", "runner", "run", "jog", "jogging", "cycling", "bike", "bicycle", "swim", "swimming", "triathlon", "marathon", "5k", "10k", "exercise", "cardio", "fitness", "yoga", "pilates", "crossfit", "training", "race"]),
+    ("OUTDOORS", &["hike", "hiking", "trail", "kayak", "kayaking", "camping", "camp", "tent", "backpack", "backpacking", "outdoor", "outdoors", "gear", "park", "wilderness", "climb", "climbing", "mountain", "beach", "lake", "fishing", "nature", "roadtrip"]),
+    ("FITNESS", &["gym", "weight", "workout", "running", "runner", "run", "jog", "jogging", "cycling", "bike", "bicycle", "swim", "swimming", "triathlon", "marathon", "5k", "10k", "exercise", "cardio", "fitness", "yoga", "pilates", "crossfit", "training", "race", "tournament", "competition", "athletic", "athletics"]),
     ("VISUAL_ART", &["painting", "paint", "acrylic", "watercolor", "watercolour", "oil", "sketch", "sketching", "draw", "drawing", "pottery", "ceramic", "clay", "studio", "sculpture", "gallery", "canvas", "portrait", "landscape", "art", "artistic", "artist", "medium", "easel", "craft", "knitting", "sewing", "exhibition"]),
     ("MUSIC", &["guitar", "piano", "vinyl", "concert", "festival", "album", "spotify", "band", "jazz", "rock", "classical", "instrument", "drum", "bass", "violin", "orchestra", "musician", "song", "singing", "vocalist", "music", "playlist", "podcast", "dance", "ballet", "salsa"]),
     ("PETS", &["dog", "puppy", "cat", "kitten", "vet", "pet", "rescue", "adopt", "adoption", "animal", "retriever", "breed", "leash", "veterinary", "veterinarian", "fish", "bird", "hamster", "horse"]),
-    ("BOOKS", &["book", "reading", "read", "novel", "author", "fiction", "nonfiction", "memoir", "library", "bookstore", "kindle", "audiobook", "literature", "poetry", "poem", "writing", "writer", "publish"]),
-    ("GAMING", &["game", "gaming", "gamer", "playstation", "nintendo", "switch", "xbox", "steam", "rpg", "boardgame", "tabletop", "console", "chess", "puzzle", "video game"]),
+    ("BOOKS", &["book", "reading", "read", "novel", "author", "fiction", "nonfiction", "memoir", "library", "bookstore", "kindle", "audiobook", "literature", "poetry", "poem", "writing", "writer", "publish", "publication", "publications", "conference", "conferences", "paper", "papers", "article", "articles", "proceedings", "journal", "journals"]),
+    ("GAMING", &["game", "gaming", "gamer", "playstation", "nintendo", "switch", "xbox", "steam", "rpg", "boardgame", "tabletop", "console", "chess", "puzzle", "videogame"]),
     ("TRAVEL", &["travel", "traveling", "flight", "airline", "trip", "vacation", "hotel", "hostel", "explore", "exploring", "passport", "tourist", "destination", "luggage", "itinerary", "cruise", "resort", "abroad", "museum", "theater"]),
     ("PHOTOGRAPHY", &["photo", "photography", "camera", "lens", "shoot", "canon", "nikon", "sony", "shutter", "aperture", "exposure", "darkroom", "instagram"]),
-    ("GARDENING", &["garden", "gardening", "plant", "indoor", "succulent", "flower", "flowers", "soil", "pruning", "seed", "greenhouse", "botany", "tomato", "herb"]),
-    ("TECH", &["python", "rust", "javascript", "typescript", "compiler", "react", "server", "bug", "repo", "code", "coding", "programmer", "programming", "software", "developer", "api", "database", "algorithm", "linux", "terminal", "github", "laptop", "computer", "phone", "app", "gadget"]),
+    ("GARDENING", &["garden", "gardening", "plant", "indoor", "succulent", "flower", "flowers", "soil", "pruning", "seed", "greenhouse", "botany", "tomato", "herb", "herbs", "homegrown", "harvest", "harvested", "ingredient", "ingredients", "produce", "basil", "mint", "pepper"]),
+    ("TECH", &["python", "rust", "javascript", "typescript", "compiler", "react", "server", "bug", "repo", "code", "coding", "programmer", "programming", "software", "developer", "api", "database", "algorithm", "linux", "terminal", "github", "laptop", "computer", "phone", "app", "gadget", "accessory", "accessories", "charger", "cable", "case", "protector", "earbuds", "headphones", "adapter", "dongle"]),
     ("VEHICLES", &["car", "vehicle", "truck", "sedan", "ev", "electric", "drive", "driving", "engine", "mechanic", "commute", "commuting", "train", "subway", "transit", "highway", "roadtrip", "motorcycle"]),
     ("FASHION", &["clothes", "clothing", "wear", "wearing", "dress", "jacket", "coat", "shoe", "boot", "sneaker", "style", "vintage", "wardrobe", "outfit", "sweater", "denim", "wool", "jewelry", "makeup", "skincare", "thrifting", "antique"]),
     ("HEALTH", &["health", "doctor", "hospital", "clinic", "medication", "prescription", "medicine", "allergy", "allergic", "symptom", "surgery", "recover", "recovery", "therapy", "therapist", "mental", "headache", "flu", "dentist", "sleep", "diet", "counseling", "psychology"]),
-    ("FAMILY", &["kid", "child", "children", "son", "daughter", "brother", "sister", "mother", "father", "mom", "dad", "parent", "parenting", "family", "toddler", "baby", "pregnancy", "grandma", "grandpa", "cousin", "niece", "nephew"]),
+    ("FAMILY", &["kid", "child", "children", "son", "daughter", "brother", "sister", "mother", "father", "mom", "dad", "parent", "parenting", "family", "toddler", "baby", "pregnancy", "grandma", "grandpa", "cousin", "niece", "nephew", "sibling", "siblings", "relative", "relatives", "kin", "twin", "twins"]),
     ("COMMUNITY", &["charity", "volunteer", "volunteering", "fundraiser", "fundraising", "donation", "donate", "shelter", "nonprofit", "cause", "awareness", "community", "activism", "protest", "rescue"]),
     ("IDENTITY", &["lgbtq", "queer", "gay", "lesbian", "pride", "trans", "transgender", "gender", "identity", "support", "transition", "religion", "faith", "church", "spiritual", "mentor"]),
-    ("EDUCATION", &["school", "college", "university", "degree", "graduate", "graduation", "studying", "study", "exam", "class", "course", "professor", "campus", "student", "certification", "diploma", "lecture", "workshop", "major"]),
-    ("CAREER", &["job", "career", "boss", "coworker", "interview", "offer", "resume", "promote", "promotion", "salary", "office", "remote", "work", "working", "firm", "client", "company", "manager", "project", "startup", "business", "profession", "occupation", "agency"]),
+    ("EDUCATION", &["school", "college", "university", "degree", "graduate", "graduation", "studying", "study", "exam", "class", "course", "professor", "campus", "student", "certification", "diploma", "lecture", "workshop", "major", "publication", "publications", "conference", "conferences", "paper", "papers", "journal"]),
+    ("CAREER", &["job", "career", "boss", "coworker", "interview", "offer", "resume", "promote", "promotion", "salary", "office", "remote", "work", "working", "firm", "client", "company", "manager", "project", "startup", "business", "profession", "occupation", "occupations", "vocation", "agency", "role", "roles", "milestone", "milestones", "buisiness", "contract", "specialist"]),
     ("HOUSING", &["house", "apartment", "rent", "lease", "mortgage", "buy", "buying", "moving", "moved", "move", "neighborhood", "landlord", "bedroom", "renovate", "furniture", "decor", "home"]),
     ("SCREEN", &["movie", "film", "cinema", "tv", "show", "series", "episode", "netflix", "actor", "director", "watch", "watching", "documentary", "anime"]),
     ("FINANCE", &["budget", "money", "save", "saving", "invest", "investment", "stock", "crypto", "deposit", "loan", "debt", "retirement", "expense", "bank", "tax"]),
-    ("RELATIONSHIP", &["date", "dating", "partner", "boyfriend", "girlfriend", "husband", "wife", "marriage", "wedding", "anniversary", "breakup", "divorce", "couple", "friend", "friendship", "single", "unmarried", "spouse"]),
+    ("RELATIONSHIP", &["date", "dating", "partner", "boyfriend", "girlfriend", "husband", "wife", "marriage", "wedding", "anniversary", "breakup", "divorce", "couple", "friend", "friendship", "single", "unmarried", "spouse", "ceremony", "event", "events"]),
     ("PERSONALITY", &["introvert", "extrovert", "adventurous", "creative", "organized", "outdoorsy", "compassionate", "empathetic", "patient", "energetic", "calm", "anxious", "stressed", "relaxed", "minimalist", "collector", "vintage", "antique", "thrifting", "personality", "trait"]),
     ("WELLNESS", &["meditation", "mindfulness", "massage", "spa", "relaxation", "stress", "breathe", "journal", "journaling", "selfcare"]),
     ("VIDEO", &["video", "editing", "premiere", "adobe", "lumetri", "davinci", "timeline", "render", "codec", "footage", "clip", "youtube", "vlog"]),
-    ("SPORTS", &["soccer", "football", "basketball", "baseball", "tennis", "golf", "hockey", "volleyball", "team", "league", "match", "score", "coach", "stadium"]),
+    ("SPORTS", &["soccer", "football", "basketball", "baseball", "tennis", "golf", "hockey", "volleyball", "team", "league", "match", "score", "coach", "stadium", "sport", "sports", "event", "events", "tournament", "race", "triathlon", "marathon", "competition", "championship", "athletic"]),
     ("SHOPPING", &["shop", "shopping", "store", "mall", "purchase", "bought", "order", "amazon", "deal", "sale", "discount", "coupon"]),
-    ("CELEBRATION", &["party", "birthday", "celebration", "celebrate", "holiday", "christmas", "thanksgiving", "halloween", "gift", "present", "festival"]),
-    ("SCIENCE", &["science", "physics", "chemistry", "biology", "astronomy", "space", "research", "experiment", "lab", "math"]),
+    ("CELEBRATION", &["party", "birthday", "celebration", "celebrate", "holiday", "christmas", "thanksgiving", "halloween", "gift", "present", "festival", "event", "events", "milestone", "ceremony", "wedding", "anniversary", "funeral", "graduation"]),
+    ("SCIENCE", &["science", "physics", "chemistry", "biology", "astronomy", "space", "research", "experiment", "lab", "math", "publication", "publications", "conference", "conferences", "paper", "papers", "journal", "article", "articles"]),
     ("LANGUAGE", &["language", "spanish", "french", "german", "japanese", "chinese", "italian", "learn", "learning", "fluent", "duolingo", "translate"]),
+    ("CONCURRENCY", &["mutex", "lock", "rwlock", "deadlock", "atomic", "channel", "thread", "coroutine", "async", "sync"]),
+    ("STORAGE", &["disk", "nvme", "wal", "strata", "sqlite", "sled", "append", "fsync", "btree", "lsm", "database", "storage", "ledger"]),
+    ("SECURITY", &["ed25519", "blake3", "sha256", "cryptography", "signature", "signed", "sandbox", "operator", "receipt", "audit", "precedent", "gate", "permission"]),
+    ("IPC_NETWORK", &["socket", "pipe", "domain", "http", "tcp", "mcp", "rpc", "grpc", "endpoint", "protocol", "tls", "stream", "packet"]),
+    ("VERIFICATION", &["fuzz", "proptest", "invariant", "witness", "bisect", "salience", "causal", "trace", "audit", "proof", "benchmark"]),
 ];
 
 const MONTHS: [&str; 12] = [
@@ -521,6 +527,8 @@ fn calendar_tokens(ts: i64) -> Vec<String> {
         MONTHS[d.month0() as usize].to_string(),
         d.year().to_string(),
         WEEKDAYS[d.weekday().num_days_from_monday() as usize].to_string(),
+        format!("__DATE__{}_{:02}_{:02}", d.year(), d.month(), d.day()),
+        format!("__YM__{}_{:02}", d.year(), d.month()),
     ]
 }
 
@@ -547,7 +555,13 @@ fn deictic_tokens(raw: &[String], ts: i64) -> Vec<String> {
             "ago" => {
                 let n: i64 = match prev {
                     "days" | "weeks" | "months" | "years" | "day" | "week" | "month" | "year" => {
-                        let q = if i >= 2 { raw[i - 2].as_str() } else { "" };
+                        let q = if i >= 3 && raw[i - 2] == "of" {
+                            raw[i - 3].as_str()
+                        } else if i >= 2 {
+                            raw[i - 2].as_str()
+                        } else {
+                            ""
+                        };
                         let n = match q {
                             "a" | "one" => 1,
                             "two" | "couple" => 2,
@@ -972,7 +986,7 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let mut groups: Vec<String> = Vec::new();
     let mut group_of = HashMap::new();
     let mut hyp_added: HashSet<&str> = HashSet::new();
-    let use_hyp = p.enable_hypernyms && (intent.preference || intent.inference);
+    let use_hyp = p.enable_hypernyms;
     for w in raw_tokens(&q.text).into_iter().filter(|w| is_content(w)) {
         if groups.contains(&w) {
             continue;
@@ -995,7 +1009,8 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                 for d in doms {
                     if hyp_added.insert(d) {
                         if let Some(id) = ix.vocab.get(&hyp_term(d)) {
-                            terms.push(QTerm { id, weight: p.hypernym_weight, group: None });
+                            terms.push(QTerm { id, weight: p.hypernym_weight, group: Some(g) });
+                            group_of.insert(id, g);
                         }
                     }
                 }
@@ -1005,6 +1020,21 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     if p.enable_preference && intent.preference {
         if let Some(id) = ix.vocab.get(PREF_AXIS) {
             terms.push(QTerm { id, weight: p.preference_axis_weight, group: None });
+        }
+    }
+    if p.enable_deictic {
+        let q_ts = parse_date(&q.date);
+        if q_ts != 0 {
+            let raw_q = raw_tokens(&q.text);
+            let mut deictic_added = HashSet::new();
+            for d in deictic_tokens(&raw_q, q_ts) {
+                if deictic_added.insert(d.clone()) {
+                    if let Some(id) = ix.vocab.get(&d) {
+                        let w = if d.starts_with("__DATE__") { 1.5 } else { p.date_weight };
+                        terms.push(QTerm { id, weight: w, group: None });
+                    }
+                }
+            }
         }
     }
     QueryPlan { intent, terms, groups, group_of }
@@ -1105,7 +1135,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let fl = if p.enable_roles && it.assistant_attribution {
         Fields { w: [1.0, p.assistant_attribution_weight], b: [p.b_user, p.b_assistant_attributed] }
     } else if p.enable_roles && it.user_attribution {
-        Fields { w: [p.user_attribution_weight, 1.0], b: [p.b_user, p.b_assistant] }
+        Fields { w: [p.user_attribution_weight, 0.35], b: [p.b_user, p.b_assistant] }
     } else {
         Fields { w: [1.0, 1.0], b: [p.b_user, p.b_assistant] }
     };
@@ -1451,13 +1481,14 @@ mod tests {
         assert_eq!(calendar_tokens(a)[..3], ["20".to_string(), "may".into(), "2023".into()]);
         assert_eq!(calendar_tokens(b)[..3], ["8".to_string(), "may".into(), "2023".into()]);
         assert_eq!(calendar_tokens(b)[3], "monday");
+        assert!(calendar_tokens(a).contains(&"__DATE__2023_05_20".to_string()));
     }
 
     #[test]
     fn deictic_compiler_resolves_yesterday() {
         let ts = parse_date("1:56 pm on 8 May, 2023");
         let toks = deictic_tokens(&raw_tokens("I went to the group yesterday"), ts);
-        assert!(toks.contains(&"7".to_string()) && toks.contains(&"may".to_string()));
+        assert!(toks.contains(&"__DATE__2023_05_07".to_string()) && toks.contains(&"may".to_string()));
     }
 
     #[test]
