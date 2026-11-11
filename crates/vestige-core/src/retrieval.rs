@@ -744,7 +744,12 @@ fn calendar_tokens(ts: i64) -> Vec<String> {
         format!("__DATE__{}_{:02}_{:02}", d.year(), d.month(), d.day()),
         format!("__YM__{}_{:02}", d.year(), d.month()),
         format!("__MONTH__{:02}", d.month()),
+        format!("__{}__{:02}", month_band(d.day()), d.month()),
     ]
+}
+
+fn month_band(day: u32) -> &'static str {
+    if day <= 10 { "EARLY" } else if day >= 21 { "LATE" } else { "MID" }
 }
 
 fn month_index(tok: &str) -> Option<u32> {
@@ -774,6 +779,15 @@ fn inline_date_tokens(text: &str) -> Vec<String> {
         .collect();
     for i in 0..toks.len() {
         let Some(m) = month_index(toks[i]) else { continue };
+        if let Some(band) = i.checked_sub(1).and_then(|k| match toks[k] {
+            "early" => Some("EARLY"),
+            "late" => Some("LATE"),
+            "mid" | "middle" => Some("MID"),
+            _ => None,
+        }) {
+            out.push(format!("__{band}__{m:02}"));
+            out.push(format!("__MONTH__{m:02}"));
+        }
         // "<day> <month> <year>" OR "<month> <day> <year>"
         let prev_num = i.checked_sub(1).and_then(|k| toks[k].parse::<u32>().ok()).filter(|&n| (1..=31).contains(&n));
         let next_num = toks.get(i + 1).and_then(|s| s.parse::<u32>().ok()).filter(|&n| (1..=31).contains(&n));
@@ -1047,6 +1061,8 @@ struct Index {
     s_stats: Stats,
     t_stats: Stats,
     w_stats: Stats,
+    /// Content-term ids that are the object of a personal constraint ("allergic to X").
+    constraint_terms: HashSet<u32>,
 }
 
 const PREF_AXIS: &str = "\u{1}pref";
@@ -1057,6 +1073,48 @@ fn hyp_term(dom: &str) -> String {
 
 fn stem_term(s: &str) -> String {
     format!("\u{1}stem:{s}")
+}
+
+/// Object tokens of a personal constraint. The marker is not enough; the thing
+/// constrained has to be in the index or a later question cannot hit it.
+fn typed_slot_tokens(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for raw in text.split_whitespace() {
+        let tok = raw.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '_' && c != '-');
+        let Some((key, value)) = tok.split_once(':') else { continue };
+        if key.len() >= 2
+            && key.chars().all(|c| c.is_ascii_alphabetic())
+            && !value.is_empty()
+            && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            out.push((key.to_lowercase(), value.to_lowercase()));
+        }
+    }
+    out
+}
+
+fn constraint_object_tokens(lower: &str) -> Vec<String> {
+    const LEADS: &[&str] = &[
+        "don't want ", "dont want ", "do not want ",
+        "allergic to ", "can't eat ", "cant eat ", "cannot eat ",
+        "can't have ", "cant have ", "cannot have ",
+    ];
+    let mut out = Vec::new();
+    for lead in LEADS {
+        let mut rest = lower;
+        while let Some(at) = rest.find(lead) {
+            let after = &rest[at + lead.len()..];
+            out.extend(
+                after
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+                    .filter(|w| !w.is_empty() && is_content(w))
+                    .take(2)
+                    .map(|w| w.to_string()),
+            );
+            rest = &rest[at + lead.len()..];
+        }
+    }
+    out
 }
 
 /// Imperative user rule. O(1) scan of a fixed prefix/phrase set, shared by
@@ -1111,6 +1169,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut session_entities = Vec::with_capacity(sessions.len());
     let mut session_content = Vec::with_capacity(sessions.len());
     let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
+    let mut constraint_terms: HashSet<u32> = HashSet::new();
 
     for (si, s) in sessions.iter().enumerate() {
         let ts = if s.date.is_empty() { s.timestamp } else { match parse_date(&s.date) { 0 => s.timestamp, t => t } };
@@ -1173,8 +1232,27 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let speaker = role.to_lowercase();
             if !speaker.is_empty() && speaker != "user" && speaker != "assistant" {
                 for w in raw_tokens(&speaker) {
-                    feats.push(Feat { id: vocab.intern(&w), w: 1.0, counts_len: false, inheritable: false });
+                    let id = vocab.intern(&w);
+                    // Speaker is a boost, never a filter: the name is an identity edge.
+                    feats.push(Feat { id, w: 1.6, counts_len: false, inheritable: false });
+                    entities.insert(id);
+                    s_ents.insert(id);
                 }
+            }
+            for obj in constraint_object_tokens(&lower) {
+                let id = vocab.intern(&obj);
+                feats.push(Feat { id, w: 1.8, counts_len: false, inheritable: true });
+                content.insert(id);
+                s_cont.insert(id);
+                constraint_terms.insert(id);
+            }
+            for (slot_key, slot_val) in typed_slot_tokens(&t.content) {
+                let kid = vocab.intern(&slot_key);
+                let vid = vocab.intern(&slot_val);
+                feats.push(Feat { id: kid, w: 0.4, counts_len: false, inheritable: false });
+                feats.push(Feat { id: vid, w: 1.6, counts_len: false, inheritable: true });
+                content.insert(vid);
+                s_cont.insert(vid);
             }
             let (is_question, is_short_question) = detect_question(&t.content, raw.len());
             let anaphoric = raw.first().is_some_and(|w| CONTINUATIONS.contains(&w.as_str()))
@@ -1235,6 +1313,18 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             for &f in &t.feats {
                 sb.add(t.field, f, 1.0);
                 turn_bags[ti].add(t.field, f, 1.0);
+            }
+            if p.enable_carry {
+                let short = t.content.len() <= 6;
+                for (npos, weight) in [(pos.wrapping_sub(1), if short { 1.0 } else { 0.55 }), (pos + 1, if short { 1.0 } else { 0.55 })] {
+                    if npos >= members.len() || (npos == pos.wrapping_sub(1) && pos == 0) {
+                        continue;
+                    }
+                    let src = &turns[members[npos]];
+                    for &f in src.feats.iter().filter(|f| f.inheritable) {
+                        turn_bags[ti].add(t.field, Feat { counts_len: false, ..f }, weight);
+                    }
+                }
             }
             if p.enable_carry && pos > 0 {
                 let prev = &turns[members[pos - 1]];
@@ -1313,6 +1403,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         s_stats,
         t_stats,
         w_stats,
+        constraint_terms,
     }
 }
 
@@ -1381,7 +1472,7 @@ pub fn classify(text: &str) -> QueryIntent {
 }
 
 fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
-    let intent = classify(&q.text);
+    let mut intent = classify(&q.text);
     let mut terms = Vec::new();
     let mut groups: Vec<String> = Vec::new();
     let mut group_of = HashMap::new();
@@ -1389,6 +1480,9 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let use_hyp = p.enable_hypernyms;
 
     let raw_q = raw_tokens(&q.text);
+    if raw_q.iter().any(|w| ix.vocab.get(w).is_some_and(|id| ix.constraint_terms.contains(&id))) {
+        intent.preference = true;
+    }
     let inline_dates = if p.enable_deictic { inline_date_tokens(&q.text) } else { Vec::new() };
     let q_ts = if p.enable_deictic { parse_date(&q.date) } else { 0 };
     let deictic_items = if p.enable_deictic && q_ts != 0 {
@@ -1812,17 +1906,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             }
                         }
                     }
-                    for &w in &ix.turns[s].content {
-                        if plan.group_of.contains_key(&w) {
-                            continue;
-                        }
-                        if let Some(&df) = ix.t_stats.df.get(&w) {
-                            if df >= 2 && df <= max_df {
-                                let idf_term = 1.0 / ((df as f32 + 1.1).ln());
-                                *activation.entry(w).or_insert(0.0) += seed_norm * idf_term;
-                            }
-                        }
-                    }
                 }
 
                 // Pass 2: Bridge Entities -> Normalized, Bounded 2nd-Hop Turns
@@ -1834,12 +1917,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                                 ent_hit += 2.0 * act;
                             }
                         }
-                        let mut ppr_sum = ent_hit;
-                        for &w in &ix.turns[ti].content {
-                            if let Some(&act) = activation.get(&w) {
-                                ppr_sum += act;
-                            }
-                        }
+                        let ppr_sum = ent_hit;
                         if ppr_sum > 0.0 && (t_scene[ti] > 0.0 || ent_hit > 0.0) {
                             let target_norm = ppr_sum / ((ix.turns[ti].content.len() + 4) as f32).sqrt();
                             let sat = target_norm / (target_norm + 0.45);
@@ -1890,6 +1968,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // captured first. 0.68 stays under the 0.72 second-anchor cut so a
     // zero-overlap rule does not become a PPR anchor. The standing floor is
     // applied to the policy turn itself, not only its session.
+    let s_lexical = s_score.clone();
+    let t_lexical = t_scene.clone();
     let lexical_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     let lexical_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
     if it.task_under_rules {
@@ -1911,6 +1991,15 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
         });
         raise_floor(&mut t_scene, lexical_tmax, 0.38, |ti| ix.turns[ti].is_initiative);
+    }
+    for ti in 0..nt {
+        let sp = ix.turns[ti].speaker.as_str();
+        if sp.is_empty() || sp == "user" || sp == "assistant" || t_scene[ti] <= 0.0 {
+            continue;
+        }
+        if plan.groups.iter().any(|g| g == sp) {
+            t_scene[ti] *= 1.35;
+        }
     }
     let initiative_content: Vec<HashSet<u32>> = if it.is_event_sequence {
         ix.session_turns.iter().map(|members| {
@@ -1958,17 +2047,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             }
                         }
                     }
-                    for &w in &ix.turns[ti].content {
-                        if plan.group_of.contains_key(&w) {
-                            continue;
-                        }
-                        if let Some(&df) = ix.s_stats.df.get(&w) {
-                            if df >= 2 && df <= max_s_df {
-                                let idf_s = 1.0 / ((df as f32 + 1.1).ln());
-                                *s_act.entry(w).or_insert(0.0) += (anc_w * idf_s) / turn_len_norm;
-                            }
-                        }
-                    }
                 }
             }
             if !s_act.is_empty() {
@@ -1982,12 +2060,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             ent_sum += 2.0 * a;
                         }
                     }
-                    let mut sum = ent_sum;
-                    for &w in &ix.session_content[si] {
-                        if let Some(&a) = s_act.get(&w) {
-                            sum += a;
-                        }
-                    }
+                    let sum = ent_sum;
                     // Require direct query overlap (s_score > 0), or an explicit proper-entity bridge
                     // on non-preference/non-user queries, so zero-match distractors never displace personal facts.
                     let allow_zero_hit = !it.preference && !it.user_attribution && ent_sum > 0.0;
@@ -2021,6 +2094,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 while selected.len() < k && !remaining.is_empty() {
                     let mut best_pos = 0usize;
                     let mut best_gain = -1.0f32;
+                    let mut found = false;
                     for (idx, &si) in remaining.iter().enumerate() {
                         let m_eff = s_mask[si] & mask_limit;
                         let uncovered = ((s_mask[si] & !covered_mask) & mask_limit).count_ones() as f32;
@@ -2030,6 +2104,21 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             0.0
                         };
                         let same_mask_seen = mask_counts.get(&m_eff).copied().unwrap_or(0);
+                        let policy_prior = s_lexical[si] <= 1e-6
+                            && ix.session_turns[si].iter().any(|&t| ix.turns[t].is_standing_policy);
+                        let pref_prior = s_lexical[si] <= 1e-6
+                            && !policy_prior
+                            && ix.session_turns[si].iter().any(|&t| ix.turns[t].pref_marker && ix.turns[t].field == 0);
+                        let policy_slots = selected.iter().filter(|&&s| {
+                            s_lexical[s] <= 1e-6 && ix.session_turns[s].iter().any(|&t| ix.turns[t].is_standing_policy)
+                        }).count();
+                        let pref_slots = selected.iter().filter(|&&s| {
+                            s_lexical[s] <= 1e-6
+                                && ix.session_turns[s].iter().any(|&t| ix.turns[t].pref_marker && ix.turns[t].field == 0)
+                        }).count();
+                        if (policy_prior && policy_slots >= 1) || (pref_prior && pref_slots >= 1) {
+                            continue;
+                        }
                         let shared_ent = ix.session_entities[si].iter().any(|e| covered_ents.contains(e));
                         let same_date_seen = it.is_event_sequence && selected.iter().any(|&s| ix.session_ts[s] == ix.session_ts[si] && ix.session_ts[si] > 0);
                         let topic_seen = it.is_event_sequence
@@ -2048,10 +2137,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         // Frozen mix for this run: new-event cover 0.65, already-seen topic 0.35.
                         let event_cover = if new_event { 0.65 } else { 0.0 };
                         let gain = (s_score[si] + bridge_boost[si]) * (1.0 + 0.90 * uncovered_ratio + event_cover) * redundancy;
+                        found = true;
                         if gain > best_gain {
                             best_gain = gain;
                             best_pos = idx;
                         }
+                    }
+                    if !found {
+                        break;
                     }
                     let chosen = remaining.swap_remove(best_pos);
                     selected.push(chosen);
@@ -2107,19 +2200,38 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     && selected_turns.iter().any(|&prev| {
                         ix.turns[prev].is_initiative && jaccard(&ix.turns[prev].content, &ix.turns[ti].content) >= 0.45
                     });
-                let diversity_factor = if count == 0 && !topic_repeat {
+                let t_m = t_mask[ti];
+                let uncovered_mask = t_m & !covered_query_terms;
+                let uncovered_count = (uncovered_mask & ((1u64 << total_query_groups) - 1)).count_ones() as f32;
+                let short_reply = ix.turns[ti].content.len() <= 6
+                    && selected_turns.iter().any(|&prev| {
+                        ix.turns[prev].session == t_sess && (prev as isize - ti as isize).abs() == 1
+                    });
+                let policy_prior = t_lexical[ti] <= 1e-6 && ix.turns[ti].is_standing_policy;
+                let pref_prior = t_lexical[ti] <= 1e-6
+                    && ix.turns[ti].pref_marker
+                    && ix.turns[ti].field == 0
+                    && !policy_prior;
+                let policy_slots = selected_turns.iter().filter(|&&t| t_lexical[t] <= 1e-6 && ix.turns[t].is_standing_policy).count();
+                let pref_slots = selected_turns.iter().filter(|&&t| {
+                    t_lexical[t] <= 1e-6 && ix.turns[t].pref_marker && ix.turns[t].field == 0
+                }).count();
+                if (policy_prior && policy_slots >= 1) || (pref_prior && pref_slots >= 1) {
+                    continue;
+                }
+                let diversity_factor = if short_reply && !it.is_event_sequence {
+                    1.0
+                } else if count == 0 && !topic_repeat {
                     1.0
                 } else if it.is_event_sequence || topic_repeat {
+                    0.15
+                } else if it.multi_hop && count >= 1 && uncovered_count == 0.0 {
                     0.15
                 } else if count == 1 {
                     0.70
                 } else {
                     0.40
                 };
-
-                let t_m = t_mask[ti];
-                let uncovered_mask = t_m & !covered_query_terms;
-                let uncovered_count = (uncovered_mask & ((1u64 << total_query_groups) - 1)).count_ones() as f32;
                 let uncovered_ratio = if total_query_groups > 0 {
                     uncovered_count / (total_query_groups as f32)
                 } else {
@@ -2682,5 +2794,74 @@ mod tests {
             params: Params::default(),
         };
         assert_eq!(rank(&req).results[0].sessions[0].id, "limit");
+    }
+
+    #[test]
+    fn short_reply_inherits_the_neighbor_turn() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "chat".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("alex", "The walnut cabinet needs another coat of oil."),
+                    turn("blair", "Done."),
+                    turn("alex", "Unrelated note about train tickets and a station platform."),
+                ],
+            }],
+            queries: vec![Query { text: "Who finished the walnut cabinet oil?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.iter().any(|id| id.ends_with("#1")), "short reply missed the neighbor words: {ids:?}");
+    }
+
+    #[test]
+    fn constraint_object_turns_preference_on_without_a_planning_cue() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "menu".into(), date: String::new(), timestamp: 1, turns: vec![turn("user", "The diner menu lists walnut pie and citrus tart.")] },
+                Session { id: "limit".into(), date: String::new(), timestamp: 2, turns: vec![turn("user", "I am allergic to walnuts and skip that dessert.")] },
+            ],
+            queries: vec![Query { text: "Does the diner menu include walnuts?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.preference);
+        let ids: Vec<&str> = ranked.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"limit"), "constraint object never entered the ranking: {ids:?}");
+    }
+
+    #[test]
+    fn a_dateless_question_does_not_invent_a_date_window() {
+        assert!(inline_date_tokens("How do I sand a drawer?").is_empty());
+        let early = inline_date_tokens("We met in early May before the show.");
+        assert!(early.iter().any(|t| t == "__EARLY__05"), "{early:?}");
+        assert!(early.iter().any(|t| t == "__MONTH__05"), "{early:?}");
+    }
+
+    #[test]
+    fn speaker_boost_does_not_drop_the_other_speaker() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "talk".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("alex", "Alex packed the walnut oil for the cabinet."),
+                    turn("blair", "Blair packed the walnut oil for the cabinet too."),
+                ],
+            }],
+            queries: vec![Query { text: "What did Alex pack for the cabinet?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert!(ids[0].ends_with("#0"), "named speaker should lead: {ids:?}");
     }
 }

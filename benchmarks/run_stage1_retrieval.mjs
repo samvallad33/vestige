@@ -128,9 +128,14 @@ function ingestLoCoMo(conv) {
     sessions.push({
       id: `D${s}`,
       date: String(c[`session_${s}_date_time`] || ''),
-      turns: c[`session_${s}`].filter(t => t.text && t.dia_id).map(t => ({
-        id: String(t.dia_id), role: String(t.speaker || ''), content: String(t.text),
-      })),
+      turns: c[`session_${s}`].filter(t => t.text && t.dia_id).map(t => {
+        let blip = t.blip_caption ? `\n[BLIP caption] ${t.blip_caption}` : '';
+        return {
+          id: String(t.dia_id),
+          role: String(t.speaker || ''),
+          content: `${t.text}${blip}`,
+        };
+      }),
     });
   }
   const queries = conv.qa.map(q => ({ text: String(q.question), date: '' }));
