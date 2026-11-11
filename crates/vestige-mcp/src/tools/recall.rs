@@ -246,36 +246,50 @@ pub fn rank_nodes_lexical(
     query: &str,
     top_k: usize,
 ) -> Vec<(String, f32)> {
-    let nodes = storage.get_all_nodes(10000, 0).unwrap_or_default();
+    let mut nodes = storage.get_all_nodes(10000, 0).unwrap_or_default();
     if nodes.is_empty() || query.trim().is_empty() {
         return Vec::new();
     }
-    let turns: Vec<vestige_core::retrieval::Turn> = nodes
+    nodes.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+
+    // One session per UTC day. Same-day turns stay a micro-scene; distinct
+    // days are the sessions the chrono-lasso and event-sequence diversity
+    // penalties actually separate.
+    let mut by_day: std::collections::BTreeMap<String, (i64, String, Vec<vestige_core::retrieval::Turn>)> =
+        std::collections::BTreeMap::new();
+    for node in nodes {
+        let day = node.created_at.format("%Y-%m-%d").to_string();
+        let role = if node.tags.iter().any(|t| t == "assistant" || t == "system") {
+            "assistant".to_string()
+        } else {
+            "user".to_string()
+        };
+        let entry = by_day.entry(day).or_insert_with(|| {
+            (
+                node.created_at.timestamp(),
+                node.created_at.to_rfc3339(),
+                Vec::new(),
+            )
+        });
+        entry.2.push(vestige_core::retrieval::Turn {
+            id: node.id,
+            role,
+            content: format!("{} {}", node.content, node.tags.join(" ")),
+        });
+    }
+    let sessions = by_day
         .into_iter()
-        .map(|node| {
-            let role = if node.tags.iter().any(|t| t == "assistant" || t == "system") {
-                "assistant".to_string()
-            } else {
-                "user".to_string()
-            };
-            vestige_core::retrieval::Turn {
-                id: node.id,
-                role,
-                content: format!("{} {}", node.content, node.tags.join(" ")),
-            }
+        .map(|(day, (timestamp, date, turns))| vestige_core::retrieval::Session {
+            id: day,
+            date,
+            timestamp,
+            turns,
         })
         .collect();
 
     let now = chrono::Utc::now();
-    let session = vestige_core::retrieval::Session {
-        id: "strata".to_string(),
-        date: now.to_rfc3339(),
-        timestamp: now.timestamp(),
-        turns,
-    };
-
     let req = vestige_core::retrieval::RankRequest {
-        sessions: vec![session],
+        sessions,
         queries: vec![vestige_core::retrieval::Query {
             text: query.to_string(),
             date: now.to_rfc3339(),
@@ -878,5 +892,74 @@ mod strata_query {
             .as_str()
             .unwrap();
         assert_eq!(full_neighbor, long_neighbor_text);
+    }
+
+    #[test]
+    fn recall_splits_memories_by_utc_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let put = |content: &str| {
+            storage
+                .ingest(IngestInput {
+                    content: content.to_string(),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+        };
+        let jan_a = put("We shipped the ledger format to production.");
+        let jan_b = put("The ledger format deploy finished before noon.");
+        let mar = put("We rolled the ledger format back after the audit.");
+        let jun = put("We restored the ledger format with signed receipts.");
+        drop(storage);
+
+        {
+            let mut store = strata_store::StrataStore::open(dir.path()).unwrap();
+            let ms = |stamp: &str| {
+                chrono::DateTime::parse_from_rfc3339(stamp)
+                    .unwrap()
+                    .timestamp_millis()
+            };
+            store
+                .set_created_at(&jan_a, ms("2024-01-04T10:00:00Z"))
+                .unwrap();
+            store
+                .set_created_at(&jan_b, ms("2024-01-04T18:00:00Z"))
+                .unwrap();
+            store
+                .set_created_at(&mar, ms("2024-03-02T11:00:00Z"))
+                .unwrap();
+            store
+                .set_created_at(&jun, ms("2024-06-09T11:00:00Z"))
+                .unwrap();
+        }
+
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let ranked = rank_nodes_lexical(
+            storage.as_ref(),
+            "What is the chronological order of the ledger format changes?",
+            3,
+        );
+        assert_eq!(ranked.len(), 3, "{ranked:?}");
+        let days: Vec<String> = ranked
+            .iter()
+            .map(|(id, _)| {
+                storage
+                    .get_node(id)
+                    .unwrap()
+                    .unwrap()
+                    .created_at
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
+            .collect();
+        let unique: std::collections::HashSet<_> = days.iter().cloned().collect();
+        assert_eq!(
+            unique.len(),
+            3,
+            "top hits collapsed onto one UTC day: {days:?} ranked={ranked:?}"
+        );
+        let january = ranked.iter().filter(|(id, _)| id == &jan_a || id == &jan_b).count();
+        assert_eq!(january, 1, "same-day pair both survived top-3: {ranked:?}");
     }
 }

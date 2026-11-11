@@ -6,10 +6,13 @@
 //! - Runs Retroactive Salience Backfill inline on every save and returns `backfilled_handles: [...]` receipt in the response.
 //! - If tagged "pinned", automatically re-compiles the CLAUDE.md fence on save.
 
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use vestige_core::intention_graph::{Command, Priority};
+use vestige_core::retrieval::{standing_policy_id, utterance_is_standing_policy};
 use vestige_core::Storage;
 
 use crate::cognitive::CognitiveEngine;
@@ -205,7 +208,11 @@ pub async fn execute(
         recompiled_fence = true;
     }
 
-    // Step 5: Format upgraded response
+    // Standing policies become active intention-graph nodes. The memory
+    // write already committed; a graph refusal is reported, not fatal.
+    let standing_policies = register_standing_policies(storage, scope, &raw_args);
+
+    // Step 6: Format upgraded response
     let mut response = ingest_res;
     if let Some(obj) = response.as_object_mut() {
         obj.insert("backfilled_handles".to_string(), json!(backfilled_handles));
@@ -215,6 +222,128 @@ pub async fn execute(
         if has_pinned {
             obj.insert("recompiled_fence".to_string(), json!(recompiled_fence));
         }
+        if !standing_policies.is_empty() {
+            obj.insert("standing_policies".to_string(), json!(standing_policies));
+        }
     }
     Ok(response)
+}
+
+fn policy_utterances(raw: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |text: &str| {
+        if utterance_is_standing_policy(text) && !out.iter().any(|seen| seen == text) {
+            out.push(text.to_string());
+        }
+    };
+    if let Some(content) = raw.get("content").and_then(Value::as_str) {
+        push(content);
+    }
+    if let Some(items) = raw.get("items").and_then(Value::as_array) {
+        for item in items {
+            if let Some(content) = item.get("content").and_then(Value::as_str) {
+                push(content);
+            }
+        }
+    }
+    out
+}
+
+fn policy_description(text: &str) -> String {
+    let mut desc: String = text
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    const MAX_BYTES: usize = 8_192;
+    if desc.len() > MAX_BYTES {
+        desc.truncate(MAX_BYTES);
+        while !desc.is_char_boundary(desc.len()) {
+            desc.pop();
+        }
+    }
+    desc
+}
+
+fn register_standing_policies(storage: &Arc<Storage>, scope: &str, raw: &Value) -> Vec<Value> {
+    let mut registered = Vec::new();
+    for text in policy_utterances(raw) {
+        let description = policy_description(&text);
+        if description.is_empty() {
+            continue;
+        }
+        let id = standing_policy_id(&text);
+        let command = Command::Plan {
+            id: id.clone(),
+            description,
+            priority: Priority::High,
+            requirements: Vec::new(),
+            min_attention_interval_seconds: 7 * 24 * 60 * 60,
+            conflict_keys: Vec::new(),
+        };
+        match storage.apply_intention_graph(scope, command, Utc::now()) {
+            Ok(_) => registered.push(json!({"id": id, "lifecycle": "active"})),
+            Err(err) if err.contains("already exists") => {
+                registered.push(json!({"id": id, "lifecycle": "active"}));
+            }
+            Err(err) => registered.push(json!({"id": id, "error": err})),
+        }
+    }
+    registered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vestige_core::intention_graph::Command;
+
+    fn open() -> (Arc<Storage>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        (storage, dir)
+    }
+
+    async fn remember(storage: &Arc<Storage>, content: &str) -> Value {
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        execute(storage, &cognitive, Some(json!({ "content": content })))
+            .await
+            .unwrap_or_else(|err| panic!("remember failed: {err}"))
+    }
+
+    #[tokio::test]
+    async fn remember_registers_a_standing_policy_on_the_intention_graph() {
+        let (storage, _dir) = open();
+        let text = "Always include the receipt hash.";
+        let id = standing_policy_id(text);
+
+        let saved = remember(&storage, text).await;
+        let policies = saved["standing_policies"].as_array().expect("standing_policies");
+        assert_eq!(policies.len(), 1, "{saved}");
+        assert_eq!(policies[0]["id"], id);
+        assert_eq!(policies[0]["lifecycle"], "active");
+        assert!(policies[0].get("error").is_none(), "{saved}");
+
+        let explained = storage
+            .apply_intention_graph("user", Command::Explain { id: id.clone() }, Utc::now())
+            .unwrap_or_else(|err| panic!("explain failed: {err}"));
+        assert_eq!(explained["result"]["plan"]["lifecycle"], "active", "{explained}");
+        assert_eq!(explained["result"]["plan"]["id"], id);
+        assert_eq!(
+            explained["result"]["current"]["description"],
+            text,
+            "{explained}"
+        );
+        assert_eq!(explained["result"]["current"]["priority"], "high");
+
+        let again = remember(&storage, text).await;
+        assert_eq!(again["standing_policies"][0]["id"], id);
+        assert_eq!(again["standing_policies"][0]["lifecycle"], "active");
+        assert!(again["standing_policies"][0].get("error").is_none(), "{again}");
+        let replay = storage.replay_intention_graph("user").unwrap();
+        assert_eq!(replay["matched"], true, "{replay}");
+        assert_eq!(replay["commands"], 1, "{replay}");
+
+        let ordinary = remember(&storage, "The cafe serves oat milk.").await;
+        assert!(ordinary.get("standing_policies").is_none(), "{ordinary}");
+    }
 }

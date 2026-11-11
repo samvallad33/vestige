@@ -189,6 +189,7 @@ pub struct QueryIntent {
     pub sniper_how_many: bool,
     pub sniper_where: bool,
     pub sniper_why: bool,
+    pub is_event_sequence: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -264,6 +265,10 @@ const PREF_MARKERS: &[&str] = &[
     "hated", "dislike", "dislikes", "avoid", "avoiding", "allergic", "diet", "vegan",
     "vegetarian", "big fan", "fond", "crave", "addicted", "habit", "routine", "can't stand",
     "i'd like", "would like", "rather", "instead of", "go-to",
+    // Exclusion and contrast. Bare "only" is a stopword and is not a unigram marker;
+    // exclusive preference is the constraint phrase, not every occurrence of the word.
+    "solely", "exclusively", "stick with", "switched to", "too bitter", "i only", "only ever",
+    "only use", "only want", "only like", "only drink", "only eat", "only buy", "only wear",
 ];
 
 const PREF_QUERY_CUES: &[&str] = &[
@@ -295,7 +300,8 @@ const ASSISTANT_ATTRIBUTION_CUES: &[&str] = &[
 
 const USER_ATTRIBUTION_CUES: &[&str] = &[
     " i ", "i'", " my ", "my ", " me ", " me?", "did i", "do i", "have i", "was i", "am i",
-    "what should i", "i've", "i'm",
+    "what should i", "i've", "i'm", "i brought up", "did i mention", "my instruction",
+    "i told you",
 ];
 
 const MULTI_HOP_CUES: &[&str] = &[
@@ -954,6 +960,7 @@ struct TurnIx {
     has_spatial: bool,
     has_causal: bool,
     is_short_question: bool,
+    is_standing_policy: bool,
 }
 
 struct Stats {
@@ -1019,6 +1026,37 @@ fn hyp_term(dom: &str) -> String {
 
 fn stem_term(s: &str) -> String {
     format!("\u{1}stem:{s}")
+}
+
+/// Imperative user rule. O(1) scan of a fixed prefix/phrase set, shared by
+/// index construction and the intention-graph registration path.
+pub fn utterance_is_standing_policy(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let trimmed = lower.trim_start();
+    trimmed.starts_with("always ")
+        || trimmed.starts_with("never ")
+        || trimmed.starts_with("make sure")
+        || trimmed.starts_with("ensure ")
+        || trimmed.starts_with("remember to")
+        || trimmed.starts_with("from now on")
+        || trimmed.starts_with("do not ")
+        || trimmed.starts_with("don't ")
+        || lower.contains("always format")
+        || lower.contains("always include")
+        || lower.contains("always use")
+        || lower.contains("never use")
+        || lower.contains("format all")
+}
+
+/// Stable plan id for one normalized standing-policy utterance.
+pub fn standing_policy_id(text: &str) -> String {
+    let norm = text.trim().to_lowercase();
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in norm.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("sp-{hash:016x}")
 }
 
 fn detect_question(content: &str, raw_len: usize) -> (bool, bool) {
@@ -1121,6 +1159,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 || raw.iter().any(|w| NUMBER_WORDS.contains(&w.as_str()));
             let has_spatial = raw.iter().any(|w| SPATIAL_WORDS.contains(&w.as_str()));
             let has_causal = CAUSAL_WORDS.iter().any(|c| lower.contains(c));
+            let is_standing_policy = field == 0 && utterance_is_standing_policy(&t.content);
             let id = if t.id.is_empty() { format!("{}#{}", s.id, ti) } else { t.id.clone() };
             members.push(turns.len());
             turns.push(TurnIx {
@@ -1141,6 +1180,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 has_spatial,
                 has_causal,
                 is_short_question,
+                is_standing_policy,
             });
         }
         session_turns.push(members);
@@ -1281,6 +1321,10 @@ pub fn classify(text: &str) -> QueryIntent {
     let sniper_why = has_any(&lower, &[
         "why ", "why did", "why does", "why was", "what reason", "how come",
     ]);
+    let is_event_sequence = has_any(&lower, &[
+        "order of", "order in which", "first to last", "earliest to latest",
+        "chronological", "order the", "order these", "timeline of",
+    ]);
     QueryIntent {
         preference: has_any(&lower, PREF_QUERY_CUES),
         current_state: has_any(&lower, CURRENT_STATE_CUES),
@@ -1293,6 +1337,7 @@ pub fn classify(text: &str) -> QueryIntent {
         sniper_how_many,
         sniper_where,
         sniper_why,
+        is_event_sequence,
     }
 }
 
@@ -1559,6 +1604,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             if pref_on && members.iter().any(|&t| ix.turns[t].pref_marker && ix.turns[t].field == 0) {
                 sc *= p.preference_boost;
             }
+            if members.iter().any(|&t| ix.turns[t].is_standing_policy) {
+                sc *= 1.8;
+            }
             if sc > s_win[si] {
                 s_win[si] = sc;
             }
@@ -1632,6 +1680,23 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     } else {
         t_scene = t_raw;
+    }
+
+    // Turn-level role alignment: when the query asks what the USER said/brought up, assistant turns are suppressed.
+    if p.enable_roles && it.user_attribution {
+        for ti in 0..nt {
+            if ix.turns[ti].field == 1 {
+                t_scene[ti] *= 0.35;
+            }
+        }
+    }
+
+    // Standing policy invariant boost:
+    for ti in 0..nt {
+        let t = &ix.turns[ti];
+        if t.is_standing_policy && t_scene[ti] > 0.0 {
+            t_scene[ti] *= 2.5;
+        }
     }
 
     // Weapon 2: Deterministic Answer-Type Sniper (+65% payload boost)
@@ -1868,7 +1933,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         };
                         let same_mask_seen = mask_counts.get(&m_eff).copied().unwrap_or(0);
                         let shared_ent = ix.session_entities[si].iter().any(|e| covered_ents.contains(e));
-                        let redundancy = if uncovered == 0.0 && bridge_boost[si] < 0.12 * smax && shared_ent && same_mask_seen >= 2 {
+                        let same_date_seen = it.is_event_sequence && selected.iter().any(|&s| ix.session_ts[s] == ix.session_ts[si] && ix.session_ts[si] > 0);
+                        let redundancy = if same_date_seen {
+                            0.25
+                        } else if uncovered == 0.0 && bridge_boost[si] < 0.12 * smax && shared_ent && same_mask_seen >= 2 {
                             0.62
                         } else {
                             1.0
@@ -1930,6 +1998,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let count = session_counts.get(&t_sess).copied().unwrap_or(0);
                 let diversity_factor = if count == 0 {
                     1.0
+                } else if it.is_event_sequence {
+                    0.15
                 } else if count == 1 {
                     0.70
                 } else {
@@ -2261,5 +2331,136 @@ mod tests {
         };
         let top2: Vec<String> = rank(&pref_req).results[0].sessions.iter().map(|s| s.id.clone()).collect();
         assert!(!top2.contains(&"zero".to_string()), "zero-overlap bridge should not enter preference top2: {top2:?}");
+    }
+
+    #[test]
+    fn standing_policy_classifier_catches_imperatives_and_exclusions() {
+        assert!(utterance_is_standing_policy("Always include the receipt hash."));
+        assert!(utterance_is_standing_policy("Please format all JSON with two-space indents."));
+        assert!(utterance_is_standing_policy("Never use tabs in this repo."));
+        assert!(utterance_is_standing_policy("The note says to always include a hash."));
+        assert!(!utterance_is_standing_policy("I like two-space indents."));
+        assert_eq!(
+            standing_policy_id("Always include the receipt hash."),
+            standing_policy_id("  always include the receipt hash.  ")
+        );
+        let seq = classify("What is the chronological order of the three deploys?");
+        assert!(seq.is_event_sequence);
+        let mine = classify("What instruction did I tell you to always include?");
+        assert!(mine.user_attribution && !mine.assistant_attribution);
+    }
+
+    #[test]
+    fn standing_policy_outranks_a_longer_topic_essay() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "essay".into(),
+                    date: "2024/06/01 (Sat) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn(
+                        "assistant",
+                        "Receipt hashes, formatting, and include paths show up in a long essay about build logs, formatters, and hash functions that never states a rule.",
+                    )],
+                },
+                Session {
+                    id: "rule".into(),
+                    date: "2024/01/02 (Tue) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "Always include the receipt hash when you format a response.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "What formatting rule did I tell you to always include?".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.user_attribution);
+        assert_eq!(ranked.results[0].turns[0].session_id, "rule");
+    }
+
+    #[test]
+    fn exclusive_preference_beats_a_neutral_mention() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "neutral".into(),
+                    date: String::new(),
+                    timestamp: 1,
+                    turns: vec![turn("user", "The cafe menu lists an oat milk latte and a citrus tonic.")],
+                },
+                Session {
+                    id: "exclusive".into(),
+                    date: String::new(),
+                    timestamp: 2,
+                    turns: vec![turn(
+                        "user",
+                        "I switched to oat milk only. The citrus tonic is too bitter and I avoid it.",
+                    )],
+                },
+            ],
+            queries: vec![Query {
+                text: "What kind of milk would I prefer?".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.preference);
+        assert_eq!(ranked.results[0].sessions[0].id, "exclusive");
+    }
+
+    #[test]
+    fn event_sequence_spreads_top_turns_across_dates() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "jan".into(),
+                    date: "2024/01/04 (Thu) 10:00".into(),
+                    timestamp: 0,
+                    turns: vec![
+                        turn("user", "We shipped the ledger format to production."),
+                        turn("assistant", "Noted the ledger format shipment."),
+                        turn("user", "The ledger format deploy finished before noon."),
+                    ],
+                },
+                Session {
+                    id: "jan-same".into(),
+                    date: "2024/01/04 (Thu) 10:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "Another note about the ledger format the same day.")],
+                },
+                Session {
+                    id: "mar".into(),
+                    date: "2024/03/02 (Sat) 11:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "We rolled the ledger format back after the audit.")],
+                },
+                Session {
+                    id: "jun".into(),
+                    date: "2024/06/09 (Sun) 11:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "We restored the ledger format with signed receipts.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "What is the chronological order of the ledger format changes?".into(),
+                date: String::new(),
+            }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.is_event_sequence);
+        let turn_sessions: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.session_id.as_str()).collect();
+        let unique = turn_sessions.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), turn_sessions.len(), "event sequence collapsed onto one session: {turn_sessions:?}");
+        let picked: Vec<&str> = ranked.results[0].sessions.iter().take(3).map(|s| s.id.as_str()).collect();
+        assert!(picked.contains(&"mar") && picked.contains(&"jun"), "same-date session was not penalized: {picked:?}");
+        assert!(!picked.contains(&"jan-same"), "{picked:?}");
     }
 }
