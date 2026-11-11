@@ -1,7 +1,7 @@
 //! GhostLink: the causal proof engine's composition surface.
 //!
 //! The ghost is the never-composed: a pairing the recorded graph already
-//! implies (or forces) that nobody has summoned. Eight modes:
+//! implies (or forces) that nobody has summoned. Modes:
 //!
 //! * `propose` — never-composed pairs. `lens='bridge'` (default): pairs
 //!   within 3 undirected hops over recorded touched / derived_from /
@@ -11,6 +11,10 @@
 //!   candidate carries its proof.
 //! * `bounty` — lanes from woven compositions by exact outcome type, plus
 //!   the bridge lens as the never-composed lane.
+//! * `open` — seal a hypothesis before any test (a write). The card is a
+//!   claim, the mechanism the path does not already name, a discriminator,
+//!   and both predictions. No admitting edge is written, so the pair stays
+//!   in both lenses. The outcome enum is not accepted here.
 //! * `weave` — record a composition outcome (a write): on a Strata log a
 //!   composition record plus `derived_from` edges to both memories, each
 //!   with a receipt; on a legacy SQLite store an outcome on `event_id`.
@@ -45,7 +49,7 @@ use vestige_core::Storage;
 
 /// Every GhostLink mode, in schema order.
 pub const MODES: &[&str] = &[
-    "propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden", "heal",
+    "propose", "open", "bounty", "weave", "map", "inspect", "explore", "predict", "harden", "heal",
 ];
 /// `inspect` views.
 pub const VIEWS: &[&str] = &["recent", "get", "memory", "neighbors"];
@@ -56,70 +60,74 @@ pub const LENSES: &[&str] = &["bridge", "divergent"];
 /// Law file name, read from the data dir, then `~/.vestige/`.
 pub const LAWS_FILE: &str = "ghostlink-laws.json";
 
-/// GhostLink tool schema.
+/// GhostLink tool schema. Built in pieces: one `json!` of the whole
+/// surface exceeds the macro recursion limit.
 pub fn schema() -> Value {
-    json!({
+    let evidence_item = json!({
         "type": "object",
         "properties": {
-            "mode": {
-                "type": "string",
-                "enum": MODES,
-                "description": "propose: never-composed pairs with proofs (lens bridge|divergent). bounty: lanes from woven outcomes. weave: record a composition outcome (write). map: recorded subgraph. inspect: woven compositions (view). explore: typed paths (kind). predict: memories anchored to an exact file path (context.current_file), ordered by FSRS retention. harden: seed invariant laws (write). heal: weave verdicts from recorded events (write)."
-            },
-            "lens": {
-                "type": "string",
-                "enum": LENSES,
-                "default": "bridge",
-                "description": "[propose] 'bridge' (default): pairs within 3 recorded touched/derived_from/closed_by hops. 'divergent': pairs no recorded edge joins, scored min(Path_min,7) x typed divergence; cold pairs are forced juxtapositions. [weave] lens the pair came from."
-            },
-            "cursor": { "type": "string", "description": "[propose divergent] nextCursor from the previous page (same log head and filter)." },
-            "view": {
-                "type": "string",
-                "enum": VIEWS,
-                "description": "[inspect] Which composition view to read."
-            },
-            "kind": {
-                "type": "string",
-                "enum": KINDS,
-                "description": "[explore] Which recorded-path read to run."
-            },
-            "from": { "type": "string", "description": "[explore] Source memory ID (center_id is accepted as an alias)." },
-            "to": { "type": "string", "description": "[explore:chain/bridges] Target memory ID." },
-            "context": { "type": "object", "description": "[predict] current_file (exact path), codebase. current_topics is free text and is refused on Strata." },
-            "center_id": { "type": "string", "description": "[map] Exact center node id. [explore] Alias for from." },
-            "query": { "type": "string", "description": "[map] Legacy SQLite only: pick the center by search. Refused on Strata (similarity_disabled)." },
-            "depth": { "type": "integer", "minimum": 1, "maximum": 3, "description": "[map] Traversal depth (1-3, default 2)." },
-            "max_nodes": { "type": "integer", "description": "[map] Max nodes (default 50, capped 200)." },
-            "first_id": { "type": "string", "description": "[weave] One memory of the composed pair." },
-            "second_id": { "type": "string", "description": "[weave] The other memory of the pair." },
-            "event_id": { "type": "string", "description": "[inspect:get] Composition record id. [weave] Legacy SQLite composition event id." },
-            "memory_id": { "type": "string", "description": "[inspect:memory/neighbors] Memory id." },
-            "tags": { "type": "array", "items": { "type": "string" }, "description": "[propose/bounty] Exact tags; both members must carry one." },
-            "outcome_type": {
-                "type": "string",
-                "enum": OUTCOME_TYPES,
-                "description": "[weave] Outcome to record."
-            },
-            "evidence": {
-                "type": "array",
-                "maxItems": 8,
-                "description": "[weave] External findings for this pair, e.g. from a web search on its composition question: url, sha256 of the fetched content, retrievedAt (RFC 3339), optional note. Recorded on the composition record and tagged evidence:<sha256>. Vestige never fetches the URL.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "url": { "type": "string" },
-                        "sha256": { "type": "string" },
-                        "retrievedAt": { "type": "string" },
-                        "note": { "type": "string", "maxLength": 500 }
-                    },
-                    "required": ["url", "sha256", "retrievedAt"]
-                }
-            },
-            "scope": { "type": "string", "default": "user", "description": "[propose/bounty] Exact project namespace." },
-            "includeCrossScope": { "type": "boolean", "default": false, "description": "[propose/bounty] Consider every namespace." },
-            "limit": { "type": "integer", "description": "Max results (per-mode defaults, clamped).", "minimum": 1, "maximum": 100 },
-            "max_per_memory": { "type": "integer", "minimum": 1, "default": 1, "description": "[propose/bounty] Most pairs one memory may take on a page, so a single memory cannot fill it." }
+            "url": { "type": "string" },
+            "sha256": { "type": "string" },
+            "retrievedAt": { "type": "string" },
+            "note": { "type": "string", "maxLength": 500 },
+            "spanSha256": { "type": "string", "description": "sha256 of the byte span inside the fetched page. Vestige does not compute it." },
+            "spanStart": { "type": "integer", "minimum": 0 },
+            "spanEnd": { "type": "integer", "minimum": 1 }
         },
+        "required": ["url", "sha256", "retrievedAt"]
+    });
+    let mut properties = json!({
+        "mode": {
+            "type": "string",
+            "enum": MODES,
+            "description": "propose: never-composed pairs with proofs (lens bridge|divergent). open: seal a hypothesis card before the test (write); the pair stays proposed. bounty: lanes from woven outcomes. weave: record a composition outcome (write); pass hypothesis_id to close a sealed card. map: recorded subgraph. inspect: woven compositions (view). explore: typed paths (kind). predict: memories anchored to an exact file path (context.current_file), ordered by FSRS retention. harden: seed invariant laws (write). heal: weave verdicts from recorded events (write)."
+        },
+        "lens": {
+            "type": "string",
+            "enum": LENSES,
+            "default": "bridge",
+            "description": "[propose] 'bridge' (default): pairs within 3 recorded touched/derived_from/closed_by hops. 'divergent': pairs no recorded edge joins, scored min(Path_min,7) x typed divergence; cold pairs are forced juxtapositions. [weave] lens the pair came from."
+        },
+        "cursor": { "type": "string", "description": "[propose divergent] nextCursor from the previous page (same log head and filter)." },
+        "view": { "type": "string", "enum": VIEWS, "description": "[inspect] Which composition view to read." },
+        "kind": { "type": "string", "enum": KINDS, "description": "[explore] Which recorded-path read to run." },
+        "from": { "type": "string", "description": "[explore] Source memory ID (center_id is accepted as an alias)." },
+        "to": { "type": "string", "description": "[explore:chain/bridges] Target memory ID." },
+        "context": { "type": "object", "description": "[predict] current_file (exact path), codebase. current_topics is free text and is refused on Strata." },
+        "center_id": { "type": "string", "description": "[map] Exact center node id. [explore] Alias for from." },
+        "query": { "type": "string", "description": "[map] Legacy SQLite only: pick the center by search. Refused on Strata (similarity_disabled)." },
+        "depth": { "type": "integer", "minimum": 1, "maximum": 3, "description": "[map] Traversal depth (1-3, default 2)." },
+        "max_nodes": { "type": "integer", "description": "[map] Max nodes (default 50, capped 200)." },
+        "first_id": { "type": "string", "description": "[open/weave] One memory of the pair." },
+        "second_id": { "type": "string", "description": "[open/weave] The other memory of the pair." },
+        "event_id": { "type": "string", "description": "[inspect:get] Composition record id. [weave] Legacy SQLite composition event id." },
+        "memory_id": { "type": "string", "description": "[inspect:memory/neighbors] Memory id." },
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "[propose/bounty] Exact tags; both members must carry one." },
+        "outcome_type": {
+            "type": "string",
+            "enum": OUTCOME_TYPES,
+            "description": "[weave] Outcome to record. Refused on open: the tool that ran the discriminator writes this, not the card."
+        },
+        "hypothesis_id": { "type": "string", "description": "[weave] Sealed hypothesis to close. The pair must be the one open recorded, and a hypothesis closes once." },
+        "claim": { "type": "string", "maxLength": 400, "description": "[open] One sentence that becomes false if either memory is removed." },
+        "bridge": { "type": "string", "maxLength": 400, "description": "[open] The mechanism the proof path does not already name." },
+        "discriminator": { "type": "string", "maxLength": 400, "description": "[open] The test, query, or model family that decides the card." },
+        "predict_if_true": { "type": "string", "maxLength": 400, "description": "[open] What the discriminator shows if the claim holds. Committed before the tool runs." },
+        "predict_if_false": { "type": "string", "maxLength": 400, "description": "[open] What the discriminator shows if the claim fails. Committed before the tool runs." },
+        "scope": { "type": "string", "default": "user", "description": "[propose/bounty] Exact project namespace." },
+        "includeCrossScope": { "type": "boolean", "default": false, "description": "[propose/bounty] Consider every namespace." },
+        "limit": { "type": "integer", "description": "Max results (per-mode defaults, clamped).", "minimum": 1, "maximum": 100 },
+        "max_per_memory": { "type": "integer", "minimum": 1, "default": 1, "description": "[propose/bounty] Most pairs one memory may take on a page, so a single memory cannot fill it." }
+    });
+    properties["evidence"] = json!({
+        "type": "array",
+        "maxItems": 8,
+        "description": "[weave] External findings: url, sha256 of the fetched content, retrievedAt (RFC 3339), optional note and byte span. Tagged evidence:<sha256>. Vestige never fetches the URL.",
+        "items": evidence_item
+    });
+    json!({
+        "type": "object",
+        "properties": properties,
         "required": ["mode"]
     })
 }
@@ -901,8 +909,14 @@ fn check_mode_fields(mode: &str, args: &Value) -> Result<(), String> {
     {
         return Err("scope and includeCrossScope apply only to modes propose and bounty".into());
     }
-    if !matches!(mode, "propose" | "weave") && args.get("lens").is_some() {
-        return Err("lens applies only to modes propose and weave".into());
+    if !matches!(mode, "propose" | "weave" | "open") && args.get("lens").is_some() {
+        return Err("lens applies only to modes propose, open, and weave".into());
+    }
+    if mode == "open" && args.get("outcome_type").is_some() {
+        return Err(
+            "open seals a card before the test; outcome_type belongs to weave, after the discriminator runs"
+                .into(),
+        );
     }
     if mode != "propose" && args.get("cursor").is_some() {
         return Err("cursor applies only to mode propose with lens 'divergent'".into());
@@ -942,11 +956,11 @@ pub async fn execute(
     let mode = args
         .get("mode")
         .and_then(Value::as_str)
-        .ok_or("Missing 'mode'. Use propose|bounty|weave|map|inspect|explore|predict|harden.")?
+        .ok_or("Missing 'mode'. Use propose|open|bounty|weave|map|inspect|explore|predict|harden.")?
         .to_string();
     if !MODES.contains(&mode.as_str()) {
         return Err(format!(
-            "Unknown mode '{mode}'. Use propose|bounty|weave|map|inspect|explore|predict|harden."
+            "Unknown mode '{mode}'. Use propose|open|bounty|weave|map|inspect|explore|predict|harden."
         ));
     }
     check_mode_fields(&mode, &args)?;
@@ -960,6 +974,20 @@ pub async fn execute(
 async fn execute_strata(storage: &Arc<Storage>, mode: &str, args: &Value) -> Result<Value, String> {
     match mode {
         "propose" => engine::propose(storage.as_ref(), &propose_request(args)?),
+        "open" => {
+            let card = engine::HypothesisCard {
+                claim: str_arg(args, "claim").unwrap_or("").to_string(),
+                bridge: str_arg(args, "bridge").unwrap_or("").to_string(),
+                discriminator: str_arg(args, "discriminator").unwrap_or("").to_string(),
+                predict_if_true: str_arg(args, "predict_if_true").unwrap_or("").to_string(),
+                predict_if_false: str_arg(args, "predict_if_false").unwrap_or("").to_string(),
+            };
+            let (Some(first), Some(second)) = (str_arg(args, "first_id"), str_arg(args, "second_id"))
+            else {
+                return Err("open needs first_id and second_id".into());
+            };
+            engine::open(storage.as_ref(), first, second, &card)
+        }
         "bounty" => {
             let mut request = propose_request(args)?;
             request.lens = Lens::Bridge;
@@ -972,13 +1000,14 @@ async fn execute_strata(storage: &Arc<Storage>, mode: &str, args: &Value) -> Res
             match (str_arg(args, "first_id"), str_arg(args, "second_id")) {
                 (Some(first), Some(second)) => {
                     let evidence = engine::parse_evidence(args.get("evidence"))?;
-                    engine::weave_with_evidence(
+                    engine::weave_closing(
                         storage.as_ref(),
                         first,
                         second,
                         outcome,
                         args.get("lens").and_then(Value::as_str),
                         &evidence,
+                        str_arg(args, "hypothesis_id"),
                     )
                 }
                 _ => Err("weave on a Strata log takes first_id and second_id (the two composed memories) and outcome_type; event_id names a legacy SQLite composition event".into()),
@@ -1032,6 +1061,7 @@ async fn execute_legacy(
     mut args: Value,
 ) -> Result<Value, String> {
     let action = match mode {
+        "open" => return Err("open is Strata-only: it seals a hypothesis into the log before the test".into()),
         "harden" => return harden(storage, false).await,
         "heal" => return Err("heal is Strata-only: it weaves verdicts onto recorded composition pairs in a Strata log".into()),
         "propose" => {
@@ -1099,7 +1129,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_lists_nine_modes_and_two_lenses() {
+    fn schema_lists_the_modes_and_two_lenses() {
         let s = schema();
         let modes: Vec<&str> = s["properties"]["mode"]["enum"]
             .as_array()
@@ -1110,8 +1140,8 @@ mod tests {
         assert_eq!(
             modes,
             [
-                "propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden",
-                "heal"
+                "propose", "open", "bounty", "weave", "map", "inspect", "explore", "predict",
+                "harden", "heal"
             ]
         );
         assert_eq!(
@@ -1171,6 +1201,7 @@ mod tests {
             );
         }
         assert_eq!(graph_action_for(Some(&json!({"mode": "harden"}))), None);
+        assert_eq!(graph_action_for(Some(&json!({"mode": "open"}))), None);
     }
 
     #[test]

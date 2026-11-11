@@ -8,7 +8,7 @@
 //! previews ride along as reading material only. Every write goes through
 //! the store's PROPOSE -> GATE -> EFFECT path and reports its receipt.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -671,6 +671,308 @@ pub fn propose_with(memory: &StrataMemory, request: &ProposeRequest) -> Result<V
     }
 }
 
+/// One line for the reflex hook. `UserPromptSubmit` and `SessionStart` name
+/// a single never-composed pair (handles, path, composition question) and
+/// tell the agent to seal it with `open`. `Stop` and `SubagentStop` name one
+/// sealed hypothesis that `weave` has not closed. Anything else, and any
+/// store that is not a Strata log, yields nothing. Errors yield nothing: the
+/// hook must not fail.
+pub fn reflex_line(storage: &Storage, event: &str) -> Option<String> {
+    if live_memory(storage).is_none() {
+        return None;
+    }
+    let line = match event {
+        "UserPromptSubmit" | "SessionStart" => propose_reflex_line(storage),
+        "Stop" | "SubagentStop" => unclosed_reflex_line(storage),
+        _ => None,
+    };
+    line.filter(|text| !text.is_empty())
+}
+
+fn propose_reflex_line(storage: &Storage) -> Option<String> {
+    let mut request = ProposeRequest {
+        lens: Lens::Bridge,
+        scope: Some(vestige_core::DEFAULT_MEMORY_SCOPE.to_string()),
+        tags: Vec::new(),
+        limit: 1,
+        cursor: None,
+        per_memory: 1,
+    };
+    let page = propose(storage, &request).ok()?;
+    if page
+        .get("candidates")
+        .and_then(Value::as_array)
+        .is_none_or(|rows| rows.is_empty())
+    {
+        request.lens = Lens::Divergent;
+        let page = propose(storage, &request).ok()?;
+        return page
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .map(format_reflex_pair);
+    }
+    page.get("candidates")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .map(format_reflex_pair)
+}
+
+fn format_reflex_pair(candidate: &Value) -> String {
+    let first = candidate["firstId"].as_str().unwrap_or("");
+    let second = candidate["secondId"].as_str().unwrap_or("");
+    let question = candidate["compositionQuestion"].as_str().unwrap_or("");
+    format!(
+        "GhostLink: compose {first} and {second}. {question} Seal the card with ghostlink open (claim, bridge, discriminator, predict_if_true, predict_if_false) before writing a claim that joins them. recall(handle=\"{first}\") and recall(handle=\"{second}\")."
+    )
+}
+
+fn unclosed_reflex_line(storage: &Storage) -> Option<String> {
+    let memory = live_memory(storage)?;
+    let store = memory.lock();
+    let nodes = store.get_all_nodes_in_scope(vestige_core::DEFAULT_MEMORY_SCOPE);
+    let closed: HashSet<&str> = nodes
+        .iter()
+        .flat_map(|node| node.tags.iter())
+        .filter_map(|tag| tag.strip_prefix("closes:"))
+        .collect();
+    let open = nodes
+        .iter()
+        .filter(|node| {
+            node.is_live()
+                && strata_store::hypothesis_record(node)
+                && !closed.contains(node.id.as_str())
+        })
+        .max_by_key(|node| node.created_at_ms)?;
+    let id = &open.id;
+    Some(format!(
+        "GhostLink: hypothesis {id} is sealed and not closed. After the discriminator runs, weave the outcome with hypothesis_id=\"{id}\". recall(handle=\"{id}\")."
+    ))
+}
+
+// ----------------------------------------------------------------------
+// Open: seal a hypothesis before the test
+// ----------------------------------------------------------------------
+
+/// The four fields the model may write. None of them is an outcome enum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HypothesisCard {
+    pub claim: String,
+    pub bridge: String,
+    pub discriminator: String,
+    pub predict_if_true: String,
+    pub predict_if_false: String,
+}
+
+const CARD_MAX_CHARS: usize = 400;
+
+fn card_field(name: &str, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    let chars = value.chars().count();
+    if chars == 0 || chars > CARD_MAX_CHARS {
+        return Err(format!(
+            "{name} must be 1 to {CARD_MAX_CHARS} characters"
+        ));
+    }
+    if value.chars().any(|c| c.is_control()) {
+        return Err(format!("{name} must not contain control characters"));
+    }
+    Ok(value.to_string())
+}
+
+fn hypothesis_parents(record: &strata_store::NodeRecord) -> Option<(String, String)> {
+    let mut first = None;
+    let mut second = None;
+    for tag in &record.tags {
+        if let Some(id) = tag.strip_prefix("hyp-a:") {
+            first = Some(id.to_string());
+        } else if let Some(id) = tag.strip_prefix("hyp-b:") {
+            second = Some(id.to_string());
+        }
+    }
+    Some((first?, second?))
+}
+
+fn commitment_hash(a: &str, b: &str, card: &HypothesisCard, path: Option<&[strata_store::PathStep]>) -> String {
+    let mut body = format!(
+        "v1\n{a}\n{b}\n{}\n{}\n{}\n{}\n{}\n",
+        card.claim, card.bridge, card.discriminator, card.predict_if_true, card.predict_if_false
+    );
+    match path {
+        None => body.push_str("witness:none\n"),
+        Some(steps) => {
+            body.push_str("witness:path\n");
+            for step in steps {
+                body.push_str(&format!(
+                    "{}\t{}\t{}\t{}\n",
+                    step.from, step.kind, step.to, step.reversed as u8
+                ));
+            }
+        }
+    }
+    hex_sha256(body.as_bytes())
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn path_json_steps(path: &[strata_store::PathStep]) -> Value {
+    Value::Array(
+        path.iter()
+            .map(|step| {
+                json!({
+                    "from": step.from,
+                    "kind": step.kind,
+                    "to": step.to,
+                    "reversed": step.reversed,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Seal a hypothesis for a pair before any test runs.
+///
+/// The record commits to both parents, the card, and the admitting path
+/// frozen at this log head (or to the absence of one). It writes no
+/// admitting edge, so both lenses still propose the pair. `weave` with
+/// `hypothesis_id` is what closes it.
+pub fn open(
+    storage: &Storage,
+    first_id: &str,
+    second_id: &str,
+    card: &HypothesisCard,
+) -> Result<Value, String> {
+    let claim = card_field("claim", &card.claim)?;
+    let bridge = card_field("bridge", &card.bridge)?;
+    let discriminator = card_field("discriminator", &card.discriminator)?;
+    let predict_if_true = card_field("predict_if_true", &card.predict_if_true)?;
+    let predict_if_false = card_field("predict_if_false", &card.predict_if_false)?;
+    let card = HypothesisCard {
+        claim,
+        bridge,
+        discriminator,
+        predict_if_true,
+        predict_if_false,
+    };
+    let (first_id, second_id) = (first_id.trim(), second_id.trim());
+    if first_id.is_empty() || second_id.is_empty() {
+        return Err("open needs first_id and second_id".into());
+    }
+    if first_id == second_id {
+        return Err("open needs two distinct memories".into());
+    }
+    let (a, b) = if first_id <= second_id {
+        (first_id, second_id)
+    } else {
+        (second_id, first_id)
+    };
+    let memory = memory(storage)?;
+    let mut store = memory.lock();
+    for id in [a, b] {
+        let record = store
+            .get_node(id)
+            .filter(retrievable)
+            .ok_or_else(|| format!("memory not found or retired: {id}"))?;
+        if strata_store::composition_pair(&record).is_some()
+            || strata_store::hypothesis_record(&record)
+        {
+            return Err(format!(
+                "{id} is a composition or a hypothesis; open seals two memories"
+            ));
+        }
+    }
+    let snapshot = store.ghost_snapshot(PoolFilter::default());
+    if snapshot.is_woven(a, b) {
+        return Err("this pair is already woven; open seals a pair that has not been tested".into());
+    }
+    let path = snapshot.admitting_path(a, b);
+    let hash = commitment_hash(a, b, &card, path.as_deref());
+    let commit_tag = format!("commit:{hash}");
+    let scope = store
+        .get_node(a)
+        .map(|record| record.scope)
+        .unwrap_or_else(|| vestige_core::DEFAULT_MEMORY_SCOPE.to_string());
+    if let Some(existing) = store.get_all_nodes_in_scope(&scope).into_iter().find(|node| {
+        node.is_live()
+            && strata_store::hypothesis_record(node)
+            && node.tags.iter().any(|tag| tag == &commit_tag)
+    }) {
+        return Ok(json!({
+            "mode": "open",
+            "decision": "already_open",
+            "nodeId": existing.id,
+            "commitment": hash,
+            "firstId": a,
+            "secondId": b,
+            "witness": if path.is_some() { "admitting_path" } else { "no_admitting_path" },
+            "hops": path.as_ref().map(|steps| steps.len()),
+            "path": path.as_ref().map(|steps| path_json_steps(steps)).unwrap_or(json!([])),
+            "pairStillProposed": true,
+            "note": "This card was already sealed at this log. The pair stays never-composed until weave closes it.",
+        }));
+    }
+    drop(snapshot);
+    let witness_line = match &path {
+        Some(steps) => format!("Witness: admitting path of {} hop(s).", steps.len()),
+        None => "Witness: no admitting path within 3 hops.".to_string(),
+    };
+    let content = format!(
+        "GhostLink hypothesis {a} {b} commitment {hash}.\n{witness_line}\nClaim: {}\nBridge: {}\nDiscriminator: {}\nPredict if true: {}\nPredict if false: {}",
+        card.claim, card.bridge, card.discriminator, card.predict_if_true, card.predict_if_false
+    );
+    let now = Utc::now().timestamp_millis();
+    let (record_id, effect) = store
+        .ingest_in_scope_with_receipt(
+            strata_store::IngestInput {
+                content,
+                source: Some(strata_store::SourceKey {
+                    system: format!("{}{hash}", strata_store::HYPOTHESIS_SOURCE_PREFIX),
+                    project: String::new(),
+                    id: hash.clone(),
+                }),
+                source_updated_at_ms: None,
+                node_type: strata_store::HYPOTHESIS_NODE_TYPE.to_string(),
+                tags: vec![
+                    strata_store::GHOSTLINK_TAG.to_string(),
+                    strata_store::HYPOTHESIS_TAG.to_string(),
+                    commit_tag,
+                    format!("hyp-a:{a}"),
+                    format!("hyp-b:{b}"),
+                ],
+                created_at_ms: Some(now),
+                valid_from_ms: None,
+                valid_until_ms: None,
+            },
+            &scope,
+        )
+        .map_err(|err| map_store(err).to_string())?;
+    Ok(json!({
+        "mode": "open",
+        "decision": "sealed",
+        "nodeId": record_id,
+        "commitment": hash,
+        "firstId": a,
+        "secondId": b,
+        "witness": if path.is_some() { "admitting_path" } else { "no_admitting_path" },
+        "hops": path.as_ref().map(|steps| steps.len()),
+        "path": path.as_ref().map(|steps| path_json_steps(steps)).unwrap_or(json!([])),
+        "receipts": [{
+            "write": "hypothesis",
+            "id": record_id,
+            "receiptId": receipt_id_for(effect),
+        }],
+        "pairStillProposed": true,
+        "globalNoveltyVerified": false,
+        "note": "Sealed before the test. No admitting edge was written, so both lenses still propose the pair. weave with hypothesis_id closes it; the outcome enum is the tool's, not this card's.",
+    }))
+}
+
 // ----------------------------------------------------------------------
 // Weave
 // ----------------------------------------------------------------------
@@ -697,6 +999,10 @@ pub struct ExternalEvidence {
     pub sha256: String,
     pub retrieved_at_ms: i64,
     pub note: Option<String>,
+    /// sha256 of the byte span the caller actually read inside the page.
+    pub span_sha256: Option<String>,
+    pub span_start: Option<u64>,
+    pub span_end: Option<u64>,
 }
 
 /// Most external findings one weave may carry.
@@ -765,17 +1071,42 @@ pub fn parse_evidence(raw: Option<&Value>) -> Result<Vec<ExternalEvidence>, Stri
         if out.iter().any(|e: &ExternalEvidence| e.sha256 == sha256) {
             return Err(format!("evidence sha256 {sha256} is listed twice"));
         }
+        let span = parse_span(entry, url)?;
         out.push(ExternalEvidence {
             url: url.to_string(),
             sha256,
             retrieved_at_ms,
             note: note.map(str::to_owned),
+            span_sha256: span.as_ref().map(|s| s.0.clone()),
+            span_start: span.as_ref().map(|s| s.1),
+            span_end: span.as_ref().map(|s| s.2),
         });
     }
     Ok(out)
 }
 
-/// [`weave`] carrying external evidence for the pair.
+/// [`weave`] that closes a sealed hypothesis when `hypothesis_id` is set.
+pub fn weave_closing(
+    storage: &Storage,
+    first_id: &str,
+    second_id: &str,
+    outcome_type: &str,
+    lens: Option<&str>,
+    evidence: &[ExternalEvidence],
+    hypothesis_id: Option<&str>,
+) -> Result<Value, String> {
+    let memory = memory(storage)?;
+    weave_with(
+        &memory,
+        first_id,
+        second_id,
+        outcome_type,
+        lens,
+        evidence,
+        hypothesis_id,
+    )
+}
+
 pub fn weave_with_evidence(
     storage: &Storage,
     first_id: &str,
@@ -785,12 +1116,51 @@ pub fn weave_with_evidence(
     evidence: &[ExternalEvidence],
 ) -> Result<Value, String> {
     let memory = memory(storage)?;
-    weave_with(&memory, first_id, second_id, outcome_type, lens, evidence)
+    weave_with(
+        &memory,
+        first_id,
+        second_id,
+        outcome_type,
+        lens,
+        evidence,
+        None,
+    )
 }
 
 /// Exact tag prefix for a woven finding: `evidence:<sha256>`, so `recall`
 /// finds the composition record by the content hash alone.
 pub const EVIDENCE_TAG_PREFIX: &str = "evidence:";
+/// Exact tag prefix for the byte span inside that page: `span:<sha256>`.
+pub const SPAN_TAG_PREFIX: &str = "span:";
+
+fn parse_span(entry: &Value, url: &str) -> Result<Option<(String, u64, u64)>, String> {
+    let sha = entry.get("spanSha256").and_then(Value::as_str);
+    let start = entry.get("spanStart").and_then(Value::as_u64);
+    let end = entry.get("spanEnd").and_then(Value::as_u64);
+    if sha.is_none() && start.is_none() && end.is_none() {
+        return Ok(None);
+    }
+    let sha = sha
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "evidence spanSha256 must be 64 hex characters for {url}"
+        ));
+    }
+    let (Some(start), Some(end)) = (start, end) else {
+        return Err(format!(
+            "evidence spanStart and spanEnd are required with spanSha256 for {url}"
+        ));
+    };
+    if end <= start || end - start > 1_000_000 {
+        return Err(format!(
+            "evidence span must be a non-empty range of at most 1000000 bytes for {url}"
+        ));
+    }
+    Ok(Some((sha, start, end)))
+}
 
 /// The composition record's text: the pair, the outcome, and one line per
 /// external finding.
@@ -813,6 +1183,11 @@ fn composition_content(
                 "\n- {} sha256:{} retrieved {when}",
                 e.url, e.sha256
             ));
+            if let (Some(span), Some(start), Some(end)) =
+                (&e.span_sha256, e.span_start, e.span_end)
+            {
+                content.push_str(&format!(" span:{span} [{start},{end})"));
+            }
             if let Some(note) = &e.note {
                 content.push_str(&format!(" ({note})"));
             }
@@ -832,6 +1207,9 @@ fn evidence_json(evidence: &[ExternalEvidence]) -> Value {
                     "retrievedAtMs": e.retrieved_at_ms,
                     "note": e.note,
                     "tag": format!("{EVIDENCE_TAG_PREFIX}{}", e.sha256),
+                    "spanSha256": e.span_sha256,
+                    "spanStart": e.span_start,
+                    "spanEnd": e.span_end,
                 })
             })
             .collect(),
@@ -846,6 +1224,7 @@ pub fn weave_with(
     outcome_type: &str,
     lens: Option<&str>,
     evidence: &[ExternalEvidence],
+    hypothesis_id: Option<&str>,
 ) -> Result<Value, String> {
     if !OUTCOME_TYPES.contains(&outcome_type) {
         return Err(format!("unsupported outcome_type: {outcome_type}"));
@@ -888,6 +1267,33 @@ pub fn weave_with(
         .get_node(a)
         .map(|record| record.scope)
         .unwrap_or_else(|| vestige_core::DEFAULT_MEMORY_SCOPE.to_string());
+    let hypothesis_id = hypothesis_id.map(str::trim).filter(|id| !id.is_empty());
+    if let Some(id) = hypothesis_id {
+        let record = store
+            .get_node(id)
+            .filter(retrievable)
+            .ok_or_else(|| format!("hypothesis not found or retired: {id}"))?;
+        if !strata_store::hypothesis_record(&record) {
+            return Err(format!("{id} is not a sealed GhostLink hypothesis"));
+        }
+        let parents = hypothesis_parents(&record).ok_or_else(|| {
+            format!("{id} does not name the pair it was sealed for")
+        })?;
+        if parents != (a.to_string(), b.to_string()) {
+            return Err(format!(
+                "hypothesis {id} was sealed for {} and {}, not {a} and {b}",
+                parents.0, parents.1
+            ));
+        }
+        let closes = format!("closes:{id}");
+        if store
+            .get_all_nodes_in_scope(&scope)
+            .iter()
+            .any(|node| node.tags.iter().any(|tag| tag == &closes))
+        {
+            return Err(format!("hypothesis {id} is already closed"));
+        }
+    }
     let now = Utc::now().timestamp_millis();
     let (record_id, record_effect) = store
         .ingest_in_scope_with_receipt(
@@ -912,6 +1318,12 @@ pub fn weave_with(
                         .iter()
                         .map(|e| format!("{EVIDENCE_TAG_PREFIX}{}", e.sha256)),
                 )
+                .chain(evidence.iter().filter_map(|e| {
+                    e.span_sha256
+                        .as_ref()
+                        .map(|span| format!("{SPAN_TAG_PREFIX}{span}"))
+                }))
+                .chain(hypothesis_id.map(|id| format!("closes:{id}")))
                 .collect(),
                 created_at_ms: Some(now),
                 valid_from_ms: None,
@@ -951,6 +1363,31 @@ pub fn weave_with(
             }
         }
     }
+    if let Some(id) = hypothesis_id {
+        let edge = strata_store::ConnectionRecord {
+            source_id: record_id.clone(),
+            target_id: id.to_string(),
+            strength_milli: 1000,
+            link_type: strata_store::EdgeKind::EvidenceOf.as_str().to_string(),
+            meta_sha: None,
+            created_at_ms: now,
+            activation_count: 0,
+        };
+        match store.save_connection(&edge) {
+            Ok(effect) => receipts.push(json!({
+                "write": "evidence_of",
+                "source": record_id,
+                "target": id,
+                "receiptId": receipt_id_for(effect),
+            })),
+            Err(err) => receipts.push(json!({
+                "write": "evidence_of",
+                "source": record_id,
+                "target": id,
+                "error": map_store(err).to_string(),
+            })),
+        }
+    }
     let snapshot = store.ghost_snapshot(PoolFilter::default());
     let mut pair_records: Vec<&CompositionRecord> = snapshot
         .records()
@@ -978,6 +1415,7 @@ pub fn weave_with(
         "secondId": b,
         "outcomeType": outcome_type,
         "lens": lens,
+        "hypothesisId": hypothesis_id,
         "scope": scope,
         "receipts": receipts,
         "pairRecords": records_json,
@@ -1580,4 +2018,187 @@ pub fn harden_with(memory: &StrataMemory, seeds: &[HardenSeed]) -> Vec<Value> {
         });
     }
     out
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::*;
+
+    fn card() -> HypothesisCard {
+        HypothesisCard {
+            claim: "The closed_by step is what the derived_from step was for".into(),
+            bridge: "A close records the derivation a touch does not name".into(),
+            discriminator: "one test that names both ids".into(),
+            predict_if_true: "the test prints both ids".into(),
+            predict_if_false: "the test fails before either id appears".into(),
+        }
+    }
+
+    #[test]
+    fn open_seals_the_card_and_leaves_the_pair_proposed_until_weave() {
+        let dir = std::env::temp_dir().join(format!(
+            "vestige-ghostlink-open-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let storage = crate::strata_memory::open(&dir).expect("log");
+        let (a, b) = {
+            let memory = memory(storage.as_ref()).expect("memory");
+            let mut store = memory.lock();
+            let a = store
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "alpha fact".into(),
+                        node_type: "fact".into(),
+                        created_at_ms: Some(1_780_000_000_000),
+                        ..Default::default()
+                    },
+                    "user",
+                )
+                .expect("a");
+            let b = store
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "beta fact".into(),
+                        node_type: "fact".into(),
+                        created_at_ms: Some(1_780_000_000_000),
+                        ..Default::default()
+                    },
+                    "user",
+                )
+                .expect("b");
+            store
+                .save_connection(&strata_store::ConnectionRecord {
+                    source_id: a.clone(),
+                    target_id: b.clone(),
+                    strength_milli: 1000,
+                    link_type: "derived_from".into(),
+                    meta_sha: None,
+                    created_at_ms: 1_780_000_000_000,
+                    activation_count: 0,
+                })
+                .expect("edge");
+            (a, b)
+        };
+        let opened = open(storage.as_ref(), &a, &b, &card()).expect("seal");
+        assert_eq!(opened["decision"], json!("sealed"));
+        assert_eq!(opened["witness"], json!("admitting_path"));
+        assert_eq!(opened["pairStillProposed"], json!(true));
+        assert_eq!(opened["hops"], json!(1));
+        let again = open(storage.as_ref(), &b, &a, &card()).expect("idempotent");
+        assert_eq!(again["decision"], json!("already_open"));
+        assert_eq!(again["nodeId"], opened["nodeId"]);
+        let request = ProposeRequest {
+            lens: Lens::Bridge,
+            scope: Some("user".into()),
+            tags: Vec::new(),
+            limit: 10,
+            cursor: None,
+            per_memory: 1,
+        };
+        let proposed = propose(storage.as_ref(), &request).expect("propose");
+        let hid = opened["nodeId"].as_str().unwrap();
+        let (low, high) = if a <= b { (&a, &b) } else { (&b, &a) };
+        let candidates = proposed["candidates"].as_array().unwrap();
+        assert!(
+            candidates.iter().any(|c| c["firstId"] == json!(low) && c["secondId"] == json!(high)),
+            "the sealed pair is still proposed: {proposed}"
+        );
+        assert!(
+            candidates.iter().all(|c| c["firstId"] != json!(hid) && c["secondId"] != json!(hid)),
+            "the hypothesis is not an idea"
+        );
+        let woven = weave_closing(
+            storage.as_ref(),
+            &a,
+            &b,
+            "helpful",
+            Some("bridge"),
+            &[],
+            Some(hid),
+        )
+        .expect("close");
+        assert_eq!(woven["hypothesisId"], json!(hid));
+        assert!(
+            woven["receipts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["write"] == json!("evidence_of"))
+        );
+        let after = propose(storage.as_ref(), &request).expect("after");
+        assert!(
+            after["candidates"].as_array().unwrap().iter().all(|c| {
+                !(c["firstId"] == json!(low) && c["secondId"] == json!(high))
+            }),
+            "closing removes the pair: {after}"
+        );
+        let second = weave_closing(
+            storage.as_ref(),
+            &a,
+            &b,
+            "dead_end",
+            Some("bridge"),
+            &[],
+            Some(hid),
+        );
+        assert!(second.is_err(), "a hypothesis closes once");
+        let prompt = reflex_line(storage.as_ref(), "UserPromptSubmit");
+        assert!(
+            prompt.is_none(),
+            "a woven pair is not injected again: {prompt:?}"
+        );
+        let stop = reflex_line(storage.as_ref(), "Stop");
+        assert!(stop.is_none(), "a closed hypothesis is not named on Stop: {stop:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reflex_names_the_pair_on_prompt_and_the_open_card_on_stop() {
+        let dir = std::env::temp_dir().join(format!(
+            "vestige-ghostlink-reflex-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let storage = crate::strata_memory::open(&dir).expect("log");
+        let (a, b) = {
+            let memory = memory(storage.as_ref()).expect("memory");
+            let mut store = memory.lock();
+            let a = store
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "alpha fact".into(),
+                        node_type: "fact".into(),
+                        created_at_ms: Some(1_780_000_000_000),
+                        ..Default::default()
+                    },
+                    "user",
+                )
+                .expect("a");
+            let b = store
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "beta fact".into(),
+                        node_type: "fact".into(),
+                        created_at_ms: Some(1_780_000_000_000),
+                        ..Default::default()
+                    },
+                    "user",
+                )
+                .expect("b");
+            (a, b)
+        };
+        let prompt = reflex_line(storage.as_ref(), "UserPromptSubmit").expect("pair");
+        assert!(prompt.contains(&a) && prompt.contains(&b), "{prompt}");
+        assert!(prompt.contains("ghostlink open"), "{prompt}");
+        assert!(reflex_line(storage.as_ref(), "PreToolUse").is_none());
+        let opened = open(storage.as_ref(), &a, &b, &card()).expect("seal");
+        let hid = opened["nodeId"].as_str().unwrap();
+        let stop = reflex_line(storage.as_ref(), "Stop").expect("unclosed");
+        assert!(stop.contains(hid), "{stop}");
+        assert!(stop.contains("hypothesis_id"), "{stop}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

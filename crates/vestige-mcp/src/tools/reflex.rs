@@ -112,6 +112,7 @@ fn event_budget(event: &str) -> usize {
     match event {
         "UserPromptSubmit" | "SessionStart" => 2000,
         "SubagentStart" => 1500,
+        "Stop" | "SubagentStop" => 600,
         "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch" => 600,
         _ => 0,
     }
@@ -2746,6 +2747,11 @@ pub async fn execute_with(
     let paired = pairing::on_event(&global, &ctx, &inp).await;
     let witnessed = witness::on_event(&global, &ctx, &inp).await;
     let (compacted, restored) = compaction::on_event(&global, &ctx, &inp).await;
+    // GhostLink is part of the hook, not a tool the model has to remember.
+    // UserPromptSubmit and SessionStart name one never-composed pair.
+    // Stop names one hypothesis weave has not closed. A miss here is silence.
+    // The walk runs before the reflex lock so a large log cannot stall the ledger.
+    let ghost = crate::strata_memory::ghostlink::reflex_line(storage.as_ref(), &inp.event);
     let mut g = global.lock().map_err(|e| e.to_string())?;
     let mut wrote = Vec::new();
     for o in outcomes {
@@ -2756,8 +2762,9 @@ pub async fn execute_with(
     wrote.extend(paired.wrote);
     wrote.extend(witnessed.wrote);
     wrote.extend(compacted);
-    let lead: Vec<String> = restored
+    let lead: Vec<String> = ghost
         .into_iter()
+        .chain(restored)
         .chain(paired.tell)
         .chain(witnessed.tell)
         .collect();

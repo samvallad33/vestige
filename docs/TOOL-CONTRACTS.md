@@ -406,6 +406,7 @@ CLI: `vestige selftest`.
 Never-composed pairs, each with its proof from recorded structure only. `mode` is
 `propose`, `bounty`, `weave`, `map`, `inspect`, `explore`, `predict`, `harden` or `heal`.
 
+- **`open`** seals a hypothesis before any test. It takes `first_id`, `second_id`, and a card: `claim`, `bridge`, `discriminator`, `predict_if_true`, `predict_if_false` (each 1–400 characters, no control characters). It refuses `outcome_type`. The record's commitment is the sha256 of the ordered pair, the card, and the admitting path frozen at this log head, or of the fact that no admitting path exists within 3 hops. The record is node type `hypothesis`, tagged `ghostlink-hypothesis`, and it writes no admitting edge, so both lenses still propose the pair. A second `open` of the same card returns the existing record. A hypothesis is not a pool member.
 - **`propose`**, `lens` `bridge` (default) or `divergent`. Bridge admits pairs within three
   undirected hops over recorded `touched`, `derived_from` or `closed_by` edges that were
   never woven, and the shortest path is the proof. Divergent admits pairs no recorded edge
@@ -424,8 +425,12 @@ Never-composed pairs, each with its proof from recorded structure only. `mode` i
 - **`weave` `evidence` (4.1.1).** Up to 8 findings from outside, each with `url` (http or
   https), `sha256` of the fetched content, `retrievedAt` (RFC 3339) and an optional `note`.
   They are recorded on the composition record and tagged `evidence:<sha256>`, so
-  `recall` finds the record by the hash alone. Every entry is checked before anything is
-  written. Vestige never fetches the URL.
+  `recall` finds the record by the hash alone. Optional `spanSha256`, `spanStart`, and
+  `spanEnd` name the byte range inside that page; the span hash is tagged `span:<sha256>`.
+  Every entry is checked before anything is written. Vestige never fetches the URL.
+  `hypothesis_id` closes a sealed hypothesis for this exact pair, once, and records an
+  `evidence_of` edge from the composition to the hypothesis. The hypothesis is not an
+  observation, and the edge is not an admitting kind, so it does not invent a bridge.
 - **`bounty`** groups woven outcomes into lanes, with the bridge lens as the
   never-composed lane. **`map`** returns the recorded subgraph around `center_id`
   (`depth` 1 to 3, `max_nodes`). **`inspect`** reads woven compositions with `view`

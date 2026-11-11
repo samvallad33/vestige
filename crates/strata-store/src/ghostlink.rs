@@ -55,6 +55,12 @@ use crate::types::{EdgeKind, NodeRecord};
 
 /// `node_type` of a woven composition record.
 pub const COMPOSITION_NODE_TYPE: &str = "composition";
+/// `node_type` of a hypothesis sealed before any test. Not an observation.
+pub const HYPOTHESIS_NODE_TYPE: &str = "hypothesis";
+/// Tag every sealed hypothesis carries.
+pub const HYPOTHESIS_TAG: &str = "ghostlink-hypothesis";
+/// Source-system prefix of a sealed hypothesis: `ghostlink-hypothesis:<sha256>`.
+pub const HYPOTHESIS_SOURCE_PREFIX: &str = "ghostlink-hypothesis:";
 /// Tag every GhostLink write carries.
 pub const GHOSTLINK_TAG: &str = "ghostlink";
 /// Tag a composition record carries (exact identity, never a prefix match).
@@ -115,6 +121,11 @@ pub fn parse_weave_source(system: &str) -> Option<(String, String)> {
         return None;
     }
     Some((a.to_string(), b.to_string()))
+}
+
+/// A sealed hypothesis: a conjecture, not a woven outcome and not a pool member.
+pub fn hypothesis_record(record: &NodeRecord) -> bool {
+    record.node_type == HYPOTHESIS_NODE_TYPE && record.tags.iter().any(|tag| tag == HYPOTHESIS_TAG)
 }
 
 /// The pair a composition record weaves, when `record` has the exact shape:
@@ -1012,7 +1023,10 @@ impl<'s> GhostSnapshot<'s> {
 
     fn select_pool(&mut self, nodes: &BTreeMap<String, NodeRecord>) {
         for (id, record) in nodes {
-            if !record.is_live() || composition_pair(record).is_some() {
+            if !record.is_live()
+                || composition_pair(record).is_some()
+                || hypothesis_record(record)
+            {
                 continue;
             }
             // Expired and future memories are not composition candidates
@@ -1289,6 +1303,21 @@ impl<'s> GhostSnapshot<'s> {
         let depth = self.bfs(&mut scratch, a, radius, &edge_ok, Some(b))?;
         let path = self.path_from(&scratch, a, b);
         Some((depth, path))
+    }
+
+    /// Shortest path over admitting edges (`touched`, `derived_from`,
+    /// `closed_by`) within [`BRIDGE_MAX_HOPS`]. `None` when no such path
+    /// exists. This is the witness `open` freezes; it does not write.
+    pub fn admitting_path(&self, from: &str, to: &str) -> Option<Vec<PathStep>> {
+        let (&a, &b) = (self.index.get(from)?, self.index.get(to)?);
+        if a == b {
+            return None;
+        }
+        let admitting = &self.kind_admitting;
+        let edge_ok = |kind: u16| admitting[kind as usize];
+        let mut scratch = self.scratch.borrow_mut();
+        self.bfs(&mut scratch, a, BRIDGE_MAX_HOPS, &edge_ok, Some(b))?;
+        Some(self.path_from(&scratch, a, b))
     }
 
     /// Shortest recorded path over vocabulary edges (no `legacy_inferred`),
