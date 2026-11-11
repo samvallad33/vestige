@@ -190,6 +190,9 @@ pub struct QueryIntent {
     pub sniper_where: bool,
     pub sniper_why: bool,
     pub is_event_sequence: bool,
+    /// The query asks for a task whose answer should obey stored imperative rules,
+    /// even when those rules share no content words with the question.
+    pub task_under_rules: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -269,6 +272,10 @@ const PREF_MARKERS: &[&str] = &[
     // exclusive preference is the constraint phrase, not every occurrence of the word.
     "solely", "exclusively", "stick with", "switched to", "too bitter", "i only", "only ever",
     "only use", "only want", "only like", "only drink", "only eat", "only buy", "only wear",
+    // Implicit personal constraints. Phrases, not the stopword "only".
+    "i don't want", "i do not want", "i won't", "i will not", "rather than", "no longer",
+    "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "leave out",
+    "keep out",
 ];
 
 const PREF_QUERY_CUES: &[&str] = &[
@@ -279,6 +286,9 @@ const PREF_QUERY_CUES: &[&str] = &[
     "can you suggest", "what should i", "something i", "i might like", "i would like",
     "go-to", "best for me", "fit my", "match my", "based on my", "steps would you",
     "help me set up", "serve",
+    // Personal planning, not a favorite-word lookup.
+    "how should i", "help me plan", "walk me through", "help me decide", "help me choose",
+    "help me figure", "what should i do",
 ];
 
 const CURRENT_STATE_CUES: &[&str] = &[
@@ -319,6 +329,25 @@ const TEMPORAL_CUES: &[&str] = &[
     "when ", "how long", "how many days", "how many weeks", "how many months",
     "how many years", "before ", "after ", "first ", "last ", " ago", "date", "which year",
     "what year", "what month", "earlier", "later", "since ",
+];
+
+/// Downstream tasks: the user wants an answer produced (a procedure, list,
+/// recommendation, calculation, or date), so stored imperative rules apply.
+/// Episodic recall ("when did", "what did") is excluded in `classify`.
+const TASK_UNDER_RULES_CUES: &[&str] = &[
+    "how should", "how do ", "how can ", "how to ", "how is my", "how much",
+    "what are some", "what are my", "what are the", "what can you", "what should",
+    "what do i", "what steps",
+    "can you", "could you", "would you",
+    "when is", "when was", "when are",
+    "help me", "walk me through", "show me",
+    "recommend", "suggest", " i should",
+];
+
+const RECALL_NOT_TASK_CUES: &[&str] = &[
+    "what did", "where did", "who did", "when did", "why did", "how did",
+    "did i", "did you", "you said", "you told", "you mentioned", "you recommended",
+    "you suggested",
 ];
 
 const ANAPHORS: &[&str] = &[
@@ -961,6 +990,8 @@ struct TurnIx {
     has_causal: bool,
     is_short_question: bool,
     is_standing_policy: bool,
+    /// User turn that opens a concrete event, not a rule and not a backchannel.
+    is_initiative: bool,
 }
 
 struct Stats {
@@ -1160,6 +1191,11 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let has_spatial = raw.iter().any(|w| SPATIAL_WORDS.contains(&w.as_str()));
             let has_causal = CAUSAL_WORDS.iter().any(|c| lower.contains(c));
             let is_standing_policy = field == 0 && utterance_is_standing_policy(&t.content);
+            let is_initiative = field == 0
+                && !is_standing_policy
+                && !anaphoric
+                && !is_short_question
+                && content.len() >= 4; // frozen: 12 was too high for a single user event; do not retune after the run
             let id = if t.id.is_empty() { format!("{}#{}", s.id, ti) } else { t.id.clone() };
             members.push(turns.len());
             turns.push(TurnIx {
@@ -1181,6 +1217,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 has_causal,
                 is_short_question,
                 is_standing_policy,
+                is_initiative,
             });
         }
         session_turns.push(members);
@@ -1338,6 +1375,8 @@ pub fn classify(text: &str) -> QueryIntent {
         sniper_where,
         sniper_why,
         is_event_sequence,
+        task_under_rules: !has_any(&lower, RECALL_NOT_TASK_CUES)
+            && has_any(&lower, TASK_UNDER_RULES_CUES),
     }
 }
 
@@ -1565,6 +1604,24 @@ fn order(scores: &[f32], ts: &[i64]) -> Vec<usize> {
             .then(a.cmp(&b))
     });
     idx
+}
+
+fn jaccard(a: &HashSet<u32>, b: &HashSet<u32>) -> f32 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let inter = a.intersection(b).count() as f32;
+    let union = (a.len() + b.len()) as f32 - inter;
+    if union <= 0.0 { 0.0 } else { inter / union }
+}
+
+fn raise_floor(scores: &mut [f32], lexical_max: f32, frac: f32, keep: impl Fn(usize) -> bool) {
+    let floor = if lexical_max > 0.0 { frac * lexical_max } else { 1.0 };
+    for i in 0..scores.len() {
+        if keep(i) && scores[i] < floor {
+            scores[i] = floor;
+        }
+    }
 }
 
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
@@ -1828,6 +1885,47 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
 
     let k = top_k.max(1);
 
+    // Frozen floors for this run (do not retune after BEAM): standing 0.68,
+    // preference 0.50, event-session 0.42, event-turn 0.38. Lexical max is
+    // captured first. 0.68 stays under the 0.72 second-anchor cut so a
+    // zero-overlap rule does not become a PPR anchor. The standing floor is
+    // applied to the policy turn itself, not only its session.
+    let lexical_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
+    let lexical_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
+    if it.task_under_rules {
+        raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
+            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
+        });
+        raise_floor(&mut t_scene, lexical_tmax, 0.68, |ti| ix.turns[ti].is_standing_policy);
+    }
+    if pref_on {
+        raise_floor(&mut s_score, lexical_smax, 0.50, |si| {
+            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].pref_marker && ix.turns[ti].field == 0)
+        });
+        raise_floor(&mut t_scene, lexical_tmax, 0.50, |ti| {
+            ix.turns[ti].pref_marker && ix.turns[ti].field == 0
+        });
+    }
+    if it.is_event_sequence {
+        raise_floor(&mut s_score, lexical_smax, 0.42, |si| {
+            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
+        });
+        raise_floor(&mut t_scene, lexical_tmax, 0.38, |ti| ix.turns[ti].is_initiative);
+    }
+    let initiative_content: Vec<HashSet<u32>> = if it.is_event_sequence {
+        ix.session_turns.iter().map(|members| {
+            let mut set = HashSet::new();
+            for &ti in members {
+                if ix.turns[ti].is_initiative {
+                    set.extend(ix.turns[ti].content.iter().copied());
+                }
+            }
+            set
+        }).collect()
+    } else {
+        Vec::new()
+    };
+
     // Session-Level Multi-Hop Bridge Activation + Greedy Submodular Set Cover
     let mut bridge_boost = vec![0.0f32; ns];
     let s_ord_base = order(&s_score, &ix.session_ts);
@@ -1934,14 +2032,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         let same_mask_seen = mask_counts.get(&m_eff).copied().unwrap_or(0);
                         let shared_ent = ix.session_entities[si].iter().any(|e| covered_ents.contains(e));
                         let same_date_seen = it.is_event_sequence && selected.iter().any(|&s| ix.session_ts[s] == ix.session_ts[si] && ix.session_ts[si] > 0);
+                        let topic_seen = it.is_event_sequence
+                            && !initiative_content[si].is_empty()
+                            && selected.iter().any(|&s| jaccard(&initiative_content[s], &initiative_content[si]) >= 0.45);
+                        let new_event = it.is_event_sequence && !initiative_content[si].is_empty() && !topic_seen;
                         let redundancy = if same_date_seen {
                             0.25
+                        } else if topic_seen {
+                            0.35
                         } else if uncovered == 0.0 && bridge_boost[si] < 0.12 * smax && shared_ent && same_mask_seen >= 2 {
                             0.62
                         } else {
                             1.0
                         };
-                        let gain = (s_score[si] + bridge_boost[si]) * (1.0 + 0.90 * uncovered_ratio) * redundancy;
+                        // Frozen mix for this run: new-event cover 0.65, already-seen topic 0.35.
+                        let event_cover = if new_event { 0.65 } else { 0.0 };
+                        let gain = (s_score[si] + bridge_boost[si]) * (1.0 + 0.90 * uncovered_ratio + event_cover) * redundancy;
                         if gain > best_gain {
                             best_gain = gain;
                             best_pos = idx;
@@ -1996,9 +2102,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let sc = t_scene[ti];
                 let t_sess = ix.turns[ti].session;
                 let count = session_counts.get(&t_sess).copied().unwrap_or(0);
-                let diversity_factor = if count == 0 {
+                let topic_repeat = it.is_event_sequence
+                    && ix.turns[ti].is_initiative
+                    && selected_turns.iter().any(|&prev| {
+                        ix.turns[prev].is_initiative && jaccard(&ix.turns[prev].content, &ix.turns[ti].content) >= 0.45
+                    });
+                let diversity_factor = if count == 0 && !topic_repeat {
                     1.0
-                } else if it.is_event_sequence {
+                } else if it.is_event_sequence || topic_repeat {
                     0.15
                 } else if count == 1 {
                     0.70
@@ -2462,5 +2573,114 @@ mod tests {
         let picked: Vec<&str> = ranked.results[0].sessions.iter().take(3).map(|s| s.id.as_str()).collect();
         assert!(picked.contains(&"mar") && picked.contains(&"jun"), "same-date session was not penalized: {picked:?}");
         assert!(!picked.contains(&"jan-same"), "{picked:?}");
+    }
+
+    #[test]
+    fn standing_rule_surfaces_for_a_task_with_no_shared_words() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "formula".into(),
+                    date: "2024/02/01 (Thu) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "A circle area uses pi times radius squared, and textbooks repeat that formula.")],
+                },
+                Session {
+                    id: "notes".into(),
+                    date: "2024/03/01 (Fri) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "Students compute circle areas by squaring the radius and multiplying.")],
+                },
+                Session {
+                    id: "rule".into(),
+                    date: "2024/01/04 (Thu) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "Always include the unit symbol when you write a measurement.")],
+                },
+            ],
+            queries: vec![Query { text: "How should I compute the area of a circle?".into(), date: String::new() }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.task_under_rules);
+        assert!(classify("What are some ways to store leftover soup?").task_under_rules);
+        assert!(classify("Could you outline a backup routine?").task_under_rules);
+        assert!(!classify("When did the soup boil?").task_under_rules);
+        let rule_turn = ranked.results[0].turns.iter().find(|t| t.session_id == "rule");
+        assert!(rule_turn.is_some(), "policy turn itself missed: {:?}", ranked.results[0].turns);
+        let ids: Vec<&str> = ranked.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"rule"), "standing rule stayed at zero overlap: {ids:?}");
+    }
+
+    #[test]
+    fn event_sequence_covers_distinct_user_initiatives() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "echo".into(),
+                    date: "2024/05/01 (Wed) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![
+                        turn("assistant", "Here is the chronological order of the workshop steps you started, as a list of steps."),
+                        turn("assistant", "Another chronological order of those workshop steps you started, repeated as more steps."),
+                        turn("assistant", "A third chronological order note of the workshop steps you started yesterday."),
+                    ],
+                },
+                Session {
+                    id: "sketch".into(),
+                    date: "2024/01/08 (Mon) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I began sketching the cabinet joints with a pencil before cutting walnut.")],
+                },
+                Session {
+                    id: "glue".into(),
+                    date: "2024/02/12 (Mon) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I glued the walnut panels after the joints were dry and clamped.")],
+                },
+                Session {
+                    id: "sand".into(),
+                    date: "2024/03/18 (Mon) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I sanded the drawers and rubbed oil into the faces.")],
+                },
+            ],
+            queries: vec![Query { text: "What is the chronological order of the workshop steps I started?".into(), date: String::new() }],
+            top_k: 4,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.is_event_sequence);
+        let turns: Vec<&str> = ranked.results[0].turns.iter().take(4).map(|t| t.session_id.as_str()).collect();
+        for id in ["sketch", "glue", "sand"] {
+            assert!(turns.contains(&id), "missing initiative {id} in {turns:?}");
+        }
+    }
+
+    #[test]
+    fn planning_question_binds_an_implicit_constraint() {
+        let intent = classify("How should I plan dinner for my guests?");
+        assert!(intent.preference && intent.task_under_rules);
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "market".into(),
+                    date: String::new(),
+                    timestamp: 1,
+                    turns: vec![turn("user", "Guests often eat dinner at the market after a long day.")],
+                },
+                Session {
+                    id: "limit".into(),
+                    date: String::new(),
+                    timestamp: 2,
+                    turns: vec![turn("user", "I don't want shellfish when guests come over for dinner.")],
+                },
+            ],
+            queries: vec![Query { text: "How should I plan dinner for my guests?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        assert_eq!(rank(&req).results[0].sessions[0].id, "limit");
     }
 }
