@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Score contrastive preferences (`solely`, `exclusively`, `switched to`, `too bitter`, and `only` used as a constraint) on the preference axis.
 - `remember` registers each standing rule as an active, idempotent plan on the intention graph.
 - Strata lexical recall keeps one session per UTC day, so those date and session penalties apply to stored memories.
+- Measured on `34c04ccb`: LongMemEval_S RecallAll@5 91.28% (470 non-abstention) and RecallAny@5 98.60% (500). LoCoMo-10 CORE session R@5 92.25%, turn soft R@5 77.93%. Held-out test (conversations 6–10) CORE session R@5 91.75%.
 
 ## [6.0.0] - 2026-10-28
 
