@@ -261,6 +261,12 @@ pub fn rank_nodes_lexical(
         let day = node.created_at.format("%Y-%m-%d").to_string();
         let role = if node.tags.iter().any(|t| t == "assistant" || t == "system") {
             "assistant".to_string()
+        } else if let Some(person) = node.tags.iter().find_map(|t| {
+            t.strip_prefix("person:")
+                .or_else(|| t.strip_prefix("speaker:"))
+                .filter(|s| !s.trim().is_empty())
+        }) {
+            person.trim().to_string()
         } else {
             "user".to_string()
         };

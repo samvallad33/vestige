@@ -265,25 +265,44 @@ const PREF_MARKERS: &[&str] = &[
     "love", "loved", "loves", "loving", "favorite", "favourite", "favorites", "prefer",
     "prefers", "preferred", "preference", "obsessed", "enjoy", "enjoys", "enjoyed", "enjoying",
     "hobby", "hobbies", "passionate", "passion", "collect", "collecting", "hate", "hates",
-    "hated", "dislike", "dislikes", "avoid", "avoiding", "allergic", "diet", "vegan",
-    "vegetarian", "big fan", "fond", "crave", "addicted", "habit", "routine", "can't stand",
-    "i'd like", "would like", "rather", "instead of", "go-to",
+    "hated", "dislike", "dislikes", "avoid", "avoiding", "allergic", "allergy", "intolerant",
+    "lactose", "celiac", "pescatarian", "gluten-free", "gluten free", "dairy-free", "dairy free",
+    "diet", "vegan", "vegetarian", "big fan", "fan of", "fond", "crave", "addicted", "habit",
+    "routine", "can't stand", "cannot stand", "i'd like", "would like", "rather", "instead of",
+    "go-to", "my usual", "i usually", "i tend to", "i'm into", "im into", "i've been into",
     // Exclusion and contrast. Bare "only" is a stopword and is not a unigram marker;
     // exclusive preference is the constraint phrase, not every occurrence of the word.
-    "solely", "exclusively", "stick with", "switched to", "too bitter", "i only", "only ever",
-    "only use", "only want", "only like", "only drink", "only eat", "only buy", "only wear",
+    "solely", "exclusively", "stick with", "stick to", "switched to", "too bitter", "i only",
+    "only ever", "only use", "only want", "only like", "only drink", "only eat", "only buy",
+    "only wear",
     // Implicit personal constraints. Phrases, not the stopword "only".
     "i don't want", "i do not want", "i won't", "i will not", "rather than", "no longer",
-    "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "leave out",
-    "keep out",
+    "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "can't drink",
+    "cannot drink", "don't eat", "do not eat", "don't drink", "do not drink", "never eat",
+    "never drink", "stay away from", "steer clear of", "leave out", "keep out",
+];
+
+const HARD_CONSTRAINT_MARKERS: &[&str] = &[
+    "allergic", "allergy", "intolerant", "lactose", "celiac", "vegan", "vegetarian",
+    "pescatarian", "gluten-free", "gluten free", "dairy-free", "dairy free", "kosher", "halal",
+    "avoid", "avoiding", "can't stand", "cannot stand", "solely", "exclusively", "stick with",
+    "stick to", "switched to", "too bitter", "i only", "only ever", "only use", "only want",
+    "only like", "only drink", "only eat", "only buy", "only wear", "i don't want",
+    "i do not want", "i won't", "i will not", "rather than", "instead of", "no longer",
+    "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "can't drink",
+    "cannot drink", "don't eat", "do not eat", "don't drink", "do not drink", "never eat",
+    "never drink", "stay away from", "steer clear of", "leave out", "keep out",
 ];
 
 const PREF_QUERY_CUES: &[&str] = &[
     "what kind of", "what type of", "what sort of", "recommend", "suggest", "suggestion",
     "prefer", "preference", "favorite", "favourite", "would i like", "would i enjoy",
-    "should i get", "should i try", "should i buy", "gift", "present for", "suitable for me",
+    "should i get", "should i try", "should i buy", "should i choose", "should i pick",
+    "should i use", "should i watch", "should i read", "should i cook", "should i make",
+    "gift", "present for", "suitable for me", "suited to", "tailored to",
     "how do i like", "any ideas", "any tips", "ideas for", "tips for", "advice on",
     "can you suggest", "what should i", "something i", "i might like", "i would like",
+    "what would be a good", "what are some good", "help me pick", "help me find",
     "go-to", "best for me", "fit my", "match my", "based on my", "steps would you",
     "help me set up", "serve",
     // Personal planning, not a favorite-word lookup.
@@ -332,22 +351,22 @@ const TEMPORAL_CUES: &[&str] = &[
 ];
 
 /// Downstream tasks: the user wants an answer produced (a procedure, list,
-/// recommendation, calculation, or date), so stored imperative rules apply.
-/// Episodic recall ("when did", "what did") is excluded in `classify`.
+/// recommendation, calculation, or draft), so stored imperative rules apply.
+/// Episodic/factual recall ("when did", "when was", "what did") is excluded in `classify`.
 const TASK_UNDER_RULES_CUES: &[&str] = &[
-    "how should", "how do ", "how can ", "how to ", "how is my", "how much",
-    "what are some", "what are my", "what are the", "what can you", "what should",
-    "what do i", "what steps",
+    "how should", "how do i", "how can i", "how to ",
+    "what are some", "what can you", "what should", "what steps",
     "can you", "could you", "would you",
-    "when is", "when was", "when are",
     "help me", "walk me through", "show me",
     "recommend", "suggest", " i should",
+    "outline ", "draft ", "write a ", "format ", "calculate ", "compute ",
 ];
 
 const RECALL_NOT_TASK_CUES: &[&str] = &[
     "what did", "where did", "who did", "when did", "why did", "how did",
-    "did i", "did you", "you said", "you told", "you mentioned", "you recommended",
-    "you suggested",
+    "when was", "when were", "where was", "who was", "how many", "how much did", "how long",
+    "did i", "did you", "have i", "had i", "you said", "you told", "you mentioned",
+    "you recommended", "you suggested",
 ];
 
 const ANAPHORS: &[&str] = &[
@@ -529,23 +548,85 @@ const STARTER_STOP: &[&str] = &[
     "sure", "certainly", "absolutely", "great", "thanks", "thank", "hi", "hey",
     "hello", "if", "so", "but", "and", "or",
     "my", "your", "our", "his", "her", "their", "its", "i", "we", "you", "they", "he", "she", "it",
+    "well", "also", "just", "now", "then", "still", "even", "maybe", "perhaps", "actually",
+    "however", "though", "although", "because", "since", "after", "before", "during", "while",
+    "today", "yesterday", "tomorrow", "tonight", "always", "never", "please", "let", "lets",
+    "not", "only", "very", "really", "wow", "oh", "okay", "ok", "right", "true", "same",
+    "another", "other", "more", "some", "many", "most", "every", "each", "both", "all", "any",
+    "here", "from", "with", "into", "over", "under", "about", "again", "once", "twice",
 ];
 
 const TITLE_CONNECTORS: &[&str] = &["and", "of", "the", "for", "in", "on", "at"];
 
-/// Extract contiguous capitalized proper-noun entity phrases ("\u{1}ent:local_h", "\u{1}ent:kiss_and_tell").
+/// Extract leading document title/header line when a multi-line passage starts with a compact
+/// header (`"{Title}\n{Body}"`, excluding `[BLIP caption]`), stripping trailing parenthetical
+/// disambiguators (`"Armada (novel)"` -> `"Armada"`).
+fn extract_header_title(text: &str) -> Option<&str> {
+    let (first_line, rest) = text.split_once('\n')?;
+    if rest.trim().is_empty() {
+        return None;
+    }
+    let header = first_line.trim();
+    if header.is_empty()
+        || header.len() > 96
+        || header.starts_with('[')
+        || header.starts_with("```")
+        || header.ends_with(['.', '?', '!', ';'])
+    {
+        return None;
+    }
+    let word_count = header.split_whitespace().count();
+    if !(1..=10).contains(&word_count) {
+        return None;
+    }
+    if !header.chars().next().is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+        return None;
+    }
+    let core = match header.find(" (") {
+        Some(idx) if header.ends_with(')') && idx > 0 => header[..idx].trim(),
+        _ => header,
+    };
+    if core.is_empty() { None } else { Some(core) }
+}
+
+/// Extract contiguous capitalized proper-noun entity phrases ("\u{1}ent:local_h", "\u{1}ent:kiss_and_tell")
+/// plus mid-clause single-token proper names ("\u{1}ent:ghana", "\u{1}ent:melanie") and header titles.
 /// Preserves short single-letter entities ("H" in "Local H"), capitalized prepositions ("For Against"),
 /// and title-case connectors ("Kiss and Tell", "Lord of the Rings").
 fn proper_entity_tokens(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let mut run: Vec<String> = Vec::new();
+    if let Some(core_title) = extract_header_title(text) {
+        let parts: Vec<String> = core_title
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase())
+            .collect();
+        if !parts.is_empty() && parts.len() <= 6 {
+            out.push(format!("\u{1}ent:{}", parts.join("_")));
+        }
+    }
 
-    let flush_run = |run: &mut Vec<String>, out: &mut Vec<String>| {
+    let mut run: Vec<String> = Vec::new();
+    let mut run_started_clause = true;
+    let mut at_clause_start;
+
+    let flush_run = |run: &mut Vec<String>, started_clause: bool, out: &mut Vec<String>| {
         // Trim trailing lowercase connectors if the run ended on a preposition like "Kiss and"
         while run.last().is_some_and(|s| s.starts_with('\u{2}')) {
             run.pop();
         }
         if run.len() >= 2 {
+            for part in run.iter() {
+                if !part.starts_with('\u{2}')
+                    && part.len() >= 3
+                    && !STARTER_STOP.contains(&part.as_str())
+                    && !stopwords().contains(part.as_str())
+                    && !MONTHS.contains(&part.as_str())
+                    && !WEEKDAYS.contains(&part.as_str())
+                {
+                    out.push(format!("\u{1}ent:{part}"));
+                }
+            }
             for win in run.windows(2) {
                 if !win[0].starts_with('\u{2}') && !win[1].starts_with('\u{2}') {
                     out.push(format!("\u{1}ent:{}_{}", win[0], win[1]));
@@ -555,39 +636,63 @@ fn proper_entity_tokens(text: &str) -> Vec<String> {
                 let clean_parts: Vec<&str> = run.iter().map(|s| s.trim_start_matches('\u{2}')).collect();
                 out.push(format!("\u{1}ent:{}", clean_parts.join("_")));
             }
+        } else if run.len() == 1 && !started_clause {
+            let tok = &run[0];
+            if tok.len() >= 3
+                && !STARTER_STOP.contains(&tok.as_str())
+                && !stopwords().contains(tok.as_str())
+                && !MONTHS.contains(&tok.as_str())
+                && !WEEKDAYS.contains(&tok.as_str())
+            {
+                out.push(format!("\u{1}ent:{tok}"));
+            }
         }
         run.clear();
     };
 
-    for raw_word in text.split_whitespace() {
-        let ends_clause = raw_word.ends_with(['.', '?', '!', ',', ';', ':']);
-        let w = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’' && c != '-');
-        if w.is_empty() {
-            flush_run(&mut run, &mut out);
-            continue;
-        }
-        let clean = clean_contraction(w);
-        let first_upper = clean.chars().next().is_some_and(|c| c.is_ascii_uppercase());
-        let lower = clean.to_lowercase();
-        let norm: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
-        if first_upper && !norm.is_empty() && !STARTER_STOP.contains(&norm.as_str()) {
-            run.push(norm);
-        } else if !run.is_empty() && TITLE_CONNECTORS.contains(&norm.as_str()) {
-            // Allow up to 2 title connectors inside an active proper-noun chain (e.g. "Lord of the Rings").
-            let trailing_conns = run.iter().rev().take_while(|s| s.starts_with('\u{2}')).count();
-            if trailing_conns < 2 {
-                run.push(format!("\u{2}{norm}"));
-            } else {
-                flush_run(&mut run, &mut out);
+    for line in text.lines() {
+        at_clause_start = true;
+        for raw_word in line.split_whitespace() {
+            let ends_clause = raw_word.ends_with(['.', '?', '!', ',', ';', ':']);
+            let starts_quote = raw_word.starts_with(['"', '\'', '“', '‘', '(', '[']);
+            let w = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’' && c != '-');
+            if w.is_empty() {
+                flush_run(&mut run, run_started_clause, &mut out);
+                at_clause_start = true;
+                continue;
             }
-        } else {
-            flush_run(&mut run, &mut out);
+            let clean = clean_contraction(w);
+            let first_upper = clean.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+            let all_upper_acronym = clean.len() >= 2
+                && clean.len() <= 6
+                && clean.chars().all(|c| c.is_ascii_uppercase());
+            let lower = clean.to_lowercase();
+            let norm: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
+            if first_upper && !norm.is_empty() && !STARTER_STOP.contains(&norm.as_str()) {
+                if run.is_empty() {
+                    run_started_clause = (at_clause_start || starts_quote) && !all_upper_acronym;
+                }
+                run.push(norm);
+            } else if !run.is_empty() && TITLE_CONNECTORS.contains(&norm.as_str()) {
+                // Allow up to 2 title connectors inside an active proper-noun chain (e.g. "Lord of the Rings").
+                let trailing_conns = run.iter().rev().take_while(|s| s.starts_with('\u{2}')).count();
+                if trailing_conns < 2 {
+                    run.push(format!("\u{2}{norm}"));
+                } else {
+                    flush_run(&mut run, run_started_clause, &mut out);
+                }
+            } else {
+                flush_run(&mut run, run_started_clause, &mut out);
+            }
+            if ends_clause {
+                flush_run(&mut run, run_started_clause, &mut out);
+                at_clause_start = raw_word.ends_with(['.', '?', '!', ';', ':']);
+            } else {
+                at_clause_start = false;
+            }
         }
-        if ends_clause {
-            flush_run(&mut run, &mut out);
-        }
+        flush_run(&mut run, run_started_clause, &mut out);
     }
-    flush_run(&mut run, &mut out);
     out
 }
 
@@ -732,10 +837,21 @@ pub fn parse_date(s: &str) -> i64 {
         .unwrap_or(0)
 }
 
+fn season_code(month: u32) -> &'static str {
+    match month {
+        3..=5 => "SP",
+        6..=8 => "SU",
+        9..=11 => "FA",
+        _ => "WI",
+    }
+}
+
 fn calendar_tokens(ts: i64) -> Vec<String> {
     use chrono::Datelike;
     let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) else { return Vec::new() };
     let d = dt.date_naive();
+    let sc = season_code(d.month());
+    let sy = if d.month() == 12 { d.year() + 1 } else { d.year() };
     vec![
         d.day().to_string(),
         MONTHS[d.month0() as usize].to_string(),
@@ -744,7 +860,12 @@ fn calendar_tokens(ts: i64) -> Vec<String> {
         format!("__DATE__{}_{:02}_{:02}", d.year(), d.month(), d.day()),
         format!("__YM__{}_{:02}", d.year(), d.month()),
         format!("__MONTH__{:02}", d.month()),
+        format!("__MD__{:02}_{:02}", d.month(), d.day()),
         format!("__{}__{:02}", month_band(d.day()), d.month()),
+        format!("__YEAR__{}", d.year()),
+        format!("__SEASON__{sc}"),
+        format!("__SY__{}_{sc}", d.year()),
+        format!("__SY__{sy}_{sc}"),
     ]
 }
 
@@ -752,47 +873,198 @@ fn month_band(day: u32) -> &'static str {
     if day <= 10 { "EARLY" } else if day >= 21 { "LATE" } else { "MID" }
 }
 
-fn month_index(tok: &str) -> Option<u32> {
-    let lower = tok.to_lowercase();
-    MONTHS.iter().position(|&m| m == lower).map(|i| i as u32 + 1)
+fn month_index(tok: &str) -> Option<(u32, bool)> {
+    match tok {
+        "january" | "jan" => Some((1, false)),
+        "february" | "feb" => Some((2, false)),
+        "march" => Some((3, true)),
+        "mar" => Some((3, false)),
+        "april" | "apr" => Some((4, false)),
+        "may" => Some((5, true)),
+        "june" | "jun" => Some((6, false)),
+        "july" | "jul" => Some((7, false)),
+        "august" | "aug" => Some((8, false)),
+        "september" | "sep" | "sept" => Some((9, false)),
+        "october" | "oct" => Some((10, false)),
+        "november" | "nov" => Some((11, false)),
+        "december" | "dec" => Some((12, false)),
+        _ => None,
+    }
+}
+
+fn parse_day_token(tok: &str) -> Option<u32> {
+    let stripped = tok
+        .strip_suffix("st")
+        .or_else(|| tok.strip_suffix("nd"))
+        .or_else(|| tok.strip_suffix("rd"))
+        .or_else(|| tok.strip_suffix("th"))
+        .unwrap_or(tok);
+    if let Ok(n) = stripped.parse::<u32>() {
+        if (1..=31).contains(&n) {
+            return Some(n);
+        }
+    }
+    match tok {
+        "first" => Some(1),
+        "second" => Some(2),
+        "third" => Some(3),
+        "fourth" | "forth" => Some(4),
+        "fifth" => Some(5),
+        "sixth" => Some(6),
+        "seventh" => Some(7),
+        "eighth" => Some(8),
+        "ninth" => Some(9),
+        "tenth" => Some(10),
+        "eleventh" => Some(11),
+        "twelfth" => Some(12),
+        "thirteenth" => Some(13),
+        "fourteenth" => Some(14),
+        "fifteenth" => Some(15),
+        "sixteenth" => Some(16),
+        "seventeenth" => Some(17),
+        "eighteenth" => Some(18),
+        "nineteenth" => Some(19),
+        "twentieth" => Some(20),
+        "thirtieth" => Some(30),
+        _ => None,
+    }
 }
 
 /// Extract explicit calendar dates written directly inside prose/queries
-/// (e.g. "1 May, 2022", "May 1, 2022", "March 29, 2024", "2022-05-01").
+/// (e.g. "1 May, 2022", "May 1st, 2022", "the 15th of March", "in May", "summer of 2023", "2022-05-01").
 fn inline_date_tokens(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let lower = text.to_lowercase();
-    // Match ISO YYYY-MM-DD
+    // Match ISO YYYY-MM-DD or YYYY/MM/DD
     for w in lower.split_whitespace() {
-        let trimmed = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
-        if trimmed.len() == 10 && trimmed.as_bytes().get(4) == Some(&b'-') && trimmed.as_bytes().get(7) == Some(&b'-') {
-            if let Ok(d) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
-                if let Some(dt) = d.and_hms_opt(0, 0, 0) {
-                    out.extend(calendar_tokens(dt.and_utc().timestamp()));
+        let trimmed = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '/');
+        if trimmed.len() == 10 {
+            let b = trimmed.as_bytes();
+            if (b.get(4) == Some(&b'-') && b.get(7) == Some(&b'-'))
+                || (b.get(4) == Some(&b'/') && b.get(7) == Some(&b'/'))
+            {
+                let iso = trimmed.replace('/', "-");
+                if let Ok(d) = chrono::NaiveDate::parse_from_str(&iso, "%Y-%m-%d") {
+                    if let Some(dt) = d.and_hms_opt(0, 0, 0) {
+                        out.extend(calendar_tokens(dt.and_utc().timestamp()));
+                    }
                 }
             }
         }
     }
-    let toks: Vec<&str> = lower
+    let orig_toks: Vec<&str> = text
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|s| !s.is_empty())
         .collect();
+    let toks: Vec<String> = orig_toks.iter().map(|s| s.to_lowercase()).collect();
+
+    const TEMP_PREPS: &[&str] = &[
+        "in", "on", "of", "during", "since", "before", "after", "until", "by", "from", "through",
+        "around", "this", "last", "next", "past", "every", "each", "late", "early", "mid", "middle",
+    ];
+    const NON_YEAR_PREV: &[&str] = &[
+        "room", "suite", "apt", "unit", "section", "port", "error", "code", "rfc", "iso", "line",
+        "page", "usd", "eur", "model", "version",
+    ];
+    const NON_YEAR_NEXT: &[&str] = &[
+        "km", "kilometers", "mi", "miles", "ft", "feet", "meters", "px", "gb", "mb", "kb", "tb",
+        "dollars", "euros", "percent", "percents", "points", "hours", "minutes", "seconds",
+    ];
+
     for i in 0..toks.len() {
-        let Some(m) = month_index(toks[i]) else { continue };
-        if let Some(band) = i.checked_sub(1).and_then(|k| match toks[k] {
-            "early" => Some("EARLY"),
-            "late" => Some("LATE"),
-            "mid" | "middle" => Some("MID"),
+        // Explicit 4-digit calendar year ("in 2022", "back in 2019", "since 2020") with HeidelTime guards
+        if toks[i].len() == 4 && toks[i].chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(y) = toks[i].parse::<i32>() {
+                if (1900..=2099).contains(&y) {
+                    let prev_bad = i
+                        .checked_sub(1)
+                        .is_some_and(|k| NON_YEAR_PREV.contains(&toks[k].as_str()));
+                    let next_bad = toks
+                        .get(i + 1)
+                        .is_some_and(|nx| NON_YEAR_NEXT.contains(&nx.as_str()));
+                    if !prev_bad && !next_bad {
+                        out.push(format!("__YEAR__{y}"));
+                    }
+                }
+            }
+        }
+
+        // Seasonal anchors ("summer of 2023", "in the winter", "last spring")
+        let season = match toks[i].as_str() {
+            "summer" => Some(("SU", false)),
+            "winter" => Some(("WI", false)),
+            "autumn" => Some(("FA", false)),
+            "spring" => Some(("SP", true)),
+            "fall" => Some(("FA", true)),
             _ => None,
-        }) {
-            out.push(format!("__{band}__{m:02}"));
+        };
+        if let Some((sc, ambig_season)) = season {
+            let prev1 = i.checked_sub(1).map(|k| toks[k].as_str()).unwrap_or("");
+            let prev2 = i.checked_sub(2).map(|k| toks[k].as_str()).unwrap_or("");
+            let y_after = if toks.get(i + 1).map(String::as_str) == Some("of") {
+                toks.get(i + 2)
+            } else {
+                toks.get(i + 1)
+            }
+            .and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten())
+            .filter(|&y| (1900..=2099).contains(&y));
+
+            if let Some(y) = y_after {
+                out.push(format!("__SY__{y}_{sc}"));
+                out.push(format!("__SEASON__{sc}"));
+                out.push(format!("__YEAR__{y}"));
+            } else if !ambig_season
+                || matches!(prev1, "this" | "last" | "next" | "past" | "every" | "early" | "late" | "mid")
+                || (prev1 == "the" && matches!(prev2, "in" | "during" | "since" | "before" | "after"))
+            {
+                out.push(format!("__SEASON__{sc}"));
+            }
+        }
+
+        let Some((m, ambig_month)) = month_index(&toks[i]) else { continue };
+        let band = i
+            .checked_sub(1)
+            .and_then(|k| match toks[k].as_str() {
+                "early" | "earlier" => Some("EARLY"),
+                "late" | "later" => Some("LATE"),
+                "mid" | "middle" => Some("MID"),
+                "of" if k >= 1 => match toks[k - 1].as_str() {
+                    "beginning" | "start" => Some("EARLY"),
+                    "middle" => Some("MID"),
+                    "end" => Some("LATE"),
+                    _ => None,
+                },
+                _ => None,
+            });
+        if let Some(b) = band {
+            out.push(format!("__{b}__{m:02}"));
             out.push(format!("__MONTH__{m:02}"));
         }
-        // "<day> <month> <year>" OR "<month> <day> <year>"
-        let prev_num = i.checked_sub(1).and_then(|k| toks[k].parse::<u32>().ok()).filter(|&n| (1..=31).contains(&n));
-        let next_num = toks.get(i + 1).and_then(|s| s.parse::<u32>().ok()).filter(|&n| (1..=31).contains(&n));
-        let year_after_next = toks.get(i + 2).and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten());
-        let year_after_month = toks.get(i + 1).and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten());
+
+        // "<day> [of] <month> [of] <year>" OR "<month> [the] <day> [of] <year>"
+        let prev_num = i.checked_sub(1).and_then(|k| {
+            if toks[k] == "of" && k >= 1 {
+                parse_day_token(&toks[k - 1])
+            } else {
+                parse_day_token(&toks[k])
+            }
+        });
+        let (next_num, day_end_idx) = if toks.get(i + 1).map(String::as_str) == Some("the") {
+            (toks.get(i + 2).and_then(|s| parse_day_token(s)), i + 2)
+        } else {
+            (toks.get(i + 1).and_then(|s| parse_day_token(s)), i + 1)
+        };
+        let year_at = |idx: usize| -> Option<i32> {
+            let cand = if toks.get(idx).map(String::as_str) == Some("of") {
+                toks.get(idx + 1)
+            } else {
+                toks.get(idx)
+            };
+            cand.and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten())
+                .filter(|&y| (1900..=2099).contains(&y))
+        };
+        let year_after_month = year_at(i + 1);
+        let year_after_next = year_at(day_end_idx + 1);
 
         if let (Some(day), Some(y)) = (prev_num, year_after_month) {
             if let Some(dt) = chrono::NaiveDate::from_ymd_opt(y, m, day).and_then(|d| d.and_hms_opt(0, 0, 0)) {
@@ -809,9 +1081,21 @@ fn inline_date_tokens(text: &str) -> Vec<String> {
         if let Some(y) = year_after_month {
             out.push(format!("__YM__{y}_{m:02}"));
             out.push(format!("__MONTH__{m:02}"));
+            out.push(format!("__YEAR__{y}"));
         } else if let Some(day) = prev_num.or(next_num) {
             out.push(format!("__MD__{m:02}_{day:02}"));
             out.push(format!("__MONTH__{m:02}"));
+        } else if band.is_none() {
+            // Bare month in prose/query ("in May", "during July", "last October").
+            // Guard ambiguous "may"/"march" with preposition or capitalization + non-modal context.
+            let prev1 = i.checked_sub(1).map(|k| toks[k].as_str()).unwrap_or("");
+            let is_cap = orig_toks
+                .get(i)
+                .and_then(|s| s.chars().next())
+                .is_some_and(|c| c.is_ascii_uppercase());
+            if !ambig_month || TEMP_PREPS.contains(&prev1) || (is_cap && i > 0) {
+                out.push(format!("__MONTH__{m:02}"));
+            }
         }
     }
     out
@@ -847,20 +1131,36 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
         match w.as_str() {
             "yesterday" => specs.push((-DAY, 1.0, false)),
             "night" if prev == "last" => specs.push((-DAY, 1.0, false)),
-            "before" if prev == "day" => specs.push((-DAY, 0.9, false)),
+            "before" | "earlier" if prev == "day" => specs.push((-DAY, 0.9, false)),
+            "before" if prev == "week" => specs.push((-7 * DAY, 0.9, true)),
+            "before" if prev == "month" => specs.push((-30 * DAY, 0.9, true)),
+            "before" if prev == "year" => specs.push((-365 * DAY, 0.9, true)),
+            "after" | "later" if prev == "day" && (i < 2 || raw[i - 2] == "the" || raw[i - 2] == "a") => {
+                specs.push((DAY, 0.9, false));
+            }
+            "after" | "following" if prev == "week" && (i < 2 || raw[i - 2] == "the" || raw[i - 2] == "a") => {
+                specs.push((7 * DAY, 0.9, true));
+            }
             "tomorrow" => specs.push((DAY, 1.0, false)),
             "today" | "tonight" => specs.push((0, 1.0, false)),
-            "week" if prev == "last" || prev == "past" => specs.push((-7 * DAY, 1.0, true)),
-            "week" if prev == "next" => specs.push((7 * DAY, 1.0, true)),
-            "weekend" if prev == "last" || prev == "this" || prev == "past" => specs.push((-2 * DAY, 1.0, true)),
-            "month" if prev == "last" || prev == "past" => {
+            "week" if matches!(prev, "last" | "past" | "previous") => specs.push((-7 * DAY, 1.0, true)),
+            "week" if matches!(prev, "next" | "coming" | "following") => specs.push((7 * DAY, 1.0, true)),
+            "week" if prev == "this" && i >= 2 && matches!(raw[i - 2].as_str(), "earlier" | "early") => {
+                specs.push((-2 * DAY, 0.9, true));
+            }
+            "weekend" if matches!(prev, "last" | "this" | "past" | "previous") => specs.push((-2 * DAY, 1.0, true)),
+            "weekend" if matches!(prev, "next" | "coming") => specs.push((5 * DAY, 0.9, true)),
+            "month" if matches!(prev, "last" | "past" | "previous") => {
                 specs.push((-30 * DAY, 1.0, true));
                 specs.push((-15 * DAY, 0.85, false));
             }
-            "month" if prev == "next" => specs.push((30 * DAY, 1.0, true)),
-            "year" if prev == "last" || prev == "past" => specs.push((-365 * DAY, 1.0, true)),
-            "year" if prev == "next" => specs.push((365 * DAY, 1.0, true)),
-            "ago" => {
+            "month" if prev == "this" && i >= 2 && matches!(raw[i - 2].as_str(), "earlier" | "early") => {
+                specs.push((-7 * DAY, 0.9, true));
+            }
+            "month" if matches!(prev, "next" | "coming" | "following") => specs.push((30 * DAY, 1.0, true)),
+            "year" if matches!(prev, "last" | "past" | "previous") => specs.push((-365 * DAY, 1.0, true)),
+            "year" if matches!(prev, "next" | "coming" | "following") => specs.push((365 * DAY, 1.0, true)),
+            "ago" | "earlier" | "later" => {
                 if matches!(prev, "days" | "weeks" | "months" | "years" | "day" | "week" | "month" | "year") {
                     let q = if i >= 3 && raw[i - 2] == "of" {
                         raw[i - 3].as_str()
@@ -876,12 +1176,17 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
                         "month" => (30, true),
                         _ => (365, true),
                     };
+                    let dir = if w == "later" { 1 } else { -1 };
                     if n > 0 {
-                        specs.push((-n * unit * DAY, 1.0, coarse));
+                        specs.push((dir * n * unit * DAY, 1.0, coarse));
+                        if q == "few" && unit >= 7 {
+                            specs.push((dir * (n - 1) * unit * DAY, 0.65, true));
+                            specs.push((dir * (n + 1) * unit * DAY, 0.65, true));
+                        }
                     }
                 }
             }
-            "days" | "weeks" | "months" | "years" if next != "ago" => {
+            "days" | "weeks" | "months" | "years" if !matches!(next, "ago" | "earlier" | "later") => {
                 // Handle "for 3 years now", "past 2 weeks", "last 3 months"
                 let prep = if i >= 2 { raw[i - 2].as_str() } else { "" };
                 if matches!(prep, "for" | "past" | "last" | "in") || next == "now" {
@@ -898,13 +1203,18 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
                 }
             }
             _ => {
-                if (prev == "last" || prev == "this" || prev == "next") && WEEKDAYS.contains(&w.as_str()) {
+                if matches!(prev, "last" | "this" | "next" | "past" | "previous" | "coming" | "following")
+                    && WEEKDAYS.contains(&w.as_str())
+                {
                     use chrono::Datelike;
                     if let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) {
                         let today = dt.weekday().num_days_from_monday() as i64;
                         let target = WEEKDAYS.iter().position(|d| d == w).unwrap_or(0) as i64;
-                        let back = ((today - target + 7) % 7).max(if prev == "last" { 1 } else { 0 });
-                        let delta = if prev == "next" { (target - today + 7) % 7 } else { -back };
+                        let is_future = matches!(prev, "next" | "coming" | "following");
+                        let is_strict_past = matches!(prev, "last" | "past" | "previous");
+                        let back = ((today - target + 7) % 7).max(if is_strict_past { 1 } else { 0 });
+                        let fwd = ((target - today + 7) % 7).max(if is_future { 1 } else { 0 });
+                        let delta = if is_future { fwd } else { -back };
                         specs.push((delta * DAY, 1.0, false));
                     }
                 }
@@ -920,7 +1230,11 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
         if coarse {
             for d_off in [-2 * DAY, -DAY, DAY, 2 * DAY] {
                 for tok in calendar_tokens(ts + off + d_off) {
-                    if tok.starts_with("__DATE__") || tok.starts_with("__YM__") || tok.starts_with("__MONTH__") {
+                    if tok.starts_with("__DATE__")
+                        || tok.starts_with("__YM__")
+                        || tok.starts_with("__MONTH__")
+                        || tok.starts_with("__MD__")
+                    {
                         out.push((tok, w * 0.45));
                     }
                 }
@@ -981,6 +1295,13 @@ impl Bag {
             self.len[field] += f.w * scale;
         }
     }
+
+    fn add_inherited(&mut self, field: usize, f: Feat, scale: f32) {
+        *self.tf[field].entry(f.id).or_insert(0.0) += f.w * scale;
+        if f.counts_len {
+            self.len[field] += 0.50 * f.w * scale;
+        }
+    }
 }
 
 struct TurnIx {
@@ -996,8 +1317,11 @@ struct TurnIx {
     speaker: String,
     is_question: bool,
     answers_question: bool,
+    is_short_reply: bool,
+    is_backchannel: bool,
     anaphoric: bool,
     pref_marker: bool,
+    is_personal_constraint: bool,
     has_temporal: bool,
     has_numeric: bool,
     has_spatial: bool,
@@ -1077,17 +1401,51 @@ fn stem_term(s: &str) -> String {
 
 /// Object tokens of a personal constraint. The marker is not enough; the thing
 /// constrained has to be in the index or a later question cannot hit it.
+/// Parse both compact `key:value` tokens and structured `Key: Value` clauses
+/// (excluding URL schemes `http:`/`https:` and `[BLIP caption]`), emitting exact
+/// `(slot_key, slot_value)` pairs so typed attributes affect ranking and supersession.
 fn typed_slot_tokens(text: &str) -> Vec<(String, String)> {
+    const SKIP_KEYS: &[&str] = &["http", "https", "mailto", "file", "note", "example", "output", "input"];
     let mut out = Vec::new();
-    for raw in text.split_whitespace() {
-        let tok = raw.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '_' && c != '-');
-        let Some((key, value)) = tok.split_once(':') else { continue };
-        if key.len() >= 2
-            && key.chars().all(|c| c.is_ascii_alphabetic())
-            && !value.is_empty()
-            && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            out.push((key.to_lowercase(), value.to_lowercase()));
+    for line in text.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.starts_with('[') || trimmed_line.starts_with("```") {
+            continue;
+        }
+        // Check structured `Key: Value` at line/clause head (up to 2 words for key, 1-2 words for value).
+        if let Some((lhs, rhs)) = trimmed_line.split_once(':') {
+            let key_words: Vec<&str> = lhs.split_whitespace().collect();
+            if (1..=2).contains(&key_words.len())
+                && key_words.iter().all(|w| w.len() >= 2 && w.chars().all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-'))
+            {
+                let norm_key = key_words.join("_").to_lowercase();
+                if !SKIP_KEYS.contains(&norm_key.as_str()) {
+                    for val in rhs
+                        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-' && c != '$')
+                        .filter(|w| !w.is_empty())
+                        .take(2)
+                    {
+                        let clean_val = val.trim_matches('$').to_lowercase();
+                        if clean_val.len() >= 2 && !stopwords().contains(clean_val.as_str()) {
+                            out.push((norm_key.clone(), clean_val));
+                        }
+                    }
+                }
+            }
+        }
+        // Also check inline `key:value` tokens without spaces.
+        for raw in trimmed_line.split_whitespace() {
+            let tok = raw.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '_' && c != '-');
+            let Some((key, value)) = tok.split_once(':') else { continue };
+            let kl = key.to_lowercase();
+            if kl.len() >= 2
+                && kl.chars().all(|c| c.is_ascii_alphabetic())
+                && !SKIP_KEYS.contains(&kl.as_str())
+                && !value.is_empty()
+                && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                out.push((kl, value.to_lowercase()));
+            }
         }
     }
     out
@@ -1096,44 +1454,133 @@ fn typed_slot_tokens(text: &str) -> Vec<(String, String)> {
 fn constraint_object_tokens(lower: &str) -> Vec<String> {
     const LEADS: &[&str] = &[
         "don't want ", "dont want ", "do not want ",
-        "allergic to ", "can't eat ", "cant eat ", "cannot eat ",
+        "allergic to ", "intolerant to ",
+        "can't eat ", "cant eat ", "cannot eat ",
         "can't have ", "cant have ", "cannot have ",
+        "can't drink ", "cant drink ", "cannot drink ",
+        "don't eat ", "dont eat ", "do not eat ",
+        "don't drink ", "dont drink ", "do not drink ",
+        "never eat ", "never drink ",
+        "stay away from ", "steer clear of ",
+    ];
+    const PSEUDO_VERBS: &[&str] = &[
+        "bother", "intrude", "waste", "bore", "jinx", "derail", "worry", "know", "think",
     ];
     let mut out = Vec::new();
     for lead in LEADS {
         let mut rest = lower;
         while let Some(at) = rest.find(lead) {
             let after = &rest[at + lead.len()..];
-            out.extend(
-                after
-                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
-                    .filter(|w| !w.is_empty() && is_content(w))
-                    .take(2)
-                    .map(|w| w.to_string()),
-            );
+            // Bound ConText scope at clause/exception boundaries ("but", "except", punctuation).
+            let clause = after
+                .split(['.', ',', ';', '!', '?', '\n'])
+                .next()
+                .unwrap_or(after);
+            let scoped = clause
+                .split(" but ")
+                .next()
+                .unwrap_or(clause)
+                .split(" except ")
+                .next()
+                .unwrap_or(clause);
+            let cands: Vec<&str> = scoped
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+                .filter(|w| !w.is_empty() && is_content(w))
+                .take(2)
+                .collect();
+            if !cands.first().is_some_and(|w| PSEUDO_VERBS.contains(w)) {
+                out.extend(cands.into_iter().map(str::to_string));
+            }
             rest = &rest[at + lead.len()..];
         }
     }
     out
 }
 
-/// Imperative user rule. O(1) scan of a fixed prefix/phrase set, shared by
-/// index construction and the intention-graph registration path.
+/// Imperative user rule. Grounded in Searle directives + SWBD-DAMSL / ISO 24617-2 + NegEx
+/// pseudo-trigger exclusion: rejects questions, epistemic hedges ("don't think/know"),
+/// downplayers ("don't worry", "never mind"), auto-feedback checks ("make sure I understand"),
+/// and elliptical perfects ("never been/seen/heard", "always wanted/been" via VBN/VBD check).
 pub fn utterance_is_standing_policy(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    let trimmed = lower.trim_start();
-    trimmed.starts_with("always ")
-        || trimmed.starts_with("never ")
-        || trimmed.starts_with("make sure")
-        || trimmed.starts_with("ensure ")
-        || trimmed.starts_with("remember to")
+    const IRREGULAR_PAST_PARTICIPLES: &[&str] = &[
+        "been", "was", "were", "had", "done", "did", "seen", "saw", "heard", "known", "knew",
+        "thought", "gone", "went", "got", "gotten", "met", "found", "felt", "meant", "lost",
+        "paid", "said", "sold", "sent", "spent", "built", "caught", "taught", "bought", "brought",
+        "told", "took", "taken", "gave", "given", "ate", "eaten", "drank", "drunk", "wrote",
+        "written", "spoke", "spoken", "broke", "broken", "chose", "chosen", "drove", "driven",
+        "fell", "fallen", "flew", "flown", "forgot", "forgotten", "grew", "grown", "understood",
+        "won",
+    ];
+    const DONT_PSEUDO_NEXT: &[&str] = &[
+        "worry", "sweat", "mention", "fret", "bother", "know", "remember", "recall", "recollect",
+        "understand", "think", "believe", "suppose", "imagine", "reckon", "guess", "expect",
+        "feel", "doubt", "mind", "care", "get", "take", "have", "kid", "ask", "want", "you",
+    ];
+
+    let prose = text.split("```").next().unwrap_or(text).trim();
+    if prose.is_empty() || prose.ends_with('?') {
+        return false;
+    }
+    let lower = prose.to_lowercase();
+    let trimmed = lower
+        .trim_start()
+        .strip_prefix("please ")
+        .map(str::trim_start)
+        .unwrap_or_else(|| lower.trim_start());
+
+    if trimmed.starts_with("never mind") || trimmed.starts_with("nevermind") {
+        return false;
+    }
+
+    let is_non_imperative_past = |verb: &str| -> bool {
+        if IRREGULAR_PAST_PARTICIPLES.contains(&verb) {
+            return true;
+        }
+        verb.len() > 4
+            && verb.ends_with("ed")
+            && !matches!(verb, "need" | "feed" | "seed" | "proceed" | "succeed" | "exceed" | "embed" | "shred")
+    };
+
+    if let Some(rest) = trimmed.strip_prefix("always ").or_else(|| trimmed.strip_prefix("never ")) {
+        let next = rest
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        return !next.is_empty() && !is_non_imperative_past(next);
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("don't ").or_else(|| trimmed.strip_prefix("do not ")) {
+        let next = rest
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        if next.is_empty() || DONT_PSEUDO_NEXT.contains(&next) {
+            return false;
+        }
+        return true;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("make sure").or_else(|| trimmed.strip_prefix("ensure ")) {
+        let after = rest.trim_start();
+        let after_that = after.strip_prefix("that ").map(str::trim_start).unwrap_or(after);
+        if after_that.starts_with("i ")
+            || after_that.starts_with("i'm ")
+            || after_that.starts_with("we're on the same")
+            || after_that.starts_with("we are on the same")
+        {
+            return false;
+        }
+        return true;
+    }
+
+    trimmed.starts_with("remember to ")
         || trimmed.starts_with("from now on")
-        || trimmed.starts_with("do not ")
-        || trimmed.starts_with("don't ")
+        || trimmed.starts_with("going forward")
         || lower.contains("always format")
         || lower.contains("always include")
         || lower.contains("always use")
         || lower.contains("never use")
+        || lower.contains("never include")
         || lower.contains("format all")
 }
 
@@ -1161,6 +1608,12 @@ fn detect_question(content: &str, raw_len: usize) -> (bool, bool) {
 }
 
 fn build_index(sessions: &[Session], p: &Params) -> Index {
+    const BACKCHANNEL_LEADS: &[&str] = &[
+        "wow", "oh", "aw", "aww", "haha", "hahaha", "lol", "nice", "cool", "awesome",
+        "congrats", "congratulations", "yay", "sweet", "amazing", "wonderful", "fantastic",
+        "thanks", "thank", "sorry", "glad", "ouch", "yikes",
+    ];
+
     let mut vocab = Vocab::default();
     let mut turns: Vec<TurnIx> = Vec::new();
     let mut session_ids = Vec::new();
@@ -1169,7 +1622,32 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut session_entities = Vec::with_capacity(sessions.len());
     let mut session_content = Vec::with_capacity(sessions.len());
     let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
+    let hard_constraint_set: HashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
     let mut constraint_terms: HashSet<u32> = HashSet::new();
+
+    // Pre-pass: collect exact single-token proper names evidenced by speakers, mid-clause
+    // capitalization, multi-word entity parts, or document header titles so sentence-initial
+    // occurrences of the same byte-equal name bind to the same identity node.
+    let mut known_proper: HashSet<String> = HashSet::new();
+    for s in sessions {
+        for t in &s.turns {
+            let sp = t.role.trim().to_lowercase();
+            if !sp.is_empty() && sp != "user" && sp != "assistant" {
+                for w in raw_tokens(&sp) {
+                    if w.len() >= 3 && !STARTER_STOP.contains(&w.as_str()) && !stopwords().contains(w.as_str()) {
+                        known_proper.insert(w);
+                    }
+                }
+            }
+            for ent in proper_entity_tokens(&t.content) {
+                if let Some(body) = ent.strip_prefix("\u{1}ent:") {
+                    if !body.contains('_') && body.len() >= 3 {
+                        known_proper.insert(body.to_string());
+                    }
+                }
+            }
+        }
+    }
 
     for (si, s) in sessions.iter().enumerate() {
         let ts = if s.date.is_empty() { s.timestamp } else { match parse_date(&s.date) { 0 => s.timestamp, t => t } };
@@ -1205,6 +1683,23 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                         }
                     }
                 }
+                if known_proper.contains(w) {
+                    let eid = vocab.intern(&format!("\u{1}ent:{w}"));
+                    entities.insert(eid);
+                    s_ents.insert(eid);
+                }
+            }
+            // Pre-saturation BM25F title boost for structured `{Title}\n{Body}` documents.
+            if let Some(core_title) = extract_header_title(&t.content) {
+                for hw in raw_tokens(core_title).into_iter().filter(|w| is_content(w)) {
+                    let hid = vocab.intern(&hw);
+                    feats.push(Feat { id: hid, w: 1.5, counts_len: true, inheritable: false });
+                    if p.enable_stemming {
+                        let hst = stem(&hw);
+                        let hsid = vocab.intern(&stem_term(&hst));
+                        feats.push(Feat { id: hsid, w: 1.0, counts_len: false, inheritable: false });
+                    }
+                }
             }
             for ent in proper_entity_tokens(&t.content) {
                 let eid = vocab.intern(&ent);
@@ -1215,6 +1710,9 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let lower = t.content.to_lowercase();
             let pref_marker = raw.iter().any(|w| pref_set.contains(w.as_str()))
                 || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m));
+            let is_personal_constraint = field == 0
+                && (raw.iter().any(|w| hard_constraint_set.contains(w.as_str()))
+                    || HARD_CONSTRAINT_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m)));
             if p.enable_preference && pref_marker && field == 0 {
                 feats.push(Feat { id: vocab.intern(PREF_AXIS), w: 1.0, counts_len: false, inheritable: false });
             }
@@ -1234,9 +1732,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 for w in raw_tokens(&speaker) {
                     let id = vocab.intern(&w);
                     // Speaker is a boost, never a filter: the name is an identity edge.
-                    feats.push(Feat { id, w: 1.6, counts_len: false, inheritable: false });
-                    entities.insert(id);
-                    s_ents.insert(id);
+                    feats.push(Feat { id, w: 0.9, counts_len: false, inheritable: false });
+                    let eid = vocab.intern(&format!("\u{1}ent:{w}"));
+                    entities.insert(eid);
+                    s_ents.insert(eid);
                 }
             }
             for obj in constraint_object_tokens(&lower) {
@@ -1247,12 +1746,16 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 constraint_terms.insert(id);
             }
             for (slot_key, slot_val) in typed_slot_tokens(&t.content) {
+                let slot_ent = vocab.intern(&format!("\u{1}slot:{slot_key}"));
                 let kid = vocab.intern(&slot_key);
                 let vid = vocab.intern(&slot_val);
-                feats.push(Feat { id: kid, w: 0.4, counts_len: false, inheritable: false });
+                feats.push(Feat { id: kid, w: 0.5, counts_len: false, inheritable: false });
                 feats.push(Feat { id: vid, w: 1.6, counts_len: false, inheritable: true });
+                feats.push(Feat { id: slot_ent, w: 0.8, counts_len: false, inheritable: false });
                 content.insert(vid);
                 s_cont.insert(vid);
+                entities.insert(slot_ent);
+                s_ents.insert(slot_ent);
             }
             let (is_question, is_short_question) = detect_question(&t.content, raw.len());
             let anaphoric = raw.first().is_some_and(|w| CONTINUATIONS.contains(&w.as_str()))
@@ -1269,6 +1772,14 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let has_spatial = raw.iter().any(|w| SPATIAL_WORDS.contains(&w.as_str()));
             let has_causal = CAUSAL_WORDS.iter().any(|c| lower.contains(c));
             let is_standing_policy = field == 0 && utterance_is_standing_policy(&t.content);
+            let is_backchannel = !is_question
+                && content.len() <= 4
+                && !has_temporal
+                && !has_numeric
+                && entities.is_empty()
+                && !pref_marker
+                && !is_standing_policy
+                && raw.first().is_some_and(|w| BACKCHANNEL_LEADS.contains(&w.as_str()));
             let is_initiative = field == 0
                 && !is_standing_policy
                 && !anaphoric
@@ -1287,8 +1798,11 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 speaker,
                 is_question,
                 answers_question: false,
+                is_short_reply: false,
+                is_backchannel,
                 anaphoric,
                 pref_marker,
+                is_personal_constraint,
                 has_temporal,
                 has_numeric,
                 has_spatial,
@@ -1303,7 +1817,31 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_content.push(s_cont);
     }
 
-    // Session bags (own text only) and turn bags (own text + centering carry-forward).
+    // Mark DAMSL adjacency pairs before bag construction: question/answer pairs AND
+    // short value/commitment replies to preceding statements ("Done.", "Last Tuesday.", "Me too!").
+    for members in &session_turns {
+        for pos in 1..members.len() {
+            let (a, b) = (members[pos - 1], members[pos]);
+            if turns[a].speaker != turns[b].speaker {
+                if turns[a].is_question {
+                    turns[b].answers_question = true;
+                }
+                if !turns[b].is_question
+                    && !turns[b].is_backchannel
+                    && turns[b].content.len() <= 5
+                    && (turns[a].is_question
+                        || turns[b].anaphoric
+                        || turns[b].content.len() <= 2
+                        || turns[b].has_temporal
+                        || turns[b].has_numeric)
+                {
+                    turns[b].is_short_reply = true;
+                }
+            }
+        }
+    }
+
+    // Session bags (own text only) and turn bags (own text + length-fair centering carry).
     let mut session_bags = Vec::with_capacity(session_turns.len());
     let mut turn_bags: Vec<Bag> = (0..turns.len()).map(|_| Bag::default()).collect();
     for members in &session_turns {
@@ -1314,22 +1852,15 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 sb.add(t.field, f, 1.0);
                 turn_bags[ti].add(t.field, f, 1.0);
             }
-            if p.enable_carry {
-                let short = t.content.len() <= 6;
-                for (npos, weight) in [(pos.wrapping_sub(1), if short { 1.0 } else { 0.55 }), (pos + 1, if short { 1.0 } else { 0.55 })] {
-                    if npos >= members.len() || (npos == pos.wrapping_sub(1) && pos == 0) {
-                        continue;
-                    }
-                    let src = &turns[members[npos]];
-                    for &f in src.feats.iter().filter(|f| f.inheritable) {
-                        turn_bags[ti].add(t.field, Feat { counts_len: false, ..f }, weight);
-                    }
-                }
-            }
             if p.enable_carry && pos > 0 {
-                let prev = &turns[members[pos - 1]];
-                let answer = prev.is_question && prev.speaker != t.speaker;
-                let factor = if answer || t.anaphoric { 1.0 } else { p.carry_plain_factor };
+                let answer = t.answers_question;
+                let factor = if t.is_backchannel {
+                    0.15
+                } else if answer || t.anaphoric {
+                    0.85
+                } else {
+                    p.carry_plain_factor
+                };
                 let field = t.field;
                 let mut inherited: Vec<(Feat, f32)> = Vec::new();
                 for k in 1..=3usize {
@@ -1337,30 +1868,34 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                         break;
                     }
                     let src = &turns[members[pos - k]];
-                    let w = if k == 1 && answer { p.carry_answer } else { p.carry[k - 1] * factor };
+                    let w = if k == 1 && answer {
+                        p.carry_answer
+                    } else if k == 1 && t.is_short_reply {
+                        0.75
+                    } else {
+                        p.carry[k - 1] * factor
+                    };
                     if w <= 0.0 {
                         continue;
                     }
                     // Inherit open-class content (exact + stem + hypernym + proper entities), never speaker tag or dates.
                     for &f in src.feats.iter().filter(|f| f.inheritable) {
-                        inherited.push((Feat { counts_len: false, ..f }, w));
+                        inherited.push((f, w));
                     }
                 }
                 for (f, w) in inherited {
-                    turn_bags[ti].add(field, f, w);
+                    turn_bags[ti].add_inherited(field, f, w);
+                }
+            }
+            // Third-position uptake: a concise value-bearing turn inherits light forward context from pos + 1.
+            if p.enable_carry && !t.is_backchannel && !t.is_question && t.content.len() <= 4 && pos + 1 < members.len() {
+                let nxt = &turns[members[pos + 1]];
+                for &f in nxt.feats.iter().filter(|f| f.inheritable) {
+                    turn_bags[ti].add_inherited(t.field, f, 0.25);
                 }
             }
         }
         session_bags.push(sb);
-    }
-    // Mark answer turns (second part of a question/answer adjacency pair).
-    for members in &session_turns {
-        for pos in 1..members.len() {
-            let (a, b) = (members[pos - 1], members[pos]);
-            if turns[a].is_question && turns[a].speaker != turns[b].speaker {
-                turns[b].answers_question = true;
-            }
-        }
     }
 
     // Max-passage windows.
@@ -1480,7 +2015,11 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let use_hyp = p.enable_hypernyms;
 
     let raw_q = raw_tokens(&q.text);
-    if raw_q.iter().any(|w| ix.vocab.get(w).is_some_and(|id| ix.constraint_terms.contains(&id))) {
+    let q_lower = format!(" {} ", q.text.to_lowercase());
+    let episodic_past_recall = has_any(&q_lower, RECALL_NOT_TASK_CUES) || intent.sniper_how_many;
+    if !episodic_past_recall
+        && raw_q.iter().any(|w| ix.vocab.get(w).is_some_and(|id| ix.constraint_terms.contains(&id)))
+    {
         intent.preference = true;
     }
     let inline_dates = if p.enable_deictic { inline_date_tokens(&q.text) } else { Vec::new() };
@@ -1581,8 +2120,18 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                 2.0
             } else if d.starts_with("__MD__") {
                 1.4
-            } else if d.starts_with("__YM__") || d.starts_with("__MONTH__") {
+            } else if d.starts_with("__YM__") {
+                1.2
+            } else if d.starts_with("__SY__") {
+                1.1
+            } else if d.starts_with("__MONTH__")
+                || d.starts_with("__EARLY__")
+                || d.starts_with("__MID__")
+                || d.starts_with("__LATE__")
+            {
                 1.0
+            } else if d.starts_with("__YEAR__") || d.starts_with("__SEASON__") {
+                0.85
             } else {
                 p.date_weight
             };
@@ -1592,8 +2141,12 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         for (d, scale) in deictic_items {
             let base = if d.starts_with("__DATE__") {
                 1.9
+            } else if d.starts_with("__MD__") {
+                1.1
             } else if d.starts_with("__YM__") || d.starts_with("__MONTH__") {
                 0.85
+            } else if d.starts_with("__YEAR__") || d.starts_with("__SEASON__") || d.starts_with("__SY__") {
+                0.55
             } else {
                 p.date_weight
             };
@@ -1709,26 +2262,31 @@ fn jaccard(a: &HashSet<u32>, b: &HashSet<u32>) -> f32 {
     if union <= 0.0 { 0.0 } else { inter / union }
 }
 
-fn raise_floor(scores: &mut [f32], lexical_max: f32, frac: f32, keep: impl Fn(usize) -> bool) {
+fn raise_floor(scores: &mut [f32], lexical_max: f32, frac: f32, keep: impl Fn(usize) -> bool) -> Vec<bool> {
     let floor = if lexical_max > 0.0 { frac * lexical_max } else { 1.0 };
+    let mut lifted = vec![false; scores.len()];
     for i in 0..scores.len() {
         if keep(i) && scores[i] < floor {
             scores[i] = floor;
+            lifted[i] = true;
         }
     }
+    lifted
 }
 
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
+    let pref_on = p.enable_preference && it.preference;
     let fl = if p.enable_roles && it.assistant_attribution {
         Fields { w: [1.0, p.assistant_attribution_weight], b: [p.b_user, p.b_assistant_attributed] }
     } else if p.enable_roles && it.user_attribution {
         Fields { w: [p.user_attribution_weight, 0.35], b: [p.b_user, p.b_assistant] }
+    } else if p.enable_roles && pref_on {
+        Fields { w: [1.45, 0.55], b: [p.b_user, p.b_assistant] }
     } else {
         Fields { w: [1.0, 1.0], b: [p.b_user, p.b_assistant] }
     };
-    let pref_on = p.enable_preference && it.preference;
     let ns = ix.session_bags.len();
 
     // ---- Session level: whole-session BM25F + max-passage window pooling ----
@@ -1809,6 +2367,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
         if p.enable_carry && t.answers_question {
             sc *= p.answer_boost;
+        } else if p.enable_carry && t.is_short_reply {
+            sc *= 1.05;
         }
         if pref_on && t.pref_marker && t.field == 0 {
             sc *= p.preference_boost;
@@ -1817,20 +2377,47 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         t_mask[ti] = m;
     }
 
-    // Weapon 1: Bidirectional 3-Turn Micro-Scene Pooling
+    // Weapon 1: Bidirectional 3-Turn Micro-Scene Pooling.
+    // Symmetric (0.55 / 0.55) across statement pairs so scene pooling is strictly order-preserving
+    // (t_scene[a] - t_scene[b] = 0.45 * (t_raw[a] - t_raw[b])) and never inverts a fact statement
+    // beneath its reaction turn; asymmetric (0.75) only when the preceding turn is a question.
     let mut t_scene = vec![0.0f32; nt];
     if p.enable_scene {
         for members in &ix.session_turns {
             for (pos, &ti) in members.iter().enumerate() {
                 let prev_raw = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
                 let next_raw = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
-                t_scene[ti] = 1.0 * t_raw[ti] + 0.75 * prev_raw + 0.55 * next_raw;
-                if pos > 0 { t_mask[ti] |= t_mask[members[pos - 1]]; }
-                if pos + 1 < members.len() { t_mask[ti] |= t_mask[members[pos + 1]]; }
+                let prev_w = if ix.turns[ti].is_backchannel {
+                    0.25
+                } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
+                    0.75
+                } else {
+                    0.55
+                };
+                t_scene[ti] = 1.0 * t_raw[ti] + prev_w * prev_raw + 0.55 * next_raw;
+                if pos > 0 && !ix.turns[ti].is_backchannel {
+                    t_mask[ti] |= t_mask[members[pos - 1]];
+                }
+                if pos + 1 < members.len() {
+                    t_mask[ti] |= t_mask[members[pos + 1]];
+                }
             }
         }
     } else {
-        t_scene = t_raw;
+        t_scene = t_raw.clone();
+    }
+
+    // Named-speaker boost (never a filter): 1.04x tie-breaker gated on t_raw[ti] > 0
+    // so an empty adjacent reply cannot outrank a fact turn, and adversarial speaker swaps
+    // do not bury the partner turn that actually stated the evidence.
+    for ti in 0..nt {
+        if t_raw[ti] <= 0.0 {
+            continue;
+        }
+        let sp = ix.turns[ti].speaker.as_str();
+        if !sp.is_empty() && sp != "user" && sp != "assistant" && plan.groups.iter().any(|g| g == sp) {
+            t_scene[ti] *= 1.04;
+        }
     }
 
     // Turn-level role alignment: when the query asks what the USER said/brought up, assistant turns are suppressed.
@@ -1873,6 +2460,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             if t.is_short_question {
                 t_scene[ti] *= 0.50;
             }
+            if t.is_backchannel {
+                t_scene[ti] *= 0.55;
+            }
         }
     }
 
@@ -1892,7 +2482,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let mut activation: HashMap<u32, f32> = HashMap::new();
                 let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
 
-                // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities
+                // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities + Rare Exact Symbols
                 for &s in &seed_indices {
                     if t_scene[s] < 0.15 * t_max {
                         break;
@@ -1901,8 +2491,19 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     for &e in &ix.turns[s].entities {
                         if let Some(&df) = ix.t_stats.df.get(&e) {
                             if df >= 2 && df <= max_df {
-                                let idf_term = 1.0 / ((df as f32 + 1.1).ln());
+                                let idf_term = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
                                 *activation.entry(e).or_insert(0.0) += 2.0 * seed_norm * idf_term;
+                            }
+                        }
+                    }
+                    for &w in &ix.turns[s].content {
+                        if plan.group_of.contains_key(&w) {
+                            continue;
+                        }
+                        if let Some(&df) = ix.t_stats.df.get(&w) {
+                            if df >= 2 && df <= max_df {
+                                let idf_term = 1.2 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
+                                *activation.entry(w).or_insert(0.0) += 0.75 * seed_norm * idf_term;
                             }
                         }
                     }
@@ -1917,7 +2518,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                                 ent_hit += 2.0 * act;
                             }
                         }
-                        let ppr_sum = ent_hit;
+                        let mut ppr_sum = ent_hit;
+                        for &w in &ix.turns[ti].content {
+                            if let Some(&act) = activation.get(&w) {
+                                ppr_sum += 0.75 * act;
+                            }
+                        }
                         if ppr_sum > 0.0 && (t_scene[ti] > 0.0 || ent_hit > 0.0) {
                             let target_norm = ppr_sum / ((ix.turns[ti].content.len() + 4) as f32).sqrt();
                             let sat = target_norm / (target_norm + 0.45);
@@ -1940,22 +2546,24 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
-    // Question/answer dyad coupling: the partner of a strong turn rides along.
+    // Adjacency-pair dyad coupling: answers to questions AND short commitment/value replies
+    // to statements ("Done.", "Last Tuesday.", "Me too!") ride alongside their setup turn.
     if p.enable_dyad {
         let base = t_scene.clone();
         for members in &ix.session_turns {
             for pos in 1..members.len() {
                 let (a, b) = (members[pos - 1], members[pos]);
-                if !ix.turns[b].answers_question {
+                if !ix.turns[b].answers_question && !ix.turns[b].is_short_reply {
                     continue;
                 }
+                let partner_ratio = if ix.turns[b].answers_question { p.dyad_partner } else { 0.84 };
                 let (hi, lo) = if base[a] >= base[b] { (a, b) } else { (b, a) };
                 if base[hi] <= 0.0 {
                     continue;
                 }
                 let dyad = base[hi] + p.dyad * base[lo];
                 t_scene[hi] = t_scene[hi].max(dyad);
-                t_scene[lo] = t_scene[lo].max(dyad * p.dyad_partner);
+                t_scene[lo] = t_scene[lo].max(dyad * partner_ratio);
                 t_mask[lo] |= t_mask[hi];
             }
         }
@@ -1968,38 +2576,33 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // captured first. 0.68 stays under the 0.72 second-anchor cut so a
     // zero-overlap rule does not become a PPR anchor. The standing floor is
     // applied to the policy turn itself, not only its session.
-    let s_lexical = s_score.clone();
-    let t_lexical = t_scene.clone();
     let lexical_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     let lexical_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
-    if it.task_under_rules {
-        raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
-            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
-        });
-        raise_floor(&mut t_scene, lexical_tmax, 0.68, |ti| ix.turns[ti].is_standing_policy);
-    }
-    if pref_on {
-        raise_floor(&mut s_score, lexical_smax, 0.50, |si| {
-            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].pref_marker && ix.turns[ti].field == 0)
-        });
-        raise_floor(&mut t_scene, lexical_tmax, 0.50, |ti| {
-            ix.turns[ti].pref_marker && ix.turns[ti].field == 0
-        });
-    }
+    let (s_policy_floored, t_policy_floored) = if it.task_under_rules {
+        (
+            raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
+                ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
+            }),
+            raise_floor(&mut t_scene, lexical_tmax, 0.68, |ti| ix.turns[ti].is_standing_policy),
+        )
+    } else {
+        (vec![false; ns], vec![false; nt])
+    };
+    let (s_pref_floored, t_pref_floored) = if pref_on {
+        (
+            raise_floor(&mut s_score, lexical_smax, 0.50, |si| {
+                ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_personal_constraint)
+            }),
+            raise_floor(&mut t_scene, lexical_tmax, 0.50, |ti| ix.turns[ti].is_personal_constraint),
+        )
+    } else {
+        (vec![false; ns], vec![false; nt])
+    };
     if it.is_event_sequence {
-        raise_floor(&mut s_score, lexical_smax, 0.42, |si| {
+        let _ = raise_floor(&mut s_score, lexical_smax, 0.42, |si| {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
         });
-        raise_floor(&mut t_scene, lexical_tmax, 0.38, |ti| ix.turns[ti].is_initiative);
-    }
-    for ti in 0..nt {
-        let sp = ix.turns[ti].speaker.as_str();
-        if sp.is_empty() || sp == "user" || sp == "assistant" || t_scene[ti] <= 0.0 {
-            continue;
-        }
-        if plan.groups.iter().any(|g| g == sp) {
-            t_scene[ti] *= 1.35;
-        }
+        let _ = raise_floor(&mut t_scene, lexical_tmax, 0.38, |ti| ix.turns[ti].is_initiative);
     }
     let initiative_content: Vec<HashSet<u32>> = if it.is_event_sequence {
         ix.session_turns.iter().map(|members| {
@@ -2022,11 +2625,16 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         if let Some(&top0) = s_ord_base.first() {
             let mut anchors = vec![top0];
             if let Some(&top1) = s_ord_base.get(1) {
-                if s_score[top1] >= 0.72 * smax {
+                if !s_policy_floored[top1] && !s_pref_floored[top1] && s_score[top1] >= 0.72 * smax {
                     anchors.push(top1);
                 }
             }
-            let max_s_df = ((ix.s_stats.n * 0.05).clamp(4.0, 24.0)) as u32;
+            let max_s_df = if ns >= 8 {
+                ((ix.s_stats.n * 0.10).clamp(4.0, (0.28 * ix.s_stats.n).max(4.0)).min(28.0)) as u32
+            } else {
+                4
+            };
+            let rare_sym_max_df = ((ix.s_stats.n * 0.05).clamp(3.0, 18.0)) as u32;
             let mut s_act: HashMap<u32, f32> = HashMap::new();
             for &anc in &anchors {
                 let anc_w = (s_score[anc] / smax).clamp(0.25, 1.0);
@@ -2042,8 +2650,20 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     for &e in &ix.turns[ti].entities {
                         if let Some(&df) = ix.s_stats.df.get(&e) {
                             if df >= 2 && df <= max_s_df {
-                                let idf_s = 1.0 / ((df as f32 + 1.1).ln());
+                                let idf_s = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
                                 *s_act.entry(e).or_insert(0.0) += (anc_w * 2.5 * idf_s) / turn_len_norm;
+                            }
+                        }
+                    }
+                    // Exact byte-equal rare symbols (content holds unstemmed exact token IDs only, never stems).
+                    for &w in &ix.turns[ti].content {
+                        if plan.group_of.contains_key(&w) {
+                            continue;
+                        }
+                        if let Some(&df) = ix.s_stats.df.get(&w) {
+                            if df >= 2 && df <= rare_sym_max_df {
+                                let idf_s = 1.2 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
+                                *s_act.entry(w).or_insert(0.0) += (anc_w * 0.75 * idf_s) / turn_len_norm;
                             }
                         }
                     }
@@ -2060,7 +2680,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             ent_sum += 2.0 * a;
                         }
                     }
-                    let sum = ent_sum;
+                    let mut sum = ent_sum;
+                    for &w in &ix.session_content[si] {
+                        if let Some(&a) = s_act.get(&w) {
+                            sum += 0.75 * a;
+                        }
+                    }
                     // Require direct query overlap (s_score > 0), or an explicit proper-entity bridge
                     // on non-preference/non-user queries, so zero-match distractors never displace personal facts.
                     let allow_zero_hit = !it.preference && !it.user_attribution && ent_sum > 0.0;
@@ -2068,13 +2693,19 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         let slen = (ix.session_bags[si].len[0] + ix.session_bags[si].len[1] + 8.0).sqrt();
                         let norm = sum / slen;
                         let sat = norm / (norm + 0.05);
-                        let coeff = if it.multi_hop || plan.groups.len() >= 3 { 0.55 } else { 0.12 };
+                        let mut coeff = if it.multi_hop || plan.groups.len() >= 3 { 0.55 } else { 0.12 };
+                        if (s_mask[si] & !s_mask[top0]) != 0 {
+                            coeff *= 1.30;
+                        }
                         bridge_boost[si] = smax * coeff * sat;
                     }
                 }
             }
         }
     }
+
+    let total_q_groups = plan.groups.len().min(64);
+    let mask_limit = if total_q_groups == 64 { u64::MAX } else { (1u64 << total_q_groups) - 1 };
 
     let final_session_indices: Vec<usize> = if p.enable_submodular && ns > 1 {
         let mut selected: Vec<usize> = Vec::with_capacity(k);
@@ -2084,8 +2715,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let mut covered_mask = s_mask[top0];
                 let mut covered_ents: HashSet<u32> = ix.session_entities[top0].clone();
                 let mut mask_counts: HashMap<u64, usize> = HashMap::new();
-                let total_q_groups = plan.groups.len().min(64);
-                let mask_limit = if total_q_groups == 64 { u64::MAX } else { (1u64 << total_q_groups) - 1 };
                 *mask_counts.entry(s_mask[top0] & mask_limit).or_insert(0) += 1;
                 let mut remaining: Vec<usize> = (0..ns)
                     .filter(|&si| si != top0 && (s_score[si] > 0.0 || bridge_boost[si] > 0.0))
@@ -2104,22 +2733,24 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             0.0
                         };
                         let same_mask_seen = mask_counts.get(&m_eff).copied().unwrap_or(0);
-                        let policy_prior = s_lexical[si] <= 1e-6
-                            && ix.session_turns[si].iter().any(|&t| ix.turns[t].is_standing_policy);
-                        let pref_prior = s_lexical[si] <= 1e-6
-                            && !policy_prior
-                            && ix.session_turns[si].iter().any(|&t| ix.turns[t].pref_marker && ix.turns[t].field == 0);
-                        let policy_slots = selected.iter().filter(|&&s| {
-                            s_lexical[s] <= 1e-6 && ix.session_turns[s].iter().any(|&t| ix.turns[t].is_standing_policy)
+                        let policy_prior = s_policy_floored[si];
+                        let pref_prior = s_pref_floored[si] && !policy_prior;
+                        let zero_prior = (policy_prior || pref_prior) && m_eff == 0;
+                        let policy_slots = selected.iter().filter(|&&s| s_policy_floored[s]).count();
+                        let pref_slots = selected.iter().filter(|&&s| s_pref_floored[s] && !s_policy_floored[s]).count();
+                        let zero_slots = selected.iter().filter(|&&s| {
+                            (s_policy_floored[s] || s_pref_floored[s]) && (s_mask[s] & mask_limit) == 0
                         }).count();
-                        let pref_slots = selected.iter().filter(|&&s| {
-                            s_lexical[s] <= 1e-6
-                                && ix.session_turns[s].iter().any(|&t| ix.turns[t].pref_marker && ix.turns[t].field == 0)
-                        }).count();
-                        if (policy_prior && policy_slots >= 1) || (pref_prior && pref_slots >= 1) {
+                        if (policy_prior && policy_slots >= 1)
+                            || (pref_prior && pref_slots >= 1)
+                            || (zero_prior && zero_slots >= 1)
+                        {
                             continue;
                         }
                         let shared_ent = ix.session_entities[si].iter().any(|e| covered_ents.contains(e));
+                        let near_dup = uncovered == 0.0
+                            && bridge_boost[si] < 0.12 * smax
+                            && selected.iter().any(|&s| jaccard(&ix.session_content[s], &ix.session_content[si]) >= 0.52);
                         let same_date_seen = it.is_event_sequence && selected.iter().any(|&s| ix.session_ts[s] == ix.session_ts[si] && ix.session_ts[si] > 0);
                         let topic_seen = it.is_event_sequence
                             && !initiative_content[si].is_empty()
@@ -2129,6 +2760,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             0.25
                         } else if topic_seen {
                             0.35
+                        } else if near_dup {
+                            0.65
                         } else if uncovered == 0.0 && bridge_boost[si] < 0.12 * smax && shared_ent && same_mask_seen >= 2 {
                             0.62
                         } else {
@@ -2158,9 +2791,24 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             if selected.len() >= k {
                 break;
             }
-            if !selected.contains(si) {
-                selected.push(*si);
+            if selected.contains(si) {
+                continue;
             }
+            let policy_prior = s_policy_floored[*si];
+            let pref_prior = s_pref_floored[*si] && !policy_prior;
+            let zero_prior = (policy_prior || pref_prior) && (s_mask[*si] & mask_limit) == 0;
+            let policy_slots = selected.iter().filter(|&&s| s_policy_floored[s]).count();
+            let pref_slots = selected.iter().filter(|&&s| s_pref_floored[s] && !s_policy_floored[s]).count();
+            let zero_slots = selected.iter().filter(|&&s| {
+                (s_policy_floored[s] || s_pref_floored[s]) && (s_mask[s] & mask_limit) == 0
+            }).count();
+            if (policy_prior && policy_slots >= 1)
+                || (pref_prior && pref_slots >= 1)
+                || (zero_prior && zero_slots >= 1)
+            {
+                continue;
+            }
+            selected.push(*si);
         }
         selected
     } else {
@@ -2178,6 +2826,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         .collect();
 
     // Weapon 4: Greedy Submodular Set Cover for Top-K Selection
+    let max_per_session_top5 = if it.is_event_sequence {
+        1
+    } else if it.multi_hop {
+        2
+    } else {
+        4
+    };
+
     let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
     let final_turn_indices: Vec<usize> = if p.enable_submodular {
         let mut selected_turns: Vec<usize> = Vec::with_capacity(k);
@@ -2186,6 +2842,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         let mut remaining: HashSet<usize> = (0..nt).filter(|&ti| t_scene[ti] > 0.0).collect();
 
         let total_query_groups = plan.groups.len().min(64);
+        let turn_mask_limit = if total_query_groups == 64 { u64::MAX } else { (1u64 << total_query_groups) - 1 };
 
         while selected_turns.len() < k && !remaining.is_empty() {
             let mut best_turn = None;
@@ -2202,21 +2859,31 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     });
                 let t_m = t_mask[ti];
                 let uncovered_mask = t_m & !covered_query_terms;
-                let uncovered_count = (uncovered_mask & ((1u64 << total_query_groups) - 1)).count_ones() as f32;
-                let short_reply = ix.turns[ti].content.len() <= 6
+                let uncovered_count = (uncovered_mask & turn_mask_limit).count_ones() as f32;
+                let short_reply = (ix.turns[ti].is_short_reply
+                    || (ix.turns[ti].answers_question && ix.turns[ti].content.len() <= 6))
                     && selected_turns.iter().any(|&prev| {
                         ix.turns[prev].session == t_sess && (prev as isize - ti as isize).abs() == 1
                     });
-                let policy_prior = t_lexical[ti] <= 1e-6 && ix.turns[ti].is_standing_policy;
-                let pref_prior = t_lexical[ti] <= 1e-6
-                    && ix.turns[ti].pref_marker
-                    && ix.turns[ti].field == 0
-                    && !policy_prior;
-                let policy_slots = selected_turns.iter().filter(|&&t| t_lexical[t] <= 1e-6 && ix.turns[t].is_standing_policy).count();
-                let pref_slots = selected_turns.iter().filter(|&&t| {
-                    t_lexical[t] <= 1e-6 && ix.turns[t].pref_marker && ix.turns[t].field == 0
+                let policy_prior = t_policy_floored[ti];
+                let pref_prior = t_pref_floored[ti] && !policy_prior;
+                let zero_prior = (policy_prior || pref_prior) && (t_m & turn_mask_limit) == 0;
+                let policy_slots = selected_turns.iter().filter(|&&t| t_policy_floored[t]).count();
+                let pref_slots = selected_turns.iter().filter(|&&t| t_pref_floored[t] && !t_policy_floored[t]).count();
+                let zero_slots = selected_turns.iter().filter(|&&t| {
+                    (t_policy_floored[t] || t_pref_floored[t]) && (t_mask[t] & turn_mask_limit) == 0
                 }).count();
-                if (policy_prior && policy_slots >= 1) || (pref_prior && pref_slots >= 1) {
+                if (policy_prior && policy_slots >= 1)
+                    || (pref_prior && pref_slots >= 1)
+                    || (zero_prior && zero_slots >= 1)
+                {
+                    continue;
+                }
+                // One chat may not fill the top 5. A short reply beside a hit is the same evidence, not a new slot.
+                let session_capped = selected_turns.len() < 5
+                    && count >= max_per_session_top5
+                    && !(short_reply && !it.is_event_sequence);
+                if session_capped {
                     continue;
                 }
                 let diversity_factor = if short_reply && !it.is_event_sequence {
@@ -2261,9 +2928,33 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 if selected_turns.len() >= k {
                     break;
                 }
-                if !selected_turns.contains(&ti) {
-                    selected_turns.push(ti);
+                if selected_turns.contains(&ti) {
+                    continue;
                 }
+                let policy_prior = t_policy_floored[ti];
+                let pref_prior = t_pref_floored[ti] && !policy_prior;
+                let zero_prior = (policy_prior || pref_prior) && (t_mask[ti] & turn_mask_limit) == 0;
+                let policy_slots = selected_turns.iter().filter(|&&t| t_policy_floored[t]).count();
+                let pref_slots = selected_turns.iter().filter(|&&t| t_pref_floored[t] && !t_policy_floored[t]).count();
+                let zero_slots = selected_turns.iter().filter(|&&t| {
+                    (t_policy_floored[t] || t_pref_floored[t]) && (t_mask[t] & turn_mask_limit) == 0
+                }).count();
+                if (policy_prior && policy_slots >= 1)
+                    || (pref_prior && pref_slots >= 1)
+                    || (zero_prior && zero_slots >= 1)
+                {
+                    continue;
+                }
+                let count = selected_turns.iter().filter(|&&p| ix.turns[p].session == ix.turns[ti].session).count();
+                let short_reply = (ix.turns[ti].is_short_reply
+                    || (ix.turns[ti].answers_question && ix.turns[ti].content.len() <= 6))
+                    && selected_turns.iter().any(|&prev| {
+                        ix.turns[prev].session == ix.turns[ti].session && (prev as isize - ti as isize).abs() == 1
+                    });
+                if selected_turns.len() < 5 && count >= max_per_session_top5 && !(short_reply && !it.is_event_sequence) {
+                    continue;
+                }
+                selected_turns.push(ti);
             }
         }
         selected_turns
@@ -2863,5 +3554,145 @@ mod tests {
         let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids.len(), 2, "{ids:?}");
         assert!(ids[0].ends_with("#0"), "named speaker should lead: {ids:?}");
+    }
+
+    #[test]
+    fn one_chat_cannot_fill_the_top_five_when_another_fact_exists() {
+        let walnut = "The walnut cabinet oil was mixed, brushed, and left to cure overnight.";
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "walnut".into(),
+                    date: "2024/01/02 (Tue) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![
+                        turn("user", walnut),
+                        turn("user", "More walnut cabinet oil notes about the second coat and the brush."),
+                        turn("user", "Still the walnut cabinet oil, now describing the rag and the cure."),
+                        turn("user", "Again the walnut cabinet oil, with the tin and the cloth."),
+                        turn("user", "Yet more walnut cabinet oil, including the shelf and the lid."),
+                    ],
+                },
+                Session {
+                    id: "maple".into(),
+                    date: "2024/03/04 (Mon) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "The maple drawer rails were cut, sanded, and fitted today.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "What connects the walnut cabinet oil and the maple drawer rails?".into(),
+                date: String::new(),
+            }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.multi_hop);
+        let sessions: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.session_id.as_str()).collect();
+        assert!(sessions.contains(&"maple"), "second fact was buried in one chat: {sessions:?}");
+        let walnut_n = sessions.iter().filter(|s| **s == "walnut").count();
+        assert!(walnut_n <= 2, "one chat took {walnut_n} of the top 5: {sessions:?}");
+    }
+
+    #[test]
+    fn pseudo_trigger_idioms_are_not_classified_as_standing_policies() {
+        assert!(!utterance_is_standing_policy("Don't worry about the rain."));
+        assert!(!utterance_is_standing_policy("Don't know where the wrench went."));
+        assert!(!utterance_is_standing_policy("Don't think we tried the cedar stain."));
+        assert!(!utterance_is_standing_policy("Never mind, I found the key."));
+        assert!(!utterance_is_standing_policy("Never been to Lisbon."));
+        assert!(!utterance_is_standing_policy("Always wanted to learn cello."));
+        assert!(!utterance_is_standing_policy("Make sure I understand your diagram."));
+        assert!(utterance_is_standing_policy("Please always quote file paths."));
+        assert!(utterance_is_standing_policy("Make sure every migration has a rollback."));
+    }
+
+    #[test]
+    fn backchannel_reaction_does_not_outrank_the_fact_turn() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "pergola".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("nora", "I stained the cedar pergola beams with tung oil yesterday."),
+                    turn("theo", "Wow, awesome!"),
+                ],
+            }],
+            queries: vec![Query { text: "What oil did Nora use on the cedar pergola?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].turns[0].id.ends_with("#0"), "{:?}", ranked.results[0].turns);
+    }
+
+    #[test]
+    fn ordinal_prepositional_and_bare_may_dates_parse_cleanly() {
+        assert!(inline_date_tokens("How may I sand a drawer?").is_empty());
+        let may_prep = inline_date_tokens("What did Nora build in May?");
+        assert!(may_prep.contains(&"__MONTH__05".to_string()), "{may_prep:?}");
+        let ord = inline_date_tokens("We met on the 15th of March before dusk.");
+        assert!(ord.contains(&"__MD__03_15".to_string()), "{ord:?}");
+        let full_ord = inline_date_tokens("Did the kiln fire on May 1st, 2023?");
+        assert!(full_ord.contains(&"__DATE__2023_05_01".to_string()), "{full_ord:?}");
+        let season = inline_date_tokens("Where did they camp in the summer of 2023?");
+        assert!(season.contains(&"__SY__2023_SU".to_string()), "{season:?}");
+    }
+
+    #[test]
+    fn single_token_entity_and_header_title_bridge_second_hop() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "hop1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "The Harbor Glassworks exhibition was curated by Mateo in Lisbon.")] },
+                Session { id: "d1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Harbor Glassworks opened a small gift counter near the ferry.")] },
+                Session { id: "d2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Visitors praised the Harbor Glassworks lighting display.")] },
+                Session { id: "d3".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Tickets for Harbor Glassworks sold out by noon.")] },
+                Session { id: "d4".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Catalogs from Harbor Glassworks listed twelve bowls.")] },
+                Session { id: "hop2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Mateo (ceramist)\nMateo trained at the Porto Kiln Guild before curating glass.")] },
+                Session { id: "noise".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Sourdough starter hydration depends on flour protein.")] },
+            ],
+            queries: vec![Query { text: "Where did the curator of the Harbor Glassworks exhibition train?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let top5: Vec<String> = rank(&req).results[0].sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(top5.contains(&"hop2".to_string()), "single-token proper bridge missed: {top5:?}");
+    }
+
+    #[test]
+    fn unrelated_hobbies_do_not_flood_topical_preference_queries() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "h1".into(), date: String::new(), timestamp: 1, turns: vec![turn("user", "I love playing blitz chess on rainy evenings.")] },
+                Session { id: "h2".into(), date: String::new(), timestamp: 2, turns: vec![turn("user", "I enjoy knitting wool scarves in winter.")] },
+                Session { id: "h3".into(), date: String::new(), timestamp: 3, turns: vec![turn("user", "I love collecting vintage postage stamps.")] },
+                Session { id: "h4".into(), date: String::new(), timestamp: 4, turns: vec![turn("user", "I prefer fountain pens with fine nibs.")] },
+                Session { id: "h5".into(), date: String::new(), timestamp: 5, turns: vec![turn("user", "I would like to visit Patagonia someday.")] },
+                Session { id: "gold".into(), date: String::new(), timestamp: 6, turns: vec![turn("user", "My camera bag holds a compact prime lens for street photography.")] },
+            ],
+            queries: vec![Query { text: "What would be a good lens to add to my camera kit?".into(), date: String::new() }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.preference);
+        assert_eq!(ranked.results[0].sessions[0].id, "gold");
+    }
+
+    #[test]
+    fn structured_typed_slots_bind_and_supersede_on_current_state() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "old".into(), date: "2024-01-10".into(), timestamp: 0, turns: vec![turn("user", "Quota: 250gb\nInitial storage plan.")] },
+                Session { id: "new".into(), date: "2024-08-15".into(), timestamp: 0, turns: vec![turn("user", "Quota: 500gb\nUpgraded storage plan.")] },
+            ],
+            queries: vec![Query { text: "What is my current storage quota?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].sessions[0].id, "new");
     }
 }
