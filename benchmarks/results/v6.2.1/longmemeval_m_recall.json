@@ -1,0 +1,87 @@
+{
+  "benchmark": "LongMemEval_M",
+  "version": "v6.2.1",
+  "timestamp": "2026-11-11T03:02:24Z",
+  "elapsed_seconds": 2509.12,
+  "cost_usd": 0,
+  "avg_sessions_per_query": 475.3,
+  "avg_turns_per_query": 4894.0,
+  "official_470_non_abs": {
+    "n": 470,
+    "recall_any_r1": 72.55,
+    "recall_any_r3": 88.09,
+    "recall_any_r5": 91.7,
+    "recall_any_r10": 94.47,
+    "recall_all_r5": 76.38,
+    "recall_all_r10": 83.19,
+    "mrr": 0.8097,
+    "ndcg_10": 0.8125
+  },
+  "all_500": {
+    "n": 500,
+    "recall_any_r1": 71.6,
+    "recall_any_r3": 88.0,
+    "recall_any_r5": 91.6,
+    "recall_any_r10": 94.6,
+    "recall_all_r5": 75.4,
+    "recall_all_r10": 82.8,
+    "mrr": 0.8038,
+    "ndcg_10": 0.805
+  },
+  "types_non_abs": {
+    "knowledge-update": {
+      "n": 72,
+      "recall_any_r1": 87.5,
+      "recall_any_r5": 100.0,
+      "recall_any_r10": 100.0,
+      "recall_all_r5": 94.44,
+      "recall_all_r10": 97.22,
+      "ndcg_10": 0.9398
+    },
+    "multi-session": {
+      "n": 121,
+      "recall_any_r1": 66.94,
+      "recall_any_r5": 93.39,
+      "recall_any_r10": 97.52,
+      "recall_all_r5": 57.02,
+      "recall_all_r10": 68.6,
+      "ndcg_10": 0.7537
+    },
+    "single-session-assistant": {
+      "n": 56,
+      "recall_any_r1": 94.64,
+      "recall_any_r5": 100.0,
+      "recall_any_r10": 100.0,
+      "recall_all_r5": 100.0,
+      "recall_all_r10": 100.0,
+      "ndcg_10": 0.9802
+    },
+    "single-session-preference": {
+      "n": 30,
+      "recall_any_r1": 20.0,
+      "recall_any_r5": 50.0,
+      "recall_any_r10": 63.33,
+      "recall_all_r5": 50.0,
+      "recall_all_r10": 63.33,
+      "ndcg_10": 0.3984
+    },
+    "single-session-user": {
+      "n": 64,
+      "recall_any_r1": 70.31,
+      "recall_any_r5": 98.44,
+      "recall_any_r10": 98.44,
+      "recall_all_r5": 98.44,
+      "recall_all_r10": 98.44,
+      "ndcg_10": 0.8619
+    },
+    "temporal-reasoning": {
+      "n": 127,
+      "recall_any_r1": 73.23,
+      "recall_any_r5": 88.19,
+      "recall_any_r10": 91.34,
+      "recall_all_r5": 69.29,
+      "recall_all_r10": 78.74,
+      "ndcg_10": 0.7954
+    }
+  }
+}

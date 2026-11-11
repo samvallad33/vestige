@@ -224,34 +224,46 @@ pub const ENGINE: &str = "stara-total-recall/2 (bm25f+idf^p+coverage+proximity+s
 const STOPWORDS: &[&str] = &[
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
     "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
-    "by", "can", "could", "did", "do", "does", "doing", "down", "during", "each", "few", "for",
-    "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself",
-    "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "just",
-    "me", "more", "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once",
-    "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she",
-    "should", "so", "some", "such", "than", "that", "the", "their", "theirs", "them",
-    "themselves", "then", "there", "these", "they", "this", "those", "through", "to", "too",
-    "under", "until", "up", "very", "was", "we", "were", "what", "when", "where", "which",
-    "while", "who", "whom", "why", "will", "with", "would", "you", "your", "yours", "yourself",
-    "yourselves", "also", "really", "yeah", "yes", "oh", "ok", "okay", "im", "ive", "id", "ill",
-    "dont", "didnt", "doesnt", "thats", "its", "youre", "theyre", "lets", "got", "get", "gets",
-    "getting", "go", "going", "gone", "went", "one", "much", "many", "lot", "lots", "thing",
-    "things", "something", "anything", "everything", "kind", "sort", "way", "well", "even",
-    "still", "ever", "may", "might", "must", "shall", "us", "let", "make", "made", "know",
-    "think", "tell", "told", "say", "said", "remind", "remember", "previous", "conversation",
-    "mentioned", "mention", "talked", "talk", "discussed", "chat", "actually", "sure", "great",
-    "thanks", "thank", "hey", "hi", "hello", "wow", "like", "want", "wanted", "need", "needed",
-    "use", "used", "using", "try", "tried", "trying", "new", "good", "help", "recently",
-    "suggest", "recommend", "useful", "interesting", "past", "times",
+    "by", "can", "cant", "could", "couldnt", "did", "didnt", "do", "does", "doesnt", "doing",
+    "dont", "down", "during", "each", "few", "for", "from", "further", "had", "hadnt", "has",
+    "hasnt", "have", "havent", "having", "he", "her", "here", "hers", "herself", "him",
+    "himself", "his", "how", "i", "id", "ill", "im", "if", "in", "into", "is", "isnt", "it",
+    "its", "itself", "ive", "just", "me", "more", "most", "my", "myself", "no", "nor", "not",
+    "now", "of", "off", "on", "once", "only", "or", "other", "our", "ours", "ourselves", "out",
+    "over", "own", "same", "she", "should", "shouldnt", "so", "some", "such", "than", "that",
+    "thats", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they",
+    "theyre", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was",
+    "wasnt", "we", "were", "werent", "what", "when", "where", "which", "while", "who", "whom",
+    "why", "will", "with", "wont", "would", "wouldnt", "you", "your", "youre", "yours",
+    "yourself", "yourselves", "also", "really", "yeah", "yes", "oh", "ok", "okay", "lets",
+    "got", "get", "gets", "getting", "go", "going", "gone", "went", "one", "much", "many",
+    "lot", "lots", "thing", "things", "something", "anything", "everything", "kind", "sort",
+    "way", "well", "even", "still", "ever", "may", "might", "must", "shall", "us", "let",
+    "make", "made", "know", "think", "tell", "told", "say", "said", "remind", "remember",
+    "conversation", "mentioned", "mention", "talked", "talk", "discussed", "chat",
+    "actually", "sure", "great", "thanks", "thank", "hey", "hi", "hello", "wow", "like",
+    "want", "wanted", "need", "needed", "use", "used", "using", "try", "tried", "trying",
+    "new", "good", "help", "recently", "suggest", "recommend", "useful", "interesting", "past",
+    "times", "arent",
+];
+
+/// Query-framing / request-boilerplate tokens that should not crush domain matches via coverage^2
+/// when genuine content tokens exist in the query.
+const QUERY_FRAMING_WORDS: &[&str] = &[
+    "name", "find", "total", "number", "amount", "count", "order", "earliest", "latest", "list",
+    "items", "item", "steps", "step", "tips", "tip", "advice", "summary", "summarize",
+    "comprehensive", "overview", "details", "detail", "aspects", "aspect", "different",
+    "distinct", "various", "several", "ago", "days", "day", "weeks", "week", "months", "month",
+    "years", "year", "earlier", "later", "throughout", "across",
 ];
 
 const PREF_MARKERS: &[&str] = &[
     "love", "loved", "loves", "loving", "favorite", "favourite", "favorites", "prefer",
-    "prefers", "preferred", "preference", "into", "obsessed", "enjoy", "enjoys", "enjoyed",
-    "enjoying", "hobby", "hobbies", "passionate", "passion", "collect", "collecting", "hate",
-    "hates", "hated", "avoid", "avoiding", "allergic", "never", "always", "usually", "diet",
-    "vegan", "vegetarian", "fan", "like", "likes", "dislike", "dislikes", "fond", "crave",
-    "addicted", "tend", "habit", "routine", "can't stand", "big fan",
+    "prefers", "preferred", "preference", "obsessed", "enjoy", "enjoys", "enjoyed", "enjoying",
+    "hobby", "hobbies", "passionate", "passion", "collect", "collecting", "hate", "hates",
+    "hated", "dislike", "dislikes", "avoid", "avoiding", "allergic", "diet", "vegan",
+    "vegetarian", "big fan", "fond", "crave", "addicted", "habit", "routine", "can't stand",
+    "i'd like", "would like", "rather", "instead of", "go-to",
 ];
 
 const PREF_QUERY_CUES: &[&str] = &[
@@ -260,7 +272,8 @@ const PREF_QUERY_CUES: &[&str] = &[
     "should i get", "should i try", "should i buy", "gift", "present for", "suitable for me",
     "how do i like", "any ideas", "any tips", "ideas for", "tips for", "advice on",
     "can you suggest", "what should i", "something i", "i might like", "i would like",
-    "go-to", "best for me", "fit my", "match my", "based on my",
+    "go-to", "best for me", "fit my", "match my", "based on my", "steps would you",
+    "help me set up", "serve",
 ];
 
 const CURRENT_STATE_CUES: &[&str] = &[
@@ -313,40 +326,43 @@ const CONTINUATIONS: &[&str] = &[
     "indeed", "agreed", "same",
 ];
 
-/// 37-cluster deterministic hypernym lattice (coarse life domains + software systems architecture).
+/// 40-cluster deterministic hypernym lattice (coarse life domains + software systems architecture).
 const HYPERNYM_LATTICE: &[(&str, &[&str])] = &[
     ("CULINARY", &["sourdough", "croissant", "baking", "bake", "baker", "bread", "loaf", "recipe", "dinner", "lunch", "breakfast", "vegan", "vegetarian", "pescatarian", "roast", "chef", "cook", "cooking", "kitchen", "cuisine", "meal", "dining", "restaurant", "food", "foodie", "dish", "spice", "pasta", "cheese", "dessert", "chocolate", "pastry", "culinary", "pizza", "sushi", "taco", "burger", "salad", "soup", "grill", "bbq", "cake", "cookie", "appliance", "appliances", "smoker", "fryer", "blender", "microwave", "toaster", "fridge", "refrigerator", "oven", "stove", "ingredient", "ingredients", "produce", "homegrown", "harvest"]),
     ("BEVERAGE", &["coffee", "espresso", "latte", "cappuccino", "roastery", "bean", "brew", "brewing", "tea", "matcha", "chai", "cafe", "barista", "aeropress", "pourover", "wine", "beer", "cocktail", "whiskey", "smoothie", "juice"]),
     ("OUTDOORS", &["hike", "hiking", "trail", "kayak", "kayaking", "camping", "camp", "tent", "backpack", "backpacking", "outdoor", "outdoors", "gear", "park", "wilderness", "climb", "climbing", "mountain", "beach", "lake", "fishing", "nature", "roadtrip"]),
     ("FITNESS", &["gym", "weight", "workout", "running", "runner", "run", "jog", "jogging", "cycling", "bike", "bicycle", "swim", "swimming", "triathlon", "marathon", "5k", "10k", "exercise", "cardio", "fitness", "yoga", "pilates", "crossfit", "training", "race", "tournament", "competition", "athletic", "athletics"]),
     ("VISUAL_ART", &["painting", "paint", "acrylic", "watercolor", "watercolour", "oil", "sketch", "sketching", "draw", "drawing", "pottery", "ceramic", "clay", "studio", "sculpture", "gallery", "canvas", "portrait", "landscape", "art", "artistic", "artist", "medium", "easel", "craft", "knitting", "sewing", "exhibition"]),
-    ("MUSIC", &["guitar", "piano", "vinyl", "concert", "festival", "album", "spotify", "band", "jazz", "rock", "classical", "instrument", "drum", "bass", "violin", "orchestra", "musician", "song", "singing", "vocalist", "music", "playlist", "podcast", "dance", "ballet", "salsa"]),
+    ("MUSIC", &["guitar", "piano", "vinyl", "concert", "festival", "album", "spotify", "band", "jazz", "rock", "classical", "instrument", "drum", "bass", "violin", "orchestra", "musician", "song", "singing", "vocalist", "music", "playlist", "podcast", "streaming", "dance", "ballet", "salsa"]),
     ("PETS", &["dog", "puppy", "cat", "kitten", "vet", "pet", "rescue", "adopt", "adoption", "animal", "retriever", "breed", "leash", "veterinary", "veterinarian", "fish", "bird", "hamster", "horse"]),
     ("BOOKS", &["book", "reading", "read", "novel", "author", "fiction", "nonfiction", "memoir", "library", "bookstore", "kindle", "audiobook", "literature", "poetry", "poem", "writing", "writer", "publish", "publication", "publications", "conference", "conferences", "paper", "papers", "article", "articles", "proceedings", "journal", "journals"]),
     ("GAMING", &["game", "gaming", "gamer", "playstation", "nintendo", "switch", "xbox", "steam", "rpg", "boardgame", "tabletop", "console", "chess", "puzzle", "videogame"]),
     ("TRAVEL", &["travel", "traveling", "flight", "airline", "trip", "vacation", "hotel", "hostel", "explore", "exploring", "passport", "tourist", "destination", "luggage", "itinerary", "cruise", "resort", "abroad", "museum", "theater"]),
     ("PHOTOGRAPHY", &["photo", "photography", "camera", "lens", "shoot", "canon", "nikon", "sony", "shutter", "aperture", "exposure", "darkroom", "instagram"]),
     ("GARDENING", &["garden", "gardening", "plant", "indoor", "succulent", "flower", "flowers", "soil", "pruning", "seed", "greenhouse", "botany", "tomato", "herb", "herbs", "homegrown", "harvest", "harvested", "ingredient", "ingredients", "produce", "basil", "mint", "pepper"]),
-    ("TECH", &["python", "rust", "javascript", "typescript", "compiler", "react", "server", "bug", "repo", "code", "coding", "programmer", "programming", "software", "developer", "api", "database", "algorithm", "linux", "terminal", "github", "laptop", "computer", "phone", "app", "gadget", "accessory", "accessories", "charger", "cable", "case", "protector", "earbuds", "headphones", "adapter", "dongle"]),
+    ("TECH", &["python", "rust", "javascript", "typescript", "compiler", "react", "server", "bug", "repo", "code", "coding", "programmer", "programming", "software", "developer", "api", "database", "algorithm", "linux", "terminal", "github", "laptop", "computer", "phone", "app", "apps", "application", "applications", "gadget", "accessory", "accessories", "charger", "charging", "charge", "cable", "case", "protector", "earbuds", "headphones", "adapter", "dongle", "battery", "power", "bank", "wireless", "security", "auth", "authentication", "encryption", "token", "flask", "django", "fastapi", "gunicorn", "docker", "deployment", "deploy", "queue", "backoff", "ratelimit", "retry", "retries", "latency", "cache", "caching"]),
     ("VEHICLES", &["car", "vehicle", "truck", "sedan", "ev", "electric", "drive", "driving", "engine", "mechanic", "commute", "commuting", "train", "subway", "transit", "highway", "roadtrip", "motorcycle"]),
     ("FASHION", &["clothes", "clothing", "wear", "wearing", "dress", "jacket", "coat", "shoe", "boot", "sneaker", "style", "vintage", "wardrobe", "outfit", "sweater", "denim", "wool", "jewelry", "makeup", "skincare", "thrifting", "antique"]),
-    ("HEALTH", &["health", "doctor", "hospital", "clinic", "medication", "prescription", "medicine", "allergy", "allergic", "symptom", "surgery", "recover", "recovery", "therapy", "therapist", "mental", "headache", "flu", "dentist", "sleep", "diet", "counseling", "psychology"]),
+    ("HEALTH", &["health", "doctor", "hospital", "clinic", "medication", "prescription", "medicine", "allergy", "allergic", "symptom", "surgery", "recover", "recovery", "therapy", "therapist", "mental", "headache", "flu", "dentist", "sleep", "diet", "counseling", "psychology", "medical", "clinical", "diagnosis", "healthcare", "imaging", "radiology"]),
+    ("AI_ML", &["ai", "artificial", "intelligence", "ml", "machine", "deep", "learning", "neural", "transformer", "llm", "model", "training", "inference", "vision", "nlp", "imaging"]),
     ("FAMILY", &["kid", "child", "children", "son", "daughter", "brother", "sister", "mother", "father", "mom", "dad", "parent", "parenting", "family", "toddler", "baby", "pregnancy", "grandma", "grandpa", "cousin", "niece", "nephew", "sibling", "siblings", "relative", "relatives", "kin", "twin", "twins"]),
     ("COMMUNITY", &["charity", "volunteer", "volunteering", "fundraiser", "fundraising", "donation", "donate", "shelter", "nonprofit", "cause", "awareness", "community", "activism", "protest", "rescue"]),
     ("IDENTITY", &["lgbtq", "queer", "gay", "lesbian", "pride", "trans", "transgender", "gender", "identity", "support", "transition", "religion", "faith", "church", "spiritual", "mentor"]),
     ("EDUCATION", &["school", "college", "university", "degree", "graduate", "graduation", "studying", "study", "exam", "class", "course", "professor", "campus", "student", "certification", "diploma", "lecture", "workshop", "major", "publication", "publications", "conference", "conferences", "paper", "papers", "journal"]),
     ("CAREER", &["job", "career", "boss", "coworker", "interview", "offer", "resume", "promote", "promotion", "salary", "office", "remote", "work", "working", "firm", "client", "company", "manager", "project", "startup", "business", "profession", "occupation", "occupations", "vocation", "agency", "role", "roles", "milestone", "milestones", "buisiness", "contract", "specialist"]),
     ("HOUSING", &["house", "apartment", "rent", "lease", "mortgage", "buy", "buying", "moving", "moved", "move", "neighborhood", "landlord", "bedroom", "renovate", "furniture", "decor", "home"]),
-    ("SCREEN", &["movie", "film", "cinema", "tv", "show", "series", "episode", "netflix", "actor", "director", "watch", "watching", "documentary", "anime"]),
+    ("SCREEN", &["movie", "film", "cinema", "tv", "show", "series", "episode", "netflix", "actor", "director", "watch", "watching", "documentary", "anime", "comedy", "sitcom", "special", "specials"]),
     ("FINANCE", &["budget", "money", "save", "saving", "invest", "investment", "stock", "crypto", "deposit", "loan", "debt", "retirement", "expense", "bank", "tax"]),
+    ("COMMERCE", &["buy", "bought", "sell", "sold", "purchase", "purchased", "order", "ordered", "price", "discount", "deal", "store", "shop", "shopping", "receipt", "refund", "warranty", "paid", "pay", "cost"]),
     ("RELATIONSHIP", &["date", "dating", "partner", "boyfriend", "girlfriend", "husband", "wife", "marriage", "wedding", "anniversary", "breakup", "divorce", "couple", "friend", "friendship", "single", "unmarried", "spouse", "ceremony", "event", "events"]),
     ("PERSONALITY", &["introvert", "extrovert", "adventurous", "creative", "organized", "outdoorsy", "compassionate", "empathetic", "patient", "energetic", "calm", "anxious", "stressed", "relaxed", "minimalist", "collector", "vintage", "antique", "thrifting", "personality", "trait"]),
     ("WELLNESS", &["meditation", "mindfulness", "massage", "spa", "relaxation", "stress", "breathe", "journal", "journaling", "selfcare"]),
     ("VIDEO", &["video", "editing", "premiere", "adobe", "lumetri", "davinci", "timeline", "render", "codec", "footage", "clip", "youtube", "vlog"]),
     ("SPORTS", &["soccer", "football", "basketball", "baseball", "tennis", "golf", "hockey", "volleyball", "team", "league", "match", "score", "coach", "stadium", "sport", "sports", "event", "events", "tournament", "race", "triathlon", "marathon", "competition", "championship", "athletic"]),
     ("SHOPPING", &["shop", "shopping", "store", "mall", "purchase", "bought", "order", "amazon", "deal", "sale", "discount", "coupon"]),
-    ("CELEBRATION", &["party", "birthday", "celebration", "celebrate", "holiday", "christmas", "thanksgiving", "halloween", "gift", "present", "festival", "event", "events", "milestone", "ceremony", "wedding", "anniversary", "funeral", "graduation"]),
+    ("CELEBRATION", &["party", "birthday", "celebration", "celebrate", "holiday", "christmas", "thanksgiving", "halloween", "gift", "present", "festival", "fest", "event", "events", "milestone", "ceremony", "wedding", "anniversary", "funeral", "graduation"]),
     ("SCIENCE", &["science", "physics", "chemistry", "biology", "astronomy", "space", "research", "experiment", "lab", "math", "publication", "publications", "conference", "conferences", "paper", "papers", "journal", "article", "articles"]),
+    ("MEANING", &["symbolize", "represent", "meaning", "signify", "symbol"]),
     ("LANGUAGE", &["language", "spanish", "french", "german", "japanese", "chinese", "italian", "learn", "learning", "fluent", "duolingo", "translate"]),
     ("CONCURRENCY", &["mutex", "lock", "rwlock", "deadlock", "atomic", "channel", "thread", "coroutine", "async", "sync"]),
     ("STORAGE", &["disk", "nvme", "wal", "strata", "sqlite", "sled", "append", "fsync", "btree", "lsm", "database", "storage", "ledger"]),
@@ -388,6 +404,11 @@ fn stopwords() -> &'static HashSet<&'static str> {
     S.get_or_init(|| STOPWORDS.iter().copied().collect())
 }
 
+fn framing_words() -> &'static HashSet<&'static str> {
+    static F: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    F.get_or_init(|| QUERY_FRAMING_WORDS.iter().copied().collect())
+}
+
 fn hypernyms() -> &'static HashMap<String, Vec<&'static str>> {
     static H: OnceLock<HashMap<String, Vec<&'static str>>> = OnceLock::new();
     H.get_or_init(|| {
@@ -405,25 +426,172 @@ fn hypernyms() -> &'static HashMap<String, Vec<&'static str>> {
 }
 
 // =========================================================================
-// TOKENISATION + DETERMINISTIC STEMMER
+// TOKENISATION + PROPER ENTITIES + DETERMINISTIC STEMMER
 // =========================================================================
+
+fn clean_contraction(raw_lower: &str) -> &str {
+    let trimmed = raw_lower.trim_matches(|c: char| c == '\'' || c == '’');
+    if let Some(stem_part) = trimmed.strip_suffix("'s").or_else(|| trimmed.strip_suffix("’s")) {
+        return stem_part;
+    }
+    if let Some(stem_part) = trimmed.strip_suffix("'ve").or_else(|| trimmed.strip_suffix("’ve")) {
+        return stem_part;
+    }
+    if let Some(stem_part) = trimmed.strip_suffix("'re").or_else(|| trimmed.strip_suffix("’re")) {
+        return stem_part;
+    }
+    if let Some(stem_part) = trimmed.strip_suffix("'ll").or_else(|| trimmed.strip_suffix("’ll")) {
+        return stem_part;
+    }
+    if let Some(stem_part) = trimmed.strip_suffix("'m").or_else(|| trimmed.strip_suffix("’m")) {
+        return stem_part;
+    }
+    if let Some(stem_part) = trimmed.strip_suffix("'d").or_else(|| trimmed.strip_suffix("’d")) {
+        return stem_part;
+    }
+    trimmed
+}
 
 fn raw_tokens(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
-    lower
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(str::to_string)
-        .collect()
+    let mut out = Vec::new();
+    for piece in lower.split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’') {
+        if piece.is_empty() {
+            continue;
+        }
+        let cleaned = clean_contraction(piece);
+        if cleaned.contains('\'') || cleaned.contains('’') {
+            // Handle contractions like don't -> dont, didn't -> didnt, can't -> cant cleanly;
+            // non-contraction apostrophes like d'aulps split cleanly into sub-words.
+            if cleaned.ends_with("n't") || cleaned.ends_with("n’t") {
+                let joined: String = cleaned.chars().filter(|&c| c != '\'' && c != '’').collect();
+                if !joined.is_empty() {
+                    out.push(joined);
+                }
+            } else {
+                for sub in cleaned.split(|c: char| c == '\'' || c == '’') {
+                    if !sub.is_empty() {
+                        out.push(sub.to_string());
+                    }
+                }
+            }
+        } else if !cleaned.is_empty() {
+            out.push(cleaned.to_string());
+        }
+    }
+    out
 }
 
 fn is_content(w: &str) -> bool {
     w.chars().count() > 1 && !stopwords().contains(w)
 }
 
-/// Deterministic suffix stripper (Porter-style, no dictionary, no model).
+const STARTER_STOP: &[&str] = &[
+    "what", "when", "where", "why", "which", "who", "whom", "whose", "how",
+    "are", "is", "was", "were", "do", "does", "did", "can", "could", "will",
+    "would", "should", "shall", "may", "might", "have", "has", "had", "the",
+    "this", "that", "these", "those", "there", "here", "yes", "yeah", "no",
+    "sure", "certainly", "absolutely", "great", "thanks", "thank", "hi", "hey",
+    "hello", "if", "so", "but", "and", "or",
+    "my", "your", "our", "his", "her", "their", "its", "i", "we", "you", "they", "he", "she", "it",
+];
+
+const TITLE_CONNECTORS: &[&str] = &["and", "of", "the", "for", "in", "on", "at"];
+
+/// Extract contiguous capitalized proper-noun entity phrases ("\u{1}ent:local_h", "\u{1}ent:kiss_and_tell").
+/// Preserves short single-letter entities ("H" in "Local H"), capitalized prepositions ("For Against"),
+/// and title-case connectors ("Kiss and Tell", "Lord of the Rings").
+fn proper_entity_tokens(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut run: Vec<String> = Vec::new();
+
+    let flush_run = |run: &mut Vec<String>, out: &mut Vec<String>| {
+        // Trim trailing lowercase connectors if the run ended on a preposition like "Kiss and"
+        while run.last().is_some_and(|s| s.starts_with('\u{2}')) {
+            run.pop();
+        }
+        if run.len() >= 2 {
+            for win in run.windows(2) {
+                if !win[0].starts_with('\u{2}') && !win[1].starts_with('\u{2}') {
+                    out.push(format!("\u{1}ent:{}_{}", win[0], win[1]));
+                }
+            }
+            if run.len() <= 4 {
+                let clean_parts: Vec<&str> = run.iter().map(|s| s.trim_start_matches('\u{2}')).collect();
+                out.push(format!("\u{1}ent:{}", clean_parts.join("_")));
+            }
+        }
+        run.clear();
+    };
+
+    for raw_word in text.split_whitespace() {
+        let ends_clause = raw_word.ends_with(['.', '?', '!', ',', ';', ':']);
+        let w = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’' && c != '-');
+        if w.is_empty() {
+            flush_run(&mut run, &mut out);
+            continue;
+        }
+        let clean = clean_contraction(w);
+        let first_upper = clean.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+        let lower = clean.to_lowercase();
+        let norm: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
+        if first_upper && !norm.is_empty() && !STARTER_STOP.contains(&norm.as_str()) {
+            run.push(norm);
+        } else if !run.is_empty() && TITLE_CONNECTORS.contains(&norm.as_str()) {
+            // Allow up to 2 title connectors inside an active proper-noun chain (e.g. "Lord of the Rings").
+            let trailing_conns = run.iter().rev().take_while(|s| s.starts_with('\u{2}')).count();
+            if trailing_conns < 2 {
+                run.push(format!("\u{2}{norm}"));
+            } else {
+                flush_run(&mut run, &mut out);
+            }
+        } else {
+            flush_run(&mut run, &mut out);
+        }
+        if ends_clause {
+            flush_run(&mut run, &mut out);
+        }
+    }
+    flush_run(&mut run, &mut out);
+    out
+}
+
+/// Deterministic suffix stripper (Porter-style + small irregular verb lemma map, no model).
 pub fn stem(word: &str) -> String {
     let w = word.to_lowercase();
+    let irregular = match w.as_str() {
+        "drew" | "drawn" => Some("draw"),
+        "felt" => Some("feel"),
+        "bought" => Some("buy"),
+        "sold" => Some("sell"),
+        "taught" => Some("teach"),
+        "wrote" | "written" => Some("write"),
+        "met" => Some("meet"),
+        "spoke" | "spoken" => Some("speak"),
+        "ran" => Some("run"),
+        "swam" | "swum" => Some("swim"),
+        "flew" | "flown" => Some("fly"),
+        "ate" | "eaten" => Some("eat"),
+        "won" => Some("win"),
+        "kept" => Some("keep"),
+        "built" => Some("build"),
+        "spent" => Some("spend"),
+        "took" | "taken" => Some("take"),
+        "lost" => Some("lose"),
+        "gave" | "given" => Some("give"),
+        "saw" | "seen" => Some("see"),
+        "knew" | "known" => Some("know"),
+        "grew" | "grown" => Some("grow"),
+        "wore" | "worn" => Some("wear"),
+        "chose" | "chosen" => Some("choose"),
+        "broke" | "broken" => Some("break"),
+        "drove" | "driven" => Some("drive"),
+        "slept" => Some("sleep"),
+        _ => None,
+    };
+    if let Some(base) = irregular {
+        return base.to_string();
+    }
     if w.len() <= 3 || !w.is_ascii() {
         return w;
     }
@@ -540,59 +708,144 @@ fn calendar_tokens(ts: i64) -> Vec<String> {
         WEEKDAYS[d.weekday().num_days_from_monday() as usize].to_string(),
         format!("__DATE__{}_{:02}_{:02}", d.year(), d.month(), d.day()),
         format!("__YM__{}_{:02}", d.year(), d.month()),
+        format!("__MONTH__{:02}", d.month()),
     ]
 }
 
-/// Resolve relative time expressions against the session timestamp into absolute calendar tokens.
-fn deictic_tokens(raw: &[String], ts: i64) -> Vec<String> {
+fn month_index(tok: &str) -> Option<u32> {
+    let lower = tok.to_lowercase();
+    MONTHS.iter().position(|&m| m == lower).map(|i| i as u32 + 1)
+}
+
+/// Extract explicit calendar dates written directly inside prose/queries
+/// (e.g. "1 May, 2022", "May 1, 2022", "March 29, 2024", "2022-05-01").
+fn inline_date_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let lower = text.to_lowercase();
+    // Match ISO YYYY-MM-DD
+    for w in lower.split_whitespace() {
+        let trimmed = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
+        if trimmed.len() == 10 && trimmed.as_bytes().get(4) == Some(&b'-') && trimmed.as_bytes().get(7) == Some(&b'-') {
+            if let Ok(d) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+                if let Some(dt) = d.and_hms_opt(0, 0, 0) {
+                    out.extend(calendar_tokens(dt.and_utc().timestamp()));
+                }
+            }
+        }
+    }
+    let toks: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
+    for i in 0..toks.len() {
+        let Some(m) = month_index(toks[i]) else { continue };
+        // "<day> <month> <year>" OR "<month> <day> <year>"
+        let prev_num = i.checked_sub(1).and_then(|k| toks[k].parse::<u32>().ok()).filter(|&n| (1..=31).contains(&n));
+        let next_num = toks.get(i + 1).and_then(|s| s.parse::<u32>().ok()).filter(|&n| (1..=31).contains(&n));
+        let year_after_next = toks.get(i + 2).and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten());
+        let year_after_month = toks.get(i + 1).and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten());
+
+        if let (Some(day), Some(y)) = (prev_num, year_after_month) {
+            if let Some(dt) = chrono::NaiveDate::from_ymd_opt(y, m, day).and_then(|d| d.and_hms_opt(0, 0, 0)) {
+                out.extend(calendar_tokens(dt.and_utc().timestamp()));
+                continue;
+            }
+        }
+        if let (Some(day), Some(y)) = (next_num, year_after_next) {
+            if let Some(dt) = chrono::NaiveDate::from_ymd_opt(y, m, day).and_then(|d| d.and_hms_opt(0, 0, 0)) {
+                out.extend(calendar_tokens(dt.and_utc().timestamp()));
+                continue;
+            }
+        }
+        if let Some(y) = year_after_month {
+            out.push(format!("__YM__{y}_{m:02}"));
+            out.push(format!("__MONTH__{m:02}"));
+        } else if let Some(day) = prev_num.or(next_num) {
+            out.push(format!("__MD__{m:02}_{day:02}"));
+            out.push(format!("__MONTH__{m:02}"));
+        }
+    }
+    out
+}
+
+fn parse_qty_word(q: &str) -> i64 {
+    match q {
+        "a" | "an" | "one" => 1,
+        "two" | "couple" => 2,
+        "three" | "few" => 3,
+        "four" => 4,
+        "five" => 5,
+        "six" => 6,
+        "seven" => 7,
+        "eight" => 8,
+        "nine" => 9,
+        "ten" => 10,
+        other => other.parse().unwrap_or(1),
+    }
+}
+
+/// Resolve relative time expressions against the session timestamp into (token, relative_weight).
+fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
     if ts == 0 {
         return Vec::new();
     }
     const DAY: i64 = 86_400;
-    let mut offsets: Vec<i64> = Vec::new();
+    // (offset_seconds, weight, is_coarse_window)
+    let mut specs: Vec<(i64, f32, bool)> = Vec::new();
     for (i, w) in raw.iter().enumerate() {
         let prev = if i > 0 { raw[i - 1].as_str() } else { "" };
+        let next = raw.get(i + 1).map(String::as_str).unwrap_or("");
         match w.as_str() {
-            "yesterday" => offsets.push(-DAY),
-            "tomorrow" => offsets.push(DAY),
-            "today" | "tonight" => offsets.push(0),
-            "week" if prev == "last" || prev == "past" => offsets.push(-7 * DAY),
-            "week" if prev == "next" => offsets.push(7 * DAY),
-            "weekend" if prev == "last" || prev == "this" || prev == "past" => offsets.push(-2 * DAY),
-            "month" if prev == "last" || prev == "past" => offsets.push(-30 * DAY),
-            "month" if prev == "next" => offsets.push(30 * DAY),
-            "year" if prev == "last" || prev == "past" => offsets.push(-365 * DAY),
-            "year" if prev == "next" => offsets.push(365 * DAY),
+            "yesterday" => specs.push((-DAY, 1.0, false)),
+            "night" if prev == "last" => specs.push((-DAY, 1.0, false)),
+            "before" if prev == "day" => specs.push((-DAY, 0.9, false)),
+            "tomorrow" => specs.push((DAY, 1.0, false)),
+            "today" | "tonight" => specs.push((0, 1.0, false)),
+            "week" if prev == "last" || prev == "past" => specs.push((-7 * DAY, 1.0, true)),
+            "week" if prev == "next" => specs.push((7 * DAY, 1.0, true)),
+            "weekend" if prev == "last" || prev == "this" || prev == "past" => specs.push((-2 * DAY, 1.0, true)),
+            "month" if prev == "last" || prev == "past" => {
+                specs.push((-30 * DAY, 1.0, true));
+                specs.push((-15 * DAY, 0.85, false));
+            }
+            "month" if prev == "next" => specs.push((30 * DAY, 1.0, true)),
+            "year" if prev == "last" || prev == "past" => specs.push((-365 * DAY, 1.0, true)),
+            "year" if prev == "next" => specs.push((365 * DAY, 1.0, true)),
             "ago" => {
-                let n: i64 = match prev {
-                    "days" | "weeks" | "months" | "years" | "day" | "week" | "month" | "year" => {
-                        let q = if i >= 3 && raw[i - 2] == "of" {
-                            raw[i - 3].as_str()
-                        } else if i >= 2 {
-                            raw[i - 2].as_str()
-                        } else {
-                            ""
-                        };
-                        let n = match q {
-                            "a" | "one" => 1,
-                            "two" | "couple" => 2,
-                            "three" | "few" => 3,
-                            "four" => 4,
-                            "five" => 5,
-                            other => other.parse().unwrap_or(1),
-                        };
-                        let unit = match prev.trim_end_matches('s') {
-                            "day" => 1,
-                            "week" => 7,
-                            "month" => 30,
-                            _ => 365,
-                        };
-                        n * unit
+                if matches!(prev, "days" | "weeks" | "months" | "years" | "day" | "week" | "month" | "year") {
+                    let q = if i >= 3 && raw[i - 2] == "of" {
+                        raw[i - 3].as_str()
+                    } else if i >= 2 {
+                        raw[i - 2].as_str()
+                    } else {
+                        ""
+                    };
+                    let n = parse_qty_word(q);
+                    let (unit, coarse) = match prev.trim_end_matches('s') {
+                        "day" => (1, n > 3),
+                        "week" => (7, true),
+                        "month" => (30, true),
+                        _ => (365, true),
+                    };
+                    if n > 0 {
+                        specs.push((-n * unit * DAY, 1.0, coarse));
                     }
-                    _ => 0,
-                };
-                if n > 0 {
-                    offsets.push(-n * DAY);
+                }
+            }
+            "days" | "weeks" | "months" | "years" if next != "ago" => {
+                // Handle "for 3 years now", "past 2 weeks", "last 3 months"
+                let prep = if i >= 2 { raw[i - 2].as_str() } else { "" };
+                if matches!(prep, "for" | "past" | "last" | "in") || next == "now" {
+                    let n = parse_qty_word(prev);
+                    let unit = match w.trim_end_matches('s') {
+                        "day" => 1,
+                        "week" => 7,
+                        "month" => 30,
+                        _ => 365,
+                    };
+                    if n > 0 && n <= 120 {
+                        specs.push((-n * unit * DAY, 0.9, true));
+                    }
                 }
             }
             _ => {
@@ -603,17 +856,34 @@ fn deictic_tokens(raw: &[String], ts: i64) -> Vec<String> {
                         let target = WEEKDAYS.iter().position(|d| d == w).unwrap_or(0) as i64;
                         let back = ((today - target + 7) % 7).max(if prev == "last" { 1 } else { 0 });
                         let delta = if prev == "next" { (target - today + 7) % 7 } else { -back };
-                        offsets.push(delta * DAY);
+                        specs.push((delta * DAY, 1.0, false));
                     }
                 }
             }
         }
     }
     let mut out = Vec::new();
-    for off in offsets {
-        out.extend(calendar_tokens(ts + off));
+    for (off, w, coarse) in specs {
+        for tok in calendar_tokens(ts + off) {
+            out.push((tok, w));
+        }
+        // Soft +-2d halo on coarse multi-week / multi-month expressions (handles Feb 28 / Mar 1 boundary).
+        if coarse {
+            for d_off in [-2 * DAY, -DAY, DAY, 2 * DAY] {
+                for tok in calendar_tokens(ts + off + d_off) {
+                    if tok.starts_with("__DATE__") || tok.starts_with("__YM__") || tok.starts_with("__MONTH__") {
+                        out.push((tok, w * 0.45));
+                    }
+                }
+            }
+        }
     }
     out
+}
+
+#[cfg(test)]
+fn deictic_tokens(raw: &[String], ts: i64) -> Vec<String> {
+    deictic_weighted_tokens(raw, ts).into_iter().map(|(t, _)| t).collect()
 }
 
 // =========================================================================
@@ -672,6 +942,8 @@ struct TurnIx {
     /// Exact/stem term ids of content tokens in order, for span proximity.
     seq: Vec<(u32, u32)>,
     content: HashSet<u32>,
+    /// Capitalized proper-entity term IDs inside this turn.
+    entities: HashSet<u32>,
     speaker: String,
     is_question: bool,
     answers_question: bool,
@@ -726,6 +998,8 @@ struct Index {
     session_ids: Vec<String>,
     session_ts: Vec<i64>,
     session_turns: Vec<Vec<usize>>,
+    session_entities: Vec<HashSet<u32>>,
+    session_content: Vec<HashSet<u32>>,
     turns: Vec<TurnIx>,
     session_bags: Vec<Bag>,
     turn_bags: Vec<Bag>,
@@ -747,12 +1021,26 @@ fn stem_term(s: &str) -> String {
     format!("\u{1}stem:{s}")
 }
 
+fn detect_question(content: &str, raw_len: usize) -> (bool, bool) {
+    let prose = content.split("```").next().unwrap_or(content).trim_end();
+    if let Some(q_pos) = prose.rfind('?') {
+        let tail = prose[q_pos + 1..].trim();
+        let ends_with_q = tail.is_empty() || tail.chars().all(|c| !c.is_ascii_alphabetic());
+        let is_q = ends_with_q || prose.len() <= 350;
+        let is_short_q = ends_with_q && raw_len < 10;
+        return (is_q, is_short_q);
+    }
+    (false, false)
+}
+
 fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut vocab = Vocab::default();
     let mut turns: Vec<TurnIx> = Vec::new();
     let mut session_ids = Vec::new();
     let mut session_ts = Vec::new();
     let mut session_turns = Vec::new();
+    let mut session_entities = Vec::with_capacity(sessions.len());
+    let mut session_content = Vec::with_capacity(sessions.len());
     let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
 
     for (si, s) in sessions.iter().enumerate() {
@@ -761,6 +1049,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_ts.push(ts);
         let date_toks = if p.enable_deictic && ts != 0 { calendar_tokens(ts) } else { Vec::new() };
         let mut members = Vec::new();
+        let mut s_ents = HashSet::new();
+        let mut s_cont = HashSet::new();
         for (ti, t) in s.turns.iter().enumerate() {
             let raw = raw_tokens(&t.content);
             let role = t.role.trim();
@@ -768,10 +1058,12 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let mut feats = Vec::new();
             let mut seq = Vec::new();
             let mut content = HashSet::new();
+            let mut entities = HashSet::new();
             for w in raw.iter().filter(|w| is_content(w)) {
                 let e = vocab.intern(w);
                 feats.push(Feat { id: e, w: 1.0, counts_len: true, inheritable: true });
                 content.insert(e);
+                s_cont.insert(e);
                 let st = stem(w);
                 let sid = if p.enable_stemming { vocab.intern(&stem_term(&st)) } else { e };
                 if p.enable_stemming {
@@ -786,6 +1078,12 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                     }
                 }
             }
+            for ent in proper_entity_tokens(&t.content) {
+                let eid = vocab.intern(&ent);
+                feats.push(Feat { id: eid, w: 1.0, counts_len: false, inheritable: true });
+                entities.insert(eid);
+                s_ents.insert(eid);
+            }
             let lower = t.content.to_lowercase();
             let pref_marker = raw.iter().any(|w| pref_set.contains(w.as_str()))
                 || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m));
@@ -793,8 +1091,11 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 feats.push(Feat { id: vocab.intern(PREF_AXIS), w: 1.0, counts_len: false, inheritable: false });
             }
             if p.enable_deictic {
-                for d in deictic_tokens(&raw, ts) {
-                    feats.push(Feat { id: vocab.intern(&d), w: 1.0, counts_len: false, inheritable: false });
+                for (d, w) in deictic_weighted_tokens(&raw, ts) {
+                    feats.push(Feat { id: vocab.intern(&d), w, counts_len: false, inheritable: false });
+                }
+                for d in inline_date_tokens(&t.content) {
+                    feats.push(Feat { id: vocab.intern(&d), w: 0.9, counts_len: false, inheritable: false });
                 }
                 for d in &date_toks {
                     feats.push(Feat { id: vocab.intern(d), w: p.date_weight, counts_len: false, inheritable: false });
@@ -806,7 +1107,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                     feats.push(Feat { id: vocab.intern(&w), w: 1.0, counts_len: false, inheritable: false });
                 }
             }
-            let is_question = t.content.trim_end().ends_with('?');
+            let (is_question, is_short_question) = detect_question(&t.content, raw.len());
             let anaphoric = raw.first().is_some_and(|w| CONTINUATIONS.contains(&w.as_str()))
                 || raw.iter().take(12).any(|w| ANAPHORS.contains(&w.as_str()));
             let has_temporal = raw.iter().any(|w| {
@@ -820,7 +1121,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 || raw.iter().any(|w| NUMBER_WORDS.contains(&w.as_str()));
             let has_spatial = raw.iter().any(|w| SPATIAL_WORDS.contains(&w.as_str()));
             let has_causal = CAUSAL_WORDS.iter().any(|c| lower.contains(c));
-            let is_short_question = is_question && raw.len() < 10;
             let id = if t.id.is_empty() { format!("{}#{}", s.id, ti) } else { t.id.clone() };
             members.push(turns.len());
             turns.push(TurnIx {
@@ -830,6 +1130,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 feats,
                 seq,
                 content,
+                entities,
                 speaker,
                 is_question,
                 answers_question: false,
@@ -843,6 +1144,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             });
         }
         session_turns.push(members);
+        session_entities.push(s_ents);
+        session_content.push(s_cont);
     }
 
     // Session bags (own text only) and turn bags (own text + centering carry-forward).
@@ -871,7 +1174,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                     if w <= 0.0 {
                         continue;
                     }
-                    // Inherit open-class content (exact + stem + hypernym), never the speaker tag or dates.
+                    // Inherit open-class content (exact + stem + hypernym + proper entities), never speaker tag or dates.
                     for &f in src.feats.iter().filter(|f| f.inheritable) {
                         inherited.push((Feat { counts_len: false, ..f }, w));
                     }
@@ -923,6 +1226,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_ids,
         session_ts,
         session_turns,
+        session_entities,
+        session_content,
         turns,
         session_bags,
         turn_bags,
@@ -998,17 +1303,50 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let mut group_of = HashMap::new();
     let mut hyp_added: HashSet<&str> = HashSet::new();
     let use_hyp = p.enable_hypernyms;
-    for w in raw_tokens(&q.text).into_iter().filter(|w| is_content(w)) {
-        if groups.contains(&w) {
+
+    let raw_q = raw_tokens(&q.text);
+    let inline_dates = if p.enable_deictic { inline_date_tokens(&q.text) } else { Vec::new() };
+    let q_ts = if p.enable_deictic { parse_date(&q.date) } else { 0 };
+    let deictic_items = if p.enable_deictic && q_ts != 0 {
+        deictic_weighted_tokens(&raw_q, q_ts)
+    } else {
+        Vec::new()
+    };
+
+    let fw = framing_words();
+    let domain_groups = raw_q
+        .iter()
+        .filter(|w| is_content(w) && !fw.contains(w.as_str()))
+        .collect::<HashSet<_>>()
+        .len();
+    let can_demote_framing = domain_groups >= 1;
+
+    let mut seen_toks = HashSet::new();
+    for w in raw_q.iter().filter(|w| is_content(w)) {
+        if !seen_toks.insert(w.clone()) {
             continue;
         }
+        let is_frame = can_demote_framing && fw.contains(w.as_str());
+        if is_frame {
+            if let Some(id) = ix.vocab.get(w) {
+                terms.push(QTerm { id, weight: 0.35, group: None });
+            }
+            if p.enable_stemming {
+                let st = stem(w);
+                if let Some(id) = ix.vocab.get(&stem_term(&st)) {
+                    terms.push(QTerm { id, weight: 0.25, group: None });
+                }
+            }
+            continue;
+        }
+
         let g = groups.len();
         groups.push(w.clone());
-        if let Some(id) = ix.vocab.get(&w) {
+        if let Some(id) = ix.vocab.get(w) {
             terms.push(QTerm { id, weight: 1.0, group: Some(g) });
             group_of.insert(id, g);
         }
-        let st = stem(&w);
+        let st = stem(w);
         if p.enable_stemming {
             if let Some(id) = ix.vocab.get(&stem_term(&st)) {
                 terms.push(QTerm { id, weight: p.stem_weight, group: Some(g) });
@@ -1028,26 +1366,70 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
             }
         }
     }
+
+    // Capitalized proper-noun entity phrases present in index (e.g. "Local H", "For Against").
+    // If all parts of the phrase are already covered content words ("United States"), emit as
+    // phrase boost (group: None) to avoid double-counting in coverage; if any part was erased
+    // by stopwords or length-1 filtering ("For Against", "Local H"), restore it as a real group.
+    let mut seen_ents = HashSet::new();
+    for ent in proper_entity_tokens(&q.text) {
+        if !seen_ents.insert(ent.clone()) {
+            continue;
+        }
+        if let Some(id) = ix.vocab.get(&ent) {
+            let parts_body = ent.strip_prefix("\u{1}ent:").unwrap_or("");
+            let any_erased = parts_body.split('_').any(|part| !groups.iter().any(|g| g == part));
+            if any_erased {
+                let g = groups.len();
+                groups.push(ent);
+                terms.push(QTerm { id, weight: 1.65, group: Some(g) });
+                group_of.insert(id, g);
+            } else {
+                terms.push(QTerm { id, weight: 0.75, group: None });
+            }
+        }
+    }
+
     if p.enable_preference && intent.preference {
         if let Some(id) = ix.vocab.get(PREF_AXIS) {
             terms.push(QTerm { id, weight: p.preference_axis_weight, group: None });
         }
     }
+
     if p.enable_deictic {
-        let q_ts = parse_date(&q.date);
-        if q_ts != 0 {
-            let raw_q = raw_tokens(&q.text);
-            let mut deictic_added = HashSet::new();
-            for d in deictic_tokens(&raw_q, q_ts) {
-                if deictic_added.insert(d.clone()) {
-                    if let Some(id) = ix.vocab.get(&d) {
-                        let w = if d.starts_with("__DATE__") { 1.5 } else { p.date_weight };
-                        terms.push(QTerm { id, weight: w, group: None });
-                    }
-                }
+        let mut date_weights: HashMap<String, f32> = HashMap::new();
+        for d in inline_dates {
+            let w = if d.starts_with("__DATE__") {
+                2.0
+            } else if d.starts_with("__MD__") {
+                1.4
+            } else if d.starts_with("__YM__") || d.starts_with("__MONTH__") {
+                1.0
+            } else {
+                p.date_weight
+            };
+            let entry = date_weights.entry(d).or_insert(0.0);
+            *entry = (*entry).max(w);
+        }
+        for (d, scale) in deictic_items {
+            let base = if d.starts_with("__DATE__") {
+                1.9
+            } else if d.starts_with("__YM__") || d.starts_with("__MONTH__") {
+                0.85
+            } else {
+                p.date_weight
+            };
+            let w = base * scale;
+            let entry = date_weights.entry(d).or_insert(0.0);
+            *entry = (*entry).max(w);
+        }
+        for (d, w) in date_weights {
+            if let Some(id) = ix.vocab.get(&d) {
+                terms.push(QTerm { id, weight: w, group: None });
             }
         }
     }
+
     QueryPlan { intent, terms, groups, group_of }
 }
 
@@ -1278,48 +1660,72 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
-    // Weapon 3: 2-Iteration Sparse Personalized PageRank (PPR Spreading Activation)
+    // Weapon 3: Bounded Length-Normalized 2-Iteration Sparse PPR (Turn Level)
     if p.enable_ppr && nt > 5 {
         let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
         let seed_indices: Vec<usize> = order(&t_scene, &turn_ts)
             .into_iter()
-            .take(25)
+            .take(16)
             .filter(|&i| t_scene[i] > 0.0)
             .collect();
 
-        if !seed_indices.is_empty() {
-            let t0 = seed_indices[0];
+        if let Some(&t0) = seed_indices.first() {
+            let t_max = t_scene[t0];
             let t0_mask = t_mask[t0];
-            let mut activation: HashMap<u32, f32> = HashMap::new();
+            if t_max > 0.0 {
+                let mut activation: HashMap<u32, f32> = HashMap::new();
+                let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
 
-            // Pass 1: Turn -> Bridge Entities
-            for &s in &seed_indices {
-                let s_score = t_scene[s];
-                for &w in &ix.turns[s].content {
-                    if let Some(&df) = ix.t_stats.df.get(&w) {
-                        if df >= 2 && (df as f32) <= 0.20 * ix.t_stats.n {
-                            let idf_term = 1.0 / ((df as f32 + 1.1).ln());
-                            *activation.entry(w).or_insert(0.0) += s_score * idf_term;
+                // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities
+                for &s in &seed_indices {
+                    if t_scene[s] < 0.15 * t_max {
+                        break;
+                    }
+                    let seed_norm = (t_scene[s] / t_max) / ((ix.turns[s].content.len() + 4) as f32).sqrt();
+                    for &e in &ix.turns[s].entities {
+                        if let Some(&df) = ix.t_stats.df.get(&e) {
+                            if df >= 2 && df <= max_df {
+                                let idf_term = 1.0 / ((df as f32 + 1.1).ln());
+                                *activation.entry(e).or_insert(0.0) += 2.0 * seed_norm * idf_term;
+                            }
+                        }
+                    }
+                    for &w in &ix.turns[s].content {
+                        if plan.group_of.contains_key(&w) {
+                            continue;
+                        }
+                        if let Some(&df) = ix.t_stats.df.get(&w) {
+                            if df >= 2 && df <= max_df {
+                                let idf_term = 1.0 / ((df as f32 + 1.1).ln());
+                                *activation.entry(w).or_insert(0.0) += seed_norm * idf_term;
+                            }
                         }
                     }
                 }
-            }
 
-            // Pass 2: Bridge Entities -> 2nd-Hop Turns
-            for ti in 0..nt {
-                let mut ppr_sum = 0.0f32;
-                for &w in &ix.turns[ti].content {
-                    if let Some(&act) = activation.get(&w) {
-                        ppr_sum += act;
+                // Pass 2: Bridge Entities -> Normalized, Bounded 2nd-Hop Turns
+                if !activation.is_empty() {
+                    for ti in 0..nt {
+                        let mut ent_hit = 0.0f32;
+                        for &e in &ix.turns[ti].entities {
+                            if let Some(&act) = activation.get(&e) {
+                                ent_hit += 2.0 * act;
+                            }
+                        }
+                        let mut ppr_sum = ent_hit;
+                        for &w in &ix.turns[ti].content {
+                            if let Some(&act) = activation.get(&w) {
+                                ppr_sum += act;
+                            }
+                        }
+                        if ppr_sum > 0.0 && (t_scene[ti] > 0.0 || ent_hit > 0.0) {
+                            let target_norm = ppr_sum / ((ix.turns[ti].content.len() + 4) as f32).sqrt();
+                            let sat = target_norm / (target_norm + 0.45);
+                            let mult = if (t_mask[ti] & !t0_mask) != 0 { 1.65 } else { 1.0 };
+                            let boost = t_max * 0.25 * mult * sat;
+                            t_scene[ti] += boost;
+                        }
                     }
-                }
-                if ppr_sum > 0.0 {
-                    let mut boost = 0.45 * ppr_sum;
-                    let missing_query_terms = (t_mask[ti] & !t0_mask) != 0;
-                    if missing_query_terms {
-                        boost *= 1.75;
-                    }
-                    t_scene[ti] += boost;
                 }
             }
         }
@@ -1356,13 +1762,150 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     }
 
     let k = top_k.max(1);
-    let sessions = order(&s_score, &ix.session_ts)
+
+    // Session-Level Multi-Hop Bridge Activation + Greedy Submodular Set Cover
+    let mut bridge_boost = vec![0.0f32; ns];
+    let s_ord_base = order(&s_score, &ix.session_ts);
+    if p.enable_ppr && ns > 5 && smax > 0.0 {
+        if let Some(&top0) = s_ord_base.first() {
+            let mut anchors = vec![top0];
+            if let Some(&top1) = s_ord_base.get(1) {
+                if s_score[top1] >= 0.72 * smax {
+                    anchors.push(top1);
+                }
+            }
+            let max_s_df = ((ix.s_stats.n * 0.05).clamp(4.0, 24.0)) as u32;
+            let mut s_act: HashMap<u32, f32> = HashMap::new();
+            for &anc in &anchors {
+                let anc_w = (s_score[anc] / smax).clamp(0.25, 1.0);
+                // Prefer highest-scoring matching turns inside anchor session so bridge entities come from hot passage.
+                let members = &ix.session_turns[anc];
+                let anc_tmax = members.iter().map(|&ti| t_scene[ti]).fold(0.0f32, f32::max);
+                let use_hot = anc_tmax > 0.0 && members.len() > 2;
+                for &ti in members {
+                    if use_hot && t_scene[ti] < 0.25 * anc_tmax {
+                        continue;
+                    }
+                    let turn_len_norm = ((ix.turns[ti].content.len() + 6) as f32).sqrt();
+                    for &e in &ix.turns[ti].entities {
+                        if let Some(&df) = ix.s_stats.df.get(&e) {
+                            if df >= 2 && df <= max_s_df {
+                                let idf_s = 1.0 / ((df as f32 + 1.1).ln());
+                                *s_act.entry(e).or_insert(0.0) += (anc_w * 2.5 * idf_s) / turn_len_norm;
+                            }
+                        }
+                    }
+                    for &w in &ix.turns[ti].content {
+                        if plan.group_of.contains_key(&w) {
+                            continue;
+                        }
+                        if let Some(&df) = ix.s_stats.df.get(&w) {
+                            if df >= 2 && df <= max_s_df {
+                                let idf_s = 1.0 / ((df as f32 + 1.1).ln());
+                                *s_act.entry(w).or_insert(0.0) += (anc_w * idf_s) / turn_len_norm;
+                            }
+                        }
+                    }
+                }
+            }
+            if !s_act.is_empty() {
+                for si in 0..ns {
+                    if si == top0 {
+                        continue;
+                    }
+                    let mut ent_sum = 0.0f32;
+                    for &e in &ix.session_entities[si] {
+                        if let Some(&a) = s_act.get(&e) {
+                            ent_sum += 2.0 * a;
+                        }
+                    }
+                    let mut sum = ent_sum;
+                    for &w in &ix.session_content[si] {
+                        if let Some(&a) = s_act.get(&w) {
+                            sum += a;
+                        }
+                    }
+                    // Require direct query overlap (s_score > 0), or an explicit proper-entity bridge
+                    // on non-preference/non-user queries, so zero-match distractors never displace personal facts.
+                    let allow_zero_hit = !it.preference && !it.user_attribution && ent_sum > 0.0;
+                    if sum > 0.0 && (s_score[si] > 0.0 || allow_zero_hit) {
+                        let slen = (ix.session_bags[si].len[0] + ix.session_bags[si].len[1] + 8.0).sqrt();
+                        let norm = sum / slen;
+                        let sat = norm / (norm + 0.05);
+                        let coeff = if it.multi_hop || plan.groups.len() >= 3 { 0.55 } else { 0.12 };
+                        bridge_boost[si] = smax * coeff * sat;
+                    }
+                }
+            }
+        }
+    }
+
+    let final_session_indices: Vec<usize> = if p.enable_submodular && ns > 1 {
+        let mut selected: Vec<usize> = Vec::with_capacity(k);
+        if let Some(&top0) = s_ord_base.first() {
+            if s_score[top0] > 0.0 {
+                selected.push(top0);
+                let mut covered_mask = s_mask[top0];
+                let mut covered_ents: HashSet<u32> = ix.session_entities[top0].clone();
+                let mut mask_counts: HashMap<u64, usize> = HashMap::new();
+                let total_q_groups = plan.groups.len().min(64);
+                let mask_limit = if total_q_groups == 64 { u64::MAX } else { (1u64 << total_q_groups) - 1 };
+                *mask_counts.entry(s_mask[top0] & mask_limit).or_insert(0) += 1;
+                let mut remaining: Vec<usize> = (0..ns)
+                    .filter(|&si| si != top0 && (s_score[si] > 0.0 || bridge_boost[si] > 0.0))
+                    .collect();
+
+                while selected.len() < k && !remaining.is_empty() {
+                    let mut best_pos = 0usize;
+                    let mut best_gain = -1.0f32;
+                    for (idx, &si) in remaining.iter().enumerate() {
+                        let m_eff = s_mask[si] & mask_limit;
+                        let uncovered = ((s_mask[si] & !covered_mask) & mask_limit).count_ones() as f32;
+                        let uncovered_ratio = if total_q_groups > 0 {
+                            uncovered / (total_q_groups as f32)
+                        } else {
+                            0.0
+                        };
+                        let same_mask_seen = mask_counts.get(&m_eff).copied().unwrap_or(0);
+                        let shared_ent = ix.session_entities[si].iter().any(|e| covered_ents.contains(e));
+                        let redundancy = if uncovered == 0.0 && bridge_boost[si] < 0.12 * smax && shared_ent && same_mask_seen >= 2 {
+                            0.62
+                        } else {
+                            1.0
+                        };
+                        let gain = (s_score[si] + bridge_boost[si]) * (1.0 + 0.90 * uncovered_ratio) * redundancy;
+                        if gain > best_gain {
+                            best_gain = gain;
+                            best_pos = idx;
+                        }
+                    }
+                    let chosen = remaining.swap_remove(best_pos);
+                    selected.push(chosen);
+                    covered_mask |= s_mask[chosen];
+                    covered_ents.extend(ix.session_entities[chosen].iter().copied());
+                    *mask_counts.entry(s_mask[chosen] & mask_limit).or_insert(0) += 1;
+                }
+            }
+        }
+        for si in &s_ord_base {
+            if selected.len() >= k {
+                break;
+            }
+            if !selected.contains(si) {
+                selected.push(*si);
+            }
+        }
+        selected
+    } else {
+        s_ord_base.into_iter().take(k).collect()
+    };
+
+    let sessions = final_session_indices
         .into_iter()
-        .take(k)
         .map(|i| RankedItem {
             id: ix.session_ids[i].clone(),
             session_id: ix.session_ids[i].clone(),
-            score: s_score[i],
+            score: s_score[i] + bridge_boost[i],
             matched: matched_words(&plan, s_mask[i]),
         })
         .collect();
@@ -1579,5 +2122,144 @@ mod tests {
         let b = serde_json::to_string(&rank(&req)).unwrap_or_default();
         assert_eq!(a, b);
         assert_eq!(rank(&req).results[0].sessions[0].id, "a");
+    }
+
+    #[test]
+    fn contraction_fragments_never_leak() {
+        let toks = raw_tokens("We've checked Caroline's logs and Don didn't go, I'll stay.");
+        assert!(!toks.contains(&"ve".to_string()), "{toks:?}");
+        assert!(!toks.contains(&"ll".to_string()), "{toks:?}");
+        assert!(toks.contains(&"caroline".to_string()), "{toks:?}");
+        assert!(toks.contains(&"don".to_string()), "{toks:?}");
+        assert!(is_content("don"));
+    }
+
+    #[test]
+    fn proper_noun_entities_survive_stopwords() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "band1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Local H is an alternative rock duo from Illinois in the United States.")] },
+                Session { id: "band2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "For Against is an American post-punk band formed in Lincoln, Nebraska.")] },
+                Session { id: "noise".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "The United States Senate held hearings against corruption.")] },
+            ],
+            queries: vec![Query { text: "Are Local H and For Against both from the United States?".into(), date: String::new() }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let top2: Vec<String> = rank(&req).results[0].sessions.iter().take(2).map(|s| s.id.clone()).collect();
+        assert!(top2.contains(&"band1".to_string()) && top2.contains(&"band2".to_string()), "{top2:?}");
+    }
+
+    #[test]
+    fn inline_dates_and_coarse_halo_match() {
+        let may1_toks = inline_date_tokens("What movie did Joanna watch on 1 May, 2022?");
+        assert!(may1_toks.contains(&"__DATE__2022_05_01".to_string()), "{may1_toks:?}");
+        assert!(may1_toks.contains(&"__MONTH__05".to_string()), "{may1_toks:?}");
+
+        let may2_ts = parse_date("2 May, 2022");
+        let last_night = deictic_tokens(&raw_tokens("I watched it last night!"), may2_ts);
+        assert!(last_night.contains(&"__DATE__2022_05_01".to_string()), "{last_night:?}");
+
+        let mar28_ts = parse_date("2023/03/28 (Tue) 20:35");
+        let four_wks = deictic_tokens(&raw_tokens("four weeks ago"), mar28_ts);
+        assert!(four_wks.contains(&"__DATE__2023_03_01".to_string()), "{four_wks:?}");
+    }
+
+    #[test]
+    fn framing_words_dont_crush_domain_facts() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "gold".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "I grew up with 3 sisters in a loud house.")] },
+                Session { id: "noise".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "The total number of items on our order list is unknown.")] },
+            ],
+            queries: vec![Query { text: "What is the total number of siblings I have?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        assert_eq!(rank(&req).results[0].sessions[0].id, "gold");
+    }
+
+    #[test]
+    fn ppr_turn_scores_remain_bounded_and_length_fair() {
+        let filler_essay = "flask app code ".repeat(120);
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "s1".into(), date: String::new(), timestamp: 0, turns: vec![
+                    Turn { id: "gold".into(), role: "user".into(), content: "My first sprint ends on March 29 for login features.".into() },
+                    Turn { id: "reply".into(), role: "assistant".into(), content: format!("Here is a sprint plan ending March 29: {filler_essay}") },
+                ]},
+                Session { id: "s2".into(), date: String::new(), timestamp: 0, turns: vec![
+                    Turn { id: "noise".into(), role: "assistant".into(), content: format!("Another unrelated deployment guide: {filler_essay}") },
+                ]},
+                Session { id: "s3".into(), date: String::new(), timestamp: 0, turns: vec![
+                    Turn { id: "noise2".into(), role: "user".into(), content: "Unrelated question about SQLite migrations.".into() },
+                    Turn { id: "noise3".into(), role: "assistant".into(), content: "Sure, here are SQLite migration commands.".into() },
+                    Turn { id: "noise4".into(), role: "user".into(), content: "Thanks!".into() },
+                ]},
+            ],
+            queries: vec![Query { text: "When does my first sprint end?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let top2: Vec<String> = rank(&req).results[0].turns.iter().take(2).map(|t| t.id.clone()).collect();
+        assert!(top2.contains(&"gold".to_string()), "{top2:?}");
+        assert_ne!(rank(&req).results[0].turns[0].id, "noise");
+    }
+
+    #[test]
+    fn session_multihop_bridges_second_hop() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "hop1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Kiss and Tell is a 1945 film starring Shirley Temple as Corliss Archer.")] },
+                Session { id: "dup1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "A Kiss for Corliss is the sequel comedy film featuring Corliss Archer.")] },
+                Session { id: "dup2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Meet Corliss Archer is a radio sitcom centered on Corliss Archer.")] },
+                Session { id: "dup3".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Janet Waldo voiced Corliss Archer in the radio broadcast.")] },
+                Session { id: "dup4".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "F. Hugh Herbert created Corliss Archer as a character.")] },
+                Session { id: "hop2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Shirley Temple served as United States Chief of Protocol and ambassador to Ghana.")] },
+                Session { id: "noise".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Baking sourdough bread at high altitude requires extra hydration.")] },
+            ],
+            queries: vec![Query { text: "What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let top5: Vec<String> = rank(&req).results[0].sessions.iter().map(|s| s.id.clone()).collect();
+        assert_eq!(top5[0], "hop1");
+        assert!(top5.contains(&"hop2".to_string()), "Expected hop2 bridged into top5: {top5:?}");
+    }
+
+    #[test]
+    fn is_question_survives_trailing_code_or_markers() {
+        let (is_q1, short1) = detect_question("Can you fix my Flask route? ->-> 1,14", 6);
+        assert!(is_q1 && short1);
+        let (is_q2, _) = detect_question("Can you initialize SQLite?\n```python\nimport sqlite3\n```", 5);
+        assert!(is_q2);
+    }
+
+    #[test]
+    fn previous_state_matches_and_zero_hit_bridge_skips_preference() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "gold".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "I worked as a marketing specialist in my previous role at a startup.")] },
+                Session { id: "d1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Here is a general list of common occupation titles across industries.")] },
+                Session { id: "d2".into(), date: String::new(), timestamp: 0, turns: vec![turn("assistant", "Waiters and teachers are common occupation categories.")] },
+            ],
+            queries: vec![Query { text: "What was my previous occupation?".into(), date: String::new() }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        assert_eq!(rank(&req).results[0].sessions[0].id, "gold");
+
+        let pref_req = RankRequest {
+            sessions: vec![
+                Session { id: "s1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Can you recommend a great show to watch on Paramount Plus tonight?")] },
+                Session { id: "zero".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Paramount Plus runs on Apple TV and Roku devices.")] },
+                Session { id: "pref".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "I love comedy specials and standup shows.")] },
+            ],
+            queries: vec![Query { text: "Can you recommend a show or movie for me to watch tonight?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let top2: Vec<String> = rank(&pref_req).results[0].sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(!top2.contains(&"zero".to_string()), "zero-overlap bridge should not enter preference top2: {top2:?}");
     }
 }

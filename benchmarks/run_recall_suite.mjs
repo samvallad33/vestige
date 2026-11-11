@@ -1,21 +1,21 @@
 // benchmarks/run_recall_suite.mjs
 // Unified RECALL-ONLY benchmark runner for Vestige 6.2.1.
 //
-// Evaluates pure retrieval accuracy on 5 benchmarks:
-//   1. BEAM (100 conversations, 2,000 queries, 100K to 10M token splits)
-//   2. MemoryAgentBench (Accurate Retrieval track, gold chunk Recall@5)
-//   3. CORE-Bench (SWE-bench requirement-driven code retrieval)
-//   4. HotpotQA (7,405 dev questions, supporting_facts exact ID check)
-//   5. LongMemEval-V2 (451 questions across enterprise/web trajectories)
+// Evaluates pure retrieval accuracy on:
+//   1. BEAM 100K (20 conversations, 400 queries / 355 non-abstention across 2,127 sub-conversations)
+//   2. MemoryAgentBench (Accurate Retrieval: ruler_qa1_197K, ruler_qa2_421K, and 5x longmemeval_s* 400K rows)
+//   3. LongMemEval_M (500 questions / 470 non-abstention streaming ~476 sessions per question)
+//   4. HotpotQA (optional dev_distractor full 7,405-question exact supporting_facts check)
 //
 // Gated Rules:
-//   - 100% of retrieval math runs in native Rust kernel (`target/release/retrieval_bench.exe --worker`).
+//   - 100% of retrieval math runs in native Rust kernel (`target/release/retrieval_bench --worker`).
 //   - Zero embeddings, zero vectors, zero cloud LLM judge calls ($0.00 spend).
-//   - Zero label leakage: questions carry only text and dates. Gold IDs are inspected ONLY during scoring.
+//   - Zero label leakage: queries carry only text and dates. Gold IDs are inspected ONLY during scoring.
 //
 // Usage:
 //   node benchmarks/run_recall_suite.mjs --bench=beam [--split=100k] [--limit=N]
-//   node benchmarks/run_recall_suite.mjs --bench=hotpotqa [--limit=N]
+//   node benchmarks/run_recall_suite.mjs --bench=memoryagentbench
+//   node benchmarks/run_recall_suite.mjs --bench=longmemeval_m [--limit=N]
 //   node benchmarks/run_recall_suite.mjs --bench=all
 
 import { spawn } from 'node:child_process';
@@ -37,34 +37,38 @@ if (!binPath) {
   process.exit(1);
 }
 
-// Start persistent worker process
-const child = spawn(binPath, ['--worker'], { stdio: ['pipe', 'pipe', 'inherit'] });
-const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+// Lazily started persistent worker process (so Python streaming sub-runners don't double-allocate).
+let child = null;
+const queue = [];
 
-let queue = [];
-rl.on('line', (line) => {
-  if (queue.length > 0) {
-    const { resolve, reject } = queue.shift();
-    try {
-      const data = JSON.parse(line);
-      if (data && data.error) {
-        reject(new Error(data.error));
-      } else {
-        resolve(data);
+function ensureWorker() {
+  if (child) return;
+  child = spawn(binPath, ['--worker'], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  rl.on('line', (line) => {
+    if (queue.length > 0) {
+      const { resolve, reject } = queue.shift();
+      try {
+        const data = JSON.parse(line);
+        if (data && data.error) {
+          reject(new Error(data.error));
+        } else {
+          resolve(data);
+        }
+      } catch (e) {
+        reject(e);
       }
-    } catch (e) {
-      reject(e);
     }
-  }
-});
-
-child.on('error', (err) => {
-  while (queue.length > 0) {
-    queue.shift().reject(err);
-  }
-});
+  });
+  child.on('error', (err) => {
+    while (queue.length > 0) {
+      queue.shift().reject(err);
+    }
+  });
+}
 
 function rank(payload) {
+  ensureWorker();
   return new Promise((resolve, reject) => {
     queue.push({ resolve, reject });
     child.stdin.write(JSON.stringify(payload) + '\n');
@@ -122,136 +126,140 @@ async function runBeam(args) {
 
   let totalQuestions = 0;
   let scoredQuestions = 0;
-  let hitsAt1 = 0;
-  let hitsAt3 = 0;
-  let hitsAt5 = 0;
-  let hitsAt10 = 0;
-  let mrrSum = 0;
+  let totalSubSessions = 0;
+  let totalTurns = 0;
+
+  let sessAny1 = 0, sessAny3 = 0, sessAny5 = 0, sessAny10 = 0;
+  let sessAll5 = 0, sessAll10 = 0, sessMrrSum = 0;
+
+  let turnAny1 = 0, turnAny3 = 0, turnAny5 = 0, turnAny10 = 0;
+  let turnAll5 = 0, turnAll10 = 0, turnMrrSum = 0;
 
   const categoryStats = {};
   const t0 = Date.now();
-
   const convsToRun = args.limit ? convDirs.slice(0, args.limit) : convDirs;
 
   for (let ci = 0; ci < convsToRun.length; ci++) {
     const cId = convsToRun[ci];
-    const chatPath = join(chatsBase, cId, 'chat.json');
-    const qPath = join(chatsBase, cId, 'probing_questions', 'probing_questions.json');
+    const chatData = JSON.parse(readFileSync(join(chatsBase, cId, 'chat.json'), 'utf8'));
+    const qData = JSON.parse(readFileSync(join(chatsBase, cId, 'probing_questions', 'probing_questions.json'), 'utf8'));
 
-    const chatData = JSON.parse(readFileSync(chatPath, 'utf8'));
-    const qData = JSON.parse(readFileSync(qPath, 'utf8'));
-
-    // Ingest into Vestige Session format
+    // Treat each coherent sub-conversation batch.turns[j] as a Vestige Session (BEAM's own turn_chunk unit).
     const sessions = [];
+    const turnIdToSessionId = new Map();
     for (let bi = 0; bi < chatData.length; bi++) {
       const batch = chatData[bi];
-      const sId = `conv${cId}_b${bi}`;
-      const turns = [];
-
-      for (const turnList of batch.turns) {
-        for (const t of turnList) {
+      const batchAnchor = batch.time_anchor || batch.turns?.[0]?.[0]?.time_anchor || '';
+      for (let subIdx = 0; subIdx < batch.turns.length; subIdx++) {
+        const sub = batch.turns[subIdx];
+        if (!Array.isArray(sub) || sub.length === 0) continue;
+        const sId = `conv${cId}_b${bi}_s${subIdx}`;
+        const turns = [];
+        for (const t of sub) {
+          const tid = String(t.id);
           turns.push({
-            id: String(t.id),
+            id: tid,
             role: t.role || 'user',
             content: t.content || '',
           });
+          turnIdToSessionId.set(tid, sId);
+          totalTurns++;
         }
+        sessions.push({
+          id: sId,
+          date: sub[0]?.time_anchor || batchAnchor || '',
+          timestamp: 0,
+          turns,
+        });
+        totalSubSessions++;
       }
-
-      sessions.push({
-        id: sId,
-        date: batch.time_anchor || '',
-        timestamp: 0,
-        turns,
-      });
     }
 
-    // Process questions
+    const queryEntries = [];
     for (const [cat, qList] of Object.entries(qData)) {
       if (!Array.isArray(qList)) continue;
-      if (!categoryStats[cat]) {
-        categoryStats[cat] = { total: 0, hitsAt5: 0, hitsAt10: 0 };
-      }
-
       for (const qItem of qList) {
         totalQuestions++;
-        const goldIds = extractGoldIds(qItem.source_chat_ids);
-        if (goldIds.length === 0) {
-          // Abstention / unanswerable questions have no source chat IDs
-          continue;
-        }
-
-        scoredQuestions++;
-        categoryStats[cat].total++;
-
-        const req = {
-          sessions,
-          queries: [{ text: qItem.question, date: '' }],
-          top_k: 10,
-        };
-
-        const resp = await rank(req);
-        const res = resp.results && resp.results[0];
-        const retrievedTurnIds = (res && res.turns ? res.turns.map(t => t.id) : []);
-
-        // Check recall against goldIds
-        const isHit = (k) => goldIds.some(gid => retrievedTurnIds.slice(0, k).includes(gid));
-
-        if (isHit(1)) hitsAt1++;
-        if (isHit(3)) hitsAt3++;
-        if (isHit(5)) {
-          hitsAt5++;
-          categoryStats[cat].hitsAt5++;
-        }
-        if (isHit(10)) {
-          hitsAt10++;
-          categoryStats[cat].hitsAt10++;
-        }
-
-        // Calculate Reciprocal Rank
-        let rankIdx = -1;
-        for (let i = 0; i < retrievedTurnIds.length; i++) {
-          if (goldIds.includes(retrievedTurnIds[i])) {
-            rankIdx = i + 1;
-            break;
-          }
-        }
-        if (rankIdx > 0) {
-          mrrSum += 1.0 / rankIdx;
-        }
+        const goldTurnIds = [...new Set(extractGoldIds(qItem.source_chat_ids))];
+        if (goldTurnIds.length === 0) continue;
+        const goldSessIds = [...new Set(goldTurnIds.map(id => turnIdToSessionId.get(id)).filter(Boolean))];
+        queryEntries.push({ cat, question: qItem.question, goldTurnIds, goldSessIds });
       }
+    }
+
+    if (queryEntries.length === 0) continue;
+    const resp = await rank({
+      sessions,
+      queries: queryEntries.map(e => ({ text: e.question, date: '' })),
+      top_k: 10,
+    });
+
+    for (let qi = 0; qi < queryEntries.length; qi++) {
+      const { cat, goldTurnIds, goldSessIds } = queryEntries[qi];
+      const res = resp.results?.[qi];
+      const retSessIds = (res?.sessions || []).map(s => s.id);
+      const retTurnIds = (res?.turns || []).map(t => t.id);
+
+      scoredQuestions++;
+      if (!categoryStats[cat]) {
+        categoryStats[cat] = {
+          total: 0,
+          sessAny5: 0, sessAll5: 0, sessAny10: 0, sessAll10: 0,
+          turnAny5: 0, turnAll5: 0, turnAny10: 0,
+        };
+      }
+      const st = categoryStats[cat];
+      st.total++;
+
+      const sAny = k => goldSessIds.some(g => retSessIds.slice(0, k).includes(g));
+      const sAll = k => goldSessIds.length > 0 && goldSessIds.every(g => retSessIds.slice(0, k).includes(g));
+      const tAny = k => goldTurnIds.some(g => retTurnIds.slice(0, k).includes(g));
+      const tAll = k => goldTurnIds.length > 0 && goldTurnIds.every(g => retTurnIds.slice(0, k).includes(g));
+
+      if (sAny(1)) sessAny1++;
+      if (sAny(3)) sessAny3++;
+      if (sAny(5)) { sessAny5++; st.sessAny5++; }
+      if (sAny(10)) { sessAny10++; st.sessAny10++; }
+      if (sAll(5)) { sessAll5++; st.sessAll5++; }
+      if (sAll(10)) { sessAll10++; st.sessAll10++; }
+      const sRank = retSessIds.findIndex(id => goldSessIds.includes(id));
+      if (sRank >= 0) sessMrrSum += 1.0 / (sRank + 1);
+
+      if (tAny(1)) turnAny1++;
+      if (tAny(3)) turnAny3++;
+      if (tAny(5)) { turnAny5++; st.turnAny5++; }
+      if (tAny(10)) { turnAny10++; st.turnAny10++; }
+      if (tAll(5)) { turnAll5++; st.turnAll5++; }
+      if (tAll(10)) turnAll10++;
+      const tRank = retTurnIds.findIndex(id => goldTurnIds.includes(id));
+      if (tRank >= 0) turnMrrSum += 1.0 / (tRank + 1);
     }
 
     if ((ci + 1) % 5 === 0 || ci === convsToRun.length - 1) {
-      const curR5 = scoredQuestions > 0 ? (hitsAt5 / scoredQuestions * 100).toFixed(2) : 0;
-      console.log(`[${ci + 1}/${convsToRun.length}] Scored ${scoredQuestions} Qs -> R@5: ${curR5}%`);
+      const sR5 = scoredQuestions > 0 ? (sessAny5 / scoredQuestions * 100).toFixed(2) : '0.00';
+      const tR5 = scoredQuestions > 0 ? (turnAny5 / scoredQuestions * 100).toFixed(2) : '0.00';
+      console.log(`[${ci + 1}/${convsToRun.length}] Scored ${scoredQuestions} Qs -> Sess Any@5: ${sR5}% | Turn Any@5: ${tR5}%`);
     }
   }
 
   const elapsedSec = ((Date.now() - t0) / 1000).toFixed(2);
-  const r1 = (hitsAt1 / scoredQuestions * 100).toFixed(2);
-  const r3 = (hitsAt3 / scoredQuestions * 100).toFixed(2);
-  const r5 = (hitsAt5 / scoredQuestions * 100).toFixed(2);
-  const r10 = (hitsAt10 / scoredQuestions * 100).toFixed(2);
-  const mrr = (mrrSum / scoredQuestions).toFixed(4);
+  const pct = n => (scoredQuestions > 0 ? parseFloat((n / scoredQuestions * 100).toFixed(2)) : 0);
 
   console.log(`\n--- BEAM RECALL RESULTS (${splitDir}) ---`);
-  console.log(`Total Questions Ingested: ${totalQuestions}`);
-  console.log(`Scored Questions (non-abstention): ${scoredQuestions}`);
-  console.log(`Recall@1:  ${r1}%`);
-  console.log(`Recall@3:  ${r3}%`);
-  console.log(`Recall@5:  ${r5}%`);
-  console.log(`Recall@10: ${r10}%`);
-  console.log(`MRR:       ${mrr}`);
-  console.log(`Time:      ${elapsedSec}s (Pure CPU arithmetic)`);
-  console.log(`Vestige API Cost: $0.00 (Zero LLM, Zero Vector Cloud Spend)`);
+  console.log(`Conversations: ${convsToRun.length} | Sub-sessions: ${totalSubSessions} | Turns: ${totalTurns}`);
+  console.log(`Total Qs: ${totalQuestions} | Scored (non-empty source_chat_ids): ${scoredQuestions}`);
+  console.log(`Session RecallAny@1: ${pct(sessAny1)}% | Any@3: ${pct(sessAny3)}% | Any@5: ${pct(sessAny5)}% | Any@10: ${pct(sessAny10)}% | All@5: ${pct(sessAll5)}% | All@10: ${pct(sessAll10)}% | MRR: ${(sessMrrSum / scoredQuestions).toFixed(4)}`);
+  console.log(`Turn    RecallAny@1: ${pct(turnAny1)}% | Any@3: ${pct(turnAny3)}% | Any@5: ${pct(turnAny5)}% | Any@10: ${pct(turnAny10)}% | All@5: ${pct(turnAll5)}% | All@10: ${pct(turnAll10)}% | MRR: ${(turnMrrSum / scoredQuestions).toFixed(4)}`);
+  console.log(`Time: ${elapsedSec}s | API Cost: $0.00`);
 
   console.log(`\n--- Category Breakdown ---`);
-  for (const [c, st] of Object.entries(categoryStats)) {
+  for (const [c, st] of Object.entries(categoryStats).sort()) {
     if (st.total > 0) {
-      const cr5 = (st.hitsAt5 / st.total * 100).toFixed(1);
-      const cr10 = (st.hitsAt10 / st.total * 100).toFixed(1);
-      console.log(`  ${c.padEnd(28)} (${String(st.total).padStart(4)} Qs): R@5 = ${cr5}% | R@10 = ${cr10}%`);
+      console.log(
+        `  ${c.padEnd(26)} (${String(st.total).padStart(3)}): ` +
+        `Sess Any@5=${(st.sessAny5 / st.total * 100).toFixed(1)}% Any@10=${(st.sessAny10 / st.total * 100).toFixed(1)}% | ` +
+        `Turn Any@5=${(st.turnAny5 / st.total * 100).toFixed(1)}% Any@10=${(st.turnAny10 / st.total * 100).toFixed(1)}%`
+      );
     }
   }
 
@@ -262,15 +270,26 @@ async function runBeam(args) {
     timestamp: new Date().toISOString(),
     elapsed_seconds: parseFloat(elapsedSec),
     cost_usd: 0.0,
-    competitor_estimated_cost_usd: '$50 - $300+',
+    conversations: convsToRun.length,
+    sub_sessions: totalSubSessions,
+    turns: totalTurns,
     metrics: {
       total_questions: totalQuestions,
       scored_questions: scoredQuestions,
-      recall_at_1: parseFloat(r1),
-      recall_at_3: parseFloat(r3),
-      recall_at_5: parseFloat(r5),
-      recall_at_10: parseFloat(r10),
-      mrr: parseFloat(mrr),
+      session_recall_any_at_1: pct(sessAny1),
+      session_recall_any_at_3: pct(sessAny3),
+      session_recall_any_at_5: pct(sessAny5),
+      session_recall_any_at_10: pct(sessAny10),
+      session_recall_all_at_5: pct(sessAll5),
+      session_recall_all_at_10: pct(sessAll10),
+      session_mrr: parseFloat((sessMrrSum / scoredQuestions).toFixed(4)),
+      turn_recall_any_at_1: pct(turnAny1),
+      turn_recall_any_at_3: pct(turnAny3),
+      turn_recall_any_at_5: pct(turnAny5),
+      turn_recall_any_at_10: pct(turnAny10),
+      turn_recall_all_at_5: pct(turnAll5),
+      turn_recall_all_at_10: pct(turnAll10),
+      turn_mrr: parseFloat((turnMrrSum / scoredQuestions).toFixed(4)),
     },
     category_breakdown: categoryStats,
   };
@@ -392,7 +411,6 @@ async function runHotpotQA(args) {
     timestamp: new Date().toISOString(),
     elapsed_seconds: parseFloat(elapsedSec),
     cost_usd: 0.0,
-    competitor_estimated_cost_usd: '$15 - $80',
     metrics: {
       questions_evaluated: scoredQuestions,
       doc_recall_all_at_2: parseFloat(docR2),
@@ -411,349 +429,49 @@ async function runHotpotQA(args) {
 }
 
 // =========================================================================
-// 3. CORE-BENCH RUNNER (SWE-bench Verified Code Retrieval)
+// PYTHON STREAM / AST EVALUATOR HELPER
 // =========================================================================
-async function runCoreBench(args) {
-  console.log(`\n======================================================`);
-  console.log(`=== RUNNING CORE-BENCH RECALL-ONLY BENCHMARK (Vestige 6.2.1) ===`);
-  console.log(`======================================================`);
-
-  const { execSync } = await import('node:child_process');
-  const coreDir = join(rootDir, 'benchmarks', 'data', 'corebench');
-  mkdirSync(coreDir, { recursive: true });
-
-  const repos = ['pallets__flask', 'psf__requests', 'mwaskom__seaborn'];
-  const baseUrl = 'https://huggingface.co/datasets/zhangfw123/CORE-Bench/resolve/main/data/LEVEL-2/SWE-bench_Verified';
-
-  let totalQueries = 0;
-  let hitsAt1 = 0;
-  let hitsAt3 = 0;
-  let hitsAt5 = 0;
-  let hitsAt10 = 0;
-  let mrrSum = 0;
-  const t0 = Date.now();
-
-  for (const repo of repos) {
-    const repoDir = join(coreDir, repo);
-    mkdirSync(repoDir, { recursive: true });
-
-    const corpusFile = join(repoDir, 'corpus.jsonl');
-    const queriesFile = join(repoDir, 'queries.jsonl');
-    const qrelsFile = join(repoDir, 'qrels.jsonl');
-
-    if (!existsSync(corpusFile)) {
-      console.log(`Downloading ${repo}/corpus.jsonl...`);
-      execSync(`curl.exe -sSL "${baseUrl}/${repo}/corpus.jsonl" -o "${corpusFile}"`, { stdio: 'inherit' });
-    }
-    if (!existsSync(queriesFile)) {
-      console.log(`Downloading ${repo}/queries.jsonl...`);
-      execSync(`curl.exe -sSL "${baseUrl}/${repo}/queries.jsonl" -o "${queriesFile}"`, { stdio: 'inherit' });
-    }
-    if (!existsSync(qrelsFile)) {
-      console.log(`Downloading ${repo}/qrels.jsonl...`);
-      execSync(`curl.exe -sSL "${baseUrl}/${repo}/qrels.jsonl" -o "${qrelsFile}"`, { stdio: 'inherit' });
-    }
-
-    // Load Qrels
-    const qrels = {};
-    const qrelLines = readFileSync(qrelsFile, 'utf8').split('\n').filter(Boolean);
-    for (const line of qrelLines) {
-      try {
-        const item = JSON.parse(line);
-        if (!qrels[item.query_id]) qrels[item.query_id] = [];
-        qrels[item.query_id].push(item.corpus_id);
-      } catch (_) {}
-    }
-
-    // Ingest Corpus as Sessions
-    const sessions = [];
-    const corpusLines = readFileSync(corpusFile, 'utf8').split('\n').filter(Boolean);
-    console.log(`[${repo}] Ingesting ${corpusLines.length} code chunks...`);
-    for (const line of corpusLines) {
-      try {
-        const c = JSON.parse(line);
-        sessions.push({
-          id: c._id,
-          date: '',
-          timestamp: 0,
-          turns: [{ id: c._id, role: 'user', content: c.text || '' }],
-        });
-      } catch (_) {}
-    }
-
-    // Load Queries
-    const queryLines = readFileSync(queriesFile, 'utf8').split('\n').filter(Boolean);
-    const queryItems = [];
-    for (const line of queryLines) {
-      try {
-        const q = JSON.parse(line);
-        if (qrels[q._id] && qrels[q._id].length > 0) {
-          queryItems.push(q);
-        }
-      } catch (_) {}
-    }
-
-    console.log(`[${repo}] Running ${queryItems.length} queries with gold code targets...`);
-    for (let qi = 0; qi < queryItems.length; qi++) {
-      const q = queryItems[qi];
-      const goldTargets = qrels[q._id];
-      totalQueries++;
-
-      const req = {
-        sessions,
-        queries: [{ text: q.text, date: '' }],
-        top_k: 10,
-      };
-
-      const resp = await rank(req);
-      const res = resp.results && resp.results[0];
-      const retrievedIds = (res && res.sessions ? res.sessions.map(s => s.id) : []);
-
-      const isHit = (k) => goldTargets.some(gid => retrievedIds.slice(0, k).includes(gid));
-      if (isHit(1)) hitsAt1++;
-      if (isHit(3)) hitsAt3++;
-      if (isHit(5)) hitsAt5++;
-      if (isHit(10)) hitsAt10++;
-
-      let rankIdx = -1;
-      for (let i = 0; i < retrievedIds.length; i++) {
-        if (goldTargets.includes(retrievedIds[i])) {
-          rankIdx = i + 1;
-          break;
-        }
+async function runPythonScript(scriptPath, scriptArgs = []) {
+  const { spawnSync } = await import('node:child_process');
+  const pythonCandidates = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+  for (const py of pythonCandidates) {
+    const probe = spawnSync(py, ['--version'], { encoding: 'utf8' });
+    if (probe.status === 0) {
+      const res = spawnSync(py, ['-u', scriptPath, ...scriptArgs], { stdio: 'inherit' });
+      if (res.status !== 0) {
+        throw new Error(`${py} ${scriptPath} exited with status ${res.status}`);
       }
-      if (rankIdx > 0) {
-        mrrSum += 1.0 / rankIdx;
-      }
+      return;
     }
   }
-
-  const elapsedSec = ((Date.now() - t0) / 1000).toFixed(2);
-  const r1 = totalQueries > 0 ? (hitsAt1 / totalQueries * 100).toFixed(2) : '0';
-  const r3 = totalQueries > 0 ? (hitsAt3 / totalQueries * 100).toFixed(2) : '0';
-  const r5 = totalQueries > 0 ? (hitsAt5 / totalQueries * 100).toFixed(2) : '0';
-  const r10 = totalQueries > 0 ? (hitsAt10 / totalQueries * 100).toFixed(2) : '0';
-  const mrr = totalQueries > 0 ? (mrrSum / totalQueries).toFixed(4) : '0';
-
-  console.log(`\n--- CORE-BENCH (SWE-BENCH VERIFIED) CODE RECALL RESULTS ---`);
-  console.log(`Total Code Queries:  ${totalQueries}`);
-  console.log(`Code Recall@1:       ${r1}%`);
-  console.log(`Code Recall@3:       ${r3}%`);
-  console.log(`Code Recall@5:       ${r5}%`);
-  console.log(`Code Recall@10:      ${r10}%`);
-  console.log(`Code MRR:            ${mrr}`);
-  console.log(`Time:                ${elapsedSec}s`);
-  console.log(`Vestige API Cost:    $0.00 (Zero LLM, Zero Vector Cloud Spend)`);
-
-  const resultPayload = {
-    benchmark: 'CORE-Bench',
-    track: 'SWE-bench_Verified_Level-2',
-    repos,
-    version: 'v6.2.1',
-    timestamp: new Date().toISOString(),
-    elapsed_seconds: parseFloat(elapsedSec),
-    cost_usd: 0.0,
-    competitor_estimated_cost_usd: '$40 - $180',
-    metrics: {
-      total_queries: totalQueries,
-      recall_at_1: parseFloat(r1),
-      recall_at_3: parseFloat(r3),
-      recall_at_5: parseFloat(r5),
-      recall_at_10: parseFloat(r10),
-      mrr: parseFloat(mrr),
-    },
-  };
-
-  const resultsDir = join(rootDir, 'benchmarks', 'results', 'v6.2.1');
-  mkdirSync(resultsDir, { recursive: true });
-  const outPath = args.out || join(resultsDir, `corebench_recall.json`);
-  writeFileSync(outPath, JSON.stringify(resultPayload, null, 2), 'utf8');
-  console.log(`\nCommitted result JSON to: ${outPath}`);
-  return resultPayload;
+  throw new Error('Python 3 runtime not found (tried python3, python)');
 }
 
 // =========================================================================
-// 4. MEMORYAGENTBENCH RUNNER (Accurate Retrieval Track)
+// 3. MEMORYAGENTBENCH RUNNER (Accurate Retrieval Track)
 // =========================================================================
 async function runMemoryAgentBench(args) {
   console.log(`\n======================================================`);
   console.log(`=== RUNNING MEMORYAGENTBENCH RECALL-ONLY (Vestige 6.2.1) ===`);
   console.log(`======================================================`);
+  const scriptPath = join(rootDir, 'benchmarks', 'eval_memoryagentbench.py');
+  const scriptArgs = [];
+  if (args.out) scriptArgs.push('--json', args.out);
+  await runPythonScript(scriptPath, scriptArgs);
+}
 
-  const { execSync } = await import('node:child_process');
-  const dataDir = join(rootDir, 'benchmarks', 'data');
-  mkdirSync(dataDir, { recursive: true });
-
-  const numScenarios = args.limit || 1;
-  let totalQuestions = 0;
-  let hitsAt1 = 0;
-  let hitsAt3 = 0;
-  let hitsAt5 = 0;
-  let hitsAt10 = 0;
-  let mrrSum = 0;
-  const t0 = Date.now();
-
-  for (let ri = 0; ri < numScenarios; ri++) {
-    const rowFile = join(dataDir, `memoryagentbench_row_${ri}.json`);
-    if (!existsSync(rowFile)) {
-      console.log(`Fetching MemoryAgentBench row ${ri} from HF Datasets API (may be ~35 MB)...`);
-      const cmd = `curl.exe -sSL "https://datasets-server.huggingface.co/rows?dataset=ai-hyz%2FMemoryAgentBench&config=default&split=Accurate_Retrieval&offset=${ri}&limit=1" -o "${rowFile}"`;
-      execSync(cmd, { stdio: 'inherit' });
-    }
-
-    console.log(`Loading ${rowFile}...`);
-    const dataset = JSON.parse(readFileSync(rowFile, 'utf8'));
-    const rows = dataset.rows || [];
-    if (rows.length === 0) continue;
-
-    const rowObj = rows[0].row;
-    const metadata = rowObj.metadata || {};
-    const questions = rowObj.questions || [];
-    const answers = rowObj.answers || [];
-    const source = metadata.source || `scenario_${ri}`;
-
-    // Build sessions
-    const sessions = [];
-    if (metadata.haystack_sessions && metadata.haystack_sessions.length > 0) {
-      for (let si = 0; si < metadata.haystack_sessions.length; si++) {
-        const sessRaw = metadata.haystack_sessions[si];
-        const turns = [];
-        for (let ti = 0; ti < sessRaw.length; ti++) {
-          const t = sessRaw[ti];
-          turns.push({
-            id: `s${si}_t${ti}`,
-            role: t.role || 'user',
-            content: t.content || '',
-          });
-        }
-        sessions.push({
-          id: `s${si}`,
-          date: metadata.question_dates && metadata.question_dates[si] ? metadata.question_dates[si] : '',
-          timestamp: 0,
-          turns,
-        });
-      }
-    } else if (rowObj.context) {
-      // Split by Document \d+:
-      const parts = rowObj.context.split(/Document \d+:\n/).filter(Boolean);
-      for (let pi = 0; pi < parts.length; pi++) {
-        const docText = parts[pi].trim();
-        sessions.push({
-          id: `doc_${pi + 1}`,
-          date: '',
-          timestamp: 0,
-          turns: [{ id: `doc_${pi + 1}`, role: 'user', content: docText }],
-        });
-      }
-    }
-
-    if (sessions.length === 0) continue;
-
-    console.log(`[Scenario ${ri + 1}/${numScenarios}] source=${source}, ${sessions.length} sessions/docs, ${questions.length} questions...`);
-
-    const qLimit = args.limit ? Math.min(questions.length, 25) : questions.length;
-    for (let qi = 0; qi < qLimit; qi++) {
-      const qText = questions[qi];
-      const qAnsList = (answers[qi] || []).map(a => String(a).toLowerCase().trim()).filter(Boolean);
-
-      // Identify gold sessions
-      let goldSessionIds = [];
-      if (metadata.haystack_sessions && metadata.haystack_sessions.length > 0) {
-        for (let si = 0; si < metadata.haystack_sessions.length; si++) {
-          const sessRaw = metadata.haystack_sessions[si];
-          if (sessRaw.some(t => t.has_answer)) {
-            goldSessionIds.push(`s${si}`);
-          }
-        }
-      }
-
-      if (goldSessionIds.length === 0 && qAnsList.length > 0) {
-        for (const sess of sessions) {
-          const combined = sess.turns.map(t => t.content.toLowerCase()).join(' ');
-          if (qAnsList.some(ans => combined.includes(ans))) {
-            goldSessionIds.push(sess.id);
-          }
-        }
-      }
-
-      if (goldSessionIds.length === 0) continue;
-
-      totalQuestions++;
-      const req = {
-        sessions,
-        queries: [{ text: qText, date: '' }],
-        top_k: 10,
-      };
-
-      const resp = await rank(req);
-      const res = resp.results && resp.results[0];
-      const retrievedSessionIds = (res && res.sessions ? res.sessions.map(s => s.id) : []);
-
-      const isHit = (k) => goldSessionIds.some(gid => retrievedSessionIds.slice(0, k).includes(gid));
-      if (isHit(1)) hitsAt1++;
-      if (isHit(3)) hitsAt3++;
-      if (isHit(5)) hitsAt5++;
-      if (isHit(10)) hitsAt10++;
-
-      let rankIdx = -1;
-      for (let i = 0; i < retrievedSessionIds.length; i++) {
-        if (goldSessionIds.includes(retrievedSessionIds[i])) {
-          rankIdx = i + 1;
-          break;
-        }
-      }
-      if (rankIdx > 0) {
-        mrrSum += 1.0 / rankIdx;
-      }
-
-      if ((qi + 1) % 5 === 0 || qi === qLimit - 1) {
-        const curR5 = (hitsAt5 / totalQuestions * 100).toFixed(2);
-        console.log(`  [Q ${qi + 1}/${qLimit}] Scored ${totalQuestions} -> R@5: ${curR5}%`);
-      }
-    }
-  }
-
-  const elapsedSec = ((Date.now() - t0) / 1000).toFixed(2);
-  const r1 = totalQuestions > 0 ? (hitsAt1 / totalQuestions * 100).toFixed(2) : '0';
-  const r3 = totalQuestions > 0 ? (hitsAt3 / totalQuestions * 100).toFixed(2) : '0';
-  const r5 = totalQuestions > 0 ? (hitsAt5 / totalQuestions * 100).toFixed(2) : '0';
-  const r10 = totalQuestions > 0 ? (hitsAt10 / totalQuestions * 100).toFixed(2) : '0';
-  const mrr = totalQuestions > 0 ? (mrrSum / totalQuestions).toFixed(4) : '0';
-
-  console.log(`\n--- MEMORYAGENTBENCH RECALL RESULTS ---`);
-  console.log(`Total Questions Scored: ${totalQuestions}`);
-  console.log(`Recall@1:               ${r1}%`);
-  console.log(`Recall@3:               ${r3}%`);
-  console.log(`Recall@5:               ${r5}%`);
-  console.log(`Recall@10:              ${r10}%`);
-  console.log(`MRR:                    ${mrr}`);
-  console.log(`Time:                   ${elapsedSec}s`);
-  console.log(`Vestige API Cost:       $0.00 (Zero LLM, Zero Vector Cloud Spend)`);
-
-  const resultPayload = {
-    benchmark: 'MemoryAgentBench',
-    track: 'Accurate_Retrieval',
-    version: 'v6.2.1',
-    timestamp: new Date().toISOString(),
-    elapsed_seconds: parseFloat(elapsedSec),
-    cost_usd: 0.0,
-    competitor_estimated_cost_usd: '$35 - $150',
-    metrics: {
-      total_questions_scored: totalQuestions,
-      recall_at_1: parseFloat(r1),
-      recall_at_3: parseFloat(r3),
-      recall_at_5: parseFloat(r5),
-      recall_at_10: parseFloat(r10),
-      mrr: parseFloat(mrr),
-    },
-  };
-
-  const resultsDir = join(rootDir, 'benchmarks', 'results', 'v6.2.1');
-  mkdirSync(resultsDir, { recursive: true });
-  const outPath = args.out || join(resultsDir, `memoryagentbench_recall.json`);
-  writeFileSync(outPath, JSON.stringify(resultPayload, null, 2), 'utf8');
-  console.log(`\nCommitted result JSON to: ${outPath}`);
-  return resultPayload;
+// =========================================================================
+// 4. LONGMEMEVAL_M STREAMING RUNNER (~476 sessions/Q)
+// =========================================================================
+async function runLongMemEvalM(args) {
+  console.log(`\n======================================================`);
+  console.log(`=== RUNNING LONGMEMEVAL_M RECALL-ONLY (Vestige 6.2.1) ===`);
+  console.log(`======================================================`);
+  const scriptPath = join(rootDir, 'benchmarks', 'eval_longmemeval_m.py');
+  const scriptArgs = [];
+  if (args.limit) scriptArgs.push('--limit', String(args.limit));
+  if (args.out) scriptArgs.push('--json', args.out);
+  await runPythonScript(scriptPath, scriptArgs);
 }
 
 // =========================================================================
@@ -766,25 +484,24 @@ async function main() {
       await runBeam(args);
     } else if (args.bench === 'hotpotqa') {
       await runHotpotQA(args);
-    } else if (args.bench === 'corebench') {
-      await runCoreBench(args);
     } else if (args.bench === 'memoryagentbench') {
       await runMemoryAgentBench(args);
+    } else if (args.bench === 'longmemeval_m') {
+      await runLongMemEvalM(args);
     } else if (args.bench === 'all') {
-      console.log('=== RUNNING ALL RECALL BENCHMARKS ===');
+      console.log('=== RUNNING ALL CORE RECALL BENCHMARKS (BEAM, MemoryAgentBench, LongMemEval_M) ===');
       await runBeam(args);
-      await runHotpotQA(args);
-      await runCoreBench(args);
       await runMemoryAgentBench(args);
+      await runLongMemEvalM(args);
     } else {
-      console.error(`Unknown benchmark: ${args.bench}. Available: beam, hotpotqa, corebench, memoryagentbench, all`);
+      console.error(`Unknown benchmark: ${args.bench}. Available: beam, memoryagentbench, longmemeval_m, hotpotqa, all`);
       process.exit(1);
     }
   } catch (err) {
     console.error('Benchmark execution error:', err);
     process.exit(1);
   } finally {
-    child.kill();
+    if (child) child.kill();
   }
 }
 
