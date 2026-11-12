@@ -329,8 +329,7 @@ const PREF_QUERY_CUES: &[&str] = &[
     "how do i like", "any ideas", "any tips", "ideas for", "tips for", "advice on",
     "can you suggest", "what should i", "something i", "i might like", "i would like",
     "what would be a good", "what are some good", "help me pick", "help me find",
-    "go-to", "best for me", "fit my", "match my", "based on my", "steps would you",
-    "help me set up", " serve ",
+    "go-to", "best for me", "fit my", "match my", "based on my",
     // Personal planning, not a favorite-word lookup.
     "how should i", "help me plan", "walk me through", "help me decide", "help me choose",
     "help me figure", "what should i do",
@@ -421,7 +420,7 @@ const TASK_UNDER_RULES_CUES: &[&str] = &[
     "help me", "walk me through", "show me",
     "recommend", "suggest", " i should",
     "should i ", "shouldn't i ", "shouldnt i ",
-    "be prepared to", "common responses", "best practices",
+    "best practices",
     "outline ", "draft ", "write a ", "format ", "calculate ", "compute ",
 ];
 
@@ -5613,6 +5612,28 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
+    // ReplySource: an assistant reply at rank 1 is derived from the user turn it answers
+    // (the turn immediately before it in the same session). When that prompt was retrieved
+    // inside the top 5 already selected, the source takes slot 1 and the reply follows; top-5
+    // membership never changes. Position and role
+    // only. Skipped when the query asks what the assistant itself said.
+    if !it.assistant_attribution && final_turn_indices.len() > 1 {
+        let top = final_turn_indices[0];
+        if ix.turns[top].speaker == "assistant" {
+            let members = &ix.session_turns[ix.turns[top].session];
+            if let Some(pos) = members.iter().position(|&m| m == top) {
+                if pos > 0 {
+                    let prev = members[pos - 1];
+                    if ix.turns[prev].speaker == "user" {
+                        if let Some(at) = final_turn_indices.iter().take(5).position(|&t| t == prev) {
+                            final_turn_indices.remove(at);
+                            final_turn_indices.insert(0, prev);
+                        }
+                    }
+                }
+            }
+        }
+    }
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
