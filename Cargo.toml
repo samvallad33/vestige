@@ -22,7 +22,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "6.2.1"
+version = "6.2.2"
 edition = "2024"
 license = "AGPL-3.0-only"
 repository = "https://github.com/samvallad33/vestige"

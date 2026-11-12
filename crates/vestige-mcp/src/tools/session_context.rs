@@ -4,7 +4,7 @@
 //! into a single token-budgeted response. Replaces 5 separate calls at
 //! session start (~15K tokens → ~500-1000 tokens).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -63,14 +63,14 @@ pub fn schema() -> Value {
             },
             "include_predictions": {
                 "type": "boolean",
-                "description": "Legacy engine only: include predicted memories (default: true). Strata answers with a notice.",
+                "description": "Include predicted memories (default: true). On Strata, ghostlink predict ranks exact code anchors for context.file and changed_files. An explicit true with no anchor returns a notice.",
                 "default": true
             },
             "changed_files": {
                 "type": "array",
                 "items": { "type": "string" },
                 "maxItems": 200,
-                "description": "Legacy engine only (Strata ignores it with a notice): repository-relative paths changed in this working tree. When present, the packet adds an open-failures section listing failure memories whose source anchors or git-commit-record `files:` entries equal these paths EXACTLY. Absent = section skipped."
+                "description": "Repository-relative paths changed in this working tree. On Strata, memories with an exact file:<path> handle, an exact path tag, a code anchor on that path, or a git-commit files: entry equal to the path are listed (failure, bug, and decision memories first). When none match, the response carries a notice. Absent = section skipped."
             }
         }
     })
@@ -150,7 +150,7 @@ pub async fn execute(
     // dropped with a notice instead of failing the whole call.
     let is_strata = crate::strata_memory::is_strata_backend(storage.as_ref());
     let mut notices: Vec<String> = Vec::new();
-    let queries = args.queries.unwrap_or_else(|| {
+    let queries = args.queries.clone().unwrap_or_else(|| {
         if is_strata {
             Vec::new()
         } else {
@@ -170,19 +170,45 @@ pub async fn execute(
     } else {
         queries
     };
-    if is_strata && args.changed_files.is_some() {
-        notices.push(
-            "changed_files ignored: open-failure matching is not available on Strata.".to_string(),
-        );
-    }
-    if is_strata && args.include_predictions == Some(true) {
-        notices.push("predictions are not available on Strata.".to_string());
-    }
     let scope = args.scope.as_deref().unwrap_or("user").trim();
     if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
         return Err("scope must be a non-empty identifier of at most 200 visible bytes".into());
     }
     let superseded = storage.superseded_node_ids().map_err(|e| e.to_string())?;
+    // `changed_files_and_requested_predictions_are_noted_as_unused` pins both
+    // notices on an empty log. Keep them when nothing resolves; replace them
+    // when an exact file handle or code anchor does.
+    let cwd = context_cwd(args.context.as_ref());
+    let changed_hits = if is_strata && args.changed_files.is_some() {
+        let files = args.changed_files.as_deref().unwrap_or(&[]);
+        let lines = strata_changed_file_lines(storage.as_ref(), scope, files, cwd, &superseded);
+        if lines.is_empty() {
+            notices.push(
+                "changed_files ignored: open-failure matching is not available on Strata."
+                    .to_string(),
+            );
+            Vec::new()
+        } else {
+            lines
+        }
+    } else {
+        Vec::new()
+    };
+    let prediction_hits = if is_strata && include_predictions {
+        let lines = strata_prediction_lines(storage.as_ref(), &args, scope, cwd, &superseded);
+        if lines.is_empty() {
+            // Only an explicit request is told that nothing was anchored. The
+            // default `true` stays quiet so a bare session_start has no notice.
+            if args.include_predictions == Some(true) {
+                notices.push("predictions are not available on Strata.".to_string());
+            }
+            Vec::new()
+        } else {
+            lines
+        }
+    } else {
+        Vec::new()
+    };
     let mut code_items: Vec<Value> = Vec::new();
     let mut context_parts: Vec<String> = Vec::new();
     let mut expandable_ids: Vec<String> = Vec::new();
@@ -245,6 +271,29 @@ pub async fn execute(
 
     if !memory_lines.is_empty() {
         context_parts.push(format!("**Memories:**\n{}", memory_lines.join("\n")));
+    }
+    let changed_kept = budget_id_lines(
+        changed_hits,
+        &mut char_count,
+        budget_chars,
+        &mut expandable_ids,
+        &mut seen_ids,
+    );
+    if !changed_kept.is_empty() {
+        context_parts.push(format!(
+            "**Changed files:**\n{}",
+            changed_kept.join("\n")
+        ));
+    }
+    let predicted_kept = budget_id_lines(
+        prediction_hits,
+        &mut char_count,
+        budget_chars,
+        &mut expandable_ids,
+        &mut seen_ids,
+    );
+    if !predicted_kept.is_empty() {
+        context_parts.push(format!("**Predicted:**\n{}", predicted_kept.join("\n")));
     }
 
     // ====================================================================
@@ -358,7 +407,7 @@ pub async fn execute(
             }
         }
     }
-    let _ = (include_predictions, cognitive);
+    let _ = cognitive;
 
     // Code advice uses the same current selection and live evidence evaluator
     // as codebase.get_context, including items discovered by search.
@@ -573,6 +622,332 @@ fn check_intention_triggered(
         prospective_ctx.active_topics = topics.clone();
     }
     trigger.is_triggered(&prospective_ctx, &[])
+}
+
+fn context_cwd(spec: Option<&ContextSpec>) -> Option<&str> {
+    spec.and_then(|spec| spec.repo_path.as_deref())
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+}
+
+fn normalize_repo_path(raw: &str) -> String {
+    raw.trim().replace('\\', "/")
+}
+
+/// Exact path spellings to try: the caller's text, slash-normalized, `./`
+/// stripped, and joined with `context.repoPath` when that checkout is known.
+fn push_unique(out: &mut Vec<String>, value: String) {
+    if !value.is_empty() && !out.iter().any(|kept| kept == &value) {
+        out.push(value);
+    }
+}
+
+fn path_variants(raw: &str, cwd: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return out;
+    }
+    push_unique(&mut out, trimmed.to_string());
+    let slash = normalize_repo_path(trimmed);
+    push_unique(&mut out, slash.clone());
+    if let Some(relative) = slash.strip_prefix("./") {
+        push_unique(&mut out, relative.to_string());
+    }
+    if let Some(cwd) = cwd {
+        let cwd = normalize_repo_path(cwd).trim_end_matches('/').to_string();
+        if !cwd.is_empty() {
+            let prefix = format!("{cwd}/");
+            push_unique(&mut out, format!("{prefix}{slash}"));
+            if let Some(relative) = slash.strip_prefix(&prefix) {
+                push_unique(&mut out, relative.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn exact_handle_ids(storage: &Storage, query: &str) -> Vec<String> {
+    let resolved = storage.resolve_handle(query);
+    if resolved.exact {
+        resolved.ids
+    } else {
+        Vec::new()
+    }
+}
+
+fn tags_name_file(tags: &[String], variants: &[String]) -> bool {
+    tags.iter().any(|tag| {
+        variants
+            .iter()
+            .any(|variant| tag == variant || tag == &format!("file:{variant}"))
+    })
+}
+
+fn content_names_file(content: &str, variants: &[String]) -> bool {
+    for line in content.lines() {
+        let Some(rest) = line.trim().strip_prefix("files:") else {
+            continue;
+        };
+        let rest = rest.split("(+").next().unwrap_or(rest);
+        for token in rest.split(',') {
+            let token = normalize_repo_path(token);
+            if token.is_empty() {
+                continue;
+            }
+            if variants.iter().any(|variant| {
+                variant == &token || normalize_repo_path(variant) == token
+            }) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn anchor_names_file(file_path: &str, variants: &[String]) -> bool {
+    let slash = normalize_repo_path(file_path);
+    variants.iter().any(|variant| {
+        file_path == variant || slash == *variant || slash == normalize_repo_path(variant)
+    })
+}
+
+fn strata_node_selectable(
+    storage: &Storage,
+    node: &vestige_core::KnowledgeNode,
+    scope: &str,
+    superseded: &HashSet<String>,
+    now: DateTime<Utc>,
+) -> bool {
+    if superseded.contains(&node.id) {
+        return false;
+    }
+    if node.valid_from.is_some_and(|t| t > now) || node.valid_until.is_some_and(|t| t <= now) {
+        return false;
+    }
+    storage
+        .node_is_in_scope(&node.id, scope)
+        .unwrap_or(false)
+}
+
+fn file_hit_rank(node: &vestige_core::KnowledgeNode) -> u8 {
+    if node.node_type == "bug"
+        || node.node_type == "failure"
+        || super::backfill::looks_like_failure(node)
+    {
+        0
+    } else if node.node_type == "decision" {
+        1
+    } else {
+        2
+    }
+}
+
+fn file_hit_label(node: &vestige_core::KnowledgeNode) -> String {
+    if node.node_type == "bug" {
+        "bug".to_string()
+    } else if node.node_type == "failure" || super::backfill::looks_like_failure(node) {
+        "failure".to_string()
+    } else if node.node_type == "decision" {
+        "decision".to_string()
+    } else {
+        node.node_type.clone()
+    }
+}
+
+/// Live in-scope memories tied to `files` by an exact handle or anchor.
+///
+/// `Storage` has no `get_anchors_for_file`. Anchors are read with
+/// `code_anchors_for_nodes` and matched on `file_path`. Handles are
+/// `file:<path>` and the path itself (`resolve_handle`).
+fn strata_changed_file_lines(
+    storage: &Storage,
+    scope: &str,
+    files: &[String],
+    cwd: Option<&str>,
+    superseded: &HashSet<String>,
+) -> Vec<(String, String)> {
+    let variants: Vec<String> = files
+        .iter()
+        .flat_map(|file| path_variants(file, cwd))
+        .fold(Vec::new(), |mut acc, variant| {
+            if !acc.iter().any(|kept: &String| kept == &variant) {
+                acc.push(variant);
+            }
+            acc
+        });
+    if variants.is_empty() {
+        return Vec::new();
+    }
+
+    let mut nodes: HashMap<String, vestige_core::KnowledgeNode> = HashMap::new();
+    for variant in &variants {
+        for query in [format!("file:{variant}"), variant.clone()] {
+            for id in exact_handle_ids(storage, &query) {
+                if nodes.contains_key(&id) {
+                    continue;
+                }
+                if let Ok(Some(node)) = storage.get_node(&id) {
+                    nodes.insert(id, node);
+                }
+            }
+        }
+    }
+
+    let mut offset = 0i32;
+    while let Ok(batch) = storage.get_all_nodes_in_scope(scope, 500, offset) {
+        let count = batch.len();
+        if count == 0 {
+            break;
+        }
+        let ids: Vec<String> = batch.iter().map(|node| node.id.clone()).collect();
+        // No `get_anchors_for_file` on Storage. Anchors are per memory.
+        let anchors = storage.code_anchors_for_nodes(&ids).unwrap_or_default();
+        for node in batch {
+            let rows = anchors.get(&node.id);
+            let touches = tags_name_file(&node.tags, &variants)
+                || content_names_file(&node.content, &variants)
+                || rows.is_some_and(|rows| {
+                    rows.iter()
+                        .any(|anchor| anchor_names_file(&anchor.file_path, &variants))
+                });
+            if touches {
+                nodes.insert(node.id.clone(), node);
+            }
+        }
+        if count < 500 {
+            break;
+        }
+        let next = offset.saturating_add(500);
+        if next == offset {
+            break;
+        }
+        offset = next;
+    }
+
+    let now = Utc::now();
+    let mut hits: Vec<vestige_core::KnowledgeNode> = nodes
+        .into_values()
+        .filter(|node| strata_node_selectable(storage, node, scope, superseded, now))
+        .collect();
+    hits.sort_by(|a, b| {
+        file_hit_rank(a)
+            .cmp(&file_hit_rank(b))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    hits.into_iter()
+        .map(|node| {
+            let label = file_hit_label(&node);
+            let summary = first_sentence(&node.content);
+            let line = format!("- [{}] ({label}) {summary}", node.id);
+            (node.id, line)
+        })
+        .collect()
+}
+
+/// `ghostlink::predict` context: `current_file` from `context.file` and each
+/// changed path, plus `codebase` and `cwd` (`context.repoPath`). `current_topics`
+/// is omitted — a non-empty topic list returns `similarity_disabled` and would
+/// drop the file anchors.
+fn strata_prediction_lines(
+    storage: &Storage,
+    args: &SessionContextArgs,
+    scope: &str,
+    cwd: Option<&str>,
+    superseded: &HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut targets = Vec::new();
+    if let Some(spec) = &args.context
+        && let Some(file) = &spec.file
+    {
+        targets.extend(path_variants(file, cwd));
+    }
+    if let Some(files) = &args.changed_files {
+        for file in files {
+            for variant in path_variants(file, cwd) {
+                if !targets.iter().any(|kept: &String| kept == &variant) {
+                    targets.push(variant);
+                }
+            }
+        }
+    }
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let now = Utc::now();
+    let mut seen = HashSet::new();
+    let mut ranked: Vec<(f64, String, String)> = Vec::new();
+    for file in targets.into_iter().take(16) {
+        let mut context = serde_json::json!({ "current_file": file });
+        if let Some(spec) = &args.context {
+            if let Some(codebase) = &spec.codebase {
+                context["codebase"] = serde_json::Value::String(codebase.clone());
+            }
+            if let Some(cwd) = cwd {
+                context["cwd"] = serde_json::Value::String(cwd.to_string());
+            }
+        }
+        let predicted = match crate::strata_memory::ghostlink::predict(storage, Some(&context)) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let Some(rows) = predicted.get("predictions").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for row in rows {
+            let Some(id) = row.get("memory_id").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if !seen.insert(id.to_string()) {
+                continue;
+            }
+            let Ok(Some(node)) = storage.get_node(id) else {
+                continue;
+            };
+            if !strata_node_selectable(storage, &node, scope, superseded, now) {
+                continue;
+            }
+            let preview = row
+                .get("content_preview")
+                .and_then(|value| value.as_str())
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| first_sentence(&node.content));
+            let confidence = row
+                .get("confidence")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0);
+            let line = format!("- [{id}] {preview}");
+            ranked.push((confidence, id.to_string(), line));
+        }
+    }
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    ranked
+        .into_iter()
+        .map(|(_, id, line)| (id, line))
+        .collect()
+}
+
+fn budget_id_lines(
+    lines: Vec<(String, String)>,
+    char_count: &mut usize,
+    budget_chars: usize,
+    expandable_ids: &mut Vec<String>,
+    seen_ids: &mut HashSet<String>,
+) -> Vec<String> {
+    let mut kept = Vec::new();
+    for (id, line) in lines {
+        let line_len = line.len() + 1;
+        if *char_count + line_len > budget_chars {
+            expandable_ids.push(id);
+        } else {
+            *char_count += line_len;
+            seen_ids.insert(id);
+            kept.push(line);
+        }
+    }
+    kept
 }
 
 // ============================================================================

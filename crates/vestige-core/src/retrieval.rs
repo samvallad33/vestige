@@ -24,7 +24,19 @@ use std::sync::OnceLock;
 // INPUT / OUTPUT CONTRACT
 // =========================================================================
 
-#[derive(Debug, Clone, Deserialize)]
+/// Exact edge. `to` is a turn id. The ranker follows it after exact-token
+/// selection and does not read either side's words.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct TurnLink {
+    pub kind: String,
+    pub to: String,
+    /// Turns that share this identity. `0` means one pair.
+    #[serde(default)]
+    pub degree: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Turn {
     #[serde(default)]
@@ -33,6 +45,13 @@ pub struct Turn {
     #[serde(default)]
     pub role: String,
     pub content: String,
+    /// Recorded edges. Empty on raw benchmark text. Reply, order, and session
+    /// links are written from position inside the ranker.
+    #[serde(default)]
+    pub links: Vec<TurnLink>,
+    /// FSRS stability in days. Zero means unset. Used only to break an exact tie.
+    #[serde(default)]
+    pub stability: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,6 +208,10 @@ pub struct QueryIntent {
     pub sniper_how_many: bool,
     pub sniper_where: bool,
     pub sniper_why: bool,
+    pub is_event_sequence: bool,
+    /// The query asks for a task whose answer should obey stored imperative rules,
+    /// even when those rules share no content words with the question.
+    pub task_under_rules: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,6 +228,9 @@ pub struct RankResult {
     pub intent: QueryIntent,
     pub sessions: Vec<RankedItem>,
     pub turns: Vec<RankedItem>,
+    /// Stratified governing channel: standing imperative policies that apply to the query
+    /// without consuming episodic `sessions` or `turns` top-k slots.
+    pub standing_rules: Vec<RankedItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -236,15 +262,15 @@ const STOPWORDS: &[&str] = &[
     "wasnt", "we", "were", "werent", "what", "when", "where", "which", "while", "who", "whom",
     "why", "will", "with", "wont", "would", "wouldnt", "you", "your", "youre", "yours",
     "yourself", "yourselves", "also", "really", "yeah", "yes", "oh", "ok", "okay", "lets",
-    "got", "get", "gets", "getting", "go", "going", "gone", "went", "one", "much", "many",
+    "got", "get", "gets", "getting", "go", "going", "gone", "much", "many",
     "lot", "lots", "thing", "things", "something", "anything", "everything", "kind", "sort",
-    "way", "well", "even", "still", "ever", "may", "might", "must", "shall", "us", "let",
-    "make", "made", "know", "think", "tell", "told", "say", "said", "remind", "remember",
+    "well", "even", "still", "ever", "may", "might", "must", "shall", "us", "let",
+    "know", "think", "tell", "told", "say", "said", "remind", "remember",
     "conversation", "mentioned", "mention", "talked", "talk", "discussed", "chat",
     "actually", "sure", "great", "thanks", "thank", "hey", "hi", "hello", "wow", "like",
-    "want", "wanted", "need", "needed", "use", "used", "using", "try", "tried", "trying",
-    "new", "good", "help", "recently", "suggest", "recommend", "useful", "interesting", "past",
-    "times", "arent",
+    "want", "wanted", "need", "needed",
+    "help", "recently", "suggest", "recommend", "useful", "interesting",
+    "arent",
 ];
 
 /// Query-framing / request-boilerplate tokens that should not crush domain matches via coverage^2
@@ -255,32 +281,66 @@ const QUERY_FRAMING_WORDS: &[&str] = &[
     "comprehensive", "overview", "details", "detail", "aspects", "aspect", "different",
     "distinct", "various", "several", "ago", "days", "day", "weeks", "week", "months", "month",
     "years", "year", "earlier", "later", "throughout", "across",
+    "new", "good", "use", "used", "using", "make", "made", "went", "try", "tried", "trying",
+    "way", "past", "times",
 ];
 
 const PREF_MARKERS: &[&str] = &[
     "love", "loved", "loves", "loving", "favorite", "favourite", "favorites", "prefer",
     "prefers", "preferred", "preference", "obsessed", "enjoy", "enjoys", "enjoyed", "enjoying",
     "hobby", "hobbies", "passionate", "passion", "collect", "collecting", "hate", "hates",
-    "hated", "dislike", "dislikes", "avoid", "avoiding", "allergic", "diet", "vegan",
-    "vegetarian", "big fan", "fond", "crave", "addicted", "habit", "routine", "can't stand",
-    "i'd like", "would like", "rather", "instead of", "go-to",
+    "hated", "dislike", "dislikes", "avoid", "avoiding", "allergic", "allergy", "intolerant",
+    "lactose", "celiac", "pescatarian", "gluten-free", "gluten free", "dairy-free", "dairy free",
+    "diet", "vegan", "vegetarian", "big fan", "fan of", "fond", "crave", "addicted", "habit",
+    "routine", "can't stand", "cannot stand", "rather", "instead of",
+    "go-to", "my usual", "i usually", "i tend to", "i'm into", "im into", "i've been into",
+    // Exclusion and contrast. Bare "only" is a stopword and is not a unigram marker;
+    // exclusive preference is the constraint phrase, not every occurrence of the word.
+    "solely", "exclusively", "stick with", "stick to", "switched to", "too bitter", "i only",
+    "only ever", "only use", "only want", "only like", "only drink", "only eat", "only buy",
+    "only wear",
+    // Implicit personal constraints. Phrases, not the stopword "only".
+    "i don't want", "i do not want", "i won't", "i will not", "rather than", "no longer",
+    "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "can't drink",
+    "cannot drink", "don't eat", "do not eat", "don't drink", "do not drink", "never eat",
+    "never drink", "stay away from", "steer clear of", "leave out", "keep out",
+    "i'd prefer", "so i prefer", "trying to keep", "keep it simple", "keep it lightweight",
+    "without compromising", "avoid using",
+];
+
+const HARD_CONSTRAINT_MARKERS: &[&str] = &[
+    "allergic", "allergy", "intolerant", "lactose", "celiac", "vegan", "vegetarian",
+    "pescatarian", "gluten-free", "gluten free", "dairy-free", "dairy free", "kosher", "halal",
+    "avoid", "avoiding", "can't stand", "cannot stand", "solely", "exclusively", "stick with",
+    "stick to", "switched to", "too bitter", "i only", "only ever", "only use", "only want",
+    "only like", "only drink", "only eat", "only buy", "only wear", "i don't want",
+    "i do not want", "i won't", "i will not", "rather than", "instead of", "no longer",
+    "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "can't drink",
+    "cannot drink", "don't eat", "do not eat", "don't drink", "do not drink", "never eat",
+    "never drink", "stay away from", "steer clear of", "leave out", "keep out",
 ];
 
 const PREF_QUERY_CUES: &[&str] = &[
     "what kind of", "what type of", "what sort of", "recommend", "suggest", "suggestion",
     "prefer", "preference", "favorite", "favourite", "would i like", "would i enjoy",
-    "should i get", "should i try", "should i buy", "gift", "present for", "suitable for me",
+    "should i get", "should i try", "should i buy", "should i choose", "should i pick",
+    "should i use", "should i watch", "should i read", "should i cook", "should i make",
+    " gift ", " gifts ", "present for", "suitable for me", "suited to", "tailored to",
     "how do i like", "any ideas", "any tips", "ideas for", "tips for", "advice on",
     "can you suggest", "what should i", "something i", "i might like", "i would like",
+    "what would be a good", "what are some good", "help me pick", "help me find",
     "go-to", "best for me", "fit my", "match my", "based on my", "steps would you",
-    "help me set up", "serve",
+    "help me set up", " serve ",
+    // Personal planning, not a favorite-word lookup.
+    "how should i", "help me plan", "walk me through", "help me decide", "help me choose",
+    "help me figure", "what should i do",
 ];
 
 const CURRENT_STATE_CUES: &[&str] = &[
-    "currently", "current ", "right now", " now", "now?", "latest", "most recent",
+    "currently", "current ", "right now", " now ", "latest", "most recent",
     "most recently", "still ", "anymore", "any more", "end up", "ended up", "these days",
     "at the moment", "where is my", "what is my", "who is my", "where do i", "what do i",
-    "do i still", "did i end", "nowadays", "updated", "new ", "changed",
+    "do i still", "did i end", "nowadays", " updated ", " new ",
 ];
 
 const ASSISTANT_ATTRIBUTION_CUES: &[&str] = &[
@@ -288,20 +348,41 @@ const ASSISTANT_ATTRIBUTION_CUES: &[&str] = &[
     "did you", "your recommendation", "your suggestion", "you wrote", "you said",
     "you provided", "you listed", "you recommend", "you shared", "you came up",
     "you helped", "you explained", "you described", "you named", "you created",
-    "remind me", "our previous conversation", "our previous chat", "our conversation",
-    "we discussed", "we talked", "previous chat", "last time we", "earlier you",
+    "remind me", "earlier you",
     "you were telling", "you advised", "you calculated", "you found", "you picked",
 ];
 
+const COLLECTIVE_CHAT_CUES: &[&str] = &[
+    "our previous conversation", "our previous chat", "our conversation",
+    "we discussed", "we talked", "previous chat", "last time we",
+];
+
+const USER_INITIATIVE_CUES: &[&str] = &[
+    "i brought up", "did i mention", "i told you", "my instruction",
+    "did i ", "what did i", "when did i", "where did i", "who did i",
+    "i mentioned", "i shared", "i asked", "i said",
+];
+
+const SUMMARY_REQUEST_CUES: &[&str] = &[
+    "summary of", "summarize", "everything we",
+];
+
+const TIMELINE_CUES: &[&str] = &[
+    "order in which", "chronological", "timeline of", "first to last",
+    "earliest to latest", "i brought up",
+];
+
 const USER_ATTRIBUTION_CUES: &[&str] = &[
-    " i ", "i'", " my ", "my ", " me ", " me?", "did i", "do i", "have i", "was i", "am i",
-    "what should i", "i've", "i'm",
+    " i ", " i'm ", " i've ", " i'd ", " i'll ", " my ", " me ", "did i", "do i", "have i",
+    "was i", "am i", "what should i", "i brought up", "did i mention", "my instruction",
+    "i told you",
 ];
 
 const MULTI_HOP_CUES: &[&str] = &[
     " both ", " and ", " also ", " in common", " together", " same ", " as well",
     " which of", " between ", " total", " combined", " altogether", " how many", " all the ",
-    " each ",
+    " each ", " how much", " across ", " compare", " versus", " vs ", " two different",
+    " three different", " how many different", " in total",
 ];
 
 const INFERENCE_CUES: &[&str] = &[
@@ -309,10 +390,49 @@ const INFERENCE_CUES: &[&str] = &[
     "traits", "what might", "would be", "be interested", "is it possible", "kind of person",
 ];
 
-const TEMPORAL_CUES: &[&str] = &[
-    "when ", "how long", "how many days", "how many weeks", "how many months",
-    "how many years", "before ", "after ", "first ", "last ", " ago", "date", "which year",
-    "what year", "what month", "earlier", "later", "since ",
+const WHEN_INTERROGATIVE_CUES: &[&str] = &[
+    "when did ", "when didn't ", "when didnt ",
+    "when was ", "when wasn't ", "when wasnt ",
+    "when were ", "when weren't ", "when werent ",
+    "when is ", "when isn't ", "when isnt ",
+    "when are ", "when aren't ", "when arent ",
+    "when will ", "when won't ", "when wont ",
+    "when does ", "when doesn't ", "when doesnt ",
+    "when do ", "when don't ", "when dont ",
+    "when has ", "when hasn't ", "when hasnt ",
+    "when have ", "when haven't ", "when havent ",
+    "when had ", "when hadn't ", "when hadnt ",
+    "when can ", "when can't ", "when cant ", "when cannot ",
+];
+
+const TEMPORAL_REST_CUES: &[&str] = &[
+    "how long", "how many days", "how many weeks", "how many months",
+    "how many years", "before ", "after ", "first ", "last ", " ago ", " date ", " dates ",
+    "which year", "what year", "what month", " earlier ", " later ", "since ",
+];
+
+/// Downstream tasks: the user wants an answer produced (a procedure, list,
+/// recommendation, calculation, or draft), so stored imperative rules apply.
+/// Episodic/factual recall ("when did", "when was", "what did") is excluded in `classify`.
+const TASK_UNDER_RULES_CUES: &[&str] = &[
+    "how should", "how do i", "how can i", "how to ",
+    "what are some", "what can you", "what should", "what steps",
+    "can you", "could you", "would you",
+    "help me", "walk me through", "show me",
+    "recommend", "suggest", " i should",
+    "should i ", "shouldn't i ", "shouldnt i ",
+    "be prepared to", "common responses", "best practices",
+    "outline ", "draft ", "write a ", "format ", "calculate ", "compute ",
+];
+
+const RECALL_NOT_TASK_CUES: &[&str] = &[
+    "what did", "where did", "who did", "when did", "why did", "how did",
+    "when was", "when were", "where was", "who was", "how many", "how much did", "how long",
+    "did i", "did you", "have i", "had i", "you said", "you told", "you mentioned",
+    "you recommended", "you suggested",
+    "order in which", "chronological", "timeline of", "first to last", "earliest to latest",
+    "summary of", "summarize", "everything we", "throughout our", "across our",
+    "has developed", "have developed", "i brought up", "i mentioned",
 ];
 
 const ANAPHORS: &[&str] = &[
@@ -330,15 +450,15 @@ const CONTINUATIONS: &[&str] = &[
 const HYPERNYM_LATTICE: &[(&str, &[&str])] = &[
     ("CULINARY", &["sourdough", "croissant", "baking", "bake", "baker", "bread", "loaf", "recipe", "dinner", "lunch", "breakfast", "vegan", "vegetarian", "pescatarian", "roast", "chef", "cook", "cooking", "kitchen", "cuisine", "meal", "dining", "restaurant", "food", "foodie", "dish", "spice", "pasta", "cheese", "dessert", "chocolate", "pastry", "culinary", "pizza", "sushi", "taco", "burger", "salad", "soup", "grill", "bbq", "cake", "cookie", "appliance", "appliances", "smoker", "fryer", "blender", "microwave", "toaster", "fridge", "refrigerator", "oven", "stove", "ingredient", "ingredients", "produce", "homegrown", "harvest"]),
     ("BEVERAGE", &["coffee", "espresso", "latte", "cappuccino", "roastery", "bean", "brew", "brewing", "tea", "matcha", "chai", "cafe", "barista", "aeropress", "pourover", "wine", "beer", "cocktail", "whiskey", "smoothie", "juice"]),
-    ("OUTDOORS", &["hike", "hiking", "trail", "kayak", "kayaking", "camping", "camp", "tent", "backpack", "backpacking", "outdoor", "outdoors", "gear", "park", "wilderness", "climb", "climbing", "mountain", "beach", "lake", "fishing", "nature", "roadtrip"]),
-    ("FITNESS", &["gym", "weight", "workout", "running", "runner", "run", "jog", "jogging", "cycling", "bike", "bicycle", "swim", "swimming", "triathlon", "marathon", "5k", "10k", "exercise", "cardio", "fitness", "yoga", "pilates", "crossfit", "training", "race", "tournament", "competition", "athletic", "athletics"]),
-    ("VISUAL_ART", &["painting", "paint", "acrylic", "watercolor", "watercolour", "oil", "sketch", "sketching", "draw", "drawing", "pottery", "ceramic", "clay", "studio", "sculpture", "gallery", "canvas", "portrait", "landscape", "art", "artistic", "artist", "medium", "easel", "craft", "knitting", "sewing", "exhibition"]),
-    ("MUSIC", &["guitar", "piano", "vinyl", "concert", "festival", "album", "spotify", "band", "jazz", "rock", "classical", "instrument", "drum", "bass", "violin", "orchestra", "musician", "song", "singing", "vocalist", "music", "playlist", "podcast", "streaming", "dance", "ballet", "salsa"]),
+    ("OUTDOORS", &["hike", "hiking", "trail", "kayak", "kayaking", "camping", "camp", "tent", "backpack", "backpacking", "outdoor", "outdoors", "gear", "park", "wilderness", "climb", "climbing", "mountain", "beach", "lake", "fishing", "nature", "roadtrip", "activity", "activities", "hobby", "hobbies"]),
+    ("FITNESS", &["gym", "weight", "workout", "running", "runner", "run", "jog", "jogging", "cycling", "bike", "bicycle", "swim", "swimming", "triathlon", "marathon", "5k", "10k", "exercise", "cardio", "fitness", "yoga", "pilates", "crossfit", "training", "race", "tournament", "competition", "athletic", "athletics", "activity", "activities", "hobby", "hobbies"]),
+    ("VISUAL_ART", &["painting", "paint", "acrylic", "watercolor", "watercolour", "oil", "sketch", "sketching", "draw", "drawing", "pottery", "ceramic", "clay", "studio", "sculpture", "gallery", "canvas", "portrait", "landscape", "art", "artistic", "artist", "medium", "easel", "craft", "knitting", "sewing", "exhibition", "activity", "activities", "hobby", "hobbies"]),
+    ("MUSIC", &["guitar", "piano", "vinyl", "concert", "festival", "album", "spotify", "band", "jazz", "rock", "classical", "instrument", "clarinet", "flute", "cello", "saxophone", "trumpet", "drum", "bass", "violin", "orchestra", "musician", "song", "singing", "vocalist", "music", "playlist", "podcast", "streaming", "dance", "ballet", "salsa", "hobby", "hobbies"]),
     ("PETS", &["dog", "puppy", "cat", "kitten", "vet", "pet", "rescue", "adopt", "adoption", "animal", "retriever", "breed", "leash", "veterinary", "veterinarian", "fish", "bird", "hamster", "horse"]),
     ("BOOKS", &["book", "reading", "read", "novel", "author", "fiction", "nonfiction", "memoir", "library", "bookstore", "kindle", "audiobook", "literature", "poetry", "poem", "writing", "writer", "publish", "publication", "publications", "conference", "conferences", "paper", "papers", "article", "articles", "proceedings", "journal", "journals"]),
     ("GAMING", &["game", "gaming", "gamer", "playstation", "nintendo", "switch", "xbox", "steam", "rpg", "boardgame", "tabletop", "console", "chess", "puzzle", "videogame"]),
     ("TRAVEL", &["travel", "traveling", "flight", "airline", "trip", "vacation", "hotel", "hostel", "explore", "exploring", "passport", "tourist", "destination", "luggage", "itinerary", "cruise", "resort", "abroad", "museum", "theater"]),
-    ("PHOTOGRAPHY", &["photo", "photography", "camera", "lens", "shoot", "canon", "nikon", "sony", "shutter", "aperture", "exposure", "darkroom", "instagram"]),
+    ("PHOTOGRAPHY", &["photo", "photography", "camera", "lens", "shoot", "canon", "nikon", "sony", "shutter", "aperture", "exposure", "darkroom", "instagram", "mirrorless", "tripod"]),
     ("GARDENING", &["garden", "gardening", "plant", "indoor", "succulent", "flower", "flowers", "soil", "pruning", "seed", "greenhouse", "botany", "tomato", "herb", "herbs", "homegrown", "harvest", "harvested", "ingredient", "ingredients", "produce", "basil", "mint", "pepper"]),
     ("TECH", &["python", "rust", "javascript", "typescript", "compiler", "react", "server", "bug", "repo", "code", "coding", "programmer", "programming", "software", "developer", "api", "database", "algorithm", "linux", "terminal", "github", "laptop", "computer", "phone", "app", "apps", "application", "applications", "gadget", "accessory", "accessories", "charger", "charging", "charge", "cable", "case", "protector", "earbuds", "headphones", "adapter", "dongle", "battery", "power", "bank", "wireless", "security", "auth", "authentication", "encryption", "token", "flask", "django", "fastapi", "gunicorn", "docker", "deployment", "deploy", "queue", "backoff", "ratelimit", "retry", "retries", "latency", "cache", "caching"]),
     ("VEHICLES", &["car", "vehicle", "truck", "sedan", "ev", "electric", "drive", "driving", "engine", "mechanic", "commute", "commuting", "train", "subway", "transit", "highway", "roadtrip", "motorcycle"]),
@@ -349,7 +469,7 @@ const HYPERNYM_LATTICE: &[(&str, &[&str])] = &[
     ("COMMUNITY", &["charity", "volunteer", "volunteering", "fundraiser", "fundraising", "donation", "donate", "shelter", "nonprofit", "cause", "awareness", "community", "activism", "protest", "rescue"]),
     ("IDENTITY", &["lgbtq", "queer", "gay", "lesbian", "pride", "trans", "transgender", "gender", "identity", "support", "transition", "religion", "faith", "church", "spiritual", "mentor"]),
     ("EDUCATION", &["school", "college", "university", "degree", "graduate", "graduation", "studying", "study", "exam", "class", "course", "professor", "campus", "student", "certification", "diploma", "lecture", "workshop", "major", "publication", "publications", "conference", "conferences", "paper", "papers", "journal"]),
-    ("CAREER", &["job", "career", "boss", "coworker", "interview", "offer", "resume", "promote", "promotion", "salary", "office", "remote", "work", "working", "firm", "client", "company", "manager", "project", "startup", "business", "profession", "occupation", "occupations", "vocation", "agency", "role", "roles", "milestone", "milestones", "buisiness", "contract", "specialist"]),
+    ("CAREER", &["job", "career", "boss", "coworker", "interview", "offer", "resume", "promote", "promotion", "salary", "office", "remote", "work", "working", "firm", "client", "company", "manager", "project", "startup", "business", "profession", "occupation", "occupations", "vocation", "agency", "role", "roles", "milestone", "milestones", "contract", "specialist"]),
     ("HOUSING", &["house", "apartment", "rent", "lease", "mortgage", "buy", "buying", "moving", "moved", "move", "neighborhood", "landlord", "bedroom", "renovate", "furniture", "decor", "home"]),
     ("SCREEN", &["movie", "film", "cinema", "tv", "show", "series", "episode", "netflix", "actor", "director", "watch", "watching", "documentary", "anime", "comedy", "sitcom", "special", "specials"]),
     ("FINANCE", &["budget", "money", "save", "saving", "invest", "investment", "stock", "crypto", "deposit", "loan", "debt", "retirement", "expense", "bank", "tax"]),
@@ -395,8 +515,8 @@ const SPATIAL_WORDS: &[&str] = &[
 ];
 
 const CAUSAL_WORDS: &[&str] = &[
-    "because", "since", "so that", "due to", "wanted", "needed", "decided", "helped",
-    "inspired", "to help", "reason", "in order", "purpose", "aim",
+    " because ", " since ", " so that ", " due to ", " wanted ", " needed ", " decided ", " helped ",
+    " inspired ", " to help ", " reason ", " in order ", " purpose ", " aim ", " aims ", " aimed ",
 ];
 
 fn stopwords() -> &'static HashSet<&'static str> {
@@ -452,8 +572,80 @@ fn clean_contraction(raw_lower: &str) -> &str {
     trimmed
 }
 
+fn collapse_thousands_commas(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    for (i, ch) in text.char_indices() {
+        if ch == ','
+            && i > 0
+            && bytes[i - 1].is_ascii_digit()
+            && i + 3 < bytes.len()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+            && (i + 4 == bytes.len() || !bytes[i + 4].is_ascii_digit())
+        {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Strip an ASCII `v` only when it introduces a dotted version (`v5.3.0` -> `5.3.0`,
+/// `(v2.1)` -> `(2.1)`). The `v` must be at the start or after a non-alphanumeric,
+/// and must be followed by digits, a dot, and a digit. Bare `v8` / `v2` / `v3` stay
+/// intact, and `dev5.3` is left alone because its `v` is inside a word.
+fn strip_dotted_version_v(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut prev_non_alnum = true;
+    for (i, ch) in text.char_indices() {
+        if ch == 'v' && prev_non_alnum {
+            let rest = &bytes[i + 1..];
+            let mut j = 0;
+            while j < rest.len() && rest[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > 0 && j + 1 < rest.len() && rest[j] == b'.' && rest[j + 1].is_ascii_digit() {
+                continue;
+            }
+        }
+        out.push(ch);
+        prev_non_alnum = !ch.is_alphanumeric();
+    }
+    out
+}
+
+fn emit_token(out: &mut Vec<String>, tok: &str) {
+    match tok {
+        "2fa" | "twofa" | "twofactor" => {
+            out.push("two".to_string());
+            out.push("factor".to_string());
+        }
+        "mfa" | "multifactor" => {
+            out.push("multi".to_string());
+            out.push("factor".to_string());
+        }
+        _ => out.push(tok.to_string()),
+    }
+}
+
+fn fold_two_factor(tokens: &mut [String]) {
+    let mut i = 0;
+    while i + 1 < tokens.len() {
+        if tokens[i] == "2" && (tokens[i + 1] == "factor" || tokens[i + 1] == "factors") {
+            tokens[i] = "two".to_string();
+        } else if tokens[i] == "2" && tokens[i + 1] == "fa" {
+            tokens[i] = "two".to_string();
+            tokens[i + 1] = "factor".to_string();
+        }
+        i += 1;
+    }
+}
+
 fn raw_tokens(text: &str) -> Vec<String> {
-    let lower = text.to_lowercase();
+    let lower = strip_dotted_version_v(&collapse_thousands_commas(&text.to_lowercase()));
     let mut out = Vec::new();
     for piece in lower.split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’') {
         if piece.is_empty() {
@@ -461,24 +653,23 @@ fn raw_tokens(text: &str) -> Vec<String> {
         }
         let cleaned = clean_contraction(piece);
         if cleaned.contains('\'') || cleaned.contains('’') {
-            // Handle contractions like don't -> dont, didn't -> didnt, can't -> cant cleanly;
-            // non-contraction apostrophes like d'aulps split cleanly into sub-words.
             if cleaned.ends_with("n't") || cleaned.ends_with("n’t") {
                 let joined: String = cleaned.chars().filter(|&c| c != '\'' && c != '’').collect();
                 if !joined.is_empty() {
-                    out.push(joined);
+                    emit_token(&mut out, &joined);
                 }
             } else {
                 for sub in cleaned.split(|c: char| c == '\'' || c == '’') {
                     if !sub.is_empty() {
-                        out.push(sub.to_string());
+                        emit_token(&mut out, sub);
                     }
                 }
             }
         } else if !cleaned.is_empty() {
-            out.push(cleaned.to_string());
+            emit_token(&mut out, cleaned);
         }
     }
+    fold_two_factor(&mut out);
     out
 }
 
@@ -494,23 +685,119 @@ const STARTER_STOP: &[&str] = &[
     "sure", "certainly", "absolutely", "great", "thanks", "thank", "hi", "hey",
     "hello", "if", "so", "but", "and", "or",
     "my", "your", "our", "his", "her", "their", "its", "i", "we", "you", "they", "he", "she", "it",
+    "well", "also", "just", "now", "then", "still", "even", "maybe", "perhaps", "actually",
+    "however", "though", "although", "because", "since", "after", "before", "during", "while",
+    "today", "yesterday", "tomorrow", "tonight", "always", "never", "please", "let", "lets",
+    "not", "only", "very", "really", "wow", "oh", "okay", "ok", "right", "true", "same",
+    "another", "other", "more", "some", "many", "most", "every", "each", "both", "all", "any",
+    "here", "from", "with", "into", "over", "under", "about", "again", "once", "twice",
 ];
 
 const TITLE_CONNECTORS: &[&str] = &["and", "of", "the", "for", "in", "on", "at"];
 
-/// Extract contiguous capitalized proper-noun entity phrases ("\u{1}ent:local_h", "\u{1}ent:kiss_and_tell").
+/// Extract leading document title/header line when a multi-line passage starts with a compact
+/// header (`"{Title}\n{Body}"`, excluding `[BLIP caption]`), stripping trailing parenthetical
+/// disambiguators (`"Armada (novel)"` -> `"Armada"`).
+fn prose_without_blip(text: &str) -> &str {
+    text.split_once("\n[BLIP caption]").map(|(body, _)| body).unwrap_or(text)
+}
+
+fn split_blip_caption(text: &str) -> (&str, Option<&str>) {
+    if let Some((body, cap)) = text.split_once("\n[BLIP caption]") {
+        let trimmed = cap.trim();
+        (body, (!trimmed.is_empty()).then_some(trimmed))
+    } else {
+        (text, None)
+    }
+}
+
+fn extract_header_titles(text: &str) -> Option<(&str, &str)> {
+    let prose = prose_without_blip(text);
+    let (first_line, rest) = prose.split_once('\n')?;
+    if rest.trim().is_empty() {
+        return None;
+    }
+    let header = first_line.trim();
+    if header.is_empty()
+        || header.len() > 96
+        || header.starts_with('[')
+        || header.starts_with("```")
+        || header.ends_with(['.', '?', '!', ';'])
+    {
+        return None;
+    }
+    let word_count = header.split_whitespace().count();
+    if !(1..=10).contains(&word_count) {
+        return None;
+    }
+    if !header.chars().next().is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+        return None;
+    }
+    let core = match header.find(" (") {
+        Some(idx) if header.ends_with(')') && idx > 0 => header[..idx].trim(),
+        _ => header,
+    };
+    if core.is_empty() { None } else { Some((header, core)) }
+}
+
+fn extract_header_title(text: &str) -> Option<&str> {
+    extract_header_titles(text).map(|(_, core)| core)
+}
+
+fn norm_span_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect()
+}
+
+fn hash_u32_slice(tokens: &[u32]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &tok in tokens {
+        h ^= u64::from(tok);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Extract contiguous capitalized proper-noun entity phrases ("\u{1}ent:local_h", "\u{1}ent:kiss_and_tell")
+/// plus mid-clause single-token proper names ("\u{1}ent:ghana", "\u{1}ent:melanie") and header titles.
 /// Preserves short single-letter entities ("H" in "Local H"), capitalized prepositions ("For Against"),
 /// and title-case connectors ("Kiss and Tell", "Lord of the Rings").
 fn proper_entity_tokens(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let mut run: Vec<String> = Vec::new();
+    if let Some(core_title) = extract_header_title(text) {
+        let parts: Vec<String> = core_title
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase())
+            .collect();
+        if !parts.is_empty() && parts.len() <= 6 {
+            out.push(format!("\u{1}ent:{}", parts.join("_")));
+        }
+    }
 
-    let flush_run = |run: &mut Vec<String>, out: &mut Vec<String>| {
+    let mut run: Vec<String> = Vec::new();
+    let mut run_started_clause = true;
+    let mut at_clause_start;
+
+    let flush_run = |run: &mut Vec<String>, started_clause: bool, out: &mut Vec<String>| {
         // Trim trailing lowercase connectors if the run ended on a preposition like "Kiss and"
         while run.last().is_some_and(|s| s.starts_with('\u{2}')) {
             run.pop();
         }
         if run.len() >= 2 {
+            for part in run.iter() {
+                if !part.starts_with('\u{2}')
+                    && part.len() >= 3
+                    && !STARTER_STOP.contains(&part.as_str())
+                    && !stopwords().contains(part.as_str())
+                    && !MONTHS.contains(&part.as_str())
+                    && !WEEKDAYS.contains(&part.as_str())
+                {
+                    out.push(format!("\u{1}ent:{part}"));
+                }
+            }
             for win in run.windows(2) {
                 if !win[0].starts_with('\u{2}') && !win[1].starts_with('\u{2}') {
                     out.push(format!("\u{1}ent:{}_{}", win[0], win[1]));
@@ -520,46 +807,68 @@ fn proper_entity_tokens(text: &str) -> Vec<String> {
                 let clean_parts: Vec<&str> = run.iter().map(|s| s.trim_start_matches('\u{2}')).collect();
                 out.push(format!("\u{1}ent:{}", clean_parts.join("_")));
             }
+        } else if run.len() == 1 && !started_clause {
+            let tok = &run[0];
+            if tok.len() >= 3
+                && !STARTER_STOP.contains(&tok.as_str())
+                && !stopwords().contains(tok.as_str())
+                && !MONTHS.contains(&tok.as_str())
+                && !WEEKDAYS.contains(&tok.as_str())
+            {
+                out.push(format!("\u{1}ent:{tok}"));
+            }
         }
         run.clear();
     };
 
-    for raw_word in text.split_whitespace() {
-        let ends_clause = raw_word.ends_with(['.', '?', '!', ',', ';', ':']);
-        let w = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’' && c != '-');
-        if w.is_empty() {
-            flush_run(&mut run, &mut out);
-            continue;
-        }
-        let clean = clean_contraction(w);
-        let first_upper = clean.chars().next().is_some_and(|c| c.is_ascii_uppercase());
-        let lower = clean.to_lowercase();
-        let norm: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
-        if first_upper && !norm.is_empty() && !STARTER_STOP.contains(&norm.as_str()) {
-            run.push(norm);
-        } else if !run.is_empty() && TITLE_CONNECTORS.contains(&norm.as_str()) {
-            // Allow up to 2 title connectors inside an active proper-noun chain (e.g. "Lord of the Rings").
-            let trailing_conns = run.iter().rev().take_while(|s| s.starts_with('\u{2}')).count();
-            if trailing_conns < 2 {
-                run.push(format!("\u{2}{norm}"));
-            } else {
-                flush_run(&mut run, &mut out);
+    for line in text.lines() {
+        at_clause_start = true;
+        for raw_word in line.split_whitespace() {
+            let ends_clause = raw_word.ends_with(['.', '?', '!', ',', ';', ':']);
+            let starts_quote = raw_word.starts_with(['"', '\'', '“', '‘', '(', '[']);
+            let w = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’' && c != '-');
+            if w.is_empty() {
+                flush_run(&mut run, run_started_clause, &mut out);
+                at_clause_start = true;
+                continue;
             }
-        } else {
-            flush_run(&mut run, &mut out);
+            let clean = clean_contraction(w);
+            let first_upper = clean.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+            let all_upper_acronym = clean.len() >= 2
+                && clean.len() <= 6
+                && clean.chars().all(|c| c.is_ascii_uppercase());
+            let lower = clean.to_lowercase();
+            let norm: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
+            if first_upper && !norm.is_empty() && !STARTER_STOP.contains(&norm.as_str()) {
+                if run.is_empty() {
+                    run_started_clause = (at_clause_start || starts_quote) && !all_upper_acronym;
+                }
+                run.push(norm);
+            } else if !run.is_empty() && TITLE_CONNECTORS.contains(&norm.as_str()) {
+                // Allow up to 2 title connectors inside an active proper-noun chain (e.g. "Lord of the Rings").
+                let trailing_conns = run.iter().rev().take_while(|s| s.starts_with('\u{2}')).count();
+                if trailing_conns < 2 {
+                    run.push(format!("\u{2}{norm}"));
+                } else {
+                    flush_run(&mut run, run_started_clause, &mut out);
+                }
+            } else {
+                flush_run(&mut run, run_started_clause, &mut out);
+            }
+            if ends_clause {
+                flush_run(&mut run, run_started_clause, &mut out);
+                at_clause_start = raw_word.ends_with(['.', '?', '!', ';', ':']);
+            } else {
+                at_clause_start = false;
+            }
         }
-        if ends_clause {
-            flush_run(&mut run, &mut out);
-        }
+        flush_run(&mut run, run_started_clause, &mut out);
     }
-    flush_run(&mut run, &mut out);
     out
 }
 
-/// Deterministic suffix stripper (Porter-style + small irregular verb lemma map, no model).
-pub fn stem(word: &str) -> String {
-    let w = word.to_lowercase();
-    let irregular = match w.as_str() {
+fn irregular_lemma(w: &str) -> Option<&'static str> {
+    match w {
         "drew" | "drawn" => Some("draw"),
         "felt" => Some("feel"),
         "bought" => Some("buy"),
@@ -587,13 +896,334 @@ pub fn stem(word: &str) -> String {
         "broke" | "broken" => Some("break"),
         "drove" | "driven" => Some("drive"),
         "slept" => Some("sleep"),
+        "career" | "careers" => Some("career"),
         _ => None,
-    };
-    if let Some(base) = irregular {
-        return base.to_string();
     }
-    if w.len() <= 3 || !w.is_ascii() {
+}
+
+fn expand_abbrev<'a>(w: &'a str) -> &'a str {
+    match w {
+        "edu" => "education",
+        "fam" => "family",
+        "pic" | "pics" => "picture",
+        "uni" | "unis" => "university",
+        "congrats" => "congratulations",
+        "info" => "information",
+        "auth" | "authn" => "authentication",
+        "authz" => "authorization",
+        "config" | "configs" | "cfg" => "configuration",
+        "repo" | "repos" => "repository",
+        "db" | "dbs" => "database",
+        "app" | "apps" => "application",
+        "env" | "envs" => "environment",
+        "bday" | "bdays" => "birthday",
+        _ => w,
+    }
+}
+
+fn uk_exact(w: &str) -> Option<&'static str> {
+    Some(match w {
+        "travelling" => "traveling",
+        "travelled" => "traveled",
+        "traveller" => "traveler",
+        "travellers" => "travelers",
+        "cancelled" => "canceled",
+        "cancelling" => "canceling",
+        "modelling" => "modeling",
+        "modelled" => "modeled",
+        "labelled" => "labeled",
+        "labelling" => "labeling",
+        "jewellery" => "jewelry",
+        "aluminium" => "aluminum",
+        "programme" => "program",
+        "programmes" => "programs",
+        "grey" => "gray",
+        "greys" => "grays",
+        "greyed" => "grayed",
+        "greying" => "graying",
+        "greyer" => "grayer",
+        "greyest" => "grayest",
+        "greyish" => "grayish",
+        "catalogue" => "catalog",
+        "catalogues" => "catalogs",
+        "catalogued" => "cataloged",
+        "cataloguing" => "cataloging",
+        "dialogue" => "dialog",
+        "dialogues" => "dialogs",
+        "dialogued" => "dialoged",
+        "dialoguing" => "dialoging",
+        "practise" => "practice",
+        "practises" => "practices",
+        "practised" => "practiced",
+        "practising" => "practicing",
+        "licencing" => "licensing",
+        _ => return None,
+    })
+}
+
+fn uk_suffix(w: &str) -> Option<String> {
+    const PAIRS: &[(&str, &str)] = &[
+        ("centring", "centering"),
+        ("centred", "centered"),
+        ("centres", "centers"),
+        ("centre", "center"),
+        ("theatres", "theaters"),
+        ("theatre", "theater"),
+        ("metres", "meters"),
+        ("metre", "meter"),
+        ("litres", "liters"),
+        ("litre", "liter"),
+        ("fibres", "fibers"),
+        ("fibre", "fiber"),
+        ("defencelessly", "defenselessly"),
+        ("defenceless", "defenseless"),
+        ("defences", "defenses"),
+        ("defence", "defense"),
+        ("offencelessly", "offenselessly"),
+        ("offenceless", "offenseless"),
+        ("offences", "offenses"),
+        ("offence", "offense"),
+        ("licences", "licenses"),
+        ("licenced", "licensed"),
+        ("licencee", "licensee"),
+        ("licence", "license"),
+    ];
+    for (uk, us) in PAIRS {
+        if let Some(prefix) = w.strip_suffix(uk) {
+            if prefix.is_empty()
+                || (prefix.len() <= 12 && prefix.bytes().all(|b| b.is_ascii_alphabetic()))
+            {
+                return Some(format!("{prefix}{us}"));
+            }
+        }
+    }
+    None
+}
+
+fn our_tail(tail: &str) -> bool {
+    matches!(
+        tail,
+        "" | "s"
+            | "ed"
+            | "ing"
+            | "ings"
+            | "er"
+            | "ers"
+            | "able"
+            | "ite"
+            | "ites"
+            | "ful"
+            | "fully"
+            | "less"
+            | "al"
+            | "ally"
+            | "ation"
+            | "hood"
+            | "hoods"
+    )
+}
+
+fn map_our(w: &str) -> Option<String> {
+    const ROOTS: &[&str] = &[
+        "neighbour", "behaviour", "flavour", "honour", "colour", "labour", "humour", "favour",
+    ];
+    let mut best: Option<(usize, String)> = None;
+    for root in ROOTS {
+        let mut from = 0;
+        while from < w.len() {
+            let Some(rel) = w[from..].find(root) else { break };
+            let i = from + rel;
+            let prefix = &w[..i];
+            let tail = &w[i + root.len()..];
+            let prefix_ok = prefix.is_empty() || prefix.bytes().all(|b| b.is_ascii_alphabetic());
+            if prefix_ok && our_tail(tail) && best.as_ref().is_none_or(|(n, _)| tail.len() > *n) {
+                let head = &root[..root.len() - 3];
+                best = Some((tail.len(), format!("{prefix}{head}or{tail}")));
+            }
+            from = i + 1;
+        }
+    }
+    best.map(|(_, s)| s)
+}
+
+fn map_yse(w: &str) -> Option<String> {
+    if w.len() < 6 {
+        return None;
+    }
+    let (base, us) = if let Some(b) = w.strip_suffix("ysing") {
+        (b, "yzing")
+    } else if let Some(b) = w.strip_suffix("ysed") {
+        (b, "yzed")
+    } else if let Some(b) = w.strip_suffix("yser") {
+        (b, "yzer")
+    } else if let Some(b) = w.strip_suffix("yse") {
+        (b, "yze")
+    } else {
+        return None;
+    };
+    const BASES: &[&str] = &[
+        "psychoanal", "electrol", "breathal", "hydrol", "paral", "catal", "pyrol", "anal", "dial",
+    ];
+    let ok = BASES.iter().any(|b| {
+        base == *b
+            || (base.ends_with(b)
+                && base.len() > b.len()
+                && base[..base.len() - b.len()].bytes().all(|c| c.is_ascii_alphabetic()))
+    });
+    if base.is_empty() || !ok {
+        return None;
+    }
+    Some(format!("{base}{us}"))
+}
+
+fn ise_blocked(lemma: &str) -> bool {
+    if lemma.len() < 4 {
+        return true;
+    }
+    if lemma.ends_with("wise")
+        || lemma.ends_with("prise")
+        || lemma.ends_with("vise")
+        || lemma.ends_with("oise")
+        || lemma.ends_with("uise")
+        || lemma.ends_with("aise")
+    {
+        return true;
+    }
+    matches!(
+        lemma,
+        "promise"
+            | "surprise"
+            | "exercise"
+            | "advise"
+            | "revise"
+            | "compromise"
+            | "enterprise"
+            | "supervise"
+            | "improvise"
+            | "paradise"
+            | "otherwise"
+            | "clockwise"
+            | "likewise"
+            | "franchise"
+            | "merchandise"
+            | "disguise"
+            | "bruise"
+            | "cruise"
+            | "raise"
+            | "praise"
+            | "noise"
+            | "poise"
+            | "choose"
+            | "chose"
+            | "house"
+            | "mouse"
+            | "practise"
+            | "advertise"
+            | "apprise"
+            | "arise"
+            | "chastise"
+            | "circumcise"
+            | "comprise"
+            | "demise"
+            | "despise"
+            | "devise"
+            | "disfranchise"
+            | "enfranchise"
+            | "excise"
+            | "incise"
+            | "premise"
+            | "reprise"
+            | "surmise"
+            | "televise"
+            | "precise"
+            | "concise"
+            | "expertise"
+            | "treatise"
+            | "sunrise"
+            | "moonrise"
+            | "rise"
+            | "uprise"
+            | "anise"
+            | "chemise"
+            | "valise"
+            | "cerise"
+            | "mortise"
+            | "tortoise"
+            | "porpoise"
+            | "liaise"
+    )
+}
+
+fn map_ise(w: &str) -> Option<String> {
+    if w.len() < 6 || !w.is_ascii() {
+        return None;
+    }
+    let (base, us) = if let Some(b) = w.strip_suffix("isations") {
+        (b, "izations")
+    } else if let Some(b) = w.strip_suffix("isation") {
+        (b, "ization")
+    } else if let Some(b) = w.strip_suffix("ising") {
+        (b, "izing")
+    } else if let Some(b) = w.strip_suffix("ised") {
+        (b, "ized")
+    } else if let Some(b) = w.strip_suffix("ises") {
+        // "irises" / "crises" are Latin plurals (base "ir" / "cr"), not UK -ise verbs.
+        if b.len() < 4 {
+            return None;
+        }
+        (b, "izes")
+    } else if let Some(b) = w.strip_suffix("ise") {
+        (b, "ize")
+    } else {
+        return None;
+    };
+    if base.is_empty() || ise_blocked(&format!("{base}ise")) {
+        return None;
+    }
+    Some(format!("{base}{us}"))
+}
+
+fn uk_to_us(w: &str) -> Option<String> {
+    if let Some(exact) = uk_exact(w) {
+        return Some(exact.to_string());
+    }
+    if let Some(hit) = uk_suffix(w) {
+        return Some(hit);
+    }
+    if let Some(hit) = map_our(w) {
+        return Some(hit);
+    }
+    if let Some(hit) = map_yse(w) {
+        return Some(hit);
+    }
+    map_ise(w)
+}
+
+fn strip_tech_major(w: &str) -> &str {
+    let b = w.as_bytes();
+    if !(4..=11).contains(&b.len()) {
         return w;
+    }
+    let last = b[b.len() - 1];
+    if !matches!(last, b'1'..=b'6') {
+        return w;
+    }
+    let head = &w[..w.len() - 1];
+    if head.bytes().all(|c| c.is_ascii_lowercase())
+        && matches!(
+            head,
+            "html" | "css" | "http" | "oauth" | "sqlite" | "python" | "ipv" | "webgl" | "vue"
+        )
+    {
+        head
+    } else {
+        w
+    }
+}
+
+fn classic_stem(w: &str) -> String {
+    if w.len() <= 3 || !w.is_ascii() {
+        return w.to_string();
     }
     let rules: &[(&str, &str, usize)] = &[
         ("ingly", "", 4),
@@ -615,7 +1245,7 @@ pub fn stem(word: &str) -> String {
         ("ly", "", 4),
         ("s", "", 3),
     ];
-    let mut out = w.clone();
+    let mut out = w.to_string();
     for (suf, rep, min) in rules {
         if let Some(base) = w.strip_suffix(suf) {
             if base.len() >= *min {
@@ -627,7 +1257,6 @@ pub fn stem(word: &str) -> String {
             }
         }
     }
-    // Undouble a final consonant pair left by -ing/-ed ("running" -> "run").
     let b = out.as_bytes();
     if b.len() >= 4 {
         let (x, y) = (b[b.len() - 1], b[b.len() - 2]);
@@ -635,11 +1264,29 @@ pub fn stem(word: &str) -> String {
             out.pop();
         }
     }
-    // Drop a silent final e so "bake"/"baking"/"baked" converge.
     if out.len() > 3 && out.ends_with('e') {
         out.pop();
     }
     out
+}
+
+/// Deterministic suffix stripper (Porter-style + irregular verb lemmas + conversational
+/// abbreviations + UK->US orthography + tech major version strip, zero model).
+pub fn stem(word: &str) -> String {
+    let lower = word.to_lowercase();
+    if let Some(base) = irregular_lemma(&lower) {
+        return base.to_string();
+    }
+    let expanded = expand_abbrev(&lower);
+    let normalized = uk_to_us(expanded).unwrap_or_else(|| expanded.to_string());
+    let surface = strip_tech_major(&normalized);
+    let stemmed = classic_stem(surface);
+    let again = strip_tech_major(&stemmed);
+    if again.len() == stemmed.len() {
+        stemmed
+    } else {
+        classic_stem(again)
+    }
 }
 
 // =========================================================================
@@ -697,10 +1344,21 @@ pub fn parse_date(s: &str) -> i64 {
         .unwrap_or(0)
 }
 
+fn season_code(month: u32) -> &'static str {
+    match month {
+        3..=5 => "SP",
+        6..=8 => "SU",
+        9..=11 => "FA",
+        _ => "WI",
+    }
+}
+
 fn calendar_tokens(ts: i64) -> Vec<String> {
     use chrono::Datelike;
     let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) else { return Vec::new() };
     let d = dt.date_naive();
+    let sc = season_code(d.month());
+    let sy = if d.month() == 12 { d.year() + 1 } else { d.year() };
     vec![
         d.day().to_string(),
         MONTHS[d.month0() as usize].to_string(),
@@ -709,41 +1367,211 @@ fn calendar_tokens(ts: i64) -> Vec<String> {
         format!("__DATE__{}_{:02}_{:02}", d.year(), d.month(), d.day()),
         format!("__YM__{}_{:02}", d.year(), d.month()),
         format!("__MONTH__{:02}", d.month()),
+        format!("__MD__{:02}_{:02}", d.month(), d.day()),
+        format!("__{}__{:02}", month_band(d.day()), d.month()),
+        format!("__YEAR__{}", d.year()),
+        format!("__SEASON__{sc}"),
+        format!("__SY__{}_{sc}", d.year()),
+        format!("__SY__{sy}_{sc}"),
     ]
 }
 
-fn month_index(tok: &str) -> Option<u32> {
-    let lower = tok.to_lowercase();
-    MONTHS.iter().position(|&m| m == lower).map(|i| i as u32 + 1)
+fn month_band(day: u32) -> &'static str {
+    if day <= 10 { "EARLY" } else if day >= 21 { "LATE" } else { "MID" }
+}
+
+fn month_index(tok: &str) -> Option<(u32, bool)> {
+    match tok {
+        "january" | "jan" => Some((1, false)),
+        "february" | "feb" => Some((2, false)),
+        "march" => Some((3, true)),
+        "mar" => Some((3, false)),
+        "april" | "apr" => Some((4, false)),
+        "may" => Some((5, true)),
+        "june" | "jun" => Some((6, false)),
+        "july" | "jul" => Some((7, false)),
+        "august" | "aug" => Some((8, false)),
+        "september" | "sep" | "sept" => Some((9, false)),
+        "october" | "oct" => Some((10, false)),
+        "november" | "nov" => Some((11, false)),
+        "december" | "dec" => Some((12, false)),
+        _ => None,
+    }
+}
+
+fn parse_day_token(tok: &str) -> Option<u32> {
+    let stripped = tok
+        .strip_suffix("st")
+        .or_else(|| tok.strip_suffix("nd"))
+        .or_else(|| tok.strip_suffix("rd"))
+        .or_else(|| tok.strip_suffix("th"))
+        .unwrap_or(tok);
+    if let Ok(n) = stripped.parse::<u32>() {
+        if (1..=31).contains(&n) {
+            return Some(n);
+        }
+    }
+    match tok {
+        "first" => Some(1),
+        "second" => Some(2),
+        "third" => Some(3),
+        "fourth" | "forth" => Some(4),
+        "fifth" => Some(5),
+        "sixth" => Some(6),
+        "seventh" => Some(7),
+        "eighth" => Some(8),
+        "ninth" => Some(9),
+        "tenth" => Some(10),
+        "eleventh" => Some(11),
+        "twelfth" => Some(12),
+        "thirteenth" => Some(13),
+        "fourteenth" => Some(14),
+        "fifteenth" => Some(15),
+        "sixteenth" => Some(16),
+        "seventeenth" => Some(17),
+        "eighteenth" => Some(18),
+        "nineteenth" => Some(19),
+        "twentieth" => Some(20),
+        "thirtieth" => Some(30),
+        _ => None,
+    }
 }
 
 /// Extract explicit calendar dates written directly inside prose/queries
-/// (e.g. "1 May, 2022", "May 1, 2022", "March 29, 2024", "2022-05-01").
+/// (e.g. "1 May, 2022", "May 1st, 2022", "the 15th of March", "in May", "summer of 2023", "2022-05-01").
 fn inline_date_tokens(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let lower = text.to_lowercase();
-    // Match ISO YYYY-MM-DD
+    // Match ISO YYYY-MM-DD or YYYY/MM/DD
     for w in lower.split_whitespace() {
-        let trimmed = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
-        if trimmed.len() == 10 && trimmed.as_bytes().get(4) == Some(&b'-') && trimmed.as_bytes().get(7) == Some(&b'-') {
-            if let Ok(d) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
-                if let Some(dt) = d.and_hms_opt(0, 0, 0) {
-                    out.extend(calendar_tokens(dt.and_utc().timestamp()));
+        let trimmed = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '/');
+        if trimmed.len() == 10 {
+            let b = trimmed.as_bytes();
+            if (b.get(4) == Some(&b'-') && b.get(7) == Some(&b'-'))
+                || (b.get(4) == Some(&b'/') && b.get(7) == Some(&b'/'))
+            {
+                let iso = trimmed.replace('/', "-");
+                if let Ok(d) = chrono::NaiveDate::parse_from_str(&iso, "%Y-%m-%d") {
+                    if let Some(dt) = d.and_hms_opt(0, 0, 0) {
+                        out.extend(calendar_tokens(dt.and_utc().timestamp()));
+                    }
                 }
             }
         }
     }
-    let toks: Vec<&str> = lower
+    let orig_toks: Vec<&str> = text
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|s| !s.is_empty())
         .collect();
+    let toks: Vec<String> = orig_toks.iter().map(|s| s.to_lowercase()).collect();
+
+    const TEMP_PREPS: &[&str] = &[
+        "in", "on", "of", "during", "since", "before", "after", "until", "by", "from", "through",
+        "around", "this", "last", "next", "past", "every", "each", "late", "early", "mid", "middle",
+    ];
+    const NON_YEAR_PREV: &[&str] = &[
+        "room", "suite", "apt", "unit", "section", "port", "error", "code", "rfc", "iso", "line",
+        "page", "usd", "eur", "model", "version",
+    ];
+    const NON_YEAR_NEXT: &[&str] = &[
+        "km", "kilometers", "mi", "miles", "ft", "feet", "meters", "px", "gb", "mb", "kb", "tb",
+        "dollars", "euros", "percent", "percents", "points", "hours", "minutes", "seconds",
+    ];
+
     for i in 0..toks.len() {
-        let Some(m) = month_index(toks[i]) else { continue };
-        // "<day> <month> <year>" OR "<month> <day> <year>"
-        let prev_num = i.checked_sub(1).and_then(|k| toks[k].parse::<u32>().ok()).filter(|&n| (1..=31).contains(&n));
-        let next_num = toks.get(i + 1).and_then(|s| s.parse::<u32>().ok()).filter(|&n| (1..=31).contains(&n));
-        let year_after_next = toks.get(i + 2).and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten());
-        let year_after_month = toks.get(i + 1).and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten());
+        // Explicit 4-digit calendar year ("in 2022", "back in 2019", "since 2020") with HeidelTime guards
+        if toks[i].len() == 4 && toks[i].chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(y) = toks[i].parse::<i32>() {
+                if (1900..=2099).contains(&y) {
+                    let prev_bad = i
+                        .checked_sub(1)
+                        .is_some_and(|k| NON_YEAR_PREV.contains(&toks[k].as_str()));
+                    let next_bad = toks
+                        .get(i + 1)
+                        .is_some_and(|nx| NON_YEAR_NEXT.contains(&nx.as_str()));
+                    if !prev_bad && !next_bad {
+                        out.push(format!("__YEAR__{y}"));
+                    }
+                }
+            }
+        }
+
+        // Seasonal anchors ("summer of 2023", "in the winter", "last spring")
+        let season = match toks[i].as_str() {
+            "summer" => Some(("SU", false)),
+            "winter" => Some(("WI", false)),
+            "autumn" => Some(("FA", false)),
+            "spring" => Some(("SP", true)),
+            "fall" => Some(("FA", true)),
+            _ => None,
+        };
+        if let Some((sc, ambig_season)) = season {
+            let prev1 = i.checked_sub(1).map(|k| toks[k].as_str()).unwrap_or("");
+            let prev2 = i.checked_sub(2).map(|k| toks[k].as_str()).unwrap_or("");
+            let y_after = if toks.get(i + 1).map(String::as_str) == Some("of") {
+                toks.get(i + 2)
+            } else {
+                toks.get(i + 1)
+            }
+            .and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten())
+            .filter(|&y| (1900..=2099).contains(&y));
+
+            if let Some(y) = y_after {
+                out.push(format!("__SY__{y}_{sc}"));
+                out.push(format!("__SEASON__{sc}"));
+                out.push(format!("__YEAR__{y}"));
+            } else if !ambig_season
+                || matches!(prev1, "this" | "last" | "next" | "past" | "every" | "early" | "late" | "mid")
+                || (prev1 == "the" && matches!(prev2, "in" | "during" | "since" | "before" | "after"))
+            {
+                out.push(format!("__SEASON__{sc}"));
+            }
+        }
+
+        let Some((m, ambig_month)) = month_index(&toks[i]) else { continue };
+        let band = i
+            .checked_sub(1)
+            .and_then(|k| match toks[k].as_str() {
+                "early" | "earlier" => Some("EARLY"),
+                "late" | "later" => Some("LATE"),
+                "mid" | "middle" => Some("MID"),
+                "of" if k >= 1 => match toks[k - 1].as_str() {
+                    "beginning" | "start" => Some("EARLY"),
+                    "middle" => Some("MID"),
+                    "end" => Some("LATE"),
+                    _ => None,
+                },
+                _ => None,
+            });
+        if let Some(b) = band {
+            out.push(format!("__{b}__{m:02}"));
+            out.push(format!("__MONTH__{m:02}"));
+        }
+
+        // "<day> [of] <month> [of] <year>" OR "<month> [the] <day> [of] <year>"
+        let prev_num = i.checked_sub(1).and_then(|k| {
+            if toks[k] == "of" && k >= 1 {
+                parse_day_token(&toks[k - 1])
+            } else {
+                parse_day_token(&toks[k])
+            }
+        });
+        let (next_num, day_end_idx) = if toks.get(i + 1).map(String::as_str) == Some("the") {
+            (toks.get(i + 2).and_then(|s| parse_day_token(s)), i + 2)
+        } else {
+            (toks.get(i + 1).and_then(|s| parse_day_token(s)), i + 1)
+        };
+        let year_at = |idx: usize| -> Option<i32> {
+            let cand = if toks.get(idx).map(String::as_str) == Some("of") {
+                toks.get(idx + 1)
+            } else {
+                toks.get(idx)
+            };
+            cand.and_then(|s| (s.len() == 4).then(|| s.parse::<i32>().ok()).flatten())
+                .filter(|&y| (1900..=2099).contains(&y))
+        };
+        let year_after_month = year_at(i + 1);
+        let year_after_next = year_at(day_end_idx + 1);
 
         if let (Some(day), Some(y)) = (prev_num, year_after_month) {
             if let Some(dt) = chrono::NaiveDate::from_ymd_opt(y, m, day).and_then(|d| d.and_hms_opt(0, 0, 0)) {
@@ -760,9 +1588,21 @@ fn inline_date_tokens(text: &str) -> Vec<String> {
         if let Some(y) = year_after_month {
             out.push(format!("__YM__{y}_{m:02}"));
             out.push(format!("__MONTH__{m:02}"));
+            out.push(format!("__YEAR__{y}"));
         } else if let Some(day) = prev_num.or(next_num) {
             out.push(format!("__MD__{m:02}_{day:02}"));
             out.push(format!("__MONTH__{m:02}"));
+        } else if band.is_none() {
+            // Bare month in prose/query ("in May", "during July", "last October").
+            // Guard ambiguous "may"/"march" with preposition or capitalization + non-modal context.
+            let prev1 = i.checked_sub(1).map(|k| toks[k].as_str()).unwrap_or("");
+            let is_cap = orig_toks
+                .get(i)
+                .and_then(|s| s.chars().next())
+                .is_some_and(|c| c.is_ascii_uppercase());
+            if !ambig_month || TEMP_PREPS.contains(&prev1) || (is_cap && i > 0) {
+                out.push(format!("__MONTH__{m:02}"));
+            }
         }
     }
     out
@@ -798,20 +1638,36 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
         match w.as_str() {
             "yesterday" => specs.push((-DAY, 1.0, false)),
             "night" if prev == "last" => specs.push((-DAY, 1.0, false)),
-            "before" if prev == "day" => specs.push((-DAY, 0.9, false)),
+            "before" | "earlier" if prev == "day" => specs.push((-DAY, 0.9, false)),
+            "before" if prev == "week" => specs.push((-7 * DAY, 0.9, true)),
+            "before" if prev == "month" => specs.push((-30 * DAY, 0.9, true)),
+            "before" if prev == "year" => specs.push((-365 * DAY, 0.9, true)),
+            "after" | "later" if prev == "day" && (i < 2 || raw[i - 2] == "the" || raw[i - 2] == "a") => {
+                specs.push((DAY, 0.9, false));
+            }
+            "after" | "following" if prev == "week" && (i < 2 || raw[i - 2] == "the" || raw[i - 2] == "a") => {
+                specs.push((7 * DAY, 0.9, true));
+            }
             "tomorrow" => specs.push((DAY, 1.0, false)),
             "today" | "tonight" => specs.push((0, 1.0, false)),
-            "week" if prev == "last" || prev == "past" => specs.push((-7 * DAY, 1.0, true)),
-            "week" if prev == "next" => specs.push((7 * DAY, 1.0, true)),
-            "weekend" if prev == "last" || prev == "this" || prev == "past" => specs.push((-2 * DAY, 1.0, true)),
-            "month" if prev == "last" || prev == "past" => {
+            "week" if matches!(prev, "last" | "past" | "previous") => specs.push((-7 * DAY, 1.0, true)),
+            "week" if matches!(prev, "next" | "coming" | "following") => specs.push((7 * DAY, 1.0, true)),
+            "week" if prev == "this" && i >= 2 && matches!(raw[i - 2].as_str(), "earlier" | "early") => {
+                specs.push((-2 * DAY, 0.9, true));
+            }
+            "weekend" if matches!(prev, "last" | "this" | "past" | "previous") => specs.push((-2 * DAY, 1.0, true)),
+            "weekend" if matches!(prev, "next" | "coming") => specs.push((5 * DAY, 0.9, true)),
+            "month" if matches!(prev, "last" | "past" | "previous") => {
                 specs.push((-30 * DAY, 1.0, true));
                 specs.push((-15 * DAY, 0.85, false));
             }
-            "month" if prev == "next" => specs.push((30 * DAY, 1.0, true)),
-            "year" if prev == "last" || prev == "past" => specs.push((-365 * DAY, 1.0, true)),
-            "year" if prev == "next" => specs.push((365 * DAY, 1.0, true)),
-            "ago" => {
+            "month" if prev == "this" && i >= 2 && matches!(raw[i - 2].as_str(), "earlier" | "early") => {
+                specs.push((-7 * DAY, 0.9, true));
+            }
+            "month" if matches!(prev, "next" | "coming" | "following") => specs.push((30 * DAY, 1.0, true)),
+            "year" if matches!(prev, "last" | "past" | "previous") => specs.push((-365 * DAY, 1.0, true)),
+            "year" if matches!(prev, "next" | "coming" | "following") => specs.push((365 * DAY, 1.0, true)),
+            "ago" | "earlier" | "later" => {
                 if matches!(prev, "days" | "weeks" | "months" | "years" | "day" | "week" | "month" | "year") {
                     let q = if i >= 3 && raw[i - 2] == "of" {
                         raw[i - 3].as_str()
@@ -827,12 +1683,17 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
                         "month" => (30, true),
                         _ => (365, true),
                     };
+                    let dir = if w == "later" { 1 } else { -1 };
                     if n > 0 {
-                        specs.push((-n * unit * DAY, 1.0, coarse));
+                        specs.push((dir * n * unit * DAY, 1.0, coarse));
+                        if q == "few" && unit >= 7 {
+                            specs.push((dir * (n - 1) * unit * DAY, 0.65, true));
+                            specs.push((dir * (n + 1) * unit * DAY, 0.65, true));
+                        }
                     }
                 }
             }
-            "days" | "weeks" | "months" | "years" if next != "ago" => {
+            "days" | "weeks" | "months" | "years" if !matches!(next, "ago" | "earlier" | "later") => {
                 // Handle "for 3 years now", "past 2 weeks", "last 3 months"
                 let prep = if i >= 2 { raw[i - 2].as_str() } else { "" };
                 if matches!(prep, "for" | "past" | "last" | "in") || next == "now" {
@@ -849,13 +1710,18 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
                 }
             }
             _ => {
-                if (prev == "last" || prev == "this" || prev == "next") && WEEKDAYS.contains(&w.as_str()) {
+                if matches!(prev, "last" | "this" | "next" | "past" | "previous" | "coming" | "following")
+                    && WEEKDAYS.contains(&w.as_str())
+                {
                     use chrono::Datelike;
                     if let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) {
                         let today = dt.weekday().num_days_from_monday() as i64;
                         let target = WEEKDAYS.iter().position(|d| d == w).unwrap_or(0) as i64;
-                        let back = ((today - target + 7) % 7).max(if prev == "last" { 1 } else { 0 });
-                        let delta = if prev == "next" { (target - today + 7) % 7 } else { -back };
+                        let is_future = matches!(prev, "next" | "coming" | "following");
+                        let is_strict_past = matches!(prev, "last" | "past" | "previous");
+                        let back = ((today - target + 7) % 7).max(if is_strict_past { 1 } else { 0 });
+                        let fwd = ((target - today + 7) % 7).max(if is_future { 1 } else { 0 });
+                        let delta = if is_future { fwd } else { -back };
                         specs.push((delta * DAY, 1.0, false));
                     }
                 }
@@ -871,7 +1737,11 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
         if coarse {
             for d_off in [-2 * DAY, -DAY, DAY, 2 * DAY] {
                 for tok in calendar_tokens(ts + off + d_off) {
-                    if tok.starts_with("__DATE__") || tok.starts_with("__YM__") || tok.starts_with("__MONTH__") {
+                    if tok.starts_with("__DATE__")
+                        || tok.starts_with("__YM__")
+                        || tok.starts_with("__MONTH__")
+                        || tok.starts_with("__MD__")
+                    {
                         out.push((tok, w * 0.45));
                     }
                 }
@@ -921,8 +1791,8 @@ struct Feat {
 
 #[derive(Default, Clone)]
 struct Bag {
-    tf: [HashMap<u32, f32>; 2],
-    len: [f32; 2],
+    tf: [HashMap<u32, f32>; 3],
+    len: [f32; 3],
 }
 
 impl Bag {
@@ -932,6 +1802,24 @@ impl Bag {
             self.len[field] += f.w * scale;
         }
     }
+
+    fn add_inherited(&mut self, field: usize, f: Feat, scale: f32) {
+        *self.tf[field].entry(f.id).or_insert(0.0) += f.w * scale;
+        if f.counts_len {
+            self.len[field] += 0.50 * f.w * scale;
+        }
+    }
+}
+
+struct StandingRule {
+    policy_key: String,
+    turn: usize,
+    session: usize,
+    ts: i64,
+    has_explicit_scope: bool,
+    scope: HashSet<u32>,
+    domains: Vec<&'static str>,
+    assistant_nouns: HashSet<u32>,
 }
 
 struct TurnIx {
@@ -939,36 +1827,60 @@ struct TurnIx {
     id: String,
     field: usize,
     feats: Vec<Feat>,
+    blip_feats: Vec<Feat>,
     /// Exact/stem term ids of content tokens in order, for span proximity.
     seq: Vec<(u32, u32)>,
     content: HashSet<u32>,
     /// Capitalized proper-entity term IDs inside this turn.
     entities: HashSet<u32>,
+    /// Body text (header line removed) for lazy exact title-span linking on hot anchors.
+    body_for_headers: String,
+    span_ids_cache: OnceLock<Vec<u32>>,
     speaker: String,
     is_question: bool,
+    is_pure_info_question: bool,
+    pre_question_ids: HashSet<u32>,
+    question_clause_ids: HashSet<u32>,
     answers_question: bool,
+    is_short_reply: bool,
+    is_backchannel: bool,
     anaphoric: bool,
     pref_marker: bool,
+    is_personal_constraint: bool,
+    is_user_schema: bool,
+    schema_domains: Vec<&'static str>,
     has_temporal: bool,
     has_numeric: bool,
     has_spatial: bool,
     has_causal: bool,
     is_short_question: bool,
+    is_standing_policy: bool,
+    /// User turn that opens a concrete event, not a rule and not a backchannel.
+    is_initiative: bool,
+    /// Previous turn in this session with a different role. Position and role only.
+    /// Backward only. A later turn points at the earlier one. There is no forward edge.
+    answers: Option<usize>,
+    /// Caller & ingest-time RSB edges resolved to `(degree, target)` — strictly backward.
+    exact_edges: Vec<(u32, usize)>,
+    /// Backward state-revision / contradiction edges (`t_new -> t_old`).
+    supersedes_turns: Vec<usize>,
+    stability: f32,
+    raw_links: Vec<TurnLink>,
 }
 
 struct Stats {
     n: f32,
     df: HashMap<u32, u32>,
-    avg: [f32; 2],
+    avg: [f32; 3],
 }
 
 fn stats_of(bags: &[Bag]) -> Stats {
     let mut df: HashMap<u32, u32> = HashMap::new();
-    let mut sum = [0.0f32; 2];
-    let mut cnt = [0.0f32; 2];
+    let mut sum = [0.0f32; 3];
+    let mut cnt = [0.0f32; 3];
     for b in bags {
         let mut seen: HashSet<u32> = HashSet::new();
-        for f in 0..2 {
+        for f in 0..3 {
             for (&t, &v) in &b.tf[f] {
                 if v > 0.0 {
                     seen.insert(t);
@@ -989,8 +1901,14 @@ fn stats_of(bags: &[Bag]) -> Stats {
         avg: [
             if cnt[0] > 0.0 { sum[0] / cnt[0] } else { 1.0 },
             if cnt[1] > 0.0 { sum[1] / cnt[1] } else { 1.0 },
+            if cnt[2] > 0.0 { sum[2] / cnt[2] } else { 1.0 },
         ],
     }
+}
+
+struct HeaderKey {
+    tokens: Vec<u32>,
+    sessions: Vec<(usize, f32)>,
 }
 
 struct Index {
@@ -1000,15 +1918,36 @@ struct Index {
     session_turns: Vec<Vec<usize>>,
     session_entities: Vec<HashSet<u32>>,
     session_content: Vec<HashSet<u32>>,
+    /// Rarest non-hub content token IDs per session (sorted, up to 32) for GhostLink Ochiai divergence.
+    session_rare_nt: Vec<Vec<u32>>,
+    /// Backward-only session RSB edges (`later_session -> (degree, earlier_session)`).
+    session_rsb_back: Vec<Vec<(u32, usize)>>,
+    /// Backward-only session contradiction/supersession edges (`s_new -> s_old`).
+    session_supersedes_back: Vec<Vec<usize>>,
+    /// Backward-only Temporal Context Episode neighbor (`si -> si - 1` when sharing episode/date anchor).
+    session_episode_prev: Vec<Option<usize>>,
     turns: Vec<TurnIx>,
     session_bags: Vec<Bag>,
+    turn_own_bags: Vec<Bag>,
     turn_bags: Vec<Bag>,
     /// (session index, first turn position within session, last turn position inclusive)
     windows: Vec<(usize, usize, usize)>,
     window_bags: Vec<Bag>,
     s_stats: Stats,
+    t_own_stats: Stats,
     t_stats: Stats,
     w_stats: Stats,
+    /// Content-term ids that are the object of a personal constraint ("allergic to X").
+    constraint_terms: HashSet<u32>,
+    /// Compiled SOAR/Rete standing rules for the stratified governing channel (`RankResult.standing_rules`).
+    standing_rules: Vec<StandingRule>,
+    /// Non-hub hypernym domains (`session_df <= 0.12 * N` when `N >= 16`).
+    non_hub_domains: HashSet<&'static str>,
+    /// Exact `{Header}\\n{Body}` titles, hashed, for the session bridge.
+    header_dict: HashMap<u64, Vec<HeaderKey>>,
+    header_max_words: usize,
+    /// Unique title-case speaker nickname bindings (`Mel` -> `melanie`).
+    nicks: SpeakerNickIndex,
 }
 
 const PREF_AXIS: &str = "\u{1}pref";
@@ -1019,6 +1958,357 @@ fn hyp_term(dom: &str) -> String {
 
 fn stem_term(s: &str) -> String {
     format!("\u{1}stem:{s}")
+}
+
+/// Object tokens of a personal constraint. The marker is not enough; the thing
+/// constrained has to be in the index or a later question cannot hit it.
+/// Parse both compact `key:value` tokens and structured `Key: Value` clauses
+/// (excluding URL schemes `http:`/`https:` and `[BLIP caption]`), emitting exact
+/// `(slot_key, slot_value)` pairs so typed attributes affect ranking and supersession.
+fn typed_slot_tokens(text: &str) -> Vec<(String, String)> {
+    const SKIP_KEYS: &[&str] = &["http", "https", "mailto", "file", "note", "example", "output", "input"];
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.starts_with('[') || trimmed_line.starts_with("```") {
+            continue;
+        }
+        // Check structured `Key: Value` at line/clause head (up to 2 words for key, 1-2 words for value).
+        if let Some((lhs, rhs)) = trimmed_line.split_once(':') {
+            let key_words: Vec<&str> = lhs.split_whitespace().collect();
+            if (1..=2).contains(&key_words.len())
+                && key_words.iter().all(|w| w.len() >= 2 && w.chars().all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-'))
+            {
+                let norm_key = key_words.join("_").to_lowercase();
+                if !SKIP_KEYS.contains(&norm_key.as_str()) {
+                    for val in rhs
+                        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-' && c != '$')
+                        .filter(|w| !w.is_empty())
+                        .take(2)
+                    {
+                        let clean_val = val.trim_matches('$').to_lowercase();
+                        if clean_val.len() >= 2 && !stopwords().contains(clean_val.as_str()) {
+                            out.push((norm_key.clone(), clean_val));
+                        }
+                    }
+                }
+            }
+        }
+        // Also check inline `key:value` tokens without spaces.
+        for raw in trimmed_line.split_whitespace() {
+            let tok = raw.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '_' && c != '-');
+            let Some((key, value)) = tok.split_once(':') else { continue };
+            let kl = key.to_lowercase();
+            if kl.len() >= 2
+                && kl.chars().all(|c| c.is_ascii_alphabetic())
+                && !SKIP_KEYS.contains(&kl.as_str())
+                && !value.is_empty()
+                && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                out.push((kl, value.to_lowercase()));
+            }
+        }
+    }
+    out
+}
+
+fn constraint_object_tokens(lower: &str) -> Vec<String> {
+    const LEADS: &[&str] = &[
+        "don't want ", "dont want ", "do not want ",
+        "allergic to ", "intolerant to ",
+        "can't eat ", "cant eat ", "cannot eat ",
+        "can't have ", "cant have ", "cannot have ",
+        "can't drink ", "cant drink ", "cannot drink ",
+        "don't eat ", "dont eat ", "do not eat ",
+        "don't drink ", "dont drink ", "do not drink ",
+        "never eat ", "never drink ",
+        "stay away from ", "steer clear of ",
+    ];
+    const PSEUDO_VERBS: &[&str] = &[
+        "bother", "intrude", "waste", "bore", "jinx", "derail", "worry", "know", "think",
+    ];
+    let mut out = Vec::new();
+    for lead in LEADS {
+        let mut rest = lower;
+        while let Some(at) = rest.find(lead) {
+            let after = &rest[at + lead.len()..];
+            // Bound ConText scope at clause/exception boundaries ("but", "except", punctuation).
+            let clause = after
+                .split(['.', ',', ';', '!', '?', '\n'])
+                .next()
+                .unwrap_or(after);
+            let scoped = clause
+                .split(" but ")
+                .next()
+                .unwrap_or(clause)
+                .split(" except ")
+                .next()
+                .unwrap_or(clause);
+            let cands: Vec<&str> = scoped
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+                .filter(|w| !w.is_empty() && is_content(w))
+                .take(2)
+                .collect();
+            if !cands.first().is_some_and(|w| PSEUDO_VERBS.contains(w)) {
+                out.extend(cands.into_iter().map(str::to_string));
+            }
+            rest = &rest[at + lead.len()..];
+        }
+    }
+    out
+}
+
+/// Imperative user rule. Grounded in Searle directives + SWBD-DAMSL / ISO 24617-2 + NegEx
+/// pseudo-trigger exclusion: rejects questions, epistemic hedges ("don't think/know"),
+/// downplayers ("don't worry", "never mind"), auto-feedback checks ("make sure I understand"),
+/// and elliptical perfects ("never been/seen/heard", "always wanted/been" via VBN/VBD check).
+pub fn utterance_is_standing_policy(text: &str) -> bool {
+    const IRREGULAR_PAST_PARTICIPLES: &[&str] = &[
+        "been", "was", "were", "had", "done", "did", "seen", "saw", "heard", "known", "knew",
+        "thought", "gone", "went", "got", "gotten", "met", "found", "felt", "meant", "lost",
+        "paid", "said", "sold", "sent", "spent", "built", "caught", "taught", "bought", "brought",
+        "told", "took", "taken", "gave", "given", "ate", "eaten", "drank", "drunk", "wrote",
+        "written", "spoke", "spoken", "broke", "broken", "chose", "chosen", "drove", "driven",
+        "fell", "fallen", "flew", "flown", "forgot", "forgotten", "grew", "grown", "understood",
+        "won",
+    ];
+    const DONT_PSEUDO_NEXT: &[&str] = &[
+        "worry", "sweat", "mention", "fret", "bother", "know", "remember", "recall", "recollect",
+        "understand", "think", "believe", "suppose", "imagine", "reckon", "guess", "expect",
+        "feel", "doubt", "mind", "care", "get", "take", "have", "kid", "ask", "want", "you",
+    ];
+
+    let prose = text.split("```").next().unwrap_or(text).trim();
+    if prose.is_empty() || prose.ends_with('?') {
+        return false;
+    }
+    let lower = prose.to_lowercase();
+    let trimmed = lower
+        .trim_start()
+        .strip_prefix("please ")
+        .map(str::trim_start)
+        .unwrap_or_else(|| lower.trim_start());
+
+    if trimmed.starts_with("never mind") || trimmed.starts_with("nevermind") {
+        return false;
+    }
+
+    let is_non_imperative_past = |verb: &str| -> bool {
+        if IRREGULAR_PAST_PARTICIPLES.contains(&verb) {
+            return true;
+        }
+        verb.len() > 4
+            && verb.ends_with("ed")
+            && !matches!(verb, "need" | "feed" | "seed" | "proceed" | "succeed" | "exceed" | "embed" | "shred")
+    };
+
+    if let Some(rest) = trimmed.strip_prefix("always ").or_else(|| trimmed.strip_prefix("never ")) {
+        let next = rest
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        return !next.is_empty() && !is_non_imperative_past(next);
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("don't ").or_else(|| trimmed.strip_prefix("do not ")) {
+        let next = rest
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        if next.is_empty() || DONT_PSEUDO_NEXT.contains(&next) {
+            return false;
+        }
+        return true;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("make sure").or_else(|| trimmed.strip_prefix("ensure ")) {
+        let after = rest.trim_start();
+        let after_that = after.strip_prefix("that ").map(str::trim_start).unwrap_or(after);
+        if after_that.starts_with("i ")
+            || after_that.starts_with("i'm ")
+            || after_that.starts_with("we're on the same")
+            || after_that.starts_with("we are on the same")
+        {
+            return false;
+        }
+        return true;
+    }
+
+    trimmed.starts_with("remember to ")
+        || trimmed.starts_with("from now on")
+        || trimmed.starts_with("going forward")
+        || lower.contains("always format")
+        || lower.contains("always include")
+        || lower.contains("always use")
+        || lower.contains("never use")
+        || lower.contains("never include")
+        || lower.contains("format all")
+}
+
+/// Extract `(has_explicit_scope, scope_words)` of a standing imperative rule for Rete specificity.
+/// Conditional subordinators (`when`, `whenever`, `if`, `for all/every/any`, `in all`) restrict
+/// firing to matching queries; unscoped universal directives remain eligible on `task_under_rules`.
+fn extract_rule_scope(text: &str) -> (bool, Vec<String>) {
+    const CONDITIONAL_CLAUSES: &[&str] = &[
+        "when ",
+        "whenever ",
+        "if ",
+        "for all ",
+        "for every ",
+        "for any ",
+        "in all ",
+    ];
+    const DIRECTIVE_VERBS: &[&str] = &[
+        "always", "never", "please", "make", "sure", "ensure", "remember", "format", "include",
+        "provide", "give", "write", "use", "using", "keep", "response", "responses", "output",
+        "outputs", "answer", "answers",
+    ];
+    let (prose, _) = split_blip_caption(text);
+    let lower = format!(" {} ", prose.to_lowercase());
+    for marker in CONDITIONAL_CLAUSES {
+        let pat = format!(" {marker}");
+        if let Some(idx) = lower.find(&pat) {
+            let after = &lower[idx + pat.len()..];
+            let clause = after.split(['.', '!', '?', ';', '\n']).next().unwrap_or(after);
+            let toks: Vec<String> = raw_tokens(clause)
+                .into_iter()
+                .filter(|w| is_content(w) && !DIRECTIVE_VERBS.contains(&w.as_str()))
+                .collect();
+            if !toks.is_empty() {
+                return (true, toks);
+            }
+        }
+    }
+    let toks = raw_tokens(prose)
+        .into_iter()
+        .filter(|w| is_content(w) && !DIRECTIVE_VERBS.contains(&w.as_str()))
+        .collect();
+    (false, toks)
+}
+
+/// Pure byte-exact technical handle extractor for Retroactive Salience Backfill (RSB):
+/// URLs, emails, commit SHAs (7..=40 hex with >=1 alpha + >=1 digit), issue refs (`PROJ-123`),
+/// version tags (`v1.2.3`), and file paths (`dir/file.ext`). Zero word similarity.
+fn extract_exact_technical_handles(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_tok in text.split_whitespace() {
+        let tok = raw_tok.trim_matches(|c: char| matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '"' | '\'' | '`'));
+        let tok_clean = tok.trim_end_matches('.');
+        if tok_clean.len() < 3 {
+            continue;
+        }
+        // 1. URL
+        if tok_clean.starts_with("http://") || tok_clean.starts_with("https://") {
+            let h = format!("\u{1}h:url:{}", tok_clean.to_lowercase());
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
+            continue;
+        }
+        // 2. Email
+        if let Some((local, dom)) = tok_clean.split_once('@') {
+            if !local.is_empty()
+                && dom.contains('.')
+                && !dom.starts_with('.')
+                && !dom.ends_with('.')
+                && local.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-'))
+                && dom.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+            {
+                let h = format!("\u{1}h:email:{}", tok_clean.to_lowercase());
+                if seen.insert(h.clone()) {
+                    out.push(h);
+                }
+                continue;
+            }
+        }
+        // 3. IssueRef (`ABC-123`)
+        if let Some((proj, num)) = tok_clean.split_once('-') {
+            if (2..=10).contains(&proj.len())
+                && proj.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && proj.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                && !num.is_empty()
+                && num.len() <= 7
+                && num.chars().all(|c| c.is_ascii_digit())
+            {
+                let h = format!("\u{1}h:issue:{}", tok_clean.to_lowercase());
+                if seen.insert(h.clone()) {
+                    out.push(h);
+                }
+                continue;
+            }
+        }
+        // 4. CommitSha (7..=40 hex with >=1 hex letter and >=1 digit)
+        if (7..=40).contains(&tok_clean.len())
+            && tok_clean.chars().all(|c| c.is_ascii_hexdigit())
+            && tok_clean.chars().any(|c| c.is_ascii_digit())
+            && tok_clean.chars().any(|c| matches!(c.to_ascii_lowercase(), 'a'..='f'))
+        {
+            let h = format!("\u{1}h:sha:{}", &tok_clean.to_lowercase()[..7.min(tok_clean.len())]);
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
+            continue;
+        }
+        // 5. Version (`v1.2` or `1.2.3`)
+        let ver_cand = tok_clean.strip_prefix('v').or_else(|| tok_clean.strip_prefix('V')).unwrap_or(tok_clean);
+        let ver_parts: Vec<&str> = ver_cand.split('.').collect();
+        if ver_parts.len() >= 2
+            && (tok_clean.starts_with('v') || tok_clean.starts_with('V') || ver_parts.len() >= 3)
+            && ver_parts.iter().all(|p| !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit()))
+        {
+            let h = format!("\u{1}h:ver:{ver_cand}");
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
+            continue;
+        }
+        // 6. FilePath (`dir/file.ext` or `src\file.rs`)
+        let norm_path = tok_clean.replace('\\', "/");
+        if norm_path.contains('/')
+            && !norm_path.contains("://")
+            && norm_path.chars().any(|c| c.is_ascii_alphabetic())
+            && norm_path.rsplit('/').next().is_some_and(|leaf| leaf.contains('.') && leaf.len() >= 3)
+        {
+            let h = format!("\u{1}h:path:{}", norm_path.to_lowercase());
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
+        }
+    }
+    out
+}
+
+/// Technical-handle term ids (`\u{1}h:…`) are linked only by backward RSB edges.
+/// Undirected PPR must not reactivate them, or a later zero-overlap session is pulled forward.
+fn is_technical_handle(vocab: &Vocab, id: u32) -> bool {
+    vocab.names.get(id as usize).is_some_and(|name| name.starts_with("\u{1}h:"))
+}
+
+/// Episode prefix before `_s{digits}` when sub-sessions belong to one contiguous batch,
+/// else empty string (never inspects benchmark labels).
+fn session_episode_key<'a>(session_id: &'a str, date: &'a str) -> String {
+    if let Some((prefix, suffix)) = session_id.rsplit_once("_s") {
+        if !prefix.is_empty() && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+            return format!("ep:{prefix}");
+        }
+    }
+    let trimmed = date.trim();
+    if !trimmed.is_empty() {
+        return format!("dt:{trimmed}");
+    }
+    String::new()
+}
+
+/// Stable plan id for one normalized standing-policy utterance.
+pub fn standing_policy_id(text: &str) -> String {
+    let norm = text.trim().to_lowercase();
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in norm.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("sp-{hash:016x}")
 }
 
 fn detect_question(content: &str, raw_len: usize) -> (bool, bool) {
@@ -1033,60 +2323,847 @@ fn detect_question(content: &str, raw_len: usize) -> (bool, bool) {
     (false, false)
 }
 
+const INFO_Q_WORDS: &[&str] = &[
+    "who", "whom", "whose", "what", "where", "when", "why", "which", "how",
+    "did", "do", "does", "is", "are", "was", "were",
+    "have", "has", "had", "can", "could", "would", "should", "will",
+    "anything", "anyone", "anybody", "anywhere", "anytime",
+    "any", "ever", "still",
+    "hey", "hi",
+];
+
+const Q_LEAD_WORDS: &[&str] = &[
+    "wow", "oh", "aw", "aww", "ooh", "whoa", "woah", "hmm", "hm", "omg",
+    "haha", "hahaha", "lol", "lmao",
+    "nice", "cool", "awesome", "congrats", "congratulations",
+    "yay", "sweet", "amazing", "wonderful", "fantastic",
+    "thanks", "thank", "sorry", "glad", "ouch", "yikes",
+    "hey", "hi", "hello", "yo",
+    "so", "and", "but", "well",
+    "okay", "ok", "yeah", "yes", "yep", "nope",
+    "right", "great", "good",
+];
+
+const Q_REACTION_HEADS: &[&str] = &[
+    "oh", "ah", "wow", "haha", "hahaha", "sounds", "looks", "seems",
+];
+const Q_REACTION_TAILS: &[&str] = &[
+    "fun", "cool", "nice", "great", "good", "awesome", "amazing",
+    "wonderful", "cute", "sweet", "lovely",
+];
+
+fn take_word(text: &str) -> Option<(&str, &str)> {
+    let text = text.trim_start();
+    let end = text
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_alphanumeric())
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    if end == 0 { None } else { Some((&text[..end], &text[end..])) }
+}
+
+fn skip_comma(text: &str) -> &str {
+    let s = text.trim_start();
+    s.strip_prefix(',').unwrap_or(s).trim_start()
+}
+
+fn is_speaker_alias(tok: &str, names: &HashSet<String>) -> bool {
+    if names.contains(tok) {
+        return true;
+    }
+    if tok.len() < 3 || stopwords().contains(tok) {
+        return false;
+    }
+    let st = stem(tok);
+    if hypernyms().contains_key(st.as_str()) {
+        return false;
+    }
+    names.iter().any(|n| n.len() >= tok.len() + 3 && n.starts_with(tok))
+}
+
+fn strip_one_question_lead<'a>(text: &'a str, names: &HashSet<String>) -> Option<&'a str> {
+    let s = text.trim_start();
+    let (tok, rest) = take_word(s)?;
+    let low = tok.to_ascii_lowercase();
+    if is_speaker_alias(&low, names) && rest.trim_start().starts_with(',') {
+        return Some(skip_comma(rest));
+    }
+    if matches!(low.as_str(), "hey" | "hi" | "hello") {
+        let after = skip_comma(rest);
+        if let Some((name, nrest)) = take_word(after) {
+            if is_speaker_alias(&name.to_ascii_lowercase(), names) {
+                return Some(skip_comma(nrest));
+            }
+        }
+        return Some(skip_comma(rest));
+    }
+    if Q_REACTION_HEADS.contains(&low.as_str()) {
+        if let Some((tail, trest)) = take_word(skip_comma(rest)) {
+            let tail_l = tail.to_ascii_lowercase();
+            if Q_REACTION_TAILS.contains(&tail_l.as_str()) {
+                return Some(skip_comma(trest));
+            }
+        }
+    }
+    if Q_LEAD_WORDS.contains(&low.as_str()) {
+        return Some(skip_comma(rest));
+    }
+    None
+}
+
+fn info_question_start(clause: &str) -> bool {
+    let s = clause.trim_start();
+    let Some((tok, rest)) = take_word(s) else { return false };
+    let low = tok.to_ascii_lowercase();
+    if low == "what" {
+        if let Some((next, _)) = take_word(skip_comma(rest)) {
+            let n = next.to_ascii_lowercase();
+            if n == "a" || n == "an" {
+                return false;
+            }
+        }
+    }
+    INFO_Q_WORDS.contains(&low.as_str())
+}
+
+fn stripped_question_clause<'a>(clause: &'a str, names: &HashSet<String>) -> &'a str {
+    let mut s = clause.trim();
+    for _ in 0..8 {
+        if info_question_start(s) {
+            return s;
+        }
+        match strip_one_question_lead(s, names) {
+            Some(next) => {
+                let next = next.trim_start();
+                if next.is_empty() || next.len() == s.len() {
+                    return s;
+                }
+                s = next;
+            }
+            None => return s,
+        }
+    }
+    s
+}
+
+fn last_sentence_boundary(head: &str) -> Option<usize> {
+    let bytes = head.as_bytes();
+    let mut end = head.len();
+    while end > 0 {
+        let rel = head[..end].rfind(|c: char| matches!(c, '.' | '!' | ';' | '\n'))?;
+        let ok = match bytes[rel] {
+            b'.' => {
+                let prev_digit = rel > 0 && bytes[rel - 1].is_ascii_digit();
+                let next_ok = head[rel + 1..].chars().next().is_none_or(|c| c.is_whitespace());
+                !prev_digit && next_ok
+            }
+            _ => true,
+        };
+        if ok {
+            return Some(rel);
+        }
+        end = rel;
+    }
+    None
+}
+
+fn terminal_question_spans(prose: &str) -> Option<(&str, &str)> {
+    let prose = prose.split("```").next().unwrap_or(prose);
+    let q_pos = prose.rfind('?')?;
+    let tail = prose[q_pos + 1..].trim();
+    if !(tail.is_empty() || tail.chars().all(|c| !c.is_ascii_alphabetic())) {
+        return None;
+    }
+    let head = &prose[..q_pos];
+    match last_sentence_boundary(head) {
+        Some(i) => Some((&head[..i], head[i + 1..].trim())),
+        None => Some(("", head.trim())),
+    }
+}
+
+fn token_is_temporal_word(w: &str) -> bool {
+    MONTHS.contains(&w)
+        || WEEKDAYS.contains(&w)
+        || [
+            "yesterday", "tomorrow", "ago", "today", "tonight",
+            "week", "weeks", "weekend", "month", "months", "year", "years",
+            "days", "spring", "summer", "autumn", "winter",
+            "mon", "tue", "wed", "thu", "fri", "sat", "sun",
+        ]
+        .contains(&w)
+        || (w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn pre_has_answer_payload(pre: &str) -> bool {
+    if pre.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    raw_tokens(pre).iter().any(|w| NUMBER_WORDS.contains(&w.as_str()) || token_is_temporal_word(w))
+}
+
+fn content_term_ids(vocab: &mut Vocab, text: &str, stemming: bool) -> HashSet<u32> {
+    let mut ids = HashSet::new();
+    for w in raw_tokens(text).into_iter().filter(|w| is_content(w)) {
+        ids.insert(vocab.intern(&w));
+        if stemming {
+            ids.insert(vocab.intern(&stem_term(&stem(&w))));
+        }
+    }
+    ids
+}
+
+struct QuestionShape {
+    pre_ids: HashSet<u32>,
+    clause_ids: HashSet<u32>,
+    is_pure: bool,
+}
+
+fn analyze_question(
+    vocab: &mut Vocab,
+    prose: &str,
+    is_question: bool,
+    stemming: bool,
+    names: &HashSet<String>,
+) -> QuestionShape {
+    let lower = prose.to_ascii_lowercase();
+    let legacy = is_question && info_question_start(lower.trim_start());
+    let tag = {
+        let t = lower.trim();
+        t.ends_with("right?") || t.ends_with("yeah?") || t.ends_with("huh?")
+    };
+    let Some((pre, clause)) = terminal_question_spans(prose) else {
+        return QuestionShape {
+            pre_ids: HashSet::new(),
+            clause_ids: HashSet::new(),
+            is_pure: is_question && legacy && !tag,
+        };
+    };
+    let stripped = stripped_question_clause(clause, names);
+    let terminal_info = info_question_start(stripped);
+    let payload = pre_has_answer_payload(pre);
+    QuestionShape {
+        pre_ids: content_term_ids(vocab, pre, stemming),
+        clause_ids: content_term_ids(vocab, clause, stemming),
+        is_pure: is_question && !tag && !payload && (legacy || terminal_info),
+    }
+}
+
+fn habitual_perfect(lower: &str) -> bool {
+    const LEADS: &[&str] = &["i've been ", "i’ve been ", "ive been "];
+    const PROGRESS: &[&str] = &[
+        "running into", "running out", "trying", "working", "debugging", "struggling",
+        "thinking", "feeling", "looking", "wondering", "dealing", "waiting", "fixing",
+        "testing", "starting", "planning", "considering", "hoping", "attempting", "stuck",
+    ];
+    for lead in LEADS {
+        let mut rest = lower;
+        while let Some(at) = rest.find(lead) {
+            let after = rest[at + lead.len()..].trim_start();
+            let progress = PROGRESS.iter().any(|p| after.starts_with(p));
+            let next = after
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .find(|s| !s.is_empty())
+                .unwrap_or("");
+            if !next.is_empty() && !progress {
+                return true;
+            }
+            rest = &rest[at + lead.len()..];
+        }
+    }
+    false
+}
+
+fn clause_has_manner(clause: &str) -> bool {
+    const PHRASES: &[&str] = &["step-by-step", "step by step", "without compromising", "avoid using"];
+    if PHRASES.iter().any(|p| clause.contains(p)) {
+        return true;
+    }
+    const WORDS: &[&str] = &[
+        "keep", "simple", "lightweight", "pragmatic", "minimal", "avoid", "rather", "prefer",
+    ];
+    clause
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '\'')
+        .any(|w| WORDS.contains(&w))
+}
+
+fn hedged_like_is_preference(lower: &str) -> bool {
+    const LEADS: &[&str] = &["i would like", "i'd like", "i’d like", "id like"];
+    const TASK: &[&str] = &[
+        "add", "implement", "build", "create", "write", "make", "fix", "set", "help",
+        "include", "integrate", "show", "calculate", "organize", "update", "install",
+        "configure", "deploy", "code", "debug", "change", "start", "finish", "complete",
+        "do", "get", "find", "use", "put", "give", "send", "run",
+    ];
+    for lead in LEADS {
+        let mut rest = lower;
+        while let Some(at) = rest.find(lead) {
+            let after = rest[at + lead.len()..].trim_start();
+            let clause = after.split(['.', '!', '?', '\n']).next().unwrap_or(after);
+            let end = clause.char_indices().nth(96).map(|(i, _)| i).unwrap_or(clause.len());
+            let window = &clause[..end];
+            if clause_has_manner(window) {
+                return true;
+            }
+            let head = window.trim_start().strip_prefix("to ").unwrap_or(window.trim_start());
+            let verb_end = head.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(head.len());
+            let verb = &head[..verb_end];
+            if !verb.is_empty() && !TASK.contains(&verb) {
+                return true;
+            }
+            rest = &rest[at + lead.len()..];
+        }
+    }
+    false
+}
+
+fn commitment_manner(lower: &str) -> bool {
+    const MANNERS: &[&str] = &["lightweight", "step-by-step", "step by step", "pragmatic"];
+    const COMMITS: &[&str] = &[
+        "i prefer", "i'd prefer", "id prefer", "trying to keep", "keep it", "keep my",
+        "i'd like", "i’d like", "i would like", "without compromising", "avoid using", "i avoid",
+    ];
+    lower.split(['.', '!', '?', '\n']).any(|sentence| {
+        MANNERS.iter().any(|m| sentence.contains(m)) && COMMITS.iter().any(|c| sentence.contains(c))
+    })
+}
+
+fn user_preference_speech_act(lower: &str, raw: &[String], pref_set: &HashSet<&str>) -> bool {
+    raw.iter().any(|w| pref_set.contains(w.as_str()))
+        || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m))
+        || hedged_like_is_preference(lower)
+        || commitment_manner(lower)
+}
+
+fn camel_case_parts(ident: &str) -> Vec<String> {
+    let chars: Vec<char> = ident.chars().collect();
+    let mut seen_lower = false;
+    let mut gated = false;
+    for &c in &chars {
+        if c.is_ascii_lowercase() {
+            seen_lower = true;
+        } else if seen_lower && c.is_ascii_uppercase() {
+            gated = true;
+            break;
+        }
+    }
+    if !gated {
+        return Vec::new();
+    }
+    let mut raw_parts: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    for i in 1..chars.len() {
+        let prev = chars[i - 1];
+        let cur = chars[i];
+        let hump = (prev.is_ascii_lowercase() || prev.is_ascii_digit()) && cur.is_ascii_uppercase();
+        let acronym_tail = prev.is_ascii_uppercase()
+            && cur.is_ascii_uppercase()
+            && chars.get(i + 1).is_some_and(|n| n.is_ascii_lowercase());
+        if hump || acronym_tail {
+            raw_parts.push(chars[start..i].iter().collect());
+            start = i;
+        }
+    }
+    raw_parts.push(chars[start..].iter().collect());
+    if raw_parts.len() < 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for part in raw_parts {
+        let lower = part.to_lowercase();
+        if lower.chars().count() < 3 || !is_content(&lower) || out.contains(&lower) {
+            continue;
+        }
+        out.push(lower);
+    }
+    out
+}
+
+fn surface_aux_tokens(word: &str) -> Vec<(String, f32)> {
+    let mut out = Vec::new();
+    if word.contains('_') || word.contains('-') {
+        let joined: String = word
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+        if (4..=48).contains(&joined.len()) && joined.chars().any(|c| c.is_ascii_alphabetic()) {
+            out.push((joined, 1.0));
+        }
+    }
+    for piece in word.split(|c: char| !c.is_ascii_alphanumeric()) {
+        if piece.is_empty() {
+            continue;
+        }
+        for part in camel_case_parts(piece) {
+            if !out.iter().any(|(p, _)| p == &part) {
+                out.push((part, 0.85));
+            }
+        }
+    }
+    out
+}
+
+const NICK_TAIL: usize = 3;
+
+struct SpeakerNickIndex {
+    prefix_of: HashMap<String, String>,
+    witnessed: HashMap<String, HashSet<String>>,
+    lower_attested: HashSet<String>,
+}
+
+fn common_speaker_tokens() -> &'static HashSet<String> {
+    static S: OnceLock<HashSet<String>> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut s = HashSet::new();
+        for w in STOPWORDS
+            .iter()
+            .chain(STARTER_STOP)
+            .chain(QUERY_FRAMING_WORDS)
+            .chain(MONTHS.iter())
+            .chain(WEEKDAYS.iter())
+        {
+            s.insert((*w).to_string());
+        }
+        for (_, words) in HYPERNYM_LATTICE {
+            for w in *words {
+                s.insert((*w).to_string());
+            }
+        }
+        for word in MONTHS.iter().chain(WEEKDAYS.iter()) {
+            for len in 2..word.len() {
+                s.insert(word[..len].to_string());
+            }
+        }
+        s
+    })
+}
+
+fn common_speaker_token(w: &str) -> bool {
+    common_speaker_tokens().contains(w)
+}
+
+fn inflectional_tail(nick: &str, full: &str) -> bool {
+    matches!(
+        full.strip_prefix(nick),
+        Some("s" | "es" | "ed" | "ing" | "er" | "ers" | "ly")
+    )
+}
+
+struct SurfaceTok {
+    lower: String,
+    title_case: bool,
+    sentence_initial: bool,
+}
+
+fn surface_tokens(text: &str) -> Vec<SurfaceTok> {
+    let mut out = Vec::new();
+    let mut sentence_initial = true;
+    let mut current = String::new();
+    let flush = |current: &mut String, sentence_initial: bool, out: &mut Vec<SurfaceTok>| {
+        if current.is_empty() {
+            return;
+        }
+        let piece = std::mem::take(current);
+        let owned = piece.clone();
+        let lower_piece = owned.to_lowercase();
+        let cleaned_lower = clean_contraction(&lower_piece);
+        let cleaned_raw = if cleaned_lower.len() == lower_piece.len() {
+            owned
+        } else {
+            let keep = cleaned_lower.chars().count();
+            owned.chars().take(keep).collect()
+        };
+        if cleaned_raw.is_empty() {
+            return;
+        }
+        let mut chars = cleaned_raw.chars();
+        let first_upper = chars.next().is_some_and(|c| c.is_ascii_uppercase());
+        let rest_lower = chars.all(|c| !c.is_ascii_uppercase());
+        let lower: String = cleaned_raw.chars().flat_map(|c| c.to_lowercase()).collect();
+        if lower.is_empty() {
+            return;
+        }
+        out.push(SurfaceTok {
+            lower,
+            title_case: first_upper && rest_lower,
+            sentence_initial,
+        });
+    };
+    for ch in text.chars() {
+        let keep = ch.is_alphanumeric() || ch == '\'' || ch == '’';
+        if keep {
+            current.push(ch);
+            continue;
+        }
+        let was_empty = current.is_empty();
+        flush(&mut current, sentence_initial, &mut out);
+        if matches!(ch, '.' | '?' | '!' | '\n') {
+            sentence_initial = true;
+        } else if !was_empty {
+            sentence_initial = false;
+        }
+    }
+    flush(&mut current, sentence_initial, &mut out);
+    out
+}
+
+impl SpeakerNickIndex {
+    fn build(sessions: &[Session]) -> Self {
+        let mut exact_roles: HashSet<String> = HashSet::new();
+        let mut targets: HashSet<String> = HashSet::new();
+        let mut lower_attested: HashSet<String> = HashSet::new();
+        let mut texts: Vec<&str> = Vec::new();
+        for s in sessions {
+            for t in &s.turns {
+                texts.push(t.content.as_str());
+                let role = t.role.trim();
+                if role.is_empty()
+                    || role.eq_ignore_ascii_case("user")
+                    || role.eq_ignore_ascii_case("assistant")
+                {
+                    continue;
+                }
+                for w in raw_tokens(role) {
+                    exact_roles.insert(w.clone());
+                    if w.len() >= 4
+                        && !STARTER_STOP.contains(&w.as_str())
+                        && !stopwords().contains(w.as_str())
+                    {
+                        targets.insert(w);
+                    }
+                }
+            }
+        }
+        for text in &texts {
+            for tok in surface_tokens(text) {
+                if !tok.title_case {
+                    lower_attested.insert(tok.lower);
+                }
+            }
+        }
+        let mut hits: HashMap<String, Vec<String>> = HashMap::new();
+        let mut ordered: Vec<&String> = targets.iter().collect();
+        ordered.sort();
+        for name in ordered {
+            for len in 2..=5 {
+                if name.len() < len + NICK_TAIL {
+                    continue;
+                }
+                let p = &name[..len];
+                if exact_roles.contains(p) || common_speaker_token(p) || inflectional_tail(p, name) {
+                    continue;
+                }
+                hits.entry(p.to_string()).or_default().push(name.clone());
+            }
+        }
+        let mut prefix_of: HashMap<String, String> = HashMap::new();
+        for (p, mut names) in hits {
+            names.sort();
+            names.dedup();
+            if names.len() == 1 {
+                prefix_of.insert(p, names.pop().unwrap());
+            }
+        }
+        let mut witnessed: HashMap<String, HashSet<String>> = HashMap::new();
+        for text in &texts {
+            for tok in surface_tokens(text) {
+                if !tok.title_case {
+                    continue;
+                }
+                let Some(full) = prefix_of.get(&tok.lower) else { continue };
+                if tok.sentence_initial && lower_attested.contains(&tok.lower) {
+                    continue;
+                }
+                witnessed.entry(full.clone()).or_default().insert(tok.lower);
+            }
+        }
+        Self { prefix_of, witnessed, lower_attested }
+    }
+
+    fn bind_token(&self, tok: &SurfaceTok, sentence_initial: bool) -> Option<&str> {
+        if !tok.title_case || common_speaker_token(&tok.lower) {
+            return None;
+        }
+        let full = self.prefix_of.get(&tok.lower)?;
+        if sentence_initial && self.lower_attested.contains(&tok.lower) {
+            return None;
+        }
+        let seen = self.witnessed.get(full);
+        let witnessed_this = seen.is_some_and(|s| s.contains(&tok.lower));
+        if !(3..=4).contains(&tok.lower.len()) && !witnessed_this {
+            return None;
+        }
+        if seen.is_some_and(|s| !s.is_empty() && !s.contains(&tok.lower)) {
+            return None;
+        }
+        Some(full.as_str())
+    }
+
+    fn bindings_in(&self, text: &str) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for tok in surface_tokens(text) {
+            if let Some(full) = self.bind_token(&tok, tok.sentence_initial) {
+                out.insert(tok.lower, full.to_string());
+            }
+        }
+        out
+    }
+}
+
 fn build_index(sessions: &[Session], p: &Params) -> Index {
+    const BACKCHANNEL_LEADS: &[&str] = &[
+        "wow", "oh", "aw", "aww", "haha", "hahaha", "lol", "nice", "cool", "awesome",
+        "congrats", "congratulations", "yay", "sweet", "amazing", "wonderful", "fantastic",
+        "thanks", "thank", "sorry", "glad", "ouch", "yikes",
+    ];
+    const BLIP_STOPLIST: &[&str] = &[
+        "photo", "picture", "image", "man", "woman", "person", "people", "group", "standing",
+        "sitting", "holding", "wearing", "smiling", "table", "room", "background", "white",
+        "black", "young", "two", "close", "up", "front", "next", "looking", "camera",
+    ];
+    const USER_SCHEMA_CUES: &[&str] = &[
+        "i always ", "i usually ", "i tend to ", "my go-to", "my usual",
+        "i switched to ", "i stick to ", "i stick with ", "fan of ",
+        "i'm into ", "im into ", "i love ", "i prefer ", "i enjoy ", "my favorite", "my favourite",
+    ];
+    const STATE_REVISION_CUES: &[&str] = &[
+        "actually", "switched to", "moved to", "relocated to", "changed to", "now use",
+        "now live", "no longer", "instead of", "used to ", "anymore", "upgraded to", "replaced",
+    ];
+
+    let nicks = SpeakerNickIndex::build(sessions);
     let mut vocab = Vocab::default();
     let mut turns: Vec<TurnIx> = Vec::new();
     let mut session_ids = Vec::new();
     let mut session_ts = Vec::new();
+    let mut session_ep_keys = Vec::with_capacity(sessions.len());
     let mut session_turns = Vec::new();
     let mut session_entities = Vec::with_capacity(sessions.len());
     let mut session_content = Vec::with_capacity(sessions.len());
+    let mut domain_session_df: HashMap<&'static str, u32> = HashMap::new();
+    let mut raw_standing_rules: Vec<(String, usize, usize, i64, bool, Vec<String>)> = Vec::new();
+    let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
+    let mut turn_prose_cache: Vec<String> = Vec::new();
     let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
+    let hard_constraint_set: HashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
+    let mut constraint_terms: HashSet<u32> = HashSet::new();
+    let mut header_dict: HashMap<u64, Vec<HeaderKey>> = HashMap::new();
+    let mut header_max_words = 0usize;
+    for (si, s) in sessions.iter().enumerate() {
+        let Some(first) = s.turns.first() else { continue };
+        let Some((full_h, core_h)) = extract_header_titles(&first.content) else { continue };
+        for (span_str, mult) in [(full_h, 1.0f32), (core_h, 0.88f32)] {
+            let htoks = norm_span_tokens(span_str);
+            if htoks.is_empty() || htoks.len() > 10 {
+                continue;
+            }
+            if htoks.len() == 1 && (htoks[0].len() < 3 || stopwords().contains(htoks[0].as_str())) {
+                continue;
+            }
+            header_max_words = header_max_words.max(htoks.len());
+            let hids: Vec<u32> = htoks.iter().map(|w| vocab.intern(w)).collect();
+            let hh = hash_u32_slice(&hids);
+            let bucket = header_dict.entry(hh).or_default();
+            if let Some(existing) = bucket.iter_mut().find(|k| k.tokens == hids) {
+                if let Some(pair) = existing.sessions.iter_mut().find(|(id, _)| *id == si) {
+                    pair.1 = pair.1.max(mult);
+                } else {
+                    existing.sessions.push((si, mult));
+                }
+            } else {
+                bucket.push(HeaderKey { tokens: hids, sessions: vec![(si, mult)] });
+            }
+        }
+    }
+
+    // Pre-pass: collect exact single-token proper names evidenced by speakers, mid-clause
+    // capitalization, multi-word entity parts, or document header titles so sentence-initial
+    // occurrences of the same byte-equal name bind to the same identity node.
+    let mut known_proper: HashSet<String> = HashSet::new();
+    for s in sessions {
+        for t in &s.turns {
+            let sp = t.role.trim().to_lowercase();
+            if !sp.is_empty() && sp != "user" && sp != "assistant" {
+                for w in raw_tokens(&sp) {
+                    if w.len() >= 3 && !STARTER_STOP.contains(&w.as_str()) && !stopwords().contains(w.as_str()) {
+                        known_proper.insert(w);
+                    }
+                }
+            }
+            for ent in proper_entity_tokens(&t.content) {
+                if let Some(body) = ent.strip_prefix("\u{1}ent:") {
+                    if !body.contains('_') && body.len() >= 3 {
+                        known_proper.insert(body.to_string());
+                    }
+                }
+            }
+        }
+    }
 
     for (si, s) in sessions.iter().enumerate() {
         let ts = if s.date.is_empty() { s.timestamp } else { match parse_date(&s.date) { 0 => s.timestamp, t => t } };
         session_ids.push(s.id.clone());
         session_ts.push(ts);
+        session_ep_keys.push(session_episode_key(&s.id, &s.date));
         let date_toks = if p.enable_deictic && ts != 0 { calendar_tokens(ts) } else { Vec::new() };
         let mut members = Vec::new();
         let mut s_ents = HashSet::new();
         let mut s_cont = HashSet::new();
+        let mut s_doms: HashSet<&'static str> = HashSet::new();
+        let mut speaker_names: HashSet<String> = HashSet::new();
+        for t in &s.turns {
+            let sp = t.role.trim().to_lowercase();
+            if !sp.is_empty() && sp != "user" && sp != "assistant" {
+                for w in raw_tokens(&sp) {
+                    speaker_names.insert(w);
+                }
+            }
+        }
+        // Collect named speakers in this session so vocative address ("Thanks, Caroline!")
+        // is capped at speaker identity parity (0.72) and never outranks Caroline speaking.
+        let mut sess_other_speakers: HashMap<usize, HashSet<String>> = HashMap::new();
+        for (idx_a, ta) in s.turns.iter().enumerate() {
+            let spa = ta.role.trim().to_lowercase();
+            let mut others = HashSet::new();
+            for (idx_b, tb) in s.turns.iter().enumerate() {
+                if idx_a == idx_b {
+                    continue;
+                }
+                let spb = tb.role.trim().to_lowercase();
+                if !spb.is_empty() && spb != "user" && spb != "assistant" && spb != spa {
+                    for sw in raw_tokens(&spb) {
+                        if let Some(set) = nicks.witnessed.get(&sw) {
+                            for nick in set {
+                                others.insert(nick.clone());
+                            }
+                        }
+                        others.insert(sw);
+                    }
+                }
+            }
+            sess_other_speakers.insert(idx_a, others);
+        }
+
         for (ti, t) in s.turns.iter().enumerate() {
-            let raw = raw_tokens(&t.content);
+            let (prose_body, blip_opt) = split_blip_caption(&t.content);
+            let raw = raw_tokens(prose_body);
+            let nick_bound = nicks.bindings_in(prose_body);
             let role = t.role.trim();
+            let speaker = role.to_lowercase();
+            let vocative_partners = sess_other_speakers.get(&ti);
             let field = usize::from(p.enable_roles && role.eq_ignore_ascii_case("assistant"));
             let mut feats = Vec::new();
+            let mut blip_feats = Vec::new();
             let mut seq = Vec::new();
             let mut content = HashSet::new();
             let mut entities = HashSet::new();
+            let mut t_doms: Vec<&'static str> = Vec::new();
+            let mut tech_handles: Vec<u32> = Vec::new();
             for w in raw.iter().filter(|w| is_content(w)) {
+                let is_vocative_partner = vocative_partners.is_some_and(|vp| vp.contains(w.as_str()));
                 let e = vocab.intern(w);
-                feats.push(Feat { id: e, w: 1.0, counts_len: true, inheritable: true });
+                let tok_w = if is_vocative_partner { 0.72 } else { 1.0 };
+                feats.push(Feat { id: e, w: tok_w, counts_len: true, inheritable: !is_vocative_partner });
                 content.insert(e);
                 s_cont.insert(e);
+                if let Some(full) = nick_bound.get(w.as_str()) {
+                    if !raw.iter().any(|t_tok| t_tok == full) {
+                        let voc = vocative_partners.is_some_and(|vp| vp.contains(full.as_str()) || vp.contains(w.as_str()));
+                        let fid = vocab.intern(full);
+                        feats.push(Feat {
+                            id: fid,
+                            w: if voc { 0.72 } else { 1.0 },
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                    }
+                }
                 let st = stem(w);
                 let sid = if p.enable_stemming { vocab.intern(&stem_term(&st)) } else { e };
-                if p.enable_stemming {
+                if p.enable_stemming && !is_vocative_partner {
                     feats.push(Feat { id: sid, w: 1.0, counts_len: false, inheritable: true });
                 }
                 seq.push((e, sid));
-                if p.enable_hypernyms {
-                    if let Some(doms) = hypernyms().get(&st) {
-                        for d in doms {
+                if let Some(doms) = hypernyms().get(&st) {
+                    for &d in doms {
+                        s_doms.insert(d);
+                        if !t_doms.contains(&d) {
+                            t_doms.push(d);
+                        }
+                        if p.enable_hypernyms {
                             feats.push(Feat { id: vocab.intern(&hyp_term(d)), w: 1.0, counts_len: false, inheritable: true });
                         }
                     }
                 }
+                if known_proper.contains(w) && !is_vocative_partner {
+                    let eid = vocab.intern(&format!("\u{1}ent:{w}"));
+                    entities.insert(eid);
+                    s_ents.insert(eid);
+                }
             }
-            for ent in proper_entity_tokens(&t.content) {
+            // Stream 2: Auxiliary BLIP caption field (w=0.75, b_blip=0, counts_len:false, inheritable:false)
+            if let Some(cap) = blip_opt {
+                for bw in raw_tokens(cap).into_iter().filter(|w| is_content(w) && !BLIP_STOPLIST.contains(&w.as_str())) {
+                    let bid = vocab.intern(&bw);
+                    blip_feats.push(Feat { id: bid, w: 1.0, counts_len: false, inheritable: false });
+                    if p.enable_stemming {
+                        let bst = stem(&bw);
+                        let bsid = vocab.intern(&stem_term(&bst));
+                        blip_feats.push(Feat { id: bsid, w: 0.75, counts_len: false, inheritable: false });
+                    }
+                }
+                for bent in proper_entity_tokens(cap) {
+                    let eid = vocab.intern(&bent);
+                    blip_feats.push(Feat { id: eid, w: 0.85, counts_len: false, inheritable: false });
+                    entities.insert(eid);
+                    s_ents.insert(eid);
+                }
+            }
+            // Pre-saturation BM25F title boost for structured `{Title}\n{Body}` documents.
+            if let Some(core_title) = extract_header_title(prose_body) {
+                for hw in raw_tokens(core_title).into_iter().filter(|w| is_content(w)) {
+                    let hid = vocab.intern(&hw);
+                    feats.push(Feat { id: hid, w: 1.5, counts_len: true, inheritable: false });
+                    if p.enable_stemming {
+                        let hst = stem(&hw);
+                        let hsid = vocab.intern(&stem_term(&hst));
+                        feats.push(Feat { id: hsid, w: 1.0, counts_len: false, inheritable: false });
+                    }
+                }
+            }
+            for ent in proper_entity_tokens(prose_body) {
+                if let Some(body) = ent.strip_prefix("\u{1}ent:") {
+                    if !body.contains('_') && vocative_partners.is_some_and(|vp| vp.contains(body)) {
+                        continue;
+                    }
+                }
                 let eid = vocab.intern(&ent);
                 feats.push(Feat { id: eid, w: 1.0, counts_len: false, inheritable: true });
                 entities.insert(eid);
                 s_ents.insert(eid);
             }
-            let lower = t.content.to_lowercase();
-            let pref_marker = raw.iter().any(|w| pref_set.contains(w.as_str()))
-                || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m));
+            for raw_word in prose_body.split_whitespace() {
+                let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+                if word.is_empty() {
+                    continue;
+                }
+                for (part, aux_w) in surface_aux_tokens(word) {
+                    if raw.iter().any(|t_tok| t_tok == &part) {
+                        continue;
+                    }
+                    let id = vocab.intern(&part);
+                    feats.push(Feat { id, w: aux_w, counts_len: false, inheritable: false });
+                }
+            }
+            let lower = prose_body.to_lowercase();
+            let pref_marker = user_preference_speech_act(&lower, &raw, &pref_set);
+            let is_personal_constraint = field == 0
+                && (raw.iter().any(|w| hard_constraint_set.contains(w.as_str()))
+                    || HARD_CONSTRAINT_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m)));
+            let is_user_schema = field == 0
+                && (pref_marker
+                    || habitual_perfect(&lower)
+                    || USER_SCHEMA_CUES.iter().any(|c| lower.contains(c)));
             if p.enable_preference && pref_marker && field == 0 {
                 feats.push(Feat { id: vocab.intern(PREF_AXIS), w: 1.0, counts_len: false, inheritable: false });
             }
@@ -1094,62 +3171,341 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 for (d, w) in deictic_weighted_tokens(&raw, ts) {
                     feats.push(Feat { id: vocab.intern(&d), w, counts_len: false, inheritable: false });
                 }
-                for d in inline_date_tokens(&t.content) {
+                for d in inline_date_tokens(prose_body) {
                     feats.push(Feat { id: vocab.intern(&d), w: 0.9, counts_len: false, inheritable: false });
                 }
                 for d in &date_toks {
                     feats.push(Feat { id: vocab.intern(d), w: p.date_weight, counts_len: false, inheritable: false });
                 }
             }
-            let speaker = role.to_lowercase();
             if !speaker.is_empty() && speaker != "user" && speaker != "assistant" {
                 for w in raw_tokens(&speaker) {
-                    feats.push(Feat { id: vocab.intern(&w), w: 1.0, counts_len: false, inheritable: false });
+                    let id = vocab.intern(&w);
+                    // Speaker identity edge: own speech carries full parity (1.05) over vocative address.
+                    feats.push(Feat { id, w: 1.05, counts_len: false, inheritable: false });
+                    let eid = vocab.intern(&format!("\u{1}ent:{w}"));
+                    entities.insert(eid);
+                    s_ents.insert(eid);
                 }
             }
-            let (is_question, is_short_question) = detect_question(&t.content, raw.len());
+            for obj in constraint_object_tokens(&lower) {
+                let id = vocab.intern(&obj);
+                feats.push(Feat { id, w: 1.8, counts_len: false, inheritable: true });
+                content.insert(id);
+                s_cont.insert(id);
+                constraint_terms.insert(id);
+            }
+            for (slot_key, slot_val) in typed_slot_tokens(prose_body) {
+                let slot_ent = vocab.intern(&format!("\u{1}slot:{slot_key}"));
+                let kid = vocab.intern(&slot_key);
+                let vid = vocab.intern(&slot_val);
+                feats.push(Feat { id: kid, w: 0.5, counts_len: false, inheritable: false });
+                feats.push(Feat { id: vid, w: 1.6, counts_len: false, inheritable: true });
+                feats.push(Feat { id: slot_ent, w: 0.8, counts_len: false, inheritable: false });
+                content.insert(vid);
+                s_cont.insert(vid);
+                entities.insert(slot_ent);
+                s_ents.insert(slot_ent);
+                tech_handles.push(slot_ent);
+            }
+            for h_str in extract_exact_technical_handles(prose_body) {
+                let hid = vocab.intern(&h_str);
+                feats.push(Feat { id: hid, w: 1.25, counts_len: false, inheritable: true });
+                entities.insert(hid);
+                s_ents.insert(hid);
+                tech_handles.push(hid);
+            }
+            let (is_question, is_short_question) = detect_question(prose_body, raw.len());
+            let qshape = analyze_question(&mut vocab, prose_body, is_question, p.enable_stemming, &speaker_names);
+            let is_pure_info_question = qshape.is_pure;
             let anaphoric = raw.first().is_some_and(|w| CONTINUATIONS.contains(&w.as_str()))
                 || raw.iter().take(12).any(|w| ANAPHORS.contains(&w.as_str()));
             let has_temporal = raw.iter().any(|w| {
-                MONTHS.contains(&w.as_str())
-                    || WEEKDAYS.contains(&w.as_str())
-                    || ["yesterday", "tomorrow", "ago", "week", "month", "year", "am", "pm", "today", "tonight"].contains(&w.as_str())
-                    || (w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()))
+                token_is_temporal_word(w.as_str())
+                    || ["am", "pm"].contains(&w.as_str())
                     || (w.len() >= 3 && (w.ends_with("st") || w.ends_with("nd") || w.ends_with("rd") || w.ends_with("th")) && w[..w.len()-2].chars().all(|c| c.is_ascii_digit()))
             });
-            let has_numeric = t.content.chars().any(|c| c.is_ascii_digit())
+            let has_numeric = prose_body.chars().any(|c| c.is_ascii_digit())
                 || raw.iter().any(|w| NUMBER_WORDS.contains(&w.as_str()));
             let has_spatial = raw.iter().any(|w| SPATIAL_WORDS.contains(&w.as_str()));
-            let has_causal = CAUSAL_WORDS.iter().any(|c| lower.contains(c));
+            let padded_lower = word_padded(&lower);
+            let has_causal = has_any(&padded_lower, CAUSAL_WORDS);
+            let is_standing_policy = field == 0 && utterance_is_standing_policy(prose_body);
+            let is_backchannel = !is_question
+                && content.len() <= 4
+                && !has_temporal
+                && !has_numeric
+                && entities.is_empty()
+                && !pref_marker
+                && !is_standing_policy
+                && raw.first().is_some_and(|w| BACKCHANNEL_LEADS.contains(&w.as_str()));
+            let is_initiative = field == 0
+                && !is_standing_policy
+                && !anaphoric
+                && !is_short_question
+                && content.len() >= 4;
+            let turn_idx = turns.len();
+            if is_standing_policy {
+                let (has_explicit_scope, scope_words) = extract_rule_scope(prose_body);
+                raw_standing_rules.push((
+                    standing_policy_id(prose_body),
+                    turn_idx,
+                    si,
+                    ts,
+                    has_explicit_scope,
+                    scope_words,
+                ));
+            }
             let id = if t.id.is_empty() { format!("{}#{}", s.id, ti) } else { t.id.clone() };
-            members.push(turns.len());
+            let body_for_headers = if header_max_words > 0 {
+                let body = if extract_header_titles(prose_body).is_some() {
+                    prose_body.split_once('\n').map(|(_, rest)| rest).unwrap_or(prose_body)
+                } else {
+                    prose_body
+                };
+                body.to_string()
+            } else {
+                String::new()
+            };
+            turn_tech_handles.push(tech_handles);
+            turn_prose_cache.push(prose_body.to_string());
+            members.push(turn_idx);
             turns.push(TurnIx {
                 session: si,
                 id,
                 field,
                 feats,
+                blip_feats,
                 seq,
                 content,
                 entities,
+                body_for_headers,
+                span_ids_cache: OnceLock::new(),
                 speaker,
                 is_question,
+                is_pure_info_question,
+                pre_question_ids: qshape.pre_ids,
+                question_clause_ids: qshape.clause_ids,
                 answers_question: false,
+                is_short_reply: false,
+                is_backchannel,
                 anaphoric,
                 pref_marker,
+                is_personal_constraint,
+                is_user_schema,
+                schema_domains: t_doms,
                 has_temporal,
                 has_numeric,
                 has_spatial,
                 has_causal,
                 is_short_question,
+                is_standing_policy,
+                is_initiative,
+                answers: None,
+                exact_edges: Vec::new(),
+                supersedes_turns: Vec::new(),
+                stability: t.stability,
+                raw_links: t.links.clone(),
             });
+        }
+        for d in s_doms {
+            *domain_session_df.entry(d).or_insert(0) += 1;
         }
         session_turns.push(members);
         session_entities.push(s_ents);
         session_content.push(s_cont);
     }
+    let _ = STATE_REVISION_CUES;
 
-    // Session bags (own text only) and turn bags (own text + centering carry-forward).
+    // Mark DAMSL adjacency pairs before bag construction: question/answer pairs AND
+    // short value/commitment replies to preceding statements ("Done.", "Last Tuesday.", "Me too!").
+    for members in &session_turns {
+        for pos in 1..members.len() {
+            let (a, b) = (members[pos - 1], members[pos]);
+            if turns[a].speaker != turns[b].speaker {
+                turns[b].answers = Some(a);
+                if turns[a].is_question {
+                    turns[b].answers_question = true;
+                }
+                if !turns[b].is_question
+                    && !turns[b].is_backchannel
+                    && turns[b].content.len() <= 5
+                    && (turns[a].is_question
+                        || turns[b].anaphoric
+                        || turns[b].content.len() <= 2
+                        || turns[b].has_temporal
+                        || turns[b].has_numeric)
+                {
+                    turns[b].is_short_reply = true;
+                }
+            }
+        }
+    }
+
+    let mut id_at: HashMap<String, usize> = HashMap::new();
+    for (i, t) in turns.iter().enumerate() {
+        if !t.id.is_empty() {
+            id_at.entry(t.id.clone()).or_insert(i);
+        }
+    }
+    for ti in 0..turns.len() {
+        let pending = std::mem::take(&mut turns[ti].raw_links);
+        for link in pending {
+            let Some(&target) = id_at.get(&link.to) else { continue };
+            if target == ti {
+                continue;
+            }
+            turns[ti].exact_edges.push((link.degree.max(2), target));
+        }
+    }
+
+    // ---- Ingest-Time Retroactive Salience Backfill (RSB), Contradiction Supersession,
+    //      Synaptic Tagging 9h CaptureWindow, and Temporal Context Episode Contiguity ----
+    // Strictly BACKWARD-ONLY (`later -> earlier`). Zero forward edges, zero word similarity.
+    let ns_count = session_turns.len();
+    let mut session_rsb_back: Vec<Vec<(u32, usize)>> = vec![Vec::new(); ns_count];
+    let mut session_supersedes_back: Vec<Vec<usize>> = vec![Vec::new(); ns_count];
+    let mut session_episode_prev: Vec<Option<usize>> = vec![None; ns_count];
+    for si in 1..ns_count {
+        let same_ep = !session_ep_keys[si].is_empty() && session_ep_keys[si] == session_ep_keys[si - 1];
+        let same_nonzero_ts = session_ts[si] > 0 && session_ts[si] == session_ts[si - 1];
+        if same_ep || same_nonzero_ts {
+            session_episode_prev[si] = Some(si - 1);
+        }
+    }
+
+    // 1. Exact Technical Handle & Typed Slot RSB (`df <= 6`): later turn/session -> earlier turn/session.
+    let mut handle_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (ti, hs) in turn_tech_handles.iter().enumerate() {
+        for &h in hs {
+            let list = handle_postings.entry(h).or_default();
+            if list.last().copied() != Some(ti) {
+                list.push(ti);
+            }
+        }
+    }
+    for (_, list) in handle_postings {
+        let deg = list.len() as u32;
+        if !(2..=6).contains(&deg) {
+            continue;
+        }
+        for idx in 1..list.len() {
+            let later = list[idx];
+            let earlier = list[idx - 1];
+            if !turns[later].exact_edges.iter().any(|&(_, t)| t == earlier) {
+                turns[later].exact_edges.push((deg, earlier));
+            }
+            let s_lat = turns[later].session;
+            let s_ear = turns[earlier].session;
+            if s_lat > s_ear && !session_rsb_back[s_lat].iter().any(|&(_, s)| s == s_ear) {
+                session_rsb_back[s_lat].push((deg, s_ear));
+            }
+        }
+    }
+
+    // 2. State-Update & Structural Contradiction Supersession Chain (`appears_contradictory`):
+    //    When two user turns share a rare proper entity (`2 <= df <= 8`) or constraint object
+    //    and either `advanced::contradiction::appears_contradictory` fires or the later turn
+    //    asserts an explicit revision/constraint, record a backward `supersedes` edge (`later -> earlier`).
+    let mut ent_user_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (ti, t) in turns.iter().enumerate() {
+        if t.field != 0 || t.is_question || t.is_backchannel {
+            continue;
+        }
+        for &eid in &t.entities {
+            ent_user_postings.entry(eid).or_default().push(ti);
+        }
+        for &cid in &t.content {
+            if constraint_terms.contains(&cid) {
+                ent_user_postings.entry(cid).or_default().push(ti);
+            }
+        }
+    }
+    for (_, mut list) in ent_user_postings {
+        list.dedup();
+        if !(2..=8).contains(&list.len()) {
+            continue;
+        }
+        for idx in 1..list.len() {
+            let later = list[idx];
+            let prev = list[idx - 1];
+            let s_lat = turns[later].session;
+            let s_prev = turns[prev].session;
+            if s_lat <= s_prev {
+                continue;
+            }
+            let lat_prose = &turn_prose_cache[later];
+            let prev_prose = &turn_prose_cache[prev];
+            let lat_low = lat_prose.to_lowercase();
+            let has_rev_cue = turns[later].is_personal_constraint
+                || STATE_REVISION_CUES.iter().any(|c| lat_low.contains(c));
+            let contradicts = crate::advanced::contradiction::appears_contradictory(
+                prev_prose,
+                lat_prose,
+                crate::advanced::contradiction::SubjectIdentity::AlreadyEstablished,
+            );
+            if contradicts || has_rev_cue {
+                if !turns[later].supersedes_turns.contains(&prev) {
+                    turns[later].supersedes_turns.push(prev);
+                }
+                if !session_supersedes_back[s_lat].contains(&s_prev) {
+                    session_supersedes_back[s_lat].push(s_prev);
+                }
+            }
+        }
+    }
+
+    // 3. Synaptic Tagging `CaptureWindow` (Frey & Morris 1997; Redondo & Morris 2011; 9-hour window):
+    //    A high-salience turn (`is_standing_policy`, `is_personal_constraint`, or `FAILURE_MARKERS`)
+    //    captures the immediately preceding tagged user initiative turn within `CaptureWindow::backward_hours` (9h)
+    //    or the immediate preceding same-episode sub-session (`session_episode_prev`).
+    let capture_window = crate::neuroscience::CaptureWindow::default();
+    let max_back_secs = (capture_window.backward_hours * 3600.0) as i64;
+    for ti in 1..turns.len() {
+        let lower_p = turn_prose_cache[ti].to_lowercase();
+        let is_failure_prp = turns[ti].field == 0
+            && !turns[ti].is_question
+            && crate::advanced::retroactive_backfill::FAILURE_MARKERS
+                .iter()
+                .any(|m| lower_p.contains(m));
+        let is_prp = turns[ti].is_standing_policy || turns[ti].is_personal_constraint || is_failure_prp;
+        if !is_prp {
+            continue;
+        }
+        let s_cur = turns[ti].session;
+        let ts_cur = session_ts[s_cur];
+        // Search backward for the closest preceding user initiative turn inside the 9h capture window (or same episode).
+        for back_s in (0..s_cur).rev() {
+            let ts_prev = session_ts[back_s];
+            let in_clock_window = ts_cur > 0 && ts_prev > 0 && ts_cur >= ts_prev && (ts_cur - ts_prev) <= max_back_secs;
+            let is_ep_prev = session_episode_prev[s_cur] == Some(back_s);
+            if !in_clock_window && !is_ep_prev {
+                if ts_cur > 0 && ts_prev > 0 && (ts_cur - ts_prev) > max_back_secs {
+                    break;
+                }
+                continue;
+            }
+            if let Some(&init_ti) = session_turns[back_s].iter().rev().find(|&&cand| turns[cand].is_initiative) {
+                // Require at least 1 shared entity or schema domain so unrelated adjacent topics don't capture blindly.
+                let shares_anchor = turns[ti].entities.iter().any(|e| turns[init_ti].entities.contains(e))
+                    || turns[ti].schema_domains.iter().any(|d| turns[init_ti].schema_domains.contains(d));
+                if shares_anchor {
+                    if !turns[ti].exact_edges.iter().any(|&(_, t)| t == init_ti) {
+                        turns[ti].exact_edges.push((3, init_ti));
+                    }
+                    if !session_rsb_back[s_cur].iter().any(|&(_, s)| s == back_s) {
+                        session_rsb_back[s_cur].push((3, back_s));
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Session bags (own text + field-2 BLIP), uncarried turn bags (`turn_own_bags`),
+    // and carried turn bags (`turn_bags` — never carrying into questions!).
     let mut session_bags = Vec::with_capacity(session_turns.len());
+    let mut turn_own_bags: Vec<Bag> = (0..turns.len()).map(|_| Bag::default()).collect();
     let mut turn_bags: Vec<Bag> = (0..turns.len()).map(|_| Bag::default()).collect();
     for members in &session_turns {
         let mut sb = Bag::default();
@@ -1157,12 +3513,30 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let t = &turns[ti];
             for &f in &t.feats {
                 sb.add(t.field, f, 1.0);
+                turn_own_bags[ti].add(t.field, f, 1.0);
                 turn_bags[ti].add(t.field, f, 1.0);
             }
-            if p.enable_carry && pos > 0 {
-                let prev = &turns[members[pos - 1]];
-                let answer = prev.is_question && prev.speaker != t.speaker;
-                let factor = if answer || t.anaphoric { 1.0 } else { p.carry_plain_factor };
+            for &bf in &t.blip_feats {
+                sb.add(2, bf, 1.0);
+                turn_own_bags[ti].add(2, bf, 1.0);
+                turn_bags[ti].add(2, bf, 1.0);
+            }
+            // In named-speaker dialogues (`LoCoMo`), a follow-up question does NOT state the
+            // previous speaker's facts; in `user`/`assistant` dialogues, user follow-up questions
+            // still inherit conversational context (`pos - k`).
+            let is_named_speaker_q = t.is_question
+                && !t.speaker.is_empty()
+                && t.speaker != "user"
+                && t.speaker != "assistant";
+            if p.enable_carry && pos > 0 && !is_named_speaker_q {
+                let answer = t.answers_question;
+                let factor = if t.is_backchannel {
+                    0.15
+                } else if answer || t.anaphoric {
+                    0.85
+                } else {
+                    p.carry_plain_factor
+                };
                 let field = t.field;
                 let mut inherited: Vec<(Feat, f32)> = Vec::new();
                 for k in 1..=3usize {
@@ -1170,30 +3544,34 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                         break;
                     }
                     let src = &turns[members[pos - k]];
-                    let w = if k == 1 && answer { p.carry_answer } else { p.carry[k - 1] * factor };
+                    let w = if k == 1 && answer {
+                        p.carry_answer
+                    } else if k == 1 && t.is_short_reply {
+                        0.75
+                    } else {
+                        p.carry[k - 1] * factor
+                    };
                     if w <= 0.0 {
                         continue;
                     }
                     // Inherit open-class content (exact + stem + hypernym + proper entities), never speaker tag or dates.
                     for &f in src.feats.iter().filter(|f| f.inheritable) {
-                        inherited.push((Feat { counts_len: false, ..f }, w));
+                        inherited.push((f, w));
                     }
                 }
                 for (f, w) in inherited {
-                    turn_bags[ti].add(field, f, w);
+                    turn_bags[ti].add_inherited(field, f, w);
+                }
+            }
+            // Third-position uptake: a concise value-bearing turn inherits light context from pos + 1.
+            if p.enable_carry && !t.is_backchannel && !t.is_question && t.content.len() <= 4 && pos + 1 < members.len() {
+                let nxt = &turns[members[pos + 1]];
+                for &f in nxt.feats.iter().filter(|f| f.inheritable) {
+                    turn_bags[ti].add_inherited(t.field, f, 0.25);
                 }
             }
         }
         session_bags.push(sb);
-    }
-    // Mark answer turns (second part of a question/answer adjacency pair).
-    for members in &session_turns {
-        for pos in 1..members.len() {
-            let (a, b) = (members[pos - 1], members[pos]);
-            if turns[a].is_question && turns[a].speaker != turns[b].speaker {
-                turns[b].answers_question = true;
-            }
-        }
     }
 
     // Max-passage windows.
@@ -1212,6 +3590,9 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 for &f in &turns[ti].feats {
                     b.add(turns[ti].field, f, 1.0);
                 }
+                for &bf in &turns[ti].blip_feats {
+                    b.add(2, bf, 1.0);
+                }
             }
             windows.push((si, start, end));
             window_bags.push(b);
@@ -1219,8 +3600,101 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     }
 
     let s_stats = stats_of(&session_bags);
+    let t_own_stats = stats_of(&turn_own_bags);
     let t_stats = stats_of(&turn_bags);
     let w_stats = stats_of(&window_bags);
+
+    // Precompute rarest non-hub tokens per session (`df >= 2 && df <= 0.20 * N`, up to 32 sorted)
+    // for GhostLink Ochiai divergence (`1 - |Nt(a) & Nt(b)| / sqrt(|Nt(a)| * |Nt(b)|)`).
+    let ns_total = session_bags.len();
+    let max_rare_nt_df = ((s_stats.n * 0.20).max(4.0)) as u32;
+    let session_rare_nt: Vec<Vec<u32>> = session_content
+        .iter()
+        .map(|sc| {
+            let mut v: Vec<(u32, u32)> = sc
+                .iter()
+                .filter_map(|&id| {
+                    let df = s_stats.df.get(&id).copied().unwrap_or(0);
+                    (df >= 2 && df <= max_rare_nt_df).then_some((df, id))
+                })
+                .collect();
+            v.sort_unstable();
+            let mut ids: Vec<u32> = v.into_iter().take(32).map(|(_, id)| id).collect();
+            ids.sort_unstable();
+            ids
+        })
+        .collect();
+
+    let dom_hub_cut = if ns_total >= 16 {
+        ((ns_total as f32 * 0.12).ceil() as u32).max(3)
+    } else {
+        u32::MAX
+    };
+    let non_hub_domains: HashSet<&'static str> = HYPERNYM_LATTICE
+        .iter()
+        .map(|(d, _)| *d)
+        .filter(|d| domain_session_df.get(d).copied().unwrap_or(0) <= dom_hub_cut)
+        .collect();
+
+    let fan_cut = if ns_total >= 16 {
+        ((s_stats.n * 0.12).max(4.0)) as u32
+    } else {
+        u32::MAX
+    };
+    let fw_set = framing_words();
+    let mut standing_rules = Vec::with_capacity(raw_standing_rules.len());
+    for (policy_key, turn_idx, sess_idx, ts, has_explicit_scope, scope_words) in raw_standing_rules {
+        let mut scope = HashSet::new();
+        let mut dom_vec: Vec<&'static str> = Vec::new();
+        for w in &scope_words {
+            if fw_set.contains(w.as_str()) {
+                continue;
+            }
+            if let Some(id) = vocab.get(w) {
+                if s_stats.df.get(&id).copied().unwrap_or(0) <= fan_cut {
+                    scope.insert(id);
+                }
+            }
+            let st = stem(w);
+            if let Some(sid) = vocab.get(&stem_term(&st)) {
+                if s_stats.df.get(&sid).copied().unwrap_or(0) <= fan_cut {
+                    scope.insert(sid);
+                }
+            }
+            if let Some(doms) = hypernyms().get(&st) {
+                for &d in doms {
+                    if non_hub_domains.contains(d) && !dom_vec.contains(&d) {
+                        dom_vec.push(d);
+                    }
+                }
+            }
+        }
+        let mut assistant_nouns = HashSet::new();
+        let members = &session_turns[sess_idx];
+        if let Some(pos) = members.iter().position(|&ti| ti == turn_idx) {
+            if pos + 1 < members.len() {
+                let adj = &turns[members[pos + 1]];
+                if adj.field == 1 {
+                    for &cid in &adj.content {
+                        if s_stats.df.get(&cid).copied().unwrap_or(0) <= fan_cut {
+                            assistant_nouns.insert(cid);
+                        }
+                    }
+                }
+            }
+        }
+        standing_rules.push(StandingRule {
+            policy_key,
+            turn: turn_idx,
+            session: sess_idx,
+            ts,
+            has_explicit_scope,
+            scope,
+            domains: dom_vec,
+            assistant_nouns,
+        });
+    }
+
     Index {
         vocab,
         session_ids,
@@ -1228,14 +3702,26 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_turns,
         session_entities,
         session_content,
+        session_rare_nt,
+        session_rsb_back,
+        session_supersedes_back,
+        session_episode_prev,
         turns,
         session_bags,
+        turn_own_bags,
         turn_bags,
         windows,
         window_bags,
         s_stats,
+        t_own_stats,
         t_stats,
         w_stats,
+        constraint_terms,
+        standing_rules,
+        non_hub_domains,
+        header_dict,
+        header_max_words,
+        nicks,
     }
 }
 
@@ -1248,6 +3734,7 @@ struct QTerm {
     id: u32,
     weight: f32,
     group: Option<usize>,
+    exact_hit: bool,
 }
 
 struct QueryPlan {
@@ -1256,19 +3743,98 @@ struct QueryPlan {
     groups: Vec<String>,
     /// term id -> group, for proximity scanning
     group_of: HashMap<u32, usize>,
+    focal_ids: HashSet<u32>,
+    focal_domains: HashSet<&'static str>,
 }
 
-fn has_any(hay: &str, cues: &[&str]) -> bool {
-    cues.iter().any(|c| hay.contains(c))
+/// Normalize punctuation (preserving internal apostrophes in contractions like `i'm` / `don't`)
+/// into single-space-padded lowercase tokens so word-boundary cue matching never misfires on
+/// substrings ("Army" != "my", "server" != "serve", "Miami's" != "i'", "claim" != "aim")
+/// and never strips literal "$0".
+fn word_padded(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 4);
+    out.push(' ');
+    let chars: Vec<char> = text.chars().collect();
+    let mut prev_space = true;
+    for (idx, &ch) in chars.iter().enumerate() {
+        let lower = ch.to_ascii_lowercase();
+        let is_apos = (lower == '\'' || lower == '’')
+            && idx > 0
+            && idx + 1 < chars.len()
+            && chars[idx - 1].is_alphanumeric()
+            && chars[idx + 1].is_alphanumeric();
+        // Glue a currency marker to the amount so "$0" stays the literal token "$0".
+        let is_currency = ch == '$' && idx + 1 < chars.len() && chars[idx + 1].is_ascii_digit();
+        if lower.is_alphanumeric() || is_currency {
+            out.push(if is_currency { '$' } else { lower });
+            prev_space = false;
+        } else if is_apos {
+            out.push('\'');
+            prev_space = false;
+        } else if !prev_space {
+            out.push(' ');
+            prev_space = true;
+        }
+    }
+    if !prev_space {
+        out.push(' ');
+    }
+    out
+}
+
+fn has_any(padded_hay: &str, cues: &[&str]) -> bool {
+    cues.iter().any(|c| {
+        if c.starts_with(' ') && c.ends_with(' ') {
+            padded_hay.contains(c)
+        } else if c.starts_with(' ') {
+            // Leading word boundary; allow suffix inflection on phrases like " recommend" / " suggest"
+            padded_hay.contains(c)
+        } else if c.ends_with(' ') {
+            let pat = format!(" {c}");
+            padded_hay.contains(&pat)
+        } else if c.contains(' ') {
+            // Multi-word phrase: require leading word boundary so "did i" matches " did i " or " did i'm"
+            let pat = format!(" {c}");
+            padded_hay.contains(&pat)
+        } else {
+            // Single un-spaced stem cue ("recommend", "suggest", "prefer", "chronological"):
+            // require leading word boundary (` {c}`) so "server" never matches "serve" and "knew" never matches "new",
+            // while "recommended" / "recommendation" still match ` recommend`.
+            let pat = format!(" {c}");
+            padded_hay.contains(&pat)
+        }
+    })
+}
+
+fn interrogative_when(padded: &str) -> bool {
+    if has_any(padded, WHEN_INTERROGATIVE_CUES) {
+        return true;
+    }
+    for cue in [" when should ", " when shouldn't ", " when shouldnt "] {
+        let mut start = 0;
+        while let Some(rel) = padded[start..].find(cue) {
+            let abs = start + rel;
+            let after = &padded[abs + cue.len()..];
+            if !(after.starts_with("i ") || after.starts_with("i'")) {
+                return true;
+            }
+            start = abs + cue.len();
+        }
+    }
+    false
 }
 
 pub fn classify(text: &str) -> QueryIntent {
-    let lower = format!(" {} ", text.to_lowercase().replace(['?', '!', ',', '.'], " $0").replace("$0", ""));
-    let lower = lower.replace("  ", " ");
+    let lower = word_padded(text);
     let content_groups = raw_tokens(text).into_iter().filter(|w| is_content(w)).collect::<HashSet<_>>().len();
-    let assistant_attribution = has_any(&lower, ASSISTANT_ATTRIBUTION_CUES);
-    let sniper_when = has_any(&lower, &[
-        "when ", "when did", "what date", "what time", "what year", "what month", "what day",
+    let user_initiative = has_any(&lower, USER_INITIATIVE_CUES);
+    let retrospective_user = user_initiative || has_any(&lower, TIMELINE_CUES);
+    let direct_assistant = has_any(&lower, ASSISTANT_ATTRIBUTION_CUES);
+    let collective_chat = has_any(&lower, COLLECTIVE_CHAT_CUES);
+    let assistant_attribution = direct_assistant || (collective_chat && !user_initiative);
+    let when_q = interrogative_when(&lower);
+    let sniper_when = when_q || has_any(&lower, &[
+        "what date", "what time", "what year", "what month", "what day",
         "how long", "how many days", "how many weeks", "how many months", "how many years",
     ]);
     let sniper_how_many = has_any(&lower, &[
@@ -1281,30 +3847,49 @@ pub fn classify(text: &str) -> QueryIntent {
     let sniper_why = has_any(&lower, &[
         "why ", "why did", "why does", "why was", "what reason", "how come",
     ]);
+    let is_event_sequence = has_any(&lower, &[
+        "order of", "order in which", "first to last", "earliest to latest",
+        "chronological", "order the", "order these", "timeline of", "i brought up",
+    ]);
     QueryIntent {
-        preference: has_any(&lower, PREF_QUERY_CUES),
+        preference: has_any(&lower, PREF_QUERY_CUES) && !retrospective_user,
         current_state: has_any(&lower, CURRENT_STATE_CUES),
         assistant_attribution,
         user_attribution: !assistant_attribution && has_any(&lower, USER_ATTRIBUTION_CUES),
         multi_hop: content_groups >= 3 && has_any(&lower, MULTI_HOP_CUES),
         inference: has_any(&lower, INFERENCE_CUES),
-        temporal: has_any(&lower, TEMPORAL_CUES),
+        temporal: when_q || has_any(&lower, TEMPORAL_REST_CUES),
         sniper_when,
         sniper_how_many,
         sniper_where,
         sniper_why,
+        is_event_sequence,
+        task_under_rules: !has_any(&lower, RECALL_NOT_TASK_CUES)
+            && has_any(&lower, TASK_UNDER_RULES_CUES),
     }
 }
 
 fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
-    let intent = classify(&q.text);
+    let mut intent = classify(&q.text);
     let mut terms = Vec::new();
     let mut groups: Vec<String> = Vec::new();
     let mut group_of = HashMap::new();
     let mut hyp_added: HashSet<&str> = HashSet::new();
+    let mut focal_ids: HashSet<u32> = HashSet::new();
+    let mut focal_domains: HashSet<&'static str> = HashSet::new();
     let use_hyp = p.enable_hypernyms;
 
     let raw_q = raw_tokens(&q.text);
+    let q_lower = word_padded(&q.text);
+    let episodic_past_recall = has_any(&q_lower, RECALL_NOT_TASK_CUES)
+        || intent.sniper_how_many
+        || intent.multi_hop
+        || intent.temporal;
+    if !episodic_past_recall
+        && raw_q.iter().any(|w| ix.vocab.get(w).is_some_and(|id| ix.constraint_terms.contains(&id)))
+    {
+        intent.preference = true;
+    }
     let inline_dates = if p.enable_deictic { inline_date_tokens(&q.text) } else { Vec::new() };
     let q_ts = if p.enable_deictic { parse_date(&q.date) } else { 0 };
     let deictic_items = if p.enable_deictic && q_ts != 0 {
@@ -1321,6 +3906,8 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         .len();
     let can_demote_framing = domain_groups >= 1;
 
+    let nick_bind = ix.nicks.bindings_in(&q.text);
+    let mut label_group: HashMap<String, usize> = HashMap::new();
     let mut seen_toks = HashSet::new();
     for w in raw_q.iter().filter(|w| is_content(w)) {
         if !seen_toks.insert(w.clone()) {
@@ -1329,48 +3916,93 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         let is_frame = can_demote_framing && fw.contains(w.as_str());
         if is_frame {
             if let Some(id) = ix.vocab.get(w) {
-                terms.push(QTerm { id, weight: 0.35, group: None });
+                terms.push(QTerm { id, weight: 0.30, group: None, exact_hit: false });
             }
             if p.enable_stemming {
                 let st = stem(w);
                 if let Some(id) = ix.vocab.get(&stem_term(&st)) {
-                    terms.push(QTerm { id, weight: 0.25, group: None });
+                    terms.push(QTerm { id, weight: 0.20, group: None, exact_hit: false });
                 }
             }
             continue;
         }
 
-        let g = groups.len();
-        groups.push(w.clone());
+        let label = nick_bind.get(w).cloned().unwrap_or_else(|| w.clone());
+        let g = if let Some(&g) = label_group.get(&label) {
+            g
+        } else {
+            let g = groups.len();
+            groups.push(label.clone());
+            label_group.insert(label, g);
+            g
+        };
         if let Some(id) = ix.vocab.get(w) {
-            terms.push(QTerm { id, weight: 1.0, group: Some(g) });
+            // Full name owns the person group. A vocative nick ("Mel") that also
+            // expands to "melanie" must not score 1.0 on top of that expansion.
+            let weight = if nick_bind.get(w).is_some_and(|full| ix.vocab.get(full).is_some()) {
+                0.35
+            } else {
+                1.0
+            };
+            terms.push(QTerm { id, weight, group: Some(g), exact_hit: true });
             group_of.insert(id, g);
+            focal_ids.insert(id);
+        }
+        if let Some(full) = nick_bind.get(w) {
+            if let Some(id) = ix.vocab.get(full) {
+                terms.push(QTerm { id, weight: 1.0, group: Some(g), exact_hit: true });
+                group_of.insert(id, g);
+                focal_ids.insert(id);
+            }
+            if p.enable_stemming {
+                let fst = stem(full);
+                if let Some(id) = ix.vocab.get(&stem_term(&fst)) {
+                    terms.push(QTerm { id, weight: p.stem_weight, group: Some(g), exact_hit: true });
+                    group_of.insert(id, g);
+                    focal_ids.insert(id);
+                }
+            }
         }
         let st = stem(w);
         if p.enable_stemming {
             if let Some(id) = ix.vocab.get(&stem_term(&st)) {
-                terms.push(QTerm { id, weight: p.stem_weight, group: Some(g) });
+                terms.push(QTerm { id, weight: p.stem_weight, group: Some(g), exact_hit: true });
                 group_of.insert(id, g);
+                focal_ids.insert(id);
             }
         }
-        if use_hyp {
-            if let Some(doms) = hypernyms().get(&st) {
-                for d in doms {
-                    if hyp_added.insert(d) {
-                        if let Some(id) = ix.vocab.get(&hyp_term(d)) {
-                            terms.push(QTerm { id, weight: p.hypernym_weight, group: Some(g) });
-                            group_of.insert(id, g);
-                        }
+        if let Some(doms) = hypernyms().get(&st) {
+            for &d in doms {
+                if ix.non_hub_domains.contains(d) {
+                    focal_domains.insert(d);
+                }
+                if use_hyp && hyp_added.insert(d) {
+                    if let Some(id) = ix.vocab.get(&hyp_term(d)) {
+                        terms.push(QTerm { id, weight: p.hypernym_weight, group: Some(g), exact_hit: false });
+                        group_of.insert(id, g);
                     }
                 }
             }
         }
     }
 
+    // CamelCase & snake/hyphen reverse query expansion (`localStorage` -> `local`, `storage` at 0.55).
+    for raw_word in q.text.split_whitespace() {
+        let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+        if word.is_empty() {
+            continue;
+        }
+        for (part, _) in surface_aux_tokens(word) {
+            if seen_toks.contains(&part) {
+                continue;
+            }
+            if let Some(id) = ix.vocab.get(&part) {
+                terms.push(QTerm { id, weight: 0.55, group: None, exact_hit: false });
+            }
+        }
+    }
+
     // Capitalized proper-noun entity phrases present in index (e.g. "Local H", "For Against").
-    // If all parts of the phrase are already covered content words ("United States"), emit as
-    // phrase boost (group: None) to avoid double-counting in coverage; if any part was erased
-    // by stopwords or length-1 filtering ("For Against", "Local H"), restore it as a real group.
     let mut seen_ents = HashSet::new();
     for ent in proper_entity_tokens(&q.text) {
         if !seen_ents.insert(ent.clone()) {
@@ -1382,17 +4014,25 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
             if any_erased {
                 let g = groups.len();
                 groups.push(ent);
-                terms.push(QTerm { id, weight: 1.65, group: Some(g) });
+                terms.push(QTerm { id, weight: 1.65, group: Some(g), exact_hit: true });
                 group_of.insert(id, g);
             } else {
-                terms.push(QTerm { id, weight: 0.75, group: None });
+                terms.push(QTerm { id, weight: 0.75, group: None, exact_hit: false });
             }
+        }
+    }
+
+    // Exact technical handles in the query (`Url`, `Email`, `CommitSha`, `IssueRef`, `Version`, `FilePath`).
+    for h_str in extract_exact_technical_handles(&q.text) {
+        if let Some(id) = ix.vocab.get(&h_str) {
+            terms.push(QTerm { id, weight: 1.5, group: None, exact_hit: true });
+            focal_ids.insert(id);
         }
     }
 
     if p.enable_preference && intent.preference {
         if let Some(id) = ix.vocab.get(PREF_AXIS) {
-            terms.push(QTerm { id, weight: p.preference_axis_weight, group: None });
+            terms.push(QTerm { id, weight: p.preference_axis_weight, group: None, exact_hit: false });
         }
     }
 
@@ -1403,8 +4043,18 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                 2.0
             } else if d.starts_with("__MD__") {
                 1.4
-            } else if d.starts_with("__YM__") || d.starts_with("__MONTH__") {
+            } else if d.starts_with("__YM__") {
+                1.2
+            } else if d.starts_with("__SY__") {
+                1.1
+            } else if d.starts_with("__MONTH__")
+                || d.starts_with("__EARLY__")
+                || d.starts_with("__MID__")
+                || d.starts_with("__LATE__")
+            {
                 1.0
+            } else if d.starts_with("__YEAR__") || d.starts_with("__SEASON__") {
+                0.85
             } else {
                 p.date_weight
             };
@@ -1414,8 +4064,12 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         for (d, scale) in deictic_items {
             let base = if d.starts_with("__DATE__") {
                 1.9
+            } else if d.starts_with("__MD__") {
+                1.1
             } else if d.starts_with("__YM__") || d.starts_with("__MONTH__") {
                 0.85
+            } else if d.starts_with("__YEAR__") || d.starts_with("__SEASON__") || d.starts_with("__SY__") {
+                0.55
             } else {
                 p.date_weight
             };
@@ -1425,12 +4079,12 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         }
         for (d, w) in date_weights {
             if let Some(id) = ix.vocab.get(&d) {
-                terms.push(QTerm { id, weight: w, group: None });
+                terms.push(QTerm { id, weight: w, group: None, exact_hit: false });
             }
         }
     }
 
-    QueryPlan { intent, terms, groups, group_of }
+    QueryPlan { intent, terms, groups, group_of, focal_ids, focal_domains }
 }
 
 // =========================================================================
@@ -1438,14 +4092,17 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
 // =========================================================================
 
 struct Fields {
-    w: [f32; 2],
-    b: [f32; 2],
+    w: [f32; 3],
+    b: [f32; 3],
 }
 
-/// BM25F with IDF power law and IDF-weighted distinct-term coverage.
-fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f32, u64) {
+/// 3-Field BM25F (`user`, `assistant`, `blip_caption`) with IDF power law, IDF-weighted
+/// distinct-term coverage, and separate `(any_mask, exact_mask)` so 0.45 hypernym hits
+/// never poison submodular coverage masks (`covered_mask` / `covered_query_terms`).
+fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f32, u64, u64) {
     let mut score = 0.0f32;
     let mut mask = 0u64;
+    let mut exact_mask = 0u64;
     let ng = plan.groups.len();
     let mut g_idf = vec![0.0f32; ng];
     let mut g_hit = vec![false; ng];
@@ -1457,7 +4114,7 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
             g_idf[g] = g_idf[g].max(idf * qt.weight);
         }
         let mut tfp = 0.0f32;
-        for f in 0..2 {
+        for f in 0..3 {
             let tf = bag.tf[f].get(&qt.id).copied().unwrap_or(0.0);
             if tf <= 0.0 {
                 continue;
@@ -1471,6 +4128,9 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
                 g_hit[g] = true;
                 if g < 64 {
                     mask |= 1 << g;
+                    if qt.exact_hit {
+                        exact_mask |= 1 << g;
+                    }
                 }
             }
         }
@@ -1483,7 +4143,7 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
             score *= p.coverage_floor + (1.0 - p.coverage_floor) * cov * cov;
         }
     }
-    (score, mask)
+    (score, mask, exact_mask)
 }
 
 /// True when two distinct query words land within `span` content tokens of each other.
@@ -1522,31 +4182,243 @@ fn order(scores: &[f32], ts: &[i64]) -> Vec<usize> {
     idx
 }
 
+fn jaccard(a: &HashSet<u32>, b: &HashSet<u32>) -> f32 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let inter = a.intersection(b).count() as f32;
+    let union = (a.len() + b.len()) as f32 - inter;
+    if union <= 0.0 { 0.0 } else { inter / union }
+}
+
+fn raise_floor(scores: &mut [f32], lexical_max: f32, frac: f32, keep: impl Fn(usize) -> bool) -> Vec<bool> {
+    let floor = if lexical_max > 0.0 { frac * lexical_max } else { 1.0 };
+    let mut lifted = vec![false; scores.len()];
+    for i in 0..scores.len() {
+        if keep(i) && scores[i] < floor {
+            scores[i] = floor;
+            lifted[i] = true;
+        }
+    }
+    lifted
+}
+
+fn ghostlink_hub_damp(deg: u32, own: u32) -> f32 {
+    let extra = deg.saturating_sub(own);
+    1.0 / (2.0 + extra as f32).log2()
+}
+
+fn ochiai_divergence(a: &[u32], b: &[u32]) -> Option<f32> {
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let (mut i, mut j, mut inter) = (0usize, 0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Equal => {
+                inter += 1;
+                i += 1;
+                j += 1;
+            }
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+        }
+    }
+    let denom = ((a.len() * b.len()) as f32).sqrt();
+    if denom <= 0.0 {
+        None
+    } else {
+        Some((1.0 - (inter as f32) / denom).clamp(0.0, 1.0))
+    }
+}
+
+fn named_partner(a: &str, b: &str) -> bool {
+    let role = |s: &str| s.is_empty() || s == "user" || s == "assistant";
+    !role(a) && !role(b) && a != b
+}
+
+/// Stratified Governing Channel (Satchel SCR 2026; Laird SOAR 2012; Forgy Rete 1982):
+/// Ranks active standing imperative policies into `RankResult.standing_rules` without
+/// consuming or distorting episodic `sessions` / `turns` slots.
+fn rank_standing_rules(
+    ix: &Index,
+    plan: &QueryPlan,
+    episodic_user_quote: bool,
+    t_mask: &[u64],
+    top_k: usize,
+) -> Vec<RankedItem> {
+    if ix.standing_rules.is_empty() || episodic_user_quote {
+        return Vec::new();
+    }
+    let it = &plan.intent;
+    // Multi-evidence recall keeps every standing policy on the stratified channel,
+    // including zero-overlap rules. The episodic floor stays off for these intents,
+    // so the channel can fire without taking one of the five episodic slots.
+    let multi_evidence = it.multi_hop || it.sniper_how_many || it.temporal || it.is_event_sequence;
+    let mut latest_by_key: HashMap<&str, (usize, i32, i32, i64)> = HashMap::new();
+    for (ri, r) in ix.standing_rules.iter().enumerate() {
+        let scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
+        let dom_hits = r.domains.iter().filter(|d| plan.focal_domains.contains(*d)).count() as i32;
+        let asst_hits = r.assistant_nouns.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
+        let spec = 5 * scope_hits + 2 * dom_hits + asst_hits;
+        let fires = if r.has_explicit_scope {
+            spec > 0 || it.task_under_rules || multi_evidence
+        } else {
+            it.task_under_rules || spec >= 3 || multi_evidence
+        };
+        if !fires {
+            continue;
+        }
+        let scope_neg_len = -(r.scope.len() as i32);
+        let cand = (ri, spec, scope_neg_len, r.ts);
+        match latest_by_key.get(r.policy_key.as_str()) {
+            Some(&cur) if (cur.3, cur.1, cur.2) >= (cand.3, cand.1, cand.2) => {}
+            _ => {
+                latest_by_key.insert(r.policy_key.as_str(), cand);
+            }
+        }
+    }
+    let max_spec = latest_by_key.values().map(|c| c.1).max().unwrap_or(0);
+    let mut cands: Vec<(usize, i32, i32, i64)> = latest_by_key
+        .into_values()
+        .filter(|c| if max_spec > 0 { c.1 > 0 } else { true })
+        .collect();
+    cands.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
+            .then(a.0.cmp(&b.0))
+    });
+    cands
+        .into_iter()
+        .take(top_k.max(1))
+        .map(|(ri, spec, _, _)| {
+            let r = &ix.standing_rules[ri];
+            RankedItem {
+                id: ix.turns[r.turn].id.clone(),
+                session_id: ix.session_ids[r.session].clone(),
+                score: 1.0 + spec.max(0) as f32,
+                matched: matched_words(plan, t_mask[r.turn]),
+            }
+        })
+        .collect()
+}
+
+fn policy_spec_winner_floor(lexical_max: f32) -> f32 {
+    if lexical_max > 0.0 {
+        0.715 * lexical_max
+    } else {
+        0.715 / 0.68
+    }
+}
+
+fn exact_query_group_ids(plan: &QueryPlan) -> HashSet<u32> {
+    plan.terms
+        .iter()
+        .filter(|t| t.exact_hit && t.group.is_some())
+        .map(|t| t.id)
+        .collect()
+}
+
+fn session_speaker_names(ix: &Index, members: &[usize]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for &m in members {
+        let sp = ix.turns[m].speaker.as_str();
+        if sp.is_empty() || sp == "user" || sp == "assistant" {
+            continue;
+        }
+        for w in raw_tokens(sp) {
+            names.insert(w);
+        }
+    }
+    names
+}
+
+fn is_speaker_term(ix: &Index, id: u32, names: &HashSet<String>) -> bool {
+    let Some(name) = ix.vocab.names.get(id as usize) else { return false };
+    let bare = name
+        .strip_prefix("\u{1}ent:")
+        .or_else(|| name.strip_prefix("\u{1}stem:"))
+        .unwrap_or(name.as_str());
+    if bare.contains('_') {
+        return bare.split('_').any(|p| is_speaker_alias(p, names));
+    }
+    is_speaker_alias(bare, names)
+}
+
+fn clause_hits_query(ids: &HashSet<u32>, g: &HashSet<u32>, ix: &Index, names: &HashSet<String>) -> bool {
+    ids.iter().any(|id| g.contains(id) && !is_speaker_term(ix, *id, names))
+}
+
+fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &HashSet<u32>, names: &HashSet<String>) -> bool {
+    if !t.is_pure_info_question {
+        return false;
+    }
+    if clause_hits_query(&t.pre_question_ids, g, ix, names) {
+        return false;
+    }
+    t.pre_question_ids.is_empty() || clause_hits_query(&t.question_clause_ids, g, ix, names)
+}
+
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
-    let fl = if p.enable_roles && it.assistant_attribution {
-        Fields { w: [1.0, p.assistant_attribution_weight], b: [p.b_user, p.b_assistant_attributed] }
-    } else if p.enable_roles && it.user_attribution {
-        Fields { w: [p.user_attribution_weight, 0.35], b: [p.b_user, p.b_assistant] }
-    } else {
-        Fields { w: [1.0, 1.0], b: [p.b_user, p.b_assistant] }
-    };
     let pref_on = p.enable_preference && it.preference;
+    let q_padded = word_padded(&q.text);
+    let persona_infer_on = it.inference
+        && !pref_on
+        && !it.assistant_attribution
+        && !it.temporal
+        && !it.sniper_how_many
+        && has_any(
+            &q_padded,
+            &["likely", "would ", "might ", "probably", "considered", "personality", "traits", "what might", "would be", "be interested", "is it possible", "kind of person"],
+        );
+    let episodic_user_quote = it.user_attribution
+        && !pref_on
+        && !it.task_under_rules
+        && !it.sniper_how_many
+        && has_any(
+            &q_padded,
+            &[
+                "did i ", "what did i ", "where did i ", "when did i ", "who did i ",
+                "i told you", "i brought up", "did i mention", "my instruction",
+                "what was my ", "where is my ", "what is my ",
+            ],
+        );
+    let summary_hold = has_any(&q_padded, SUMMARY_REQUEST_CUES)
+        && has_any(&q_padded, TASK_UNDER_RULES_CUES)
+        && !has_any(&q_padded, USER_INITIATIVE_CUES);
+    let user_role = p.enable_roles
+        && it.user_attribution
+        && !pref_on
+        && !it.task_under_rules
+        && !summary_hold;
+    let fl = if p.enable_roles && it.assistant_attribution {
+        Fields { w: [1.0, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
+    } else if user_role {
+        Fields { w: [p.user_attribution_weight, 0.35, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
+    } else if p.enable_roles && pref_on {
+        Fields { w: [1.45, 0.55, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
+    } else {
+        Fields { w: [1.0, 1.0, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
+    };
     let ns = ix.session_bags.len();
 
     // ---- Session level: whole-session BM25F + max-passage window pooling ----
     let mut s_base = vec![0.0f32; ns];
     let mut s_mask = vec![0u64; ns];
+    let mut s_exact_mask = vec![0u64; ns];
     for si in 0..ns {
-        let (sc, m) = bm25f(&ix.session_bags[si], &plan, &ix.s_stats, p, &fl);
+        let (sc, m, em) = bm25f(&ix.session_bags[si], &plan, &ix.s_stats, p, &fl);
         s_base[si] = sc;
         s_mask[si] = m;
+        s_exact_mask[si] = em;
     }
     let mut s_win = vec![0.0f32; ns];
     if p.enable_window {
         for (wi, &(si, a, b)) in ix.windows.iter().enumerate() {
-            let (mut sc, m) = bm25f(&ix.window_bags[wi], &plan, &ix.w_stats, p, &fl);
+            let (mut sc, m, em) = bm25f(&ix.window_bags[wi], &plan, &ix.w_stats, p, &fl);
             if sc <= 0.0 {
                 continue;
             }
@@ -1556,13 +4428,56 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             {
                 sc *= 1.0 + p.proximity_bonus;
             }
-            if pref_on && members.iter().any(|&t| ix.turns[t].pref_marker && ix.turns[t].field == 0) {
-                sc *= p.preference_boost;
+            if pref_on {
+                let mut best_pref = 1.0f32;
+                for &t in members {
+                    let tr = &ix.turns[t];
+                    if tr.field == 0 {
+                        if tr.pref_marker {
+                            best_pref = best_pref.max(p.preference_boost);
+                        } else if tr.is_user_schema
+                            && tr.schema_domains.iter().any(|d| plan.focal_domains.contains(d))
+                        {
+                            // Tse et al. (Science 2007) domain-gated user schema activation:
+                            // habitual/behavioral declarations boost only when matching query domain.
+                            best_pref = best_pref.max(1.45);
+                        }
+                    }
+                }
+                sc *= best_pref;
+            } else if persona_infer_on && members.iter().any(|&t| ix.turns[t].pref_marker || ix.turns[t].is_user_schema) {
+                sc *= 1.38;
+            }
+            if members.iter().any(|&t| ix.turns[t].is_standing_policy) {
+                sc *= 1.8;
             }
             if sc > s_win[si] {
                 s_win[si] = sc;
             }
             s_mask[si] |= m;
+            s_exact_mask[si] |= em;
+        }
+    }
+    if pref_on {
+        for si in 0..ns {
+            let mut best = 1.0f32;
+            for &ti in &ix.session_turns[si] {
+                let tr = &ix.turns[ti];
+                if tr.field != 0 {
+                    continue;
+                }
+                let domain_hit = tr.schema_domains.iter().any(|d| plan.focal_domains.contains(d));
+                let focal_hit = tr.content.iter().any(|id| plan.focal_ids.contains(id))
+                    || tr.feats.iter().any(|f| plan.focal_ids.contains(&f.id));
+                if tr.pref_marker && (focal_hit || domain_hit) {
+                    best = best.max(p.preference_boost);
+                } else if tr.is_user_schema && domain_hit {
+                    best = best.max(1.45);
+                }
+            }
+            if best > 1.0 {
+                s_base[si] *= best;
+            }
         }
     }
     let bmax = s_base.iter().cloned().fold(0.0f32, f32::max);
@@ -1595,67 +4510,267 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     }
     let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
 
-    // ---- Turn level ----
+    // ---- Turn level: score BOTH uncarried `t_own` AND carried `t_raw` ----
     let nt = ix.turns.len();
+    let mut t_own = vec![0.0f32; nt];
     let mut t_raw = vec![0.0f32; nt];
     let mut t_mask = vec![0u64; nt];
+    let mut t_exact_mask = vec![0u64; nt];
     for ti in 0..nt {
         let t = &ix.turns[ti];
-        let (mut sc, m) = bm25f(&ix.turn_bags[ti], &plan, &ix.t_stats, p, &fl);
-        if sc <= 0.0 {
+        let (mut sc_own, _, em_own) = bm25f(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, p, &fl);
+        let (mut sc, m, _) = bm25f(&ix.turn_bags[ti], &plan, &ix.t_stats, p, &fl);
+        if sc <= 0.0 && sc_own <= 0.0 {
             continue;
         }
-        if p.enable_proximity && proximity_hit(t.seq.iter(), &plan, p.proximity_span) {
+        let prox = p.enable_proximity && proximity_hit(t.seq.iter(), &plan, p.proximity_span);
+        if prox {
             sc *= 1.0 + p.proximity_bonus;
+            sc_own *= 1.0 + p.proximity_bonus;
         }
         if p.enable_carry && t.answers_question {
             sc *= p.answer_boost;
+            sc_own *= p.answer_boost;
+        } else if p.enable_carry && t.is_short_reply {
+            sc *= 1.05;
+            sc_own *= 1.05;
         }
-        if pref_on && t.pref_marker && t.field == 0 {
-            sc *= p.preference_boost;
+        if pref_on && t.field == 0 {
+            if t.pref_marker {
+                sc *= p.preference_boost;
+                sc_own *= p.preference_boost;
+            } else if t.is_user_schema && t.schema_domains.iter().any(|d| plan.focal_domains.contains(d)) {
+                sc *= 1.45;
+                sc_own *= 1.45;
+            }
+        } else if persona_infer_on && (t.pref_marker || t.is_user_schema) {
+            sc *= 1.40;
+            sc_own *= 1.40;
         }
+        t_own[ti] = sc_own;
         t_raw[ti] = sc;
         t_mask[ti] = m;
+        t_exact_mask[ti] = em_own;
     }
 
-    // Weapon 1: Bidirectional 3-Turn Micro-Scene Pooling
+    // Weapon 1: Bidirectional 3-Turn Scene Pooling.
+    // - On named-speaker dialogues (`LoCoMo` / multi-person chats), pool over uncarried `t_own` +
+    //   Center-Peak Monotonicity so follow-up questions & reactions (`gold + 1`) never steal Rank 1!
+    // - On `user`/`assistant` dialogues (`BEAM` / `LME`), preserve symmetric `t_raw` pooling so
+    //   concise user turns ending in `?` are never inverted beneath verbose assistant expansions!
     let mut t_scene = vec![0.0f32; nt];
     if p.enable_scene {
         for members in &ix.session_turns {
-            for (pos, &ti) in members.iter().enumerate() {
-                let prev_raw = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
-                let next_raw = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
-                t_scene[ti] = 1.0 * t_raw[ti] + 0.75 * prev_raw + 0.55 * next_raw;
-                if pos > 0 { t_mask[ti] |= t_mask[members[pos - 1]]; }
-                if pos + 1 < members.len() { t_mask[ti] |= t_mask[members[pos + 1]]; }
+            let has_named_dialogue = members.iter().any(|&m| {
+                let sp = ix.turns[m].speaker.as_str();
+                !sp.is_empty() && sp != "user" && sp != "assistant"
+            });
+            if has_named_dialogue {
+                for (pos, &ti) in members.iter().enumerate() {
+                    let prev_own = if pos > 0 { t_own[members[pos - 1]] } else { 0.0 };
+                    let next_own = if pos + 1 < members.len() { t_own[members[pos + 1]] } else { 0.0 };
+                    let prev_w = if ix.turns[ti].is_backchannel {
+                        0.22
+                    } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
+                        0.75
+                    } else {
+                        0.48
+                    };
+                    let self_score = if ix.turns[ti].answers_question || ix.turns[ti].is_short_reply || ix.turns[ti].anaphoric {
+                        t_raw[ti]
+                    } else {
+                        t_own[ti] + 0.18 * (t_raw[ti] - t_own[ti]).max(0.0)
+                    };
+                    t_scene[ti] = self_score + prev_w * prev_own + 0.42 * next_own;
+                    if pos > 0 && !ix.turns[ti].is_backchannel {
+                        t_mask[ti] |= t_mask[members[pos - 1]];
+                    }
+                    if pos + 1 < members.len() && !ix.turns[ti].is_question {
+                        t_mask[ti] |= t_mask[members[pos + 1]];
+                    }
+                }
+                for pos in 1..members.len() {
+                    let prev = members[pos - 1];
+                    let ti = members[pos];
+                    if !ix.turns[prev].is_question
+                        && !ix.turns[prev].is_backchannel
+                        && t_own[prev] > 0.0
+                        && (t_exact_mask[ti] & !t_exact_mask[prev]) == 0
+                        && t_own[ti] <= t_own[prev] * 1.05
+                        && t_scene[ti] > 0.92 * t_scene[prev]
+                    {
+                        t_scene[ti] = 0.92 * t_scene[prev];
+                    }
+                }
+            } else {
+                for (pos, &ti) in members.iter().enumerate() {
+                    let prev_raw = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
+                    let next_raw = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
+                    let prev_w = if ix.turns[ti].is_backchannel {
+                        0.25
+                    } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
+                        0.75
+                    } else {
+                        0.55
+                    };
+                    t_scene[ti] = 1.0 * t_raw[ti] + prev_w * prev_raw + 0.55 * next_raw;
+                    if pos > 0 && !ix.turns[ti].is_backchannel {
+                        t_mask[ti] |= t_mask[members[pos - 1]];
+                    }
+                    if pos + 1 < members.len() {
+                        t_mask[ti] |= t_mask[members[pos + 1]];
+                    }
+                }
             }
         }
     } else {
-        t_scene = t_raw;
+        t_scene = t_raw.clone();
     }
 
-    // Weapon 2: Deterministic Answer-Type Sniper (+65% payload boost)
-    if p.enable_sniper {
+    // Named-speaker boost (never a filter): 1.06x tie-breaker gated on t_own[ti] > 0 or t_raw[ti] > 0.
+    for ti in 0..nt {
+        if t_raw[ti] <= 0.0 && t_own[ti] <= 0.0 {
+            continue;
+        }
+        let sp = ix.turns[ti].speaker.as_str();
+        if !sp.is_empty() && sp != "user" && sp != "assistant" && plan.groups.iter().any(|g| g == sp) {
+            t_scene[ti] *= 1.06;
+        }
+    }
+
+    // Turn-level role alignment: suppress assistant turns on explicit user-role queries,
+    // except when no user turn in the same session covers that assistant turn's exact query bits!
+    if user_role {
         for ti in 0..nt {
-            if t_scene[ti] <= 0.0 {
+            if ix.turns[ti].field == 1 {
+                let s_idx = ix.turns[ti].session;
+                let a_bits = t_exact_mask[ti];
+                let user_covers = a_bits == 0
+                    || ix.session_turns[s_idx]
+                        .iter()
+                        .any(|&u| ix.turns[u].field == 0 && (t_exact_mask[u] & a_bits) == a_bits);
+                if user_covers {
+                    t_scene[ti] *= 0.35;
+                } else {
+                    t_scene[ti] *= 0.72;
+                }
+            }
+        }
+    }
+
+    // Standing policy invariant boost:
+    for ti in 0..nt {
+        let t = &ix.turns[ti];
+        if t.is_standing_policy && t_scene[ti] > 0.0 {
+            t_scene[ti] *= 2.5;
+        }
+    }
+
+    let exact_groups = exact_query_group_ids(&plan);
+
+    // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
+    if p.enable_sniper {
+        for members in &ix.session_turns {
+            let has_named_dialogue = members.iter().any(|&m| {
+                let sp = ix.turns[m].speaker.as_str();
+                !sp.is_empty() && sp != "user" && sp != "assistant"
+            });
+            let speaker_names = if has_named_dialogue {
+                session_speaker_names(ix, members)
+            } else {
+                HashSet::new()
+            };
+            let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
+            for &ti in members {
+                if t_scene[ti] <= 0.0 {
+                    continue;
+                }
+                let t = &ix.turns[ti];
+                if it.sniper_when {
+                    if t.has_temporal {
+                        t_scene[ti] *= 1.65;
+                    }
+                    if t.is_question {
+                        t_scene[ti] *= 0.55;
+                    }
+                } else if has_named_dialogue
+                    && has_declarative_peer
+                    && !episodic_user_quote
+                    && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
+                {
+                    t_scene[ti] *= 0.62;
+                }
+                if it.sniper_how_many && t.has_numeric {
+                    t_scene[ti] *= 1.65;
+                }
+                if it.sniper_where && t.has_spatial {
+                    t_scene[ti] *= 1.60;
+                }
+                if it.sniper_why && t.has_causal {
+                    t_scene[ti] *= 1.55;
+                }
+                if t.is_short_question {
+                    t_scene[ti] *= 0.50;
+                }
+                if t.is_backchannel {
+                    t_scene[ti] *= 0.55;
+                }
+            }
+        }
+    }
+
+    // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
+    let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
+    for ent in proper_entity_tokens(&q.text) {
+        if let Some(id) = ix.vocab.get(&ent) {
+            q_ents_and_vocatives.insert(id);
+        }
+    }
+    for w in raw_tokens(&q.text) {
+        if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{w}")) {
+            q_ents_and_vocatives.insert(id);
+        }
+    }
+    let query_has_temp = it.temporal || it.sniper_when || !inline_date_tokens(&q.text).is_empty();
+    let query_has_num = it.sniper_how_many || q.text.chars().any(|c| c.is_ascii_digit());
+    if p.enable_dyad {
+        for members in &ix.session_turns {
+            let speaker_names = session_speaker_names(ix, members);
+            if speaker_names.is_empty() {
                 continue;
             }
-            let t = &ix.turns[ti];
-            if it.sniper_when {
-                if t.has_temporal { t_scene[ti] *= 1.65; }
-                if t.is_question { t_scene[ti] *= 0.55; }
+            let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
+            for sw in &speaker_names {
+                if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
+                    sess_speaker_ents.insert(id);
+                }
             }
-            if it.sniper_how_many && t.has_numeric {
-                t_scene[ti] *= 1.65;
-            }
-            if it.sniper_where && t.has_spatial {
-                t_scene[ti] *= 1.60;
-            }
-            if it.sniper_why && t.has_causal {
-                t_scene[ti] *= 1.55;
-            }
-            if t.is_short_question {
-                t_scene[ti] *= 0.50;
+            for pos in 0..members.len() {
+                let qi = members[pos];
+                let qt = &ix.turns[qi];
+                if t_scene[qi] <= 0.0 || !turn_echoes_query(ix, qt, &exact_groups, &speaker_names) {
+                    continue;
+                }
+                let novel_temp = qt.has_temporal && !query_has_temp;
+                let novel_num = qt.has_numeric && !query_has_num;
+                let novel_ent = qt
+                    .entities
+                    .iter()
+                    .any(|eid| !q_ents_and_vocatives.contains(eid) && !sess_speaker_ents.contains(eid));
+                if novel_temp || novel_num || novel_ent {
+                    continue;
+                }
+                if let Some(&ai) = members.get(pos + 1) {
+                    let ans = &ix.turns[ai];
+                    if named_partner(&qt.speaker, &ans.speaker) && !ans.is_question && !ans.is_backchannel {
+                        t_mask[ai] |= t_mask[qi];
+                        t_exact_mask[ai] |= t_exact_mask[qi];
+                        if t_scene[qi] > t_scene[ai] {
+                            t_scene[ai] = t_scene[ai].max(t_scene[qi] * 1.06);
+                            t_scene[qi] *= 0.65;
+                        }
+                    }
+                }
             }
         }
     }
@@ -1676,16 +4791,19 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let mut activation: HashMap<u32, f32> = HashMap::new();
                 let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
 
-                // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities
+                // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities + Rare Exact Symbols
                 for &s in &seed_indices {
                     if t_scene[s] < 0.15 * t_max {
                         break;
                     }
                     let seed_norm = (t_scene[s] / t_max) / ((ix.turns[s].content.len() + 4) as f32).sqrt();
                     for &e in &ix.turns[s].entities {
+                        if is_technical_handle(&ix.vocab, e) {
+                            continue;
+                        }
                         if let Some(&df) = ix.t_stats.df.get(&e) {
                             if df >= 2 && df <= max_df {
-                                let idf_term = 1.0 / ((df as f32 + 1.1).ln());
+                                let idf_term = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
                                 *activation.entry(e).or_insert(0.0) += 2.0 * seed_norm * idf_term;
                             }
                         }
@@ -1696,8 +4814,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         }
                         if let Some(&df) = ix.t_stats.df.get(&w) {
                             if df >= 2 && df <= max_df {
-                                let idf_term = 1.0 / ((df as f32 + 1.1).ln());
-                                *activation.entry(w).or_insert(0.0) += seed_norm * idf_term;
+                                let idf_term = 1.2 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
+                                *activation.entry(w).or_insert(0.0) += 0.75 * seed_norm * idf_term;
                             }
                         }
                     }
@@ -1715,7 +4833,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         let mut ppr_sum = ent_hit;
                         for &w in &ix.turns[ti].content {
                             if let Some(&act) = activation.get(&w) {
-                                ppr_sum += act;
+                                ppr_sum += 0.75 * act;
                             }
                         }
                         if ppr_sum > 0.0 && (t_scene[ti] > 0.0 || ent_hit > 0.0) {
@@ -1740,22 +4858,24 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
-    // Question/answer dyad coupling: the partner of a strong turn rides along.
+    // Adjacency-pair dyad coupling: answers to questions AND short commitment/value replies
+    // to statements ("Done.", "Last Tuesday.", "Me too!") ride alongside their setup turn.
     if p.enable_dyad {
         let base = t_scene.clone();
         for members in &ix.session_turns {
             for pos in 1..members.len() {
                 let (a, b) = (members[pos - 1], members[pos]);
-                if !ix.turns[b].answers_question {
+                if !ix.turns[b].answers_question && !ix.turns[b].is_short_reply {
                     continue;
                 }
+                let partner_ratio = if ix.turns[b].answers_question { p.dyad_partner } else { 0.84 };
                 let (hi, lo) = if base[a] >= base[b] { (a, b) } else { (b, a) };
                 if base[hi] <= 0.0 {
                     continue;
                 }
                 let dyad = base[hi] + p.dyad * base[lo];
                 t_scene[hi] = t_scene[hi].max(dyad);
-                t_scene[lo] = t_scene[lo].max(dyad * p.dyad_partner);
+                t_scene[lo] = t_scene[lo].max(dyad * partner_ratio);
                 t_mask[lo] |= t_mask[hi];
             }
         }
@@ -1763,18 +4883,197 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
 
     let k = top_k.max(1);
 
+    // Frozen floors for this run (do not retune after BEAM): standing 0.68,
+    // preference 0.50, event-session 0.42, event-turn 0.38. Lexical max is
+    // captured first. 0.68 stays under the 0.72 second-anchor cut so a
+    // zero-overlap rule does not become a PPR anchor. The standing floor is
+    // applied to the policy turn itself, not only its session.
+    let lexical_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
+    let lexical_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
+    let multi_evidence_intent = it.multi_hop
+        || it.sniper_how_many
+        || it.temporal
+        || it.is_event_sequence;
+    // Compound/prepositional task wording (" and ", "first ", "before ") must not
+    // drop the standing-policy floor. Only count-snipers and event sequences do.
+    let policy_blocked = it.sniper_how_many || it.is_event_sequence;
+    let standing_rules = rank_standing_rules(ix, &plan, episodic_user_quote, &t_mask, k);
+    let (s_policy_floored, t_policy_floored) = if it.task_under_rules && !policy_blocked {
+        let mut s_floored = raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
+            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
+        });
+        let mut t_floored = raise_floor(&mut t_scene, lexical_tmax, 0.68, |ti| ix.turns[ti].is_standing_policy);
+        if let Some(top) = standing_rules.first() {
+            let s_win_floor = policy_spec_winner_floor(lexical_smax);
+            let t_win_floor = policy_spec_winner_floor(lexical_tmax);
+            if let Some(top_rule_sess) = ix.session_ids.iter().position(|id| id == &top.session_id) {
+                if s_score[top_rule_sess] < s_win_floor {
+                    s_score[top_rule_sess] = s_win_floor;
+                    s_floored[top_rule_sess] = true;
+                }
+            }
+            if let Some(top_rule_turn) = ix.turns.iter().position(|t| t.id == top.id) {
+                if t_scene[top_rule_turn] < t_win_floor {
+                    t_scene[top_rule_turn] = t_win_floor;
+                    t_floored[top_rule_turn] = true;
+                }
+            }
+        }
+        (s_floored, t_floored)
+    } else {
+        (vec![false; ns], vec![false; nt])
+    };
+    let (s_pref_floored, t_pref_floored) = if pref_on && !multi_evidence_intent {
+        (
+            raise_floor(&mut s_score, lexical_smax, 0.50, |si| {
+                ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_personal_constraint)
+            }),
+            raise_floor(&mut t_scene, lexical_tmax, 0.50, |ti| ix.turns[ti].is_personal_constraint),
+        )
+    } else {
+        (vec![false; ns], vec![false; nt])
+    };
+    let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
+    if it.is_event_sequence {
+        let _ = raise_floor(&mut s_score, lexical_smax, 0.42, |si| {
+            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
+        });
+        let _ = raise_floor(&mut t_scene, lexical_tmax, 0.38, |ti| ix.turns[ti].is_initiative);
+    }
+    let initiative_content: Vec<HashSet<u32>> = if it.is_event_sequence {
+        ix.session_turns.iter().map(|members| {
+            let mut set = HashSet::new();
+            for &ti in members {
+                if ix.turns[ti].is_initiative {
+                    set.extend(ix.turns[ti].content.iter().copied());
+                }
+            }
+            set
+        }).collect()
+    } else {
+        Vec::new()
+    };
+
     // Session-Level Multi-Hop Bridge Activation + Greedy Submodular Set Cover
     let mut bridge_boost = vec![0.0f32; ns];
     let s_ord_base = order(&s_score, &ix.session_ts);
     if p.enable_ppr && ns > 5 && smax > 0.0 {
         if let Some(&top0) = s_ord_base.first() {
-            let mut anchors = vec![top0];
-            if let Some(&top1) = s_ord_base.get(1) {
-                if s_score[top1] >= 0.72 * smax {
-                    anchors.push(top1);
+            let anchors: Vec<usize> = s_ord_base
+                .iter()
+                .copied()
+                .filter(|&si| !s_policy_floored[si] && !s_pref_floored[si] && s_score[si] >= 0.62 * smax)
+                .take(3)
+                .collect();
+            if !ix.header_dict.is_empty() && ix.header_max_words > 0 && !it.preference && !it.user_attribution {
+                let mut hdr_best = vec![0.0f32; ns];
+                // Weapon 1: Query-direct canonical header-title match (`1 <= deg <= 4`).
+                let (q_ids, q_proper): (Vec<u32>, Vec<bool>) = q
+                    .text
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        let proper = s.chars().next().is_some_and(|c| c.is_uppercase());
+                        let id = ix.vocab.get(&s.to_lowercase()).unwrap_or(u32::MAX);
+                        (id, proper)
+                    })
+                    .unzip();
+                let mut q_idx = 0usize;
+                while q_idx < q_ids.len() {
+                    let max_l = ix.header_max_words.min(q_ids.len() - q_idx);
+                    // Every span length, then advance one token. A degree-4 outer phrase
+                    // must not shadow a degree-1 canonical entity header inside it.
+                    for len in 1..=max_l {
+                        let slice = &q_ids[q_idx..q_idx + len];
+                        if slice.contains(&u32::MAX) {
+                            continue;
+                        }
+                        if len == 1 && !q_proper[q_idx] {
+                            continue;
+                        }
+                        let hh = hash_u32_slice(slice);
+                        if let Some(bucket) = ix.header_dict.get(&hh) {
+                            if let Some(hk) = bucket.iter().find(|k| k.tokens.as_slice() == slice) {
+                                let deg = hk.sessions.len() as u32;
+                                if (1..=4).contains(&deg) {
+                                    let extra = deg.saturating_sub(1);
+                                    let damp = 1.0 / (2.0 + extra as f32).log2();
+                                    for &(target_si, mult) in &hk.sessions {
+                                        let cand_b = 0.68 * smax * mult * damp;
+                                        if cand_b > hdr_best[target_si] {
+                                            hdr_best[target_si] = cand_b;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    q_idx += 1;
+                }
+                for &anc in &anchors {
+                    let anc_w = (s_score[anc] / smax).clamp(0.35, 1.0);
+                    let members = &ix.session_turns[anc];
+                    let anc_tmax = members.iter().map(|&ti| t_scene[ti]).fold(0.0f32, f32::max);
+                    let use_hot = anc_tmax > 0.0 && members.len() > 2;
+                    for &ti in members {
+                        if use_hot && t_scene[ti] < 0.25 * anc_tmax {
+                            continue;
+                        }
+                        let hot_turn_bonus = if anc_tmax > 0.0 && t_scene[ti] >= 0.60 * anc_tmax { 1.18 } else { 1.0 };
+                        let toks = ix.turns[ti].span_ids_cache.get_or_init(|| {
+                            ix.turns[ti]
+                                .body_for_headers
+                                .split(|c: char| !c.is_alphanumeric())
+                                .filter(|s| !s.is_empty())
+                                .map(|s| ix.vocab.get(&s.to_lowercase()).unwrap_or(u32::MAX))
+                                .collect()
+                        });
+                        let mut idx = 0usize;
+                        while idx < toks.len() {
+                            let max_l = ix.header_max_words.min(toks.len() - idx);
+                            let mut matched_len = 0usize;
+                            for len in (1..=max_l).rev() {
+                                let slice = &toks[idx..idx + len];
+                                if slice.contains(&u32::MAX) {
+                                    continue;
+                                }
+                                let hh = hash_u32_slice(slice);
+                                if let Some(bucket) = ix.header_dict.get(&hh) {
+                                    if let Some(hk) = bucket.iter().find(|k| k.tokens.as_slice() == slice) {
+                                        let deg = hk.sessions.len() as u32;
+                                        if (1..=6).contains(&deg) {
+                                            let extra = deg.saturating_sub(1);
+                                            let damp = 1.0 / (2.0 + extra as f32).log2();
+                                            for &(target_si, mult) in &hk.sessions {
+                                                if target_si != anc && target_si != top0 {
+                                                    let cand_b = smax * 0.76 * anc_w * mult * damp * hot_turn_bonus;
+                                                    if cand_b > hdr_best[target_si] {
+                                                        hdr_best[target_si] = cand_b;
+                                                    }
+                                                }
+                                            }
+                                            matched_len = len;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            idx += matched_len.max(1);
+                        }
+                    }
+                }
+                for si in 0..ns {
+                    if hdr_best[si] > bridge_boost[si] {
+                        bridge_boost[si] = hdr_best[si];
+                    }
                 }
             }
-            let max_s_df = ((ix.s_stats.n * 0.05).clamp(4.0, 24.0)) as u32;
+            let max_s_df = if ns >= 8 {
+                ((ix.s_stats.n * 0.10).clamp(4.0, (0.28 * ix.s_stats.n).max(4.0)).min(28.0)) as u32
+            } else {
+                4
+            };
+            let rare_sym_max_df = ((ix.s_stats.n * 0.05).clamp(3.0, 18.0)) as u32;
             let mut s_act: HashMap<u32, f32> = HashMap::new();
             for &anc in &anchors {
                 let anc_w = (s_score[anc] / smax).clamp(0.25, 1.0);
@@ -1788,21 +5087,25 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     }
                     let turn_len_norm = ((ix.turns[ti].content.len() + 6) as f32).sqrt();
                     for &e in &ix.turns[ti].entities {
+                        if is_technical_handle(&ix.vocab, e) {
+                            continue;
+                        }
                         if let Some(&df) = ix.s_stats.df.get(&e) {
                             if df >= 2 && df <= max_s_df {
-                                let idf_s = 1.0 / ((df as f32 + 1.1).ln());
+                                let idf_s = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
                                 *s_act.entry(e).or_insert(0.0) += (anc_w * 2.5 * idf_s) / turn_len_norm;
                             }
                         }
                     }
+                    // Exact byte-equal rare symbols (content holds unstemmed exact token IDs only, never stems).
                     for &w in &ix.turns[ti].content {
                         if plan.group_of.contains_key(&w) {
                             continue;
                         }
                         if let Some(&df) = ix.s_stats.df.get(&w) {
-                            if df >= 2 && df <= max_s_df {
-                                let idf_s = 1.0 / ((df as f32 + 1.1).ln());
-                                *s_act.entry(w).or_insert(0.0) += (anc_w * idf_s) / turn_len_norm;
+                            if df >= 2 && df <= rare_sym_max_df {
+                                let idf_s = 1.2 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
+                                *s_act.entry(w).or_insert(0.0) += (anc_w * 0.75 * idf_s) / turn_len_norm;
                             }
                         }
                     }
@@ -1822,7 +5125,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     let mut sum = ent_sum;
                     for &w in &ix.session_content[si] {
                         if let Some(&a) = s_act.get(&w) {
-                            sum += a;
+                            sum += 0.75 * a;
                         }
                     }
                     // Require direct query overlap (s_score > 0), or an explicit proper-entity bridge
@@ -1832,13 +5135,66 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         let slen = (ix.session_bags[si].len[0] + ix.session_bags[si].len[1] + 8.0).sqrt();
                         let norm = sum / slen;
                         let sat = norm / (norm + 0.05);
-                        let coeff = if it.multi_hop || plan.groups.len() >= 3 { 0.55 } else { 0.12 };
-                        bridge_boost[si] = smax * coeff * sat;
+                        let mut coeff = if it.multi_hop || plan.groups.len() >= 3 { 0.55 } else { 0.12 };
+                        if (s_exact_mask[si] & !s_exact_mask[top0]) != 0 {
+                            coeff *= 1.30;
+                        }
+                        let boosted = smax * coeff * sat;
+                        if boosted > bridge_boost[si] {
+                            bridge_boost[si] = boosted;
+                        }
+                    }
+                }
+            }
+
+            // Backward-only RSB Handle/CaptureWindow, Structural Contradiction Supersession,
+            // and Temporal Context Episode Contiguity (`later -> earlier` ONLY).
+            for &anc in &anchors {
+                let anc_w = (s_score[anc] / smax).clamp(0.35, 1.0);
+                // 1. Exact RSB technical handles & 9h Synaptic Tagging CaptureWindow backward edges
+                for &(deg, prev_si) in &ix.session_rsb_back[anc] {
+                    if prev_si != top0 {
+                        let damp = ghostlink_hub_damp(deg.max(2), 1);
+                        let cand = smax * 0.64 * anc_w * damp;
+                        if cand > bridge_boost[prev_si] {
+                            bridge_boost[prev_si] = cand;
+                        }
+                    }
+                }
+                // 2. Structural contradiction / state-update supersession (`!it.current_state` pulls the earlier state
+                //    when the earlier session also has lexical grounding or user attribution, without displacing QA2 header bridges)
+                if !it.current_state {
+                    for &prev_si in &ix.session_supersedes_back[anc] {
+                        if prev_si != top0 && (s_score[prev_si] >= 0.12 * smax || it.user_attribution) {
+                            let cand = smax * 0.44 * anc_w;
+                            if cand > bridge_boost[prev_si] {
+                                bridge_boost[prev_si] = cand;
+                            }
+                        }
+                    }
+                }
+                // 3. Temporal Context Episode backward contiguity (`session_episode_prev`: `si -> si - 1`)
+                if it.is_event_sequence {
+                    let mut cur = anc;
+                    let mut decay = 0.52f32;
+                    for _ in 0..2 {
+                        let Some(prev_ep) = ix.session_episode_prev[cur] else { break };
+                        if prev_ep != top0 {
+                            let cand = smax * decay * anc_w;
+                            if cand > bridge_boost[prev_ep] {
+                                bridge_boost[prev_ep] = cand;
+                            }
+                        }
+                        cur = prev_ep;
+                        decay *= 0.65;
                     }
                 }
             }
         }
     }
+
+    let total_q_groups = plan.groups.len().min(64);
+    let mask_limit = if total_q_groups == 64 { u64::MAX } else { (1u64 << total_q_groups) - 1 };
 
     let final_session_indices: Vec<usize> = if p.enable_submodular && ns > 1 {
         let mut selected: Vec<usize> = Vec::with_capacity(k);
@@ -1848,8 +5204,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let mut covered_mask = s_mask[top0];
                 let mut covered_ents: HashSet<u32> = ix.session_entities[top0].clone();
                 let mut mask_counts: HashMap<u64, usize> = HashMap::new();
-                let total_q_groups = plan.groups.len().min(64);
-                let mask_limit = if total_q_groups == 64 { u64::MAX } else { (1u64 << total_q_groups) - 1 };
                 *mask_counts.entry(s_mask[top0] & mask_limit).or_insert(0) += 1;
                 let mut remaining: Vec<usize> = (0..ns)
                     .filter(|&si| si != top0 && (s_score[si] > 0.0 || bridge_boost[si] > 0.0))
@@ -1858,6 +5212,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 while selected.len() < k && !remaining.is_empty() {
                     let mut best_pos = 0usize;
                     let mut best_gain = -1.0f32;
+                    let mut found = false;
                     for (idx, &si) in remaining.iter().enumerate() {
                         let m_eff = s_mask[si] & mask_limit;
                         let uncovered = ((s_mask[si] & !covered_mask) & mask_limit).count_ones() as f32;
@@ -1867,19 +5222,60 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             0.0
                         };
                         let same_mask_seen = mask_counts.get(&m_eff).copied().unwrap_or(0);
+                        let policy_prior = s_policy_floored[si];
+                        let pref_prior = s_pref_floored[si] && !policy_prior;
+                        let zero_prior = (policy_prior || pref_prior) && m_eff == 0;
+                        let policy_slots = selected.iter().filter(|&&s| s_policy_floored[s]).count();
+                        let pref_slots = selected.iter().filter(|&&s| s_pref_floored[s] && !s_policy_floored[s]).count();
+                        let zero_slots = selected.iter().filter(|&&s| {
+                            (s_policy_floored[s] || s_pref_floored[s]) && (s_mask[s] & mask_limit) == 0
+                        }).count();
+                        if (policy_prior && policy_slots >= 1)
+                            || (pref_prior && pref_slots >= 1)
+                            || (zero_prior && zero_slots >= 1)
+                        {
+                            continue;
+                        }
                         let shared_ent = ix.session_entities[si].iter().any(|e| covered_ents.contains(e));
-                        let redundancy = if uncovered == 0.0 && bridge_boost[si] < 0.12 * smax && shared_ent && same_mask_seen >= 2 {
+                        let same_date_seen = it.is_event_sequence && selected.iter().any(|&s| ix.session_ts[s] == ix.session_ts[si] && ix.session_ts[si] > 0);
+                        let topic_seen = it.is_event_sequence
+                            && !initiative_content[si].is_empty()
+                            && selected.iter().any(|&s| jaccard(&initiative_content[s], &initiative_content[si]) >= 0.45);
+                        let new_event = it.is_event_sequence && !initiative_content[si].is_empty() && !topic_seen;
+                        let min_ochiai = selected
+                            .iter()
+                            .filter_map(|&s| ochiai_divergence(&ix.session_rare_nt[s], &ix.session_rare_nt[si]))
+                            .fold(None::<f32>, |acc, d| Some(acc.map_or(d, |a| a.min(d))));
+                        let distinct_episode = min_ochiai.is_some_and(|d| d >= 0.58)
+                            && (ix.session_ts[si] == 0 || selected.iter().all(|&s| ix.session_ts[s] != ix.session_ts[si]));
+                        let redundancy = if same_date_seen {
+                            0.25
+                        } else if topic_seen {
+                            0.35
+                        } else if !it.is_event_sequence
+                            && !it.sniper_how_many
+                            && !distinct_episode
+                            && uncovered == 0.0
+                            && bridge_boost[si] < 0.12 * smax
+                            && shared_ent
+                            && same_mask_seen >= 3
+                        {
                             0.62
                         } else {
                             1.0
                         };
-                        let gain = (s_score[si] + bridge_boost[si]) * (1.0 + 0.90 * uncovered_ratio) * redundancy;
+                        let event_cover = if new_event { 0.65 } else { 0.0 };
+                        let gain = (s_score[si] + bridge_boost[si]) * (1.0 + 0.90 * uncovered_ratio + event_cover) * redundancy;
+                        found = true;
                         if gain > best_gain {
                             best_gain = gain;
                             best_pos = idx;
                         }
                     }
-                    let chosen = remaining.swap_remove(best_pos);
+                    if !found {
+                        break;
+                    }
+                    let chosen = remaining.remove(best_pos);
                     selected.push(chosen);
                     covered_mask |= s_mask[chosen];
                     covered_ents.extend(ix.session_entities[chosen].iter().copied());
@@ -1891,15 +5287,42 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             if selected.len() >= k {
                 break;
             }
-            if !selected.contains(si) {
-                selected.push(*si);
+            if selected.contains(si) {
+                continue;
             }
+            if s_score[*si] <= 0.0 && bridge_boost[*si] <= 0.0 {
+                continue;
+            }
+            let policy_prior = s_policy_floored[*si];
+            let pref_prior = s_pref_floored[*si] && !policy_prior;
+            let zero_prior = (policy_prior || pref_prior) && (s_mask[*si] & mask_limit) == 0;
+            let policy_slots = selected.iter().filter(|&&s| s_policy_floored[s]).count();
+            let pref_slots = selected.iter().filter(|&&s| s_pref_floored[s] && !s_policy_floored[s]).count();
+            let zero_slots = selected.iter().filter(|&&s| {
+                (s_policy_floored[s] || s_pref_floored[s]) && (s_mask[s] & mask_limit) == 0
+            }).count();
+            if (policy_prior && policy_slots >= 1)
+                || (pref_prior && pref_slots >= 1)
+                || (zero_prior && zero_slots >= 1)
+            {
+                continue;
+            }
+            selected.push(*si);
         }
         selected
     } else {
-        s_ord_base.into_iter().take(k).collect()
+        s_ord_base
+            .into_iter()
+            .filter(|&si| s_score[si] > 0.0 || bridge_boost[si] > 0.0)
+            .take(k)
+            .collect()
     };
 
+    let strong_top_sessions = final_session_indices
+        .iter()
+        .take(5)
+        .filter(|&&si| smax > 0.0 && !s_policy_floored[si] && !s_pref_floored[si] && (s_score[si] + bridge_boost[si]) >= 0.62 * smax)
+        .count();
     let sessions = final_session_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -1910,35 +5333,82 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         })
         .collect();
 
-    // Weapon 4: Greedy Submodular Set Cover for Top-K Selection
+    // Weapon 4: Greedy Submodular Set Cover for Top-K Turn Selection
+    let max_per_session_top5 = if it.is_event_sequence {
+        1
+    } else if it.multi_hop || (!pref_on && !it.task_under_rules && strong_top_sessions >= 2) {
+        2
+    } else {
+        3
+    };
+
     let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
-    let final_turn_indices: Vec<usize> = if p.enable_submodular {
+    let mut final_turn_indices: Vec<usize> = if p.enable_submodular {
         let mut selected_turns: Vec<usize> = Vec::with_capacity(k);
         let mut covered_query_terms: u64 = 0;
         let mut session_counts: HashMap<usize, usize> = HashMap::new();
-        let mut remaining: HashSet<usize> = (0..nt).filter(|&ti| t_scene[ti] > 0.0).collect();
+        // Ingest order. Equal gains keep the earlier turn, then the higher recorded stability.
+        let mut remaining: Vec<usize> = (0..nt).filter(|&ti| t_scene[ti] > 0.0).collect();
 
         let total_query_groups = plan.groups.len().min(64);
+        let turn_mask_limit = if total_query_groups == 64 { u64::MAX } else { (1u64 << total_query_groups) - 1 };
 
         while selected_turns.len() < k && !remaining.is_empty() {
-            let mut best_turn = None;
+            let mut best_turn: Option<usize> = None;
+            let mut best_pos = 0usize;
             let mut best_gain = -1.0f32;
 
-            for &ti in &remaining {
+            for (pos, &ti) in remaining.iter().enumerate() {
                 let sc = t_scene[ti];
                 let t_sess = ix.turns[ti].session;
                 let count = session_counts.get(&t_sess).copied().unwrap_or(0);
-                let diversity_factor = if count == 0 {
+                let topic_repeat = it.is_event_sequence
+                    && ix.turns[ti].is_initiative
+                    && selected_turns.iter().any(|&prev| {
+                        ix.turns[prev].is_initiative && jaccard(&ix.turns[prev].content, &ix.turns[ti].content) >= 0.45
+                    });
+                let t_m = t_mask[ti];
+                let uncovered_mask = t_exact_mask[ti] & !covered_query_terms;
+                let uncovered_count = (uncovered_mask & turn_mask_limit).count_ones() as f32;
+                let short_reply = (ix.turns[ti].is_short_reply
+                    || (ix.turns[ti].answers_question && ix.turns[ti].content.len() <= 6))
+                    && selected_turns.iter().any(|&prev| {
+                        ix.turns[prev].session == t_sess && (prev as isize - ti as isize).abs() == 1
+                    });
+                let policy_prior = t_policy_floored[ti];
+                let pref_prior = t_pref_floored[ti] && !policy_prior;
+                let zero_prior = (policy_prior || pref_prior) && (t_m & turn_mask_limit) == 0;
+                let policy_slots = selected_turns.iter().filter(|&&t| t_policy_floored[t]).count();
+                let pref_slots = selected_turns.iter().filter(|&&t| t_pref_floored[t] && !t_policy_floored[t]).count();
+                let zero_slots = selected_turns.iter().filter(|&&t| {
+                    (t_policy_floored[t] || t_pref_floored[t]) && (t_mask[t] & turn_mask_limit) == 0
+                }).count();
+                if (policy_prior && policy_slots >= 1)
+                    || (pref_prior && pref_slots >= 1)
+                    || (zero_prior && zero_slots >= 1)
+                {
+                    continue;
+                }
+                // One chat may not fill the top 5. A short reply beside a hit is the same evidence, not a new slot.
+                let session_capped = selected_turns.len() < 5
+                    && count >= max_per_session_top5
+                    && !(short_reply && !it.is_event_sequence);
+                if session_capped {
+                    continue;
+                }
+                let diversity_factor = if short_reply && !it.is_event_sequence {
                     1.0
+                } else if count == 0 && !topic_repeat {
+                    1.0
+                } else if it.is_event_sequence || topic_repeat {
+                    0.15
+                } else if it.multi_hop && count >= 1 && uncovered_count == 0.0 {
+                    0.15
                 } else if count == 1 {
                     0.70
                 } else {
                     0.40
                 };
-
-                let t_m = t_mask[ti];
-                let uncovered_mask = t_m & !covered_query_terms;
-                let uncovered_count = (uncovered_mask & ((1u64 << total_query_groups) - 1)).count_ones() as f32;
                 let uncovered_ratio = if total_query_groups > 0 {
                     uncovered_count / (total_query_groups as f32)
                 } else {
@@ -1946,16 +5416,25 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 };
 
                 let gain = sc * (1.0 + 0.60 * uncovered_ratio) * diversity_factor;
-                if gain > best_gain {
+                let stab = ix.turns[ti].stability;
+                let take = match best_turn {
+                    None => true,
+                    Some(cur) => {
+                        gain > best_gain
+                            || (gain == best_gain && stab > ix.turns[cur].stability)
+                    }
+                };
+                if take {
                     best_gain = gain;
                     best_turn = Some(ti);
+                    best_pos = pos;
                 }
             }
 
             if let Some(chosen) = best_turn {
                 selected_turns.push(chosen);
-                remaining.remove(&chosen);
-                covered_query_terms |= t_mask[chosen];
+                remaining.remove(best_pos);
+                covered_query_terms |= t_exact_mask[chosen];
                 *session_counts.entry(ix.turns[chosen].session).or_insert(0) += 1;
             } else {
                 break;
@@ -1968,15 +5447,171 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 if selected_turns.len() >= k {
                     break;
                 }
-                if !selected_turns.contains(&ti) {
-                    selected_turns.push(ti);
+                if selected_turns.contains(&ti) {
+                    continue;
                 }
+                if t_scene[ti] <= 0.0 {
+                    continue;
+                }
+                let policy_prior = t_policy_floored[ti];
+                let pref_prior = t_pref_floored[ti] && !policy_prior;
+                let zero_prior = (policy_prior || pref_prior) && (t_mask[ti] & turn_mask_limit) == 0;
+                let policy_slots = selected_turns.iter().filter(|&&t| t_policy_floored[t]).count();
+                let pref_slots = selected_turns.iter().filter(|&&t| t_pref_floored[t] && !t_policy_floored[t]).count();
+                let zero_slots = selected_turns.iter().filter(|&&t| {
+                    (t_policy_floored[t] || t_pref_floored[t]) && (t_mask[t] & turn_mask_limit) == 0
+                }).count();
+                if (policy_prior && policy_slots >= 1)
+                    || (pref_prior && pref_slots >= 1)
+                    || (zero_prior && zero_slots >= 1)
+                {
+                    continue;
+                }
+                let count = selected_turns.iter().filter(|&&p| ix.turns[p].session == ix.turns[ti].session).count();
+                let short_reply = (ix.turns[ti].is_short_reply
+                    || (ix.turns[ti].answers_question && ix.turns[ti].content.len() <= 6))
+                    && selected_turns.iter().any(|&prev| {
+                        ix.turns[prev].session == ix.turns[ti].session && (prev as isize - ti as isize).abs() == 1
+                    });
+                if selected_turns.len() < 5 && count >= max_per_session_top5 && !(short_reply && !it.is_event_sequence) {
+                    continue;
+                }
+                selected_turns.push(ti);
             }
         }
         selected_turns
     } else {
-        order(&t_scene, &turn_ts).into_iter().take(k).collect()
+        order(&t_scene, &turn_ts)
+            .into_iter()
+            .filter(|&ti| t_scene[ti] > 0.0)
+            .take(k)
+            .collect()
     };
+
+    // Exact-token selection is finished. A recorded backward reply or exact edge
+    // promotes its earlier target to the rank position earned by `credit`, including
+    // when `target` was previously sitting in the tail (`5..k`) at a lower score.
+    if !final_turn_indices.is_empty() {
+        let pair = 1.0 / 3.0f32.log2();
+        let mut slot_score: Vec<f32> = final_turn_indices.iter().map(|&i| t_scene[i]).collect();
+        let mut best_incoming: HashMap<usize, f32> = HashMap::new();
+        for &ti in &final_turn_indices {
+            let src = t_scene[ti];
+            if src <= 0.0 {
+                continue;
+            }
+            if let Some(ai) = ix.turns[ti].answers {
+                let c = src * pair;
+                let cur = best_incoming.entry(ai).or_insert(0.0);
+                if c > *cur {
+                    *cur = c;
+                }
+            }
+            for &(degree, target) in &ix.turns[ti].exact_edges {
+                let damp = 1.0 / (2.0 + degree.saturating_sub(1) as f32).log2();
+                let c = src * damp;
+                let cur = best_incoming.entry(target).or_insert(0.0);
+                if c > *cur {
+                    *cur = c;
+                }
+            }
+            if !it.current_state {
+                for &target in &ix.turns[ti].supersedes_turns {
+                    let c = src * 0.66;
+                    let cur = best_incoming.entry(target).or_insert(0.0);
+                    if c > *cur {
+                        *cur = c;
+                    }
+                }
+            }
+        }
+        let mut incoming: Vec<(usize, f32)> = best_incoming.into_iter().collect();
+        incoming.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        for (target, credit) in incoming {
+            if credit <= 0.0 {
+                continue;
+            }
+            if let Some(existing_pos) = final_turn_indices.iter().position(|&t| t == target) {
+                if credit <= slot_score[existing_pos] {
+                    continue;
+                }
+                let mut insert_at = existing_pos;
+                for (i, &sc) in slot_score[..existing_pos].iter().enumerate() {
+                    if credit > sc {
+                        insert_at = i;
+                        break;
+                    }
+                }
+                if insert_at >= existing_pos {
+                    slot_score[existing_pos] = credit;
+                    if credit > t_scene[target] {
+                        t_scene[target] = credit;
+                    }
+                    continue;
+                }
+                let sess = ix.turns[target].session;
+                if insert_at < 5 && existing_pos >= 5 {
+                    let in_top5 = final_turn_indices
+                        .iter()
+                        .take(5)
+                        .filter(|&&t| ix.turns[t].session == sess)
+                        .count();
+                    if in_top5 >= max_per_session_top5 {
+                        continue;
+                    }
+                }
+                final_turn_indices.remove(existing_pos);
+                slot_score.remove(existing_pos);
+                final_turn_indices.insert(insert_at, target);
+                slot_score.insert(insert_at, credit);
+                if credit > t_scene[target] {
+                    t_scene[target] = credit;
+                }
+                continue;
+            }
+            // An event list already spread one turn per date. A reply link must
+            // not pull a second turn from a session that is already in the list.
+            if it.is_event_sequence
+                && final_turn_indices.iter().any(|&sel| ix.turns[sel].session == ix.turns[target].session)
+            {
+                continue;
+            }
+            let mut insert_at = slot_score.len();
+            for (i, &sc) in slot_score.iter().enumerate() {
+                if credit > sc {
+                    insert_at = i;
+                    break;
+                }
+            }
+            if insert_at >= k {
+                continue;
+            }
+            let sess = ix.turns[target].session;
+            if insert_at < 5 {
+                let in_top5 = final_turn_indices
+                    .iter()
+                    .take(5)
+                    .filter(|&&t| ix.turns[t].session == sess)
+                    .count();
+                if in_top5 >= max_per_session_top5 {
+                    continue;
+                }
+            }
+            if credit > t_scene[target] {
+                t_scene[target] = credit;
+            }
+            final_turn_indices.insert(insert_at, target);
+            slot_score.insert(insert_at, credit);
+            if final_turn_indices.len() > k {
+                final_turn_indices.truncate(k);
+                slot_score.truncate(k);
+            }
+        }
+    }
 
     let turns = final_turn_indices
         .into_iter()
@@ -1987,7 +5622,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns }
+    RankResult { intent: plan.intent, sessions, turns, standing_rules }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -2007,7 +5642,7 @@ mod tests {
     use super::*;
 
     fn turn(role: &str, content: &str) -> Turn {
-        Turn { id: String::new(), role: role.into(), content: content.into() }
+        Turn { role: role.into(), content: content.into(), ..Turn::default() }
     }
 
     #[test]
@@ -2084,10 +5719,10 @@ mod tests {
                 date: String::new(),
                 timestamp: 0,
                 turns: vec![
-                    Turn { id: "D1:1".into(), role: "Caroline".into(), content: "I went hiking with my dog.".into() },
-                    Turn { id: "D1:2".into(), role: "Melanie".into(), content: "Are you still painting that sunrise landscape?".into() },
-                    Turn { id: "D1:3".into(), role: "Caroline".into(), content: "Yeah, I switched to acrylics for it yesterday.".into() },
-                    Turn { id: "D1:4".into(), role: "Melanie".into(), content: "My kids love the beach.".into() },
+                    Turn { id: "D1:1".into(), role: "Caroline".into(), content: "I went hiking with my dog.".into(), ..Turn::default() },
+                    Turn { id: "D1:2".into(), role: "Melanie".into(), content: "Are you still painting that sunrise landscape?".into(), ..Turn::default() },
+                    Turn { id: "D1:3".into(), role: "Caroline".into(), content: "Yeah, I switched to acrylics for it yesterday.".into(), ..Turn::default() },
+                    Turn { id: "D1:4".into(), role: "Melanie".into(), content: "My kids love the beach.".into(), ..Turn::default() },
                 ],
             }],
             queries: vec![Query { text: "What medium did Caroline use for her sunrise landscape?".into(), date: String::new() }],
@@ -2185,16 +5820,16 @@ mod tests {
         let req = RankRequest {
             sessions: vec![
                 Session { id: "s1".into(), date: String::new(), timestamp: 0, turns: vec![
-                    Turn { id: "gold".into(), role: "user".into(), content: "My first sprint ends on March 29 for login features.".into() },
-                    Turn { id: "reply".into(), role: "assistant".into(), content: format!("Here is a sprint plan ending March 29: {filler_essay}") },
+                    Turn { id: "gold".into(), role: "user".into(), content: "My first sprint ends on March 29 for login features.".into(), ..Turn::default() },
+                    Turn { id: "reply".into(), role: "assistant".into(), content: format!("Here is a sprint plan ending March 29: {filler_essay}"), ..Turn::default() },
                 ]},
                 Session { id: "s2".into(), date: String::new(), timestamp: 0, turns: vec![
-                    Turn { id: "noise".into(), role: "assistant".into(), content: format!("Another unrelated deployment guide: {filler_essay}") },
+                    Turn { id: "noise".into(), role: "assistant".into(), content: format!("Another unrelated deployment guide: {filler_essay}"), ..Turn::default() },
                 ]},
                 Session { id: "s3".into(), date: String::new(), timestamp: 0, turns: vec![
-                    Turn { id: "noise2".into(), role: "user".into(), content: "Unrelated question about SQLite migrations.".into() },
-                    Turn { id: "noise3".into(), role: "assistant".into(), content: "Sure, here are SQLite migration commands.".into() },
-                    Turn { id: "noise4".into(), role: "user".into(), content: "Thanks!".into() },
+                    Turn { id: "noise2".into(), role: "user".into(), content: "Unrelated question about SQLite migrations.".into(), ..Turn::default() },
+                    Turn { id: "noise3".into(), role: "assistant".into(), content: "Sure, here are SQLite migration commands.".into(), ..Turn::default() },
+                    Turn { id: "noise4".into(), role: "user".into(), content: "Thanks!".into(), ..Turn::default() },
                 ]},
             ],
             queries: vec![Query { text: "When does my first sprint end?".into(), date: String::new() }],
@@ -2261,5 +5896,959 @@ mod tests {
         };
         let top2: Vec<String> = rank(&pref_req).results[0].sessions.iter().map(|s| s.id.clone()).collect();
         assert!(!top2.contains(&"zero".to_string()), "zero-overlap bridge should not enter preference top2: {top2:?}");
+    }
+
+    #[test]
+    fn standing_policy_classifier_catches_imperatives_and_exclusions() {
+        assert!(utterance_is_standing_policy("Always include the receipt hash."));
+        assert!(utterance_is_standing_policy("Please format all JSON with two-space indents."));
+        assert!(utterance_is_standing_policy("Never use tabs in this repo."));
+        assert!(utterance_is_standing_policy("The note says to always include a hash."));
+        assert!(!utterance_is_standing_policy("I like two-space indents."));
+        assert_eq!(
+            standing_policy_id("Always include the receipt hash."),
+            standing_policy_id("  always include the receipt hash.  ")
+        );
+        let seq = classify("What is the chronological order of the three deploys?");
+        assert!(seq.is_event_sequence);
+        let mine = classify("What instruction did I tell you to always include?");
+        assert!(mine.user_attribution && !mine.assistant_attribution);
+    }
+
+    #[test]
+    fn standing_policy_outranks_a_longer_topic_essay() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "essay".into(),
+                    date: "2024/06/01 (Sat) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn(
+                        "assistant",
+                        "Receipt hashes, formatting, and include paths show up in a long essay about build logs, formatters, and hash functions that never states a rule.",
+                    )],
+                },
+                Session {
+                    id: "rule".into(),
+                    date: "2024/01/02 (Tue) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "Always include the receipt hash when you format a response.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "What formatting rule did I tell you to always include?".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.user_attribution);
+        assert_eq!(ranked.results[0].turns[0].session_id, "rule");
+    }
+
+    #[test]
+    fn exclusive_preference_beats_a_neutral_mention() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "neutral".into(),
+                    date: String::new(),
+                    timestamp: 1,
+                    turns: vec![turn("user", "The cafe menu lists an oat milk latte and a citrus tonic.")],
+                },
+                Session {
+                    id: "exclusive".into(),
+                    date: String::new(),
+                    timestamp: 2,
+                    turns: vec![turn(
+                        "user",
+                        "I switched to oat milk only. The citrus tonic is too bitter and I avoid it.",
+                    )],
+                },
+            ],
+            queries: vec![Query {
+                text: "What kind of milk would I prefer?".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.preference);
+        assert_eq!(ranked.results[0].sessions[0].id, "exclusive");
+    }
+
+    #[test]
+    fn event_sequence_spreads_top_turns_across_dates() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "jan".into(),
+                    date: "2024/01/04 (Thu) 10:00".into(),
+                    timestamp: 0,
+                    turns: vec![
+                        turn("user", "We shipped the ledger format to production."),
+                        turn("assistant", "Noted the ledger format shipment."),
+                        turn("user", "The ledger format deploy finished before noon."),
+                    ],
+                },
+                Session {
+                    id: "jan-same".into(),
+                    date: "2024/01/04 (Thu) 10:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "Another note about the ledger format the same day.")],
+                },
+                Session {
+                    id: "mar".into(),
+                    date: "2024/03/02 (Sat) 11:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "We rolled the ledger format back after the audit.")],
+                },
+                Session {
+                    id: "jun".into(),
+                    date: "2024/06/09 (Sun) 11:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "We restored the ledger format with signed receipts.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "What is the chronological order of the ledger format changes?".into(),
+                date: String::new(),
+            }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.is_event_sequence);
+        let turn_sessions: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.session_id.as_str()).collect();
+        let unique = turn_sessions.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), turn_sessions.len(), "event sequence collapsed onto one session: {turn_sessions:?}");
+        let picked: Vec<&str> = ranked.results[0].sessions.iter().take(3).map(|s| s.id.as_str()).collect();
+        assert!(picked.contains(&"mar") && picked.contains(&"jun"), "same-date session was not penalized: {picked:?}");
+        assert!(!picked.contains(&"jan-same"), "{picked:?}");
+    }
+
+    #[test]
+    fn standing_rule_surfaces_for_a_task_with_no_shared_words() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "formula".into(),
+                    date: "2024/02/01 (Thu) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "A circle area uses pi times radius squared, and textbooks repeat that formula.")],
+                },
+                Session {
+                    id: "notes".into(),
+                    date: "2024/03/01 (Fri) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "Students compute circle areas by squaring the radius and multiplying.")],
+                },
+                Session {
+                    id: "rule".into(),
+                    date: "2024/01/04 (Thu) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "Always include the unit symbol when you write a measurement.")],
+                },
+            ],
+            queries: vec![Query { text: "How should I compute the area of a circle?".into(), date: String::new() }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.task_under_rules);
+        assert!(classify("What are some ways to store leftover soup?").task_under_rules);
+        assert!(classify("Could you outline a backup routine?").task_under_rules);
+        assert!(!classify("When did the soup boil?").task_under_rules);
+        let rule_turn = ranked.results[0].turns.iter().find(|t| t.session_id == "rule");
+        assert!(rule_turn.is_some(), "policy turn itself missed: {:?}", ranked.results[0].turns);
+        let ids: Vec<&str> = ranked.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"rule"), "standing rule stayed at zero overlap: {ids:?}");
+    }
+
+    #[test]
+    fn event_sequence_covers_distinct_user_initiatives() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "echo".into(),
+                    date: "2024/05/01 (Wed) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![
+                        turn("assistant", "Here is the chronological order of the workshop steps you started, as a list of steps."),
+                        turn("assistant", "Another chronological order of those workshop steps you started, repeated as more steps."),
+                        turn("assistant", "A third chronological order note of the workshop steps you started yesterday."),
+                    ],
+                },
+                Session {
+                    id: "sketch".into(),
+                    date: "2024/01/08 (Mon) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I began sketching the cabinet joints with a pencil before cutting walnut.")],
+                },
+                Session {
+                    id: "glue".into(),
+                    date: "2024/02/12 (Mon) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I glued the walnut panels after the joints were dry and clamped.")],
+                },
+                Session {
+                    id: "sand".into(),
+                    date: "2024/03/18 (Mon) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I sanded the drawers and rubbed oil into the faces.")],
+                },
+            ],
+            queries: vec![Query { text: "What is the chronological order of the workshop steps I started?".into(), date: String::new() }],
+            top_k: 4,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.is_event_sequence);
+        let turns: Vec<&str> = ranked.results[0].turns.iter().take(4).map(|t| t.session_id.as_str()).collect();
+        for id in ["sketch", "glue", "sand"] {
+            assert!(turns.contains(&id), "missing initiative {id} in {turns:?}");
+        }
+    }
+
+    #[test]
+    fn planning_question_binds_an_implicit_constraint() {
+        let intent = classify("How should I plan dinner for my guests?");
+        assert!(intent.preference && intent.task_under_rules);
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "market".into(),
+                    date: String::new(),
+                    timestamp: 1,
+                    turns: vec![turn("user", "Guests often eat dinner at the market after a long day.")],
+                },
+                Session {
+                    id: "limit".into(),
+                    date: String::new(),
+                    timestamp: 2,
+                    turns: vec![turn("user", "I don't want shellfish when guests come over for dinner.")],
+                },
+            ],
+            queries: vec![Query { text: "How should I plan dinner for my guests?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        assert_eq!(rank(&req).results[0].sessions[0].id, "limit");
+    }
+
+    #[test]
+    fn short_reply_inherits_the_neighbor_turn() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "chat".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("alex", "The walnut cabinet needs another coat of oil."),
+                    turn("blair", "Done."),
+                    turn("alex", "Unrelated note about train tickets and a station platform."),
+                ],
+            }],
+            queries: vec![Query { text: "Who finished the walnut cabinet oil?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.iter().any(|id| id.ends_with("#1")), "short reply missed the neighbor words: {ids:?}");
+    }
+
+    #[test]
+    fn constraint_object_turns_preference_on_without_a_planning_cue() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "menu".into(), date: String::new(), timestamp: 1, turns: vec![turn("user", "The diner menu lists walnut pie and citrus tart.")] },
+                Session { id: "limit".into(), date: String::new(), timestamp: 2, turns: vec![turn("user", "I am allergic to walnuts and skip that dessert.")] },
+            ],
+            queries: vec![Query { text: "Does the diner menu include walnuts?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.preference);
+        let ids: Vec<&str> = ranked.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"limit"), "constraint object never entered the ranking: {ids:?}");
+    }
+
+    #[test]
+    fn a_dateless_question_does_not_invent_a_date_window() {
+        assert!(inline_date_tokens("How do I sand a drawer?").is_empty());
+        let early = inline_date_tokens("We met in early May before the show.");
+        assert!(early.iter().any(|t| t == "__EARLY__05"), "{early:?}");
+        assert!(early.iter().any(|t| t == "__MONTH__05"), "{early:?}");
+    }
+
+    #[test]
+    fn speaker_boost_does_not_drop_the_other_speaker() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "talk".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("alex", "Alex packed the walnut oil for the cabinet."),
+                    turn("blair", "Blair packed the walnut oil for the cabinet too."),
+                ],
+            }],
+            queries: vec![Query { text: "What did Alex pack for the cabinet?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert!(ids[0].ends_with("#0"), "named speaker should lead: {ids:?}");
+    }
+
+    #[test]
+    fn one_chat_cannot_fill_the_top_five_when_another_fact_exists() {
+        let walnut = "The walnut cabinet oil was mixed, brushed, and left to cure overnight.";
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "walnut".into(),
+                    date: "2024/01/02 (Tue) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![
+                        turn("user", walnut),
+                        turn("user", "More walnut cabinet oil notes about the second coat and the brush."),
+                        turn("user", "Still the walnut cabinet oil, now describing the rag and the cure."),
+                        turn("user", "Again the walnut cabinet oil, with the tin and the cloth."),
+                        turn("user", "Yet more walnut cabinet oil, including the shelf and the lid."),
+                    ],
+                },
+                Session {
+                    id: "maple".into(),
+                    date: "2024/03/04 (Mon) 09:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "The maple drawer rails were cut, sanded, and fitted today.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "What connects the walnut cabinet oil and the maple drawer rails?".into(),
+                date: String::new(),
+            }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.multi_hop);
+        let sessions: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.session_id.as_str()).collect();
+        assert!(sessions.contains(&"maple"), "second fact was buried in one chat: {sessions:?}");
+        let walnut_n = sessions.iter().filter(|s| **s == "walnut").count();
+        assert!(walnut_n <= 2, "one chat took {walnut_n} of the top 5: {sessions:?}");
+    }
+
+    #[test]
+    fn pseudo_trigger_idioms_are_not_classified_as_standing_policies() {
+        assert!(!utterance_is_standing_policy("Don't worry about the rain."));
+        assert!(!utterance_is_standing_policy("Don't know where the wrench went."));
+        assert!(!utterance_is_standing_policy("Don't think we tried the cedar stain."));
+        assert!(!utterance_is_standing_policy("Never mind, I found the key."));
+        assert!(!utterance_is_standing_policy("Never been to Lisbon."));
+        assert!(!utterance_is_standing_policy("Always wanted to learn cello."));
+        assert!(!utterance_is_standing_policy("Make sure I understand your diagram."));
+        assert!(utterance_is_standing_policy("Please always quote file paths."));
+        assert!(utterance_is_standing_policy("Make sure every migration has a rollback."));
+    }
+
+    #[test]
+    fn backchannel_reaction_does_not_outrank_the_fact_turn() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "pergola".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("nora", "I stained the cedar pergola beams with tung oil yesterday."),
+                    turn("theo", "Wow, awesome!"),
+                ],
+            }],
+            queries: vec![Query { text: "What oil did Nora use on the cedar pergola?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].turns[0].id.ends_with("#0"), "{:?}", ranked.results[0].turns);
+    }
+
+    #[test]
+    fn ordinal_prepositional_and_bare_may_dates_parse_cleanly() {
+        assert!(inline_date_tokens("How may I sand a drawer?").is_empty());
+        let may_prep = inline_date_tokens("What did Nora build in May?");
+        assert!(may_prep.contains(&"__MONTH__05".to_string()), "{may_prep:?}");
+        let ord = inline_date_tokens("We met on the 15th of March before dusk.");
+        assert!(ord.contains(&"__MD__03_15".to_string()), "{ord:?}");
+        let full_ord = inline_date_tokens("Did the kiln fire on May 1st, 2023?");
+        assert!(full_ord.contains(&"__DATE__2023_05_01".to_string()), "{full_ord:?}");
+        let season = inline_date_tokens("Where did they camp in the summer of 2023?");
+        assert!(season.contains(&"__SY__2023_SU".to_string()), "{season:?}");
+    }
+
+    #[test]
+    fn single_token_entity_and_header_title_bridge_second_hop() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "hop1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "The Harbor Glassworks exhibition was curated by Mateo in Lisbon.")] },
+                Session { id: "d1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Harbor Glassworks opened a small gift counter near the ferry.")] },
+                Session { id: "d2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Visitors praised the Harbor Glassworks lighting display.")] },
+                Session { id: "d3".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Tickets for Harbor Glassworks sold out by noon.")] },
+                Session { id: "d4".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Catalogs from Harbor Glassworks listed twelve bowls.")] },
+                Session { id: "hop2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Mateo (ceramist)\nMateo trained at the Porto Kiln Guild before curating glass.")] },
+                Session { id: "noise".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Sourdough starter hydration depends on flour protein.")] },
+            ],
+            queries: vec![Query { text: "Where did the curator of the Harbor Glassworks exhibition train?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let top5: Vec<String> = rank(&req).results[0].sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(top5.contains(&"hop2".to_string()), "single-token proper bridge missed: {top5:?}");
+    }
+
+    #[test]
+    fn unrelated_hobbies_do_not_flood_topical_preference_queries() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "h1".into(), date: String::new(), timestamp: 1, turns: vec![turn("user", "I love playing blitz chess on rainy evenings.")] },
+                Session { id: "h2".into(), date: String::new(), timestamp: 2, turns: vec![turn("user", "I enjoy knitting wool scarves in winter.")] },
+                Session { id: "h3".into(), date: String::new(), timestamp: 3, turns: vec![turn("user", "I love collecting vintage postage stamps.")] },
+                Session { id: "h4".into(), date: String::new(), timestamp: 4, turns: vec![turn("user", "I prefer fountain pens with fine nibs.")] },
+                Session { id: "h5".into(), date: String::new(), timestamp: 5, turns: vec![turn("user", "I would like to visit Patagonia someday.")] },
+                Session { id: "gold".into(), date: String::new(), timestamp: 6, turns: vec![turn("user", "My camera bag holds a compact prime lens for street photography.")] },
+            ],
+            queries: vec![Query { text: "What would be a good lens to add to my camera kit?".into(), date: String::new() }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.preference);
+        assert_eq!(ranked.results[0].sessions[0].id, "gold");
+    }
+
+    #[test]
+    fn structured_typed_slots_bind_and_supersede_on_current_state() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "old".into(), date: "2024-01-10".into(), timestamp: 0, turns: vec![turn("user", "Quota: 250gb\nInitial storage plan.")] },
+                Session { id: "new".into(), date: "2024-08-15".into(), timestamp: 0, turns: vec![turn("user", "Quota: 500gb\nUpgraded storage plan.")] },
+            ],
+            queries: vec![Query { text: "What is my current storage quota?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].sessions[0].id, "new");
+    }
+
+    #[test]
+    fn tied_turns_are_identical_across_two_runs() {
+        let mut sessions = Vec::new();
+        for i in 0..12 {
+            sessions.push(Session {
+                id: format!("s{i}"),
+                date: String::new(),
+                timestamp: i,
+                turns: vec![turn("user", "alpha beta gamma delta"), turn("assistant", "alpha beta gamma delta")],
+            });
+        }
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "alpha beta gamma delta".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        assert_eq!(serde_json::to_string(&rank(&req)).unwrap(), serde_json::to_string(&rank(&req)).unwrap());
+    }
+
+    #[test]
+    fn exact_edge_replaces_a_weaker_slot_without_shared_words() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "now".into(),
+                    date: String::new(),
+                    timestamp: 2,
+                    turns: vec![Turn {
+                        id: "trigger".into(),
+                        role: "user".into(),
+                        content: "The ledger key is cedar.".into(),
+                        links: vec![TurnLink { kind: "backfill".into(), to: "earlier".into(), degree: 2 }],
+                        stability: 4.0,
+                    }],
+                },
+                Session {
+                    id: "then".into(),
+                    date: String::new(),
+                    timestamp: 1,
+                    turns: vec![Turn {
+                        id: "earlier".into(),
+                        role: "user".into(),
+                        content: "quartz violin under the stairs".into(),
+                        stability: 9.0,
+                        ..Turn::default()
+                    }],
+                },
+                Session { id: "n1".into(), date: String::new(), timestamp: 3, turns: vec![turn("user", "marble compass on the table")] },
+                Session { id: "n2".into(), date: String::new(), timestamp: 4, turns: vec![turn("user", "linen harbor in the fog")] },
+                Session { id: "n3".into(), date: String::new(), timestamp: 5, turns: vec![turn("user", "pewter lantern by the door")] },
+                Session { id: "n4".into(), date: String::new(), timestamp: 6, turns: vec![turn("user", "silk orchard past the gate")] },
+            ],
+            queries: vec![Query { text: "Where is the ledger key?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|t| t.id.clone()).collect();
+        assert!(ids.iter().any(|id| id == "trigger"), "{ids:?}");
+        assert!(ids.iter().any(|id| id == "earlier"), "exact edge missed the zero-overlap turn: {ids:?}");
+    }
+
+    #[test]
+    fn a_backward_edge_lands_inside_the_first_five_not_the_tail() {
+        let mut sessions = vec![
+            Session {
+                id: "now".into(),
+                date: String::new(),
+                timestamp: 20,
+                turns: vec![Turn {
+                    id: "trigger".into(),
+                    role: "user".into(),
+                    content: "The ledger key is cedar.".into(),
+                    links: vec![TurnLink { kind: "backfill".into(), to: "earlier".into(), degree: 2 }],
+                    ..Turn::default()
+                }],
+            },
+            Session {
+                id: "then".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![Turn {
+                    id: "earlier".into(),
+                    role: "user".into(),
+                    content: "quartz violin under the stairs".into(),
+                    ..Turn::default()
+                }],
+            },
+        ];
+        for i in 0..8 {
+            sessions.push(Session {
+                id: format!("f{i}"),
+                date: String::new(),
+                timestamp: 2 + i,
+                turns: vec![turn("user", &format!("ledger {}", "padding ".repeat(40)))],
+            });
+        }
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "Where is the ledger key?".into(), date: String::new() }],
+            top_k: 10,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let rows: Vec<String> = ranked.results[0].turns.iter().map(|t| format!("{}:{:.3}", t.id, t.score)).collect();
+        let pos = rows.iter().position(|row| row.starts_with("earlier:"));
+        assert!(pos.is_some_and(|p| p < 5), "backward edge parked in the tail: {rows:?}");
+    }
+
+    #[test]
+    fn rabin_karp_header_title_dictionary_bridges_numeric_and_multiword_titles() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "anchor".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "The 1928 Winter Games figure skating pair event was won in St. Moritz alongside the premiere of Symphony No. 9.")] },
+                Session { id: "d1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Figure skating pair events in St. Moritz drew Alpine crowds.")] },
+                Session { id: "d2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "St. Moritz figure skating pair medals were awarded outdoors.")] },
+                Session { id: "d3".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Winter figure skating pair routines included spins.")] },
+                Session { id: "d4".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Judges scored the figure skating pair program in St. Moritz.")] },
+                Session { id: "target".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Symphony No. 9 (piece)\nComposed in Vienna, this symphony features a choral finale.")] },
+            ],
+            queries: vec![Query { text: "In which city was the symphony premiered alongside the St. Moritz figure skating pair event composed?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let top5: Vec<String> = rank(&req).results[0].sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(top5.contains(&"target".to_string()), "Rabin-Karp header bridge missed: {top5:?}");
+    }
+
+    #[test]
+    fn word_boundary_cues_never_misfire_on_substrings() {
+        let army = classify("Which Army Academy did Amy attend in Miami's district?");
+        assert!(!army.user_attribution, "Army/Amy/Miami's tripped user attribution: {army:?}");
+
+        let server = classify("How does the server service preserve gifted packets?");
+        assert!(!server.preference, "server/gifted tripped preference: {server:?}");
+
+        let renew = classify("What did Matthew renew before curfew?");
+        assert!(!renew.current_state, "renew tripped current_state: {renew:?}");
+
+        let claim = "Did the bilateral candidate validate the $0 claim?";
+        let bilateral = classify(claim);
+        assert!(!bilateral.temporal, "bilateral/validate/$0 tripped temporal: {bilateral:?}");
+        let padded = word_padded(claim);
+        assert!(padded.contains("$0"), "currency amount was stripped: {padded}");
+
+        assert!(is_content("one"), "Formula One lost the content token one");
+        assert!(raw_tokens("Formula One").contains(&"one".to_string()));
+
+        let ix = build_index(
+            &[Session {
+                id: "claim".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("user", "They claimed victory"),
+                    turn("user", "Their aim was victory"),
+                ],
+            }],
+            &Params::default(),
+        );
+        assert!(!ix.turns[0].has_causal, "aim substring inside claimed set has_causal");
+        assert!(ix.turns[1].has_causal, "whole-word aim cue did not fire");
+    }
+
+    #[test]
+    fn standing_rules_channel_fires_without_stealing_multihop_episodic_slots() {
+        let episodic = [
+            ("e1", "2024/01/03 (Wed) 09:00", "I logged an otter survey and counted 2 pups by the reed bank."),
+            ("e2", "2024/02/11 (Sun) 09:00", "I logged an otter survey and counted 4 pups by the cove."),
+            ("e3", "2024/03/19 (Tue) 09:00", "I logged an otter survey and counted 1 pup by the marsh."),
+            ("e4", "2024/04/07 (Sun) 09:00", "I logged an otter survey and counted 6 pups by the pier."),
+            ("e5", "2024/05/22 (Wed) 09:00", "I logged an otter survey and counted 3 pups by the inlet."),
+        ];
+        let mut sessions = Vec::new();
+        for (id, date, content) in episodic {
+            sessions.push(Session {
+                id: id.into(),
+                date: date.into(),
+                timestamp: 0,
+                turns: vec![turn("user", content)],
+            });
+        }
+        sessions.push(Session {
+            id: "rule".into(),
+            date: "2023/12/01 (Fri) 09:00".into(),
+            timestamp: 0,
+            turns: vec![turn("user", "Always include the unit symbol when writing measurements.")],
+        });
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "How many otter surveys did I log?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let intent = &ranked.results[0].intent;
+        assert!(intent.sniper_how_many && intent.multi_hop, "{intent:?}");
+        let ids: Vec<&str> = ranked.results[0].sessions.iter().take(5).map(|s| s.id.as_str()).collect();
+        for id in ["e1", "e2", "e3", "e4", "e5"] {
+            assert!(ids.contains(&id), "episodic slot missing {id}: {ids:?}");
+        }
+        assert!(!ids.contains(&"rule"), "standing rule stole an episodic slot: {ids:?}");
+        assert!(
+            ranked.results[0].standing_rules.iter().any(|r| r.session_id == "rule"),
+            "standing channel missed the zero-overlap rule: {:?}",
+            ranked.results[0].standing_rules
+        );
+    }
+
+    #[test]
+    fn ingest_rsb_handle_and_contradiction_bridge_backward_only() {
+        let path_words = "Glossary lists src auth token rs as separate syllables.";
+        let noise = "Marble compass beside a cedar shelf.";
+        let mut sessions = vec![
+            Session {
+                id: "S0".into(),
+                date: String::new(),
+                timestamp: 1_700_000_000,
+                turns: vec![Turn {
+                    id: "T0".into(),
+                    role: "user".into(),
+                    content: "Pinned legacy rotation window to 15m in src/auth/token.rs".into(),
+                    ..Turn::default()
+                }],
+            },
+        ];
+        for (i, content) in [path_words, path_words, path_words, noise, noise].into_iter().enumerate() {
+            sessions.push(Session {
+                id: format!("F{}", i + 1),
+                date: String::new(),
+                timestamp: 1_700_000_000 + ((i as i64) + 1) * 200_000,
+                turns: vec![turn("user", content)],
+            });
+        }
+        sessions.push(Session {
+            id: "S6".into(),
+            date: String::new(),
+            timestamp: 1_700_000_000 + 6 * 200_000,
+            turns: vec![Turn {
+                id: "T6".into(),
+                role: "user".into(),
+                content: "Production outage caused by expired JWT signature in src/auth/token.rs".into(),
+                ..Turn::default()
+            }],
+        });
+        sessions.push(Session {
+            id: "S7".into(),
+            date: String::new(),
+            timestamp: 1_700_000_000 + 7 * 200_000,
+            turns: vec![Turn {
+                id: "T7".into(),
+                role: "user".into(),
+                content: "Quiet refactor landed beside src/auth/token.rs overnight.".into(),
+                ..Turn::default()
+            }],
+        });
+        assert_eq!(sessions.len(), 8);
+
+        let ix = build_index(&sessions, &Params::default());
+        assert!(
+            ix.session_rsb_back[6].iter().any(|&(_, prev)| prev == 0),
+            "later outage did not link backward to the earlier path: {:?}",
+            ix.session_rsb_back
+        );
+        assert!(
+            ix.session_rsb_back.iter().enumerate().all(|(later, edges)| {
+                edges.iter().all(|&(_, earlier)| earlier < later)
+            }),
+            "RSB edge pointed forward: {:?}",
+            ix.session_rsb_back
+        );
+        assert!(
+            ix.session_supersedes_back.iter().enumerate().all(|(later, edges)| {
+                edges.iter().all(|&earlier| earlier < later)
+            }),
+            "contradiction edge pointed forward: {:?}",
+            ix.session_supersedes_back
+        );
+        assert!(ix.session_rsb_back[6].iter().all(|&(_, prev)| prev != 7));
+
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query {
+                text: "What caused the production outage with expired JWT signature?".into(),
+                date: String::new(),
+            }],
+            top_k: 8,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let session_ids: Vec<&str> = ranked.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(session_ids.contains(&"S6"), "outage session missing: {session_ids:?}");
+        assert!(session_ids.contains(&"S0"), "backward RSB missed the earlier path: {session_ids:?}");
+        assert!(!session_ids.contains(&"S7"), "RSB pulled a later session forward: {session_ids:?}");
+        let turn_ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        assert!(turn_ids.contains(&"T0"), "backward RSB missed turn T0: {turn_ids:?}");
+        assert!(!turn_ids.contains(&"T7"), "RSB pulled later turn T7 forward: {turn_ids:?}");
+    }
+
+    #[test]
+    fn uncarried_scene_pooling_prevents_reaction_and_vocative_rank1_steal() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "D1".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    Turn {
+                        id: "D1:1".into(),
+                        role: "Caroline".into(),
+                        content: "I adopted a rescue greyhound yesterday!".into(),
+                        ..Turn::default()
+                    },
+                    Turn {
+                        id: "D1:2".into(),
+                        role: "Melanie".into(),
+                        content: "Aww amazing Caroline! Why did you choose a greyhound?".into(),
+                        ..Turn::default()
+                    },
+                ],
+            }],
+            queries: vec![Query { text: "What dog did Caroline adopt?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let top = ranked.results[0].turns.first().map(|t| t.id.as_str());
+        assert_eq!(top, Some("D1:1"), "vocative follow-up stole rank 1: {:?}", ranked.results[0].turns);
+    }
+
+    #[test]
+    fn query_direct_header_title_match_boosts_canonical_subject_doc() {
+        let bury = "coastal conservatory rostrum downbeat catalog notes";
+        let mut sessions = vec![
+            Session { id: "scott".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Scott Derrickson\nAmerican director based in Denver.")] },
+            Session { id: "wolf".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Wolf Alice\nEnglish band formed in London.")] },
+            Session { id: "ambroise".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Ambroise Thomas\nFrench composer who taught in Paris.")] },
+            Session { id: "vcu".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Virginia Commonwealth University\nPublic campus in Richmond.")] },
+            Session { id: "hayden".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Hayden (musician)\nCanadian singer from Thornhill.")] },
+            Session { id: "time_doc".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Time\nWeekly magazine based in New York.")] },
+            Session { id: "music_doc".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Music\nTheory of scales and intervals.")] },
+        ];
+        for i in 0..3 {
+            sessions.push(Session {
+                id: format!("coast{i}"),
+                date: String::new(),
+                timestamp: 0,
+                turns: vec![turn("user", &format!("{bury} visit {i}"))],
+            });
+        }
+        for i in 0..3 {
+            sessions.push(Session {
+                id: format!("rehearse{i}"),
+                date: String::new(),
+                timestamp: 0,
+                turns: vec![turn("user", &format!("The rehearsal schedule lists the ensemble downbeat rostrum {i}"))],
+            });
+        }
+        for i in 0..6 {
+            sessions.push(Session {
+                id: format!("dilute{i}"),
+                date: String::new(),
+                timestamp: 0,
+                turns: vec![turn("user", "padding mentions time and music without a title line")],
+            });
+        }
+        let req = RankRequest {
+            sessions,
+            queries: vec![
+                Query {
+                    text: "Where did Scott Derrickson record with Wolf Alice and Hayden after Ambroise Thomas left Virginia Commonwealth University?".into(),
+                    date: String::new(),
+                },
+                Query {
+                    text: "What time is the music rehearsal?".into(),
+                    date: String::new(),
+                },
+            ],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let titles: Vec<String> = ranked.results[0].sessions.iter().map(|s| s.id.clone()).collect();
+        for id in ["scott", "wolf", "ambroise", "vcu", "hayden"] {
+            assert!(titles.contains(&id.to_string()), "canonical title missed: {id} in {titles:?}");
+        }
+        let common: Vec<String> = ranked.results[1].sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(!common.contains(&"time_doc".to_string()), "lowercase time bridged: {common:?}");
+        assert!(!common.contains(&"music_doc".to_string()), "lowercase music bridged: {common:?}");
+    }
+
+    #[test]
+    fn conditional_when_and_scope_matched_standing_rule_win_episodic_slot() {
+        let q1 = classify("What are some common responses when something goes wrong with an API?");
+        assert!(!q1.temporal && !q1.sniper_when && q1.task_under_rules, "{q1:?}");
+        let q2 = classify("When building an application that communicates with a REST API, what typical errors should I be prepared to handle?");
+        assert!(!q2.temporal && !q2.sniper_when && q2.task_under_rules, "{q2:?}");
+        let q3 = classify("When does my first sprint end?");
+        assert!(q3.temporal && q3.sniper_when && !q3.task_under_rules, "{q3:?}");
+
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "newer-unit".into(), date: String::new(), timestamp: 400, turns: vec![turn("user", "Always include the unit symbol.")] },
+                Session { id: "newer-tabs".into(), date: String::new(), timestamp: 300, turns: vec![turn("user", "Never use tabs in this repo.")] },
+                Session { id: "scope-soup".into(), date: String::new(), timestamp: 1, turns: vec![turn("user", "Always keep a lid when labeling soup.")] },
+                Session { id: "essay".into(), date: String::new(), timestamp: 50, turns: vec![turn("user", "Store leftover soup.")] },
+            ],
+            queries: vec![Query { text: "How should I store leftover soup?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let sessions: Vec<&str> = ranked.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(sessions.contains(&"scope-soup"), "spec winner missed episodic slot: {sessions:?}");
+        assert!(!sessions.contains(&"newer-unit"), "newer unmatched rule stole slot: {sessions:?}");
+    }
+
+    #[test]
+    fn beam_timeline_routes_to_user_and_ssa_collective_cues_stay_assistant() {
+        let order = classify("Can you list the order in which I brought up different aspects of developing my personal budget tracker throughout our conversations?");
+        assert!(order.is_event_sequence && order.user_attribution && !order.assistant_attribution && !order.task_under_rules, "{order:?}");
+        let ssa = classify("I think we discussed work from home jobs for seniors earlier. Can you remind me what was the 7th job in the list you provided?");
+        assert!(ssa.assistant_attribution && !ssa.user_attribution, "{ssa:?}");
+    }
+
+    #[test]
+    fn weapon4_versions_orthography_and_abbreviations() {
+        assert_eq!(raw_tokens("V8 engine"), vec!["v8".to_string(), "engine".to_string()]);
+        assert_eq!(raw_tokens("Bootstrap v5.3.0"), raw_tokens("Bootstrap 5.3.0"));
+        assert_eq!(raw_tokens("enable 2FA"), raw_tokens("enable two-factor"));
+        assert_eq!(raw_tokens("$1,200"), vec!["1200".to_string()]);
+        assert_eq!(stem("html5"), stem("html"));
+        assert_eq!(stem("css3"), stem("css"));
+        assert_eq!(stem("colour"), stem("color"));
+        assert_eq!(stem("theatre"), stem("theater"));
+        assert_eq!(stem("organise"), stem("organize"));
+        assert_eq!(stem("organises"), stem("organizes"));
+        assert_eq!(stem("irises"), stem("iris"));
+        assert_eq!(stem("edu"), stem("education"));
+        assert_eq!(stem("fam"), stem("family"));
+        assert_eq!(stem("pic"), stem("picture"));
+        assert_eq!(stem("career"), "career");
+    }
+
+    #[test]
+    fn multi_sentence_question_echo_and_speaker_nicknames_resolve_cleanly() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "D3".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    Turn {
+                        id: "D3:15".into(),
+                        role: "Caroline".into(),
+                        content: "Wow, what an amazing family pic! How long have you been married?".into(),
+                        ..Turn::default()
+                    },
+                    Turn {
+                        id: "D3:16".into(),
+                        role: "Melanie".into(),
+                        content: "5 years already! Time flies.".into(),
+                        ..Turn::default()
+                    },
+                ],
+            }],
+            queries: vec![Query { text: "How long have Mel and her husband been married?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].turns[0].id, "D3:16", "{:?}", ranked.results[0].turns);
+    }
+
+    #[test]
+    fn engineering_choice_beats_progress_narrative_and_assistant_expansion() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "debug".into(),
+                    date: String::new(),
+                    timestamp: 4,
+                    turns: vec![turn("user", "I've been debugging how to set up and keep the API cache responses simple and lightweight. I've been working on the API cache responses.")],
+                },
+                Session {
+                    id: "choice".into(),
+                    date: String::new(),
+                    timestamp: 5,
+                    turns: vec![turn("user", "I'd prefer to set up the API cache responses by trying to keep it lightweight and simple, without compromising latency.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "How should I set up the API cache responses? I'd like to keep it simple and lightweight.".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.preference);
+        assert_eq!(ranked.results[0].sessions[0].id, "choice");
+        assert_eq!(ranked.results[0].turns[0].session_id, "choice");
     }
 }

@@ -1537,6 +1537,33 @@ fn to_store_input(input: &IngestInput) -> strata_store::IngestInput {
     }
 }
 
+/// Bjork storage strength from the folded card.
+///
+/// `1 - exp(-(S/30 + reps/8))` is monotone in stability and review count and
+/// saturates in `[0, 1)`. The result is then raised to retrieval strength, so
+/// storage never decays below the strength the log can still retrieve, and
+/// clamped into `[0, 1]`. Every input is the card or the derived retrieval
+/// score: no wall clock.
+fn bjork_storage_strength(stability: f64, reps: i32, retrieval: f64) -> f64 {
+    let stability = if stability.is_finite() {
+        stability.max(0.0)
+    } else {
+        0.0
+    };
+    let reps = f64::from(reps.max(0));
+    let retrieval = if retrieval.is_finite() {
+        retrieval.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let encoded = 1.0 - (-(stability / 30.0 + reps / 8.0)).exp();
+    if encoded.is_finite() {
+        encoded.max(retrieval).clamp(0.0, 1.0)
+    } else {
+        retrieval
+    }
+}
+
 fn project_node(
     store: &strata_store::StrataStore,
     record: &strata_store::NodeRecord,
@@ -1547,25 +1574,42 @@ fn project_node(
         .ok()
         .flatten()
         .unwrap_or(0.0);
+    let created = ms_to_dt(record.created_at_ms);
     let mut node = KnowledgeNode::default();
     node.id = record.id.clone();
     node.content = record.content.clone();
     node.node_type = record.node_type.clone();
-    node.created_at = ms_to_dt(record.created_at_ms);
-    node.updated_at = node.created_at;
-    node.last_accessed = node.created_at;
+    // `KnowledgeNode::default` stamps `Utc::now()`. Those stamps must not
+    // survive: `updated_at` and `last_accessed` are a pure function of the
+    // record and the folded review clock, so two reads of one log agree.
+    // `node_field_mismatches` compares the record, not these projections.
+    node.created_at = created;
+    node.updated_at = created;
+    node.last_accessed = created;
+    // `reviewed_at_ms` is the latest explicit review (or an imported card's
+    // last access), recorded on the log. It is not a field of `CardState`.
+    // A clock at or before creation leaves both stamps on `created_at`.
+    if card.is_some()
+        && let Some(reviewed_ms) = store.reviewed_at_ms(&record.id)
+        && reviewed_ms > record.created_at_ms
+    {
+        let reviewed = ms_to_dt(reviewed_ms);
+        node.updated_at = reviewed;
+        node.last_accessed = reviewed;
+    }
     node.tags = record.tags.clone();
     node.valid_from = Some(ms_to_dt(record.valid_from_ms));
     node.valid_until =
         (record.valid_until_ms != VALID_FOREVER_MS).then(|| ms_to_dt(record.valid_until_ms));
-    // Kernel retrievability is the only strength the log can justify.
-    node.stability = card.as_ref().map(|c| q32(c.stability_q)).unwrap_or(0.0);
+    let stability = card.as_ref().map(|c| q32(c.stability_q)).unwrap_or(0.0);
+    let reps = card.as_ref().map(|c| c.review_count as i32).unwrap_or(0);
+    node.stability = stability;
     node.difficulty = card.as_ref().map(|c| q32(c.difficulty_q)).unwrap_or(0.0);
-    node.reps = card.as_ref().map(|c| c.review_count as i32).unwrap_or(0);
+    node.reps = reps;
     node.lapses = card.as_ref().map(|c| c.lapse_count as i32).unwrap_or(0);
-    node.storage_strength = retrieval;
     node.retrieval_strength = retrieval;
     node.retention_strength = retrieval;
+    node.storage_strength = bjork_storage_strength(stability, reps, retrieval);
     node.has_embedding = Some(false);
     apply_store_provenance(&mut node, record);
     node
@@ -1630,6 +1674,80 @@ fn endpoint_retired(store: &strata_store::StrataStore, id: &str) -> bool {
 
 fn edge_visible(store: &strata_store::StrataStore, edge: &strata_store::ConnectionRecord) -> bool {
     !endpoint_retired(store, &edge.source_id) && !endpoint_retired(store, &edge.target_id)
+}
+
+/// Whole days from `created_at_ms` to `now_ms`, floored, never negative.
+fn whole_days_since(created_at_ms: i64, now_ms: i64) -> i64 {
+    now_ms.saturating_sub(created_at_ms) / 86_400_000
+}
+
+/// `anchored / total * 100`, rounded to 2 decimals. `0.0` when `total` is 0.
+fn anchor_coverage_pct(anchored: u64, total: u64) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    let raw = (anchored as f64 / total as f64) * 100.0;
+    (raw * 100.0).round() / 100.0
+}
+
+/// A live node is code-anchored when the log recorded a code anchor, an
+/// `anchored_to` or `touched` edge on either end, or an exact `file:` /
+/// `symbol:` tag.
+fn code_anchored(
+    store: &strata_store::StrataStore,
+    record: &strata_store::NodeRecord,
+    linked: &BTreeSet<String>,
+) -> bool {
+    record.tags.iter().any(|tag| tag.starts_with("file:") || tag.starts_with("symbol:"))
+        || linked.contains(&record.id)
+        || !store.anchors_for(&record.id).is_empty()
+}
+
+/// Newest git-commit record: `node_type == "commit"`, a `git-commit` or
+/// `commit:` tag, or `source.system == "git"`. Tags and the system name are
+/// exact, the same compare the log stores.
+fn is_git_commit_node(record: &strata_store::NodeRecord) -> bool {
+    record.node_type == "commit"
+        || record
+            .source
+            .as_ref()
+            .is_some_and(|source| source.system == "git")
+        || record
+            .tags
+            .iter()
+            .any(|tag| tag == "git-commit" || tag.starts_with("commit:"))
+}
+
+/// `(never_accessed, access_unknown)` from the folded card.
+///
+/// `UpsertNode` folds one ingest review, and `FsrsFold::initial` sets
+/// `review_count` to 1. That review is creation, not a later access. A count
+/// above 1 is an explicit review or promote (an imported card keeps the
+/// source count, so above 1 means the source recorded reviews past the first).
+/// `StrataStore::retrievability_at` uses the same `review_count <= 1` line
+/// for "still at the ingest review".
+///
+/// No such review is then split by [`vestige_core::ACCESS_LOG_RETENTION_DAYS`]:
+/// created inside that window means `never_accessed`; older means
+/// `access_unknown`, and is never claimed as never-accessed. A missing card
+/// has no count to read, so it stays unknown. The two flags are never both set.
+fn hygiene_access(
+    store: &strata_store::StrataStore,
+    record: &strata_store::NodeRecord,
+) -> (bool, bool) {
+    let Some(card) = store.card_state(&record.id) else {
+        return (false, true);
+    };
+    if card.review_count > 1 {
+        return (false, false);
+    }
+    let window_ms = vestige_core::ACCESS_LOG_RETENTION_DAYS.saturating_mul(86_400_000);
+    let age_ms = Utc::now().timestamp_millis().saturating_sub(record.created_at_ms);
+    if age_ms <= window_ms {
+        (true, false)
+    } else {
+        (false, true)
+    }
 }
 
 fn project_edge(edge: &strata_store::ConnectionRecord) -> VestigeEdge {
@@ -2060,22 +2178,33 @@ impl MemoryStoreSend for StrataMemory {
     }
 
     fn run_consolidation(&self) -> Result<ConsolidationResult, StorageError> {
-        if crate::tools::backfill::autofire_enabled() {
-            let mut nodes = self.get_all_nodes(i32::MAX, 0)?;
-            nodes.sort_by(|a, b| {
-                a.created_at
-                    .cmp(&b.created_at)
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-            for node in nodes {
-                let scope = self.lock().get_node(&node.id).map(|r| r.scope);
-                if let Some(scope) = scope {
-                    crate::tools::backfill::autofire(self, &node.id, &scope)
-                        .map_err(StorageError::Refused)?;
-                }
+        if !crate::tools::backfill::autofire_enabled() {
+            return Ok(ConsolidationResult::default());
+        }
+        let started = Instant::now();
+        // Drop the lock before autofire: that path locks the store again.
+        let receipts_before = self.lock().backfill_receipts().len() as i64;
+        let mut nodes = self.get_all_nodes(i32::MAX, 0)?;
+        nodes.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let nodes_processed = nodes.len() as i64;
+        for node in &nodes {
+            let scope = self.lock().get_node(&node.id).map(|r| r.scope);
+            if let Some(scope) = scope {
+                crate::tools::backfill::autofire(self, &node.id, &scope)
+                    .map_err(StorageError::Refused)?;
             }
         }
-        Ok(ConsolidationResult::default())
+        let receipts_after = self.lock().backfill_receipts().len() as i64;
+        Ok(ConsolidationResult {
+            nodes_processed,
+            activations_computed: receipts_after.saturating_sub(receipts_before),
+            duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+            ..ConsolidationResult::default()
+        })
     }
 
     fn apply_salience_change(
@@ -3350,6 +3479,7 @@ impl MemoryStoreSend for StrataMemory {
                     .ok()
                     .flatten()
                     .unwrap_or(0.0);
+                let (never_accessed, access_unknown) = hygiene_access(&store, &record);
                 HygieneNodeSummary {
                     id: record.id,
                     node_type: record.node_type,
@@ -3362,8 +3492,8 @@ impl MemoryStoreSend for StrataMemory {
                     superseded: false,
                     content_bytes: record.content.len(),
                     content_preview: record.content.chars().take(140).collect(),
-                    never_accessed: false,
-                    access_unknown: true,
+                    never_accessed,
+                    access_unknown,
                 }
             })
             .collect();
@@ -3473,20 +3603,49 @@ impl MemoryStoreSend for StrataMemory {
     fn coverage_snapshot(&self) -> Result<CoverageSnapshot, StorageError> {
         let store = self.lock();
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        let mut linked: BTreeSet<String> = BTreeSet::new();
         for edge in store
             .edges()
             .into_iter()
             .filter(|edge| edge_visible(&store, edge))
         {
+            if edge.link_type == "anchored_to" || edge.link_type == "touched" {
+                linked.insert(edge.source_id.clone());
+                linked.insert(edge.target_id.clone());
+            }
             *counts.entry(edge.link_type).or_default() += 1;
         }
+        // Same population as `StrataStore::node_count`: live nodes, every scope.
+        // `retrievable` is `superseded_by.is_none()`, which is `NodeRecord::is_live`.
+        let live: Vec<strata_store::NodeRecord> =
+            store.nodes().into_iter().filter(retrievable).collect();
+        let total_nodes = live.len() as u64;
+        let anchored_nodes = live
+            .iter()
+            .filter(|record| code_anchored(&store, record, &linked))
+            .count() as u64;
+        let newest_commit = live
+            .iter()
+            .filter(|record| is_git_commit_node(record))
+            .max_by(|left, right| {
+                left.created_at_ms
+                    .cmp(&right.created_at_ms)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+        let (newest_git_commit_record, newest_git_commit_record_age_days) = match newest_commit {
+            Some(record) => (
+                Some(ms_to_dt(record.created_at_ms).to_rfc3339()),
+                Some(whole_days_since(record.created_at_ms, Utc::now().timestamp_millis())),
+            ),
+            None => (None, None),
+        };
         Ok(CoverageSnapshot {
-            total_nodes: store.node_count() as u64,
-            anchored_nodes: 0,
-            anchor_coverage_pct: 0.0,
+            total_nodes,
+            anchored_nodes,
+            anchor_coverage_pct: anchor_coverage_pct(anchored_nodes, total_nodes),
             edge_counts_by_type: counts.into_iter().collect(),
-            newest_git_commit_record: None,
-            newest_git_commit_record_age_days: None,
+            newest_git_commit_record,
+            newest_git_commit_record_age_days,
             newest_agent_trace_at: None,
             newest_agent_trace_age_hours: None,
         })
@@ -3495,7 +3654,65 @@ impl MemoryStoreSend for StrataMemory {
     fn load_active_synaptic_tags(
         &self,
     ) -> Result<Vec<vestige_core::neuroscience::SynapticTag>, StorageError> {
-        Ok(Vec::new())
+        let now = Utc::now();
+        let cutoff = now - chrono::Duration::hours(9);
+        let retired = self.superseded_node_ids().unwrap_or_default();
+        let nodes = self.get_all_nodes(i32::MAX, 0)?;
+        let receipts = self.salience_receipts().unwrap_or_default();
+        let undone: HashSet<String> = receipts
+            .iter()
+            .filter_map(|r| r.get("undo_of").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string))
+            .collect();
+        let mut captured_by: std::collections::HashMap<String, (String, DateTime<Utc>)> =
+            std::collections::HashMap::new();
+        for row in &receipts {
+            if row.get("undo_of").is_some_and(|v| !v.is_null()) {
+                continue;
+            }
+            if row.get("receipt_id").and_then(Value::as_str).is_some_and(|rid| undone.contains(rid)) {
+                continue;
+            }
+            let Some(mem_id) = row.get("memory_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let Some(trig_id) = row.get("trigger_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let ts = row
+                .get("timestamp_ms")
+                .and_then(Value::as_i64)
+                .map(ms_to_dt)
+                .unwrap_or(now);
+            captured_by.insert(mem_id.to_string(), (trig_id.to_string(), ts));
+        }
+
+        let decay_fn = vestige_core::neuroscience::DecayFunction::Exponential;
+        let mut tags = Vec::new();
+        for n in nodes {
+            if retired.contains(&n.id) || n.created_at < cutoff {
+                continue;
+            }
+            let elapsed_hours = ((now - n.created_at).num_milliseconds().max(0) as f64) / 3_600_000.0;
+            let strength = decay_fn.apply(1.0, elapsed_hours, 9.0);
+            if strength < 0.05 {
+                continue;
+            }
+            let (captured, capture_event, captured_at) = match captured_by.get(&n.id) {
+                Some((ev, ts)) => (true, Some(ev.clone()), Some(*ts)),
+                None => (false, None, None),
+            };
+            tags.push(vestige_core::neuroscience::SynapticTag {
+                memory_id: n.id,
+                created_at: n.created_at,
+                tag_strength: strength,
+                initial_strength: 1.0,
+                captured,
+                capture_event,
+                captured_at,
+                encoding_context: n.source,
+            });
+        }
+        Ok(tags)
     }
 
     fn promote_memory(&self, id: &str) -> Result<KnowledgeNode, StorageError> {

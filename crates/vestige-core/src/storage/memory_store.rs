@@ -323,9 +323,10 @@ pub trait LocalMemoryStore: Sync + 'static {
     // The product-wide surface every tool, server, and CLI entry point uses.
     // These mirror the SQLite reference implementation's inherent methods one
     // for one so the whole product compiles against `Arc<dyn MemoryStore>`.
-    // Backends implement (override) what they support; the default bodies
-    // fail loudly (StorageError::Init / unimplemented!) so a partial backend
-    // can never silently succeed.
+    // Backends implement (override) what they support. Default bodies return
+    // `Err(StorageError::Init)` or `None` so a partial backend cannot crash
+    // the process. Methods that return `&Path` or a `PathBuf` the caller
+    // writes into still panic: those signatures have no error channel.
     // ------------------------------------------------------------------------
 
     /// Admit `projected_to` edges for a confirmed projection.
@@ -1547,11 +1548,11 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Timestamp of the newest backup, if any.
+    ///
+    /// `None` when this backend records no backup stamp. Callers treat that
+    /// as "no backup yet"; the missing method must not panic.
     fn last_backup_timestamp(&self) -> Option<DateTime<Utc>> {
-        unimplemented!(concat!(
-            stringify!(last_backup_timestamp),
-            " is not implemented by this backend"
-        ))
+        None
     }
 
     /// Failed tool calls for the session funnel.
@@ -1868,11 +1869,11 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Read the process actor DID.
+    ///
+    /// `None` when this backend has no bound actor. Callers skip the
+    /// actor-attributed path; the missing method must not panic.
     fn process_actor_did(&self) -> Option<String> {
-        unimplemented!(concat!(
-            stringify!(process_actor_did),
-            " is not implemented by this backend"
-        ))
+        None
     }
 
     /// Synaptic-tagging ingest pipeline step.
@@ -2194,19 +2195,45 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Resolve @handle/#tag/^sha memory handles to candidates.
+    ///
+    /// An unsupported backend resolves nothing. The `handle_required` detail
+    /// names the gap; the call does not panic.
     fn resolve_handle(&self, _query: &str) -> HandleResolution {
-        unimplemented!(concat!(
-            stringify!(resolve_handle),
-            " is not implemented by this backend"
-        ))
+        HandleResolution {
+            kind: super::types::HandleKind::Unknown,
+            ids: Vec::new(),
+            exact: false,
+            candidates: Vec::new(),
+            handle_required: Some(
+                concat!(
+                    stringify!(resolve_handle),
+                    " is not implemented by this backend"
+                )
+                .to_string(),
+            ),
+        }
     }
 
     /// Retire blast-affected memories and report outcomes.
-    fn retire_affected(&self, _ids: &[&str], _reason: &str) -> Vec<RetireOutcome> {
-        unimplemented!(concat!(
-            stringify!(retire_affected),
-            " is not implemented by this backend"
-        ))
+    ///
+    /// An unsupported backend suppresses nothing. Each id comes back with
+    /// `suppressed: false` and an error, so a caller can report the failure
+    /// without the process panicking.
+    fn retire_affected(&self, ids: &[&str], _reason: &str) -> Vec<RetireOutcome> {
+        ids.iter()
+            .map(|id| RetireOutcome {
+                id: (*id).to_string(),
+                suppressed: false,
+                suppression_count: 0,
+                error: Some(
+                    concat!(
+                        stringify!(retire_affected),
+                        " is not implemented by this backend"
+                    )
+                    .to_string(),
+                ),
+            })
+            .collect()
     }
 
     /// Undo a suppression inside the labile window.

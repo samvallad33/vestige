@@ -269,8 +269,8 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
     if (!fs.existsSync(gate)) {
       const source = path.join(__dirname, '..', 'hooks', 'operator-gate.py');
       const liteSource = path.join(__dirname, '..', 'hooks', 'lite_core.py');
-      const row = change(gate, 'install Operator gate 6.2.1 with 102 STOP rules (owner terminal required)'); row.after = fs.readFileSync(source, 'utf8');
-      const lite = change(liteCore, 'install pinned Operator Lite 6.2.1 core beside the gate'); lite.after = fs.readFileSync(liteSource, 'utf8');
+      const row = change(gate, 'install Operator gate 6.2.2 with 102 STOP rules (owner terminal required)'); row.after = fs.readFileSync(source, 'utf8');
+      const lite = change(liteCore, 'install pinned Operator Lite 6.2.2 core beside the gate'); lite.after = fs.readFileSync(liteSource, 'utf8');
       const mode = change(path.join(home, '.operator', 'mode'), 'start new guard in enforce mode');
       if (mode.before === null) mode.after = 'enforce\n';
       guardInstall = { source, python };

@@ -42,14 +42,14 @@ try:
 except ImportError:                                  # Windows: receipts lock through msvcrt instead
     fcntl = None
 
-VERSION = "6.2.1"
+VERSION = "6.2.2"
 INTEGRITY = "reference_digest_not_signature"
 # Operator is a strict superset of Operator Lite: the Lite gate ships beside this file, byte for byte,
 # and every call is also judged by it. A copy whose bytes differ from the pin is not loaded.
-# The pin is operator-lite/operator-gate.py in this repository (Operator Lite 6.2.1).
+# The pin is operator-lite/operator-gate.py in this repository (Operator Lite 6.2.2).
 LITE_CORE_FILE = "lite_core.py"
-LITE_CORE_VERSION = "6.2.1"
-LITE_CORE_SHA256 = "f42156e9c9c8c6e5f4f4cdc6c2a698f49925338306e741b6645cdf417fbf50a1"
+LITE_CORE_VERSION = "6.2.2"
+LITE_CORE_SHA256 = "9de59e80f5ffa1d8ce380351d950dd612660d998020f791e483b17493f95a63d"
 IS_WINDOWS = os.name == "nt"
 
 

@@ -184,9 +184,43 @@ pub async fn execute(
             let id_b = args
                 .identity_b
                 .ok_or("connect_identities requires 'identity_b'")?;
-            Err(format!(
-                "connect_identities is unavailable: no storage identity-unification API for {id_a:?} and {id_b:?}"
-            ))
+            let a_trim = id_a.trim();
+            let b_trim = id_b.trim();
+            if a_trim.is_empty() || b_trim.is_empty() {
+                return Err("identity_a and identity_b must be non-empty handles".into());
+            }
+            if a_trim == b_trim {
+                return Err("connect_identities requires two distinct handles".into());
+            }
+            let scope = args.scope.as_deref().unwrap_or("user").trim();
+            let res_a = storage.resolve_handle(a_trim);
+            let res_b = storage.resolve_handle(b_trim);
+            let node_a = res_a
+                .ids
+                .into_iter()
+                .find(|id| storage.node_is_in_scope(id, scope).unwrap_or(false))
+                .ok_or_else(|| format!("identity_a '{a_trim}' did not resolve to a live memory in scope '{scope}'"))?;
+            let node_b = res_b
+                .ids
+                .into_iter()
+                .find(|id| *id != node_a && storage.node_is_in_scope(id, scope).unwrap_or(false))
+                .ok_or_else(|| format!("identity_b '{b_trim}' did not resolve to a distinct live memory in scope '{scope}'"))?;
+            let kind = crate::strata_memory::DeclaredLink::EvidenceOf;
+            crate::strata_memory::check_links(
+                storage.as_ref(),
+                scope,
+                &[(kind, node_a.clone()), (kind, node_b.clone())],
+            )?;
+            let links = crate::strata_memory::save_links(storage.as_ref(), &node_a, &[(kind, node_b.clone())])?;
+            Ok(json!({
+                "action": "connect_identities",
+                "success": true,
+                "identity_a": a_trim,
+                "identity_b": b_trim,
+                "source_id": node_a,
+                "target_id": node_b,
+                "links": links,
+            }))
         }
         other => Err(format!(
             "unknown curate action '{other}'; use promote, demote, edit, link, bridge, connect_identities, or suppress"

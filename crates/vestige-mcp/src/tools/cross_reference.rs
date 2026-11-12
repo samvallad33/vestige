@@ -1,8 +1,12 @@
-//! Deep Reference / Reason-Mode Tool
+//! Deep reference / reason mode.
 //!
-//! Validates reason-mode arguments and delegates to the active storage backend
-//! (returning `similarity_disabled` on Strata 4.0) while providing shared
-//! trust and contradiction helpers for dashboard and retrieval views.
+//! A Strata answer is an exact handle (id, unique prefix, or exact tag) or an
+//! exact token, then the recorded neighborhood of those memories: one hop for
+//! a token, the depth budget for a handle. Trust is FSRS state. Tension is a
+//! recorded `corrects`, `supersedes`, `contradicts`, or `closed_by` edge.
+//! Free text that is neither a handle nor an exact token is
+//! `similarity_disabled` — the dashboard pins that refusal for a query such
+//! as `"x"`. Nothing here is an embedding.
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
@@ -281,16 +285,211 @@ pub async fn execute(
         return Err("Query cannot be empty".to_string());
     }
 
-    let depth = args.depth.unwrap_or(20).clamp(5, 50);
+    let depth = args.depth.unwrap_or(20).clamp(5, 50) as usize;
+    let limit = args.limit.unwrap_or(10).clamp(1, 50) as usize;
     validate_scope(args.scope.as_deref())?;
     validate_source_args(&args)?;
-    let _valid_at = parse_valid_at(args.valid_at.as_deref())?;
-    let _superseded_ids = storage.superseded_node_ids().map_err(|e| e.to_string())?;
+    let valid_at = parse_valid_at(args.valid_at.as_deref())?;
+    let superseded_ids = storage.superseded_node_ids().map_err(|e| e.to_string())?;
+
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        let trimmed = args.query.trim();
+        let resolution = storage.resolve_handle(trimmed);
+        if resolution.ids.is_empty() {
+            return Err(format!(
+                "{}: cross_reference requires exact handles in 4.0",
+                crate::tools::unavailable::SIMILARITY_DISABLED
+            ));
+        }
+        let scope = args.scope.as_deref().unwrap_or(DEFAULT_MEMORY_SCOPE).trim();
+        let cross_scope = args.include_cross_scope.unwrap_or(false);
+        let check_ts = valid_at.unwrap_or_else(Utc::now);
+        let min_ret = args.min_retention.unwrap_or(0.0);
+
+        let node_allowed = |n: &vestige_core::KnowledgeNode| -> bool {
+            if superseded_ids.contains(&n.id) {
+                return false;
+            }
+            if !cross_scope && !storage.node_is_in_scope(&n.id, scope).unwrap_or(false) {
+                return false;
+            }
+            if n.valid_from.is_some_and(|t| t > check_ts) || n.valid_until.is_some_and(|t| t <= check_ts) {
+                return false;
+            }
+            if n.retention_strength < min_ret {
+                return false;
+            }
+            if let Some(inc) = args.include_types.as_ref()
+                && !inc.is_empty()
+                && !inc.iter().any(|t| t.eq_ignore_ascii_case(&n.node_type))
+            {
+                return false;
+            }
+            if let Some(exc) = args.exclude_types.as_ref()
+                && exc.iter().any(|t| t.eq_ignore_ascii_case(&n.node_type))
+            {
+                return false;
+            }
+            if let Some(pref) = args.tag_prefix.as_deref()
+                && !pref.is_empty()
+                && !n.tags.iter().any(|t| t.starts_with(pref))
+            {
+                return false;
+            }
+            true
+        };
+
+        let mut seen = std::collections::HashSet::new();
+        let mut evidence_nodes: Vec<(vestige_core::KnowledgeNode, &'static str, f64)> = Vec::new();
+        let mut contradiction_pairs: Vec<Value> = Vec::new();
+
+        for (idx, seed_id) in resolution.ids.iter().enumerate() {
+            if evidence_nodes.len() >= depth {
+                break;
+            }
+            let Some(seed) = storage.get_node(seed_id).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            if !node_allowed(&seed) || !seen.insert(seed.id.clone()) {
+                continue;
+            }
+            let role = if idx == 0 { "primary" } else { "supporting" };
+            let trust = compute_trust(seed.retention_strength, seed.stability, seed.reps, seed.lapses);
+            evidence_nodes.push((seed, role, trust));
+        }
+
+        let seed_ids: Vec<String> = evidence_nodes.iter().map(|(n, _, _)| n.id.clone()).collect();
+        const TENSION_KINDS: &[&str] = &["corrects", "supersedes", "contradicts", "closed_by"];
+        for sid in &seed_ids {
+            if let Ok(conns) = storage.get_connections_for_memory(sid) {
+                for edge in conns {
+                    if evidence_nodes.len() >= depth {
+                        break;
+                    }
+                    let other_id = if edge.source_id == *sid {
+                        &edge.target_id
+                    } else {
+                        &edge.source_id
+                    };
+                    let Some(other) = storage.get_node(other_id).map_err(|e| e.to_string())? else {
+                        continue;
+                    };
+                    if !node_allowed(&other) {
+                        continue;
+                    }
+                    let is_tension = TENSION_KINDS.contains(&edge.link_type.as_str());
+                    if is_tension {
+                        contradiction_pairs.push(serde_json::json!({
+                            "a_id": edge.source_id,
+                            "b_id": edge.target_id,
+                            "relation": edge.link_type,
+                            "strength": edge.strength,
+                        }));
+                    }
+                    if seen.insert(other.id.clone()) {
+                        let role = if is_tension { "contradicting" } else { "supporting" };
+                        let trust = compute_trust(other.retention_strength, other.stability, other.reps, other.lapses);
+                        evidence_nodes.push((other, role, trust));
+                    }
+                }
+            }
+        }
+
+        // Also walk active (non-undone) Retroactive Salience Backfill receipts connected to seeds
+        if let Ok(receipts) = storage.salience_receipts() {
+            let undone: std::collections::HashSet<String> = receipts
+                .iter()
+                .filter_map(|r| r.get("undo_of").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string))
+                .collect();
+            let seed_set: std::collections::HashSet<&str> = seed_ids.iter().map(String::as_str).collect();
+            for row in receipts {
+                if evidence_nodes.len() >= depth {
+                    break;
+                }
+                if row.get("undo_of").is_some_and(|v| !v.is_null()) {
+                    continue;
+                }
+                if row.get("receipt_id").and_then(Value::as_str).is_some_and(|rid| undone.contains(rid)) {
+                    continue;
+                }
+                let mem = row.get("memory_id").and_then(Value::as_str).unwrap_or("");
+                let trig = row.get("trigger_id").and_then(Value::as_str).unwrap_or("");
+                let other_id = if seed_set.contains(trig) {
+                    mem
+                } else if seed_set.contains(mem) {
+                    trig
+                } else {
+                    continue;
+                };
+                if other_id.is_empty() {
+                    continue;
+                }
+                if let Ok(Some(other)) = storage.get_node(other_id)
+                    && node_allowed(&other)
+                    && seen.insert(other.id.clone())
+                {
+                    let trust = compute_trust(other.retention_strength, other.stability, other.reps, other.lapses);
+                    evidence_nodes.push((other, "supporting", trust));
+                }
+            }
+        }
+
+        evidence_nodes.sort_by(|a, b| {
+            (a.1 == "primary")
+                .cmp(&(b.1 == "primary"))
+                .reverse()
+                .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| a.0.id.cmp(&b.0.id))
+        });
+        let total_analyzed = evidence_nodes.len();
+        evidence_nodes.truncate(limit);
+
+        let recommended = evidence_nodes.first().map(|(n, _, trust)| {
+            serde_json::json!({
+                "memory_id": n.id,
+                "trust": trust,
+                "content": n.content,
+            })
+        });
+        let avg_conf = if evidence_nodes.is_empty() {
+            0.0
+        } else {
+            evidence_nodes.iter().map(|(_, _, t)| *t).sum::<f64>() / (evidence_nodes.len() as f64)
+        };
+        let evidence_json: Vec<Value> = evidence_nodes
+            .into_iter()
+            .map(|(n, role, trust)| {
+                serde_json::json!({
+                    "id": n.id,
+                    "memory_id": n.id,
+                    "role": role,
+                    "trust": trust,
+                    "nodeType": n.node_type,
+                    "content": n.content,
+                    "tags": n.tags,
+                    "stability": n.stability,
+                    "retentionStrength": n.retention_strength,
+                    "createdAt": n.created_at.to_rfc3339(),
+                })
+            })
+            .collect();
+
+        return Ok(serde_json::json!({
+            "query": args.query,
+            "handleKind": resolution.kind.as_str(),
+            "intent": "exact_handle_reason",
+            "memoriesAnalyzed": total_analyzed,
+            "confidence": avg_conf,
+            "recommended": recommended,
+            "evidence": evidence_json,
+            "contradictions": contradiction_pairs,
+        }));
+    }
 
     storage
         .hybrid_search_filtered(
             &args.query,
-            depth,
+            depth as i32,
             0.3,
             0.7,
             args.include_types.as_deref(),

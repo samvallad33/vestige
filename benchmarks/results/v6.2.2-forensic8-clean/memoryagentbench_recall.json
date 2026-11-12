@@ -1,0 +1,172 @@
+{
+  "benchmark": "MemoryAgentBench",
+  "track": "Accurate_Retrieval",
+  "version": "v6.2.1",
+  "timestamp": "2026-11-12T05:17:10Z",
+  "elapsed_seconds": 113.4,
+  "cost_usd": 0,
+  "splits": {
+    "ruler_qa1_197K": {
+      "row": 0,
+      "docs": 1204,
+      "total_questions": 100,
+      "unique_doc_gold_subset": {
+        "n": 48,
+        "recall_any_at_1": 81.25,
+        "recall_any_at_5": 95.83,
+        "recall_any_at_10": 97.92,
+        "mrr": 0.8705
+      },
+      "answer_containing_doc_match": {
+        "n": 100,
+        "recall_any_at_1": 80.0,
+        "recall_any_at_5": 98.0,
+        "recall_any_at_10": 99.0,
+        "mrr": 0.868
+      }
+    },
+    "ruler_qa2_421K": {
+      "row": 1,
+      "docs": 3307,
+      "total_questions": 100,
+      "recall_any_at_1": 85.0,
+      "recall_any_at_5": 100.0,
+      "recall_any_at_10": 100.0,
+      "recall_all_at_5": 85.0,
+      "recall_all_at_10": 94.0,
+      "mrr": 0.9183
+    },
+    "longmemeval_s_star": {
+      "rows": [
+        17,
+        18,
+        19,
+        20,
+        21
+      ],
+      "total_questions_all": 300,
+      "abstentions_excluded": 13,
+      "total_questions": 287,
+      "recall_any_at_1": 77.7,
+      "recall_any_at_3": 89.55,
+      "recall_any_at_5": 93.38,
+      "recall_any_at_10": 95.82,
+      "recall_all_at_5": 80.84,
+      "recall_all_at_10": 87.8,
+      "mrr": 0.8426,
+      "per_row": [
+        {
+          "row": 17,
+          "sessions": 111,
+          "n": 58,
+          "n_total": 60,
+          "n_abs": 2,
+          "recall_any_at_1": 81.03,
+          "recall_any_at_5": 94.83,
+          "recall_all_at_5": 79.31,
+          "recall_any_at_10": 96.55,
+          "mrr": 0.8772
+        },
+        {
+          "row": 18,
+          "sessions": 107,
+          "n": 59,
+          "n_total": 60,
+          "n_abs": 1,
+          "recall_any_at_1": 83.05,
+          "recall_any_at_5": 93.22,
+          "recall_all_at_5": 84.75,
+          "recall_any_at_10": 93.22,
+          "mrr": 0.8701
+        },
+        {
+          "row": 19,
+          "sessions": 116,
+          "n": 58,
+          "n_total": 60,
+          "n_abs": 2,
+          "recall_any_at_1": 67.24,
+          "recall_any_at_5": 91.38,
+          "recall_all_at_5": 77.59,
+          "recall_any_at_10": 94.83,
+          "mrr": 0.767
+        },
+        {
+          "row": 20,
+          "sessions": 111,
+          "n": 56,
+          "n_total": 60,
+          "n_abs": 4,
+          "recall_any_at_1": 78.57,
+          "recall_any_at_5": 92.86,
+          "recall_all_at_5": 80.36,
+          "recall_any_at_10": 96.43,
+          "mrr": 0.8436
+        },
+        {
+          "row": 21,
+          "sessions": 110,
+          "n": 56,
+          "n_total": 60,
+          "n_abs": 4,
+          "recall_any_at_1": 78.57,
+          "recall_any_at_5": 94.64,
+          "recall_all_at_5": 82.14,
+          "recall_any_at_10": 98.21,
+          "mrr": 0.8551
+        }
+      ],
+      "types": {
+        "knowledge-update": {
+          "n": 43,
+          "recall_any_at_1": 95.35,
+          "recall_any_at_5": 97.67,
+          "recall_any_at_10": 100.0,
+          "recall_all_at_5": 97.67,
+          "recall_all_at_10": 97.67
+        },
+        "multi-session": {
+          "n": 70,
+          "recall_any_at_1": 74.29,
+          "recall_any_at_5": 97.14,
+          "recall_any_at_10": 98.57,
+          "recall_all_at_5": 55.71,
+          "recall_all_at_10": 75.71
+        },
+        "single-session-assistant": {
+          "n": 30,
+          "recall_any_at_1": 96.67,
+          "recall_any_at_5": 100.0,
+          "recall_any_at_10": 100.0,
+          "recall_all_at_5": 100.0,
+          "recall_all_at_10": 100.0
+        },
+        "single-session-preference": {
+          "n": 30,
+          "recall_any_at_1": 23.33,
+          "recall_any_at_5": 53.33,
+          "recall_any_at_10": 70.0,
+          "recall_all_at_5": 53.33,
+          "recall_all_at_10": 70.0
+        },
+        "single-session-user": {
+          "n": 41,
+          "recall_any_at_1": 87.8,
+          "recall_any_at_5": 100.0,
+          "recall_any_at_10": 100.0,
+          "recall_all_at_5": 100.0,
+          "recall_all_at_10": 100.0
+        },
+        "temporal-reasoning": {
+          "n": 73,
+          "recall_any_at_1": 79.45,
+          "recall_any_at_5": 97.26,
+          "recall_any_at_10": 97.26,
+          "recall_all_at_5": 87.67,
+          "recall_all_at_10": 89.04
+        }
+      }
+    }
+  },
+  "notes": "EventQA rows (multiple-choice paraphrased next-event selection over novel chapters with no gold chunk IDs in dataset) are not exact-ID retrieval tracks."
+}

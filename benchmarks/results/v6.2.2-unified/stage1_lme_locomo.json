@@ -1,0 +1,673 @@
+{
+  "system": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpus": "Intel(R) Core(TM) i5-2520M CPU @ 2.50GHz",
+    "total_mem_mb": 8126
+  },
+  "params": {},
+  "lme": {
+    "official_470_non_abs": {
+      "n": 470,
+      "recall_any_r1": 89.57,
+      "recall_any_r5": 97.66,
+      "recall_any_r10": 99.36,
+      "recall_all_r5": 87.02,
+      "recall_all_r10": 93.62,
+      "ndcg_10": 0.9227
+    },
+    "all_500": {
+      "n": 500,
+      "recall_any_r1": 89.6,
+      "recall_any_r5": 97.6,
+      "recall_any_r10": 99.4,
+      "recall_all_r5": 86.2,
+      "recall_all_r10": 93,
+      "ndcg_10": 0.919
+    },
+    "types": {
+      "single-session-user": {
+        "n": 70,
+        "recall_any_r1": 92.86,
+        "recall_any_r5": 100,
+        "recall_any_r10": 100,
+        "recall_all_r5": 100,
+        "recall_all_r10": 100,
+        "ndcg_10": 0.9699
+      },
+      "multi-session": {
+        "n": 133,
+        "recall_any_r1": 89.47,
+        "recall_any_r5": 97.74,
+        "recall_any_r10": 100,
+        "recall_all_r5": 73.68,
+        "recall_all_r10": 87.97,
+        "ndcg_10": 0.8982
+      },
+      "single-session-preference": {
+        "n": 30,
+        "recall_any_r1": 43.33,
+        "recall_any_r5": 80,
+        "recall_any_r10": 96.67,
+        "recall_all_r5": 80,
+        "recall_all_r10": 96.67,
+        "ndcg_10": 0.6734
+      },
+      "temporal-reasoning": {
+        "n": 133,
+        "recall_any_r1": 88.72,
+        "recall_any_r5": 97.74,
+        "recall_any_r10": 98.5,
+        "recall_all_r5": 79.7,
+        "recall_all_r10": 87.22,
+        "ndcg_10": 0.897
+      },
+      "knowledge-update": {
+        "n": 78,
+        "recall_any_r1": 98.72,
+        "recall_any_r5": 100,
+        "recall_any_r10": 100,
+        "recall_all_r5": 98.72,
+        "recall_all_r10": 98.72,
+        "ndcg_10": 0.9829
+      },
+      "single-session-assistant": {
+        "n": 56,
+        "recall_any_r1": 100,
+        "recall_any_r5": 100,
+        "recall_any_r10": 100,
+        "recall_all_r5": 100,
+        "recall_all_r10": 100,
+        "ndcg_10": 1
+      }
+    },
+    "raw": {
+      "all": {
+        "n": 500,
+        "r1": 448,
+        "r5": 488,
+        "r10": 497,
+        "all5": 431,
+        "all10": 465,
+        "ndcg10": 459.51615664040924
+      },
+      "nonAbs": {
+        "n": 470,
+        "r1": 421,
+        "r5": 459,
+        "r10": 467,
+        "all5": 409,
+        "all10": 440,
+        "ndcg10": 433.6807387823424
+      },
+      "buckets": {
+        "single-session-user": {
+          "n": 70,
+          "r1": 65,
+          "r5": 70,
+          "r10": 70,
+          "all5": 70,
+          "all10": 70,
+          "ndcg10": 67.89278926071438
+        },
+        "multi-session": {
+          "n": 133,
+          "r1": 119,
+          "r5": 130,
+          "r10": 133,
+          "all5": 98,
+          "all10": 117,
+          "ndcg10": 119.45487700342441
+        },
+        "single-session-preference": {
+          "n": 30,
+          "r1": 13,
+          "r5": 24,
+          "r10": 29,
+          "all5": 24,
+          "all10": 29,
+          "ndcg10": 20.203323338111737
+        },
+        "temporal-reasoning": {
+          "n": 133,
+          "r1": 118,
+          "r5": 130,
+          "r10": 131,
+          "all5": 106,
+          "all10": 116,
+          "ndcg10": 119.30082712859038
+        },
+        "knowledge-update": {
+          "n": 78,
+          "r1": 77,
+          "r5": 78,
+          "r10": 78,
+          "all5": 77,
+          "all10": 77,
+          "ndcg10": 76.66433990956823
+        },
+        "single-session-assistant": {
+          "n": 56,
+          "r1": 56,
+          "r5": 56,
+          "r10": 56,
+          "all5": 56,
+          "all10": 56,
+          "ndcg10": 56
+        }
+      }
+    }
+  },
+  "locomo": {
+    "dialogues": 10,
+    "core": {
+      "n": 1536,
+      "noEvidence": 4,
+      "session_r1": 74.28,
+      "session_r5": 92.19,
+      "turn_exact_r1": 45.64,
+      "turn_exact_r5": 65.43,
+      "turn_exact_r10": 76.43,
+      "turn_soft_r1": 55.34,
+      "turn_soft_r5": 74.74
+    },
+    "total": {
+      "n": 1982,
+      "noEvidence": 4,
+      "session_r1": 76.54,
+      "session_r5": 93.04,
+      "turn_exact_r1": 45.61,
+      "turn_exact_r5": 67.56,
+      "turn_exact_r10": 78.61,
+      "turn_soft_r1": 58.68,
+      "turn_soft_r5": 76.99
+    },
+    "categories": {
+      "Multi-Hop": {
+        "n": 282,
+        "noEvidence": 0,
+        "session_r1": 56.03,
+        "session_r5": 87.23,
+        "turn_exact_r1": 28.72,
+        "turn_exact_r5": 45.04,
+        "turn_exact_r10": 61.35,
+        "turn_soft_r1": 34.4,
+        "turn_soft_r5": 57.8
+      },
+      "Temporal": {
+        "n": 321,
+        "noEvidence": 0,
+        "session_r1": 74.14,
+        "session_r5": 92.52,
+        "turn_exact_r1": 55.76,
+        "turn_exact_r5": 69.78,
+        "turn_exact_r10": 78.19,
+        "turn_soft_r1": 62.31,
+        "turn_soft_r5": 79.13
+      },
+      "Open-Domain": {
+        "n": 92,
+        "noEvidence": 4,
+        "session_r1": 38.04,
+        "session_r5": 70.65,
+        "turn_exact_r1": 17.39,
+        "turn_exact_r5": 33.7,
+        "turn_exact_r10": 39.13,
+        "turn_soft_r1": 19.57,
+        "turn_soft_r5": 39.13
+      },
+      "Single-Hop": {
+        "n": 841,
+        "noEvidence": 0,
+        "session_r1": 84.42,
+        "session_r5": 96.08,
+        "turn_exact_r1": 50.54,
+        "turn_exact_r5": 74.08,
+        "turn_exact_r10": 84.9,
+        "turn_soft_r1": 63.61,
+        "turn_soft_r5": 82.64
+      },
+      "Adversarial": {
+        "n": 446,
+        "noEvidence": 0,
+        "session_r1": 84.3,
+        "session_r5": 95.96,
+        "turn_exact_r1": 45.52,
+        "turn_exact_r5": 74.89,
+        "turn_exact_r10": 86.1,
+        "turn_soft_r1": 70.18,
+        "turn_soft_r5": 84.75
+      }
+    },
+    "raw": {
+      "core": {
+        "n": 1536,
+        "noEvidence": 4,
+        "sR1": 1141,
+        "sR5": 1416,
+        "tR1": 701,
+        "tR5": 1005,
+        "tR10": 1174,
+        "softR1": 850,
+        "softR5": 1148,
+        "fracR5": 911.6569115525004
+      },
+      "total": {
+        "n": 1982,
+        "noEvidence": 4,
+        "sR1": 1517,
+        "sR5": 1844,
+        "tR1": 904,
+        "tR5": 1339,
+        "tR10": 1558,
+        "softR1": 1163,
+        "softR5": 1526,
+        "fracR5": 1242.6569115524999
+      },
+      "cats": {
+        "1": {
+          "n": 282,
+          "noEvidence": 0,
+          "sR1": 158,
+          "sR5": 246,
+          "tR1": 81,
+          "tR5": 127,
+          "tR10": 173,
+          "softR1": 97,
+          "softR5": 163,
+          "fracR5": 63.014754689754724
+        },
+        "2": {
+          "n": 321,
+          "noEvidence": 0,
+          "sR1": 238,
+          "sR5": 297,
+          "tR1": 179,
+          "tR5": 224,
+          "tR10": 251,
+          "softR1": 200,
+          "softR5": 254,
+          "fracR5": 213.50000000000003
+        },
+        "3": {
+          "n": 92,
+          "noEvidence": 4,
+          "sR1": 35,
+          "sR5": 65,
+          "tR1": 16,
+          "tR5": 31,
+          "tR10": 36,
+          "softR1": 18,
+          "softR5": 36,
+          "fracR5": 23.80882352941176
+        },
+        "4": {
+          "n": 841,
+          "noEvidence": 0,
+          "sR1": 710,
+          "sR5": 808,
+          "tR1": 425,
+          "tR5": 623,
+          "tR10": 714,
+          "softR1": 535,
+          "softR5": 695,
+          "fracR5": 611.3333333333333
+        },
+        "5": {
+          "n": 446,
+          "noEvidence": 0,
+          "sR1": 376,
+          "sR5": 428,
+          "tR1": 203,
+          "tR5": 334,
+          "tR10": 384,
+          "softR1": 313,
+          "softR5": 378,
+          "fracR5": 331
+        }
+      }
+    }
+  },
+  "held_out": {
+    "convs_1_to_5": {
+      "dialogues": 5,
+      "core": {
+        "n": 760,
+        "noEvidence": 2,
+        "session_r1": 76.32,
+        "session_r5": 93.03,
+        "turn_exact_r1": 48.95,
+        "turn_exact_r5": 67.37,
+        "turn_exact_r10": 78.03,
+        "turn_soft_r1": 57.63,
+        "turn_soft_r5": 75.92
+      },
+      "total": {
+        "n": 997,
+        "noEvidence": 2,
+        "session_r1": 78.54,
+        "session_r5": 93.98,
+        "turn_exact_r1": 48.45,
+        "turn_exact_r5": 68.61,
+        "turn_exact_r10": 79.94,
+        "turn_soft_r1": 60.78,
+        "turn_soft_r5": 77.93
+      },
+      "categories": {
+        "Multi-Hop": {
+          "n": 142,
+          "noEvidence": 0,
+          "session_r1": 52.82,
+          "session_r5": 88.73,
+          "turn_exact_r1": 30.28,
+          "turn_exact_r5": 47.18,
+          "turn_exact_r10": 63.38,
+          "turn_soft_r1": 35.92,
+          "turn_soft_r5": 60.56
+        },
+        "Temporal": {
+          "n": 156,
+          "noEvidence": 0,
+          "session_r1": 82.05,
+          "session_r5": 96.79,
+          "turn_exact_r1": 68.59,
+          "turn_exact_r5": 82.05,
+          "turn_exact_r10": 85.9,
+          "turn_soft_r1": 74.36,
+          "turn_soft_r5": 88.46
+        },
+        "Open-Domain": {
+          "n": 44,
+          "noEvidence": 2,
+          "session_r1": 45.45,
+          "session_r5": 68.18,
+          "turn_exact_r1": 20.45,
+          "turn_exact_r5": 36.36,
+          "turn_exact_r10": 40.91,
+          "turn_soft_r1": 20.45,
+          "turn_soft_r5": 40.91
+        },
+        "Single-Hop": {
+          "n": 418,
+          "noEvidence": 0,
+          "session_r1": 85.41,
+          "session_r5": 95.69,
+          "turn_exact_r1": 50.96,
+          "turn_exact_r5": 72.01,
+          "turn_exact_r10": 83.97,
+          "turn_soft_r1": 62.68,
+          "turn_soft_r5": 80.14
+        },
+        "Adversarial": {
+          "n": 237,
+          "noEvidence": 0,
+          "session_r1": 85.65,
+          "session_r5": 97.05,
+          "turn_exact_r1": 46.84,
+          "turn_exact_r5": 72.57,
+          "turn_exact_r10": 86.08,
+          "turn_soft_r1": 70.89,
+          "turn_soft_r5": 84.39
+        }
+      },
+      "raw": {
+        "core": {
+          "n": 760,
+          "noEvidence": 2,
+          "sR1": 580,
+          "sR5": 707,
+          "tR1": 372,
+          "tR5": 512,
+          "tR10": 593,
+          "softR1": 438,
+          "softR5": 577,
+          "fracR5": 469.59841269841274
+        },
+        "total": {
+          "n": 997,
+          "noEvidence": 2,
+          "sR1": 783,
+          "sR5": 937,
+          "tR1": 483,
+          "tR5": 684,
+          "tR10": 797,
+          "softR1": 606,
+          "softR5": 777,
+          "fracR5": 639.5984126984126
+        },
+        "cats": {
+          "1": {
+            "n": 142,
+            "noEvidence": 0,
+            "sR1": 75,
+            "sR5": 126,
+            "tR1": 43,
+            "tR5": 67,
+            "tR10": 90,
+            "softR1": 51,
+            "softR5": 86,
+            "fracR5": 36.598412698412695
+          },
+          "2": {
+            "n": 156,
+            "noEvidence": 0,
+            "sR1": 128,
+            "sR5": 151,
+            "tR1": 107,
+            "tR5": 128,
+            "tR10": 134,
+            "softR1": 116,
+            "softR5": 138,
+            "fracR5": 124
+          },
+          "3": {
+            "n": 44,
+            "noEvidence": 2,
+            "sR1": 20,
+            "sR5": 30,
+            "tR1": 9,
+            "tR5": 16,
+            "tR10": 18,
+            "softR1": 9,
+            "softR5": 18,
+            "fracR5": 11.666666666666666
+          },
+          "4": {
+            "n": 418,
+            "noEvidence": 0,
+            "sR1": 357,
+            "sR5": 400,
+            "tR1": 213,
+            "tR5": 301,
+            "tR10": 351,
+            "softR1": 262,
+            "softR5": 335,
+            "fracR5": 297.3333333333333
+          },
+          "5": {
+            "n": 237,
+            "noEvidence": 0,
+            "sR1": 203,
+            "sR5": 230,
+            "tR1": 111,
+            "tR5": 172,
+            "tR10": 204,
+            "softR1": 168,
+            "softR5": 200,
+            "fracR5": 170
+          }
+        }
+      }
+    },
+    "convs_6_to_10": {
+      "dialogues": 5,
+      "core": {
+        "n": 776,
+        "noEvidence": 2,
+        "session_r1": 72.29,
+        "session_r5": 91.37,
+        "turn_exact_r1": 42.4,
+        "turn_exact_r5": 63.53,
+        "turn_exact_r10": 74.87,
+        "turn_soft_r1": 53.09,
+        "turn_soft_r5": 73.58
+      },
+      "total": {
+        "n": 985,
+        "noEvidence": 2,
+        "session_r1": 74.52,
+        "session_r5": 92.08,
+        "turn_exact_r1": 42.74,
+        "turn_exact_r5": 66.5,
+        "turn_exact_r10": 77.26,
+        "turn_soft_r1": 56.55,
+        "turn_soft_r5": 76.04
+      },
+      "categories": {
+        "Multi-Hop": {
+          "n": 140,
+          "noEvidence": 0,
+          "session_r1": 59.29,
+          "session_r5": 85.71,
+          "turn_exact_r1": 27.14,
+          "turn_exact_r5": 42.86,
+          "turn_exact_r10": 59.29,
+          "turn_soft_r1": 32.86,
+          "turn_soft_r5": 55
+        },
+        "Temporal": {
+          "n": 165,
+          "noEvidence": 0,
+          "session_r1": 66.67,
+          "session_r5": 88.48,
+          "turn_exact_r1": 43.64,
+          "turn_exact_r5": 58.18,
+          "turn_exact_r10": 70.91,
+          "turn_soft_r1": 50.91,
+          "turn_soft_r5": 70.3
+        },
+        "Open-Domain": {
+          "n": 48,
+          "noEvidence": 2,
+          "session_r1": 31.25,
+          "session_r5": 72.92,
+          "turn_exact_r1": 14.58,
+          "turn_exact_r5": 31.25,
+          "turn_exact_r10": 37.5,
+          "turn_soft_r1": 18.75,
+          "turn_soft_r5": 37.5
+        },
+        "Single-Hop": {
+          "n": 423,
+          "noEvidence": 0,
+          "session_r1": 83.45,
+          "session_r5": 96.45,
+          "turn_exact_r1": 50.12,
+          "turn_exact_r5": 76.12,
+          "turn_exact_r10": 85.82,
+          "turn_soft_r1": 64.54,
+          "turn_soft_r5": 85.11
+        },
+        "Adversarial": {
+          "n": 209,
+          "noEvidence": 0,
+          "session_r1": 82.78,
+          "session_r5": 94.74,
+          "turn_exact_r1": 44.02,
+          "turn_exact_r5": 77.51,
+          "turn_exact_r10": 86.12,
+          "turn_soft_r1": 69.38,
+          "turn_soft_r5": 85.17
+        }
+      },
+      "raw": {
+        "core": {
+          "n": 776,
+          "noEvidence": 2,
+          "sR1": 561,
+          "sR5": 709,
+          "tR1": 329,
+          "tR5": 493,
+          "tR10": 581,
+          "softR1": 412,
+          "softR5": 571,
+          "fracR5": 442.058498854087
+        },
+        "total": {
+          "n": 985,
+          "noEvidence": 2,
+          "sR1": 734,
+          "sR5": 907,
+          "tR1": 421,
+          "tR5": 655,
+          "tR10": 761,
+          "softR1": 557,
+          "softR5": 749,
+          "fracR5": 603.0584988540869
+        },
+        "cats": {
+          "1": {
+            "n": 140,
+            "noEvidence": 0,
+            "sR1": 83,
+            "sR5": 120,
+            "tR1": 38,
+            "tR5": 60,
+            "tR10": 83,
+            "softR1": 46,
+            "softR5": 77,
+            "fracR5": 26.416341991341984
+          },
+          "2": {
+            "n": 165,
+            "noEvidence": 0,
+            "sR1": 110,
+            "sR5": 146,
+            "tR1": 72,
+            "tR5": 96,
+            "tR10": 117,
+            "softR1": 84,
+            "softR5": 116,
+            "fracR5": 89.5
+          },
+          "3": {
+            "n": 48,
+            "noEvidence": 2,
+            "sR1": 15,
+            "sR5": 35,
+            "tR1": 7,
+            "tR5": 15,
+            "tR10": 18,
+            "softR1": 9,
+            "softR5": 18,
+            "fracR5": 12.142156862745098
+          },
+          "4": {
+            "n": 423,
+            "noEvidence": 0,
+            "sR1": 353,
+            "sR5": 408,
+            "tR1": 212,
+            "tR5": 322,
+            "tR10": 363,
+            "softR1": 273,
+            "softR5": 360,
+            "fracR5": 314
+          },
+          "5": {
+            "n": 209,
+            "noEvidence": 0,
+            "sR1": 173,
+            "sR5": 198,
+            "tR1": 92,
+            "tR5": 162,
+            "tR10": 180,
+            "softR1": 145,
+            "softR5": 178,
+            "fracR5": 161
+          }
+        }
+      }
+    }
+  }
+}

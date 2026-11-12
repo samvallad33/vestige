@@ -1,0 +1,161 @@
+{
+  "system": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpus": "Intel(R) Core(TM) i5-2520M CPU @ 2.50GHz",
+    "total_mem_mb": 8126
+  },
+  "params": {},
+  "lme": {
+    "official_470_non_abs": {
+      "n": 470,
+      "recall_any_r1": 90,
+      "recall_any_r5": 97.45,
+      "recall_any_r10": 99.36,
+      "recall_all_r5": 86.6,
+      "recall_all_r10": 93.62,
+      "ndcg_10": 0.9229
+    },
+    "all_500": {
+      "n": 500,
+      "recall_any_r1": 90,
+      "recall_any_r5": 97.4,
+      "recall_any_r10": 99.4,
+      "recall_all_r5": 85.8,
+      "recall_all_r10": 93,
+      "ndcg_10": 0.9191
+    },
+    "types": {
+      "single-session-user": {
+        "n": 70,
+        "recall_any_r1": 95.71,
+        "recall_any_r5": 100,
+        "recall_any_r10": 100,
+        "recall_all_r5": 100,
+        "recall_all_r10": 100,
+        "ndcg_10": 0.9804
+      },
+      "multi-session": {
+        "n": 133,
+        "recall_any_r1": 89.47,
+        "recall_any_r5": 97.74,
+        "recall_any_r10": 100,
+        "recall_all_r5": 72.93,
+        "recall_all_r10": 87.97,
+        "ndcg_10": 0.8986
+      },
+      "single-session-preference": {
+        "n": 30,
+        "recall_any_r1": 40,
+        "recall_any_r5": 76.67,
+        "recall_any_r10": 96.67,
+        "recall_all_r5": 76.67,
+        "recall_all_r10": 96.67,
+        "ndcg_10": 0.6423
+      },
+      "temporal-reasoning": {
+        "n": 133,
+        "recall_any_r1": 89.47,
+        "recall_any_r5": 97.74,
+        "recall_any_r10": 98.5,
+        "recall_all_r5": 79.7,
+        "recall_all_r10": 87.22,
+        "ndcg_10": 0.8978
+      },
+      "knowledge-update": {
+        "n": 78,
+        "recall_any_r1": 98.72,
+        "recall_any_r5": 100,
+        "recall_any_r10": 100,
+        "recall_all_r5": 98.72,
+        "recall_all_r10": 98.72,
+        "ndcg_10": 0.9839
+      },
+      "single-session-assistant": {
+        "n": 56,
+        "recall_any_r1": 100,
+        "recall_any_r5": 100,
+        "recall_any_r10": 100,
+        "recall_all_r5": 100,
+        "recall_all_r10": 100,
+        "ndcg_10": 1
+      }
+    },
+    "raw": {
+      "all": {
+        "n": 500,
+        "r1": 450,
+        "r5": 487,
+        "r10": 497,
+        "all5": 429,
+        "all10": 465,
+        "ndcg10": 459.5573375005233
+      },
+      "nonAbs": {
+        "n": 470,
+        "r1": 423,
+        "r5": 458,
+        "r10": 467,
+        "all5": 407,
+        "all10": 440,
+        "ndcg10": 433.76442511626675
+      },
+      "buckets": {
+        "single-session-user": {
+          "n": 70,
+          "r1": 67,
+          "r5": 70,
+          "r10": 70,
+          "all5": 70,
+          "all10": 70,
+          "ndcg10": 68.63092975357145
+        },
+        "multi-session": {
+          "n": 133,
+          "r1": 119,
+          "r5": 130,
+          "r10": 133,
+          "all5": 97,
+          "all10": 117,
+          "ndcg10": 119.50837573078834
+        },
+        "single-session-preference": {
+          "n": 30,
+          "r1": 12,
+          "r5": 23,
+          "r10": 29,
+          "all5": 23,
+          "all10": 29,
+          "ndcg10": 19.270198816745708
+        },
+        "temporal-reasoning": {
+          "n": 133,
+          "r1": 119,
+          "r5": 130,
+          "r10": 131,
+          "all5": 106,
+          "all10": 116,
+          "ndcg10": 119.40321407899775
+        },
+        "knowledge-update": {
+          "n": 78,
+          "r1": 77,
+          "r5": 78,
+          "r10": 78,
+          "all5": 77,
+          "all10": 77,
+          "ndcg10": 76.74461912042004
+        },
+        "single-session-assistant": {
+          "n": 56,
+          "r1": 56,
+          "r5": 56,
+          "r10": 56,
+          "all5": 56,
+          "all10": 56,
+          "ndcg10": 56
+        }
+      }
+    }
+  }
+}

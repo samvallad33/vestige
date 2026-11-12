@@ -6,7 +6,7 @@
 //! names a recorded person does not pull in a different person's records.
 use chrono::{Datelike, Days, NaiveDate, Weekday};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use vestige_core::{KnowledgeNode, Storage};
 
 use super::lexical::{self, HOOK_CHAR_BUDGET};
@@ -377,13 +377,37 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             // No prompt, no target: never inject unrelated salience.
             (Vec::new(), "none_empty_prompt", "none")
         } else {
-            let hits = lexical::rank(&nodes, prompt, tie);
-            let score_of = |id: &str| {
-                hits.iter()
-                    .find(|hit| nodes[hit.index].id == id)
-                    .map(|hit| hit.score_micro)
-                    .unwrap_or(0)
-            };
+            let tr_pool = requested.saturating_mul(6).max(32);
+            let tr_scored = super::recall::rank_loaded_nodes_total_recall(
+                storage,
+                &nodes,
+                prompt,
+                tr_pool,
+            );
+            let pos_by_id: HashMap<&str, usize> = nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.id.as_str(), i))
+                .collect();
+            let mut hits: Vec<lexical::LexicalHit> = tr_scored
+                .into_iter()
+                .filter_map(|(id, sc)| {
+                    let index = *pos_by_id.get(id.as_str())?;
+                    let score_micro = ((sc as f64) * 1_000_000.0).round() as i64;
+                    (score_micro > 0).then_some(lexical::LexicalHit { index, score_micro })
+                })
+                .collect();
+            hits.sort_by(|a, b| {
+                b.score_micro
+                    .cmp(&a.score_micro)
+                    .then_with(|| tie(&nodes[b.index]).cmp(&tie(&nodes[a.index])))
+                    .then_with(|| nodes[b.index].id.cmp(&nodes[a.index].id))
+            });
+            let score_map: HashMap<&str, i64> = hits
+                .iter()
+                .map(|h| (nodes[h.index].id.as_str(), h.score_micro))
+                .collect();
+            let score_of = |id: &str| score_map.get(id).copied().unwrap_or(0);
             let mut indexes: Vec<usize> = hits
                 .iter()
                 .map(|hit| hit.index)
@@ -421,6 +445,9 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                     || (top_score > 0 && score_of(&node.id) * 2 >= top_score)
             };
             let raised = |index: &usize| tie(&nodes[*index]) > 0 && on_target(index);
+            // A memory whose salience receipt lowered it (e.g. a superseded residence via
+            // `supersedes` edge) yields to un-demoted peers before lexical tie-breaking.
+            let lowered = |index: &usize| tie(&nodes[*index]) < 0;
             // salience-pro 0.3.7 candidate reservation: a memory joined to the
             // prompt by a date or an avoid index tag is reserved a place right
             // after the raised ones, at most MAX_RESERVED, so lexical scores on
@@ -450,6 +477,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                 raised(b)
                     .cmp(&raised(a))
                     .then_with(|| reserved.contains(b).cmp(&reserved.contains(a)))
+                    .then_with(|| lowered(a).cmp(&lowered(b)))
                     .then_with(|| score_of(&nodes[*b].id).cmp(&score_of(&nodes[*a].id)))
                     .then_with(|| compare(&nodes[*a], &nodes[*b], &scores))
             });

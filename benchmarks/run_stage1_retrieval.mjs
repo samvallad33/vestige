@@ -128,9 +128,14 @@ function ingestLoCoMo(conv) {
     sessions.push({
       id: `D${s}`,
       date: String(c[`session_${s}_date_time`] || ''),
-      turns: c[`session_${s}`].filter(t => t.text && t.dia_id).map(t => ({
-        id: String(t.dia_id), role: String(t.speaker || ''), content: String(t.text),
-      })),
+      turns: c[`session_${s}`].filter(t => t.text && t.dia_id).map(t => {
+        let blip = t.blip_caption ? `\n[BLIP caption] ${t.blip_caption}` : '';
+        return {
+          id: String(t.dia_id),
+          role: String(t.speaker || ''),
+          content: `${t.text}${blip}`,
+        };
+      }),
     });
   }
   const queries = conv.qa.map(q => ({ text: String(q.question), date: '' }));
@@ -348,107 +353,112 @@ async function runLoCoMo(params, quiet = false, convList = null) {
 // MAIN EXECUTION
 // ---------------------------------------------------------------------------
 async function main() {
-  console.log('================================================================================');
-  console.log('  VESTIGE ENGINE · Stage 1 zero-model retrieval · Native Rust kernel');
-  console.log('================================================================================');
-  console.log(`Static audit: ingestion functions free of ${staticAudit()} label fields  ✔`);
-  const rejected = await boundarySelfTest();
-  console.log(`Boundary self-test: Rust rejected ${rejected}/4 labelled payloads  ✔\n`);
+  let exitCode = 0;
+  try {
+    console.log('================================================================================');
+    console.log('  VESTIGE ENGINE · Stage 1 zero-model retrieval · Native Rust kernel');
+    console.log('================================================================================');
+    console.log(`Static audit: ingestion functions free of ${staticAudit()} label fields  ✔`);
+    const rejected = await boundarySelfTest();
+    console.log(`Boundary self-test: Rust rejected ${rejected}/4 labelled payloads  ✔\n`);
 
-  const params = paramsFromArgs();
-  const out = {
-    system: {
-      platform: os.platform(),
-      arch: os.arch(),
-      cpus: os.cpus()[0]?.model || 'unknown',
-      total_mem_mb: Math.round(os.totalmem() / (1024 * 1024)),
-    },
-    params,
-  };
-
-  if (args.only !== 'locomo') out.lme = await runLongMemEval(params);
-  if (args.only !== 'lme') out.locomo = await runLoCoMo(params);
-
-  if (args['held-out']) {
-    console.log('\n--- HELD-OUT EVALUATION: LoCoMo Convs 1-5 vs Convs 6-10 ---');
-    if (!LOCOMO_DATA) LOCOMO_DATA = JSON.parse(readFileSync('benchmarks/data/locomo10.json', 'utf8'));
-    const part1 = LOCOMO_DATA.slice(0, 5);
-    const part2 = LOCOMO_DATA.slice(5, 10);
-    const res1 = await runLoCoMo(params, true, part1);
-    const res2 = await runLoCoMo(params, true, part2);
-    out.held_out = { convs_1_to_5: res1, convs_6_to_10: res2 };
-    console.log(`LoCoMo Convs 1-5  (${res1.core.n} core q) | Session R@5: ${pct(res1.core.sR5, res1.core.n)}% | Turn Exact R@5: ${pct(res1.core.tR5, res1.core.n)}% | Turn Soft R@5: ${pct(res1.core.softR5, res1.core.n)}%`);
-    console.log(`LoCoMo Convs 6-10 (${res2.core.n} core q) | Session R@5: ${pct(res2.core.sR5, res2.core.n)}% | Turn Exact R@5: ${pct(res2.core.tR5, res2.core.n)}% | Turn Soft R@5: ${pct(res2.core.softR5, res2.core.n)}%`);
-  }
-
-  if (args.ablations) {
-    const toggles = [
-      'enable_stemming',
-      'enable_proximity',
-      'enable_coverage',
-      'enable_roles',
-      'enable_preference',
-      'enable_hypernyms',
-      'enable_recency',
-      'enable_window',
-      'enable_carry',
-      'enable_deictic',
-      'enable_funnel',
-      'enable_dyad',
-      'enable_bridge',
-      'enable_scene',
-      'enable_sniper',
-      'enable_ppr',
-      'enable_submodular',
-    ];
-    console.log('\n--- ABLATIONS (each weapon switched off alone) ---');
-    console.log('Note: scene, sniper, ppr, and submodular re-rank turns within sessions; they affect Turn scores.');
-    console.log('weapon off           | LME R@1  LME R@5 | LoCoMo core Sess R@5  Turn R@5 (Exact)  Turn R@5 (Soft)');
-    out.ablations = {};
-    const fmt = (lme, lo) => {
-      const lmeR1 = (lme.all_500 ? lme.all_500.recall_any_r1.toFixed(2) : pct(lme.all.r1, lme.all.n)).padStart(6);
-      const lmeR5 = (lme.all_500 ? lme.all_500.recall_any_r5.toFixed(2) : pct(lme.all.r5, lme.all.n)).padStart(6);
-      const loSessR5 = (lo.core.session_r5 !== undefined ? lo.core.session_r5.toFixed(2) : pct(lo.core.sR5, lo.core.n)).padStart(18);
-      const loTurnExactR5 = (lo.core.turn_exact_r5 !== undefined ? lo.core.turn_exact_r5.toFixed(2) : pct(lo.core.tR5, lo.core.n)).padStart(15);
-      const loTurnSoftR5 = (lo.core.turn_soft_r5 !== undefined ? lo.core.turn_soft_r5.toFixed(2) : pct(lo.core.softR5, lo.core.n)).padStart(14);
-      return `${lmeR1}%  ${lmeR5}% | ${loSessR5}%  ${loTurnExactR5}%  ${loTurnSoftR5}%`;
+    const params = paramsFromArgs();
+    const out = {
+      system: {
+        platform: os.platform(),
+        arch: os.arch(),
+        cpus: os.cpus()[0]?.model || 'unknown',
+        total_mem_mb: Math.round(os.totalmem() / (1024 * 1024)),
+      },
+      params,
     };
-    console.log(`${'(none)'.padEnd(20)} | ${fmt(out.lme, out.locomo)}`);
-    const turnOnlyFeatures = [
-      'enable_funnel',
-      'enable_dyad',
-      'enable_bridge',
-      'enable_scene',
-      'enable_sniper',
-      'enable_ppr',
-      'enable_submodular',
-    ];
-    for (const t of toggles) {
-      const p = { ...params, [t]: false };
-      // Features that only modify turn ranking within sessions do not change session-level LongMemEval results
-      const lme = turnOnlyFeatures.includes(t) ? out.lme : await runLongMemEval(p, true);
-      const lo = await runLoCoMo(p, true);
-      out.ablations[t] = { lme, locomo: lo };
-      console.log(`${t.replace('enable_', '').padEnd(20)} | ${fmt(lme, lo)}`);
+
+    if (args.only !== 'locomo') out.lme = await runLongMemEval(params);
+    if (args.only !== 'lme') out.locomo = await runLoCoMo(params);
+
+    if (args['held-out']) {
+      console.log('\n--- HELD-OUT EVALUATION: LoCoMo Convs 1-5 vs Convs 6-10 ---');
+      if (!LOCOMO_DATA) LOCOMO_DATA = JSON.parse(readFileSync('benchmarks/data/locomo10.json', 'utf8'));
+      const part1 = LOCOMO_DATA.slice(0, 5);
+      const part2 = LOCOMO_DATA.slice(5, 10);
+      const res1 = await runLoCoMo(params, true, part1);
+      const res2 = await runLoCoMo(params, true, part2);
+      out.held_out = { convs_1_to_5: res1, convs_6_to_10: res2 };
+      console.log(`LoCoMo Convs 1-5  (${res1.core.n} core q) | Session R@5: ${res1.core.session_r5.toFixed(2)}% | Turn Exact R@1: ${res1.core.turn_exact_r1.toFixed(2)}% | Turn Exact R@5: ${res1.core.turn_exact_r5.toFixed(2)}% | Turn Soft R@5: ${res1.core.turn_soft_r5.toFixed(2)}%`);
+      console.log(`LoCoMo Convs 6-10 (${res2.core.n} core q) | Session R@5: ${res2.core.session_r5.toFixed(2)}% | Turn Exact R@1: ${res2.core.turn_exact_r1.toFixed(2)}% | Turn Exact R@5: ${res2.core.turn_exact_r5.toFixed(2)}% | Turn Soft R@5: ${res2.core.turn_soft_r5.toFixed(2)}%`);
     }
+
+    if (args.ablations) {
+      const toggles = [
+        'enable_stemming',
+        'enable_proximity',
+        'enable_coverage',
+        'enable_roles',
+        'enable_preference',
+        'enable_hypernyms',
+        'enable_recency',
+        'enable_window',
+        'enable_carry',
+        'enable_deictic',
+        'enable_funnel',
+        'enable_dyad',
+        'enable_bridge',
+        'enable_scene',
+        'enable_sniper',
+        'enable_ppr',
+        'enable_submodular',
+      ];
+      console.log('\n--- ABLATIONS (each weapon switched off alone) ---');
+      console.log('Note: scene, sniper, ppr, and submodular re-rank turns within sessions; they affect Turn scores.');
+      console.log('weapon off           | LME R@1  LME R@5 | LoCoMo core Sess R@5  Turn R@5 (Exact)  Turn R@5 (Soft)');
+      out.ablations = {};
+      const fmt = (lme, lo) => {
+        const lmeR1 = (lme.all_500 ? lme.all_500.recall_any_r1.toFixed(2) : pct(lme.all.r1, lme.all.n)).padStart(6);
+        const lmeR5 = (lme.all_500 ? lme.all_500.recall_any_r5.toFixed(2) : pct(lme.all.r5, lme.all.n)).padStart(6);
+        const loSessR5 = (lo.core.session_r5 !== undefined ? lo.core.session_r5.toFixed(2) : pct(lo.core.sR5, lo.core.n)).padStart(18);
+        const loTurnExactR5 = (lo.core.turn_exact_r5 !== undefined ? lo.core.turn_exact_r5.toFixed(2) : pct(lo.core.tR5, lo.core.n)).padStart(15);
+        const loTurnSoftR5 = (lo.core.turn_soft_r5 !== undefined ? lo.core.turn_soft_r5.toFixed(2) : pct(lo.core.softR5, lo.core.n)).padStart(14);
+        return `${lmeR1}%  ${lmeR5}% | ${loSessR5}%  ${loTurnExactR5}%  ${loTurnSoftR5}%`;
+      };
+      console.log(`${'(none)'.padEnd(20)} | ${fmt(out.lme, out.locomo)}`);
+      const turnOnlyFeatures = [
+        'enable_funnel',
+        'enable_dyad',
+        'enable_bridge',
+        'enable_scene',
+        'enable_sniper',
+        'enable_ppr',
+        'enable_submodular',
+      ];
+      for (const t of toggles) {
+        const p = { ...params, [t]: false };
+        // Features that only modify turn ranking within sessions do not change session-level LongMemEval results
+        const lme = turnOnlyFeatures.includes(t) ? out.lme : await runLongMemEval(p, true);
+        const lo = await runLoCoMo(p, true);
+        out.ablations[t] = { lme, locomo: lo };
+        console.log(`${t.replace('enable_', '').padEnd(20)} | ${fmt(lme, lo)}`);
+      }
+    }
+
+    if (args.json) {
+      const jsonPath = resolve(args.json);
+      writeFileSync(jsonPath, JSON.stringify(out, null, 2));
+      console.log(`\nResults written to: ${jsonPath}`);
+    }
+
+    console.log('\n================================================================================');
+    console.log(`  COMPLETE · ZERO LLM · ZERO VECTORS · RSS ${(process.memoryUsage().rss / 1048576).toFixed(0)} MB`);
+    console.log('================================================================================');
+  } catch (err) {
+    console.error('Benchmark fatal error:', err);
+    exitCode = 1;
+  } finally {
+    try { child.stdin.on('error', () => {}); } catch {}
+    try { child.stdin.end(); } catch {}
+    try { child.kill(); } catch {}
+    if (exitCode === 0) process.exit(0);
+    else process.exit(1);
   }
-
-  if (args.json) {
-    const jsonPath = resolve(args.json);
-    writeFileSync(jsonPath, JSON.stringify(out, null, 2));
-    console.log(`\nResults written to: ${jsonPath}`);
-  }
-
-  console.log('\n================================================================================');
-  console.log(`  COMPLETE · ZERO LLM · ZERO VECTORS · RSS ${(process.memoryUsage().rss / 1048576).toFixed(0)} MB`);
-  console.log('================================================================================');
-
-  child.kill();
-  process.exit(0);
 }
 
-main().catch(err => {
-  console.error('Benchmark fatal error:', err);
-  child.kill();
-  process.exit(1);
-});
+main();

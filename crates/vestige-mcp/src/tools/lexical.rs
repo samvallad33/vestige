@@ -15,12 +15,15 @@ use vestige_core::KnowledgeNode;
 pub const HOOK_TOKEN_BUDGET: usize = 3_000;
 pub const HOOK_CHAR_BUDGET: usize = HOOK_TOKEN_BUDGET * 4;
 
+#[cfg(test)]
 const K1: f64 = 1.2;
+#[cfg(test)]
 const B: f64 = 0.75;
 
 /// Identity tags a two-hop bridge may walk. Exact prefix, case-sensitive.
 const IDENTITY_PREFIXES: &[&str] = &["person:", "place:", "food:", "file:", "service:", "symbol:"];
 
+#[cfg(test)]
 const STOPWORDS: &[&str] = &[
     "a", "an", "the", "of", "to", "in", "for", "on", "with", "at", "by", "from", "as", "is", "are",
     "was", "were", "be", "been", "being", "it", "this", "that", "these", "those", "and", "or",
@@ -46,6 +49,7 @@ pub struct TagBridge {
 }
 
 /// Case-folded exact tokens. One-character pieces are dropped.
+#[cfg(test)]
 pub fn tokens(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
@@ -64,6 +68,7 @@ pub fn tokens(text: &str) -> Vec<String> {
     out
 }
 
+#[cfg(test)]
 fn push_token(current: &mut String, out: &mut Vec<String>) {
     if current.chars().count() >= 2 && !is_stopword(current) {
         out.push(std::mem::take(current));
@@ -72,10 +77,12 @@ fn push_token(current: &mut String, out: &mut Vec<String>) {
     }
 }
 
+#[cfg(test)]
 fn is_stopword(word: &str) -> bool {
     STOPWORDS.contains(&word)
 }
 
+#[cfg(test)]
 fn document_text(node: &KnowledgeNode) -> String {
     let mut text = node.content.clone();
     for tag in &node.tags {
@@ -88,6 +95,7 @@ fn document_text(node: &KnowledgeNode) -> String {
 /// Rank `nodes` by exact-token BM25 against `query`. Score 0 is omitted.
 /// Order is score, then the `tie` key descending, then id descending, so the
 /// same store always returns the same list.
+#[cfg(test)]
 pub fn rank(
     nodes: &[KnowledgeNode],
     query: &str,

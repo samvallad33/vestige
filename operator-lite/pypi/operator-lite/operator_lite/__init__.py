@@ -30,7 +30,7 @@ from ._core import (ALLOW, BLOCK, PASS, UNREACHABLE, GATE_URL, decide,
                     ensure_gate, extract_command, gate_status, is_shellish,
                     resolve_gate)
 
-__version__ = "6.2.1"
+__version__ = "6.2.2"
 
 # Verdicts shared by every adapter (same vocabulary as the ports).
 PASS = "pass"          # not shell-ish -> no gating, call the handler
