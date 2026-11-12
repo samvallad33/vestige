@@ -7,8 +7,8 @@ One deterministic pre-tool gate. `npx @vestige/init --guard` installs it when
 
 | File | What it is |
 |---|---|
-| `~/.operator/gate/operator-gate.py` | Operator 6.2.1. 102 STOP rules, OP-000 through OP-114. OP-086–OP-097 and OP-100 are reserved and are not rules. |
-| `~/.operator/gate/lite_core.py` | Operator Lite from `operator-lite/operator-gate.py`, byte for byte. The gate loads it only when its sha256 is `f42156e9c9c8c6e5f4f4cdc6c2a698f49925338306e741b6645cdf417fbf50a1`. |
+| `~/.operator/gate/operator-gate.py` | Operator 6.2.2. 102 STOP rules, OP-000 through OP-114. OP-086–OP-097 and OP-100 are reserved and are not rules. |
+| `~/.operator/gate/lite_core.py` | Operator Lite from `operator-lite/operator-gate.py`, byte for byte. The gate loads it only when its sha256 is `9de59e80f5ffa1d8ce380351d950dd612660d998020f791e483b17493f95a63d`. |
 
 An existing gate file is not replaced. Delete it yourself and run `--guard` again to install this one.
 

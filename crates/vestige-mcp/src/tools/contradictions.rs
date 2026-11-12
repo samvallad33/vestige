@@ -141,21 +141,23 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     };
 
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        // On Strata, contradictions are explicit recorded tension edges (`corrects`,
-        // `supersedes`, `contradicts`, `closed_by`). If `topic` is passed, it must resolve
-        // as an exact handle (id, prefix, or exact tag); free-text similarity stays refused.
-        let topic_filter: Option<std::collections::HashSet<String>> = match args.topic.as_deref().map(str::trim) {
-            Some(t) if !t.is_empty() => {
-                let res = storage.resolve_handle(t);
-                if res.ids.is_empty() {
-                    return Err(
-                        "similarity_disabled: contradictions topic on Strata must be an exact handle (memory id or exact tag); embeddings and free-text similarity are disabled".into(),
-                    );
-                }
-                Some(res.ids.into_iter().collect())
-            }
-            _ => None,
+        // On Strata a contradiction is a recorded tension edge. Topic is
+        // required: an omitted or unresolved handle would be an unscoped
+        // pairwise scan, which this log does not do.
+        const STRATA_TOPIC_REQUIRED: &str = concat!(
+            "similarity_disabled: recall(mode=\"contradictions\"): ",
+            "Unscoped contradiction scan requires pairwise similarity; ",
+            "pass an exact handle (memory id or exact tag) in topic ",
+            "to inspect recorded tension edges"
+        );
+        let Some(t) = args.topic.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+            return Err(STRATA_TOPIC_REQUIRED.into());
         };
+        let resolved = storage.resolve_handle(t);
+        if resolved.ids.is_empty() {
+            return Err(STRATA_TOPIC_REQUIRED.into());
+        }
+        let tf: std::collections::HashSet<String> = resolved.ids.into_iter().collect();
 
         let retired = storage.superseded_node_ids().map_err(|e| e.to_string())?;
         let min_trust = args.min_trust.unwrap_or(0.0).clamp(0.0, 1.0);
@@ -179,10 +181,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             if retired.contains(&edge.source_id) || retired.contains(&edge.target_id) {
                 continue;
             }
-            if let Some(ref tf) = topic_filter
-                && !tf.contains(&edge.source_id)
-                && !tf.contains(&edge.target_id)
-            {
+            if !tf.contains(&edge.source_id) && !tf.contains(&edge.target_id) {
                 continue;
             }
             if !cross_scope {

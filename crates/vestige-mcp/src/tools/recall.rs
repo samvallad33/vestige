@@ -268,10 +268,8 @@ pub fn rank_nodes_lexical_scoped(
     if nodes.is_empty() || query.trim().is_empty() {
         return Vec::new();
     }
-    if !include_superseded {
-        if let Ok(retired) = storage.superseded_node_ids() {
-            nodes.retain(|n| !retired.contains(&n.id));
-        }
+    if !include_superseded && let Ok(retired) = storage.superseded_node_ids() {
+        nodes.retain(|n| !retired.contains(&n.id));
     }
     let check_ts = valid_at.unwrap_or_else(chrono::Utc::now);
     nodes.retain(|n| {
@@ -823,65 +821,63 @@ fn one_hop_neighbors(storage: &Arc<Storage>, ids: &[String], detail_level: &str)
     }
     // Also surface active (non-undone) Retroactive Salience Backfill edges on handle lookup
     // so inspecting either the later trigger or the earlier memory reveals the causal RSB bond.
-    if out.len() < MAX_NEIGHBOR_EDGES {
-        if let Ok(receipts) = storage.salience_receipts() {
-            let undone: std::collections::HashSet<String> = receipts
-                .iter()
-                .filter_map(|r| r.get("undo_of").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string))
-                .collect();
-            let id_set: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
-            for row in receipts {
-                if out.len() >= MAX_NEIGHBOR_EDGES {
-                    break;
-                }
-                if row.get("undo_of").is_some_and(|v| !v.is_null()) {
-                    continue;
-                }
-                if row.get("receipt_id").and_then(Value::as_str).is_some_and(|rid| undone.contains(rid)) {
-                    continue;
-                }
-                let mem = row.get("memory_id").and_then(Value::as_str).unwrap_or("");
-                let trig = row.get("trigger_id").and_then(Value::as_str).unwrap_or("");
-                if mem.is_empty() || trig.is_empty() || mem == trig {
-                    continue;
-                }
-                let (matched_self, other, direction) = if id_set.contains(trig) {
-                    (trig, mem, "outgoing")
-                } else if id_set.contains(mem) {
-                    (mem, trig, "incoming")
-                } else {
-                    continue;
-                };
-                let key = (trig.to_string(), mem.to_string());
-                if seen_edges.contains(&key) {
-                    continue;
-                }
-                seen_edges.push(key);
-                let first_seen = seen_nodes.insert(other.to_string());
-                let max_chars = if full_neighbors {
-                    None
-                } else if first_seen {
-                    Some(200)
-                } else {
-                    Some(80)
-                };
-                let node = storage
-                    .get_node(other)
-                    .ok()
-                    .flatten()
-                    .map(|n| neighbor_node_payload(n, max_chars));
-                let _ = matched_self;
-                out.push(serde_json::json!({
-                    "from": trig,
-                    "to": mem,
-                    "link_type": "backfill",
-                    "strength": 1.0,
-                    "direction": direction,
-                    "receipt_id": row.get("receipt_id").cloned().unwrap_or(Value::Null),
-                    "shared_entity": row.get("shared_entity").cloned().unwrap_or(Value::Null),
-                    "node": node,
-                }));
+    if out.len() < MAX_NEIGHBOR_EDGES && let Ok(receipts) = storage.salience_receipts() {
+        let undone: std::collections::HashSet<String> = receipts
+            .iter()
+            .filter_map(|r| r.get("undo_of").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string))
+            .collect();
+        let id_set: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+        for row in receipts {
+            if out.len() >= MAX_NEIGHBOR_EDGES {
+                break;
             }
+            if row.get("undo_of").is_some_and(|v| !v.is_null()) {
+                continue;
+            }
+            if row.get("receipt_id").and_then(Value::as_str).is_some_and(|rid| undone.contains(rid)) {
+                continue;
+            }
+            let mem = row.get("memory_id").and_then(Value::as_str).unwrap_or("");
+            let trig = row.get("trigger_id").and_then(Value::as_str).unwrap_or("");
+            if mem.is_empty() || trig.is_empty() || mem == trig {
+                continue;
+            }
+            let (matched_self, other, direction) = if id_set.contains(trig) {
+                (trig, mem, "outgoing")
+            } else if id_set.contains(mem) {
+                (mem, trig, "incoming")
+            } else {
+                continue;
+            };
+            let key = (trig.to_string(), mem.to_string());
+            if seen_edges.contains(&key) {
+                continue;
+            }
+            seen_edges.push(key);
+            let first_seen = seen_nodes.insert(other.to_string());
+            let max_chars = if full_neighbors {
+                None
+            } else if first_seen {
+                Some(200)
+            } else {
+                Some(80)
+            };
+            let node = storage
+                .get_node(other)
+                .ok()
+                .flatten()
+                .map(|n| neighbor_node_payload(n, max_chars));
+            let _ = matched_self;
+            out.push(serde_json::json!({
+                "from": trig,
+                "to": mem,
+                "link_type": "backfill",
+                "strength": 1.0,
+                "direction": direction,
+                "receipt_id": row.get("receipt_id").cloned().unwrap_or(Value::Null),
+                "shared_entity": row.get("shared_entity").cloned().unwrap_or(Value::Null),
+                "node": node,
+            }));
         }
     }
     out

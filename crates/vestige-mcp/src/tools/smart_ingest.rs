@@ -2471,7 +2471,7 @@ fn run_post_ingest_with_snapshot(
 
     if !tagged {
         return strata_backend(storage)
-            .then(|| crate::tools::unavailable::synaptic_capture_on_strata());
+            .then(crate::tools::unavailable::synaptic_capture_on_strata);
     }
 
     let mut report = serde_json::json!({

@@ -795,10 +795,7 @@ fn strata_changed_file_lines(
     }
 
     let mut offset = 0i32;
-    loop {
-        let Ok(batch) = storage.get_all_nodes_in_scope(scope, 500, offset) else {
-            break;
-        };
+    while let Ok(batch) = storage.get_all_nodes_in_scope(scope, 500, offset) {
         let count = batch.len();
         if count == 0 {
             break;

@@ -12,7 +12,7 @@ on:
       version:
         description: 'Product version (no v prefix)'
         required: true
-        default: '6.2.1'
+        default: '6.2.2'
         type: string
 
 # This workflow only uploads Actions artifacts. It cannot create a release,
@@ -23,7 +23,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   SOURCE_REF: ${{ github.event.pull_request.head.sha || inputs.source_ref }}
-  PRODUCT_VERSION: ${{ inputs.version || '6.2.1' }}
+  PRODUCT_VERSION: ${{ inputs.version || '6.2.2' }}
 
 jobs:
   desktop:
@@ -103,7 +103,7 @@ jobs:
           [[ "$PRODUCT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
           for attempt in 1 2 3 4; do
-            if timeout 120 apt-get $opts update && timeout 240 DEBIAN_FRONTEND=noninteractive apt-get $opts install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev; then
+            if timeout 120 apt-get $opts update && DEBIAN_FRONTEND=noninteractive timeout 240 apt-get $opts install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev; then
               break
             fi
             [ "$attempt" -lt 4 ] || exit 1
