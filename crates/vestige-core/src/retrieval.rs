@@ -292,7 +292,7 @@ const PREF_MARKERS: &[&str] = &[
     "hated", "dislike", "dislikes", "avoid", "avoiding", "allergic", "allergy", "intolerant",
     "lactose", "celiac", "pescatarian", "gluten-free", "gluten free", "dairy-free", "dairy free",
     "diet", "vegan", "vegetarian", "big fan", "fan of", "fond", "crave", "addicted", "habit",
-    "routine", "can't stand", "cannot stand", "i'd like", "would like", "rather", "instead of",
+    "routine", "can't stand", "cannot stand", "rather", "instead of",
     "go-to", "my usual", "i usually", "i tend to", "i'm into", "im into", "i've been into",
     // Exclusion and contrast. Bare "only" is a stopword and is not a unigram marker;
     // exclusive preference is the constraint phrase, not every occurrence of the word.
@@ -304,6 +304,8 @@ const PREF_MARKERS: &[&str] = &[
     "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "can't drink",
     "cannot drink", "don't eat", "do not eat", "don't drink", "do not drink", "never eat",
     "never drink", "stay away from", "steer clear of", "leave out", "keep out",
+    "i'd prefer", "so i prefer", "trying to keep", "keep it simple", "keep it lightweight",
+    "without compromising", "avoid using",
 ];
 
 const HARD_CONSTRAINT_MARKERS: &[&str] = &[
@@ -346,9 +348,28 @@ const ASSISTANT_ATTRIBUTION_CUES: &[&str] = &[
     "did you", "your recommendation", "your suggestion", "you wrote", "you said",
     "you provided", "you listed", "you recommend", "you shared", "you came up",
     "you helped", "you explained", "you described", "you named", "you created",
-    "remind me", "our previous conversation", "our previous chat", "our conversation",
-    "we discussed", "we talked", "previous chat", "last time we", "earlier you",
+    "remind me", "earlier you",
     "you were telling", "you advised", "you calculated", "you found", "you picked",
+];
+
+const COLLECTIVE_CHAT_CUES: &[&str] = &[
+    "our previous conversation", "our previous chat", "our conversation",
+    "we discussed", "we talked", "previous chat", "last time we",
+];
+
+const USER_INITIATIVE_CUES: &[&str] = &[
+    "i brought up", "did i mention", "i told you", "my instruction",
+    "did i ", "what did i", "when did i", "where did i", "who did i",
+    "i mentioned", "i shared", "i asked", "i said",
+];
+
+const SUMMARY_REQUEST_CUES: &[&str] = &[
+    "summary of", "summarize", "everything we",
+];
+
+const TIMELINE_CUES: &[&str] = &[
+    "order in which", "chronological", "timeline of", "first to last",
+    "earliest to latest", "i brought up",
 ];
 
 const USER_ATTRIBUTION_CUES: &[&str] = &[
@@ -360,7 +381,8 @@ const USER_ATTRIBUTION_CUES: &[&str] = &[
 const MULTI_HOP_CUES: &[&str] = &[
     " both ", " and ", " also ", " in common", " together", " same ", " as well",
     " which of", " between ", " total", " combined", " altogether", " how many", " all the ",
-    " each ",
+    " each ", " how much", " across ", " compare", " versus", " vs ", " two different",
+    " three different", " how many different", " in total",
 ];
 
 const INFERENCE_CUES: &[&str] = &[
@@ -368,8 +390,23 @@ const INFERENCE_CUES: &[&str] = &[
     "traits", "what might", "would be", "be interested", "is it possible", "kind of person",
 ];
 
-const TEMPORAL_CUES: &[&str] = &[
-    "when ", "how long", "how many days", "how many weeks", "how many months",
+const WHEN_INTERROGATIVE_CUES: &[&str] = &[
+    "when did ", "when didn't ", "when didnt ",
+    "when was ", "when wasn't ", "when wasnt ",
+    "when were ", "when weren't ", "when werent ",
+    "when is ", "when isn't ", "when isnt ",
+    "when are ", "when aren't ", "when arent ",
+    "when will ", "when won't ", "when wont ",
+    "when does ", "when doesn't ", "when doesnt ",
+    "when do ", "when don't ", "when dont ",
+    "when has ", "when hasn't ", "when hasnt ",
+    "when have ", "when haven't ", "when havent ",
+    "when had ", "when hadn't ", "when hadnt ",
+    "when can ", "when can't ", "when cant ", "when cannot ",
+];
+
+const TEMPORAL_REST_CUES: &[&str] = &[
+    "how long", "how many days", "how many weeks", "how many months",
     "how many years", "before ", "after ", "first ", "last ", " ago ", " date ", " dates ",
     "which year", "what year", "what month", " earlier ", " later ", "since ",
 ];
@@ -383,6 +420,8 @@ const TASK_UNDER_RULES_CUES: &[&str] = &[
     "can you", "could you", "would you",
     "help me", "walk me through", "show me",
     "recommend", "suggest", " i should",
+    "should i ", "shouldn't i ", "shouldnt i ",
+    "be prepared to", "common responses", "best practices",
     "outline ", "draft ", "write a ", "format ", "calculate ", "compute ",
 ];
 
@@ -391,6 +430,9 @@ const RECALL_NOT_TASK_CUES: &[&str] = &[
     "when was", "when were", "where was", "who was", "how many", "how much did", "how long",
     "did i", "did you", "have i", "had i", "you said", "you told", "you mentioned",
     "you recommended", "you suggested",
+    "order in which", "chronological", "timeline of", "first to last", "earliest to latest",
+    "summary of", "summarize", "everything we", "throughout our", "across our",
+    "has developed", "have developed", "i brought up", "i mentioned",
 ];
 
 const ANAPHORS: &[&str] = &[
@@ -408,10 +450,10 @@ const CONTINUATIONS: &[&str] = &[
 const HYPERNYM_LATTICE: &[(&str, &[&str])] = &[
     ("CULINARY", &["sourdough", "croissant", "baking", "bake", "baker", "bread", "loaf", "recipe", "dinner", "lunch", "breakfast", "vegan", "vegetarian", "pescatarian", "roast", "chef", "cook", "cooking", "kitchen", "cuisine", "meal", "dining", "restaurant", "food", "foodie", "dish", "spice", "pasta", "cheese", "dessert", "chocolate", "pastry", "culinary", "pizza", "sushi", "taco", "burger", "salad", "soup", "grill", "bbq", "cake", "cookie", "appliance", "appliances", "smoker", "fryer", "blender", "microwave", "toaster", "fridge", "refrigerator", "oven", "stove", "ingredient", "ingredients", "produce", "homegrown", "harvest"]),
     ("BEVERAGE", &["coffee", "espresso", "latte", "cappuccino", "roastery", "bean", "brew", "brewing", "tea", "matcha", "chai", "cafe", "barista", "aeropress", "pourover", "wine", "beer", "cocktail", "whiskey", "smoothie", "juice"]),
-    ("OUTDOORS", &["hike", "hiking", "trail", "kayak", "kayaking", "camping", "camp", "tent", "backpack", "backpacking", "outdoor", "outdoors", "gear", "park", "wilderness", "climb", "climbing", "mountain", "beach", "lake", "fishing", "nature", "roadtrip"]),
-    ("FITNESS", &["gym", "weight", "workout", "running", "runner", "run", "jog", "jogging", "cycling", "bike", "bicycle", "swim", "swimming", "triathlon", "marathon", "5k", "10k", "exercise", "cardio", "fitness", "yoga", "pilates", "crossfit", "training", "race", "tournament", "competition", "athletic", "athletics"]),
-    ("VISUAL_ART", &["painting", "paint", "acrylic", "watercolor", "watercolour", "oil", "sketch", "sketching", "draw", "drawing", "pottery", "ceramic", "clay", "studio", "sculpture", "gallery", "canvas", "portrait", "landscape", "art", "artistic", "artist", "medium", "easel", "craft", "knitting", "sewing", "exhibition"]),
-    ("MUSIC", &["guitar", "piano", "vinyl", "concert", "festival", "album", "spotify", "band", "jazz", "rock", "classical", "instrument", "drum", "bass", "violin", "orchestra", "musician", "song", "singing", "vocalist", "music", "playlist", "podcast", "streaming", "dance", "ballet", "salsa"]),
+    ("OUTDOORS", &["hike", "hiking", "trail", "kayak", "kayaking", "camping", "camp", "tent", "backpack", "backpacking", "outdoor", "outdoors", "gear", "park", "wilderness", "climb", "climbing", "mountain", "beach", "lake", "fishing", "nature", "roadtrip", "activity", "activities", "hobby", "hobbies"]),
+    ("FITNESS", &["gym", "weight", "workout", "running", "runner", "run", "jog", "jogging", "cycling", "bike", "bicycle", "swim", "swimming", "triathlon", "marathon", "5k", "10k", "exercise", "cardio", "fitness", "yoga", "pilates", "crossfit", "training", "race", "tournament", "competition", "athletic", "athletics", "activity", "activities", "hobby", "hobbies"]),
+    ("VISUAL_ART", &["painting", "paint", "acrylic", "watercolor", "watercolour", "oil", "sketch", "sketching", "draw", "drawing", "pottery", "ceramic", "clay", "studio", "sculpture", "gallery", "canvas", "portrait", "landscape", "art", "artistic", "artist", "medium", "easel", "craft", "knitting", "sewing", "exhibition", "activity", "activities", "hobby", "hobbies"]),
+    ("MUSIC", &["guitar", "piano", "vinyl", "concert", "festival", "album", "spotify", "band", "jazz", "rock", "classical", "instrument", "clarinet", "flute", "cello", "saxophone", "trumpet", "drum", "bass", "violin", "orchestra", "musician", "song", "singing", "vocalist", "music", "playlist", "podcast", "streaming", "dance", "ballet", "salsa", "hobby", "hobbies"]),
     ("PETS", &["dog", "puppy", "cat", "kitten", "vet", "pet", "rescue", "adopt", "adoption", "animal", "retriever", "breed", "leash", "veterinary", "veterinarian", "fish", "bird", "hamster", "horse"]),
     ("BOOKS", &["book", "reading", "read", "novel", "author", "fiction", "nonfiction", "memoir", "library", "bookstore", "kindle", "audiobook", "literature", "poetry", "poem", "writing", "writer", "publish", "publication", "publications", "conference", "conferences", "paper", "papers", "article", "articles", "proceedings", "journal", "journals"]),
     ("GAMING", &["game", "gaming", "gamer", "playstation", "nintendo", "switch", "xbox", "steam", "rpg", "boardgame", "tabletop", "console", "chess", "puzzle", "videogame"]),
@@ -530,8 +572,80 @@ fn clean_contraction(raw_lower: &str) -> &str {
     trimmed
 }
 
+fn collapse_thousands_commas(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    for (i, ch) in text.char_indices() {
+        if ch == ','
+            && i > 0
+            && bytes[i - 1].is_ascii_digit()
+            && i + 3 < bytes.len()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+            && (i + 4 == bytes.len() || !bytes[i + 4].is_ascii_digit())
+        {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Strip an ASCII `v` only when it introduces a dotted version (`v5.3.0` -> `5.3.0`,
+/// `(v2.1)` -> `(2.1)`). The `v` must be at the start or after a non-alphanumeric,
+/// and must be followed by digits, a dot, and a digit. Bare `v8` / `v2` / `v3` stay
+/// intact, and `dev5.3` is left alone because its `v` is inside a word.
+fn strip_dotted_version_v(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut prev_non_alnum = true;
+    for (i, ch) in text.char_indices() {
+        if ch == 'v' && prev_non_alnum {
+            let rest = &bytes[i + 1..];
+            let mut j = 0;
+            while j < rest.len() && rest[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > 0 && j + 1 < rest.len() && rest[j] == b'.' && rest[j + 1].is_ascii_digit() {
+                continue;
+            }
+        }
+        out.push(ch);
+        prev_non_alnum = !ch.is_alphanumeric();
+    }
+    out
+}
+
+fn emit_token(out: &mut Vec<String>, tok: &str) {
+    match tok {
+        "2fa" | "twofa" | "twofactor" => {
+            out.push("two".to_string());
+            out.push("factor".to_string());
+        }
+        "mfa" | "multifactor" => {
+            out.push("multi".to_string());
+            out.push("factor".to_string());
+        }
+        _ => out.push(tok.to_string()),
+    }
+}
+
+fn fold_two_factor(tokens: &mut [String]) {
+    let mut i = 0;
+    while i + 1 < tokens.len() {
+        if tokens[i] == "2" && (tokens[i + 1] == "factor" || tokens[i + 1] == "factors") {
+            tokens[i] = "two".to_string();
+        } else if tokens[i] == "2" && tokens[i + 1] == "fa" {
+            tokens[i] = "two".to_string();
+            tokens[i + 1] = "factor".to_string();
+        }
+        i += 1;
+    }
+}
+
 fn raw_tokens(text: &str) -> Vec<String> {
-    let lower = text.to_lowercase();
+    let lower = strip_dotted_version_v(&collapse_thousands_commas(&text.to_lowercase()));
     let mut out = Vec::new();
     for piece in lower.split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’') {
         if piece.is_empty() {
@@ -539,24 +653,23 @@ fn raw_tokens(text: &str) -> Vec<String> {
         }
         let cleaned = clean_contraction(piece);
         if cleaned.contains('\'') || cleaned.contains('’') {
-            // Handle contractions like don't -> dont, didn't -> didnt, can't -> cant cleanly;
-            // non-contraction apostrophes like d'aulps split cleanly into sub-words.
             if cleaned.ends_with("n't") || cleaned.ends_with("n’t") {
                 let joined: String = cleaned.chars().filter(|&c| c != '\'' && c != '’').collect();
                 if !joined.is_empty() {
-                    out.push(joined);
+                    emit_token(&mut out, &joined);
                 }
             } else {
                 for sub in cleaned.split(|c: char| c == '\'' || c == '’') {
                     if !sub.is_empty() {
-                        out.push(sub.to_string());
+                        emit_token(&mut out, sub);
                     }
                 }
             }
         } else if !cleaned.is_empty() {
-            out.push(cleaned.to_string());
+            emit_token(&mut out, cleaned);
         }
     }
+    fold_two_factor(&mut out);
     out
 }
 
@@ -754,10 +867,8 @@ fn proper_entity_tokens(text: &str) -> Vec<String> {
     out
 }
 
-/// Deterministic suffix stripper (Porter-style + small irregular verb lemma map, no model).
-pub fn stem(word: &str) -> String {
-    let w = word.to_lowercase();
-    let irregular = match w.as_str() {
+fn irregular_lemma(w: &str) -> Option<&'static str> {
+    match w {
         "drew" | "drawn" => Some("draw"),
         "felt" => Some("feel"),
         "bought" => Some("buy"),
@@ -785,13 +896,334 @@ pub fn stem(word: &str) -> String {
         "broke" | "broken" => Some("break"),
         "drove" | "driven" => Some("drive"),
         "slept" => Some("sleep"),
+        "career" | "careers" => Some("career"),
         _ => None,
-    };
-    if let Some(base) = irregular {
-        return base.to_string();
     }
-    if w.len() <= 3 || !w.is_ascii() {
+}
+
+fn expand_abbrev<'a>(w: &'a str) -> &'a str {
+    match w {
+        "edu" => "education",
+        "fam" => "family",
+        "pic" | "pics" => "picture",
+        "uni" | "unis" => "university",
+        "congrats" => "congratulations",
+        "info" => "information",
+        "auth" | "authn" => "authentication",
+        "authz" => "authorization",
+        "config" | "configs" | "cfg" => "configuration",
+        "repo" | "repos" => "repository",
+        "db" | "dbs" => "database",
+        "app" | "apps" => "application",
+        "env" | "envs" => "environment",
+        "bday" | "bdays" => "birthday",
+        _ => w,
+    }
+}
+
+fn uk_exact(w: &str) -> Option<&'static str> {
+    Some(match w {
+        "travelling" => "traveling",
+        "travelled" => "traveled",
+        "traveller" => "traveler",
+        "travellers" => "travelers",
+        "cancelled" => "canceled",
+        "cancelling" => "canceling",
+        "modelling" => "modeling",
+        "modelled" => "modeled",
+        "labelled" => "labeled",
+        "labelling" => "labeling",
+        "jewellery" => "jewelry",
+        "aluminium" => "aluminum",
+        "programme" => "program",
+        "programmes" => "programs",
+        "grey" => "gray",
+        "greys" => "grays",
+        "greyed" => "grayed",
+        "greying" => "graying",
+        "greyer" => "grayer",
+        "greyest" => "grayest",
+        "greyish" => "grayish",
+        "catalogue" => "catalog",
+        "catalogues" => "catalogs",
+        "catalogued" => "cataloged",
+        "cataloguing" => "cataloging",
+        "dialogue" => "dialog",
+        "dialogues" => "dialogs",
+        "dialogued" => "dialoged",
+        "dialoguing" => "dialoging",
+        "practise" => "practice",
+        "practises" => "practices",
+        "practised" => "practiced",
+        "practising" => "practicing",
+        "licencing" => "licensing",
+        _ => return None,
+    })
+}
+
+fn uk_suffix(w: &str) -> Option<String> {
+    const PAIRS: &[(&str, &str)] = &[
+        ("centring", "centering"),
+        ("centred", "centered"),
+        ("centres", "centers"),
+        ("centre", "center"),
+        ("theatres", "theaters"),
+        ("theatre", "theater"),
+        ("metres", "meters"),
+        ("metre", "meter"),
+        ("litres", "liters"),
+        ("litre", "liter"),
+        ("fibres", "fibers"),
+        ("fibre", "fiber"),
+        ("defencelessly", "defenselessly"),
+        ("defenceless", "defenseless"),
+        ("defences", "defenses"),
+        ("defence", "defense"),
+        ("offencelessly", "offenselessly"),
+        ("offenceless", "offenseless"),
+        ("offences", "offenses"),
+        ("offence", "offense"),
+        ("licences", "licenses"),
+        ("licenced", "licensed"),
+        ("licencee", "licensee"),
+        ("licence", "license"),
+    ];
+    for (uk, us) in PAIRS {
+        if let Some(prefix) = w.strip_suffix(uk) {
+            if prefix.is_empty()
+                || (prefix.len() <= 12 && prefix.bytes().all(|b| b.is_ascii_alphabetic()))
+            {
+                return Some(format!("{prefix}{us}"));
+            }
+        }
+    }
+    None
+}
+
+fn our_tail(tail: &str) -> bool {
+    matches!(
+        tail,
+        "" | "s"
+            | "ed"
+            | "ing"
+            | "ings"
+            | "er"
+            | "ers"
+            | "able"
+            | "ite"
+            | "ites"
+            | "ful"
+            | "fully"
+            | "less"
+            | "al"
+            | "ally"
+            | "ation"
+            | "hood"
+            | "hoods"
+    )
+}
+
+fn map_our(w: &str) -> Option<String> {
+    const ROOTS: &[&str] = &[
+        "neighbour", "behaviour", "flavour", "honour", "colour", "labour", "humour", "favour",
+    ];
+    let mut best: Option<(usize, String)> = None;
+    for root in ROOTS {
+        let mut from = 0;
+        while from < w.len() {
+            let Some(rel) = w[from..].find(root) else { break };
+            let i = from + rel;
+            let prefix = &w[..i];
+            let tail = &w[i + root.len()..];
+            let prefix_ok = prefix.is_empty() || prefix.bytes().all(|b| b.is_ascii_alphabetic());
+            if prefix_ok && our_tail(tail) && best.as_ref().is_none_or(|(n, _)| tail.len() > *n) {
+                let head = &root[..root.len() - 3];
+                best = Some((tail.len(), format!("{prefix}{head}or{tail}")));
+            }
+            from = i + 1;
+        }
+    }
+    best.map(|(_, s)| s)
+}
+
+fn map_yse(w: &str) -> Option<String> {
+    if w.len() < 6 {
+        return None;
+    }
+    let (base, us) = if let Some(b) = w.strip_suffix("ysing") {
+        (b, "yzing")
+    } else if let Some(b) = w.strip_suffix("ysed") {
+        (b, "yzed")
+    } else if let Some(b) = w.strip_suffix("yser") {
+        (b, "yzer")
+    } else if let Some(b) = w.strip_suffix("yse") {
+        (b, "yze")
+    } else {
+        return None;
+    };
+    const BASES: &[&str] = &[
+        "psychoanal", "electrol", "breathal", "hydrol", "paral", "catal", "pyrol", "anal", "dial",
+    ];
+    let ok = BASES.iter().any(|b| {
+        base == *b
+            || (base.ends_with(b)
+                && base.len() > b.len()
+                && base[..base.len() - b.len()].bytes().all(|c| c.is_ascii_alphabetic()))
+    });
+    if base.is_empty() || !ok {
+        return None;
+    }
+    Some(format!("{base}{us}"))
+}
+
+fn ise_blocked(lemma: &str) -> bool {
+    if lemma.len() < 4 {
+        return true;
+    }
+    if lemma.ends_with("wise")
+        || lemma.ends_with("prise")
+        || lemma.ends_with("vise")
+        || lemma.ends_with("oise")
+        || lemma.ends_with("uise")
+        || lemma.ends_with("aise")
+    {
+        return true;
+    }
+    matches!(
+        lemma,
+        "promise"
+            | "surprise"
+            | "exercise"
+            | "advise"
+            | "revise"
+            | "compromise"
+            | "enterprise"
+            | "supervise"
+            | "improvise"
+            | "paradise"
+            | "otherwise"
+            | "clockwise"
+            | "likewise"
+            | "franchise"
+            | "merchandise"
+            | "disguise"
+            | "bruise"
+            | "cruise"
+            | "raise"
+            | "praise"
+            | "noise"
+            | "poise"
+            | "choose"
+            | "chose"
+            | "house"
+            | "mouse"
+            | "practise"
+            | "advertise"
+            | "apprise"
+            | "arise"
+            | "chastise"
+            | "circumcise"
+            | "comprise"
+            | "demise"
+            | "despise"
+            | "devise"
+            | "disfranchise"
+            | "enfranchise"
+            | "excise"
+            | "incise"
+            | "premise"
+            | "reprise"
+            | "surmise"
+            | "televise"
+            | "precise"
+            | "concise"
+            | "expertise"
+            | "treatise"
+            | "sunrise"
+            | "moonrise"
+            | "rise"
+            | "uprise"
+            | "anise"
+            | "chemise"
+            | "valise"
+            | "cerise"
+            | "mortise"
+            | "tortoise"
+            | "porpoise"
+            | "liaise"
+    )
+}
+
+fn map_ise(w: &str) -> Option<String> {
+    if w.len() < 6 || !w.is_ascii() {
+        return None;
+    }
+    let (base, us) = if let Some(b) = w.strip_suffix("isations") {
+        (b, "izations")
+    } else if let Some(b) = w.strip_suffix("isation") {
+        (b, "ization")
+    } else if let Some(b) = w.strip_suffix("ising") {
+        (b, "izing")
+    } else if let Some(b) = w.strip_suffix("ised") {
+        (b, "ized")
+    } else if let Some(b) = w.strip_suffix("ises") {
+        // "irises" / "crises" are Latin plurals (base "ir" / "cr"), not UK -ise verbs.
+        if b.len() < 4 {
+            return None;
+        }
+        (b, "izes")
+    } else if let Some(b) = w.strip_suffix("ise") {
+        (b, "ize")
+    } else {
+        return None;
+    };
+    if base.is_empty() || ise_blocked(&format!("{base}ise")) {
+        return None;
+    }
+    Some(format!("{base}{us}"))
+}
+
+fn uk_to_us(w: &str) -> Option<String> {
+    if let Some(exact) = uk_exact(w) {
+        return Some(exact.to_string());
+    }
+    if let Some(hit) = uk_suffix(w) {
+        return Some(hit);
+    }
+    if let Some(hit) = map_our(w) {
+        return Some(hit);
+    }
+    if let Some(hit) = map_yse(w) {
+        return Some(hit);
+    }
+    map_ise(w)
+}
+
+fn strip_tech_major(w: &str) -> &str {
+    let b = w.as_bytes();
+    if !(4..=11).contains(&b.len()) {
         return w;
+    }
+    let last = b[b.len() - 1];
+    if !matches!(last, b'1'..=b'6') {
+        return w;
+    }
+    let head = &w[..w.len() - 1];
+    if head.bytes().all(|c| c.is_ascii_lowercase())
+        && matches!(
+            head,
+            "html" | "css" | "http" | "oauth" | "sqlite" | "python" | "ipv" | "webgl" | "vue"
+        )
+    {
+        head
+    } else {
+        w
+    }
+}
+
+fn classic_stem(w: &str) -> String {
+    if w.len() <= 3 || !w.is_ascii() {
+        return w.to_string();
     }
     let rules: &[(&str, &str, usize)] = &[
         ("ingly", "", 4),
@@ -813,7 +1245,7 @@ pub fn stem(word: &str) -> String {
         ("ly", "", 4),
         ("s", "", 3),
     ];
-    let mut out = w.clone();
+    let mut out = w.to_string();
     for (suf, rep, min) in rules {
         if let Some(base) = w.strip_suffix(suf) {
             if base.len() >= *min {
@@ -825,7 +1257,6 @@ pub fn stem(word: &str) -> String {
             }
         }
     }
-    // Undouble a final consonant pair left by -ing/-ed ("running" -> "run").
     let b = out.as_bytes();
     if b.len() >= 4 {
         let (x, y) = (b[b.len() - 1], b[b.len() - 2]);
@@ -833,11 +1264,29 @@ pub fn stem(word: &str) -> String {
             out.pop();
         }
     }
-    // Drop a silent final e so "bake"/"baking"/"baked" converge.
     if out.len() > 3 && out.ends_with('e') {
         out.pop();
     }
     out
+}
+
+/// Deterministic suffix stripper (Porter-style + irregular verb lemmas + conversational
+/// abbreviations + UK->US orthography + tech major version strip, zero model).
+pub fn stem(word: &str) -> String {
+    let lower = word.to_lowercase();
+    if let Some(base) = irregular_lemma(&lower) {
+        return base.to_string();
+    }
+    let expanded = expand_abbrev(&lower);
+    let normalized = uk_to_us(expanded).unwrap_or_else(|| expanded.to_string());
+    let surface = strip_tech_major(&normalized);
+    let stemmed = classic_stem(surface);
+    let again = strip_tech_major(&stemmed);
+    if again.len() == stemmed.len() {
+        stemmed
+    } else {
+        classic_stem(again)
+    }
 }
 
 // =========================================================================
@@ -1390,6 +1839,8 @@ struct TurnIx {
     speaker: String,
     is_question: bool,
     is_pure_info_question: bool,
+    pre_question_ids: HashSet<u32>,
+    question_clause_ids: HashSet<u32>,
     answers_question: bool,
     is_short_reply: bool,
     is_backchannel: bool,
@@ -1495,6 +1946,8 @@ struct Index {
     /// Exact `{Header}\\n{Body}` titles, hashed, for the session bridge.
     header_dict: HashMap<u64, Vec<HeaderKey>>,
     header_max_words: usize,
+    /// Unique title-case speaker nickname bindings (`Mel` -> `melanie`).
+    nicks: SpeakerNickIndex,
 }
 
 const PREF_AXIS: &str = "\u{1}pref";
@@ -1870,6 +2323,593 @@ fn detect_question(content: &str, raw_len: usize) -> (bool, bool) {
     (false, false)
 }
 
+const INFO_Q_WORDS: &[&str] = &[
+    "who", "whom", "whose", "what", "where", "when", "why", "which", "how",
+    "did", "do", "does", "is", "are", "was", "were",
+    "have", "has", "had", "can", "could", "would", "should", "will",
+    "anything", "anyone", "anybody", "anywhere", "anytime",
+    "any", "ever", "still",
+    "hey", "hi",
+];
+
+const Q_LEAD_WORDS: &[&str] = &[
+    "wow", "oh", "aw", "aww", "ooh", "whoa", "woah", "hmm", "hm", "omg",
+    "haha", "hahaha", "lol", "lmao",
+    "nice", "cool", "awesome", "congrats", "congratulations",
+    "yay", "sweet", "amazing", "wonderful", "fantastic",
+    "thanks", "thank", "sorry", "glad", "ouch", "yikes",
+    "hey", "hi", "hello", "yo",
+    "so", "and", "but", "well",
+    "okay", "ok", "yeah", "yes", "yep", "nope",
+    "right", "great", "good",
+];
+
+const Q_REACTION_HEADS: &[&str] = &[
+    "oh", "ah", "wow", "haha", "hahaha", "sounds", "looks", "seems",
+];
+const Q_REACTION_TAILS: &[&str] = &[
+    "fun", "cool", "nice", "great", "good", "awesome", "amazing",
+    "wonderful", "cute", "sweet", "lovely",
+];
+
+fn take_word(text: &str) -> Option<(&str, &str)> {
+    let text = text.trim_start();
+    let end = text
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_alphanumeric())
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    if end == 0 { None } else { Some((&text[..end], &text[end..])) }
+}
+
+fn skip_comma(text: &str) -> &str {
+    let s = text.trim_start();
+    s.strip_prefix(',').unwrap_or(s).trim_start()
+}
+
+fn is_speaker_alias(tok: &str, names: &HashSet<String>) -> bool {
+    if names.contains(tok) {
+        return true;
+    }
+    if tok.len() < 3 || stopwords().contains(tok) {
+        return false;
+    }
+    let st = stem(tok);
+    if hypernyms().contains_key(st.as_str()) {
+        return false;
+    }
+    names.iter().any(|n| n.len() >= tok.len() + 3 && n.starts_with(tok))
+}
+
+fn strip_one_question_lead<'a>(text: &'a str, names: &HashSet<String>) -> Option<&'a str> {
+    let s = text.trim_start();
+    let (tok, rest) = take_word(s)?;
+    let low = tok.to_ascii_lowercase();
+    if is_speaker_alias(&low, names) && rest.trim_start().starts_with(',') {
+        return Some(skip_comma(rest));
+    }
+    if matches!(low.as_str(), "hey" | "hi" | "hello") {
+        let after = skip_comma(rest);
+        if let Some((name, nrest)) = take_word(after) {
+            if is_speaker_alias(&name.to_ascii_lowercase(), names) {
+                return Some(skip_comma(nrest));
+            }
+        }
+        return Some(skip_comma(rest));
+    }
+    if Q_REACTION_HEADS.contains(&low.as_str()) {
+        if let Some((tail, trest)) = take_word(skip_comma(rest)) {
+            let tail_l = tail.to_ascii_lowercase();
+            if Q_REACTION_TAILS.contains(&tail_l.as_str()) {
+                return Some(skip_comma(trest));
+            }
+        }
+    }
+    if Q_LEAD_WORDS.contains(&low.as_str()) {
+        return Some(skip_comma(rest));
+    }
+    None
+}
+
+fn info_question_start(clause: &str) -> bool {
+    let s = clause.trim_start();
+    let Some((tok, rest)) = take_word(s) else { return false };
+    let low = tok.to_ascii_lowercase();
+    if low == "what" {
+        if let Some((next, _)) = take_word(skip_comma(rest)) {
+            let n = next.to_ascii_lowercase();
+            if n == "a" || n == "an" {
+                return false;
+            }
+        }
+    }
+    INFO_Q_WORDS.contains(&low.as_str())
+}
+
+fn stripped_question_clause<'a>(clause: &'a str, names: &HashSet<String>) -> &'a str {
+    let mut s = clause.trim();
+    for _ in 0..8 {
+        if info_question_start(s) {
+            return s;
+        }
+        match strip_one_question_lead(s, names) {
+            Some(next) => {
+                let next = next.trim_start();
+                if next.is_empty() || next.len() == s.len() {
+                    return s;
+                }
+                s = next;
+            }
+            None => return s,
+        }
+    }
+    s
+}
+
+fn last_sentence_boundary(head: &str) -> Option<usize> {
+    let bytes = head.as_bytes();
+    let mut end = head.len();
+    while end > 0 {
+        let rel = head[..end].rfind(|c: char| matches!(c, '.' | '!' | ';' | '\n'))?;
+        let ok = match bytes[rel] {
+            b'.' => {
+                let prev_digit = rel > 0 && bytes[rel - 1].is_ascii_digit();
+                let next_ok = head[rel + 1..].chars().next().is_none_or(|c| c.is_whitespace());
+                !prev_digit && next_ok
+            }
+            _ => true,
+        };
+        if ok {
+            return Some(rel);
+        }
+        end = rel;
+    }
+    None
+}
+
+fn terminal_question_spans(prose: &str) -> Option<(&str, &str)> {
+    let prose = prose.split("```").next().unwrap_or(prose);
+    let q_pos = prose.rfind('?')?;
+    let tail = prose[q_pos + 1..].trim();
+    if !(tail.is_empty() || tail.chars().all(|c| !c.is_ascii_alphabetic())) {
+        return None;
+    }
+    let head = &prose[..q_pos];
+    match last_sentence_boundary(head) {
+        Some(i) => Some((&head[..i], head[i + 1..].trim())),
+        None => Some(("", head.trim())),
+    }
+}
+
+fn token_is_temporal_word(w: &str) -> bool {
+    MONTHS.contains(&w)
+        || WEEKDAYS.contains(&w)
+        || [
+            "yesterday", "tomorrow", "ago", "today", "tonight",
+            "week", "weeks", "weekend", "month", "months", "year", "years",
+            "days", "spring", "summer", "autumn", "winter",
+            "mon", "tue", "wed", "thu", "fri", "sat", "sun",
+        ]
+        .contains(&w)
+        || (w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn pre_has_answer_payload(pre: &str) -> bool {
+    if pre.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    raw_tokens(pre).iter().any(|w| NUMBER_WORDS.contains(&w.as_str()) || token_is_temporal_word(w))
+}
+
+fn content_term_ids(vocab: &mut Vocab, text: &str, stemming: bool) -> HashSet<u32> {
+    let mut ids = HashSet::new();
+    for w in raw_tokens(text).into_iter().filter(|w| is_content(w)) {
+        ids.insert(vocab.intern(&w));
+        if stemming {
+            ids.insert(vocab.intern(&stem_term(&stem(&w))));
+        }
+    }
+    ids
+}
+
+struct QuestionShape {
+    pre_ids: HashSet<u32>,
+    clause_ids: HashSet<u32>,
+    is_pure: bool,
+}
+
+fn analyze_question(
+    vocab: &mut Vocab,
+    prose: &str,
+    is_question: bool,
+    stemming: bool,
+    names: &HashSet<String>,
+) -> QuestionShape {
+    let lower = prose.to_ascii_lowercase();
+    let legacy = is_question && info_question_start(lower.trim_start());
+    let tag = {
+        let t = lower.trim();
+        t.ends_with("right?") || t.ends_with("yeah?") || t.ends_with("huh?")
+    };
+    let Some((pre, clause)) = terminal_question_spans(prose) else {
+        return QuestionShape {
+            pre_ids: HashSet::new(),
+            clause_ids: HashSet::new(),
+            is_pure: is_question && legacy && !tag,
+        };
+    };
+    let stripped = stripped_question_clause(clause, names);
+    let terminal_info = info_question_start(stripped);
+    let payload = pre_has_answer_payload(pre);
+    QuestionShape {
+        pre_ids: content_term_ids(vocab, pre, stemming),
+        clause_ids: content_term_ids(vocab, clause, stemming),
+        is_pure: is_question && !tag && !payload && (legacy || terminal_info),
+    }
+}
+
+fn habitual_perfect(lower: &str) -> bool {
+    const LEADS: &[&str] = &["i've been ", "i’ve been ", "ive been "];
+    const PROGRESS: &[&str] = &[
+        "running into", "running out", "trying", "working", "debugging", "struggling",
+        "thinking", "feeling", "looking", "wondering", "dealing", "waiting", "fixing",
+        "testing", "starting", "planning", "considering", "hoping", "attempting", "stuck",
+    ];
+    for lead in LEADS {
+        let mut rest = lower;
+        while let Some(at) = rest.find(lead) {
+            let after = rest[at + lead.len()..].trim_start();
+            let progress = PROGRESS.iter().any(|p| after.starts_with(p));
+            let next = after
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .find(|s| !s.is_empty())
+                .unwrap_or("");
+            if !next.is_empty() && !progress {
+                return true;
+            }
+            rest = &rest[at + lead.len()..];
+        }
+    }
+    false
+}
+
+fn clause_has_manner(clause: &str) -> bool {
+    const PHRASES: &[&str] = &["step-by-step", "step by step", "without compromising", "avoid using"];
+    if PHRASES.iter().any(|p| clause.contains(p)) {
+        return true;
+    }
+    const WORDS: &[&str] = &[
+        "keep", "simple", "lightweight", "pragmatic", "minimal", "avoid", "rather", "prefer",
+    ];
+    clause
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '\'')
+        .any(|w| WORDS.contains(&w))
+}
+
+fn hedged_like_is_preference(lower: &str) -> bool {
+    const LEADS: &[&str] = &["i would like", "i'd like", "i’d like", "id like"];
+    const TASK: &[&str] = &[
+        "add", "implement", "build", "create", "write", "make", "fix", "set", "help",
+        "include", "integrate", "show", "calculate", "organize", "update", "install",
+        "configure", "deploy", "code", "debug", "change", "start", "finish", "complete",
+        "do", "get", "find", "use", "put", "give", "send", "run",
+    ];
+    for lead in LEADS {
+        let mut rest = lower;
+        while let Some(at) = rest.find(lead) {
+            let after = rest[at + lead.len()..].trim_start();
+            let clause = after.split(['.', '!', '?', '\n']).next().unwrap_or(after);
+            let end = clause.char_indices().nth(96).map(|(i, _)| i).unwrap_or(clause.len());
+            let window = &clause[..end];
+            if clause_has_manner(window) {
+                return true;
+            }
+            let head = window.trim_start().strip_prefix("to ").unwrap_or(window.trim_start());
+            let verb_end = head.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(head.len());
+            let verb = &head[..verb_end];
+            if !verb.is_empty() && !TASK.contains(&verb) {
+                return true;
+            }
+            rest = &rest[at + lead.len()..];
+        }
+    }
+    false
+}
+
+fn commitment_manner(lower: &str) -> bool {
+    const MANNERS: &[&str] = &["lightweight", "step-by-step", "step by step", "pragmatic"];
+    const COMMITS: &[&str] = &[
+        "i prefer", "i'd prefer", "id prefer", "trying to keep", "keep it", "keep my",
+        "i'd like", "i’d like", "i would like", "without compromising", "avoid using", "i avoid",
+    ];
+    lower.split(['.', '!', '?', '\n']).any(|sentence| {
+        MANNERS.iter().any(|m| sentence.contains(m)) && COMMITS.iter().any(|c| sentence.contains(c))
+    })
+}
+
+fn user_preference_speech_act(lower: &str, raw: &[String], pref_set: &HashSet<&str>) -> bool {
+    raw.iter().any(|w| pref_set.contains(w.as_str()))
+        || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m))
+        || hedged_like_is_preference(lower)
+        || commitment_manner(lower)
+}
+
+fn camel_case_parts(ident: &str) -> Vec<String> {
+    let chars: Vec<char> = ident.chars().collect();
+    let mut seen_lower = false;
+    let mut gated = false;
+    for &c in &chars {
+        if c.is_ascii_lowercase() {
+            seen_lower = true;
+        } else if seen_lower && c.is_ascii_uppercase() {
+            gated = true;
+            break;
+        }
+    }
+    if !gated {
+        return Vec::new();
+    }
+    let mut raw_parts: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    for i in 1..chars.len() {
+        let prev = chars[i - 1];
+        let cur = chars[i];
+        let hump = (prev.is_ascii_lowercase() || prev.is_ascii_digit()) && cur.is_ascii_uppercase();
+        let acronym_tail = prev.is_ascii_uppercase()
+            && cur.is_ascii_uppercase()
+            && chars.get(i + 1).is_some_and(|n| n.is_ascii_lowercase());
+        if hump || acronym_tail {
+            raw_parts.push(chars[start..i].iter().collect());
+            start = i;
+        }
+    }
+    raw_parts.push(chars[start..].iter().collect());
+    if raw_parts.len() < 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for part in raw_parts {
+        let lower = part.to_lowercase();
+        if lower.chars().count() < 3 || !is_content(&lower) || out.contains(&lower) {
+            continue;
+        }
+        out.push(lower);
+    }
+    out
+}
+
+fn surface_aux_tokens(word: &str) -> Vec<(String, f32)> {
+    let mut out = Vec::new();
+    if word.contains('_') || word.contains('-') {
+        let joined: String = word
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+        if (4..=48).contains(&joined.len()) && joined.chars().any(|c| c.is_ascii_alphabetic()) {
+            out.push((joined, 1.0));
+        }
+    }
+    for piece in word.split(|c: char| !c.is_ascii_alphanumeric()) {
+        if piece.is_empty() {
+            continue;
+        }
+        for part in camel_case_parts(piece) {
+            if !out.iter().any(|(p, _)| p == &part) {
+                out.push((part, 0.85));
+            }
+        }
+    }
+    out
+}
+
+const NICK_TAIL: usize = 3;
+
+struct SpeakerNickIndex {
+    prefix_of: HashMap<String, String>,
+    witnessed: HashMap<String, HashSet<String>>,
+    lower_attested: HashSet<String>,
+}
+
+fn common_speaker_tokens() -> &'static HashSet<String> {
+    static S: OnceLock<HashSet<String>> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut s = HashSet::new();
+        for w in STOPWORDS
+            .iter()
+            .chain(STARTER_STOP)
+            .chain(QUERY_FRAMING_WORDS)
+            .chain(MONTHS.iter())
+            .chain(WEEKDAYS.iter())
+        {
+            s.insert((*w).to_string());
+        }
+        for (_, words) in HYPERNYM_LATTICE {
+            for w in *words {
+                s.insert((*w).to_string());
+            }
+        }
+        for word in MONTHS.iter().chain(WEEKDAYS.iter()) {
+            for len in 2..word.len() {
+                s.insert(word[..len].to_string());
+            }
+        }
+        s
+    })
+}
+
+fn common_speaker_token(w: &str) -> bool {
+    common_speaker_tokens().contains(w)
+}
+
+fn inflectional_tail(nick: &str, full: &str) -> bool {
+    matches!(
+        full.strip_prefix(nick),
+        Some("s" | "es" | "ed" | "ing" | "er" | "ers" | "ly")
+    )
+}
+
+struct SurfaceTok {
+    lower: String,
+    title_case: bool,
+    sentence_initial: bool,
+}
+
+fn surface_tokens(text: &str) -> Vec<SurfaceTok> {
+    let mut out = Vec::new();
+    let mut sentence_initial = true;
+    let mut current = String::new();
+    let flush = |current: &mut String, sentence_initial: bool, out: &mut Vec<SurfaceTok>| {
+        if current.is_empty() {
+            return;
+        }
+        let piece = std::mem::take(current);
+        let owned = piece.clone();
+        let lower_piece = owned.to_lowercase();
+        let cleaned_lower = clean_contraction(&lower_piece);
+        let cleaned_raw = if cleaned_lower.len() == lower_piece.len() {
+            owned
+        } else {
+            let keep = cleaned_lower.chars().count();
+            owned.chars().take(keep).collect()
+        };
+        if cleaned_raw.is_empty() {
+            return;
+        }
+        let mut chars = cleaned_raw.chars();
+        let first_upper = chars.next().is_some_and(|c| c.is_ascii_uppercase());
+        let rest_lower = chars.all(|c| !c.is_ascii_uppercase());
+        let lower: String = cleaned_raw.chars().flat_map(|c| c.to_lowercase()).collect();
+        if lower.is_empty() {
+            return;
+        }
+        out.push(SurfaceTok {
+            lower,
+            title_case: first_upper && rest_lower,
+            sentence_initial,
+        });
+    };
+    for ch in text.chars() {
+        let keep = ch.is_alphanumeric() || ch == '\'' || ch == '’';
+        if keep {
+            current.push(ch);
+            continue;
+        }
+        let was_empty = current.is_empty();
+        flush(&mut current, sentence_initial, &mut out);
+        if matches!(ch, '.' | '?' | '!' | '\n') {
+            sentence_initial = true;
+        } else if !was_empty {
+            sentence_initial = false;
+        }
+    }
+    flush(&mut current, sentence_initial, &mut out);
+    out
+}
+
+impl SpeakerNickIndex {
+    fn build(sessions: &[Session]) -> Self {
+        let mut exact_roles: HashSet<String> = HashSet::new();
+        let mut targets: HashSet<String> = HashSet::new();
+        let mut lower_attested: HashSet<String> = HashSet::new();
+        let mut texts: Vec<&str> = Vec::new();
+        for s in sessions {
+            for t in &s.turns {
+                texts.push(t.content.as_str());
+                let role = t.role.trim();
+                if role.is_empty()
+                    || role.eq_ignore_ascii_case("user")
+                    || role.eq_ignore_ascii_case("assistant")
+                {
+                    continue;
+                }
+                for w in raw_tokens(role) {
+                    exact_roles.insert(w.clone());
+                    if w.len() >= 4
+                        && !STARTER_STOP.contains(&w.as_str())
+                        && !stopwords().contains(w.as_str())
+                    {
+                        targets.insert(w);
+                    }
+                }
+            }
+        }
+        for text in &texts {
+            for tok in surface_tokens(text) {
+                if !tok.title_case {
+                    lower_attested.insert(tok.lower);
+                }
+            }
+        }
+        let mut hits: HashMap<String, Vec<String>> = HashMap::new();
+        let mut ordered: Vec<&String> = targets.iter().collect();
+        ordered.sort();
+        for name in ordered {
+            for len in 2..=5 {
+                if name.len() < len + NICK_TAIL {
+                    continue;
+                }
+                let p = &name[..len];
+                if exact_roles.contains(p) || common_speaker_token(p) || inflectional_tail(p, name) {
+                    continue;
+                }
+                hits.entry(p.to_string()).or_default().push(name.clone());
+            }
+        }
+        let mut prefix_of: HashMap<String, String> = HashMap::new();
+        for (p, mut names) in hits {
+            names.sort();
+            names.dedup();
+            if names.len() == 1 {
+                prefix_of.insert(p, names.pop().unwrap());
+            }
+        }
+        let mut witnessed: HashMap<String, HashSet<String>> = HashMap::new();
+        for text in &texts {
+            for tok in surface_tokens(text) {
+                if !tok.title_case {
+                    continue;
+                }
+                let Some(full) = prefix_of.get(&tok.lower) else { continue };
+                if tok.sentence_initial && lower_attested.contains(&tok.lower) {
+                    continue;
+                }
+                witnessed.entry(full.clone()).or_default().insert(tok.lower);
+            }
+        }
+        Self { prefix_of, witnessed, lower_attested }
+    }
+
+    fn bind_token(&self, tok: &SurfaceTok, sentence_initial: bool) -> Option<&str> {
+        if !tok.title_case || common_speaker_token(&tok.lower) {
+            return None;
+        }
+        let full = self.prefix_of.get(&tok.lower)?;
+        if sentence_initial && self.lower_attested.contains(&tok.lower) {
+            return None;
+        }
+        let seen = self.witnessed.get(full);
+        let witnessed_this = seen.is_some_and(|s| s.contains(&tok.lower));
+        if !(3..=4).contains(&tok.lower.len()) && !witnessed_this {
+            return None;
+        }
+        if seen.is_some_and(|s| !s.is_empty() && !s.contains(&tok.lower)) {
+            return None;
+        }
+        Some(full.as_str())
+    }
+
+    fn bindings_in(&self, text: &str) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for tok in surface_tokens(text) {
+            if let Some(full) = self.bind_token(&tok, tok.sentence_initial) {
+                out.insert(tok.lower, full.to_string());
+            }
+        }
+        out
+    }
+}
+
 fn build_index(sessions: &[Session], p: &Params) -> Index {
     const BACKCHANNEL_LEADS: &[&str] = &[
         "wow", "oh", "aw", "aww", "haha", "hahaha", "lol", "nice", "cool", "awesome",
@@ -1882,8 +2922,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         "black", "young", "two", "close", "up", "front", "next", "looking", "camera",
     ];
     const USER_SCHEMA_CUES: &[&str] = &[
-        "i always ", "i usually ", "i tend to ", "my go-to", "my usual", "i've been ",
-        "ive been ", "i switched to ", "i stick to ", "i stick with ", "fan of ",
+        "i always ", "i usually ", "i tend to ", "my go-to", "my usual",
+        "i switched to ", "i stick to ", "i stick with ", "fan of ",
         "i'm into ", "im into ", "i love ", "i prefer ", "i enjoy ", "my favorite", "my favourite",
     ];
     const STATE_REVISION_CUES: &[&str] = &[
@@ -1891,6 +2931,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         "now live", "no longer", "instead of", "used to ", "anymore", "upgraded to", "replaced",
     ];
 
+    let nicks = SpeakerNickIndex::build(sessions);
     let mut vocab = Vocab::default();
     let mut turns: Vec<TurnIx> = Vec::new();
     let mut session_ids = Vec::new();
@@ -1969,8 +3010,17 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         let mut s_ents = HashSet::new();
         let mut s_cont = HashSet::new();
         let mut s_doms: HashSet<&'static str> = HashSet::new();
+        let mut speaker_names: HashSet<String> = HashSet::new();
+        for t in &s.turns {
+            let sp = t.role.trim().to_lowercase();
+            if !sp.is_empty() && sp != "user" && sp != "assistant" {
+                for w in raw_tokens(&sp) {
+                    speaker_names.insert(w);
+                }
+            }
+        }
         // Collect named speakers in this session so vocative address ("Thanks, Caroline!")
-        // is capped at speaker identity parity (0.9) and never outranks Caroline speaking.
+        // is capped at speaker identity parity (0.72) and never outranks Caroline speaking.
         let mut sess_other_speakers: HashMap<usize, HashSet<String>> = HashMap::new();
         for (idx_a, ta) in s.turns.iter().enumerate() {
             let spa = ta.role.trim().to_lowercase();
@@ -1982,6 +3032,11 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 let spb = tb.role.trim().to_lowercase();
                 if !spb.is_empty() && spb != "user" && spb != "assistant" && spb != spa {
                     for sw in raw_tokens(&spb) {
+                        if let Some(set) = nicks.witnessed.get(&sw) {
+                            for nick in set {
+                                others.insert(nick.clone());
+                            }
+                        }
                         others.insert(sw);
                     }
                 }
@@ -1992,6 +3047,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         for (ti, t) in s.turns.iter().enumerate() {
             let (prose_body, blip_opt) = split_blip_caption(&t.content);
             let raw = raw_tokens(prose_body);
+            let nick_bound = nicks.bindings_in(prose_body);
             let role = t.role.trim();
             let speaker = role.to_lowercase();
             let vocative_partners = sess_other_speakers.get(&ti);
@@ -2010,6 +3066,18 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 feats.push(Feat { id: e, w: tok_w, counts_len: true, inheritable: !is_vocative_partner });
                 content.insert(e);
                 s_cont.insert(e);
+                if let Some(full) = nick_bound.get(w.as_str()) {
+                    if !raw.iter().any(|t_tok| t_tok == full) {
+                        let voc = vocative_partners.is_some_and(|vp| vp.contains(full.as_str()) || vp.contains(w.as_str()));
+                        let fid = vocab.intern(full);
+                        feats.push(Feat {
+                            id: fid,
+                            w: if voc { 0.72 } else { 1.0 },
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                    }
+                }
                 let st = stem(w);
                 let sid = if p.enable_stemming { vocab.intern(&stem_term(&st)) } else { e };
                 if p.enable_stemming && !is_vocative_partner {
@@ -2074,15 +3142,29 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 entities.insert(eid);
                 s_ents.insert(eid);
             }
+            for raw_word in prose_body.split_whitespace() {
+                let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+                if word.is_empty() {
+                    continue;
+                }
+                for (part, aux_w) in surface_aux_tokens(word) {
+                    if raw.iter().any(|t_tok| t_tok == &part) {
+                        continue;
+                    }
+                    let id = vocab.intern(&part);
+                    feats.push(Feat { id, w: aux_w, counts_len: false, inheritable: false });
+                }
+            }
             let lower = prose_body.to_lowercase();
-            let pref_marker = raw.iter().any(|w| pref_set.contains(w.as_str()))
-                || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m));
+            let pref_marker = user_preference_speech_act(&lower, &raw, &pref_set);
             let is_personal_constraint = field == 0
                 && (raw.iter().any(|w| hard_constraint_set.contains(w.as_str()))
                     || HARD_CONSTRAINT_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m)));
             let is_user_schema = field == 0
-                && (pref_marker || USER_SCHEMA_CUES.iter().any(|c| lower.contains(c)));
-            if p.enable_preference && (pref_marker || is_user_schema) && field == 0 {
+                && (pref_marker
+                    || habitual_perfect(&lower)
+                    || USER_SCHEMA_CUES.iter().any(|c| lower.contains(c)));
+            if p.enable_preference && pref_marker && field == 0 {
                 feats.push(Feat { id: vocab.intern(PREF_AXIS), w: 1.0, counts_len: false, inheritable: false });
             }
             if p.enable_deictic {
@@ -2134,24 +3216,13 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 tech_handles.push(hid);
             }
             let (is_question, is_short_question) = detect_question(prose_body, raw.len());
-            let trimmed_q = lower.trim_start();
-            let starts_wh_or_aux = [
-                "who ", "what ", "where ", "when ", "why ", "which ", "how ",
-                "did ", "do ", "does ", "is ", "are ", "was ", "were ",
-                "have ", "has ", "had ", "can ", "could ", "would ", "should ", "will ",
-                "hey ", "hi ",
-            ]
-            .iter()
-            .any(|pfx| trimmed_q.starts_with(pfx));
-            let is_tag_q = trimmed_q.ends_with("right?") || trimmed_q.ends_with("yeah?") || trimmed_q.ends_with("huh?");
-            let is_pure_info_question = is_question && starts_wh_or_aux && !is_tag_q;
+            let qshape = analyze_question(&mut vocab, prose_body, is_question, p.enable_stemming, &speaker_names);
+            let is_pure_info_question = qshape.is_pure;
             let anaphoric = raw.first().is_some_and(|w| CONTINUATIONS.contains(&w.as_str()))
                 || raw.iter().take(12).any(|w| ANAPHORS.contains(&w.as_str()));
             let has_temporal = raw.iter().any(|w| {
-                MONTHS.contains(&w.as_str())
-                    || WEEKDAYS.contains(&w.as_str())
-                    || ["yesterday", "tomorrow", "ago", "week", "month", "year", "am", "pm", "today", "tonight", "spring", "summer", "autumn", "winter"].contains(&w.as_str())
-                    || (w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()))
+                token_is_temporal_word(w.as_str())
+                    || ["am", "pm"].contains(&w.as_str())
                     || (w.len() >= 3 && (w.ends_with("st") || w.ends_with("nd") || w.ends_with("rd") || w.ends_with("th")) && w[..w.len()-2].chars().all(|c| c.is_ascii_digit()))
             });
             let has_numeric = prose_body.chars().any(|c| c.is_ascii_digit())
@@ -2213,6 +3284,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 speaker,
                 is_question,
                 is_pure_info_question,
+                pre_question_ids: qshape.pre_ids,
+                question_clause_ids: qshape.clause_ids,
                 answers_question: false,
                 is_short_reply: false,
                 is_backchannel,
@@ -2648,6 +3721,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         non_hub_domains,
         header_dict,
         header_max_words,
+        nicks,
     }
 }
 
@@ -2732,12 +3806,35 @@ fn has_any(padded_hay: &str, cues: &[&str]) -> bool {
     })
 }
 
+fn interrogative_when(padded: &str) -> bool {
+    if has_any(padded, WHEN_INTERROGATIVE_CUES) {
+        return true;
+    }
+    for cue in [" when should ", " when shouldn't ", " when shouldnt "] {
+        let mut start = 0;
+        while let Some(rel) = padded[start..].find(cue) {
+            let abs = start + rel;
+            let after = &padded[abs + cue.len()..];
+            if !(after.starts_with("i ") || after.starts_with("i'")) {
+                return true;
+            }
+            start = abs + cue.len();
+        }
+    }
+    false
+}
+
 pub fn classify(text: &str) -> QueryIntent {
     let lower = word_padded(text);
     let content_groups = raw_tokens(text).into_iter().filter(|w| is_content(w)).collect::<HashSet<_>>().len();
-    let assistant_attribution = has_any(&lower, ASSISTANT_ATTRIBUTION_CUES);
-    let sniper_when = has_any(&lower, &[
-        "when ", "when did", "what date", "what time", "what year", "what month", "what day",
+    let user_initiative = has_any(&lower, USER_INITIATIVE_CUES);
+    let retrospective_user = user_initiative || has_any(&lower, TIMELINE_CUES);
+    let direct_assistant = has_any(&lower, ASSISTANT_ATTRIBUTION_CUES);
+    let collective_chat = has_any(&lower, COLLECTIVE_CHAT_CUES);
+    let assistant_attribution = direct_assistant || (collective_chat && !user_initiative);
+    let when_q = interrogative_when(&lower);
+    let sniper_when = when_q || has_any(&lower, &[
+        "what date", "what time", "what year", "what month", "what day",
         "how long", "how many days", "how many weeks", "how many months", "how many years",
     ]);
     let sniper_how_many = has_any(&lower, &[
@@ -2752,16 +3849,16 @@ pub fn classify(text: &str) -> QueryIntent {
     ]);
     let is_event_sequence = has_any(&lower, &[
         "order of", "order in which", "first to last", "earliest to latest",
-        "chronological", "order the", "order these", "timeline of",
+        "chronological", "order the", "order these", "timeline of", "i brought up",
     ]);
     QueryIntent {
-        preference: has_any(&lower, PREF_QUERY_CUES),
+        preference: has_any(&lower, PREF_QUERY_CUES) && !retrospective_user,
         current_state: has_any(&lower, CURRENT_STATE_CUES),
         assistant_attribution,
         user_attribution: !assistant_attribution && has_any(&lower, USER_ATTRIBUTION_CUES),
         multi_hop: content_groups >= 3 && has_any(&lower, MULTI_HOP_CUES),
         inference: has_any(&lower, INFERENCE_CUES),
-        temporal: has_any(&lower, TEMPORAL_CUES),
+        temporal: when_q || has_any(&lower, TEMPORAL_REST_CUES),
         sniper_when,
         sniper_how_many,
         sniper_where,
@@ -2784,7 +3881,10 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
 
     let raw_q = raw_tokens(&q.text);
     let q_lower = word_padded(&q.text);
-    let episodic_past_recall = has_any(&q_lower, RECALL_NOT_TASK_CUES) || intent.sniper_how_many;
+    let episodic_past_recall = has_any(&q_lower, RECALL_NOT_TASK_CUES)
+        || intent.sniper_how_many
+        || intent.multi_hop
+        || intent.temporal;
     if !episodic_past_recall
         && raw_q.iter().any(|w| ix.vocab.get(w).is_some_and(|id| ix.constraint_terms.contains(&id)))
     {
@@ -2806,6 +3906,8 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         .len();
     let can_demote_framing = domain_groups >= 1;
 
+    let nick_bind = ix.nicks.bindings_in(&q.text);
+    let mut label_group: HashMap<String, usize> = HashMap::new();
     let mut seen_toks = HashSet::new();
     for w in raw_q.iter().filter(|w| is_content(w)) {
         if !seen_toks.insert(w.clone()) {
@@ -2825,12 +3927,41 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
             continue;
         }
 
-        let g = groups.len();
-        groups.push(w.clone());
+        let label = nick_bind.get(w).cloned().unwrap_or_else(|| w.clone());
+        let g = if let Some(&g) = label_group.get(&label) {
+            g
+        } else {
+            let g = groups.len();
+            groups.push(label.clone());
+            label_group.insert(label, g);
+            g
+        };
         if let Some(id) = ix.vocab.get(w) {
-            terms.push(QTerm { id, weight: 1.0, group: Some(g), exact_hit: true });
+            // Full name owns the person group. A vocative nick ("Mel") that also
+            // expands to "melanie" must not score 1.0 on top of that expansion.
+            let weight = if nick_bind.get(w).is_some_and(|full| ix.vocab.get(full).is_some()) {
+                0.35
+            } else {
+                1.0
+            };
+            terms.push(QTerm { id, weight, group: Some(g), exact_hit: true });
             group_of.insert(id, g);
             focal_ids.insert(id);
+        }
+        if let Some(full) = nick_bind.get(w) {
+            if let Some(id) = ix.vocab.get(full) {
+                terms.push(QTerm { id, weight: 1.0, group: Some(g), exact_hit: true });
+                group_of.insert(id, g);
+                focal_ids.insert(id);
+            }
+            if p.enable_stemming {
+                let fst = stem(full);
+                if let Some(id) = ix.vocab.get(&stem_term(&fst)) {
+                    terms.push(QTerm { id, weight: p.stem_weight, group: Some(g), exact_hit: true });
+                    group_of.insert(id, g);
+                    focal_ids.insert(id);
+                }
+            }
         }
         let st = stem(w);
         if p.enable_stemming {
@@ -2851,6 +3982,22 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                         group_of.insert(id, g);
                     }
                 }
+            }
+        }
+    }
+
+    // CamelCase & snake/hyphen reverse query expansion (`localStorage` -> `local`, `storage` at 0.55).
+    for raw_word in q.text.split_whitespace() {
+        let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+        if word.is_empty() {
+            continue;
+        }
+        for (part, _) in surface_aux_tokens(word) {
+            if seen_toks.contains(&part) {
+                continue;
+            }
+            if let Some(id) = ix.vocab.get(&part) {
+                terms.push(QTerm { id, weight: 0.55, group: None, exact_hit: false });
             }
         }
     }
@@ -3113,7 +4260,7 @@ fn rank_standing_rules(
         let scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         let dom_hits = r.domains.iter().filter(|d| plan.focal_domains.contains(*d)).count() as i32;
         let asst_hits = r.assistant_nouns.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
-        let spec = 3 * scope_hits + 2 * dom_hits + asst_hits;
+        let spec = 5 * scope_hits + 2 * dom_hits + asst_hits;
         let fires = if r.has_explicit_scope {
             spec > 0 || it.task_under_rules || multi_evidence
         } else {
@@ -3157,11 +4304,76 @@ fn rank_standing_rules(
         .collect()
 }
 
+fn policy_spec_winner_floor(lexical_max: f32) -> f32 {
+    if lexical_max > 0.0 {
+        0.715 * lexical_max
+    } else {
+        0.715 / 0.68
+    }
+}
+
+fn exact_query_group_ids(plan: &QueryPlan) -> HashSet<u32> {
+    plan.terms
+        .iter()
+        .filter(|t| t.exact_hit && t.group.is_some())
+        .map(|t| t.id)
+        .collect()
+}
+
+fn session_speaker_names(ix: &Index, members: &[usize]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for &m in members {
+        let sp = ix.turns[m].speaker.as_str();
+        if sp.is_empty() || sp == "user" || sp == "assistant" {
+            continue;
+        }
+        for w in raw_tokens(sp) {
+            names.insert(w);
+        }
+    }
+    names
+}
+
+fn is_speaker_term(ix: &Index, id: u32, names: &HashSet<String>) -> bool {
+    let Some(name) = ix.vocab.names.get(id as usize) else { return false };
+    let bare = name
+        .strip_prefix("\u{1}ent:")
+        .or_else(|| name.strip_prefix("\u{1}stem:"))
+        .unwrap_or(name.as_str());
+    if bare.contains('_') {
+        return bare.split('_').any(|p| is_speaker_alias(p, names));
+    }
+    is_speaker_alias(bare, names)
+}
+
+fn clause_hits_query(ids: &HashSet<u32>, g: &HashSet<u32>, ix: &Index, names: &HashSet<String>) -> bool {
+    ids.iter().any(|id| g.contains(id) && !is_speaker_term(ix, *id, names))
+}
+
+fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &HashSet<u32>, names: &HashSet<String>) -> bool {
+    if !t.is_pure_info_question {
+        return false;
+    }
+    if clause_hits_query(&t.pre_question_ids, g, ix, names) {
+        return false;
+    }
+    t.pre_question_ids.is_empty() || clause_hits_query(&t.question_clause_ids, g, ix, names)
+}
+
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
     let pref_on = p.enable_preference && it.preference;
     let q_padded = word_padded(&q.text);
+    let persona_infer_on = it.inference
+        && !pref_on
+        && !it.assistant_attribution
+        && !it.temporal
+        && !it.sniper_how_many
+        && has_any(
+            &q_padded,
+            &["likely", "would ", "might ", "probably", "considered", "personality", "traits", "what might", "would be", "be interested", "is it possible", "kind of person"],
+        );
     let episodic_user_quote = it.user_attribution
         && !pref_on
         && !it.task_under_rules
@@ -3174,9 +4386,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 "what was my ", "where is my ", "what is my ",
             ],
         );
+    let summary_hold = has_any(&q_padded, SUMMARY_REQUEST_CUES)
+        && has_any(&q_padded, TASK_UNDER_RULES_CUES)
+        && !has_any(&q_padded, USER_INITIATIVE_CUES);
+    let user_role = p.enable_roles
+        && it.user_attribution
+        && !pref_on
+        && !it.task_under_rules
+        && !summary_hold;
     let fl = if p.enable_roles && it.assistant_attribution {
         Fields { w: [1.0, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
-    } else if p.enable_roles && it.user_attribution && !pref_on && !it.task_under_rules {
+    } else if user_role {
         Fields { w: [p.user_attribution_weight, 0.35, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
     } else if p.enable_roles && pref_on {
         Fields { w: [1.45, 0.55, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
@@ -3225,6 +4445,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     }
                 }
                 sc *= best_pref;
+            } else if persona_infer_on && members.iter().any(|&t| ix.turns[t].pref_marker || ix.turns[t].is_user_schema) {
+                sc *= 1.38;
             }
             if members.iter().any(|&t| ix.turns[t].is_standing_policy) {
                 sc *= 1.8;
@@ -3234,6 +4456,28 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             }
             s_mask[si] |= m;
             s_exact_mask[si] |= em;
+        }
+    }
+    if pref_on {
+        for si in 0..ns {
+            let mut best = 1.0f32;
+            for &ti in &ix.session_turns[si] {
+                let tr = &ix.turns[ti];
+                if tr.field != 0 {
+                    continue;
+                }
+                let domain_hit = tr.schema_domains.iter().any(|d| plan.focal_domains.contains(d));
+                let focal_hit = tr.content.iter().any(|id| plan.focal_ids.contains(id))
+                    || tr.feats.iter().any(|f| plan.focal_ids.contains(&f.id));
+                if tr.pref_marker && (focal_hit || domain_hit) {
+                    best = best.max(p.preference_boost);
+                } else if tr.is_user_schema && domain_hit {
+                    best = best.max(1.45);
+                }
+            }
+            if best > 1.0 {
+                s_base[si] *= best;
+            }
         }
     }
     let bmax = s_base.iter().cloned().fold(0.0f32, f32::max);
@@ -3299,6 +4543,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 sc *= 1.45;
                 sc_own *= 1.45;
             }
+        } else if persona_infer_on && (t.pref_marker || t.is_user_schema) {
+            sc *= 1.40;
+            sc_own *= 1.40;
         }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
@@ -3391,11 +4638,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
-    // Turn-level role alignment: when the query asks what the USER said/brought up, assistant turns are suppressed.
-    if p.enable_roles && it.user_attribution && !pref_on && !it.task_under_rules {
+    // Turn-level role alignment: suppress assistant turns on explicit user-role queries,
+    // except when no user turn in the same session covers that assistant turn's exact query bits!
+    if user_role {
         for ti in 0..nt {
             if ix.turns[ti].field == 1 {
-                t_scene[ti] *= 0.35;
+                let s_idx = ix.turns[ti].session;
+                let a_bits = t_exact_mask[ti];
+                let user_covers = a_bits == 0
+                    || ix.session_turns[s_idx]
+                        .iter()
+                        .any(|&u| ix.turns[u].field == 0 && (t_exact_mask[u] & a_bits) == a_bits);
+                if user_covers {
+                    t_scene[ti] *= 0.35;
+                } else {
+                    t_scene[ti] *= 0.72;
+                }
             }
         }
     }
@@ -3408,13 +4666,20 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
-    // Weapon 2: Deterministic Answer-Type Sniper + Universal Pure-Question Demotion on Named Dialogues
+    let exact_groups = exact_query_group_ids(&plan);
+
+    // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
     if p.enable_sniper {
         for members in &ix.session_turns {
             let has_named_dialogue = members.iter().any(|&m| {
                 let sp = ix.turns[m].speaker.as_str();
                 !sp.is_empty() && sp != "user" && sp != "assistant"
             });
+            let speaker_names = if has_named_dialogue {
+                session_speaker_names(ix, members)
+            } else {
+                HashSet::new()
+            };
             let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
             for &ti in members {
                 if t_scene[ti] <= 0.0 {
@@ -3422,12 +4687,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 }
                 let t = &ix.turns[ti];
                 if it.sniper_when {
-                    if t.has_temporal { t_scene[ti] *= 1.65; }
-                    if t.is_question { t_scene[ti] *= 0.55; }
-                } else if t.is_pure_info_question && !episodic_user_quote && has_named_dialogue && has_declarative_peer {
-                    // Universal conversational question demotion on named-speaker dialogues (`LoCoMo`):
-                    // prevents 10+ word setup/follow-up questions from stealing Rank 1 from declarative facts,
-                    // while leaving `user`/`assistant` chats (`BEAM` / `LME-S`) 100% untouched.
+                    if t.has_temporal {
+                        t_scene[ti] *= 1.65;
+                    }
+                    if t.is_question {
+                        t_scene[ti] *= 0.55;
+                    }
+                } else if has_named_dialogue
+                    && has_declarative_peer
+                    && !episodic_user_quote
+                    && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
+                {
                     t_scene[ti] *= 0.62;
                 }
                 if it.sniper_how_many && t.has_numeric {
@@ -3450,8 +4720,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     }
 
     // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
-    // When a pure information-seeking question in a named dialogue adds no novel entity, temporal anchor,
-    // or number absent from the query, place its adjacent named-partner declarative answer above it.
     let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
     for ent in proper_entity_tokens(&q.text) {
         if let Some(id) = ix.vocab.get(&ent) {
@@ -3467,21 +4735,20 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let query_has_num = it.sniper_how_many || q.text.chars().any(|c| c.is_ascii_digit());
     if p.enable_dyad {
         for members in &ix.session_turns {
+            let speaker_names = session_speaker_names(ix, members);
+            if speaker_names.is_empty() {
+                continue;
+            }
             let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
-            for &m in members {
-                let sp = ix.turns[m].speaker.as_str();
-                if !sp.is_empty() && sp != "user" && sp != "assistant" {
-                    for sw in raw_tokens(sp) {
-                        if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
-                            sess_speaker_ents.insert(id);
-                        }
-                    }
+            for sw in &speaker_names {
+                if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
+                    sess_speaker_ents.insert(id);
                 }
             }
             for pos in 0..members.len() {
                 let qi = members[pos];
                 let qt = &ix.turns[qi];
-                if !qt.is_pure_info_question || t_scene[qi] <= 0.0 {
+                if t_scene[qi] <= 0.0 || !turn_echoes_query(ix, qt, &exact_groups, &speaker_names) {
                     continue;
                 }
                 let novel_temp = qt.has_temporal && !query_has_temp;
@@ -3496,11 +4763,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 if let Some(&ai) = members.get(pos + 1) {
                     let ans = &ix.turns[ai];
                     if named_partner(&qt.speaker, &ans.speaker) && !ans.is_question && !ans.is_backchannel {
+                        t_mask[ai] |= t_mask[qi];
+                        t_exact_mask[ai] |= t_exact_mask[qi];
                         if t_scene[qi] > t_scene[ai] {
                             t_scene[ai] = t_scene[ai].max(t_scene[qi] * 1.06);
                             t_scene[qi] *= 0.65;
-                            t_mask[ai] |= t_mask[qi];
-                            t_exact_mask[ai] |= t_exact_mask[qi];
                         }
                     }
                 }
@@ -3627,15 +4894,32 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         || it.sniper_how_many
         || it.temporal
         || it.is_event_sequence;
-    // Standing rules ALWAYS emit in `RankResult.standing_rules`. On multi-evidence queries,
-    // gate off the 0.68 episodic slot floor so zero-overlap rules never steal 1 of the 5 episodic slots!
-    let (s_policy_floored, t_policy_floored) = if it.task_under_rules && !multi_evidence_intent {
-        (
-            raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
-                ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
-            }),
-            raise_floor(&mut t_scene, lexical_tmax, 0.68, |ti| ix.turns[ti].is_standing_policy),
-        )
+    // Compound/prepositional task wording (" and ", "first ", "before ") must not
+    // drop the standing-policy floor. Only count-snipers and event sequences do.
+    let policy_blocked = it.sniper_how_many || it.is_event_sequence;
+    let standing_rules = rank_standing_rules(ix, &plan, episodic_user_quote, &t_mask, k);
+    let (s_policy_floored, t_policy_floored) = if it.task_under_rules && !policy_blocked {
+        let mut s_floored = raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
+            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
+        });
+        let mut t_floored = raise_floor(&mut t_scene, lexical_tmax, 0.68, |ti| ix.turns[ti].is_standing_policy);
+        if let Some(top) = standing_rules.first() {
+            let s_win_floor = policy_spec_winner_floor(lexical_smax);
+            let t_win_floor = policy_spec_winner_floor(lexical_tmax);
+            if let Some(top_rule_sess) = ix.session_ids.iter().position(|id| id == &top.session_id) {
+                if s_score[top_rule_sess] < s_win_floor {
+                    s_score[top_rule_sess] = s_win_floor;
+                    s_floored[top_rule_sess] = true;
+                }
+            }
+            if let Some(top_rule_turn) = ix.turns.iter().position(|t| t.id == top.id) {
+                if t_scene[top_rule_turn] < t_win_floor {
+                    t_scene[top_rule_turn] = t_win_floor;
+                    t_floored[top_rule_turn] = true;
+                }
+            }
+        }
+        (s_floored, t_floored)
     } else {
         (vec![false; ns], vec![false; nt])
     };
@@ -3649,6 +4933,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     } else {
         (vec![false; ns], vec![false; nt])
     };
+    let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     if it.is_event_sequence {
         let _ = raise_floor(&mut s_score, lexical_smax, 0.42, |si| {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
@@ -3674,14 +4959,57 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let s_ord_base = order(&s_score, &ix.session_ts);
     if p.enable_ppr && ns > 5 && smax > 0.0 {
         if let Some(&top0) = s_ord_base.first() {
-            let mut anchors = vec![top0];
-            if let Some(&top1) = s_ord_base.get(1) {
-                if !s_policy_floored[top1] && !s_pref_floored[top1] && s_score[top1] >= 0.72 * smax {
-                    anchors.push(top1);
-                }
-            }
+            let anchors: Vec<usize> = s_ord_base
+                .iter()
+                .copied()
+                .filter(|&si| !s_policy_floored[si] && !s_pref_floored[si] && s_score[si] >= 0.62 * smax)
+                .take(3)
+                .collect();
             if !ix.header_dict.is_empty() && ix.header_max_words > 0 && !it.preference && !it.user_attribution {
                 let mut hdr_best = vec![0.0f32; ns];
+                // Weapon 1: Query-direct canonical header-title match (`1 <= deg <= 4`).
+                let (q_ids, q_proper): (Vec<u32>, Vec<bool>) = q
+                    .text
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        let proper = s.chars().next().is_some_and(|c| c.is_uppercase());
+                        let id = ix.vocab.get(&s.to_lowercase()).unwrap_or(u32::MAX);
+                        (id, proper)
+                    })
+                    .unzip();
+                let mut q_idx = 0usize;
+                while q_idx < q_ids.len() {
+                    let max_l = ix.header_max_words.min(q_ids.len() - q_idx);
+                    // Every span length, then advance one token. A degree-4 outer phrase
+                    // must not shadow a degree-1 canonical entity header inside it.
+                    for len in 1..=max_l {
+                        let slice = &q_ids[q_idx..q_idx + len];
+                        if slice.contains(&u32::MAX) {
+                            continue;
+                        }
+                        if len == 1 && !q_proper[q_idx] {
+                            continue;
+                        }
+                        let hh = hash_u32_slice(slice);
+                        if let Some(bucket) = ix.header_dict.get(&hh) {
+                            if let Some(hk) = bucket.iter().find(|k| k.tokens.as_slice() == slice) {
+                                let deg = hk.sessions.len() as u32;
+                                if (1..=4).contains(&deg) {
+                                    let extra = deg.saturating_sub(1);
+                                    let damp = 1.0 / (2.0 + extra as f32).log2();
+                                    for &(target_si, mult) in &hk.sessions {
+                                        let cand_b = 0.68 * smax * mult * damp;
+                                        if cand_b > hdr_best[target_si] {
+                                            hdr_best[target_si] = cand_b;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    q_idx += 1;
+                }
                 for &anc in &anchors {
                     let anc_w = (s_score[anc] / smax).clamp(0.35, 1.0);
                     let members = &ix.session_turns[anc];
@@ -3909,9 +5237,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             continue;
                         }
                         let shared_ent = ix.session_entities[si].iter().any(|e| covered_ents.contains(e));
-                        let near_dup = uncovered == 0.0
-                            && bridge_boost[si] < 0.12 * smax
-                            && selected.iter().any(|&s| jaccard(&ix.session_content[s], &ix.session_content[si]) >= 0.52);
                         let same_date_seen = it.is_event_sequence && selected.iter().any(|&s| ix.session_ts[s] == ix.session_ts[si] && ix.session_ts[si] > 0);
                         let topic_seen = it.is_event_sequence
                             && !initiative_content[si].is_empty()
@@ -3927,15 +5252,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             0.25
                         } else if topic_seen {
                             0.35
-                        } else if near_dup {
-                            0.65
                         } else if !it.is_event_sequence
                             && !it.sniper_how_many
                             && !distinct_episode
                             && uncovered == 0.0
                             && bridge_boost[si] < 0.12 * smax
                             && shared_ent
-                            && same_mask_seen >= 2
+                            && same_mask_seen >= 3
                         {
                             0.62
                         } else {
@@ -4299,7 +5622,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    let standing_rules = rank_standing_rules(ix, &plan, episodic_user_quote, &t_mask, k);
     RankResult { intent: plan.intent, sessions, turns, standing_rules }
 }
 
@@ -5354,5 +6676,179 @@ mod tests {
         let ranked = rank(&req);
         let top = ranked.results[0].turns.first().map(|t| t.id.as_str());
         assert_eq!(top, Some("D1:1"), "vocative follow-up stole rank 1: {:?}", ranked.results[0].turns);
+    }
+
+    #[test]
+    fn query_direct_header_title_match_boosts_canonical_subject_doc() {
+        let bury = "coastal conservatory rostrum downbeat catalog notes";
+        let mut sessions = vec![
+            Session { id: "scott".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Scott Derrickson\nAmerican director based in Denver.")] },
+            Session { id: "wolf".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Wolf Alice\nEnglish band formed in London.")] },
+            Session { id: "ambroise".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Ambroise Thomas\nFrench composer who taught in Paris.")] },
+            Session { id: "vcu".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Virginia Commonwealth University\nPublic campus in Richmond.")] },
+            Session { id: "hayden".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Hayden (musician)\nCanadian singer from Thornhill.")] },
+            Session { id: "time_doc".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Time\nWeekly magazine based in New York.")] },
+            Session { id: "music_doc".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Music\nTheory of scales and intervals.")] },
+        ];
+        for i in 0..3 {
+            sessions.push(Session {
+                id: format!("coast{i}"),
+                date: String::new(),
+                timestamp: 0,
+                turns: vec![turn("user", &format!("{bury} visit {i}"))],
+            });
+        }
+        for i in 0..3 {
+            sessions.push(Session {
+                id: format!("rehearse{i}"),
+                date: String::new(),
+                timestamp: 0,
+                turns: vec![turn("user", &format!("The rehearsal schedule lists the ensemble downbeat rostrum {i}"))],
+            });
+        }
+        for i in 0..6 {
+            sessions.push(Session {
+                id: format!("dilute{i}"),
+                date: String::new(),
+                timestamp: 0,
+                turns: vec![turn("user", "padding mentions time and music without a title line")],
+            });
+        }
+        let req = RankRequest {
+            sessions,
+            queries: vec![
+                Query {
+                    text: "Where did Scott Derrickson record with Wolf Alice and Hayden after Ambroise Thomas left Virginia Commonwealth University?".into(),
+                    date: String::new(),
+                },
+                Query {
+                    text: "What time is the music rehearsal?".into(),
+                    date: String::new(),
+                },
+            ],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let titles: Vec<String> = ranked.results[0].sessions.iter().map(|s| s.id.clone()).collect();
+        for id in ["scott", "wolf", "ambroise", "vcu", "hayden"] {
+            assert!(titles.contains(&id.to_string()), "canonical title missed: {id} in {titles:?}");
+        }
+        let common: Vec<String> = ranked.results[1].sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(!common.contains(&"time_doc".to_string()), "lowercase time bridged: {common:?}");
+        assert!(!common.contains(&"music_doc".to_string()), "lowercase music bridged: {common:?}");
+    }
+
+    #[test]
+    fn conditional_when_and_scope_matched_standing_rule_win_episodic_slot() {
+        let q1 = classify("What are some common responses when something goes wrong with an API?");
+        assert!(!q1.temporal && !q1.sniper_when && q1.task_under_rules, "{q1:?}");
+        let q2 = classify("When building an application that communicates with a REST API, what typical errors should I be prepared to handle?");
+        assert!(!q2.temporal && !q2.sniper_when && q2.task_under_rules, "{q2:?}");
+        let q3 = classify("When does my first sprint end?");
+        assert!(q3.temporal && q3.sniper_when && !q3.task_under_rules, "{q3:?}");
+
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "newer-unit".into(), date: String::new(), timestamp: 400, turns: vec![turn("user", "Always include the unit symbol.")] },
+                Session { id: "newer-tabs".into(), date: String::new(), timestamp: 300, turns: vec![turn("user", "Never use tabs in this repo.")] },
+                Session { id: "scope-soup".into(), date: String::new(), timestamp: 1, turns: vec![turn("user", "Always keep a lid when labeling soup.")] },
+                Session { id: "essay".into(), date: String::new(), timestamp: 50, turns: vec![turn("user", "Store leftover soup.")] },
+            ],
+            queries: vec![Query { text: "How should I store leftover soup?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let sessions: Vec<&str> = ranked.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(sessions.contains(&"scope-soup"), "spec winner missed episodic slot: {sessions:?}");
+        assert!(!sessions.contains(&"newer-unit"), "newer unmatched rule stole slot: {sessions:?}");
+    }
+
+    #[test]
+    fn beam_timeline_routes_to_user_and_ssa_collective_cues_stay_assistant() {
+        let order = classify("Can you list the order in which I brought up different aspects of developing my personal budget tracker throughout our conversations?");
+        assert!(order.is_event_sequence && order.user_attribution && !order.assistant_attribution && !order.task_under_rules, "{order:?}");
+        let ssa = classify("I think we discussed work from home jobs for seniors earlier. Can you remind me what was the 7th job in the list you provided?");
+        assert!(ssa.assistant_attribution && !ssa.user_attribution, "{ssa:?}");
+    }
+
+    #[test]
+    fn weapon4_versions_orthography_and_abbreviations() {
+        assert_eq!(raw_tokens("V8 engine"), vec!["v8".to_string(), "engine".to_string()]);
+        assert_eq!(raw_tokens("Bootstrap v5.3.0"), raw_tokens("Bootstrap 5.3.0"));
+        assert_eq!(raw_tokens("enable 2FA"), raw_tokens("enable two-factor"));
+        assert_eq!(raw_tokens("$1,200"), vec!["1200".to_string()]);
+        assert_eq!(stem("html5"), stem("html"));
+        assert_eq!(stem("css3"), stem("css"));
+        assert_eq!(stem("colour"), stem("color"));
+        assert_eq!(stem("theatre"), stem("theater"));
+        assert_eq!(stem("organise"), stem("organize"));
+        assert_eq!(stem("organises"), stem("organizes"));
+        assert_eq!(stem("irises"), stem("iris"));
+        assert_eq!(stem("edu"), stem("education"));
+        assert_eq!(stem("fam"), stem("family"));
+        assert_eq!(stem("pic"), stem("picture"));
+        assert_eq!(stem("career"), "career");
+    }
+
+    #[test]
+    fn multi_sentence_question_echo_and_speaker_nicknames_resolve_cleanly() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "D3".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    Turn {
+                        id: "D3:15".into(),
+                        role: "Caroline".into(),
+                        content: "Wow, what an amazing family pic! How long have you been married?".into(),
+                        ..Turn::default()
+                    },
+                    Turn {
+                        id: "D3:16".into(),
+                        role: "Melanie".into(),
+                        content: "5 years already! Time flies.".into(),
+                        ..Turn::default()
+                    },
+                ],
+            }],
+            queries: vec![Query { text: "How long have Mel and her husband been married?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].turns[0].id, "D3:16", "{:?}", ranked.results[0].turns);
+    }
+
+    #[test]
+    fn engineering_choice_beats_progress_narrative_and_assistant_expansion() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "debug".into(),
+                    date: String::new(),
+                    timestamp: 4,
+                    turns: vec![turn("user", "I've been debugging how to set up and keep the API cache responses simple and lightweight. I've been working on the API cache responses.")],
+                },
+                Session {
+                    id: "choice".into(),
+                    date: String::new(),
+                    timestamp: 5,
+                    turns: vec![turn("user", "I'd prefer to set up the API cache responses by trying to keep it lightweight and simple, without compromising latency.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "How should I set up the API cache responses? I'd like to keep it simple and lightweight.".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.preference);
+        assert_eq!(ranked.results[0].sessions[0].id, "choice");
+        assert_eq!(ranked.results[0].turns[0].session_id, "choice");
     }
 }
