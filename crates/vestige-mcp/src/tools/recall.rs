@@ -246,11 +246,152 @@ pub fn rank_nodes_lexical(
     query: &str,
     top_k: usize,
 ) -> Vec<(String, f32)> {
-    let mut nodes = storage.get_all_nodes(10000, 0).unwrap_or_default();
+    rank_nodes_lexical_scoped(storage, None, false, None, query, top_k)
+}
+
+/// Scoped, lifecycle-filtered Total-Recall ranking over `Storage`.
+/// Enforces scope isolation (when `scope` is `Some`), excludes retired/superseded nodes
+/// unless `include_superseded` is true, filters `valid_from` / `valid_until` against `valid_at`,
+/// and applies Anderson (2025) `ActiveForgettingSystem` suppression decay.
+pub fn rank_nodes_lexical_scoped(
+    storage: &Storage,
+    scope: Option<&str>,
+    include_superseded: bool,
+    valid_at: Option<chrono::DateTime<chrono::Utc>>,
+    query: &str,
+    top_k: usize,
+) -> Vec<(String, f32)> {
+    let mut nodes = match scope {
+        Some(sc) => storage.get_all_nodes_in_scope(sc, i32::MAX, 0).unwrap_or_default(),
+        None => storage.get_all_nodes(i32::MAX, 0).unwrap_or_default(),
+    };
     if nodes.is_empty() || query.trim().is_empty() {
         return Vec::new();
     }
+    if !include_superseded {
+        if let Ok(retired) = storage.superseded_node_ids() {
+            nodes.retain(|n| !retired.contains(&n.id));
+        }
+    }
+    let check_ts = valid_at.unwrap_or_else(chrono::Utc::now);
+    nodes.retain(|n| {
+        n.valid_from.is_none_or(|t| t <= check_ts)
+            && n.valid_until.is_none_or(|t| t > check_ts)
+    });
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    rank_loaded_nodes_total_recall(storage, &nodes, query, top_k)
+}
+
+/// Core Total-Recall bridge shared by `recall` (`rank_nodes_lexical`) and the live
+/// Reflex hook (`memory_packet::packet`). Wires recorded graph connections, active
+/// (non-undone) Retroactive Salience Backfill receipts, typed identity tags, and
+/// `ActiveForgettingSystem` suppression penalties into `vestige_core::retrieval::rank`.
+pub(crate) fn rank_loaded_nodes_total_recall(
+    storage: &Storage,
+    raw_nodes: &[KnowledgeNode],
+    query: &str,
+    top_k: usize,
+) -> Vec<(String, f32)> {
+    if raw_nodes.is_empty() || query.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut nodes: Vec<&KnowledgeNode> = raw_nodes.iter().collect();
     nodes.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+    let forgetting = vestige_core::neuroscience::ActiveForgettingSystem::default();
+    let penalty_by_id: std::collections::HashMap<&str, f32> = nodes
+        .iter()
+        .filter(|n| n.suppression_count > 0)
+        .map(|n| (n.id.as_str(), forgetting.retrieval_penalty(n.suppression_count) as f32))
+        .collect();
+
+    // Exact edges the ranker can follow: recorded graph links, backfill receipts,
+    // and typed tags (`person:`, `place:`). Built from ids, not from words.
+    let mut links_of: std::collections::HashMap<String, Vec<vestige_core::retrieval::TurnLink>> =
+        std::collections::HashMap::new();
+    let mut tag_members: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for node in &nodes {
+        if let Ok(conns) = storage.get_connections_for_memory(&node.id) {
+            for edge in conns {
+                let other = if edge.source_id == node.id {
+                    edge.target_id
+                } else if edge.target_id == node.id {
+                    edge.source_id
+                } else {
+                    continue;
+                };
+                if other.is_empty() || other == node.id {
+                    continue;
+                }
+                links_of.entry(node.id.clone()).or_default().push(
+                    vestige_core::retrieval::TurnLink {
+                        kind: edge.link_type,
+                        to: other,
+                        degree: 2,
+                    },
+                );
+            }
+        }
+        for tag in &node.tags {
+            if tag.contains(':') {
+                tag_members.entry(tag.clone()).or_default().push(node.id.clone());
+            }
+        }
+    }
+    if let Ok(receipts) = storage.salience_receipts() {
+        let undone: std::collections::HashSet<String> = receipts
+            .iter()
+            .filter_map(|row| {
+                row.get("undo_of")
+                    .and_then(|v| v.as_str())
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string)
+            })
+            .collect();
+        for row in receipts {
+            if row.get("undo_of").is_some_and(|v| !v.is_null()) {
+                continue;
+            }
+            if row
+                .get("receipt_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|id| undone.contains(id))
+            {
+                continue;
+            }
+            let memory = row.get("memory_id").and_then(|v| v.as_str()).unwrap_or("");
+            let trigger = row.get("trigger_id").and_then(|v| v.as_str()).unwrap_or("");
+            if memory.is_empty() || trigger.is_empty() || memory == trigger {
+                continue;
+            }
+            links_of.entry(trigger.to_string()).or_default().push(
+                vestige_core::retrieval::TurnLink {
+                    kind: "backfill".into(),
+                    to: memory.to_string(),
+                    degree: 2,
+                },
+            );
+        }
+    }
+    for ids in tag_members.values_mut() {
+        ids.sort();
+        ids.dedup();
+        if ids.len() < 2 {
+            continue;
+        }
+        let degree = ids.len() as u32;
+        let canonical = ids[0].clone();
+        for id in ids.iter().skip(1) {
+            links_of.entry(id.clone()).or_default().push(
+                vestige_core::retrieval::TurnLink {
+                    kind: "tag".into(),
+                    to: canonical.clone(),
+                    degree,
+                },
+            );
+        }
+    }
 
     // One session per UTC day. Same-day turns stay a micro-scene; distinct
     // days are the sessions the chrono-lasso and event-sequence diversity
@@ -277,10 +418,13 @@ pub fn rank_nodes_lexical(
                 Vec::new(),
             )
         });
+        let links = links_of.remove(&node.id).unwrap_or_default();
         entry.2.push(vestige_core::retrieval::Turn {
-            id: node.id,
+            id: node.id.clone(),
             role,
             content: format!("{} {}", node.content, node.tags.join(" ")),
+            links,
+            stability: node.stability as f32,
         });
     }
     let sessions = by_day
@@ -305,18 +449,24 @@ pub fn rank_nodes_lexical(
     };
 
     let resp = vestige_core::retrieval::rank(&req);
-    resp.results
+    let mut scored: Vec<(String, f32)> = resp
+        .results
         .into_iter()
         .next()
         .map(|q_res| {
             q_res
                 .turns
                 .into_iter()
-                .filter(|hit| hit.score > 0.0)
-                .map(|hit| (hit.id, hit.score))
+                .filter_map(|hit| {
+                    let mult = 1.0 - penalty_by_id.get(hit.id.as_str()).copied().unwrap_or(0.0);
+                    let adj = hit.score * mult;
+                    (adj > 0.0).then_some((hit.id, adj))
+                })
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored
 }
 
 fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Value, String>> {
@@ -669,6 +819,69 @@ fn one_hop_neighbors(storage: &Arc<Storage>, ids: &[String], detail_level: &str)
                 "direction": if edge.source_id == *id { "outgoing" } else { "incoming" },
                 "node": node,
             }));
+        }
+    }
+    // Also surface active (non-undone) Retroactive Salience Backfill edges on handle lookup
+    // so inspecting either the later trigger or the earlier memory reveals the causal RSB bond.
+    if out.len() < MAX_NEIGHBOR_EDGES {
+        if let Ok(receipts) = storage.salience_receipts() {
+            let undone: std::collections::HashSet<String> = receipts
+                .iter()
+                .filter_map(|r| r.get("undo_of").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string))
+                .collect();
+            let id_set: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+            for row in receipts {
+                if out.len() >= MAX_NEIGHBOR_EDGES {
+                    break;
+                }
+                if row.get("undo_of").is_some_and(|v| !v.is_null()) {
+                    continue;
+                }
+                if row.get("receipt_id").and_then(Value::as_str).is_some_and(|rid| undone.contains(rid)) {
+                    continue;
+                }
+                let mem = row.get("memory_id").and_then(Value::as_str).unwrap_or("");
+                let trig = row.get("trigger_id").and_then(Value::as_str).unwrap_or("");
+                if mem.is_empty() || trig.is_empty() || mem == trig {
+                    continue;
+                }
+                let (matched_self, other, direction) = if id_set.contains(trig) {
+                    (trig, mem, "outgoing")
+                } else if id_set.contains(mem) {
+                    (mem, trig, "incoming")
+                } else {
+                    continue;
+                };
+                let key = (trig.to_string(), mem.to_string());
+                if seen_edges.contains(&key) {
+                    continue;
+                }
+                seen_edges.push(key);
+                let first_seen = seen_nodes.insert(other.to_string());
+                let max_chars = if full_neighbors {
+                    None
+                } else if first_seen {
+                    Some(200)
+                } else {
+                    Some(80)
+                };
+                let node = storage
+                    .get_node(other)
+                    .ok()
+                    .flatten()
+                    .map(|n| neighbor_node_payload(n, max_chars));
+                let _ = matched_self;
+                out.push(serde_json::json!({
+                    "from": trig,
+                    "to": mem,
+                    "link_type": "backfill",
+                    "strength": 1.0,
+                    "direction": direction,
+                    "receipt_id": row.get("receipt_id").cloned().unwrap_or(Value::Null),
+                    "shared_entity": row.get("shared_entity").cloned().unwrap_or(Value::Null),
+                    "node": node,
+                }));
+            }
         }
     }
     out

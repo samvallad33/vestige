@@ -31,8 +31,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use vestige_core::{
-    DEFAULT_MEMORY_SCOPE, ImportanceContext, IngestInput, SecretPolicy, Storage, StorageError,
-    SynapticSignalSnapshot, scan_secrets,
+    DEFAULT_MEMORY_SCOPE, ImportanceContext, ImportanceEvent, ImportanceEventType, IngestInput,
+    SecretPolicy, Storage, StorageError, SynapticSignalSnapshot, scan_secrets,
 };
 
 /// The `intent_id` property schema, shared by the single and batch-item
@@ -2417,22 +2417,182 @@ async fn execute_batch(
     Ok(envelope)
 }
 
+/// Composite at or above this floor opens a PRP capture even when no single
+/// channel has reached the tagging system's PRP threshold.
+const CAPTURE_COMPOSITE_FLOOR: f64 = 0.65;
+
+const CAPTURE_NODE_TYPES: &[&str] = &[
+    "decision",
+    "error",
+    "bug",
+    "rule",
+    "preference",
+    "correction",
+];
+
 #[allow(clippy::too_many_arguments)]
 fn run_post_ingest_with_snapshot(
-    _storage: &Arc<Storage>,
+    storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     node_id: &str,
     content: &str,
-    _node_type: &str,
-    _importance_composite: f64,
-    _importance_snapshot: SynapticSignalSnapshot,
+    node_type: &str,
+    importance_composite: f64,
+    importance_snapshot: SynapticSignalSnapshot,
 ) -> Option<Value> {
-    if let Ok(mut cog) = cognitive.try_lock() {
+    let project = project_name_for_node(storage.as_ref(), node_id);
+    let mut captured_ids: Vec<String> = Vec::new();
+    let tagged = if let Ok(mut cog) = cognitive.try_lock() {
         cog.importance_signals.learn_content(content);
         cog.cross_project
-            .record_project_memory(node_id, "default", None);
+            .record_project_memory(node_id, &project, None);
+        cog.synaptic_tagging
+            .tag_memory_with_context(node_id, node_type);
+        let threshold = cog.synaptic_tagging.config().prp_threshold;
+        if should_trigger_prp(node_type, importance_composite, &importance_snapshot, threshold) {
+            let event = capture_event(
+                node_id,
+                node_type,
+                importance_composite,
+                &importance_snapshot,
+                threshold,
+            );
+            let result = cog.synaptic_tagging.trigger_prp(event);
+            captured_ids = result
+                .captured_memories
+                .into_iter()
+                .map(|memory| memory.memory_id)
+                .collect();
+        }
+        true
+    } else {
+        false
+    };
+
+    if !tagged {
+        return strata_backend(storage)
+            .then(|| crate::tools::unavailable::synaptic_capture_on_strata());
     }
-    None
+
+    let mut report = serde_json::json!({
+        "tagged": true,
+        "importanceComposite": finite_or_zero(importance_composite),
+        "capturedCount": captured_ids.len(),
+        "capturedMemoryIds": captured_ids,
+    });
+    // A Strata log does not persist synaptic tags. The stdio contract in
+    // `a_successful_save_carries_no_error_shaped_field` requires
+    // `status` / `reason` / `durable` whenever `synapticCapture` is present.
+    if strata_backend(storage) {
+        let contract = crate::tools::unavailable::synaptic_capture_on_strata();
+        if let Some(report) = report.as_object_mut()
+            && let Some(contract) = contract.as_object()
+        {
+            for (key, value) in contract {
+                report.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+    Some(report)
+}
+
+fn strata_backend(storage: &Arc<Storage>) -> bool {
+    crate::strata_memory::is_strata_backend(storage.as_ref())
+}
+
+fn finite_or_zero(value: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        0.0
+    }
+}
+
+fn project_name_for_node(storage: &Storage, node_id: &str) -> String {
+    storage
+        .get_node(node_id)
+        .ok()
+        .flatten()
+        .and_then(|node| {
+            node.tags.into_iter().find_map(|tag| {
+                tag.strip_prefix("codebase:")
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+            })
+        })
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn node_type_is_capture_event(node_type: &str) -> bool {
+    CAPTURE_NODE_TYPES
+        .iter()
+        .any(|kind| node_type.eq_ignore_ascii_case(kind))
+}
+
+fn snapshot_exceeds_capture(snapshot: &SynapticSignalSnapshot, threshold: f64) -> bool {
+    [
+        snapshot.novelty,
+        snapshot.arousal,
+        snapshot.reward,
+        snapshot.attention,
+        snapshot.composite,
+    ]
+    .into_iter()
+    .any(|value| value.is_finite() && value >= threshold)
+}
+
+fn should_trigger_prp(
+    node_type: &str,
+    importance_composite: f64,
+    snapshot: &SynapticSignalSnapshot,
+    prp_threshold: f64,
+) -> bool {
+    (importance_composite.is_finite() && importance_composite >= CAPTURE_COMPOSITE_FLOOR)
+        || node_type_is_capture_event(node_type)
+        || snapshot_exceeds_capture(snapshot, prp_threshold)
+}
+
+fn capture_event(
+    node_id: &str,
+    node_type: &str,
+    importance_composite: f64,
+    snapshot: &SynapticSignalSnapshot,
+    prp_threshold: f64,
+) -> ImportanceEvent {
+    let kind = if node_type_is_capture_event(node_type) {
+        ImportanceEventType::UserFlag
+    } else if snapshot.arousal.is_finite()
+        && snapshot.arousal >= CAPTURE_COMPOSITE_FLOOR
+        && snapshot.arousal >= snapshot.novelty
+        && snapshot.arousal >= snapshot.reward
+    {
+        ImportanceEventType::EmotionalContent
+    } else {
+        ImportanceEventType::NoveltySpike
+    };
+    let mut event = ImportanceEvent::for_memory(node_id, kind);
+    event.context = Some(node_type.to_string());
+    // `trigger_prp` drops events under `prp_threshold` before it sweeps the
+    // backward window. A capture we already decided to open has to clear it.
+    let floor = if prp_threshold.is_finite() {
+        prp_threshold.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if event.strength < floor {
+        event.strength = floor;
+    }
+    if kind == ImportanceEventType::EmotionalContent {
+        let magnitude = finite_or_zero(snapshot.arousal).max(finite_or_zero(importance_composite));
+        event.strength = event.strength.max(magnitude).clamp(0.0, 1.0);
+    } else if kind == ImportanceEventType::NoveltySpike {
+        let prediction_error = finite_or_zero(importance_composite)
+            .max(finite_or_zero(snapshot.novelty))
+            .max(finite_or_zero(snapshot.composite));
+        event.strength = event.strength.max(prediction_error).clamp(0.0, 1.0);
+    }
+    event
 }
 
 // ============================================================================

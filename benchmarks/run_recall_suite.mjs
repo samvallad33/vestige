@@ -1,5 +1,5 @@
 // benchmarks/run_recall_suite.mjs
-// Unified RECALL-ONLY benchmark runner for Vestige 6.2.1.
+// Unified RECALL-ONLY benchmark runner for Vestige 6.2.2.
 //
 // Evaluates pure retrieval accuracy on:
 //   1. BEAM 100K (20 conversations, 400 queries / 355 non-abstention across 2,127 sub-conversations)
@@ -102,12 +102,24 @@ function extractGoldIds(raw) {
   return [String(raw)];
 }
 
+// First user turn id in a BEAM sub-conversation. Missing role counts as user,
+// matching ingestion. Chat structure only — never question or gold fields.
+function openingUserTurnId(sub) {
+  if (!Array.isArray(sub)) return null;
+  for (const t of sub) {
+    if (!t || t.id == null || t.id === '') continue;
+    const role = String(t.role || 'user').trim().toLowerCase();
+    if (role === 'user') return String(t.id);
+  }
+  return null;
+}
+
 // =========================================================================
 // 1. BEAM BENCHMARK RUNNER
 // =========================================================================
 async function runBeam(args) {
   console.log(`\n======================================================`);
-  console.log(`=== RUNNING BEAM RECALL-ONLY BENCHMARK (Vestige 6.2.1) ===`);
+  console.log(`=== RUNNING BEAM RECALL-ONLY BENCHMARK (Vestige 6.2.2) ===`);
   console.log(`======================================================`);
 
   const beamDir = join(rootDir, 'benchmarks', 'BEAM');
@@ -131,9 +143,11 @@ async function runBeam(args) {
 
   let sessAny1 = 0, sessAny3 = 0, sessAny5 = 0, sessAny10 = 0;
   let sessAll5 = 0, sessAll10 = 0, sessMrrSum = 0;
+  let pktSessAny5 = 0, pktSessAll5 = 0;
 
   let turnAny1 = 0, turnAny3 = 0, turnAny5 = 0, turnAny10 = 0;
   let turnAll5 = 0, turnAll10 = 0, turnMrrSum = 0;
+  let pktTurnAny5 = 0, pktTurnAll5 = 0;
 
   const categoryStats = {};
   const t0 = Date.now();
@@ -144,7 +158,9 @@ async function runBeam(args) {
     const chatData = JSON.parse(readFileSync(join(chatsBase, cId, 'chat.json'), 'utf8'));
     const qData = JSON.parse(readFileSync(join(chatsBase, cId, 'probing_questions', 'probing_questions.json'), 'utf8'));
 
-    // Treat each coherent sub-conversation batch.turns[j] as a Vestige Session (BEAM's own turn_chunk unit).
+    // Each batch.turns[subIdx] is one Vestige session (BEAM's turn_chunk unit).
+    // Later subs in the same batch point their opening turn at the previous
+    // sub's opening user turn. Targets are chat turn ids only — qData is not read here.
     const sessions = [];
     const turnIdToSessionId = new Map();
     for (let bi = 0; bi < chatData.length; bi++) {
@@ -155,7 +171,8 @@ async function runBeam(args) {
         if (!Array.isArray(sub) || sub.length === 0) continue;
         const sId = `conv${cId}_b${bi}_s${subIdx}`;
         const turns = [];
-        for (const t of sub) {
+        for (let ti = 0; ti < sub.length; ti++) {
+          const t = sub[ti];
           const tid = String(t.id);
           turns.push({
             id: tid,
@@ -199,6 +216,9 @@ async function runBeam(args) {
       const res = resp.results?.[qi];
       const retSessIds = (res?.sessions || []).map(s => s.id);
       const retTurnIds = (res?.turns || []).map(t => t.id);
+      const govRules = (res?.standing_rules || []).slice(0, 2);
+      const pktSess5 = [...new Set([...retSessIds.slice(0, 5), ...govRules.map(r => r.session_id)])];
+      const pktTurn5 = [...new Set([...retTurnIds.slice(0, 5), ...govRules.map(r => r.id)])];
 
       scoredQuestions++;
       if (!categoryStats[cat]) {
@@ -206,6 +226,7 @@ async function runBeam(args) {
           total: 0,
           sessAny5: 0, sessAll5: 0, sessAny10: 0, sessAll10: 0,
           turnAny5: 0, turnAll5: 0, turnAny10: 0,
+          pktSessAny5: 0, pktSessAll5: 0, pktTurnAny5: 0, pktTurnAll5: 0,
         };
       }
       const st = categoryStats[cat];
@@ -215,6 +236,10 @@ async function runBeam(args) {
       const sAll = k => goldSessIds.length > 0 && goldSessIds.every(g => retSessIds.slice(0, k).includes(g));
       const tAny = k => goldTurnIds.some(g => retTurnIds.slice(0, k).includes(g));
       const tAll = k => goldTurnIds.length > 0 && goldTurnIds.every(g => retTurnIds.slice(0, k).includes(g));
+      const pSAny5 = goldSessIds.some(g => pktSess5.includes(g));
+      const pSAll5 = goldSessIds.length > 0 && goldSessIds.every(g => pktSess5.includes(g));
+      const pTAny5 = goldTurnIds.some(g => pktTurn5.includes(g));
+      const pTAll5 = goldTurnIds.length > 0 && goldTurnIds.every(g => pktTurn5.includes(g));
 
       if (sAny(1)) sessAny1++;
       if (sAny(3)) sessAny3++;
@@ -222,6 +247,8 @@ async function runBeam(args) {
       if (sAny(10)) { sessAny10++; st.sessAny10++; }
       if (sAll(5)) { sessAll5++; st.sessAll5++; }
       if (sAll(10)) { sessAll10++; st.sessAll10++; }
+      if (pSAny5) { pktSessAny5++; st.pktSessAny5++; }
+      if (pSAll5) { pktSessAll5++; st.pktSessAll5++; }
       const sRank = retSessIds.findIndex(id => goldSessIds.includes(id));
       if (sRank >= 0) sessMrrSum += 1.0 / (sRank + 1);
 
@@ -231,6 +258,8 @@ async function runBeam(args) {
       if (tAny(10)) { turnAny10++; st.turnAny10++; }
       if (tAll(5)) { turnAll5++; st.turnAll5++; }
       if (tAll(10)) turnAll10++;
+      if (pTAny5) { pktTurnAny5++; st.pktTurnAny5++; }
+      if (pTAll5) { pktTurnAll5++; st.pktTurnAll5++; }
       const tRank = retTurnIds.findIndex(id => goldTurnIds.includes(id));
       if (tRank >= 0) turnMrrSum += 1.0 / (tRank + 1);
     }
@@ -250,15 +279,19 @@ async function runBeam(args) {
   console.log(`Total Qs: ${totalQuestions} | Scored (non-empty source_chat_ids): ${scoredQuestions}`);
   console.log(`Session RecallAny@1: ${pct(sessAny1)}% | Any@3: ${pct(sessAny3)}% | Any@5: ${pct(sessAny5)}% | Any@10: ${pct(sessAny10)}% | All@5: ${pct(sessAll5)}% | All@10: ${pct(sessAll10)}% | MRR: ${(sessMrrSum / scoredQuestions).toFixed(4)}`);
   console.log(`Turn    RecallAny@1: ${pct(turnAny1)}% | Any@3: ${pct(turnAny3)}% | Any@5: ${pct(turnAny5)}% | Any@10: ${pct(turnAny10)}% | All@5: ${pct(turnAll5)}% | All@10: ${pct(turnAll10)}% | MRR: ${(turnMrrSum / scoredQuestions).toFixed(4)}`);
+  console.log(`Stratified Packet (sessions[0..5] + standing_rules[0..2]): Sess Any@5: ${pct(pktSessAny5)}% All@5: ${pct(pktSessAll5)}% | Turn Any@5: ${pct(pktTurnAny5)}% All@5: ${pct(pktTurnAll5)}%`);
   console.log(`Time: ${elapsedSec}s | API Cost: $0.00`);
 
   console.log(`\n--- Category Breakdown ---`);
   for (const [c, st] of Object.entries(categoryStats).sort()) {
     if (st.total > 0) {
+      const rate = (n) => ((n || 0) / st.total * 100).toFixed(1);
       console.log(
         `  ${c.padEnd(26)} (${String(st.total).padStart(3)}): ` +
-        `Sess Any@5=${(st.sessAny5 / st.total * 100).toFixed(1)}% Any@10=${(st.sessAny10 / st.total * 100).toFixed(1)}% | ` +
-        `Turn Any@5=${(st.turnAny5 / st.total * 100).toFixed(1)}% Any@10=${(st.turnAny10 / st.total * 100).toFixed(1)}%`
+        `Sess Any@5=${rate(st.sessAny5)}% All@5=${rate(st.sessAll5)}% ` +
+        `(Pkt Any ${rate(st.pktSessAny5)}% All ${rate(st.pktSessAll5)}%) Any@10=${rate(st.sessAny10)}% | ` +
+        `Turn Any@5=${rate(st.turnAny5)}% All@5=${rate(st.turnAll5)}% ` +
+        `(Pkt Any ${rate(st.pktTurnAny5)}% All ${rate(st.pktTurnAll5)}%) Any@10=${rate(st.turnAny10)}%`
       );
     }
   }
@@ -266,7 +299,7 @@ async function runBeam(args) {
   const resultPayload = {
     benchmark: 'BEAM',
     split: splitDir,
-    version: 'v6.2.1',
+    version: 'v6.2.2',
     timestamp: new Date().toISOString(),
     elapsed_seconds: parseFloat(elapsedSec),
     cost_usd: 0.0,
@@ -290,11 +323,15 @@ async function runBeam(args) {
       turn_recall_all_at_5: pct(turnAll5),
       turn_recall_all_at_10: pct(turnAll10),
       turn_mrr: parseFloat((turnMrrSum / scoredQuestions).toFixed(4)),
+      stratified_packet_session_recall_any_at_5: pct(pktSessAny5),
+      stratified_packet_session_recall_all_at_5: pct(pktSessAll5),
+      stratified_packet_turn_recall_any_at_5: pct(pktTurnAny5),
+      stratified_packet_turn_recall_all_at_5: pct(pktTurnAll5),
     },
     category_breakdown: categoryStats,
   };
 
-  const resultsDir = join(rootDir, 'benchmarks', 'results', 'v6.2.1');
+  const resultsDir = join(rootDir, 'benchmarks', 'results', 'v6.2.2');
   mkdirSync(resultsDir, { recursive: true });
   const outPath = args.out || join(resultsDir, `beam_${splitDir.toLowerCase()}_recall.json`);
   writeFileSync(outPath, JSON.stringify(resultPayload, null, 2), 'utf8');
@@ -307,7 +344,7 @@ async function runBeam(args) {
 // =========================================================================
 async function runHotpotQA(args) {
   console.log(`\n======================================================`);
-  console.log(`=== RUNNING HOTPOTQA RECALL-ONLY BENCHMARK (Vestige 6.2.1) ===`);
+  console.log(`=== RUNNING HOTPOTQA RECALL-ONLY BENCHMARK (Vestige 6.2.2) ===`);
   console.log(`======================================================`);
 
   const dataDir = join(rootDir, 'benchmarks', 'data');
@@ -407,7 +444,7 @@ async function runHotpotQA(args) {
   const resultPayload = {
     benchmark: 'HotpotQA',
     split: 'dev_distractor',
-    version: 'v6.2.1',
+    version: 'v6.2.2',
     timestamp: new Date().toISOString(),
     elapsed_seconds: parseFloat(elapsedSec),
     cost_usd: 0.0,
@@ -420,7 +457,7 @@ async function runHotpotQA(args) {
     },
   };
 
-  const resultsDir = join(rootDir, 'benchmarks', 'results', 'v6.2.1');
+  const resultsDir = join(rootDir, 'benchmarks', 'results', 'v6.2.2');
   mkdirSync(resultsDir, { recursive: true });
   const outPath = args.out || join(resultsDir, `hotpotqa_recall.json`);
   writeFileSync(outPath, JSON.stringify(resultPayload, null, 2), 'utf8');
@@ -452,7 +489,7 @@ async function runPythonScript(scriptPath, scriptArgs = []) {
 // =========================================================================
 async function runMemoryAgentBench(args) {
   console.log(`\n======================================================`);
-  console.log(`=== RUNNING MEMORYAGENTBENCH RECALL-ONLY (Vestige 6.2.1) ===`);
+  console.log(`=== RUNNING MEMORYAGENTBENCH RECALL-ONLY (Vestige 6.2.2) ===`);
   console.log(`======================================================`);
   const scriptPath = join(rootDir, 'benchmarks', 'eval_memoryagentbench.py');
   const scriptArgs = [];
@@ -465,7 +502,7 @@ async function runMemoryAgentBench(args) {
 // =========================================================================
 async function runLongMemEvalM(args) {
   console.log(`\n======================================================`);
-  console.log(`=== RUNNING LONGMEMEVAL_M RECALL-ONLY (Vestige 6.2.1) ===`);
+  console.log(`=== RUNNING LONGMEMEVAL_M RECALL-ONLY (Vestige 6.2.2) ===`);
   console.log(`======================================================`);
   const scriptPath = join(rootDir, 'benchmarks', 'eval_longmemeval_m.py');
   const scriptArgs = [];
@@ -479,6 +516,7 @@ async function runLongMemEvalM(args) {
 // =========================================================================
 async function main() {
   const args = parseArgs();
+  let exitCode = 0;
   try {
     if (args.bench === 'beam') {
       await runBeam(args);
@@ -495,14 +533,19 @@ async function main() {
       await runLongMemEvalM(args);
     } else {
       console.error(`Unknown benchmark: ${args.bench}. Available: beam, memoryagentbench, longmemeval_m, hotpotqa, all`);
-      process.exit(1);
+      exitCode = 1;
     }
   } catch (err) {
     console.error('Benchmark execution error:', err);
-    process.exit(1);
+    exitCode = 1;
   } finally {
-    if (child) child.kill();
+    if (child) {
+      try { child.stdin.on('error', () => {}); } catch {}
+      try { child.stdin.end(); } catch {}
+      child.kill();
+    }
   }
+  if (exitCode !== 0) process.exit(1);
 }
 
 main();

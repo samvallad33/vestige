@@ -1915,67 +1915,57 @@ pub struct ImportanceRequest {
     pub content: String,
 }
 
-/// Score content importance using 4-channel model
+/// Score content importance using 4-channel model.
+///
+/// The shared engine is preferred. If it is absent, or its lock does not land
+/// within 250ms, a fresh stateless [`vestige_core::ImportanceSignals`] runs
+/// the same `compute_importance` math. No constant stand-in is returned.
 pub async fn score_importance(
     State(state): State<AppState>,
     Json(req): Json<ImportanceRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    if let Some(ref cognitive) = state.cognitive {
-        let context = vestige_core::ImportanceContext::current();
-        let cog = cognitive.lock().await;
-        let score = cog
-            .importance_signals
-            .compute_importance(&req.content, &context);
-        drop(cog);
-
-        let composite = score.composite;
-        let novelty = score.novelty;
-        let arousal = score.arousal;
-        let reward = score.reward;
-        let attention = score.attention;
-
-        state.emit(VestigeEvent::ImportanceScored {
-            memory_id: None, // /api/importance scores arbitrary content, not a stored memory
-            content_preview: req.content.chars().take(80).collect(),
-            composite_score: composite,
-            novelty,
-            arousal,
-            reward,
-            attention,
-            timestamp: Utc::now(),
-        });
-
-        Ok(Json(serde_json::json!({
-            "composite": composite,
-            "channels": {
-                "novelty": novelty,
-                "arousal": arousal,
-                "reward": reward,
-                "attention": attention,
-            },
-            "recommendation": if composite > 0.6 { "save" } else { "skip" },
-        })))
+    let context = vestige_core::ImportanceContext::current();
+    let locked = if let Some(cognitive) = state.cognitive.as_ref() {
+        tokio::time::timeout(std::time::Duration::from_millis(250), cognitive.lock())
+            .await
+            .ok()
     } else {
-        // Fallback: basic heuristic scoring
-        let word_count = req.content.split_whitespace().count();
-        let has_code = req.content.contains("```") || req.content.contains("fn ");
-        let composite = if has_code {
-            0.7
-        } else {
-            (word_count as f64 / 100.0).min(0.8)
-        };
+        None
+    };
+    let score = match locked {
+        Some(cog) => cog
+            .importance_signals
+            .compute_importance(&req.content, &context),
+        None => vestige_core::ImportanceSignals::new().compute_importance(&req.content, &context),
+    };
 
-        Ok(Json(serde_json::json!({
-            "composite": composite,
-            "channels": {
-                "novelty": composite,
-                "arousal": 0.5,
-                "reward": 0.5,
-                "attention": composite,
-            },
-            "recommendation": if composite > 0.6 { "save" } else { "skip" },
-        })))
-    }
+    let composite = score.composite;
+    let novelty = score.novelty;
+    let arousal = score.arousal;
+    let reward = score.reward;
+    let attention = score.attention;
+
+    state.emit(VestigeEvent::ImportanceScored {
+        memory_id: None, // /api/importance scores arbitrary content, not a stored memory
+        content_preview: req.content.chars().take(80).collect(),
+        composite_score: composite,
+        novelty,
+        arousal,
+        reward,
+        attention,
+        timestamp: Utc::now(),
+    });
+
+    Ok(Json(serde_json::json!({
+        "composite": composite,
+        "channels": {
+            "novelty": novelty,
+            "arousal": arousal,
+            "reward": reward,
+            "attention": attention,
+        },
+        "recommendation": if composite > 0.6 { "save" } else { "skip" },
+    })))
 }
 
 /// Trigger consolidation

@@ -13,35 +13,44 @@
 //!
 //! ## What fires autonomously after v2.0.9
 //!
-//! - **`MemoryCreated`**  → `predictive_memory.record_memory_access()`
-//!   (pattern learning for `predict` tool). Durable synaptic capture is owned
-//!   by `smart_ingest`'s V22 SQLite transaction, never by this event consumer.
-//! - **`SearchPerformed`** → `predictive_memory.record_query()` (keeps the
-//!   query-interest model warm without waiting for the next `predict` call).
-//! - **`MemoryPromoted`** → `activation_network.activate()` (spreads a small
-//!   reinforcement ripple from the promoted node to its neighbors).
+//! - **`MemoryCreated`** → `activity_tracker.record_activity()`, an in-memory
+//!   synaptic tag when the id is not already tagged, and any stored edges
+//!   added to `activation_network`. Durable synaptic capture stays with
+//!   `smart_ingest`; this consumer only updates the live cognitive engine.
+//! - **`SearchPerformed`** → activity, `reconsolidation.mark_labile_with_context`
+//!   for the top retrieved ids, and `attention_signal` for the query.
+//! - **`MemoryPromoted`** → `activation_network.activate()` and, when the
+//!   ripple is non-empty, a `VestigeEvent::ActivationSpread` so subscribers
+//!   see the ids instead of the spread being dropped.
 //! - **`MemorySuppressed`** → emits the previously-declared-never-emitted
 //!   `Rac1CascadeSwept` event so the dashboard can render the cascade wave.
 //! - **`ImportanceScored` with `composite_score > 0.85`** → auto-`promote`
 //!   when the score refers to a stored memory.
 //! - **`Heartbeat` with `memory_count > DUPLICATES_THRESHOLD`** →
-//!   opportunistic `find_duplicates` sweep (rate-limited).
+//!   opportunistic `find_duplicates` sweep (rate-limited). On Strata the
+//!   vector sweep is skipped (`similarity_disabled`); when backfill autofire
+//!   is on, the tick runs `storage.run_consolidation()` instead.
 //!
 //! ## What polls on a timer
 //!
 //! A 60-second `tokio::interval` calls `prospective_memory.check_triggers()`
-//! with the best context we can infer from recent WebSocket activity.
-//! Matched intentions are logged at `info!` level today; v2.5 "Autonomic"
-//! will promote this to MCP sampling/createMessage notifications that
-//! actually reach the agent mid-session.
+//! and, on Strata, `storage.get_active_intentions()` for deadlines and
+//! triggers due at `now`. A due intention emits `VestigeEvent::TraceEvent`
+//! and an `info!` line. v2.5 "Autonomic" will promote this to MCP
+//! sampling/createMessage notifications that reach the agent mid-session.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, info, warn};
-use vestige_core::Storage;
 use vestige_core::neuroscience::prospective_memory::Context as ProspectiveContext;
+use vestige_core::{
+    AccessContext, AccessPattern, AccessTrigger, AttentionSession, LinkType, MemorySnapshot,
+    MemoryTraceEvent, Storage,
+};
 
 use crate::cognitive::CognitiveEngine;
 use crate::dashboard::events::VestigeEvent;
@@ -167,11 +176,15 @@ pub fn spawn(
     // Prospective-memory poller supervisor — symmetric restart semantics.
     {
         let cognitive = cognitive.clone();
+        let storage = storage.clone();
+        let event_tx = event_tx.clone();
         tokio::spawn(async move {
             loop {
                 let cog = cognitive.clone();
+                let sto = storage.clone();
+                let etx = event_tx.clone();
                 let handle = tokio::spawn(async move {
-                    run_prospective_poller(cog).await;
+                    run_prospective_poller(cog, sto, etx).await;
                 });
                 match handle.await {
                     Ok(()) => {
@@ -234,32 +247,104 @@ async fn handle_event(
     dedup_state: &mut DedupSweepState,
 ) {
     match event {
-        VestigeEvent::MemoryCreated { id, .. } => {
+        VestigeEvent::MemoryCreated { id, node_type, .. } => {
+            let edges = storage
+                .get_connections_for_memory(&id)
+                .unwrap_or_default();
+            let mut cog = cognitive.lock().await;
+            cog.activity_tracker.record_activity();
+            if !cog.synaptic_tagging.has_active_tag(&id) {
+                let _ = cog
+                    .synaptic_tagging
+                    .tag_memory_with_context(&id, &node_type);
+            }
+            for edge in &edges {
+                cog.activation_network.add_edge(
+                    edge.source_id.clone(),
+                    edge.target_id.clone(),
+                    link_type_of(&edge.link_type),
+                    edge.strength,
+                );
+            }
             debug!(
                 memory_id = %id,
-                "Autopilot: MemoryCreated observed; durable synaptic capture is owned by smart_ingest"
+                node_type = %node_type,
+                n_edges = edges.len(),
+                "Autopilot: MemoryCreated recorded activity, synaptic tag, and edges"
             );
         }
 
         VestigeEvent::SearchPerformed {
             query, result_ids, ..
         } => {
+            let n_results = result_ids.len();
+            let top: Vec<String> = result_ids.into_iter().take(24).collect();
+            let retrieved: Vec<(String, MemorySnapshot)> = top
+                .iter()
+                .filter_map(|id| {
+                    retrieval_snapshot(storage.as_ref(), id).map(|snapshot| (id.clone(), snapshot))
+                })
+                .collect();
+            let co_retrieved: Vec<String> = retrieved.iter().map(|(id, _)| id.clone()).collect();
+            let mut cog = cognitive.lock().await;
+            cog.activity_tracker.record_activity();
+            for (id, snapshot) in retrieved {
+                let context = AccessContext {
+                    trigger: AccessTrigger::Search,
+                    query: Some(query.clone()),
+                    co_retrieved: co_retrieved
+                        .iter()
+                        .filter(|other| *other != &id)
+                        .cloned()
+                        .collect(),
+                    session_id: Some("autopilot".to_string()),
+                };
+                cog.reconsolidation
+                    .mark_labile_with_context(&id, snapshot, context);
+            }
+            let mut pattern = AccessPattern::new();
+            pattern.add_query(query.clone());
+            for id in &top {
+                pattern.add_access(id.clone(), 0.0);
+            }
+            let mut session = AttentionSession::new("autopilot-search");
+            session.query_count = 1;
+            session.unique_memories_accessed = top.len() as u32;
+            session.duration_minutes = 1.0;
+            if !query.is_empty() {
+                session.query_topics.push(query.clone());
+            }
+            let attention = cog.attention_signal.compute(&pattern);
+            cog.attention_signal.record_session_activity(session);
             debug!(
                 query = %query,
-                n_results = result_ids.len(),
-                "Autopilot: SearchPerformed observed"
+                n_results,
+                marked = co_retrieved.len(),
+                attention,
+                "Autopilot: SearchPerformed recorded retrieval"
             );
         }
 
-        VestigeEvent::MemoryPromoted { id, .. } => {
+        VestigeEvent::MemoryPromoted { id, timestamp, .. } => {
             // Spread a small activation ripple from the promoted node. The
             // ActivationNetwork internally handles decay (0.7/hop) so this
-            // cannot over-amplify.
+            // cannot over-amplify. Emit the ripple so subscribers and
+            // telemetry observe it.
             let mut cog = cognitive.lock().await;
             let spread = cog.activation_network.activate(&id, 0.3);
+            let activated_ids: Vec<String> = spread.into_iter().map(|hit| hit.memory_id).collect();
+            let n_activated = activated_ids.len();
+            drop(cog);
+            if n_activated > 0 {
+                let _ = event_tx.send(VestigeEvent::ActivationSpread {
+                    source_id: id.clone(),
+                    activated_ids,
+                    timestamp,
+                });
+            }
             debug!(
                 memory_id = %id,
-                n_activated = spread.len(),
+                n_activated,
                 "Autopilot: MemoryPromoted triggered activation spread"
             );
         }
@@ -346,6 +431,40 @@ async fn handle_event(
             }
             dedup_state.last_fired = Some(now);
 
+            // Strata refuses vector dedup (`similarity_threshold` is
+            // `similarity_disabled`). Skip that sweep. When backfill autofire
+            // is on, consolidate instead — and do not warn every 6h if the
+            // sweep has nothing to say.
+            if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+                if !crate::tools::backfill::autofire_enabled() {
+                    debug!(
+                        memory_count,
+                        "Autopilot: skipping vector dedup on Strata (similarity_disabled)"
+                    );
+                    return;
+                }
+                let storage = storage.clone();
+                let handle = tokio::spawn(async move {
+                    match storage.run_consolidation() {
+                        Ok(result) => {
+                            debug!(
+                                nodes_processed = result.nodes_processed,
+                                decay_applied = result.decay_applied,
+                                "Autopilot: Heartbeat ran Strata consolidation; vector dedup skipped"
+                            );
+                        }
+                        Err(error) => {
+                            debug!(
+                                %error,
+                                "Autopilot: Strata consolidation failed; vector dedup skipped"
+                            );
+                        }
+                    }
+                });
+                dedup_state.in_flight = Some(handle);
+                return;
+            }
+
             // Fire the find_duplicates tool with conservative defaults.
             // Running on the heartbeat task keeps this off the critical
             // MCP-dispatch path. Result is logged only — the user's client
@@ -410,22 +529,32 @@ async fn handle_event(
 }
 
 /// Background task that polls `prospective_memory.check_triggers()` every
-/// `PROSPECTIVE_POLL_SECS` seconds. Today triggers are logged at info!
-/// level; v2.5 "Autonomic" upgrades this to fire MCP sampling/createMessage
-/// notifications so the agent sees intentions mid-conversation.
-async fn run_prospective_poller(cognitive: Arc<Mutex<CognitiveEngine>>) {
+/// `PROSPECTIVE_POLL_SECS` seconds, and on Strata also
+/// `storage.get_active_intentions()` for deadlines and triggers due at `now`.
+/// Due intentions are logged and emitted as `TraceEvent`. v2.5 "Autonomic"
+/// upgrades the notification to MCP sampling/createMessage.
+async fn run_prospective_poller(
+    cognitive: Arc<Mutex<CognitiveEngine>>,
+    storage: Arc<Storage>,
+    event_tx: broadcast::Sender<VestigeEvent>,
+) {
     // Short delay on startup so hydration + other init settles first.
     tokio::time::sleep(Duration::from_secs(10)).await;
 
     let mut ticker = tokio::time::interval(Duration::from_secs(PROSPECTIVE_POLL_SECS));
     // Skip the immediate first tick that `interval` fires.
     ticker.tick().await;
+    // Strata intentions stay `active` after they fire. Announce each due key
+    // once per process so a 60s poll does not repeat the same deadline.
+    let mut announced: HashSet<String> = HashSet::new();
+    let mut seq = 0i64;
 
     loop {
         ticker.tick().await;
 
+        let now = Utc::now();
         let context = ProspectiveContext {
-            timestamp: chrono::Utc::now(),
+            timestamp: now,
             ..Default::default()
         };
 
@@ -434,6 +563,7 @@ async fn run_prospective_poller(cognitive: Arc<Mutex<CognitiveEngine>>) {
             cog.prospective_memory.check_triggers(&context)
         };
 
+        let mut surfaced: Vec<String> = Vec::new();
         match triggered {
             Ok(intentions) if !intentions.is_empty() => {
                 info!(
@@ -441,16 +571,115 @@ async fn run_prospective_poller(cognitive: Arc<Mutex<CognitiveEngine>>) {
                     ids = ?intentions.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
                     "Autopilot: prospective memory triggered intentions"
                 );
-                // v2.5 "Autonomic" will emit MCP sampling/createMessage here
-                // so the agent actually sees the intention mid-conversation.
+                surfaced.extend(intentions.into_iter().map(|intention| intention.id));
             }
             Ok(_) => {
-                // No triggers — silent. This runs every 60s and the common
-                // case is no work to do.
+                // No in-memory triggers — silent. This runs every 60s and the
+                // common case is no work to do.
             }
             Err(e) => {
                 warn!(error = %e, "Autopilot: prospective check_triggers failed");
             }
         }
+
+        if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+            match storage.get_active_intentions() {
+                Ok(intentions) => {
+                    let mut due = Vec::new();
+                    for intention in intentions {
+                        if intention.snoozed_until.is_some_and(|until| until > now) {
+                            continue;
+                        }
+                        let deadline_due = intention.deadline.is_some_and(|deadline| deadline <= now);
+                        let trigger_due = crate::tools::intention_unified::stored_prospective_trigger(
+                            &intention,
+                        )
+                        .ok()
+                        .flatten()
+                        .is_some_and(|trigger| trigger.is_triggered(&context, &[]));
+                        if !deadline_due && !trigger_due {
+                            continue;
+                        }
+                        let key = match intention.deadline {
+                            Some(deadline) => format!("{}@{}", intention.id, deadline.timestamp()),
+                            None => intention.id.clone(),
+                        };
+                        if announced.insert(key) {
+                            due.push(intention.id);
+                        }
+                    }
+                    if !due.is_empty() {
+                        info!(
+                            n_triggered = due.len(),
+                            ids = ?due,
+                            "Autopilot: Strata intentions due"
+                        );
+                        surfaced.extend(due);
+                    }
+                }
+                Err(error) => {
+                    debug!(%error, "Autopilot: get_active_intentions failed");
+                }
+            }
+        }
+
+        if !surfaced.is_empty() {
+            seq += 1;
+            emit_due_intentions(&event_tx, &surfaced, now, seq);
+        }
     }
+}
+
+fn emit_due_intentions(
+    event_tx: &broadcast::Sender<VestigeEvent>,
+    ids: &[String],
+    now: DateTime<Utc>,
+    seq: i64,
+) {
+    let run_id = "autopilot-prospective".to_string();
+    let event = MemoryTraceEvent::MemoryRetrieve {
+        run_id: run_id.clone(),
+        ids: ids.to_vec(),
+        activation: std::collections::BTreeMap::new(),
+        at: now.timestamp_millis(),
+    };
+    let _ = event_tx.send(VestigeEvent::TraceEvent {
+        run_id,
+        seq,
+        event,
+        timestamp: now,
+    });
+}
+
+fn link_type_of(raw: &str) -> LinkType {
+    match raw {
+        "temporal" => LinkType::Temporal,
+        "causal" => LinkType::Causal,
+        "spatial" => LinkType::Spatial,
+        _ => LinkType::Semantic,
+    }
+}
+
+fn retrieval_snapshot(storage: &Storage, id: &str) -> Option<MemorySnapshot> {
+    let node = storage.get_node(id).ok().flatten()?;
+    let connection_ids = storage
+        .get_connections_for_memory(id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|edge| {
+            if edge.source_id == id {
+                edge.target_id
+            } else {
+                edge.source_id
+            }
+        })
+        .collect();
+    Some(MemorySnapshot::capture(
+        node.content,
+        node.tags,
+        node.retention_strength,
+        node.storage_strength,
+        node.retrieval_strength,
+        connection_ids,
+    ))
 }

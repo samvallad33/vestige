@@ -9,6 +9,7 @@
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use vestige_core::intention_graph::{Command, Priority};
@@ -187,25 +188,36 @@ pub async fn execute(
     backfilled_handles.sort();
     backfilled_handles.dedup();
 
-    // Step 4: If tagged "pinned", automatically re-compile CLAUDE.md fence lock-free
+    // Step 4: If tagged "pinned", re-compile the rule fence. A relative path
+    // without `root` is refused by `project`, so the directory is resolved here.
     let has_pinned = parsed
         .tags
         .as_ref()
         .is_some_and(|tags| tags.iter().any(|t| t == "pinned"));
     let mut recompiled_fence = false;
-    if has_pinned
-        && tools::project::execute(
-            storage,
-            Some(json!({
-                "action": "write",
-                "path": "CLAUDE.md",
-                "confirm": true,
-            })),
-        )
-        .await
-        .is_ok()
-    {
-        recompiled_fence = true;
+    let mut recompiled_fence_error: Option<String> = None;
+    if has_pinned {
+        let (path, root) = fence_projection_target(&raw_args, &parsed);
+        let mut request = json!({
+            "action": "write",
+            "path": path,
+            "confirm": true,
+        });
+        if let Some(root) = root {
+            request["root"] = json!(root);
+        }
+        if let Some(scope) = parsed
+            .scope
+            .as_deref()
+            .map(str::trim)
+            .filter(|scope| !scope.is_empty())
+        {
+            request["scope"] = json!(scope);
+        }
+        match tools::project::execute(storage, Some(request)).await {
+            Ok(_) => recompiled_fence = true,
+            Err(error) => recompiled_fence_error = Some(error),
+        }
     }
 
     // Standing policies become active intention-graph nodes. The memory
@@ -221,12 +233,66 @@ pub async fn execute(
         obj.insert("backfill_errors".to_string(), json!(backfill_errors));
         if has_pinned {
             obj.insert("recompiled_fence".to_string(), json!(recompiled_fence));
+            if let Some(error) = recompiled_fence_error {
+                obj.insert("recompiled_fence_error".to_string(), json!(error));
+            }
         }
         if !standing_policies.is_empty() {
             obj.insert("standing_policies".to_string(), json!(standing_policies));
         }
     }
     Ok(response)
+}
+
+/// Directory a pinned save should project into: an explicit `cwd` or
+/// `repo_path` when the caller gave one, otherwise the process working directory.
+fn fence_base_dir<'a>(raw: &'a Value, parsed: &'a RememberArgs) -> Option<&'a str> {
+    let from_raw = |key: &str| {
+        raw.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    };
+    from_raw("cwd")
+        .or_else(|| {
+            parsed
+                .repo_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        })
+        .or_else(|| from_raw("repo_path"))
+        .or_else(|| from_raw("repoPath"))
+}
+
+/// `(file name, root)` for the fence write.
+///
+/// An explicit base prefers `AGENTS.md` when that file is already there, and
+/// otherwise `CLAUDE.md` in the same directory. With no base, an existing
+/// `CLAUDE.md` in the process cwd wins, then an existing `AGENTS.md`, then
+/// `CLAUDE.md`.
+fn fence_projection_target(raw: &Value, parsed: &RememberArgs) -> (String, Option<String>) {
+    if let Some(base) = fence_base_dir(raw, parsed) {
+        let name = if Path::new(base).join("AGENTS.md").is_file() {
+            "AGENTS.md"
+        } else {
+            "CLAUDE.md"
+        };
+        return (name.to_string(), Some(base.to_string()));
+    }
+    match std::env::current_dir() {
+        Ok(dir) => {
+            let name = if dir.join("CLAUDE.md").is_file() {
+                "CLAUDE.md"
+            } else if dir.join("AGENTS.md").is_file() {
+                "AGENTS.md"
+            } else {
+                "CLAUDE.md"
+            };
+            (name.to_string(), Some(dir.display().to_string()))
+        }
+        Err(_) => ("CLAUDE.md".to_string(), None),
+    }
 }
 
 fn policy_utterances(raw: &Value) -> Vec<String> {

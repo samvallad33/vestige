@@ -24,7 +24,19 @@ use std::sync::OnceLock;
 // INPUT / OUTPUT CONTRACT
 // =========================================================================
 
-#[derive(Debug, Clone, Deserialize)]
+/// Exact edge. `to` is a turn id. The ranker follows it after exact-token
+/// selection and does not read either side's words.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct TurnLink {
+    pub kind: String,
+    pub to: String,
+    /// Turns that share this identity. `0` means one pair.
+    #[serde(default)]
+    pub degree: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Turn {
     #[serde(default)]
@@ -33,6 +45,13 @@ pub struct Turn {
     #[serde(default)]
     pub role: String,
     pub content: String,
+    /// Recorded edges. Empty on raw benchmark text. Reply, order, and session
+    /// links are written from position inside the ranker.
+    #[serde(default)]
+    pub links: Vec<TurnLink>,
+    /// FSRS stability in days. Zero means unset. Used only to break an exact tie.
+    #[serde(default)]
+    pub stability: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -209,6 +228,9 @@ pub struct RankResult {
     pub intent: QueryIntent,
     pub sessions: Vec<RankedItem>,
     pub turns: Vec<RankedItem>,
+    /// Stratified governing channel: standing imperative policies that apply to the query
+    /// without consuming episodic `sessions` or `turns` top-k slots.
+    pub standing_rules: Vec<RankedItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -240,15 +262,15 @@ const STOPWORDS: &[&str] = &[
     "wasnt", "we", "were", "werent", "what", "when", "where", "which", "while", "who", "whom",
     "why", "will", "with", "wont", "would", "wouldnt", "you", "your", "youre", "yours",
     "yourself", "yourselves", "also", "really", "yeah", "yes", "oh", "ok", "okay", "lets",
-    "got", "get", "gets", "getting", "go", "going", "gone", "went", "one", "much", "many",
+    "got", "get", "gets", "getting", "go", "going", "gone", "much", "many",
     "lot", "lots", "thing", "things", "something", "anything", "everything", "kind", "sort",
-    "way", "well", "even", "still", "ever", "may", "might", "must", "shall", "us", "let",
-    "make", "made", "know", "think", "tell", "told", "say", "said", "remind", "remember",
+    "well", "even", "still", "ever", "may", "might", "must", "shall", "us", "let",
+    "know", "think", "tell", "told", "say", "said", "remind", "remember",
     "conversation", "mentioned", "mention", "talked", "talk", "discussed", "chat",
     "actually", "sure", "great", "thanks", "thank", "hey", "hi", "hello", "wow", "like",
-    "want", "wanted", "need", "needed", "use", "used", "using", "try", "tried", "trying",
-    "new", "good", "help", "recently", "suggest", "recommend", "useful", "interesting", "past",
-    "times", "arent",
+    "want", "wanted", "need", "needed",
+    "help", "recently", "suggest", "recommend", "useful", "interesting",
+    "arent",
 ];
 
 /// Query-framing / request-boilerplate tokens that should not crush domain matches via coverage^2
@@ -259,6 +281,8 @@ const QUERY_FRAMING_WORDS: &[&str] = &[
     "comprehensive", "overview", "details", "detail", "aspects", "aspect", "different",
     "distinct", "various", "several", "ago", "days", "day", "weeks", "week", "months", "month",
     "years", "year", "earlier", "later", "throughout", "across",
+    "new", "good", "use", "used", "using", "make", "made", "went", "try", "tried", "trying",
+    "way", "past", "times",
 ];
 
 const PREF_MARKERS: &[&str] = &[
@@ -299,22 +323,22 @@ const PREF_QUERY_CUES: &[&str] = &[
     "prefer", "preference", "favorite", "favourite", "would i like", "would i enjoy",
     "should i get", "should i try", "should i buy", "should i choose", "should i pick",
     "should i use", "should i watch", "should i read", "should i cook", "should i make",
-    "gift", "present for", "suitable for me", "suited to", "tailored to",
+    " gift ", " gifts ", "present for", "suitable for me", "suited to", "tailored to",
     "how do i like", "any ideas", "any tips", "ideas for", "tips for", "advice on",
     "can you suggest", "what should i", "something i", "i might like", "i would like",
     "what would be a good", "what are some good", "help me pick", "help me find",
     "go-to", "best for me", "fit my", "match my", "based on my", "steps would you",
-    "help me set up", "serve",
+    "help me set up", " serve ",
     // Personal planning, not a favorite-word lookup.
     "how should i", "help me plan", "walk me through", "help me decide", "help me choose",
     "help me figure", "what should i do",
 ];
 
 const CURRENT_STATE_CUES: &[&str] = &[
-    "currently", "current ", "right now", " now", "now?", "latest", "most recent",
+    "currently", "current ", "right now", " now ", "latest", "most recent",
     "most recently", "still ", "anymore", "any more", "end up", "ended up", "these days",
     "at the moment", "where is my", "what is my", "who is my", "where do i", "what do i",
-    "do i still", "did i end", "nowadays", "updated", "new ", "changed",
+    "do i still", "did i end", "nowadays", " updated ", " new ",
 ];
 
 const ASSISTANT_ATTRIBUTION_CUES: &[&str] = &[
@@ -328,8 +352,8 @@ const ASSISTANT_ATTRIBUTION_CUES: &[&str] = &[
 ];
 
 const USER_ATTRIBUTION_CUES: &[&str] = &[
-    " i ", "i'", " my ", "my ", " me ", " me?", "did i", "do i", "have i", "was i", "am i",
-    "what should i", "i've", "i'm", "i brought up", "did i mention", "my instruction",
+    " i ", " i'm ", " i've ", " i'd ", " i'll ", " my ", " me ", "did i", "do i", "have i",
+    "was i", "am i", "what should i", "i brought up", "did i mention", "my instruction",
     "i told you",
 ];
 
@@ -346,8 +370,8 @@ const INFERENCE_CUES: &[&str] = &[
 
 const TEMPORAL_CUES: &[&str] = &[
     "when ", "how long", "how many days", "how many weeks", "how many months",
-    "how many years", "before ", "after ", "first ", "last ", " ago", "date", "which year",
-    "what year", "what month", "earlier", "later", "since ",
+    "how many years", "before ", "after ", "first ", "last ", " ago ", " date ", " dates ",
+    "which year", "what year", "what month", " earlier ", " later ", "since ",
 ];
 
 /// Downstream tasks: the user wants an answer produced (a procedure, list,
@@ -392,7 +416,7 @@ const HYPERNYM_LATTICE: &[(&str, &[&str])] = &[
     ("BOOKS", &["book", "reading", "read", "novel", "author", "fiction", "nonfiction", "memoir", "library", "bookstore", "kindle", "audiobook", "literature", "poetry", "poem", "writing", "writer", "publish", "publication", "publications", "conference", "conferences", "paper", "papers", "article", "articles", "proceedings", "journal", "journals"]),
     ("GAMING", &["game", "gaming", "gamer", "playstation", "nintendo", "switch", "xbox", "steam", "rpg", "boardgame", "tabletop", "console", "chess", "puzzle", "videogame"]),
     ("TRAVEL", &["travel", "traveling", "flight", "airline", "trip", "vacation", "hotel", "hostel", "explore", "exploring", "passport", "tourist", "destination", "luggage", "itinerary", "cruise", "resort", "abroad", "museum", "theater"]),
-    ("PHOTOGRAPHY", &["photo", "photography", "camera", "lens", "shoot", "canon", "nikon", "sony", "shutter", "aperture", "exposure", "darkroom", "instagram"]),
+    ("PHOTOGRAPHY", &["photo", "photography", "camera", "lens", "shoot", "canon", "nikon", "sony", "shutter", "aperture", "exposure", "darkroom", "instagram", "mirrorless", "tripod"]),
     ("GARDENING", &["garden", "gardening", "plant", "indoor", "succulent", "flower", "flowers", "soil", "pruning", "seed", "greenhouse", "botany", "tomato", "herb", "herbs", "homegrown", "harvest", "harvested", "ingredient", "ingredients", "produce", "basil", "mint", "pepper"]),
     ("TECH", &["python", "rust", "javascript", "typescript", "compiler", "react", "server", "bug", "repo", "code", "coding", "programmer", "programming", "software", "developer", "api", "database", "algorithm", "linux", "terminal", "github", "laptop", "computer", "phone", "app", "apps", "application", "applications", "gadget", "accessory", "accessories", "charger", "charging", "charge", "cable", "case", "protector", "earbuds", "headphones", "adapter", "dongle", "battery", "power", "bank", "wireless", "security", "auth", "authentication", "encryption", "token", "flask", "django", "fastapi", "gunicorn", "docker", "deployment", "deploy", "queue", "backoff", "ratelimit", "retry", "retries", "latency", "cache", "caching"]),
     ("VEHICLES", &["car", "vehicle", "truck", "sedan", "ev", "electric", "drive", "driving", "engine", "mechanic", "commute", "commuting", "train", "subway", "transit", "highway", "roadtrip", "motorcycle"]),
@@ -403,7 +427,7 @@ const HYPERNYM_LATTICE: &[(&str, &[&str])] = &[
     ("COMMUNITY", &["charity", "volunteer", "volunteering", "fundraiser", "fundraising", "donation", "donate", "shelter", "nonprofit", "cause", "awareness", "community", "activism", "protest", "rescue"]),
     ("IDENTITY", &["lgbtq", "queer", "gay", "lesbian", "pride", "trans", "transgender", "gender", "identity", "support", "transition", "religion", "faith", "church", "spiritual", "mentor"]),
     ("EDUCATION", &["school", "college", "university", "degree", "graduate", "graduation", "studying", "study", "exam", "class", "course", "professor", "campus", "student", "certification", "diploma", "lecture", "workshop", "major", "publication", "publications", "conference", "conferences", "paper", "papers", "journal"]),
-    ("CAREER", &["job", "career", "boss", "coworker", "interview", "offer", "resume", "promote", "promotion", "salary", "office", "remote", "work", "working", "firm", "client", "company", "manager", "project", "startup", "business", "profession", "occupation", "occupations", "vocation", "agency", "role", "roles", "milestone", "milestones", "buisiness", "contract", "specialist"]),
+    ("CAREER", &["job", "career", "boss", "coworker", "interview", "offer", "resume", "promote", "promotion", "salary", "office", "remote", "work", "working", "firm", "client", "company", "manager", "project", "startup", "business", "profession", "occupation", "occupations", "vocation", "agency", "role", "roles", "milestone", "milestones", "contract", "specialist"]),
     ("HOUSING", &["house", "apartment", "rent", "lease", "mortgage", "buy", "buying", "moving", "moved", "move", "neighborhood", "landlord", "bedroom", "renovate", "furniture", "decor", "home"]),
     ("SCREEN", &["movie", "film", "cinema", "tv", "show", "series", "episode", "netflix", "actor", "director", "watch", "watching", "documentary", "anime", "comedy", "sitcom", "special", "specials"]),
     ("FINANCE", &["budget", "money", "save", "saving", "invest", "investment", "stock", "crypto", "deposit", "loan", "debt", "retirement", "expense", "bank", "tax"]),
@@ -449,8 +473,8 @@ const SPATIAL_WORDS: &[&str] = &[
 ];
 
 const CAUSAL_WORDS: &[&str] = &[
-    "because", "since", "so that", "due to", "wanted", "needed", "decided", "helped",
-    "inspired", "to help", "reason", "in order", "purpose", "aim",
+    " because ", " since ", " so that ", " due to ", " wanted ", " needed ", " decided ", " helped ",
+    " inspired ", " to help ", " reason ", " in order ", " purpose ", " aim ", " aims ", " aimed ",
 ];
 
 fn stopwords() -> &'static HashSet<&'static str> {
@@ -561,8 +585,22 @@ const TITLE_CONNECTORS: &[&str] = &["and", "of", "the", "for", "in", "on", "at"]
 /// Extract leading document title/header line when a multi-line passage starts with a compact
 /// header (`"{Title}\n{Body}"`, excluding `[BLIP caption]`), stripping trailing parenthetical
 /// disambiguators (`"Armada (novel)"` -> `"Armada"`).
-fn extract_header_title(text: &str) -> Option<&str> {
-    let (first_line, rest) = text.split_once('\n')?;
+fn prose_without_blip(text: &str) -> &str {
+    text.split_once("\n[BLIP caption]").map(|(body, _)| body).unwrap_or(text)
+}
+
+fn split_blip_caption(text: &str) -> (&str, Option<&str>) {
+    if let Some((body, cap)) = text.split_once("\n[BLIP caption]") {
+        let trimmed = cap.trim();
+        (body, (!trimmed.is_empty()).then_some(trimmed))
+    } else {
+        (text, None)
+    }
+}
+
+fn extract_header_titles(text: &str) -> Option<(&str, &str)> {
+    let prose = prose_without_blip(text);
+    let (first_line, rest) = prose.split_once('\n')?;
     if rest.trim().is_empty() {
         return None;
     }
@@ -586,7 +624,27 @@ fn extract_header_title(text: &str) -> Option<&str> {
         Some(idx) if header.ends_with(')') && idx > 0 => header[..idx].trim(),
         _ => header,
     };
-    if core.is_empty() { None } else { Some(core) }
+    if core.is_empty() { None } else { Some((header, core)) }
+}
+
+fn extract_header_title(text: &str) -> Option<&str> {
+    extract_header_titles(text).map(|(_, core)| core)
+}
+
+fn norm_span_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect()
+}
+
+fn hash_u32_slice(tokens: &[u32]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &tok in tokens {
+        h ^= u64::from(tok);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 /// Extract contiguous capitalized proper-noun entity phrases ("\u{1}ent:local_h", "\u{1}ent:kiss_and_tell")
@@ -1284,8 +1342,8 @@ struct Feat {
 
 #[derive(Default, Clone)]
 struct Bag {
-    tf: [HashMap<u32, f32>; 2],
-    len: [f32; 2],
+    tf: [HashMap<u32, f32>; 3],
+    len: [f32; 3],
 }
 
 impl Bag {
@@ -1304,24 +1362,42 @@ impl Bag {
     }
 }
 
+struct StandingRule {
+    policy_key: String,
+    turn: usize,
+    session: usize,
+    ts: i64,
+    has_explicit_scope: bool,
+    scope: HashSet<u32>,
+    domains: Vec<&'static str>,
+    assistant_nouns: HashSet<u32>,
+}
+
 struct TurnIx {
     session: usize,
     id: String,
     field: usize,
     feats: Vec<Feat>,
+    blip_feats: Vec<Feat>,
     /// Exact/stem term ids of content tokens in order, for span proximity.
     seq: Vec<(u32, u32)>,
     content: HashSet<u32>,
     /// Capitalized proper-entity term IDs inside this turn.
     entities: HashSet<u32>,
+    /// Body text (header line removed) for lazy exact title-span linking on hot anchors.
+    body_for_headers: String,
+    span_ids_cache: OnceLock<Vec<u32>>,
     speaker: String,
     is_question: bool,
+    is_pure_info_question: bool,
     answers_question: bool,
     is_short_reply: bool,
     is_backchannel: bool,
     anaphoric: bool,
     pref_marker: bool,
     is_personal_constraint: bool,
+    is_user_schema: bool,
+    schema_domains: Vec<&'static str>,
     has_temporal: bool,
     has_numeric: bool,
     has_spatial: bool,
@@ -1330,21 +1406,30 @@ struct TurnIx {
     is_standing_policy: bool,
     /// User turn that opens a concrete event, not a rule and not a backchannel.
     is_initiative: bool,
+    /// Previous turn in this session with a different role. Position and role only.
+    /// Backward only. A later turn points at the earlier one. There is no forward edge.
+    answers: Option<usize>,
+    /// Caller & ingest-time RSB edges resolved to `(degree, target)` — strictly backward.
+    exact_edges: Vec<(u32, usize)>,
+    /// Backward state-revision / contradiction edges (`t_new -> t_old`).
+    supersedes_turns: Vec<usize>,
+    stability: f32,
+    raw_links: Vec<TurnLink>,
 }
 
 struct Stats {
     n: f32,
     df: HashMap<u32, u32>,
-    avg: [f32; 2],
+    avg: [f32; 3],
 }
 
 fn stats_of(bags: &[Bag]) -> Stats {
     let mut df: HashMap<u32, u32> = HashMap::new();
-    let mut sum = [0.0f32; 2];
-    let mut cnt = [0.0f32; 2];
+    let mut sum = [0.0f32; 3];
+    let mut cnt = [0.0f32; 3];
     for b in bags {
         let mut seen: HashSet<u32> = HashSet::new();
-        for f in 0..2 {
+        for f in 0..3 {
             for (&t, &v) in &b.tf[f] {
                 if v > 0.0 {
                     seen.insert(t);
@@ -1365,8 +1450,14 @@ fn stats_of(bags: &[Bag]) -> Stats {
         avg: [
             if cnt[0] > 0.0 { sum[0] / cnt[0] } else { 1.0 },
             if cnt[1] > 0.0 { sum[1] / cnt[1] } else { 1.0 },
+            if cnt[2] > 0.0 { sum[2] / cnt[2] } else { 1.0 },
         ],
     }
+}
+
+struct HeaderKey {
+    tokens: Vec<u32>,
+    sessions: Vec<(usize, f32)>,
 }
 
 struct Index {
@@ -1376,17 +1467,34 @@ struct Index {
     session_turns: Vec<Vec<usize>>,
     session_entities: Vec<HashSet<u32>>,
     session_content: Vec<HashSet<u32>>,
+    /// Rarest non-hub content token IDs per session (sorted, up to 32) for GhostLink Ochiai divergence.
+    session_rare_nt: Vec<Vec<u32>>,
+    /// Backward-only session RSB edges (`later_session -> (degree, earlier_session)`).
+    session_rsb_back: Vec<Vec<(u32, usize)>>,
+    /// Backward-only session contradiction/supersession edges (`s_new -> s_old`).
+    session_supersedes_back: Vec<Vec<usize>>,
+    /// Backward-only Temporal Context Episode neighbor (`si -> si - 1` when sharing episode/date anchor).
+    session_episode_prev: Vec<Option<usize>>,
     turns: Vec<TurnIx>,
     session_bags: Vec<Bag>,
+    turn_own_bags: Vec<Bag>,
     turn_bags: Vec<Bag>,
     /// (session index, first turn position within session, last turn position inclusive)
     windows: Vec<(usize, usize, usize)>,
     window_bags: Vec<Bag>,
     s_stats: Stats,
+    t_own_stats: Stats,
     t_stats: Stats,
     w_stats: Stats,
     /// Content-term ids that are the object of a personal constraint ("allergic to X").
     constraint_terms: HashSet<u32>,
+    /// Compiled SOAR/Rete standing rules for the stratified governing channel (`RankResult.standing_rules`).
+    standing_rules: Vec<StandingRule>,
+    /// Non-hub hypernym domains (`session_df <= 0.12 * N` when `N >= 16`).
+    non_hub_domains: HashSet<&'static str>,
+    /// Exact `{Header}\\n{Body}` titles, hashed, for the session bridge.
+    header_dict: HashMap<u64, Vec<HeaderKey>>,
+    header_max_words: usize,
 }
 
 const PREF_AXIS: &str = "\u{1}pref";
@@ -1584,6 +1692,161 @@ pub fn utterance_is_standing_policy(text: &str) -> bool {
         || lower.contains("format all")
 }
 
+/// Extract `(has_explicit_scope, scope_words)` of a standing imperative rule for Rete specificity.
+/// Conditional subordinators (`when`, `whenever`, `if`, `for all/every/any`, `in all`) restrict
+/// firing to matching queries; unscoped universal directives remain eligible on `task_under_rules`.
+fn extract_rule_scope(text: &str) -> (bool, Vec<String>) {
+    const CONDITIONAL_CLAUSES: &[&str] = &[
+        "when ",
+        "whenever ",
+        "if ",
+        "for all ",
+        "for every ",
+        "for any ",
+        "in all ",
+    ];
+    const DIRECTIVE_VERBS: &[&str] = &[
+        "always", "never", "please", "make", "sure", "ensure", "remember", "format", "include",
+        "provide", "give", "write", "use", "using", "keep", "response", "responses", "output",
+        "outputs", "answer", "answers",
+    ];
+    let (prose, _) = split_blip_caption(text);
+    let lower = format!(" {} ", prose.to_lowercase());
+    for marker in CONDITIONAL_CLAUSES {
+        let pat = format!(" {marker}");
+        if let Some(idx) = lower.find(&pat) {
+            let after = &lower[idx + pat.len()..];
+            let clause = after.split(['.', '!', '?', ';', '\n']).next().unwrap_or(after);
+            let toks: Vec<String> = raw_tokens(clause)
+                .into_iter()
+                .filter(|w| is_content(w) && !DIRECTIVE_VERBS.contains(&w.as_str()))
+                .collect();
+            if !toks.is_empty() {
+                return (true, toks);
+            }
+        }
+    }
+    let toks = raw_tokens(prose)
+        .into_iter()
+        .filter(|w| is_content(w) && !DIRECTIVE_VERBS.contains(&w.as_str()))
+        .collect();
+    (false, toks)
+}
+
+/// Pure byte-exact technical handle extractor for Retroactive Salience Backfill (RSB):
+/// URLs, emails, commit SHAs (7..=40 hex with >=1 alpha + >=1 digit), issue refs (`PROJ-123`),
+/// version tags (`v1.2.3`), and file paths (`dir/file.ext`). Zero word similarity.
+fn extract_exact_technical_handles(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_tok in text.split_whitespace() {
+        let tok = raw_tok.trim_matches(|c: char| matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '"' | '\'' | '`'));
+        let tok_clean = tok.trim_end_matches('.');
+        if tok_clean.len() < 3 {
+            continue;
+        }
+        // 1. URL
+        if tok_clean.starts_with("http://") || tok_clean.starts_with("https://") {
+            let h = format!("\u{1}h:url:{}", tok_clean.to_lowercase());
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
+            continue;
+        }
+        // 2. Email
+        if let Some((local, dom)) = tok_clean.split_once('@') {
+            if !local.is_empty()
+                && dom.contains('.')
+                && !dom.starts_with('.')
+                && !dom.ends_with('.')
+                && local.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-'))
+                && dom.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+            {
+                let h = format!("\u{1}h:email:{}", tok_clean.to_lowercase());
+                if seen.insert(h.clone()) {
+                    out.push(h);
+                }
+                continue;
+            }
+        }
+        // 3. IssueRef (`ABC-123`)
+        if let Some((proj, num)) = tok_clean.split_once('-') {
+            if (2..=10).contains(&proj.len())
+                && proj.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && proj.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                && !num.is_empty()
+                && num.len() <= 7
+                && num.chars().all(|c| c.is_ascii_digit())
+            {
+                let h = format!("\u{1}h:issue:{}", tok_clean.to_lowercase());
+                if seen.insert(h.clone()) {
+                    out.push(h);
+                }
+                continue;
+            }
+        }
+        // 4. CommitSha (7..=40 hex with >=1 hex letter and >=1 digit)
+        if (7..=40).contains(&tok_clean.len())
+            && tok_clean.chars().all(|c| c.is_ascii_hexdigit())
+            && tok_clean.chars().any(|c| c.is_ascii_digit())
+            && tok_clean.chars().any(|c| matches!(c.to_ascii_lowercase(), 'a'..='f'))
+        {
+            let h = format!("\u{1}h:sha:{}", &tok_clean.to_lowercase()[..7.min(tok_clean.len())]);
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
+            continue;
+        }
+        // 5. Version (`v1.2` or `1.2.3`)
+        let ver_cand = tok_clean.strip_prefix('v').or_else(|| tok_clean.strip_prefix('V')).unwrap_or(tok_clean);
+        let ver_parts: Vec<&str> = ver_cand.split('.').collect();
+        if ver_parts.len() >= 2
+            && (tok_clean.starts_with('v') || tok_clean.starts_with('V') || ver_parts.len() >= 3)
+            && ver_parts.iter().all(|p| !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit()))
+        {
+            let h = format!("\u{1}h:ver:{ver_cand}");
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
+            continue;
+        }
+        // 6. FilePath (`dir/file.ext` or `src\file.rs`)
+        let norm_path = tok_clean.replace('\\', "/");
+        if norm_path.contains('/')
+            && !norm_path.contains("://")
+            && norm_path.chars().any(|c| c.is_ascii_alphabetic())
+            && norm_path.rsplit('/').next().is_some_and(|leaf| leaf.contains('.') && leaf.len() >= 3)
+        {
+            let h = format!("\u{1}h:path:{}", norm_path.to_lowercase());
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
+        }
+    }
+    out
+}
+
+/// Technical-handle term ids (`\u{1}h:…`) are linked only by backward RSB edges.
+/// Undirected PPR must not reactivate them, or a later zero-overlap session is pulled forward.
+fn is_technical_handle(vocab: &Vocab, id: u32) -> bool {
+    vocab.names.get(id as usize).is_some_and(|name| name.starts_with("\u{1}h:"))
+}
+
+/// Episode prefix before `_s{digits}` when sub-sessions belong to one contiguous batch,
+/// else empty string (never inspects benchmark labels).
+fn session_episode_key<'a>(session_id: &'a str, date: &'a str) -> String {
+    if let Some((prefix, suffix)) = session_id.rsplit_once("_s") {
+        if !prefix.is_empty() && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+            return format!("ep:{prefix}");
+        }
+    }
+    let trimmed = date.trim();
+    if !trimmed.is_empty() {
+        return format!("dt:{trimmed}");
+    }
+    String::new()
+}
+
 /// Stable plan id for one normalized standing-policy utterance.
 pub fn standing_policy_id(text: &str) -> String {
     let norm = text.trim().to_lowercase();
@@ -1613,17 +1876,64 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         "congrats", "congratulations", "yay", "sweet", "amazing", "wonderful", "fantastic",
         "thanks", "thank", "sorry", "glad", "ouch", "yikes",
     ];
+    const BLIP_STOPLIST: &[&str] = &[
+        "photo", "picture", "image", "man", "woman", "person", "people", "group", "standing",
+        "sitting", "holding", "wearing", "smiling", "table", "room", "background", "white",
+        "black", "young", "two", "close", "up", "front", "next", "looking", "camera",
+    ];
+    const USER_SCHEMA_CUES: &[&str] = &[
+        "i always ", "i usually ", "i tend to ", "my go-to", "my usual", "i've been ",
+        "ive been ", "i switched to ", "i stick to ", "i stick with ", "fan of ",
+        "i'm into ", "im into ", "i love ", "i prefer ", "i enjoy ", "my favorite", "my favourite",
+    ];
+    const STATE_REVISION_CUES: &[&str] = &[
+        "actually", "switched to", "moved to", "relocated to", "changed to", "now use",
+        "now live", "no longer", "instead of", "used to ", "anymore", "upgraded to", "replaced",
+    ];
 
     let mut vocab = Vocab::default();
     let mut turns: Vec<TurnIx> = Vec::new();
     let mut session_ids = Vec::new();
     let mut session_ts = Vec::new();
+    let mut session_ep_keys = Vec::with_capacity(sessions.len());
     let mut session_turns = Vec::new();
     let mut session_entities = Vec::with_capacity(sessions.len());
     let mut session_content = Vec::with_capacity(sessions.len());
+    let mut domain_session_df: HashMap<&'static str, u32> = HashMap::new();
+    let mut raw_standing_rules: Vec<(String, usize, usize, i64, bool, Vec<String>)> = Vec::new();
+    let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
+    let mut turn_prose_cache: Vec<String> = Vec::new();
     let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
     let hard_constraint_set: HashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
     let mut constraint_terms: HashSet<u32> = HashSet::new();
+    let mut header_dict: HashMap<u64, Vec<HeaderKey>> = HashMap::new();
+    let mut header_max_words = 0usize;
+    for (si, s) in sessions.iter().enumerate() {
+        let Some(first) = s.turns.first() else { continue };
+        let Some((full_h, core_h)) = extract_header_titles(&first.content) else { continue };
+        for (span_str, mult) in [(full_h, 1.0f32), (core_h, 0.88f32)] {
+            let htoks = norm_span_tokens(span_str);
+            if htoks.is_empty() || htoks.len() > 10 {
+                continue;
+            }
+            if htoks.len() == 1 && (htoks[0].len() < 3 || stopwords().contains(htoks[0].as_str())) {
+                continue;
+            }
+            header_max_words = header_max_words.max(htoks.len());
+            let hids: Vec<u32> = htoks.iter().map(|w| vocab.intern(w)).collect();
+            let hh = hash_u32_slice(&hids);
+            let bucket = header_dict.entry(hh).or_default();
+            if let Some(existing) = bucket.iter_mut().find(|k| k.tokens == hids) {
+                if let Some(pair) = existing.sessions.iter_mut().find(|(id, _)| *id == si) {
+                    pair.1 = pair.1.max(mult);
+                } else {
+                    existing.sessions.push((si, mult));
+                }
+            } else {
+                bucket.push(HeaderKey { tokens: hids, sessions: vec![(si, mult)] });
+            }
+        }
+    }
 
     // Pre-pass: collect exact single-token proper names evidenced by speakers, mid-clause
     // capitalization, multi-word entity parts, or document header titles so sentence-initial
@@ -1653,44 +1963,96 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         let ts = if s.date.is_empty() { s.timestamp } else { match parse_date(&s.date) { 0 => s.timestamp, t => t } };
         session_ids.push(s.id.clone());
         session_ts.push(ts);
+        session_ep_keys.push(session_episode_key(&s.id, &s.date));
         let date_toks = if p.enable_deictic && ts != 0 { calendar_tokens(ts) } else { Vec::new() };
         let mut members = Vec::new();
         let mut s_ents = HashSet::new();
         let mut s_cont = HashSet::new();
+        let mut s_doms: HashSet<&'static str> = HashSet::new();
+        // Collect named speakers in this session so vocative address ("Thanks, Caroline!")
+        // is capped at speaker identity parity (0.9) and never outranks Caroline speaking.
+        let mut sess_other_speakers: HashMap<usize, HashSet<String>> = HashMap::new();
+        for (idx_a, ta) in s.turns.iter().enumerate() {
+            let spa = ta.role.trim().to_lowercase();
+            let mut others = HashSet::new();
+            for (idx_b, tb) in s.turns.iter().enumerate() {
+                if idx_a == idx_b {
+                    continue;
+                }
+                let spb = tb.role.trim().to_lowercase();
+                if !spb.is_empty() && spb != "user" && spb != "assistant" && spb != spa {
+                    for sw in raw_tokens(&spb) {
+                        others.insert(sw);
+                    }
+                }
+            }
+            sess_other_speakers.insert(idx_a, others);
+        }
+
         for (ti, t) in s.turns.iter().enumerate() {
-            let raw = raw_tokens(&t.content);
+            let (prose_body, blip_opt) = split_blip_caption(&t.content);
+            let raw = raw_tokens(prose_body);
             let role = t.role.trim();
+            let speaker = role.to_lowercase();
+            let vocative_partners = sess_other_speakers.get(&ti);
             let field = usize::from(p.enable_roles && role.eq_ignore_ascii_case("assistant"));
             let mut feats = Vec::new();
+            let mut blip_feats = Vec::new();
             let mut seq = Vec::new();
             let mut content = HashSet::new();
             let mut entities = HashSet::new();
+            let mut t_doms: Vec<&'static str> = Vec::new();
+            let mut tech_handles: Vec<u32> = Vec::new();
             for w in raw.iter().filter(|w| is_content(w)) {
+                let is_vocative_partner = vocative_partners.is_some_and(|vp| vp.contains(w.as_str()));
                 let e = vocab.intern(w);
-                feats.push(Feat { id: e, w: 1.0, counts_len: true, inheritable: true });
+                let tok_w = if is_vocative_partner { 0.72 } else { 1.0 };
+                feats.push(Feat { id: e, w: tok_w, counts_len: true, inheritable: !is_vocative_partner });
                 content.insert(e);
                 s_cont.insert(e);
                 let st = stem(w);
                 let sid = if p.enable_stemming { vocab.intern(&stem_term(&st)) } else { e };
-                if p.enable_stemming {
+                if p.enable_stemming && !is_vocative_partner {
                     feats.push(Feat { id: sid, w: 1.0, counts_len: false, inheritable: true });
                 }
                 seq.push((e, sid));
-                if p.enable_hypernyms {
-                    if let Some(doms) = hypernyms().get(&st) {
-                        for d in doms {
+                if let Some(doms) = hypernyms().get(&st) {
+                    for &d in doms {
+                        s_doms.insert(d);
+                        if !t_doms.contains(&d) {
+                            t_doms.push(d);
+                        }
+                        if p.enable_hypernyms {
                             feats.push(Feat { id: vocab.intern(&hyp_term(d)), w: 1.0, counts_len: false, inheritable: true });
                         }
                     }
                 }
-                if known_proper.contains(w) {
+                if known_proper.contains(w) && !is_vocative_partner {
                     let eid = vocab.intern(&format!("\u{1}ent:{w}"));
                     entities.insert(eid);
                     s_ents.insert(eid);
                 }
             }
+            // Stream 2: Auxiliary BLIP caption field (w=0.75, b_blip=0, counts_len:false, inheritable:false)
+            if let Some(cap) = blip_opt {
+                for bw in raw_tokens(cap).into_iter().filter(|w| is_content(w) && !BLIP_STOPLIST.contains(&w.as_str())) {
+                    let bid = vocab.intern(&bw);
+                    blip_feats.push(Feat { id: bid, w: 1.0, counts_len: false, inheritable: false });
+                    if p.enable_stemming {
+                        let bst = stem(&bw);
+                        let bsid = vocab.intern(&stem_term(&bst));
+                        blip_feats.push(Feat { id: bsid, w: 0.75, counts_len: false, inheritable: false });
+                    }
+                }
+                for bent in proper_entity_tokens(cap) {
+                    let eid = vocab.intern(&bent);
+                    blip_feats.push(Feat { id: eid, w: 0.85, counts_len: false, inheritable: false });
+                    entities.insert(eid);
+                    s_ents.insert(eid);
+                }
+            }
             // Pre-saturation BM25F title boost for structured `{Title}\n{Body}` documents.
-            if let Some(core_title) = extract_header_title(&t.content) {
+            if let Some(core_title) = extract_header_title(prose_body) {
                 for hw in raw_tokens(core_title).into_iter().filter(|w| is_content(w)) {
                     let hid = vocab.intern(&hw);
                     feats.push(Feat { id: hid, w: 1.5, counts_len: true, inheritable: false });
@@ -1701,38 +2063,44 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                     }
                 }
             }
-            for ent in proper_entity_tokens(&t.content) {
+            for ent in proper_entity_tokens(prose_body) {
+                if let Some(body) = ent.strip_prefix("\u{1}ent:") {
+                    if !body.contains('_') && vocative_partners.is_some_and(|vp| vp.contains(body)) {
+                        continue;
+                    }
+                }
                 let eid = vocab.intern(&ent);
                 feats.push(Feat { id: eid, w: 1.0, counts_len: false, inheritable: true });
                 entities.insert(eid);
                 s_ents.insert(eid);
             }
-            let lower = t.content.to_lowercase();
+            let lower = prose_body.to_lowercase();
             let pref_marker = raw.iter().any(|w| pref_set.contains(w.as_str()))
                 || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m));
             let is_personal_constraint = field == 0
                 && (raw.iter().any(|w| hard_constraint_set.contains(w.as_str()))
                     || HARD_CONSTRAINT_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m)));
-            if p.enable_preference && pref_marker && field == 0 {
+            let is_user_schema = field == 0
+                && (pref_marker || USER_SCHEMA_CUES.iter().any(|c| lower.contains(c)));
+            if p.enable_preference && (pref_marker || is_user_schema) && field == 0 {
                 feats.push(Feat { id: vocab.intern(PREF_AXIS), w: 1.0, counts_len: false, inheritable: false });
             }
             if p.enable_deictic {
                 for (d, w) in deictic_weighted_tokens(&raw, ts) {
                     feats.push(Feat { id: vocab.intern(&d), w, counts_len: false, inheritable: false });
                 }
-                for d in inline_date_tokens(&t.content) {
+                for d in inline_date_tokens(prose_body) {
                     feats.push(Feat { id: vocab.intern(&d), w: 0.9, counts_len: false, inheritable: false });
                 }
                 for d in &date_toks {
                     feats.push(Feat { id: vocab.intern(d), w: p.date_weight, counts_len: false, inheritable: false });
                 }
             }
-            let speaker = role.to_lowercase();
             if !speaker.is_empty() && speaker != "user" && speaker != "assistant" {
                 for w in raw_tokens(&speaker) {
                     let id = vocab.intern(&w);
-                    // Speaker is a boost, never a filter: the name is an identity edge.
-                    feats.push(Feat { id, w: 0.9, counts_len: false, inheritable: false });
+                    // Speaker identity edge: own speech carries full parity (1.05) over vocative address.
+                    feats.push(Feat { id, w: 1.05, counts_len: false, inheritable: false });
                     let eid = vocab.intern(&format!("\u{1}ent:{w}"));
                     entities.insert(eid);
                     s_ents.insert(eid);
@@ -1745,7 +2113,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 s_cont.insert(id);
                 constraint_terms.insert(id);
             }
-            for (slot_key, slot_val) in typed_slot_tokens(&t.content) {
+            for (slot_key, slot_val) in typed_slot_tokens(prose_body) {
                 let slot_ent = vocab.intern(&format!("\u{1}slot:{slot_key}"));
                 let kid = vocab.intern(&slot_key);
                 let vid = vocab.intern(&slot_val);
@@ -1756,22 +2124,42 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 s_cont.insert(vid);
                 entities.insert(slot_ent);
                 s_ents.insert(slot_ent);
+                tech_handles.push(slot_ent);
             }
-            let (is_question, is_short_question) = detect_question(&t.content, raw.len());
+            for h_str in extract_exact_technical_handles(prose_body) {
+                let hid = vocab.intern(&h_str);
+                feats.push(Feat { id: hid, w: 1.25, counts_len: false, inheritable: true });
+                entities.insert(hid);
+                s_ents.insert(hid);
+                tech_handles.push(hid);
+            }
+            let (is_question, is_short_question) = detect_question(prose_body, raw.len());
+            let trimmed_q = lower.trim_start();
+            let starts_wh_or_aux = [
+                "who ", "what ", "where ", "when ", "why ", "which ", "how ",
+                "did ", "do ", "does ", "is ", "are ", "was ", "were ",
+                "have ", "has ", "had ", "can ", "could ", "would ", "should ", "will ",
+                "hey ", "hi ",
+            ]
+            .iter()
+            .any(|pfx| trimmed_q.starts_with(pfx));
+            let is_tag_q = trimmed_q.ends_with("right?") || trimmed_q.ends_with("yeah?") || trimmed_q.ends_with("huh?");
+            let is_pure_info_question = is_question && starts_wh_or_aux && !is_tag_q;
             let anaphoric = raw.first().is_some_and(|w| CONTINUATIONS.contains(&w.as_str()))
                 || raw.iter().take(12).any(|w| ANAPHORS.contains(&w.as_str()));
             let has_temporal = raw.iter().any(|w| {
                 MONTHS.contains(&w.as_str())
                     || WEEKDAYS.contains(&w.as_str())
-                    || ["yesterday", "tomorrow", "ago", "week", "month", "year", "am", "pm", "today", "tonight"].contains(&w.as_str())
+                    || ["yesterday", "tomorrow", "ago", "week", "month", "year", "am", "pm", "today", "tonight", "spring", "summer", "autumn", "winter"].contains(&w.as_str())
                     || (w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()))
                     || (w.len() >= 3 && (w.ends_with("st") || w.ends_with("nd") || w.ends_with("rd") || w.ends_with("th")) && w[..w.len()-2].chars().all(|c| c.is_ascii_digit()))
             });
-            let has_numeric = t.content.chars().any(|c| c.is_ascii_digit())
+            let has_numeric = prose_body.chars().any(|c| c.is_ascii_digit())
                 || raw.iter().any(|w| NUMBER_WORDS.contains(&w.as_str()));
             let has_spatial = raw.iter().any(|w| SPATIAL_WORDS.contains(&w.as_str()));
-            let has_causal = CAUSAL_WORDS.iter().any(|c| lower.contains(c));
-            let is_standing_policy = field == 0 && utterance_is_standing_policy(&t.content);
+            let padded_lower = word_padded(&lower);
+            let has_causal = has_any(&padded_lower, CAUSAL_WORDS);
+            let is_standing_policy = field == 0 && utterance_is_standing_policy(prose_body);
             let is_backchannel = !is_question
                 && content.len() <= 4
                 && !has_temporal
@@ -1784,25 +2172,55 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 && !is_standing_policy
                 && !anaphoric
                 && !is_short_question
-                && content.len() >= 4; // frozen: 12 was too high for a single user event; do not retune after the run
+                && content.len() >= 4;
+            let turn_idx = turns.len();
+            if is_standing_policy {
+                let (has_explicit_scope, scope_words) = extract_rule_scope(prose_body);
+                raw_standing_rules.push((
+                    standing_policy_id(prose_body),
+                    turn_idx,
+                    si,
+                    ts,
+                    has_explicit_scope,
+                    scope_words,
+                ));
+            }
             let id = if t.id.is_empty() { format!("{}#{}", s.id, ti) } else { t.id.clone() };
-            members.push(turns.len());
+            let body_for_headers = if header_max_words > 0 {
+                let body = if extract_header_titles(prose_body).is_some() {
+                    prose_body.split_once('\n').map(|(_, rest)| rest).unwrap_or(prose_body)
+                } else {
+                    prose_body
+                };
+                body.to_string()
+            } else {
+                String::new()
+            };
+            turn_tech_handles.push(tech_handles);
+            turn_prose_cache.push(prose_body.to_string());
+            members.push(turn_idx);
             turns.push(TurnIx {
                 session: si,
                 id,
                 field,
                 feats,
+                blip_feats,
                 seq,
                 content,
                 entities,
+                body_for_headers,
+                span_ids_cache: OnceLock::new(),
                 speaker,
                 is_question,
+                is_pure_info_question,
                 answers_question: false,
                 is_short_reply: false,
                 is_backchannel,
                 anaphoric,
                 pref_marker,
                 is_personal_constraint,
+                is_user_schema,
+                schema_domains: t_doms,
                 has_temporal,
                 has_numeric,
                 has_spatial,
@@ -1810,12 +2228,21 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 is_short_question,
                 is_standing_policy,
                 is_initiative,
+                answers: None,
+                exact_edges: Vec::new(),
+                supersedes_turns: Vec::new(),
+                stability: t.stability,
+                raw_links: t.links.clone(),
             });
+        }
+        for d in s_doms {
+            *domain_session_df.entry(d).or_insert(0) += 1;
         }
         session_turns.push(members);
         session_entities.push(s_ents);
         session_content.push(s_cont);
     }
+    let _ = STATE_REVISION_CUES;
 
     // Mark DAMSL adjacency pairs before bag construction: question/answer pairs AND
     // short value/commitment replies to preceding statements ("Done.", "Last Tuesday.", "Me too!").
@@ -1823,6 +2250,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         for pos in 1..members.len() {
             let (a, b) = (members[pos - 1], members[pos]);
             if turns[a].speaker != turns[b].speaker {
+                turns[b].answers = Some(a);
                 if turns[a].is_question {
                     turns[b].answers_question = true;
                 }
@@ -1841,8 +2269,170 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         }
     }
 
-    // Session bags (own text only) and turn bags (own text + length-fair centering carry).
+    let mut id_at: HashMap<String, usize> = HashMap::new();
+    for (i, t) in turns.iter().enumerate() {
+        if !t.id.is_empty() {
+            id_at.entry(t.id.clone()).or_insert(i);
+        }
+    }
+    for ti in 0..turns.len() {
+        let pending = std::mem::take(&mut turns[ti].raw_links);
+        for link in pending {
+            let Some(&target) = id_at.get(&link.to) else { continue };
+            if target == ti {
+                continue;
+            }
+            turns[ti].exact_edges.push((link.degree.max(2), target));
+        }
+    }
+
+    // ---- Ingest-Time Retroactive Salience Backfill (RSB), Contradiction Supersession,
+    //      Synaptic Tagging 9h CaptureWindow, and Temporal Context Episode Contiguity ----
+    // Strictly BACKWARD-ONLY (`later -> earlier`). Zero forward edges, zero word similarity.
+    let ns_count = session_turns.len();
+    let mut session_rsb_back: Vec<Vec<(u32, usize)>> = vec![Vec::new(); ns_count];
+    let mut session_supersedes_back: Vec<Vec<usize>> = vec![Vec::new(); ns_count];
+    let mut session_episode_prev: Vec<Option<usize>> = vec![None; ns_count];
+    for si in 1..ns_count {
+        let same_ep = !session_ep_keys[si].is_empty() && session_ep_keys[si] == session_ep_keys[si - 1];
+        let same_nonzero_ts = session_ts[si] > 0 && session_ts[si] == session_ts[si - 1];
+        if same_ep || same_nonzero_ts {
+            session_episode_prev[si] = Some(si - 1);
+        }
+    }
+
+    // 1. Exact Technical Handle & Typed Slot RSB (`df <= 6`): later turn/session -> earlier turn/session.
+    let mut handle_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (ti, hs) in turn_tech_handles.iter().enumerate() {
+        for &h in hs {
+            let list = handle_postings.entry(h).or_default();
+            if list.last().copied() != Some(ti) {
+                list.push(ti);
+            }
+        }
+    }
+    for (_, list) in handle_postings {
+        let deg = list.len() as u32;
+        if !(2..=6).contains(&deg) {
+            continue;
+        }
+        for idx in 1..list.len() {
+            let later = list[idx];
+            let earlier = list[idx - 1];
+            if !turns[later].exact_edges.iter().any(|&(_, t)| t == earlier) {
+                turns[later].exact_edges.push((deg, earlier));
+            }
+            let s_lat = turns[later].session;
+            let s_ear = turns[earlier].session;
+            if s_lat > s_ear && !session_rsb_back[s_lat].iter().any(|&(_, s)| s == s_ear) {
+                session_rsb_back[s_lat].push((deg, s_ear));
+            }
+        }
+    }
+
+    // 2. State-Update & Structural Contradiction Supersession Chain (`appears_contradictory`):
+    //    When two user turns share a rare proper entity (`2 <= df <= 8`) or constraint object
+    //    and either `advanced::contradiction::appears_contradictory` fires or the later turn
+    //    asserts an explicit revision/constraint, record a backward `supersedes` edge (`later -> earlier`).
+    let mut ent_user_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (ti, t) in turns.iter().enumerate() {
+        if t.field != 0 || t.is_question || t.is_backchannel {
+            continue;
+        }
+        for &eid in &t.entities {
+            ent_user_postings.entry(eid).or_default().push(ti);
+        }
+        for &cid in &t.content {
+            if constraint_terms.contains(&cid) {
+                ent_user_postings.entry(cid).or_default().push(ti);
+            }
+        }
+    }
+    for (_, mut list) in ent_user_postings {
+        list.dedup();
+        if !(2..=8).contains(&list.len()) {
+            continue;
+        }
+        for idx in 1..list.len() {
+            let later = list[idx];
+            let prev = list[idx - 1];
+            let s_lat = turns[later].session;
+            let s_prev = turns[prev].session;
+            if s_lat <= s_prev {
+                continue;
+            }
+            let lat_prose = &turn_prose_cache[later];
+            let prev_prose = &turn_prose_cache[prev];
+            let lat_low = lat_prose.to_lowercase();
+            let has_rev_cue = turns[later].is_personal_constraint
+                || STATE_REVISION_CUES.iter().any(|c| lat_low.contains(c));
+            let contradicts = crate::advanced::contradiction::appears_contradictory(
+                prev_prose,
+                lat_prose,
+                crate::advanced::contradiction::SubjectIdentity::AlreadyEstablished,
+            );
+            if contradicts || has_rev_cue {
+                if !turns[later].supersedes_turns.contains(&prev) {
+                    turns[later].supersedes_turns.push(prev);
+                }
+                if !session_supersedes_back[s_lat].contains(&s_prev) {
+                    session_supersedes_back[s_lat].push(s_prev);
+                }
+            }
+        }
+    }
+
+    // 3. Synaptic Tagging `CaptureWindow` (Frey & Morris 1997; Redondo & Morris 2011; 9-hour window):
+    //    A high-salience turn (`is_standing_policy`, `is_personal_constraint`, or `FAILURE_MARKERS`)
+    //    captures the immediately preceding tagged user initiative turn within `CaptureWindow::backward_hours` (9h)
+    //    or the immediate preceding same-episode sub-session (`session_episode_prev`).
+    let capture_window = crate::neuroscience::CaptureWindow::default();
+    let max_back_secs = (capture_window.backward_hours * 3600.0) as i64;
+    for ti in 1..turns.len() {
+        let lower_p = turn_prose_cache[ti].to_lowercase();
+        let is_failure_prp = turns[ti].field == 0
+            && !turns[ti].is_question
+            && crate::advanced::retroactive_backfill::FAILURE_MARKERS
+                .iter()
+                .any(|m| lower_p.contains(m));
+        let is_prp = turns[ti].is_standing_policy || turns[ti].is_personal_constraint || is_failure_prp;
+        if !is_prp {
+            continue;
+        }
+        let s_cur = turns[ti].session;
+        let ts_cur = session_ts[s_cur];
+        // Search backward for the closest preceding user initiative turn inside the 9h capture window (or same episode).
+        for back_s in (0..s_cur).rev() {
+            let ts_prev = session_ts[back_s];
+            let in_clock_window = ts_cur > 0 && ts_prev > 0 && ts_cur >= ts_prev && (ts_cur - ts_prev) <= max_back_secs;
+            let is_ep_prev = session_episode_prev[s_cur] == Some(back_s);
+            if !in_clock_window && !is_ep_prev {
+                if ts_cur > 0 && ts_prev > 0 && (ts_cur - ts_prev) > max_back_secs {
+                    break;
+                }
+                continue;
+            }
+            if let Some(&init_ti) = session_turns[back_s].iter().rev().find(|&&cand| turns[cand].is_initiative) {
+                // Require at least 1 shared entity or schema domain so unrelated adjacent topics don't capture blindly.
+                let shares_anchor = turns[ti].entities.iter().any(|e| turns[init_ti].entities.contains(e))
+                    || turns[ti].schema_domains.iter().any(|d| turns[init_ti].schema_domains.contains(d));
+                if shares_anchor {
+                    if !turns[ti].exact_edges.iter().any(|&(_, t)| t == init_ti) {
+                        turns[ti].exact_edges.push((3, init_ti));
+                    }
+                    if !session_rsb_back[s_cur].iter().any(|&(_, s)| s == back_s) {
+                        session_rsb_back[s_cur].push((3, back_s));
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Session bags (own text + field-2 BLIP), uncarried turn bags (`turn_own_bags`),
+    // and carried turn bags (`turn_bags` — never carrying into questions!).
     let mut session_bags = Vec::with_capacity(session_turns.len());
+    let mut turn_own_bags: Vec<Bag> = (0..turns.len()).map(|_| Bag::default()).collect();
     let mut turn_bags: Vec<Bag> = (0..turns.len()).map(|_| Bag::default()).collect();
     for members in &session_turns {
         let mut sb = Bag::default();
@@ -1850,9 +2440,22 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let t = &turns[ti];
             for &f in &t.feats {
                 sb.add(t.field, f, 1.0);
+                turn_own_bags[ti].add(t.field, f, 1.0);
                 turn_bags[ti].add(t.field, f, 1.0);
             }
-            if p.enable_carry && pos > 0 {
+            for &bf in &t.blip_feats {
+                sb.add(2, bf, 1.0);
+                turn_own_bags[ti].add(2, bf, 1.0);
+                turn_bags[ti].add(2, bf, 1.0);
+            }
+            // In named-speaker dialogues (`LoCoMo`), a follow-up question does NOT state the
+            // previous speaker's facts; in `user`/`assistant` dialogues, user follow-up questions
+            // still inherit conversational context (`pos - k`).
+            let is_named_speaker_q = t.is_question
+                && !t.speaker.is_empty()
+                && t.speaker != "user"
+                && t.speaker != "assistant";
+            if p.enable_carry && pos > 0 && !is_named_speaker_q {
                 let answer = t.answers_question;
                 let factor = if t.is_backchannel {
                     0.15
@@ -1887,7 +2490,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                     turn_bags[ti].add_inherited(field, f, w);
                 }
             }
-            // Third-position uptake: a concise value-bearing turn inherits light forward context from pos + 1.
+            // Third-position uptake: a concise value-bearing turn inherits light context from pos + 1.
             if p.enable_carry && !t.is_backchannel && !t.is_question && t.content.len() <= 4 && pos + 1 < members.len() {
                 let nxt = &turns[members[pos + 1]];
                 for &f in nxt.feats.iter().filter(|f| f.inheritable) {
@@ -1914,6 +2517,9 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 for &f in &turns[ti].feats {
                     b.add(turns[ti].field, f, 1.0);
                 }
+                for &bf in &turns[ti].blip_feats {
+                    b.add(2, bf, 1.0);
+                }
             }
             windows.push((si, start, end));
             window_bags.push(b);
@@ -1921,8 +2527,101 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     }
 
     let s_stats = stats_of(&session_bags);
+    let t_own_stats = stats_of(&turn_own_bags);
     let t_stats = stats_of(&turn_bags);
     let w_stats = stats_of(&window_bags);
+
+    // Precompute rarest non-hub tokens per session (`df >= 2 && df <= 0.20 * N`, up to 32 sorted)
+    // for GhostLink Ochiai divergence (`1 - |Nt(a) & Nt(b)| / sqrt(|Nt(a)| * |Nt(b)|)`).
+    let ns_total = session_bags.len();
+    let max_rare_nt_df = ((s_stats.n * 0.20).max(4.0)) as u32;
+    let session_rare_nt: Vec<Vec<u32>> = session_content
+        .iter()
+        .map(|sc| {
+            let mut v: Vec<(u32, u32)> = sc
+                .iter()
+                .filter_map(|&id| {
+                    let df = s_stats.df.get(&id).copied().unwrap_or(0);
+                    (df >= 2 && df <= max_rare_nt_df).then_some((df, id))
+                })
+                .collect();
+            v.sort_unstable();
+            let mut ids: Vec<u32> = v.into_iter().take(32).map(|(_, id)| id).collect();
+            ids.sort_unstable();
+            ids
+        })
+        .collect();
+
+    let dom_hub_cut = if ns_total >= 16 {
+        ((ns_total as f32 * 0.12).ceil() as u32).max(3)
+    } else {
+        u32::MAX
+    };
+    let non_hub_domains: HashSet<&'static str> = HYPERNYM_LATTICE
+        .iter()
+        .map(|(d, _)| *d)
+        .filter(|d| domain_session_df.get(d).copied().unwrap_or(0) <= dom_hub_cut)
+        .collect();
+
+    let fan_cut = if ns_total >= 16 {
+        ((s_stats.n * 0.12).max(4.0)) as u32
+    } else {
+        u32::MAX
+    };
+    let fw_set = framing_words();
+    let mut standing_rules = Vec::with_capacity(raw_standing_rules.len());
+    for (policy_key, turn_idx, sess_idx, ts, has_explicit_scope, scope_words) in raw_standing_rules {
+        let mut scope = HashSet::new();
+        let mut dom_vec: Vec<&'static str> = Vec::new();
+        for w in &scope_words {
+            if fw_set.contains(w.as_str()) {
+                continue;
+            }
+            if let Some(id) = vocab.get(w) {
+                if s_stats.df.get(&id).copied().unwrap_or(0) <= fan_cut {
+                    scope.insert(id);
+                }
+            }
+            let st = stem(w);
+            if let Some(sid) = vocab.get(&stem_term(&st)) {
+                if s_stats.df.get(&sid).copied().unwrap_or(0) <= fan_cut {
+                    scope.insert(sid);
+                }
+            }
+            if let Some(doms) = hypernyms().get(&st) {
+                for &d in doms {
+                    if non_hub_domains.contains(d) && !dom_vec.contains(&d) {
+                        dom_vec.push(d);
+                    }
+                }
+            }
+        }
+        let mut assistant_nouns = HashSet::new();
+        let members = &session_turns[sess_idx];
+        if let Some(pos) = members.iter().position(|&ti| ti == turn_idx) {
+            if pos + 1 < members.len() {
+                let adj = &turns[members[pos + 1]];
+                if adj.field == 1 {
+                    for &cid in &adj.content {
+                        if s_stats.df.get(&cid).copied().unwrap_or(0) <= fan_cut {
+                            assistant_nouns.insert(cid);
+                        }
+                    }
+                }
+            }
+        }
+        standing_rules.push(StandingRule {
+            policy_key,
+            turn: turn_idx,
+            session: sess_idx,
+            ts,
+            has_explicit_scope,
+            scope,
+            domains: dom_vec,
+            assistant_nouns,
+        });
+    }
+
     Index {
         vocab,
         session_ids,
@@ -1930,15 +2629,25 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_turns,
         session_entities,
         session_content,
+        session_rare_nt,
+        session_rsb_back,
+        session_supersedes_back,
+        session_episode_prev,
         turns,
         session_bags,
+        turn_own_bags,
         turn_bags,
         windows,
         window_bags,
         s_stats,
+        t_own_stats,
         t_stats,
         w_stats,
         constraint_terms,
+        standing_rules,
+        non_hub_domains,
+        header_dict,
+        header_max_words,
     }
 }
 
@@ -1951,6 +2660,7 @@ struct QTerm {
     id: u32,
     weight: f32,
     group: Option<usize>,
+    exact_hit: bool,
 }
 
 struct QueryPlan {
@@ -1959,15 +2669,71 @@ struct QueryPlan {
     groups: Vec<String>,
     /// term id -> group, for proximity scanning
     group_of: HashMap<u32, usize>,
+    focal_ids: HashSet<u32>,
+    focal_domains: HashSet<&'static str>,
 }
 
-fn has_any(hay: &str, cues: &[&str]) -> bool {
-    cues.iter().any(|c| hay.contains(c))
+/// Normalize punctuation (preserving internal apostrophes in contractions like `i'm` / `don't`)
+/// into single-space-padded lowercase tokens so word-boundary cue matching never misfires on
+/// substrings ("Army" != "my", "server" != "serve", "Miami's" != "i'", "claim" != "aim")
+/// and never strips literal "$0".
+fn word_padded(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 4);
+    out.push(' ');
+    let chars: Vec<char> = text.chars().collect();
+    let mut prev_space = true;
+    for (idx, &ch) in chars.iter().enumerate() {
+        let lower = ch.to_ascii_lowercase();
+        let is_apos = (lower == '\'' || lower == '’')
+            && idx > 0
+            && idx + 1 < chars.len()
+            && chars[idx - 1].is_alphanumeric()
+            && chars[idx + 1].is_alphanumeric();
+        // Glue a currency marker to the amount so "$0" stays the literal token "$0".
+        let is_currency = ch == '$' && idx + 1 < chars.len() && chars[idx + 1].is_ascii_digit();
+        if lower.is_alphanumeric() || is_currency {
+            out.push(if is_currency { '$' } else { lower });
+            prev_space = false;
+        } else if is_apos {
+            out.push('\'');
+            prev_space = false;
+        } else if !prev_space {
+            out.push(' ');
+            prev_space = true;
+        }
+    }
+    if !prev_space {
+        out.push(' ');
+    }
+    out
+}
+
+fn has_any(padded_hay: &str, cues: &[&str]) -> bool {
+    cues.iter().any(|c| {
+        if c.starts_with(' ') && c.ends_with(' ') {
+            padded_hay.contains(c)
+        } else if c.starts_with(' ') {
+            // Leading word boundary; allow suffix inflection on phrases like " recommend" / " suggest"
+            padded_hay.contains(c)
+        } else if c.ends_with(' ') {
+            let pat = format!(" {c}");
+            padded_hay.contains(&pat)
+        } else if c.contains(' ') {
+            // Multi-word phrase: require leading word boundary so "did i" matches " did i " or " did i'm"
+            let pat = format!(" {c}");
+            padded_hay.contains(&pat)
+        } else {
+            // Single un-spaced stem cue ("recommend", "suggest", "prefer", "chronological"):
+            // require leading word boundary (` {c}`) so "server" never matches "serve" and "knew" never matches "new",
+            // while "recommended" / "recommendation" still match ` recommend`.
+            let pat = format!(" {c}");
+            padded_hay.contains(&pat)
+        }
+    })
 }
 
 pub fn classify(text: &str) -> QueryIntent {
-    let lower = format!(" {} ", text.to_lowercase().replace(['?', '!', ',', '.'], " $0").replace("$0", ""));
-    let lower = lower.replace("  ", " ");
+    let lower = word_padded(text);
     let content_groups = raw_tokens(text).into_iter().filter(|w| is_content(w)).collect::<HashSet<_>>().len();
     let assistant_attribution = has_any(&lower, ASSISTANT_ATTRIBUTION_CUES);
     let sniper_when = has_any(&lower, &[
@@ -2012,10 +2778,12 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let mut groups: Vec<String> = Vec::new();
     let mut group_of = HashMap::new();
     let mut hyp_added: HashSet<&str> = HashSet::new();
+    let mut focal_ids: HashSet<u32> = HashSet::new();
+    let mut focal_domains: HashSet<&'static str> = HashSet::new();
     let use_hyp = p.enable_hypernyms;
 
     let raw_q = raw_tokens(&q.text);
-    let q_lower = format!(" {} ", q.text.to_lowercase());
+    let q_lower = word_padded(&q.text);
     let episodic_past_recall = has_any(&q_lower, RECALL_NOT_TASK_CUES) || intent.sniper_how_many;
     if !episodic_past_recall
         && raw_q.iter().any(|w| ix.vocab.get(w).is_some_and(|id| ix.constraint_terms.contains(&id)))
@@ -2046,12 +2814,12 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         let is_frame = can_demote_framing && fw.contains(w.as_str());
         if is_frame {
             if let Some(id) = ix.vocab.get(w) {
-                terms.push(QTerm { id, weight: 0.35, group: None });
+                terms.push(QTerm { id, weight: 0.30, group: None, exact_hit: false });
             }
             if p.enable_stemming {
                 let st = stem(w);
                 if let Some(id) = ix.vocab.get(&stem_term(&st)) {
-                    terms.push(QTerm { id, weight: 0.25, group: None });
+                    terms.push(QTerm { id, weight: 0.20, group: None, exact_hit: false });
                 }
             }
             continue;
@@ -2060,24 +2828,27 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         let g = groups.len();
         groups.push(w.clone());
         if let Some(id) = ix.vocab.get(w) {
-            terms.push(QTerm { id, weight: 1.0, group: Some(g) });
+            terms.push(QTerm { id, weight: 1.0, group: Some(g), exact_hit: true });
             group_of.insert(id, g);
+            focal_ids.insert(id);
         }
         let st = stem(w);
         if p.enable_stemming {
             if let Some(id) = ix.vocab.get(&stem_term(&st)) {
-                terms.push(QTerm { id, weight: p.stem_weight, group: Some(g) });
+                terms.push(QTerm { id, weight: p.stem_weight, group: Some(g), exact_hit: true });
                 group_of.insert(id, g);
+                focal_ids.insert(id);
             }
         }
-        if use_hyp {
-            if let Some(doms) = hypernyms().get(&st) {
-                for d in doms {
-                    if hyp_added.insert(d) {
-                        if let Some(id) = ix.vocab.get(&hyp_term(d)) {
-                            terms.push(QTerm { id, weight: p.hypernym_weight, group: Some(g) });
-                            group_of.insert(id, g);
-                        }
+        if let Some(doms) = hypernyms().get(&st) {
+            for &d in doms {
+                if ix.non_hub_domains.contains(d) {
+                    focal_domains.insert(d);
+                }
+                if use_hyp && hyp_added.insert(d) {
+                    if let Some(id) = ix.vocab.get(&hyp_term(d)) {
+                        terms.push(QTerm { id, weight: p.hypernym_weight, group: Some(g), exact_hit: false });
+                        group_of.insert(id, g);
                     }
                 }
             }
@@ -2085,9 +2856,6 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     }
 
     // Capitalized proper-noun entity phrases present in index (e.g. "Local H", "For Against").
-    // If all parts of the phrase are already covered content words ("United States"), emit as
-    // phrase boost (group: None) to avoid double-counting in coverage; if any part was erased
-    // by stopwords or length-1 filtering ("For Against", "Local H"), restore it as a real group.
     let mut seen_ents = HashSet::new();
     for ent in proper_entity_tokens(&q.text) {
         if !seen_ents.insert(ent.clone()) {
@@ -2099,17 +2867,25 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
             if any_erased {
                 let g = groups.len();
                 groups.push(ent);
-                terms.push(QTerm { id, weight: 1.65, group: Some(g) });
+                terms.push(QTerm { id, weight: 1.65, group: Some(g), exact_hit: true });
                 group_of.insert(id, g);
             } else {
-                terms.push(QTerm { id, weight: 0.75, group: None });
+                terms.push(QTerm { id, weight: 0.75, group: None, exact_hit: false });
             }
+        }
+    }
+
+    // Exact technical handles in the query (`Url`, `Email`, `CommitSha`, `IssueRef`, `Version`, `FilePath`).
+    for h_str in extract_exact_technical_handles(&q.text) {
+        if let Some(id) = ix.vocab.get(&h_str) {
+            terms.push(QTerm { id, weight: 1.5, group: None, exact_hit: true });
+            focal_ids.insert(id);
         }
     }
 
     if p.enable_preference && intent.preference {
         if let Some(id) = ix.vocab.get(PREF_AXIS) {
-            terms.push(QTerm { id, weight: p.preference_axis_weight, group: None });
+            terms.push(QTerm { id, weight: p.preference_axis_weight, group: None, exact_hit: false });
         }
     }
 
@@ -2156,12 +2932,12 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         }
         for (d, w) in date_weights {
             if let Some(id) = ix.vocab.get(&d) {
-                terms.push(QTerm { id, weight: w, group: None });
+                terms.push(QTerm { id, weight: w, group: None, exact_hit: false });
             }
         }
     }
 
-    QueryPlan { intent, terms, groups, group_of }
+    QueryPlan { intent, terms, groups, group_of, focal_ids, focal_domains }
 }
 
 // =========================================================================
@@ -2169,14 +2945,17 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
 // =========================================================================
 
 struct Fields {
-    w: [f32; 2],
-    b: [f32; 2],
+    w: [f32; 3],
+    b: [f32; 3],
 }
 
-/// BM25F with IDF power law and IDF-weighted distinct-term coverage.
-fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f32, u64) {
+/// 3-Field BM25F (`user`, `assistant`, `blip_caption`) with IDF power law, IDF-weighted
+/// distinct-term coverage, and separate `(any_mask, exact_mask)` so 0.45 hypernym hits
+/// never poison submodular coverage masks (`covered_mask` / `covered_query_terms`).
+fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f32, u64, u64) {
     let mut score = 0.0f32;
     let mut mask = 0u64;
+    let mut exact_mask = 0u64;
     let ng = plan.groups.len();
     let mut g_idf = vec![0.0f32; ng];
     let mut g_hit = vec![false; ng];
@@ -2188,7 +2967,7 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
             g_idf[g] = g_idf[g].max(idf * qt.weight);
         }
         let mut tfp = 0.0f32;
-        for f in 0..2 {
+        for f in 0..3 {
             let tf = bag.tf[f].get(&qt.id).copied().unwrap_or(0.0);
             if tf <= 0.0 {
                 continue;
@@ -2202,6 +2981,9 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
                 g_hit[g] = true;
                 if g < 64 {
                     mask |= 1 << g;
+                    if qt.exact_hit {
+                        exact_mask |= 1 << g;
+                    }
                 }
             }
         }
@@ -2214,7 +2996,7 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
             score *= p.coverage_floor + (1.0 - p.coverage_floor) * cov * cov;
         }
     }
-    (score, mask)
+    (score, mask, exact_mask)
 }
 
 /// True when two distinct query words land within `span` content tokens of each other.
@@ -2274,33 +3056,149 @@ fn raise_floor(scores: &mut [f32], lexical_max: f32, frac: f32, keep: impl Fn(us
     lifted
 }
 
+fn ghostlink_hub_damp(deg: u32, own: u32) -> f32 {
+    let extra = deg.saturating_sub(own);
+    1.0 / (2.0 + extra as f32).log2()
+}
+
+fn ochiai_divergence(a: &[u32], b: &[u32]) -> Option<f32> {
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let (mut i, mut j, mut inter) = (0usize, 0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Equal => {
+                inter += 1;
+                i += 1;
+                j += 1;
+            }
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+        }
+    }
+    let denom = ((a.len() * b.len()) as f32).sqrt();
+    if denom <= 0.0 {
+        None
+    } else {
+        Some((1.0 - (inter as f32) / denom).clamp(0.0, 1.0))
+    }
+}
+
+fn named_partner(a: &str, b: &str) -> bool {
+    let role = |s: &str| s.is_empty() || s == "user" || s == "assistant";
+    !role(a) && !role(b) && a != b
+}
+
+/// Stratified Governing Channel (Satchel SCR 2026; Laird SOAR 2012; Forgy Rete 1982):
+/// Ranks active standing imperative policies into `RankResult.standing_rules` without
+/// consuming or distorting episodic `sessions` / `turns` slots.
+fn rank_standing_rules(
+    ix: &Index,
+    plan: &QueryPlan,
+    episodic_user_quote: bool,
+    t_mask: &[u64],
+    top_k: usize,
+) -> Vec<RankedItem> {
+    if ix.standing_rules.is_empty() || episodic_user_quote {
+        return Vec::new();
+    }
+    let it = &plan.intent;
+    // Multi-evidence recall keeps every standing policy on the stratified channel,
+    // including zero-overlap rules. The episodic floor stays off for these intents,
+    // so the channel can fire without taking one of the five episodic slots.
+    let multi_evidence = it.multi_hop || it.sniper_how_many || it.temporal || it.is_event_sequence;
+    let mut latest_by_key: HashMap<&str, (usize, i32, i32, i64)> = HashMap::new();
+    for (ri, r) in ix.standing_rules.iter().enumerate() {
+        let scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
+        let dom_hits = r.domains.iter().filter(|d| plan.focal_domains.contains(*d)).count() as i32;
+        let asst_hits = r.assistant_nouns.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
+        let spec = 3 * scope_hits + 2 * dom_hits + asst_hits;
+        let fires = if r.has_explicit_scope {
+            spec > 0 || it.task_under_rules || multi_evidence
+        } else {
+            it.task_under_rules || spec >= 3 || multi_evidence
+        };
+        if !fires {
+            continue;
+        }
+        let scope_neg_len = -(r.scope.len() as i32);
+        let cand = (ri, spec, scope_neg_len, r.ts);
+        match latest_by_key.get(r.policy_key.as_str()) {
+            Some(&cur) if (cur.3, cur.1, cur.2) >= (cand.3, cand.1, cand.2) => {}
+            _ => {
+                latest_by_key.insert(r.policy_key.as_str(), cand);
+            }
+        }
+    }
+    let max_spec = latest_by_key.values().map(|c| c.1).max().unwrap_or(0);
+    let mut cands: Vec<(usize, i32, i32, i64)> = latest_by_key
+        .into_values()
+        .filter(|c| if max_spec > 0 { c.1 > 0 } else { true })
+        .collect();
+    cands.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
+            .then(a.0.cmp(&b.0))
+    });
+    cands
+        .into_iter()
+        .take(top_k.max(1))
+        .map(|(ri, spec, _, _)| {
+            let r = &ix.standing_rules[ri];
+            RankedItem {
+                id: ix.turns[r.turn].id.clone(),
+                session_id: ix.session_ids[r.session].clone(),
+                score: 1.0 + spec.max(0) as f32,
+                matched: matched_words(plan, t_mask[r.turn]),
+            }
+        })
+        .collect()
+}
+
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
     let pref_on = p.enable_preference && it.preference;
+    let q_padded = word_padded(&q.text);
+    let episodic_user_quote = it.user_attribution
+        && !pref_on
+        && !it.task_under_rules
+        && !it.sniper_how_many
+        && has_any(
+            &q_padded,
+            &[
+                "did i ", "what did i ", "where did i ", "when did i ", "who did i ",
+                "i told you", "i brought up", "did i mention", "my instruction",
+                "what was my ", "where is my ", "what is my ",
+            ],
+        );
     let fl = if p.enable_roles && it.assistant_attribution {
-        Fields { w: [1.0, p.assistant_attribution_weight], b: [p.b_user, p.b_assistant_attributed] }
-    } else if p.enable_roles && it.user_attribution {
-        Fields { w: [p.user_attribution_weight, 0.35], b: [p.b_user, p.b_assistant] }
+        Fields { w: [1.0, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
+    } else if p.enable_roles && it.user_attribution && !pref_on && !it.task_under_rules {
+        Fields { w: [p.user_attribution_weight, 0.35, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
     } else if p.enable_roles && pref_on {
-        Fields { w: [1.45, 0.55], b: [p.b_user, p.b_assistant] }
+        Fields { w: [1.45, 0.55, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
     } else {
-        Fields { w: [1.0, 1.0], b: [p.b_user, p.b_assistant] }
+        Fields { w: [1.0, 1.0, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
     };
     let ns = ix.session_bags.len();
 
     // ---- Session level: whole-session BM25F + max-passage window pooling ----
     let mut s_base = vec![0.0f32; ns];
     let mut s_mask = vec![0u64; ns];
+    let mut s_exact_mask = vec![0u64; ns];
     for si in 0..ns {
-        let (sc, m) = bm25f(&ix.session_bags[si], &plan, &ix.s_stats, p, &fl);
+        let (sc, m, em) = bm25f(&ix.session_bags[si], &plan, &ix.s_stats, p, &fl);
         s_base[si] = sc;
         s_mask[si] = m;
+        s_exact_mask[si] = em;
     }
     let mut s_win = vec![0.0f32; ns];
     if p.enable_window {
         for (wi, &(si, a, b)) in ix.windows.iter().enumerate() {
-            let (mut sc, m) = bm25f(&ix.window_bags[wi], &plan, &ix.w_stats, p, &fl);
+            let (mut sc, m, em) = bm25f(&ix.window_bags[wi], &plan, &ix.w_stats, p, &fl);
             if sc <= 0.0 {
                 continue;
             }
@@ -2310,8 +3208,23 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             {
                 sc *= 1.0 + p.proximity_bonus;
             }
-            if pref_on && members.iter().any(|&t| ix.turns[t].pref_marker && ix.turns[t].field == 0) {
-                sc *= p.preference_boost;
+            if pref_on {
+                let mut best_pref = 1.0f32;
+                for &t in members {
+                    let tr = &ix.turns[t];
+                    if tr.field == 0 {
+                        if tr.pref_marker {
+                            best_pref = best_pref.max(p.preference_boost);
+                        } else if tr.is_user_schema
+                            && tr.schema_domains.iter().any(|d| plan.focal_domains.contains(d))
+                        {
+                            // Tse et al. (Science 2007) domain-gated user schema activation:
+                            // habitual/behavioral declarations boost only when matching query domain.
+                            best_pref = best_pref.max(1.45);
+                        }
+                    }
+                }
+                sc *= best_pref;
             }
             if members.iter().any(|&t| ix.turns[t].is_standing_policy) {
                 sc *= 1.8;
@@ -2320,6 +3233,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 s_win[si] = sc;
             }
             s_mask[si] |= m;
+            s_exact_mask[si] |= em;
         }
     }
     let bmax = s_base.iter().cloned().fold(0.0f32, f32::max);
@@ -2352,54 +3266,113 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     }
     let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
 
-    // ---- Turn level ----
+    // ---- Turn level: score BOTH uncarried `t_own` AND carried `t_raw` ----
     let nt = ix.turns.len();
+    let mut t_own = vec![0.0f32; nt];
     let mut t_raw = vec![0.0f32; nt];
     let mut t_mask = vec![0u64; nt];
+    let mut t_exact_mask = vec![0u64; nt];
     for ti in 0..nt {
         let t = &ix.turns[ti];
-        let (mut sc, m) = bm25f(&ix.turn_bags[ti], &plan, &ix.t_stats, p, &fl);
-        if sc <= 0.0 {
+        let (mut sc_own, _, em_own) = bm25f(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, p, &fl);
+        let (mut sc, m, _) = bm25f(&ix.turn_bags[ti], &plan, &ix.t_stats, p, &fl);
+        if sc <= 0.0 && sc_own <= 0.0 {
             continue;
         }
-        if p.enable_proximity && proximity_hit(t.seq.iter(), &plan, p.proximity_span) {
+        let prox = p.enable_proximity && proximity_hit(t.seq.iter(), &plan, p.proximity_span);
+        if prox {
             sc *= 1.0 + p.proximity_bonus;
+            sc_own *= 1.0 + p.proximity_bonus;
         }
         if p.enable_carry && t.answers_question {
             sc *= p.answer_boost;
+            sc_own *= p.answer_boost;
         } else if p.enable_carry && t.is_short_reply {
             sc *= 1.05;
+            sc_own *= 1.05;
         }
-        if pref_on && t.pref_marker && t.field == 0 {
-            sc *= p.preference_boost;
+        if pref_on && t.field == 0 {
+            if t.pref_marker {
+                sc *= p.preference_boost;
+                sc_own *= p.preference_boost;
+            } else if t.is_user_schema && t.schema_domains.iter().any(|d| plan.focal_domains.contains(d)) {
+                sc *= 1.45;
+                sc_own *= 1.45;
+            }
         }
+        t_own[ti] = sc_own;
         t_raw[ti] = sc;
         t_mask[ti] = m;
+        t_exact_mask[ti] = em_own;
     }
 
-    // Weapon 1: Bidirectional 3-Turn Micro-Scene Pooling.
-    // Symmetric (0.55 / 0.55) across statement pairs so scene pooling is strictly order-preserving
-    // (t_scene[a] - t_scene[b] = 0.45 * (t_raw[a] - t_raw[b])) and never inverts a fact statement
-    // beneath its reaction turn; asymmetric (0.75) only when the preceding turn is a question.
+    // Weapon 1: Bidirectional 3-Turn Scene Pooling.
+    // - On named-speaker dialogues (`LoCoMo` / multi-person chats), pool over uncarried `t_own` +
+    //   Center-Peak Monotonicity so follow-up questions & reactions (`gold + 1`) never steal Rank 1!
+    // - On `user`/`assistant` dialogues (`BEAM` / `LME`), preserve symmetric `t_raw` pooling so
+    //   concise user turns ending in `?` are never inverted beneath verbose assistant expansions!
     let mut t_scene = vec![0.0f32; nt];
     if p.enable_scene {
         for members in &ix.session_turns {
-            for (pos, &ti) in members.iter().enumerate() {
-                let prev_raw = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
-                let next_raw = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
-                let prev_w = if ix.turns[ti].is_backchannel {
-                    0.25
-                } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
-                    0.75
-                } else {
-                    0.55
-                };
-                t_scene[ti] = 1.0 * t_raw[ti] + prev_w * prev_raw + 0.55 * next_raw;
-                if pos > 0 && !ix.turns[ti].is_backchannel {
-                    t_mask[ti] |= t_mask[members[pos - 1]];
+            let has_named_dialogue = members.iter().any(|&m| {
+                let sp = ix.turns[m].speaker.as_str();
+                !sp.is_empty() && sp != "user" && sp != "assistant"
+            });
+            if has_named_dialogue {
+                for (pos, &ti) in members.iter().enumerate() {
+                    let prev_own = if pos > 0 { t_own[members[pos - 1]] } else { 0.0 };
+                    let next_own = if pos + 1 < members.len() { t_own[members[pos + 1]] } else { 0.0 };
+                    let prev_w = if ix.turns[ti].is_backchannel {
+                        0.22
+                    } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
+                        0.75
+                    } else {
+                        0.48
+                    };
+                    let self_score = if ix.turns[ti].answers_question || ix.turns[ti].is_short_reply || ix.turns[ti].anaphoric {
+                        t_raw[ti]
+                    } else {
+                        t_own[ti] + 0.18 * (t_raw[ti] - t_own[ti]).max(0.0)
+                    };
+                    t_scene[ti] = self_score + prev_w * prev_own + 0.42 * next_own;
+                    if pos > 0 && !ix.turns[ti].is_backchannel {
+                        t_mask[ti] |= t_mask[members[pos - 1]];
+                    }
+                    if pos + 1 < members.len() && !ix.turns[ti].is_question {
+                        t_mask[ti] |= t_mask[members[pos + 1]];
+                    }
                 }
-                if pos + 1 < members.len() {
-                    t_mask[ti] |= t_mask[members[pos + 1]];
+                for pos in 1..members.len() {
+                    let prev = members[pos - 1];
+                    let ti = members[pos];
+                    if !ix.turns[prev].is_question
+                        && !ix.turns[prev].is_backchannel
+                        && t_own[prev] > 0.0
+                        && (t_exact_mask[ti] & !t_exact_mask[prev]) == 0
+                        && t_own[ti] <= t_own[prev] * 1.05
+                        && t_scene[ti] > 0.92 * t_scene[prev]
+                    {
+                        t_scene[ti] = 0.92 * t_scene[prev];
+                    }
+                }
+            } else {
+                for (pos, &ti) in members.iter().enumerate() {
+                    let prev_raw = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
+                    let next_raw = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
+                    let prev_w = if ix.turns[ti].is_backchannel {
+                        0.25
+                    } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
+                        0.75
+                    } else {
+                        0.55
+                    };
+                    t_scene[ti] = 1.0 * t_raw[ti] + prev_w * prev_raw + 0.55 * next_raw;
+                    if pos > 0 && !ix.turns[ti].is_backchannel {
+                        t_mask[ti] |= t_mask[members[pos - 1]];
+                    }
+                    if pos + 1 < members.len() {
+                        t_mask[ti] |= t_mask[members[pos + 1]];
+                    }
                 }
             }
         }
@@ -2407,21 +3380,19 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         t_scene = t_raw.clone();
     }
 
-    // Named-speaker boost (never a filter): 1.04x tie-breaker gated on t_raw[ti] > 0
-    // so an empty adjacent reply cannot outrank a fact turn, and adversarial speaker swaps
-    // do not bury the partner turn that actually stated the evidence.
+    // Named-speaker boost (never a filter): 1.06x tie-breaker gated on t_own[ti] > 0 or t_raw[ti] > 0.
     for ti in 0..nt {
-        if t_raw[ti] <= 0.0 {
+        if t_raw[ti] <= 0.0 && t_own[ti] <= 0.0 {
             continue;
         }
         let sp = ix.turns[ti].speaker.as_str();
         if !sp.is_empty() && sp != "user" && sp != "assistant" && plan.groups.iter().any(|g| g == sp) {
-            t_scene[ti] *= 1.04;
+            t_scene[ti] *= 1.06;
         }
     }
 
     // Turn-level role alignment: when the query asks what the USER said/brought up, assistant turns are suppressed.
-    if p.enable_roles && it.user_attribution {
+    if p.enable_roles && it.user_attribution && !pref_on && !it.task_under_rules {
         for ti in 0..nt {
             if ix.turns[ti].field == 1 {
                 t_scene[ti] *= 0.35;
@@ -2437,31 +3408,102 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
-    // Weapon 2: Deterministic Answer-Type Sniper (+65% payload boost)
+    // Weapon 2: Deterministic Answer-Type Sniper + Universal Pure-Question Demotion on Named Dialogues
     if p.enable_sniper {
-        for ti in 0..nt {
-            if t_scene[ti] <= 0.0 {
-                continue;
+        for members in &ix.session_turns {
+            let has_named_dialogue = members.iter().any(|&m| {
+                let sp = ix.turns[m].speaker.as_str();
+                !sp.is_empty() && sp != "user" && sp != "assistant"
+            });
+            let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
+            for &ti in members {
+                if t_scene[ti] <= 0.0 {
+                    continue;
+                }
+                let t = &ix.turns[ti];
+                if it.sniper_when {
+                    if t.has_temporal { t_scene[ti] *= 1.65; }
+                    if t.is_question { t_scene[ti] *= 0.55; }
+                } else if t.is_pure_info_question && !episodic_user_quote && has_named_dialogue && has_declarative_peer {
+                    // Universal conversational question demotion on named-speaker dialogues (`LoCoMo`):
+                    // prevents 10+ word setup/follow-up questions from stealing Rank 1 from declarative facts,
+                    // while leaving `user`/`assistant` chats (`BEAM` / `LME-S`) 100% untouched.
+                    t_scene[ti] *= 0.62;
+                }
+                if it.sniper_how_many && t.has_numeric {
+                    t_scene[ti] *= 1.65;
+                }
+                if it.sniper_where && t.has_spatial {
+                    t_scene[ti] *= 1.60;
+                }
+                if it.sniper_why && t.has_causal {
+                    t_scene[ti] *= 1.55;
+                }
+                if t.is_short_question {
+                    t_scene[ti] *= 0.50;
+                }
+                if t.is_backchannel {
+                    t_scene[ti] *= 0.55;
+                }
             }
-            let t = &ix.turns[ti];
-            if it.sniper_when {
-                if t.has_temporal { t_scene[ti] *= 1.65; }
-                if t.is_question { t_scene[ti] *= 0.55; }
+        }
+    }
+
+    // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
+    // When a pure information-seeking question in a named dialogue adds no novel entity, temporal anchor,
+    // or number absent from the query, place its adjacent named-partner declarative answer above it.
+    let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
+    for ent in proper_entity_tokens(&q.text) {
+        if let Some(id) = ix.vocab.get(&ent) {
+            q_ents_and_vocatives.insert(id);
+        }
+    }
+    for w in raw_tokens(&q.text) {
+        if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{w}")) {
+            q_ents_and_vocatives.insert(id);
+        }
+    }
+    let query_has_temp = it.temporal || it.sniper_when || !inline_date_tokens(&q.text).is_empty();
+    let query_has_num = it.sniper_how_many || q.text.chars().any(|c| c.is_ascii_digit());
+    if p.enable_dyad {
+        for members in &ix.session_turns {
+            let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
+            for &m in members {
+                let sp = ix.turns[m].speaker.as_str();
+                if !sp.is_empty() && sp != "user" && sp != "assistant" {
+                    for sw in raw_tokens(sp) {
+                        if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
+                            sess_speaker_ents.insert(id);
+                        }
+                    }
+                }
             }
-            if it.sniper_how_many && t.has_numeric {
-                t_scene[ti] *= 1.65;
-            }
-            if it.sniper_where && t.has_spatial {
-                t_scene[ti] *= 1.60;
-            }
-            if it.sniper_why && t.has_causal {
-                t_scene[ti] *= 1.55;
-            }
-            if t.is_short_question {
-                t_scene[ti] *= 0.50;
-            }
-            if t.is_backchannel {
-                t_scene[ti] *= 0.55;
+            for pos in 0..members.len() {
+                let qi = members[pos];
+                let qt = &ix.turns[qi];
+                if !qt.is_pure_info_question || t_scene[qi] <= 0.0 {
+                    continue;
+                }
+                let novel_temp = qt.has_temporal && !query_has_temp;
+                let novel_num = qt.has_numeric && !query_has_num;
+                let novel_ent = qt
+                    .entities
+                    .iter()
+                    .any(|eid| !q_ents_and_vocatives.contains(eid) && !sess_speaker_ents.contains(eid));
+                if novel_temp || novel_num || novel_ent {
+                    continue;
+                }
+                if let Some(&ai) = members.get(pos + 1) {
+                    let ans = &ix.turns[ai];
+                    if named_partner(&qt.speaker, &ans.speaker) && !ans.is_question && !ans.is_backchannel {
+                        if t_scene[qi] > t_scene[ai] {
+                            t_scene[ai] = t_scene[ai].max(t_scene[qi] * 1.06);
+                            t_scene[qi] *= 0.65;
+                            t_mask[ai] |= t_mask[qi];
+                            t_exact_mask[ai] |= t_exact_mask[qi];
+                        }
+                    }
+                }
             }
         }
     }
@@ -2489,6 +3531,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     }
                     let seed_norm = (t_scene[s] / t_max) / ((ix.turns[s].content.len() + 4) as f32).sqrt();
                     for &e in &ix.turns[s].entities {
+                        if is_technical_handle(&ix.vocab, e) {
+                            continue;
+                        }
                         if let Some(&df) = ix.t_stats.df.get(&e) {
                             if df >= 2 && df <= max_df {
                                 let idf_term = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
@@ -2578,7 +3623,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // applied to the policy turn itself, not only its session.
     let lexical_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     let lexical_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
-    let (s_policy_floored, t_policy_floored) = if it.task_under_rules {
+    let multi_evidence_intent = it.multi_hop
+        || it.sniper_how_many
+        || it.temporal
+        || it.is_event_sequence;
+    // Standing rules ALWAYS emit in `RankResult.standing_rules`. On multi-evidence queries,
+    // gate off the 0.68 episodic slot floor so zero-overlap rules never steal 1 of the 5 episodic slots!
+    let (s_policy_floored, t_policy_floored) = if it.task_under_rules && !multi_evidence_intent {
         (
             raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
                 ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
@@ -2588,7 +3639,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     } else {
         (vec![false; ns], vec![false; nt])
     };
-    let (s_pref_floored, t_pref_floored) = if pref_on {
+    let (s_pref_floored, t_pref_floored) = if pref_on && !multi_evidence_intent {
         (
             raise_floor(&mut s_score, lexical_smax, 0.50, |si| {
                 ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_personal_constraint)
@@ -2629,6 +3680,66 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     anchors.push(top1);
                 }
             }
+            if !ix.header_dict.is_empty() && ix.header_max_words > 0 && !it.preference && !it.user_attribution {
+                let mut hdr_best = vec![0.0f32; ns];
+                for &anc in &anchors {
+                    let anc_w = (s_score[anc] / smax).clamp(0.35, 1.0);
+                    let members = &ix.session_turns[anc];
+                    let anc_tmax = members.iter().map(|&ti| t_scene[ti]).fold(0.0f32, f32::max);
+                    let use_hot = anc_tmax > 0.0 && members.len() > 2;
+                    for &ti in members {
+                        if use_hot && t_scene[ti] < 0.25 * anc_tmax {
+                            continue;
+                        }
+                        let hot_turn_bonus = if anc_tmax > 0.0 && t_scene[ti] >= 0.60 * anc_tmax { 1.18 } else { 1.0 };
+                        let toks = ix.turns[ti].span_ids_cache.get_or_init(|| {
+                            ix.turns[ti]
+                                .body_for_headers
+                                .split(|c: char| !c.is_alphanumeric())
+                                .filter(|s| !s.is_empty())
+                                .map(|s| ix.vocab.get(&s.to_lowercase()).unwrap_or(u32::MAX))
+                                .collect()
+                        });
+                        let mut idx = 0usize;
+                        while idx < toks.len() {
+                            let max_l = ix.header_max_words.min(toks.len() - idx);
+                            let mut matched_len = 0usize;
+                            for len in (1..=max_l).rev() {
+                                let slice = &toks[idx..idx + len];
+                                if slice.contains(&u32::MAX) {
+                                    continue;
+                                }
+                                let hh = hash_u32_slice(slice);
+                                if let Some(bucket) = ix.header_dict.get(&hh) {
+                                    if let Some(hk) = bucket.iter().find(|k| k.tokens.as_slice() == slice) {
+                                        let deg = hk.sessions.len() as u32;
+                                        if (1..=6).contains(&deg) {
+                                            let extra = deg.saturating_sub(1);
+                                            let damp = 1.0 / (2.0 + extra as f32).log2();
+                                            for &(target_si, mult) in &hk.sessions {
+                                                if target_si != anc && target_si != top0 {
+                                                    let cand_b = smax * 0.76 * anc_w * mult * damp * hot_turn_bonus;
+                                                    if cand_b > hdr_best[target_si] {
+                                                        hdr_best[target_si] = cand_b;
+                                                    }
+                                                }
+                                            }
+                                            matched_len = len;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            idx += matched_len.max(1);
+                        }
+                    }
+                }
+                for si in 0..ns {
+                    if hdr_best[si] > bridge_boost[si] {
+                        bridge_boost[si] = hdr_best[si];
+                    }
+                }
+            }
             let max_s_df = if ns >= 8 {
                 ((ix.s_stats.n * 0.10).clamp(4.0, (0.28 * ix.s_stats.n).max(4.0)).min(28.0)) as u32
             } else {
@@ -2648,6 +3759,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     }
                     let turn_len_norm = ((ix.turns[ti].content.len() + 6) as f32).sqrt();
                     for &e in &ix.turns[ti].entities {
+                        if is_technical_handle(&ix.vocab, e) {
+                            continue;
+                        }
                         if let Some(&df) = ix.s_stats.df.get(&e) {
                             if df >= 2 && df <= max_s_df {
                                 let idf_s = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
@@ -2694,10 +3808,57 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         let norm = sum / slen;
                         let sat = norm / (norm + 0.05);
                         let mut coeff = if it.multi_hop || plan.groups.len() >= 3 { 0.55 } else { 0.12 };
-                        if (s_mask[si] & !s_mask[top0]) != 0 {
+                        if (s_exact_mask[si] & !s_exact_mask[top0]) != 0 {
                             coeff *= 1.30;
                         }
-                        bridge_boost[si] = smax * coeff * sat;
+                        let boosted = smax * coeff * sat;
+                        if boosted > bridge_boost[si] {
+                            bridge_boost[si] = boosted;
+                        }
+                    }
+                }
+            }
+
+            // Backward-only RSB Handle/CaptureWindow, Structural Contradiction Supersession,
+            // and Temporal Context Episode Contiguity (`later -> earlier` ONLY).
+            for &anc in &anchors {
+                let anc_w = (s_score[anc] / smax).clamp(0.35, 1.0);
+                // 1. Exact RSB technical handles & 9h Synaptic Tagging CaptureWindow backward edges
+                for &(deg, prev_si) in &ix.session_rsb_back[anc] {
+                    if prev_si != top0 {
+                        let damp = ghostlink_hub_damp(deg.max(2), 1);
+                        let cand = smax * 0.64 * anc_w * damp;
+                        if cand > bridge_boost[prev_si] {
+                            bridge_boost[prev_si] = cand;
+                        }
+                    }
+                }
+                // 2. Structural contradiction / state-update supersession (`!it.current_state` pulls the earlier state
+                //    when the earlier session also has lexical grounding or user attribution, without displacing QA2 header bridges)
+                if !it.current_state {
+                    for &prev_si in &ix.session_supersedes_back[anc] {
+                        if prev_si != top0 && (s_score[prev_si] >= 0.12 * smax || it.user_attribution) {
+                            let cand = smax * 0.44 * anc_w;
+                            if cand > bridge_boost[prev_si] {
+                                bridge_boost[prev_si] = cand;
+                            }
+                        }
+                    }
+                }
+                // 3. Temporal Context Episode backward contiguity (`session_episode_prev`: `si -> si - 1`)
+                if it.is_event_sequence {
+                    let mut cur = anc;
+                    let mut decay = 0.52f32;
+                    for _ in 0..2 {
+                        let Some(prev_ep) = ix.session_episode_prev[cur] else { break };
+                        if prev_ep != top0 {
+                            let cand = smax * decay * anc_w;
+                            if cand > bridge_boost[prev_ep] {
+                                bridge_boost[prev_ep] = cand;
+                            }
+                        }
+                        cur = prev_ep;
+                        decay *= 0.65;
                     }
                 }
             }
@@ -2756,18 +3917,30 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             && !initiative_content[si].is_empty()
                             && selected.iter().any(|&s| jaccard(&initiative_content[s], &initiative_content[si]) >= 0.45);
                         let new_event = it.is_event_sequence && !initiative_content[si].is_empty() && !topic_seen;
+                        let min_ochiai = selected
+                            .iter()
+                            .filter_map(|&s| ochiai_divergence(&ix.session_rare_nt[s], &ix.session_rare_nt[si]))
+                            .fold(None::<f32>, |acc, d| Some(acc.map_or(d, |a| a.min(d))));
+                        let distinct_episode = min_ochiai.is_some_and(|d| d >= 0.58)
+                            && (ix.session_ts[si] == 0 || selected.iter().all(|&s| ix.session_ts[s] != ix.session_ts[si]));
                         let redundancy = if same_date_seen {
                             0.25
                         } else if topic_seen {
                             0.35
                         } else if near_dup {
                             0.65
-                        } else if uncovered == 0.0 && bridge_boost[si] < 0.12 * smax && shared_ent && same_mask_seen >= 2 {
+                        } else if !it.is_event_sequence
+                            && !it.sniper_how_many
+                            && !distinct_episode
+                            && uncovered == 0.0
+                            && bridge_boost[si] < 0.12 * smax
+                            && shared_ent
+                            && same_mask_seen >= 2
+                        {
                             0.62
                         } else {
                             1.0
                         };
-                        // Frozen mix for this run: new-event cover 0.65, already-seen topic 0.35.
                         let event_cover = if new_event { 0.65 } else { 0.0 };
                         let gain = (s_score[si] + bridge_boost[si]) * (1.0 + 0.90 * uncovered_ratio + event_cover) * redundancy;
                         found = true;
@@ -2779,7 +3952,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     if !found {
                         break;
                     }
-                    let chosen = remaining.swap_remove(best_pos);
+                    let chosen = remaining.remove(best_pos);
                     selected.push(chosen);
                     covered_mask |= s_mask[chosen];
                     covered_ents.extend(ix.session_entities[chosen].iter().copied());
@@ -2792,6 +3965,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 break;
             }
             if selected.contains(si) {
+                continue;
+            }
+            if s_score[*si] <= 0.0 && bridge_boost[*si] <= 0.0 {
                 continue;
             }
             let policy_prior = s_policy_floored[*si];
@@ -2812,9 +3988,18 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
         selected
     } else {
-        s_ord_base.into_iter().take(k).collect()
+        s_ord_base
+            .into_iter()
+            .filter(|&si| s_score[si] > 0.0 || bridge_boost[si] > 0.0)
+            .take(k)
+            .collect()
     };
 
+    let strong_top_sessions = final_session_indices
+        .iter()
+        .take(5)
+        .filter(|&&si| smax > 0.0 && !s_policy_floored[si] && !s_pref_floored[si] && (s_score[si] + bridge_boost[si]) >= 0.62 * smax)
+        .count();
     let sessions = final_session_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -2825,30 +4010,32 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         })
         .collect();
 
-    // Weapon 4: Greedy Submodular Set Cover for Top-K Selection
+    // Weapon 4: Greedy Submodular Set Cover for Top-K Turn Selection
     let max_per_session_top5 = if it.is_event_sequence {
         1
-    } else if it.multi_hop {
+    } else if it.multi_hop || (!pref_on && !it.task_under_rules && strong_top_sessions >= 2) {
         2
     } else {
-        4
+        3
     };
 
     let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
-    let final_turn_indices: Vec<usize> = if p.enable_submodular {
+    let mut final_turn_indices: Vec<usize> = if p.enable_submodular {
         let mut selected_turns: Vec<usize> = Vec::with_capacity(k);
         let mut covered_query_terms: u64 = 0;
         let mut session_counts: HashMap<usize, usize> = HashMap::new();
-        let mut remaining: HashSet<usize> = (0..nt).filter(|&ti| t_scene[ti] > 0.0).collect();
+        // Ingest order. Equal gains keep the earlier turn, then the higher recorded stability.
+        let mut remaining: Vec<usize> = (0..nt).filter(|&ti| t_scene[ti] > 0.0).collect();
 
         let total_query_groups = plan.groups.len().min(64);
         let turn_mask_limit = if total_query_groups == 64 { u64::MAX } else { (1u64 << total_query_groups) - 1 };
 
         while selected_turns.len() < k && !remaining.is_empty() {
-            let mut best_turn = None;
+            let mut best_turn: Option<usize> = None;
+            let mut best_pos = 0usize;
             let mut best_gain = -1.0f32;
 
-            for &ti in &remaining {
+            for (pos, &ti) in remaining.iter().enumerate() {
                 let sc = t_scene[ti];
                 let t_sess = ix.turns[ti].session;
                 let count = session_counts.get(&t_sess).copied().unwrap_or(0);
@@ -2858,7 +4045,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         ix.turns[prev].is_initiative && jaccard(&ix.turns[prev].content, &ix.turns[ti].content) >= 0.45
                     });
                 let t_m = t_mask[ti];
-                let uncovered_mask = t_m & !covered_query_terms;
+                let uncovered_mask = t_exact_mask[ti] & !covered_query_terms;
                 let uncovered_count = (uncovered_mask & turn_mask_limit).count_ones() as f32;
                 let short_reply = (ix.turns[ti].is_short_reply
                     || (ix.turns[ti].answers_question && ix.turns[ti].content.len() <= 6))
@@ -2906,16 +4093,25 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 };
 
                 let gain = sc * (1.0 + 0.60 * uncovered_ratio) * diversity_factor;
-                if gain > best_gain {
+                let stab = ix.turns[ti].stability;
+                let take = match best_turn {
+                    None => true,
+                    Some(cur) => {
+                        gain > best_gain
+                            || (gain == best_gain && stab > ix.turns[cur].stability)
+                    }
+                };
+                if take {
                     best_gain = gain;
                     best_turn = Some(ti);
+                    best_pos = pos;
                 }
             }
 
             if let Some(chosen) = best_turn {
                 selected_turns.push(chosen);
-                remaining.remove(&chosen);
-                covered_query_terms |= t_mask[chosen];
+                remaining.remove(best_pos);
+                covered_query_terms |= t_exact_mask[chosen];
                 *session_counts.entry(ix.turns[chosen].session).or_insert(0) += 1;
             } else {
                 break;
@@ -2929,6 +4125,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     break;
                 }
                 if selected_turns.contains(&ti) {
+                    continue;
+                }
+                if t_scene[ti] <= 0.0 {
                     continue;
                 }
                 let policy_prior = t_policy_floored[ti];
@@ -2959,8 +4158,137 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
         selected_turns
     } else {
-        order(&t_scene, &turn_ts).into_iter().take(k).collect()
+        order(&t_scene, &turn_ts)
+            .into_iter()
+            .filter(|&ti| t_scene[ti] > 0.0)
+            .take(k)
+            .collect()
     };
+
+    // Exact-token selection is finished. A recorded backward reply or exact edge
+    // promotes its earlier target to the rank position earned by `credit`, including
+    // when `target` was previously sitting in the tail (`5..k`) at a lower score.
+    if !final_turn_indices.is_empty() {
+        let pair = 1.0 / 3.0f32.log2();
+        let mut slot_score: Vec<f32> = final_turn_indices.iter().map(|&i| t_scene[i]).collect();
+        let mut best_incoming: HashMap<usize, f32> = HashMap::new();
+        for &ti in &final_turn_indices {
+            let src = t_scene[ti];
+            if src <= 0.0 {
+                continue;
+            }
+            if let Some(ai) = ix.turns[ti].answers {
+                let c = src * pair;
+                let cur = best_incoming.entry(ai).or_insert(0.0);
+                if c > *cur {
+                    *cur = c;
+                }
+            }
+            for &(degree, target) in &ix.turns[ti].exact_edges {
+                let damp = 1.0 / (2.0 + degree.saturating_sub(1) as f32).log2();
+                let c = src * damp;
+                let cur = best_incoming.entry(target).or_insert(0.0);
+                if c > *cur {
+                    *cur = c;
+                }
+            }
+            if !it.current_state {
+                for &target in &ix.turns[ti].supersedes_turns {
+                    let c = src * 0.66;
+                    let cur = best_incoming.entry(target).or_insert(0.0);
+                    if c > *cur {
+                        *cur = c;
+                    }
+                }
+            }
+        }
+        let mut incoming: Vec<(usize, f32)> = best_incoming.into_iter().collect();
+        incoming.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        for (target, credit) in incoming {
+            if credit <= 0.0 {
+                continue;
+            }
+            if let Some(existing_pos) = final_turn_indices.iter().position(|&t| t == target) {
+                if credit <= slot_score[existing_pos] {
+                    continue;
+                }
+                let mut insert_at = existing_pos;
+                for (i, &sc) in slot_score[..existing_pos].iter().enumerate() {
+                    if credit > sc {
+                        insert_at = i;
+                        break;
+                    }
+                }
+                if insert_at >= existing_pos {
+                    slot_score[existing_pos] = credit;
+                    if credit > t_scene[target] {
+                        t_scene[target] = credit;
+                    }
+                    continue;
+                }
+                let sess = ix.turns[target].session;
+                if insert_at < 5 && existing_pos >= 5 {
+                    let in_top5 = final_turn_indices
+                        .iter()
+                        .take(5)
+                        .filter(|&&t| ix.turns[t].session == sess)
+                        .count();
+                    if in_top5 >= max_per_session_top5 {
+                        continue;
+                    }
+                }
+                final_turn_indices.remove(existing_pos);
+                slot_score.remove(existing_pos);
+                final_turn_indices.insert(insert_at, target);
+                slot_score.insert(insert_at, credit);
+                if credit > t_scene[target] {
+                    t_scene[target] = credit;
+                }
+                continue;
+            }
+            // An event list already spread one turn per date. A reply link must
+            // not pull a second turn from a session that is already in the list.
+            if it.is_event_sequence
+                && final_turn_indices.iter().any(|&sel| ix.turns[sel].session == ix.turns[target].session)
+            {
+                continue;
+            }
+            let mut insert_at = slot_score.len();
+            for (i, &sc) in slot_score.iter().enumerate() {
+                if credit > sc {
+                    insert_at = i;
+                    break;
+                }
+            }
+            if insert_at >= k {
+                continue;
+            }
+            let sess = ix.turns[target].session;
+            if insert_at < 5 {
+                let in_top5 = final_turn_indices
+                    .iter()
+                    .take(5)
+                    .filter(|&&t| ix.turns[t].session == sess)
+                    .count();
+                if in_top5 >= max_per_session_top5 {
+                    continue;
+                }
+            }
+            if credit > t_scene[target] {
+                t_scene[target] = credit;
+            }
+            final_turn_indices.insert(insert_at, target);
+            slot_score.insert(insert_at, credit);
+            if final_turn_indices.len() > k {
+                final_turn_indices.truncate(k);
+                slot_score.truncate(k);
+            }
+        }
+    }
 
     let turns = final_turn_indices
         .into_iter()
@@ -2971,7 +4299,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns }
+    let standing_rules = rank_standing_rules(ix, &plan, episodic_user_quote, &t_mask, k);
+    RankResult { intent: plan.intent, sessions, turns, standing_rules }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -2991,7 +4320,7 @@ mod tests {
     use super::*;
 
     fn turn(role: &str, content: &str) -> Turn {
-        Turn { id: String::new(), role: role.into(), content: content.into() }
+        Turn { role: role.into(), content: content.into(), ..Turn::default() }
     }
 
     #[test]
@@ -3068,10 +4397,10 @@ mod tests {
                 date: String::new(),
                 timestamp: 0,
                 turns: vec![
-                    Turn { id: "D1:1".into(), role: "Caroline".into(), content: "I went hiking with my dog.".into() },
-                    Turn { id: "D1:2".into(), role: "Melanie".into(), content: "Are you still painting that sunrise landscape?".into() },
-                    Turn { id: "D1:3".into(), role: "Caroline".into(), content: "Yeah, I switched to acrylics for it yesterday.".into() },
-                    Turn { id: "D1:4".into(), role: "Melanie".into(), content: "My kids love the beach.".into() },
+                    Turn { id: "D1:1".into(), role: "Caroline".into(), content: "I went hiking with my dog.".into(), ..Turn::default() },
+                    Turn { id: "D1:2".into(), role: "Melanie".into(), content: "Are you still painting that sunrise landscape?".into(), ..Turn::default() },
+                    Turn { id: "D1:3".into(), role: "Caroline".into(), content: "Yeah, I switched to acrylics for it yesterday.".into(), ..Turn::default() },
+                    Turn { id: "D1:4".into(), role: "Melanie".into(), content: "My kids love the beach.".into(), ..Turn::default() },
                 ],
             }],
             queries: vec![Query { text: "What medium did Caroline use for her sunrise landscape?".into(), date: String::new() }],
@@ -3169,16 +4498,16 @@ mod tests {
         let req = RankRequest {
             sessions: vec![
                 Session { id: "s1".into(), date: String::new(), timestamp: 0, turns: vec![
-                    Turn { id: "gold".into(), role: "user".into(), content: "My first sprint ends on March 29 for login features.".into() },
-                    Turn { id: "reply".into(), role: "assistant".into(), content: format!("Here is a sprint plan ending March 29: {filler_essay}") },
+                    Turn { id: "gold".into(), role: "user".into(), content: "My first sprint ends on March 29 for login features.".into(), ..Turn::default() },
+                    Turn { id: "reply".into(), role: "assistant".into(), content: format!("Here is a sprint plan ending March 29: {filler_essay}"), ..Turn::default() },
                 ]},
                 Session { id: "s2".into(), date: String::new(), timestamp: 0, turns: vec![
-                    Turn { id: "noise".into(), role: "assistant".into(), content: format!("Another unrelated deployment guide: {filler_essay}") },
+                    Turn { id: "noise".into(), role: "assistant".into(), content: format!("Another unrelated deployment guide: {filler_essay}"), ..Turn::default() },
                 ]},
                 Session { id: "s3".into(), date: String::new(), timestamp: 0, turns: vec![
-                    Turn { id: "noise2".into(), role: "user".into(), content: "Unrelated question about SQLite migrations.".into() },
-                    Turn { id: "noise3".into(), role: "assistant".into(), content: "Sure, here are SQLite migration commands.".into() },
-                    Turn { id: "noise4".into(), role: "user".into(), content: "Thanks!".into() },
+                    Turn { id: "noise2".into(), role: "user".into(), content: "Unrelated question about SQLite migrations.".into(), ..Turn::default() },
+                    Turn { id: "noise3".into(), role: "assistant".into(), content: "Sure, here are SQLite migration commands.".into(), ..Turn::default() },
+                    Turn { id: "noise4".into(), role: "user".into(), content: "Thanks!".into(), ..Turn::default() },
                 ]},
             ],
             queries: vec![Query { text: "When does my first sprint end?".into(), date: String::new() }],
@@ -3694,5 +5023,336 @@ mod tests {
         };
         let ranked = rank(&req);
         assert_eq!(ranked.results[0].sessions[0].id, "new");
+    }
+
+    #[test]
+    fn tied_turns_are_identical_across_two_runs() {
+        let mut sessions = Vec::new();
+        for i in 0..12 {
+            sessions.push(Session {
+                id: format!("s{i}"),
+                date: String::new(),
+                timestamp: i,
+                turns: vec![turn("user", "alpha beta gamma delta"), turn("assistant", "alpha beta gamma delta")],
+            });
+        }
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "alpha beta gamma delta".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        assert_eq!(serde_json::to_string(&rank(&req)).unwrap(), serde_json::to_string(&rank(&req)).unwrap());
+    }
+
+    #[test]
+    fn exact_edge_replaces_a_weaker_slot_without_shared_words() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "now".into(),
+                    date: String::new(),
+                    timestamp: 2,
+                    turns: vec![Turn {
+                        id: "trigger".into(),
+                        role: "user".into(),
+                        content: "The ledger key is cedar.".into(),
+                        links: vec![TurnLink { kind: "backfill".into(), to: "earlier".into(), degree: 2 }],
+                        stability: 4.0,
+                    }],
+                },
+                Session {
+                    id: "then".into(),
+                    date: String::new(),
+                    timestamp: 1,
+                    turns: vec![Turn {
+                        id: "earlier".into(),
+                        role: "user".into(),
+                        content: "quartz violin under the stairs".into(),
+                        stability: 9.0,
+                        ..Turn::default()
+                    }],
+                },
+                Session { id: "n1".into(), date: String::new(), timestamp: 3, turns: vec![turn("user", "marble compass on the table")] },
+                Session { id: "n2".into(), date: String::new(), timestamp: 4, turns: vec![turn("user", "linen harbor in the fog")] },
+                Session { id: "n3".into(), date: String::new(), timestamp: 5, turns: vec![turn("user", "pewter lantern by the door")] },
+                Session { id: "n4".into(), date: String::new(), timestamp: 6, turns: vec![turn("user", "silk orchard past the gate")] },
+            ],
+            queries: vec![Query { text: "Where is the ledger key?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|t| t.id.clone()).collect();
+        assert!(ids.iter().any(|id| id == "trigger"), "{ids:?}");
+        assert!(ids.iter().any(|id| id == "earlier"), "exact edge missed the zero-overlap turn: {ids:?}");
+    }
+
+    #[test]
+    fn a_backward_edge_lands_inside_the_first_five_not_the_tail() {
+        let mut sessions = vec![
+            Session {
+                id: "now".into(),
+                date: String::new(),
+                timestamp: 20,
+                turns: vec![Turn {
+                    id: "trigger".into(),
+                    role: "user".into(),
+                    content: "The ledger key is cedar.".into(),
+                    links: vec![TurnLink { kind: "backfill".into(), to: "earlier".into(), degree: 2 }],
+                    ..Turn::default()
+                }],
+            },
+            Session {
+                id: "then".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![Turn {
+                    id: "earlier".into(),
+                    role: "user".into(),
+                    content: "quartz violin under the stairs".into(),
+                    ..Turn::default()
+                }],
+            },
+        ];
+        for i in 0..8 {
+            sessions.push(Session {
+                id: format!("f{i}"),
+                date: String::new(),
+                timestamp: 2 + i,
+                turns: vec![turn("user", &format!("ledger {}", "padding ".repeat(40)))],
+            });
+        }
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "Where is the ledger key?".into(), date: String::new() }],
+            top_k: 10,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let rows: Vec<String> = ranked.results[0].turns.iter().map(|t| format!("{}:{:.3}", t.id, t.score)).collect();
+        let pos = rows.iter().position(|row| row.starts_with("earlier:"));
+        assert!(pos.is_some_and(|p| p < 5), "backward edge parked in the tail: {rows:?}");
+    }
+
+    #[test]
+    fn rabin_karp_header_title_dictionary_bridges_numeric_and_multiword_titles() {
+        let req = RankRequest {
+            sessions: vec![
+                Session { id: "anchor".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "The 1928 Winter Games figure skating pair event was won in St. Moritz alongside the premiere of Symphony No. 9.")] },
+                Session { id: "d1".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Figure skating pair events in St. Moritz drew Alpine crowds.")] },
+                Session { id: "d2".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "St. Moritz figure skating pair medals were awarded outdoors.")] },
+                Session { id: "d3".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Winter figure skating pair routines included spins.")] },
+                Session { id: "d4".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Judges scored the figure skating pair program in St. Moritz.")] },
+                Session { id: "target".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "Symphony No. 9 (piece)\nComposed in Vienna, this symphony features a choral finale.")] },
+            ],
+            queries: vec![Query { text: "In which city was the symphony premiered alongside the St. Moritz figure skating pair event composed?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let top5: Vec<String> = rank(&req).results[0].sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(top5.contains(&"target".to_string()), "Rabin-Karp header bridge missed: {top5:?}");
+    }
+
+    #[test]
+    fn word_boundary_cues_never_misfire_on_substrings() {
+        let army = classify("Which Army Academy did Amy attend in Miami's district?");
+        assert!(!army.user_attribution, "Army/Amy/Miami's tripped user attribution: {army:?}");
+
+        let server = classify("How does the server service preserve gifted packets?");
+        assert!(!server.preference, "server/gifted tripped preference: {server:?}");
+
+        let renew = classify("What did Matthew renew before curfew?");
+        assert!(!renew.current_state, "renew tripped current_state: {renew:?}");
+
+        let claim = "Did the bilateral candidate validate the $0 claim?";
+        let bilateral = classify(claim);
+        assert!(!bilateral.temporal, "bilateral/validate/$0 tripped temporal: {bilateral:?}");
+        let padded = word_padded(claim);
+        assert!(padded.contains("$0"), "currency amount was stripped: {padded}");
+
+        assert!(is_content("one"), "Formula One lost the content token one");
+        assert!(raw_tokens("Formula One").contains(&"one".to_string()));
+
+        let ix = build_index(
+            &[Session {
+                id: "claim".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("user", "They claimed victory"),
+                    turn("user", "Their aim was victory"),
+                ],
+            }],
+            &Params::default(),
+        );
+        assert!(!ix.turns[0].has_causal, "aim substring inside claimed set has_causal");
+        assert!(ix.turns[1].has_causal, "whole-word aim cue did not fire");
+    }
+
+    #[test]
+    fn standing_rules_channel_fires_without_stealing_multihop_episodic_slots() {
+        let episodic = [
+            ("e1", "2024/01/03 (Wed) 09:00", "I logged an otter survey and counted 2 pups by the reed bank."),
+            ("e2", "2024/02/11 (Sun) 09:00", "I logged an otter survey and counted 4 pups by the cove."),
+            ("e3", "2024/03/19 (Tue) 09:00", "I logged an otter survey and counted 1 pup by the marsh."),
+            ("e4", "2024/04/07 (Sun) 09:00", "I logged an otter survey and counted 6 pups by the pier."),
+            ("e5", "2024/05/22 (Wed) 09:00", "I logged an otter survey and counted 3 pups by the inlet."),
+        ];
+        let mut sessions = Vec::new();
+        for (id, date, content) in episodic {
+            sessions.push(Session {
+                id: id.into(),
+                date: date.into(),
+                timestamp: 0,
+                turns: vec![turn("user", content)],
+            });
+        }
+        sessions.push(Session {
+            id: "rule".into(),
+            date: "2023/12/01 (Fri) 09:00".into(),
+            timestamp: 0,
+            turns: vec![turn("user", "Always include the unit symbol when writing measurements.")],
+        });
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "How many otter surveys did I log?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let intent = &ranked.results[0].intent;
+        assert!(intent.sniper_how_many && intent.multi_hop, "{intent:?}");
+        let ids: Vec<&str> = ranked.results[0].sessions.iter().take(5).map(|s| s.id.as_str()).collect();
+        for id in ["e1", "e2", "e3", "e4", "e5"] {
+            assert!(ids.contains(&id), "episodic slot missing {id}: {ids:?}");
+        }
+        assert!(!ids.contains(&"rule"), "standing rule stole an episodic slot: {ids:?}");
+        assert!(
+            ranked.results[0].standing_rules.iter().any(|r| r.session_id == "rule"),
+            "standing channel missed the zero-overlap rule: {:?}",
+            ranked.results[0].standing_rules
+        );
+    }
+
+    #[test]
+    fn ingest_rsb_handle_and_contradiction_bridge_backward_only() {
+        let path_words = "Glossary lists src auth token rs as separate syllables.";
+        let noise = "Marble compass beside a cedar shelf.";
+        let mut sessions = vec![
+            Session {
+                id: "S0".into(),
+                date: String::new(),
+                timestamp: 1_700_000_000,
+                turns: vec![Turn {
+                    id: "T0".into(),
+                    role: "user".into(),
+                    content: "Pinned legacy rotation window to 15m in src/auth/token.rs".into(),
+                    ..Turn::default()
+                }],
+            },
+        ];
+        for (i, content) in [path_words, path_words, path_words, noise, noise].into_iter().enumerate() {
+            sessions.push(Session {
+                id: format!("F{}", i + 1),
+                date: String::new(),
+                timestamp: 1_700_000_000 + ((i as i64) + 1) * 200_000,
+                turns: vec![turn("user", content)],
+            });
+        }
+        sessions.push(Session {
+            id: "S6".into(),
+            date: String::new(),
+            timestamp: 1_700_000_000 + 6 * 200_000,
+            turns: vec![Turn {
+                id: "T6".into(),
+                role: "user".into(),
+                content: "Production outage caused by expired JWT signature in src/auth/token.rs".into(),
+                ..Turn::default()
+            }],
+        });
+        sessions.push(Session {
+            id: "S7".into(),
+            date: String::new(),
+            timestamp: 1_700_000_000 + 7 * 200_000,
+            turns: vec![Turn {
+                id: "T7".into(),
+                role: "user".into(),
+                content: "Quiet refactor landed beside src/auth/token.rs overnight.".into(),
+                ..Turn::default()
+            }],
+        });
+        assert_eq!(sessions.len(), 8);
+
+        let ix = build_index(&sessions, &Params::default());
+        assert!(
+            ix.session_rsb_back[6].iter().any(|&(_, prev)| prev == 0),
+            "later outage did not link backward to the earlier path: {:?}",
+            ix.session_rsb_back
+        );
+        assert!(
+            ix.session_rsb_back.iter().enumerate().all(|(later, edges)| {
+                edges.iter().all(|&(_, earlier)| earlier < later)
+            }),
+            "RSB edge pointed forward: {:?}",
+            ix.session_rsb_back
+        );
+        assert!(
+            ix.session_supersedes_back.iter().enumerate().all(|(later, edges)| {
+                edges.iter().all(|&earlier| earlier < later)
+            }),
+            "contradiction edge pointed forward: {:?}",
+            ix.session_supersedes_back
+        );
+        assert!(ix.session_rsb_back[6].iter().all(|&(_, prev)| prev != 7));
+
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query {
+                text: "What caused the production outage with expired JWT signature?".into(),
+                date: String::new(),
+            }],
+            top_k: 8,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let session_ids: Vec<&str> = ranked.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(session_ids.contains(&"S6"), "outage session missing: {session_ids:?}");
+        assert!(session_ids.contains(&"S0"), "backward RSB missed the earlier path: {session_ids:?}");
+        assert!(!session_ids.contains(&"S7"), "RSB pulled a later session forward: {session_ids:?}");
+        let turn_ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        assert!(turn_ids.contains(&"T0"), "backward RSB missed turn T0: {turn_ids:?}");
+        assert!(!turn_ids.contains(&"T7"), "RSB pulled later turn T7 forward: {turn_ids:?}");
+    }
+
+    #[test]
+    fn uncarried_scene_pooling_prevents_reaction_and_vocative_rank1_steal() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "D1".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    Turn {
+                        id: "D1:1".into(),
+                        role: "Caroline".into(),
+                        content: "I adopted a rescue greyhound yesterday!".into(),
+                        ..Turn::default()
+                    },
+                    Turn {
+                        id: "D1:2".into(),
+                        role: "Melanie".into(),
+                        content: "Aww amazing Caroline! Why did you choose a greyhound?".into(),
+                        ..Turn::default()
+                    },
+                ],
+            }],
+            queries: vec![Query { text: "What dog did Caroline adopt?".into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let top = ranked.results[0].turns.first().map(|t| t.id.as_str());
+        assert_eq!(top, Some("D1:1"), "vocative follow-up stole rank 1: {:?}", ranked.results[0].turns);
     }
 }
