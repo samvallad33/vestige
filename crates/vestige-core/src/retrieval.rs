@@ -5745,6 +5745,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Wh-slot type gate. One pairwise vote: a turn that fills the question's
+    // closed-class type stays ahead of one that does not. Ties keep this order.
+    // Not a score bonus. RSB has already seated the cause.
+    wh_type_gate(ix, &q.text, &mut final_turn_indices);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6514,6 +6518,51 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
 /// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
 /// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
 /// they do on a full window. The head is not a candidate for demotion.
+/// One ballot. Satisfiers keep their relative order, then everyone else does.
+/// If nobody satisfies the slot, the list is left as it is.
+fn wh_type_gate(ix: &Index, query: &str, list: &mut Vec<usize>) {
+    let slots = wh_slots(query);
+    if slots == 0 || list.len() < 2 {
+        return;
+    }
+    let mut cause = vec![false; ix.turns.len()];
+    for (src, turn) in ix.turns.iter().enumerate() {
+        let mut mark = |target: usize| {
+            if target != src && target < cause.len() {
+                cause[target] = true;
+            }
+        };
+        for &target in &turn.policy_backlinks {
+            mark(target);
+        }
+        for &target in &turn.supersedes_turns {
+            mark(target);
+        }
+        for &(_, target) in &turn.exact_edges {
+            mark(target);
+        }
+        if let Some(target) = rsb_antecedent(ix, src) {
+            mark(target);
+        }
+    }
+    let mut yes = Vec::with_capacity(list.len());
+    let mut no = Vec::new();
+    for &ti in list.iter() {
+        let edge = cause.get(ti).copied().unwrap_or(false);
+        if wh_satisfied(ix, ti, slots, edge) {
+            yes.push(ti);
+        } else {
+            no.push(ti);
+        }
+    }
+    if yes.is_empty() {
+        return;
+    }
+    list.clear();
+    list.extend(yes);
+    list.extend(no);
+}
+
 fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
     if list.len() < 2 {
         return;
@@ -8364,6 +8413,28 @@ mod recall_cue_tests {
         rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene);
         assert_eq!(list[0], head, "slot 1 stays the RSB head");
         assert_eq!(list[1], fresh, "ATMS still demotes a superseded turn inside the tail");
+    }
+
+    #[test]
+    fn wh_type_gate_is_one_order_vote() {
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("clock", "user", "We met at 18:40 after the show."),
+            t("later", "user", "We met at 19:05 after the show."),
+        ])];
+        let ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let clock = idx(&ix, "clock");
+        let later = idx(&ix, "later");
+        let mut list = vec![plain, clock, later];
+        wh_type_gate(&ix, "When did we meet?", &mut list);
+        assert_eq!(ids(&ix, &list), vec!["clock", "later", "plain"]);
+        let mut tied = vec![clock, later, plain];
+        wh_type_gate(&ix, "When did we meet?", &mut tied);
+        assert_eq!(ids(&ix, &tied), vec!["clock", "later", "plain"]);
+        let mut untouched = vec![plain, clock];
+        wh_type_gate(&ix, "Please repeat that.", &mut untouched);
+        assert_eq!(ids(&ix, &untouched), vec!["plain", "clock"]);
     }
 
     #[test]
