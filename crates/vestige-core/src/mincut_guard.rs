@@ -29,14 +29,23 @@
 //! header-anchor session degree cap (`1..=6`). A token is the capitalized
 //! form on that turn. The known-proper backfill is not an identity edge.
 //!
-//! Entry, fixed before the v-next card and not fit to a slice. The seated
-//! tail is ordered by the gatekeeper without this vote. A deep turn is
-//! seated only when its margin against every seated tail turn is strictly
-//! positive on the same five ballots (scene, structural degree, stability,
-//! wh-slot, island). Qualifiers are ordered by Kemeny among themselves and
-//! evict from the bottom of the tail. When none qualify, the tail stays in
-//! that baseline order. The island ballot is one of the five votes. It is
-//! not a second pass over the window.
+//! Entry. The seated tail is ordered by the gatekeeper without this vote.
+//! A deep turn passes a seated turn only when its margin on the five
+//! ballots (scene, structural degree, stability, wh-slot, island) is
+//! strictly positive. Qualifiers are the deep turns that beat the bottom
+//! of that tail. They are ordered by Kemeny among themselves, then merged
+//! so a qualifier advances only past seated turns it beats. Truncation
+//! drops the bottom. When none qualify, the tail stays in the baseline
+//! order. The island ballot is one of the five votes. It does not reorder
+//! two seated turns.
+//!
+//! The whole-tail bar (a deep turn had to beat every seated turn) was the
+//! rule in the commit before this one. One card of that binary fired on
+//! 0 LME questions, 0 LoCoMo questions, and 3 BEAM questions, and every
+//! headline matched PR 715. A higher-scene seated turn, or an on-island
+//! seated turn against which the island vote abstains, blocked admission.
+//! The suffix rule above is the same strict majority applied to the turns
+//! a deep candidate actually passes. No constant changed.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

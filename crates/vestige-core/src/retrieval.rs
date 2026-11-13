@@ -6946,11 +6946,12 @@ fn rank1_gatekeeper_ballots(
 
 /// Slot 0 is the RSB head and is not a candidate. The seated tail is ordered
 /// by the gatekeeper without the island vote, the same order PR 715 returns.
-/// A deep turn takes a seat only when it beats every seated tail turn by a
-/// strict pairwise majority on the five ballots, island included. Qualifiers
-/// are ordered by Kemeny among themselves and evict from the bottom of that
-/// tail. Otherwise the tail stays the baseline order: the island vote does
-/// not reshuffle the window. Returns whether a deep turn took a seat.
+/// A deep turn passes a seated turn only when the five-ballot margin is
+/// strictly positive. Qualifiers beat the bottom of that tail, are ordered
+/// by Kemeny among themselves, and advance only past turns they beat.
+/// Truncation evicts from the bottom. Otherwise the tail stays the baseline
+/// order: the island vote does not reshuffle the window. Returns whether a
+/// deep turn took a seat.
 fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) -> bool {
     if list.len() < 2 {
         return false;
@@ -6997,10 +6998,13 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
         );
         votes.margin() > 0
     };
+    let at = |ti: usize| pool.iter().position(|&p| p == ti).unwrap_or(0);
+    let beats_turn = |a: usize, b: usize| beats(at(a), at(b));
+    let bottom = *baseline.last().unwrap();
     let deep_start = tail.len();
     let mut qualifiers: Vec<usize> = Vec::new();
     for a in deep_start..pool.len() {
-        if (0..deep_start).all(|b| beats(a, b)) {
+        if beats_turn(pool[a], bottom) {
             qualifiers.push(pool[a]);
         }
     }
@@ -7008,14 +7012,21 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
         write(list, &baseline);
         return false;
     }
-    let q_same: Vec<bool> = qualifiers
-        .iter()
-        .map(|ti| pool.iter().position(|p| p == ti).map(|i| same[i]).unwrap_or(false))
-        .collect();
+    let q_same: Vec<bool> = qualifiers.iter().map(|&ti| same[at(ti)]).collect();
     rank1_gatekeeper_ballots(ix, query, &mut qualifiers, t_scene, &q_same);
-    let mut final_tail = qualifiers;
-    final_tail.extend(baseline.iter().copied());
-    final_tail.truncate(tail.len());
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut final_tail = Vec::with_capacity(tail.len());
+    while final_tail.len() < tail.len() && (i < qualifiers.len() || j < baseline.len()) {
+        let take_qualifier = i < qualifiers.len() && (j == baseline.len() || beats_turn(qualifiers[i], baseline[j]));
+        if take_qualifier {
+            final_tail.push(qualifiers[i]);
+            i += 1;
+        } else {
+            final_tail.push(baseline[j]);
+            j += 1;
+        }
+    }
     let fired = final_tail != baseline;
     if fired {
         crate::mincut_guard::record_fire();
@@ -9012,7 +9023,7 @@ mod recall_cue_tests {
     }
 
     #[test]
-    fn a_deep_turn_that_loses_one_pair_does_not_reorder_the_window() {
+    fn a_deep_turn_passes_only_the_suffix_it_beats() {
         let sessions = vec![
             s("a", vec![
                 t("head", "user", "I left the spare key with Sam."),
@@ -9037,9 +9048,14 @@ mod recall_cue_tests {
         scene[deep] = 4.0;
         let mut list = vec![head, off, near];
         let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
-        assert!(!fired);
-        assert_eq!(list, vec![head, off, near], "island membership does not reshuffle the seated tail");
+        assert!(fired);
+        assert_eq!(list, vec![head, off, deep], "the deep turn takes only the suffix it strictly beats");
         assert_eq!(list[0], head);
+        scene[deep] = 0.0;
+        let mut blocked = vec![head, off, near];
+        let blocked_fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut blocked, &scene);
+        assert!(!blocked_fired);
+        assert_eq!(blocked, vec![head, off, near], "island membership does not reshuffle the seated tail");
     }
 
     #[test]
