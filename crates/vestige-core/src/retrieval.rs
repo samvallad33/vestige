@@ -5745,6 +5745,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Ascent of the RSB cause. The direct cause is already seated. Each further
+    // cause, derived by joining that chain, sits immediately after the previous
+    // one. Same window rule as RSB v4: nothing already inside is dropped, and
+    // k is the caller's top_k. No new constant.
+    if !it.is_event_sequence {
+        ascent_bridge(ix, &mut final_turn_indices, k);
+    }
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6035,6 +6042,72 @@ fn rsb_seat_behind(ix: &Index, list: &mut Vec<usize>, k: usize) {
             list.insert(sym_at + 1, cause);
         } else if list.len() < k {
             list.insert(sym_at + 1, cause);
+        }
+    }
+}
+
+/// Linear Datalog ascent of the cause RSB already uses.
+///
+/// `cause(x, y)` is that functional cause: the antecedent, otherwise the
+/// nearest earlier standing policy. The program is
+/// `bridge(x, y) :- cause(x, y)` and
+/// `bridge(x, z) :- bridge(x, y), cause(y, z)`.
+/// Semi-naive evaluation extends one cause per round and stops when a round
+/// adds nothing: the next cause is missing, or it repeats a turn already on
+/// the chain. Round 1 is the cause RSB seated, so it is not seated again.
+/// Each later turn sits immediately after the previous one. A turn already
+/// ahead of that anchor stays there. A turn outside the window is inserted
+/// only while the window is shorter than k. A full window does not grow.
+/// There is no depth cap. k is the caller's top_k.
+fn ascent_bridge(ix: &Index, list: &mut Vec<usize>, k: usize) {
+    if list.is_empty() || k == 0 {
+        return;
+    }
+    let snapshot = list.clone();
+    let mut chains: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut reserved = snapshot.clone();
+    let mut seated: Vec<usize> = Vec::new();
+    for &sym in &snapshot {
+        let Some(direct) = rsb_cause(ix, sym) else { continue };
+        let mut seen = vec![sym, direct];
+        let mut frontier = direct;
+        let mut seat_after = if snapshot.contains(&direct) { direct } else { sym };
+        let mut steps: Vec<(usize, usize)> = Vec::new();
+        loop {
+            let Some(next) = rsb_cause(ix, frontier) else { break };
+            if seen.contains(&next) || seated.contains(&next) {
+                break;
+            }
+            let in_snapshot = snapshot.contains(&next);
+            if !in_snapshot && reserved.len() >= k {
+                break;
+            }
+            if !in_snapshot {
+                reserved.push(next);
+            }
+            steps.push((seat_after, next));
+            seen.push(next);
+            seated.push(next);
+            frontier = next;
+            seat_after = next;
+        }
+        if !steps.is_empty() {
+            chains.push(steps);
+        }
+    }
+    for steps in chains.into_iter().rev() {
+        for (anchor, bridge) in steps {
+            let Some(mut anchor_at) = list.iter().position(|&t| t == anchor) else { continue };
+            if let Some(bridge_at) = list.iter().position(|&t| t == bridge) {
+                if bridge_at <= anchor_at {
+                    continue;
+                }
+                list.remove(bridge_at);
+                anchor_at = list.iter().position(|&t| t == anchor).unwrap();
+                list.insert(anchor_at + 1, bridge);
+            } else if list.len() < k {
+                list.insert(anchor_at + 1, bridge);
+            }
         }
     }
 }
@@ -8223,6 +8296,94 @@ mod recall_cue_tests {
             !ids.contains(&"rule".to_string()),
             "a temporal question must not import a policy from another episode, got {ids:?}"
         );
+    }
+
+    #[test]
+    fn ascent_bridge_seats_the_earlier_policy_behind_the_rsb_cause() {
+        let sessions = vec![s(
+            "conv_s0",
+            vec![
+                t("root", "user", "Always write the answer in markdown tables."),
+                t("mid", "user", "Always cite the source beside the answer."),
+                t("near", "user", "Always keep the backup on a separate disk."),
+                t("later", "user", "Could you outline a backup routine?"),
+                t("other", "user", "The kettle whistled at noon."),
+            ],
+        )];
+        let ix = ix_of(&sessions);
+        let later = idx(&ix, "later");
+        let near = idx(&ix, "near");
+        let mid = idx(&ix, "mid");
+        let root = idx(&ix, "root");
+        let other = idx(&ix, "other");
+        assert_eq!(rsb_cause(&ix, later), Some(near));
+        assert_eq!(rsb_cause(&ix, near), Some(mid));
+        assert_eq!(rsb_cause(&ix, mid), Some(root));
+        assert_eq!(rsb_cause(&ix, root), None);
+
+        let mut list = vec![later, near, other, mid, root];
+        ascent_bridge(&ix, &mut list, 5);
+        assert_eq!(
+            ids(&ix, &list),
+            vec!["later", "near", "mid", "root", "other"]
+        );
+
+        let mut seated = vec![later, near, mid, root, other];
+        ascent_bridge(&ix, &mut seated, 5);
+        assert_eq!(
+            ids(&ix, &seated),
+            vec!["later", "near", "mid", "root", "other"]
+        );
+
+        let mut ahead = vec![later, root, near, mid];
+        ascent_bridge(&ix, &mut ahead, 4);
+        assert_eq!(ids(&ix, &ahead), vec!["later", "root", "near", "mid"]);
+
+        let mut full = vec![later, near];
+        ascent_bridge(&ix, &mut full, 2);
+        assert_eq!(ids(&ix, &full), vec!["later", "near"]);
+
+        let mut room = vec![later, near];
+        ascent_bridge(&ix, &mut room, 4);
+        assert_eq!(ids(&ix, &room), vec!["later", "near", "mid", "root"]);
+    }
+
+    #[test]
+    fn ascent_bridge_never_moves_the_rsb_head() {
+        let sessions = vec![s(
+            "conv_s0",
+            vec![
+                t("root", "user", "Always write the answer in markdown tables."),
+                t("mid", "user", "Always cite the source beside the answer."),
+                t("near", "user", "Always keep the backup on a separate disk."),
+                t("later", "user", "Could you outline a backup routine?"),
+                t("other", "user", "The kettle whistled at noon."),
+            ],
+        )];
+        let ix = ix_of(&sessions);
+        let turns = ["later", "near", "mid", "root", "other"];
+        let ids_of: Vec<usize> = turns.iter().map(|id| idx(&ix, id)).collect();
+        for head in &ids_of {
+            let mut list = vec![*head];
+            for id in &ids_of {
+                if id != head {
+                    list.push(*id);
+                }
+            }
+            let before = list[0];
+            let k = list.len();
+            ascent_bridge(&ix, &mut list, k);
+            assert_eq!(list[0], before, "slot 0 stays {}", ix.turns[before].id);
+            let mut short = vec![*head];
+            for id in &ids_of {
+                if id != head && short.len() < 2 {
+                    short.push(*id);
+                }
+            }
+            let short_head = short[0];
+            ascent_bridge(&ix, &mut short, 5);
+            assert_eq!(short[0], short_head);
+        }
     }
 
     #[test]
