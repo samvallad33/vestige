@@ -22,7 +22,8 @@
 //! the head's cross-session neighbors: policy backlinks, supersession,
 //! exact edges, exact name/handle tokens, and one turn of a
 //! `session_episode_prev` session, in that same scene order. Adjacent
-//! turns are not edges. The local RSB reply stays in the degree ballot
+//! turns already in the pool share one edge, so the answer beside the
+//! head stays on the island. The local RSB reply stays in the degree ballot
 //! and is not a second island edge. The token session range is the
 //! ingest-time exact-handle gate (`2..=6`) and the header-anchor session
 //! degree cap (`1..=6`). A token is the capitalized form on that turn.

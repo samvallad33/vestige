@@ -6705,9 +6705,16 @@ fn episode_islands(ix: &Index, pool: &[usize]) -> Vec<usize> {
             }
         }
     }
-    // Adjacent turns are not edges. A unit path has min-cut 1, so adjacency
-    // would weld every in-pool turn of the head's session into one island
-    // and the vote would prefer that thread over the other episode.
+    // True neighbors already in the pool share one edge. The answer often
+    // sits beside the head and does not repeat the name. A path cannot pull
+    // a turn that was left out of the pool: the deep pool is cross-session.
+    for members in &ix.session_turns {
+        for pair in members.windows(2) {
+            if let (Some(&a), Some(&b)) = (pos.get(&pair[0]), pos.get(&pair[1])) {
+                unit_link(&mut weight, a, b);
+            }
+        }
+    }
     for (si, prev) in ix.session_episode_prev.iter().enumerate() {
         let Some(pj) = *prev else { continue };
         let a = ix.session_turns.get(si).and_then(|members| members.iter().find_map(|ti| pos.get(ti).copied()));
@@ -8915,8 +8922,9 @@ mod recall_cue_tests {
         scene[local] = 3.0;
         let mut tied = vec![head, noise, local];
         let tied_fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut tied, &scene);
-        assert!(!tied_fired, "adjacency is not a vote, and a lower-scene name does not break the tie");
-        assert_eq!(tied, vec![head, noise, local]);
+        assert!(tied_fired);
+        assert_eq!(tied[0], head);
+        assert_eq!(tied[1], local, "an in-window neighbor of the head stays on the island");
     }
 
     #[test]
