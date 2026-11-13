@@ -16,8 +16,17 @@
 
 #![allow(clippy::all)]
 
+use crate::wh_slot_guard::{
+    scene_margin_milli, token_ic, wh_weight_milli, GATEKEEPER_POOL, WH_ANTIMONOPOLY_MIN_SESSIONS,
+    WH_CAUSE_BIND_IN_ORDER_POOL, WH_CLOSED_SCENE_FLOOR, WH_HOW_MANY_FOLLOWS_715, WH_MARGIN_SCALE,
+    WH_MIN_NAME_LEN, WH_SESSION_CAP_TOP5, WH_UNINFORMATIVE, WH_YEAR_MAX, WH_YEAR_MIN,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use serde_json::{json, Value};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 // =========================================================================
@@ -1867,14 +1876,9 @@ struct TurnIx {
     /// Backward state-revision / contradiction edges (`t_new -> t_old`).
     supersedes_turns: Vec<usize>,
     stability: f32,
-    /// ISO date or HH:MM in the turn text. Character form, not a month name.
-    form_clock: bool,
-    /// An ASCII digit in the turn text. Number words do not count.
-    form_digit: bool,
-    /// An @handle, a URL, or a path token.
-    form_handle: bool,
-    /// A capitalized word of two or more letters that is not sentence-initial.
-    form_midcap: bool,
+    /// Turn prose. The wh residual blanks the query's tokens on this text.
+    /// Character forms only. Not a word list.
+    body: String,
     raw_links: Vec<TurnLink>,
 }
 
@@ -1964,6 +1968,9 @@ struct Index {
     cue_vocab: HashMap<String, u32>,
     /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
     role_cues: HashSet<u32>,
+    /// Tokens attested with a lowercase first letter anywhere in this conversation.
+    /// A sentence-initial TitleCase name counts only when its lower form is absent here.
+    lowercase_attested: HashSet<String>,
 }
 
 /// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
@@ -3345,10 +3352,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 policy_backlinks: Vec::new(),
                 supersedes_turns: Vec::new(),
                 stability: t.stability,
-                form_clock: has_iso_or_hhmm(prose_body),
-                form_digit: has_ascii_digit(prose_body),
-                form_handle: has_handle_or_path(prose_body),
-                form_midcap: has_mid_sentence_name(prose_body),
+                body: prose_body.to_string(),
                 raw_links: t.links.clone(),
             });
         }
@@ -3780,6 +3784,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         });
     }
 
+    let lowercase_attested = lowercase_attested_from_turns(&turns);
     Index {
         vocab,
         session_ids,
@@ -3810,6 +3815,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         turn_cues,
         cue_vocab,
         role_cues,
+        lowercase_attested,
     }
 }
 
@@ -5735,16 +5741,87 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     session_opener_lift(ix, &q_cues, &mut final_turn_indices);
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
     hearsay(ix, &q_cues, &mut final_turn_indices);
-    // RSB: the retrieved turn is the symptom. Seat its structural cause
-    // immediately after it. The cause can share no words with the query.
-    // Never in front of the symptom. A full window does not grow.
+    // RSB seats into the caller's k, the same call PR 715 makes. A full
+    // window does not grow, so a cause cannot push a gold turn past k.
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
-    // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
-    // same Kemeny-Young order as PR 710, computed on that window with the head
-    // removed. No new constant: the frozen slot is position 0 of this window.
-    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    let seated: Vec<usize> = final_turn_indices.iter().copied().take(k).collect();
+    // Deeper candidates are appended after the seat. They are not passed to
+    // rsb_seat_behind and they do not shift the seated window.
+    let mut below: Vec<usize> = Vec::new();
+    let pool_cap = k.max(GATEKEEPER_POOL);
+    if seated.len() < pool_cap {
+        let mut seen: HashSet<usize> = seated.iter().copied().collect();
+        for ti in order(&t_scene, &turn_ts) {
+            if t_scene[ti] <= 0.0 {
+                continue;
+            }
+            if seen.insert(ti) {
+                below.push(ti);
+                if seated.len() + below.len() >= pool_cap {
+                    break;
+                }
+            }
+        }
+    }
+    let mut rsb_at: HashMap<usize, usize> = HashMap::with_capacity(seated.len() + below.len());
+    for (i, &t) in seated.iter().enumerate() {
+        rsb_at.insert(t, i);
+    }
+    for (j, &t) in below.iter().enumerate() {
+        rsb_at.entry(t).or_insert(k + j);
+    }
+    let head = seated.first().copied();
+    if let Some(head) = head {
+        // Slot 0 is the RSB head. The tail may reorder. Nothing here moves the head.
+        // Step 3A: event-sequence pairwise votes use the head's session timestamp.
+        let event_anchor_ts = if it.is_event_sequence {
+            ix.turns
+                .get(head)
+                .and_then(|t| ix.session_ts.get(t.session).copied())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let tail = seat_wh_tail(ix, &q.text, &seated[1..], &below, &t_scene, event_anchor_ts);
+        let mut out = Vec::with_capacity(k);
+        out.push(head);
+        out.extend(tail);
+        // Closed wh classes re-apply the 715 seat-behind placement so Kemeny
+        // cannot detach a cause from its symptom. WH_NONE keeps the 715 order.
+        // Event sequences already skip the first RSB seat, so they skip this too.
+        if !wh_uses_715_ballots(wh_class(&q.text)) && !it.is_event_sequence {
+            rsb_seat_behind(ix, &mut out, k);
+            if out.first().copied() != Some(head) {
+                if let Some(pos) = out.iter().position(|&t| t == head) {
+                    out.remove(pos);
+                }
+                out.insert(0, head);
+            }
+        }
+        WH_QUERIES.fetch_add(1, Ordering::Relaxed);
+        if out.iter().take(k).any(|t| rsb_at.get(t).copied().unwrap_or(0) >= k) {
+            WH_BELOW_K.fetch_add(1, Ordering::Relaxed);
+        }
+        if out.iter().take(5).any(|t| rsb_at.get(t).copied().unwrap_or(0) >= 10) {
+            WH_LIFTS.fetch_add(1, Ordering::Relaxed);
+        }
+        final_turn_indices = out;
+    }
+    // 217 stack post-passes, in the Stage B order: slot4dup, then idea 18.
+    // The RSB head is re-locked at slot 0 afterwards and is never demoted.
+    if let Some(head) = head {
+        apply_slot4_dup(ix, &mut final_turn_indices, k, &t_scene, &seated, &below);
+        apply_anti_monopoly(ix, &mut final_turn_indices, k, &t_scene, &seated, &below);
+        if final_turn_indices.first().copied() != Some(head) {
+            if let Some(pos) = final_turn_indices.iter().position(|&t| t == head) {
+                final_turn_indices.remove(pos);
+            }
+            final_turn_indices.insert(0, head);
+        }
+    }
+    maybe_dump_replay(ix, q, k, &it, &t_scene, &seated, &below, &final_turn_indices);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6045,43 +6122,6 @@ fn rsb_seat_behind(ix: &Index, list: &mut Vec<usize>, k: usize) {
 /// before any card.
 const KEMENY_EXACT_CAP: usize = 8;
 
-const WH_TIME: u8 = 1;
-const WH_QTY: u8 = 2;
-const WH_PERSON: u8 = 4;
-const WH_PLACE: u8 = 8;
-const WH_CAUSE: u8 = 16;
-
-/// Closed class of English interrogative function words. Not a topical list.
-fn wh_slots(query: &str) -> u8 {
-    let lower = query.to_ascii_lowercase();
-    let tokens: Vec<String> = lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_string())
-        .collect();
-    let mut slots = 0u8;
-    let has = |w: &str| tokens.iter().any(|t| t == w);
-    let phrase = |a: &str, b: &str| {
-        tokens.windows(2).any(|p| p[0] == a && p[1] == b)
-    };
-    if phrase("what", "time") || phrase("which", "year") || has("when") {
-        slots |= WH_TIME;
-    }
-    if phrase("how", "many") || phrase("how", "much") {
-        slots |= WH_QTY;
-    }
-    if has("who") || has("whom") || has("whose") {
-        slots |= WH_PERSON;
-    }
-    if has("where") {
-        slots |= WH_PLACE;
-    }
-    if has("why") {
-        slots |= WH_CAUSE;
-    }
-    slots
-}
-
 fn has_iso_or_hhmm(body: &str) -> bool {
     let b = body.as_bytes();
     if b.len() >= 10 {
@@ -6132,8 +6172,172 @@ fn has_handle_or_path(body: &str) -> bool {
     body.split_whitespace().any(|tok| tok.contains('/') && tok.len() > 1)
 }
 
-/// A capitalized word of at least two letters that is not the first word of a sentence.
-fn has_mid_sentence_name(body: &str) -> bool {
+/// Dump-only. Path or URL character geometry, without the @handle arm of
+/// `has_handle_or_path`. A `scheme://` span, or a whitespace token that
+/// contains `/` and is longer than one character. No word list. Not wired
+/// into ranking.
+fn has_path_or_url(body: &str) -> bool {
+    let b = body.as_bytes();
+    for i in 0..b.len() {
+        if i + 2 < b.len() && b[i] == b':' && b[i + 1] == b'/' && b[i + 2] == b'/' {
+            return true;
+        }
+    }
+    body.split_whitespace().any(|tok| tok.contains('/') && tok.len() > 1)
+}
+
+fn has_slash_date(body: &str) -> bool {
+    let b = body.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if !b[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let s1 = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        let n1 = i - s1;
+        if i >= b.len() || b[i] != b'/' || n1 == 0 || n1 > 4 {
+            continue;
+        }
+        i += 1;
+        let s2 = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        let n2 = i - s2;
+        if i >= b.len() || b[i] != b'/' || n2 == 0 || n2 > 4 {
+            continue;
+        }
+        i += 1;
+        let s3 = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        let n3 = i - s3;
+        if n3 == 0 || n3 > 4 {
+            continue;
+        }
+        // A year is four digits, at either end. "1/2" is not a date.
+        if n1 == 4 || n3 == 4 {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_calendar_year(body: &str) -> bool {
+    let b = body.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if !b[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        if i > 0 && b[i - 1].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i - start != 4 {
+            continue;
+        }
+        let Ok(year) = std::str::from_utf8(&b[start..i]).unwrap_or("").parse::<u32>() else {
+            continue;
+        };
+        if (WH_YEAR_MIN..=WH_YEAR_MAX).contains(&year) {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_clock_or_date(body: &str) -> bool {
+    has_iso_or_hhmm(body) || has_slash_date(body) || has_calendar_year(body)
+}
+
+/// Blank alphanumeric tokens that occur in the query. Punctuation stays, so a
+/// clock, a slash date, or a path can be re-tested on what the query did not say.
+fn blank_query_tokens(text: &str, excluded: &HashSet<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cur = String::new();
+    let flush = |cur: &mut String, out: &mut String| {
+        if cur.is_empty() {
+            return;
+        }
+        if excluded.contains(&cur.to_ascii_lowercase()) {
+            for _ in 0..cur.chars().count() {
+                out.push(' ');
+            }
+        } else {
+            out.push_str(cur);
+        }
+        cur.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() {
+            cur.push(c);
+        } else {
+            flush(&mut cur, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+fn has_novel_clock_or_date(body: &str, excluded: &HashSet<String>) -> bool {
+    has_clock_or_date(&blank_query_tokens(body, excluded))
+}
+
+fn has_novel_digit(body: &str, excluded: &HashSet<String>) -> bool {
+    has_ascii_digit(&blank_query_tokens(body, excluded))
+}
+
+fn has_novel_handle_or_path(body: &str, excluded: &HashSet<String>) -> bool {
+    has_handle_or_path(&blank_query_tokens(body, excluded))
+}
+
+fn collect_lowercase_tokens(text: &str, out: &mut HashSet<String>) {
+    let mut cur = String::new();
+    let flush = |cur: &mut String, out: &mut HashSet<String>| {
+        if cur.is_empty() {
+            return;
+        }
+        let mut chars = cur.chars();
+        if chars.next().is_some_and(|c| c.is_lowercase()) {
+            out.insert(cur.to_lowercase());
+        }
+        cur.clear();
+    };
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '\'' || c == '’' {
+            cur.push(c);
+        } else {
+            flush(&mut cur, out);
+        }
+    }
+    flush(&mut cur, out);
+}
+
+fn lowercase_attested_from_turns(turns: &[TurnIx]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for t in turns {
+        collect_lowercase_tokens(&t.body, &mut out);
+    }
+    out
+}
+
+/// TitleCase: first letter upper, every later letter lower, length at least
+/// [`WH_MIN_NAME_LEN`]. All-caps tokens fail the rest-lower test. Mid-sentence
+/// names always count. A sentence-initial name counts only when `lowercase_attested`
+/// does not contain that token (`df_lower == 0`).
+fn has_titlecase_name(body: &str, lowercase_attested: &HashSet<String>) -> bool {
     let chars: Vec<char> = body.chars().collect();
     let mut sentence_start = true;
     let mut i = 0;
@@ -6150,48 +6354,42 @@ fn has_mid_sentence_name(body: &str) -> bool {
         }
         if c.is_uppercase() {
             let start = i;
+            i += 1;
             while i < chars.len() && chars[i].is_alphabetic() {
                 i += 1;
             }
-            if !sentence_start && i - start >= 2 {
-                return true;
+            let len = i - start;
+            if len >= WH_MIN_NAME_LEN && chars[start + 1..i].iter().all(|ch| ch.is_lowercase()) {
+                if !sentence_start {
+                    return true;
+                }
+                let lower: String = chars[start..i].iter().flat_map(|ch| ch.to_lowercase()).collect();
+                if !lowercase_attested.contains(&lower) {
+                    return true;
+                }
             }
             sentence_start = false;
             continue;
         }
         sentence_start = false;
-        i += 1;
+        while i < chars.len()
+            && !chars[i].is_whitespace()
+            && chars[i] != '.'
+            && chars[i] != '!'
+            && chars[i] != '?'
+            && chars[i] != '\n'
+        {
+            i += 1;
+        }
     }
     false
 }
 
-fn wh_satisfied(ix: &Index, ti: usize, slots: u8, has_cause_edge: bool) -> bool {
-    if slots == 0 {
-        return true;
-    }
-    let turn = &ix.turns[ti];
-    let ts = ix.session_ts.get(turn.session).copied().unwrap_or(0);
-    if slots & WH_TIME != 0 && ts == 0 && !turn.form_clock {
-        return false;
-    }
-    if slots & WH_QTY != 0 && !turn.form_digit {
-        return false;
-    }
-    if slots & WH_PERSON != 0 && !turn.form_handle && !turn.form_midcap {
-        return false;
-    }
-    if slots & WH_PLACE != 0 && !turn.form_midcap && !turn.form_handle {
-        return false;
-    }
-    if slots & WH_CAUSE != 0 && !has_cause_edge {
-        return false;
-    }
-    true
+fn has_novel_titlecase_name(body: &str, excluded: &HashSet<String>, lowercase_attested: &HashSet<String>) -> bool {
+    has_titlecase_name(&blank_query_tokens(body, excluded), lowercase_attested)
 }
 
-/// In-degree inside the pool from edges the index already stored, plus the
-/// RSB antecedent. One pass over the log, not one pass per candidate.
-fn pool_structural_degree(ix: &Index, pool: &[usize]) -> Vec<i64> {
+fn pool_structural_degree(ix: &Index, pool: &[usize], include_rsb_antecedent: bool) -> Vec<i64> {
     let mut at = vec![None; ix.turns.len()];
     for (i, &ti) in pool.iter().enumerate() {
         if let Some(slot) = at.get_mut(ti) {
@@ -6217,8 +6415,10 @@ fn pool_structural_degree(ix: &Index, pool: &[usize]) -> Vec<i64> {
         for &(_, target) in &t.exact_edges {
             hit(target);
         }
-        if let Some(target) = rsb_antecedent(ix, src) {
-            hit(target);
+        if include_rsb_antecedent {
+            if let Some(target) = rsb_antecedent(ix, src) {
+                hit(target);
+            }
         }
     }
     degree
@@ -6449,57 +6649,303 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
-/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
-/// grow the window. The pool is that window, so its size is the caller's k.
-fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+const WH_NONE: u8 = 0;
+const WH_WHEN: u8 = 1;
+const WH_HOW_LONG: u8 = 2;
+const WH_HOW_MANY: u8 = 3;
+const WH_WHO: u8 = 4;
+const WH_WHERE: u8 = 5;
+
+static WH_QUERIES: AtomicU64 = AtomicU64::new(0);
+static WH_SWAPS: AtomicU64 = AtomicU64::new(0);
+static WH_BELOW_K: AtomicU64 = AtomicU64::new(0);
+static WH_VOTE_NZ: AtomicU64 = AtomicU64::new(0);
+static WH_AGAINST: AtomicU64 = AtomicU64::new(0);
+static WH_LIFTS: AtomicU64 = AtomicU64::new(0);
+
+pub fn wh_pool_counts() -> (u64, u64, u64, u64, u64, u64) {
+    (
+        WH_QUERIES.load(Ordering::Relaxed),
+        WH_SWAPS.load(Ordering::Relaxed),
+        WH_BELOW_K.load(Ordering::Relaxed),
+        WH_VOTE_NZ.load(Ordering::Relaxed),
+        WH_AGAINST.load(Ordering::Relaxed),
+        WH_LIFTS.load(Ordering::Relaxed),
+    )
+}
+
+fn query_tokens(query: &str) -> Vec<String> {
+    query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// True when this class keeps the PR 715 ballots (sign scene, antecedent
+/// degree, no residual, no below-window admission, no second seat-behind).
+fn wh_uses_715_ballots(class: u8) -> bool {
+    class == WH_NONE || (WH_HOW_MANY_FOLLOWS_715 && class == WH_HOW_MANY)
+}
+
+/// Closed interrogatives, in this order: how long, how many or how much,
+/// when, who/whom/whose, where. Everything else is `WH_NONE`.
+fn wh_class(query: &str) -> u8 {
+    let tokens = query_tokens(query);
+    let has = |w: &str| tokens.iter().any(|t| t == w);
+    let phrase = |a: &str, b: &str| tokens.windows(2).any(|p| p[0] == a && p[1] == b);
+    if phrase("how", "long") {
+        return WH_HOW_LONG;
+    }
+    if phrase("how", "many") || phrase("how", "much") {
+        return WH_HOW_MANY;
+    }
+    if has("when") {
+        return WH_WHEN;
+    }
+    if has("who") || has("whom") || has("whose") {
+        return WH_WHO;
+    }
+    if has("where") {
+        return WH_WHERE;
+    }
+    WH_NONE
+}
+
+fn wh_excluded(query: &str) -> HashSet<String> {
+    query_tokens(query).into_iter().collect()
+}
+
+fn wh_pass_rate(passing: usize, n: usize) -> f64 {
+    if n == 0 {
+        0.0
+    } else {
+        passing as f64 / n as f64
+    }
+}
+
+/// One residual. Query tokens are blanked before every character-form check.
+/// The session timestamp is never read.
+fn wh_residual(ix: &Index, ti: usize, class: u8, excluded: &HashSet<String>) -> bool {
+    let body = match ix.turns.get(ti) {
+        Some(t) => t.body.as_str(),
+        None => return false,
+    };
+    let clock = has_novel_clock_or_date(body, excluded);
+    let digit = has_novel_digit(body, excluded);
+    let name = has_novel_titlecase_name(body, excluded, &ix.lowercase_attested);
+    let handle = has_novel_handle_or_path(body, excluded);
+    match class {
+        WH_WHEN => clock,
+        WH_HOW_LONG => digit || clock,
+        WH_HOW_MANY => digit,
+        WH_WHO => name || handle,
+        WH_WHERE => handle || name,
+        _ => false,
+    }
+}
+
+struct WhCtx {
+    ok: HashMap<usize, bool>,
+    degree: HashMap<usize, i64>,
+    weight: i64,
+    informative: bool,
+    /// Closed wh class uses the continuous scene margin. WH_NONE keeps the 715 sign ballot.
+    continuous_scene: bool,
+    /// Lock (symptom, cause) supernodes inside order_pool. Off for 715-ballot classes.
+    cause_bind: bool,
+    /// Step 3A anchor: the RSB head's session timestamp when `is_event_sequence`
+    /// is set. 0 disables the proximity and order votes.
+    event_anchor_ts: i64,
+}
+
+fn sign_of(ord: std::cmp::Ordering) -> i64 {
+    match ord {
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
+/// Four ballots in milli-votes. `wh_weight` is at most one ballot.
+fn ballot_margin(scene_v: i64, deg_v: i64, stab_v: i64, wh_v: i64, wh_weight: i64) -> i64 {
+    (scene_v + deg_v + stab_v) * WH_MARGIN_SCALE + wh_v * wh_weight
+}
+
+/// `seated` is the window whose scarcity sets the weight. `below` is scored
+/// so a candidate can cast a vote, and it does not change `n` or `passing`.
+fn wh_ctx(ix: &Index, query: &str, seated: &[usize], below: &[usize], event_anchor_ts: i64) -> WhCtx {
+    let class = wh_class(query);
+    let mut members = Vec::with_capacity(seated.len() + below.len());
+    members.extend_from_slice(seated);
+    members.extend_from_slice(below);
+    // Every class uses the PR 715 / WH_NONE degree, including rsb_antecedent
+    // (dump field degree_none). Locked from the offline 217 stack. WH_NONE
+    // lists stay 715-identical because this is the same 715 degree.
+    let degree_v = pool_structural_degree(ix, &members, true);
+    let mut degree = HashMap::with_capacity(members.len());
+    for (i, &ti) in members.iter().enumerate() {
+        degree.insert(ti, degree_v[i]);
+    }
+    if wh_uses_715_ballots(class) {
+        return WhCtx { ok: HashMap::new(), degree, weight: 0, informative: false, continuous_scene: false, cause_bind: false, event_anchor_ts };
+    }
+    let excluded = wh_excluded(query);
+    let mut ok = HashMap::with_capacity(members.len());
+    let mut passing = 0usize;
+    for &ti in seated {
+        let pass = wh_residual(ix, ti, class, &excluded);
+        if pass {
+            passing += 1;
+        }
+        ok.insert(ti, pass);
+    }
+    for &ti in below {
+        ok.entry(ti).or_insert_with(|| wh_residual(ix, ti, class, &excluded));
+    }
+    let n = seated.len();
+    WhCtx {
+        ok,
+        degree,
+        weight: wh_weight_milli(n, passing),
+        informative: wh_pass_rate(passing, n) <= WH_UNINFORMATIVE,
+        continuous_scene: true,
+        cause_bind: WH_CAUSE_BIND_IN_ORDER_POOL,
+        event_anchor_ts,
+    }
+}
+
+/// Margin of `ta` over `tb`. Positive means `ta` wins the pair.
+/// `count` records the votes that set an order. Admission checks pass false.
+fn directed_margin(ix: &Index, ctx: &WhCtx, ta: usize, tb: usize, t_scene: &[f32], count: bool) -> i64 {
+    let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
+    let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
+    let scene_m = if ctx.continuous_scene {
+        scene_margin_milli(scene_a, scene_b)
+    } else {
+        sign_of(scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal)) * WH_MARGIN_SCALE
+    };
+    let deg_a = ctx.degree.get(&ta).copied().unwrap_or(0);
+    let deg_b = ctx.degree.get(&tb).copied().unwrap_or(0);
+    let deg_v = sign_of(deg_a.cmp(&deg_b));
+    let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
+    let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
+    let stab_v = sign_of(stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal));
+    let wh_v = if ctx.informative {
+        wh_vote(ctx.ok.get(&ta).copied().unwrap_or(false), ctx.ok.get(&tb).copied().unwrap_or(false))
+    } else {
+        0
+    };
+    if count && wh_v != 0 {
+        WH_VOTE_NZ.fetch_add(1, Ordering::Relaxed);
+    }
+    let mut margin = scene_m + (deg_v + stab_v) * WH_MARGIN_SCALE + wh_v * ctx.weight;
+    // Step 3A (is_event_sequence only): proximity to the head session plus
+    // later-session order, each one milli-ballot. Disabled when any timestamp
+    // is <= 0, matching the offline 217 stack.
+    if ctx.event_anchor_ts > 0 {
+        let ts_a = ix
+            .turns
+            .get(ta)
+            .and_then(|t| ix.session_ts.get(t.session).copied())
+            .unwrap_or(0);
+        let ts_b = ix
+            .turns
+            .get(tb)
+            .and_then(|t| ix.session_ts.get(t.session).copied())
+            .unwrap_or(0);
+        if ts_a > 0 && ts_b > 0 {
+            let anchor = ctx.event_anchor_ts;
+            let da = (ts_a - anchor).unsigned_abs();
+            let db = (ts_b - anchor).unsigned_abs();
+            margin += WH_MARGIN_SCALE * sign_of(db.cmp(&da));
+            margin += WH_MARGIN_SCALE * sign_of(ts_a.cmp(&ts_b));
+        }
+    }
+    if count && margin < 0 {
+        WH_AGAINST.fetch_add(1, Ordering::Relaxed);
+    }
+    margin
+}
+
+fn order_pool(ix: &Index, list: &mut Vec<usize>, t_scene: &[f32], ctx: &WhCtx) {
     let n = list.len();
     if n < 2 {
         return;
     }
     let pool = list.clone();
-    let slots = wh_slots(query);
-    let degree = pool_structural_degree(ix, &pool);
     let mut net = vec![vec![0i64; n]; n];
     for a in 0..n {
         for b in (a + 1)..n {
-            let (ta, tb) = (pool[a], pool[b]);
-            let mut margin = 0i64;
-            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
-            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-            match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            match degree[a].cmp(&degree[b]) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
-            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
-            match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            if slots != 0 {
-                let ok_a = wh_satisfied(ix, ta, slots, degree[a] > 0);
-                let ok_b = wh_satisfied(ix, tb, slots, degree[b] > 0);
-                if ok_a && !ok_b {
-                    margin += 1;
-                } else if ok_b && !ok_a {
-                    margin -= 1;
-                }
-            }
+            let margin = directed_margin(ix, ctx, pool[a], pool[b], t_scene, true);
             net[a][b] = margin;
             net[b][a] = -margin;
         }
     }
-    let rsb: Vec<usize> = (0..n).collect();
-    let mut order = kemeny_young(&net, &rsb);
-    if order.len() != n {
-        order = rsb.clone();
+    let mut order: Vec<usize>;
+    if ctx.cause_bind {
+        let mut used_cause: HashSet<usize> = HashSet::new();
+        let mut planned: Vec<(usize, usize)> = Vec::new();
+        for (i, &ti) in pool.iter().enumerate() {
+            let Some(cause) = rsb_cause(ix, ti) else { continue };
+            if !pool.contains(&cause) {
+                continue;
+            }
+            if !used_cause.insert(cause) {
+                continue;
+            }
+            let Some(j) = pool.iter().position(|&x| x == cause) else { continue };
+            if j <= i {
+                used_cause.remove(&cause);
+                continue;
+            }
+            planned.push((i, j));
+        }
+        let mut claimed: HashSet<usize> = HashSet::new();
+        let mut supernodes: Vec<Vec<usize>> = Vec::new();
+        for &(i, j) in &planned {
+            supernodes.push(vec![i, j]);
+            claimed.insert(i);
+            claimed.insert(j);
+        }
+        for i in 0..n {
+            if !claimed.contains(&i) {
+                supernodes.push(vec![i]);
+            }
+        }
+        let m = supernodes.len();
+        let mut snet = vec![vec![0i64; m]; m];
+        for a in 0..m {
+            for b in (a + 1)..m {
+                let mut s = 0i64;
+                for &ia in &supernodes[a] {
+                    for &ib in &supernodes[b] {
+                        s += net[ia][ib];
+                    }
+                }
+                snet[a][b] = s;
+                snet[b][a] = -s;
+            }
+        }
+        let srsb: Vec<usize> = supernodes
+            .iter()
+            .map(|g| g.iter().copied().min().unwrap_or(usize::MAX))
+            .collect();
+        let mut sorder = kemeny_young(&snet, &srsb);
+        if sorder.len() != m {
+            sorder = (0..m).collect();
+        }
+        order = Vec::with_capacity(n);
+        for si in sorder {
+            order.extend_from_slice(&supernodes[si]);
+        }
+    } else {
+        let rsb: Vec<usize> = (0..n).collect();
+        order = kemeny_young(&net, &rsb);
+        if order.len() != n {
+            order = rsb;
+        }
     }
     let mut turned: Vec<usize> = order.iter().map(|&i| pool[i]).collect();
     if turn_is_superseded(ix, turned[0]) {
@@ -6511,25 +6957,650 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     *list = turned;
 }
 
-/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
-/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
-/// they do on a full window. The head is not a candidate for demotion.
-fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
-    if list.len() < 2 {
+/// Order the RSB tail. `seated` is the top-k tail the within-window gatekeeper
+/// already owns. `below` is the rest of the pool, past that top k.
+///
+/// A below-window turn is added to the Kemeny set only when it passes the
+/// novel residual, meets the t_scene floor against the last seated turn, and
+/// beats at least one seated tail turn by a strict four-ballot majority
+/// (beats_worst). The returned tail has the same length as `seated`. When
+/// nobody qualifies, the result is the within-window order.
+fn seat_wh_tail(ix: &Index, query: &str, seated: &[usize], below: &[usize], t_scene: &[f32], event_anchor_ts: i64) -> Vec<usize> {
+    if seated.is_empty() {
+        return Vec::new();
+    }
+    // Scarcity is the seated tail. The deeper pool does not dilute it.
+    let ctx = wh_ctx(ix, query, seated, below, event_anchor_ts);
+    let class = wh_class(query);
+    if wh_uses_715_ballots(class) {
+        let mut ordered = seated.to_vec();
+        order_pool(ix, &mut ordered, t_scene, &ctx);
+        return ordered;
+    }
+    let excluded = wh_excluded(query);
+    let mut admitted = Vec::new();
+    let last_scene = seated
+        .last()
+        .and_then(|&ti| t_scene.get(ti).copied())
+        .unwrap_or(0.0);
+    for &cand in below {
+        if !wh_residual(ix, cand, class, &excluded) {
+            continue;
+        }
+        let cand_scene = t_scene.get(cand).copied().unwrap_or(0.0);
+        if cand_scene < WH_CLOSED_SCENE_FLOOR * last_scene {
+            continue;
+        }
+        let beats_worst = seated
+            .iter()
+            .any(|&seat| directed_margin(ix, &ctx, cand, seat, t_scene, false) > 0);
+        if beats_worst {
+            admitted.push(cand);
+        }
+    }
+    if admitted.is_empty() {
+        let mut ordered = seated.to_vec();
+        order_pool(ix, &mut ordered, t_scene, &ctx);
+        return ordered;
+    }
+    let mut combined = seated.to_vec();
+    combined.extend(admitted);
+    order_pool(ix, &mut combined, t_scene, &ctx);
+    combined.truncate(seated.len());
+    combined
+}
+
+/// Per-turn session / superseded / t_scene used by slot4dup and idea 18.
+/// Session-best turns (highest positive t_scene in each conversation session,
+/// preferring a non-superseded turn) are inserted first; the 50-turn pool
+/// overwrites them when both are present, matching the offline `info()` map.
+fn slot_meta(
+    ix: &Index,
+    t_scene: &[f32],
+    seated: &[usize],
+    below: &[usize],
+) -> HashMap<usize, (usize, bool, f32)> {
+    let mut best: HashMap<usize, (usize, f32, bool)> = HashMap::new();
+    for ti in 0..ix.turns.len() {
+        let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+        if sc <= 0.0 {
+            continue;
+        }
+        let Some(turn) = ix.turns.get(ti) else {
+            continue;
+        };
+        let sess = turn.session;
+        let sup = turn_is_superseded(ix, ti);
+        let ent = best.entry(sess).or_insert((ti, sc, sup));
+        let replace = match (ent.2, sup) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => sc > ent.1,
+        };
+        if replace {
+            *ent = (ti, sc, sup);
+        }
+    }
+    let mut meta: HashMap<usize, (usize, bool, f32)> = HashMap::new();
+    for (sess, (ti, sc, sup)) in best {
+        let _ = sess;
+        meta.insert(ti, (ix.turns[ti].session, sup, sc));
+    }
+    for &ti in seated.iter().chain(below.iter()) {
+        let Some(turn) = ix.turns.get(ti) else {
+            continue;
+        };
+        let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+        meta.insert(ti, (turn.session, turn_is_superseded(ix, ti), sc));
+    }
+    meta
+}
+
+fn sort_by_scene_then_id(ix: &Index, pool: &mut Vec<(f32, usize)>) {
+    pool.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| {
+            let ia = ix.turns.get(a.1).map(|t| t.id.as_str()).unwrap_or("");
+            let ib = ix.turns.get(b.1).map(|t| t.id.as_str()).unwrap_or("");
+            ia.cmp(ib)
+        })
+    });
+}
+
+/// If slot 4's session already appears in slots 0-3, replace slot 4 with the
+/// highest-t_scene non-superseded positive-scene turn from an unseen session
+/// in the 50-turn pool union session-best, and move the displaced turn to
+/// slot 5. Length stays `k`. Offline slot4dup on the 217 stack.
+fn apply_slot4_dup(
+    ix: &Index,
+    list: &mut Vec<usize>,
+    k: usize,
+    t_scene: &[f32],
+    seated: &[usize],
+    below: &[usize],
+) {
+    if list.len() < 5 {
+        list.truncate(k);
         return;
     }
-    let head = list[0];
-    let mut tail = list[1..].to_vec();
-    rank1_gatekeeper(ix, query, &mut tail, t_scene);
-    list.clear();
-    list.push(head);
-    list.extend(tail);
+    let meta = slot_meta(ix, t_scene, seated, below);
+    let top: Vec<usize> = list.iter().copied().take(5).collect();
+    let displaced = top[4];
+    let Some(&(disp_sess, _, _)) = meta.get(&displaced) else {
+        list.truncate(k);
+        return;
+    };
+    let prefix_sess: HashSet<usize> = top[..4]
+        .iter()
+        .filter_map(|&x| meta.get(&x).map(|&(sess, _, _)| sess))
+        .collect();
+    if !prefix_sess.contains(&disp_sess) {
+        list.truncate(k);
+        return;
+    }
+    let top_sess: HashSet<usize> = top
+        .iter()
+        .filter_map(|&x| meta.get(&x).map(|&(sess, _, _)| sess))
+        .collect();
+    let top_set: HashSet<usize> = top.iter().copied().collect();
+    let mut pool: Vec<(f32, usize)> = Vec::new();
+    for (&tid, &(sess, sup, sc)) in &meta {
+        if !top_set.contains(&tid) && !top_sess.contains(&sess) && !sup && sc > 0.0 {
+            pool.push((sc, tid));
+        }
+    }
+    if pool.is_empty() {
+        list.truncate(k);
+        return;
+    }
+    sort_by_scene_then_id(ix, &mut pool);
+    let pick = pool[0].1;
+    let mut out = top;
+    out[4] = pick;
+    let mut seen: HashSet<usize> = out.iter().copied().collect();
+    for &x in std::iter::once(&displaced).chain(list.iter().skip(5)) {
+        if seen.insert(x) {
+            out.push(x);
+        }
+    }
+    out.truncate(k);
+    *list = out;
+}
+
+/// When the 50-turn candidate pool spans at least `WH_ANTIMONOPOLY_MIN_SESSIONS`
+/// sessions, cap any session at `WH_SESSION_CAP_TOP5` turns in the top 5.
+/// Slot 0 is always kept. Freed slots are filled from the highest-t_scene
+/// non-superseded turn of sessions not yet in the kept top 5, one turn per
+/// session. Displaced turns shift into 5..k. Offline idea 18 on the 217 stack.
+fn apply_anti_monopoly(
+    ix: &Index,
+    list: &mut Vec<usize>,
+    k: usize,
+    t_scene: &[f32],
+    seated: &[usize],
+    below: &[usize],
+) {
+    let mut pool_sessions: HashSet<usize> = HashSet::new();
+    for &ti in seated.iter().chain(below.iter()) {
+        if let Some(turn) = ix.turns.get(ti) {
+            pool_sessions.insert(turn.session);
+        }
+    }
+    if pool_sessions.len() < WH_ANTIMONOPOLY_MIN_SESSIONS {
+        list.truncate(k);
+        return;
+    }
+    let meta = slot_meta(ix, t_scene, seated, below);
+    let mut kept: Vec<usize> = Vec::new();
+    let mut evicted: Vec<usize> = Vec::new();
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+    for (i, &tid) in list.iter().take(5).enumerate() {
+        let sess = meta.get(&tid).map(|&(sess, _, _)| sess);
+        let under_cap = sess
+            .map(|s| counts.get(&s).copied().unwrap_or(0) < WH_SESSION_CAP_TOP5)
+            .unwrap_or(false);
+        if i == 0 || under_cap {
+            kept.push(tid);
+            if let Some(s) = sess {
+                *counts.entry(s).or_insert(0) += 1;
+            }
+        } else {
+            evicted.push(tid);
+        }
+    }
+    let n_free = evicted.len();
+    let mut used: HashSet<usize> = kept.iter().copied().collect();
+    let mut kept_sess: HashSet<usize> = kept
+        .iter()
+        .filter_map(|&t| meta.get(&t).map(|&(sess, _, _)| sess))
+        .collect();
+    let mut fills: Vec<(f32, usize, usize)> = Vec::new();
+    for (&tid, &(sess, sup, sc)) in &meta {
+        if !used.contains(&tid) && !kept_sess.contains(&sess) && !sup && sc > 0.0 {
+            fills.push((sc, tid, sess));
+        }
+    }
+    fills.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| {
+            let ia = ix.turns.get(a.1).map(|t| t.id.as_str()).unwrap_or("");
+            let ib = ix.turns.get(b.1).map(|t| t.id.as_str()).unwrap_or("");
+            ia.cmp(ib)
+        })
+    });
+    let mut seen_sess: HashSet<usize> = HashSet::new();
+    let mut n_filled = 0usize;
+    for (_sc, tid, sess) in fills {
+        if n_filled >= n_free {
+            break;
+        }
+        if seen_sess.contains(&sess) || kept_sess.contains(&sess) {
+            continue;
+        }
+        kept.push(tid);
+        used.insert(tid);
+        seen_sess.insert(sess);
+        kept_sess.insert(sess);
+        n_filled += 1;
+    }
+    let mut rest: Vec<usize> = Vec::new();
+    for &x in evicted.iter().chain(list.iter()) {
+        if used.insert(x) {
+            rest.push(x);
+        }
+    }
+    kept.extend(rest);
+    kept.truncate(k);
+    *list = kept;
+}
+
+/// The wh ballot. One equal vote: +1, -1, or 0. Not a bonus and not a veto.
+fn wh_vote(ok_a: bool, ok_b: bool) -> i64 {
+    match (ok_a, ok_b) {
+        (true, false) => 1,
+        (false, true) => -1,
+        _ => 0,
+    }
+}
+
+/// Scene, degree, stability, and one full wh ballot. Used by the equal-vote test.
+#[allow(dead_code)] // equal-ballot test helper
+fn pair_margin(
+    scene_a: f32,
+    scene_b: f32,
+    degree_a: i64,
+    degree_b: i64,
+    stab_a: f32,
+    stab_b: f32,
+    wh: i64,
+) -> i64 {
+    let scene_v = sign_of(scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal));
+    let deg_v = sign_of(degree_a.cmp(&degree_b));
+    let stab_v = sign_of(stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal));
+    ballot_margin(scene_v, deg_v, stab_v, wh, WH_MARGIN_SCALE)
+}
+
+fn wh_class_name(class: u8) -> &'static str {
+    match class {
+        WH_WHEN => "WH_WHEN",
+        WH_HOW_LONG => "WH_HOW_LONG",
+        WH_HOW_MANY => "WH_HOW_MANY",
+        WH_WHO => "WH_WHO",
+        WH_WHERE => "WH_WHERE",
+        _ => "WH_NONE",
+    }
+}
+
+fn replay_dump_path() -> Option<String> {
+    match std::env::var("VESTIGE_REPLAY_DUMP") {
+        Ok(p) if !p.is_empty() => Some(p),
+        _ => None,
+    }
+}
+
+/// Snapshot only. No HashMap/HashSet: those would advance Rust's hasher
+/// seed and change later queries in the same RankRequest.
+struct ReplaySnap {
+    query_text: String,
+    query_date: String,
+    k: usize,
+    class: u8,
+    is_event_sequence: bool,
+    temporal: bool,
+    seated: Vec<usize>,
+    below: Vec<usize>,
+    final_turn_indices: Vec<usize>,
+    t_scene: Vec<f32>,
+}
+
+thread_local! {
+    static REPLAY_SNAPS: std::cell::RefCell<Vec<ReplaySnap>> = std::cell::RefCell::new(Vec::new());
+}
+
+fn maybe_dump_replay(
+    _ix: &Index,
+    q: &Query,
+    k: usize,
+    it: &QueryIntent,
+    t_scene: &[f32],
+    seated: &[usize],
+    below: &[usize],
+    final_turn_indices: &[usize],
+) {
+    if replay_dump_path().is_none() {
+        return;
+    }
+    REPLAY_SNAPS.with(|slot| {
+        slot.borrow_mut().push(ReplaySnap {
+            query_text: q.text.clone(),
+            query_date: q.date.clone(),
+            k,
+            class: wh_class(&q.text),
+            is_event_sequence: it.is_event_sequence,
+            temporal: it.temporal,
+            seated: seated.to_vec(),
+            below: below.to_vec(),
+            final_turn_indices: final_turn_indices.to_vec(),
+            t_scene: t_scene.to_vec(),
+        });
+    });
+}
+
+fn flush_replay_dumps(ix: &Index) {
+    let Some(path) = replay_dump_path() else {
+        return;
+    };
+    let snaps = REPLAY_SNAPS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+    if snaps.is_empty() {
+        return;
+    }
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => std::io::BufWriter::new(f),
+        Err(e) => {
+            eprintln!("VESTIGE_REPLAY_DUMP open failed: {e}");
+            return;
+        }
+    };
+    for snap in snaps {
+        write_one_replay_dump(ix, &snap, &mut file);
+    }
+    let _ = file.flush();
+}
+
+/// Direct same-session reply: the next turn in this session whose stored
+/// `answers` edge points at `ti`. `answers` is written only for an adjacent
+/// different-role pair, backward from the reply. None when that edge is absent.
+fn response_turn_of(ix: &Index, ti: usize) -> Option<usize> {
+    let t = ix.turns.get(ti)?;
+    let members = ix.session_turns.get(t.session)?;
+    let pos = members.iter().position(|&m| m == ti)?;
+    let next = *members.get(pos + 1)?;
+    if ix.turns.get(next).and_then(|n| n.answers) == Some(ti) {
+        Some(next)
+    } else {
+        None
+    }
+}
+
+/// `IC_novel(t \ Q)`: sum of `token_ic(N, df(w))` over the turn's distinct
+/// `raw_tokens` that are not in the query token set, using the engine
+/// tokenizer and `t_own_stats` df. Tokens the engine never interned have
+/// no corpus df and are skipped. Dump-only. Not wired into ranking.
+fn turn_ic_novel(ix: &Index, ti: usize, qset: &HashSet<String>, n_docs: usize) -> f64 {
+    let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut sum = 0.0;
+    for w in raw_tokens(body) {
+        if !seen.insert(w.clone()) || qset.contains(&w) {
+            continue;
+        }
+        let Some(id) = ix.vocab.get(&w) else {
+            continue;
+        };
+        let df = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+        sum += token_ic(n_docs, df);
+    }
+    sum
+}
+
+fn edge_ids(ix: &Index, targets: impl IntoIterator<Item = usize>) -> Vec<String> {
+    targets
+        .into_iter()
+        .filter_map(|tgt| ix.turns.get(tgt).map(|t| t.id.clone()))
+        .collect()
+}
+
+fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufWriter<std::fs::File>) {
+    let class = snap.class;
+    let excluded = wh_excluded(&snap.query_text);
+    let empty_lower: HashSet<String> = HashSet::new();
+    let mut pool: Vec<usize> = Vec::with_capacity(snap.seated.len() + snap.below.len());
+    pool.extend_from_slice(&snap.seated);
+    pool.extend_from_slice(&snap.below);
+    let mut pre_rank: HashMap<usize, usize> = HashMap::with_capacity(pool.len());
+    for (i, &ti) in pool.iter().enumerate() {
+        pre_rank.insert(ti, i);
+    }
+    let tail: &[usize] = if snap.seated.len() > 1 { &snap.seated[1..] } else { &[] };
+    let mut members = Vec::with_capacity(tail.len() + snap.below.len());
+    members.extend_from_slice(tail);
+    members.extend_from_slice(&snap.below);
+    let deg_closed = pool_structural_degree(ix, &members, false);
+    let deg_none = pool_structural_degree(ix, &members, true);
+    let mut degree_closed: HashMap<usize, i64> = HashMap::new();
+    let mut degree_none: HashMap<usize, i64> = HashMap::new();
+    for (i, &ti) in members.iter().enumerate() {
+        degree_closed.insert(ti, deg_closed[i]);
+        degree_none.insert(ti, deg_none[i]);
+    }
+    let mut passing = 0usize;
+    for &ti in tail {
+        if wh_residual(ix, ti, class, &excluded) {
+            passing += 1;
+        }
+    }
+    let n = tail.len();
+    let n_docs = ix.turns.len();
+    let qset: HashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
+    let head_turn_ic_novel = snap
+        .seated
+        .first()
+        .copied()
+        .map(|ti| turn_ic_novel(ix, ti, &qset, n_docs));
+    let mut qtoks: Vec<Value> = Vec::new();
+    let mut seen_tok: HashSet<String> = HashSet::new();
+    for tok in query_tokens(&snap.query_text) {
+        if !seen_tok.insert(tok.clone()) {
+            continue;
+        }
+        let mut df = 0usize;
+        let mut ids: Vec<u32> = Vec::new();
+        if let Some(id) = ix.vocab.get(&tok) {
+            ids.push(id);
+            df = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+        }
+        let stemmed = stem(&tok);
+        if stemmed != tok {
+            if let Some(id) = ix.vocab.get(&stemmed) {
+                ids.push(id);
+                let d2 = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+                if d2 > df {
+                    df = d2;
+                }
+            }
+        }
+        let ic = token_ic(n_docs, df);
+        qtoks.push(json!({
+            "tok": tok,
+            "df": df,
+            "ic": ic,
+            "ids": ids,
+        }));
+    }
+    let residual_bits = |ti: usize| -> Value {
+        let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
+        let novel_digit = has_novel_digit(body, &excluded);
+        let novel_clock = has_novel_clock_or_date(body, &excluded);
+        let novel_handle = has_novel_handle_or_path(body, &excluded);
+        let name_strict = has_novel_titlecase_name(body, &excluded, &ix.lowercase_attested);
+        let name_unfiltered = has_novel_titlecase_name(body, &excluded, &empty_lower);
+        let digit_raw = has_ascii_digit(body);
+        let clock_raw = has_clock_or_date(body);
+        let handle_raw = has_handle_or_path(body);
+        let name_raw_strict = has_titlecase_name(body, &ix.lowercase_attested);
+        let name_raw_unfiltered = has_titlecase_name(body, &empty_lower);
+        let body_toks: HashSet<String> = query_tokens(body).into_iter().collect();
+        let content = ix.turns.get(ti).map(|t| &t.content);
+        let mut present: Vec<bool> = Vec::with_capacity(qtoks.len());
+        for tok in qtoks.iter() {
+            let t = tok.get("tok").and_then(|v| v.as_str()).unwrap_or("");
+            let mut hit = body_toks.contains(t);
+            if !hit {
+                if let Some(arr) = tok.get("ids").and_then(|v| v.as_array()) {
+                    if let Some(content) = content {
+                        for idv in arr {
+                            if let Some(id) = idv.as_u64() {
+                                if content.contains(&(id as u32)) {
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            present.push(hit);
+        }
+        json!({
+            "novel_digit": novel_digit,
+            "novel_clock": novel_clock,
+            "novel_handle": novel_handle,
+            "name_strict": name_strict,
+            "name_unfiltered": name_unfiltered,
+            "digit_raw": digit_raw,
+            "clock_raw": clock_raw,
+            "handle_raw": handle_raw,
+            "name_raw_strict": name_raw_strict,
+            "name_raw_unfiltered": name_raw_unfiltered,
+            "qtok_present": present,
+        })
+    };
+    let mut cands: Vec<Value> = Vec::with_capacity(pool.len());
+    for (rank, &ti) in pool.iter().enumerate() {
+        let t = &ix.turns[ti];
+        let cause = rsb_cause(ix, ti);
+        let cause_id = cause.map(|c| ix.turns[c].id.clone());
+        let cause_rank = cause.and_then(|c| pre_rank.get(&c).copied());
+        let mut symptom_ids: Vec<String> = Vec::new();
+        for &s in &snap.seated {
+            if rsb_cause(ix, s) == Some(ti) {
+                symptom_ids.push(ix.turns[s].id.clone());
+            }
+        }
+        let sess = t.session;
+        let session_order = turn_pos(ix, ti).unwrap_or(0);
+        cands.push(json!({
+            "id": t.id,
+            "idx": ti,
+            "rank_pre": rank,
+            "t_scene": snap.t_scene.get(ti).copied().unwrap_or(0.0),
+            "t_scene_bits": snap.t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+            "stability": t.stability,
+            "stability_bits": t.stability.to_bits(),
+            "session": sess,
+            "session_id": ix.session_ids.get(sess).cloned().unwrap_or_default(),
+            "session_order": session_order,
+            "ts": ix.session_ts.get(sess).copied().unwrap_or(0),
+            "rsb_seated": rank < snap.seated.len(),
+            "rsb_cause_id": cause_id,
+            "rsb_cause_rank": cause_rank,
+            "rsb_symptom_ids": symptom_ids,
+            "degree_closed": degree_closed.get(&ti).copied().unwrap_or(0),
+            "degree_none": degree_none.get(&ti).copied().unwrap_or(0),
+            "superseded": turn_is_superseded(ix, ti),
+            "residual": residual_bits(ti),
+            "turn_ic_novel": turn_ic_novel(ix, ti, &qset, n_docs),
+            "response_turn_id": response_turn_of(ix, ti).map(|r| ix.turns[r].id.clone()),
+            "exact_edges": edge_ids(ix, t.exact_edges.iter().map(|&(_, tgt)| tgt)),
+            "policy_backlinks": edge_ids(ix, t.policy_backlinks.iter().copied()),
+            "has_path_or_url": has_path_or_url(&t.body),
+        }));
+    }
+    let mut session_best: Vec<Value> = Vec::new();
+    let mut best: HashMap<usize, (usize, f32, bool)> = HashMap::new();
+    for ti in 0..ix.turns.len() {
+        let sc = snap.t_scene.get(ti).copied().unwrap_or(0.0);
+        if sc <= 0.0 {
+            continue;
+        }
+        let sess = ix.turns[ti].session;
+        let sup = turn_is_superseded(ix, ti);
+        let ent = best.entry(sess).or_insert((ti, sc, sup));
+        let replace = match (ent.2, sup) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => sc > ent.1,
+        };
+        if replace {
+            *ent = (ti, sc, sup);
+        }
+    }
+    let mut sess_keys: Vec<usize> = best.keys().copied().collect();
+    sess_keys.sort_unstable();
+    for sess in sess_keys {
+        let (ti, sc, sup) = best[&sess];
+        let t = &ix.turns[ti];
+        session_best.push(json!({
+            "session": sess,
+            "session_id": ix.session_ids.get(sess).cloned().unwrap_or_default(),
+            "id": t.id,
+            "idx": ti,
+            "t_scene": sc,
+            "t_scene_bits": sc.to_bits(),
+            "ts": ix.session_ts.get(sess).copied().unwrap_or(0),
+            "superseded": sup,
+            "in_pool": pre_rank.contains_key(&ti),
+            "turn_ic_novel": turn_ic_novel(ix, ti, &qset, n_docs),
+            "response_turn_id": response_turn_of(ix, ti).map(|r| ix.turns[r].id.clone()),
+            "exact_edges": edge_ids(ix, t.exact_edges.iter().map(|&(_, tgt)| tgt)),
+            "policy_backlinks": edge_ids(ix, t.policy_backlinks.iter().copied()),
+            "has_path_or_url": has_path_or_url(&t.body),
+        }));
+    }
+    let first_sid = ix.session_ids.first().cloned().unwrap_or_default();
+    let rec = json!({
+        "query_text": snap.query_text,
+        "query_date": snap.query_date,
+        "first_session_id": first_sid,
+        "n_sessions": ix.session_ids.len(),
+        "n_turns": ix.turns.len(),
+        "k": snap.k,
+        "wh_class": wh_class_name(class),
+        "wh_class_u8": class,
+        "is_event_sequence": snap.is_event_sequence,
+        "temporal": snap.temporal,
+        "n_tail": n,
+        "passing_count": passing,
+        "pool_size": pool.len(),
+        "weight_v6": wh_weight_milli(n, passing),
+        "informative": class != WH_NONE && wh_pass_rate(passing, n) <= WH_UNINFORMATIVE,
+        "continuous_scene": class != WH_NONE,
+        "pre_ids": pool.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "seated_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "below_ids": snap.below.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "final_ids": snap.final_turn_indices.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "head_id": snap.seated.first().map(|&ti| ix.turns[ti].id.clone()),
+        "head_turn_ic_novel": head_turn_ic_novel,
+        "query_tokens": qtoks,
+        "candidates": cands,
+        "session_best": session_best,
+    });
+    let _ = writeln!(file, "{rec}");
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
 
     let ix = build_index(&req.sessions, &req.params);
     let results = req.queries.iter().map(|q| rank_one(&ix, q, &req.params, req.top_k)).collect();
+    flush_replay_dumps(&ix);
     RankResponse {
         engine: ENGINE,
         sessions_indexed: ix.session_ids.len(),
@@ -7773,6 +8844,21 @@ mod recall_cue_tests {
     fn ids(ix: &Index, list: &[usize]) -> Vec<String> {
         list.iter().map(|&i| ix.turns[i].id.clone()).collect()
     }
+    fn order_with_wh(ix: &Index, query: &str, list: &mut Vec<usize>, scene: &[f32]) {
+        let ctx = wh_ctx(ix, query, list, &[], 0);
+        order_pool(ix, list, scene, &ctx);
+    }
+    fn lock_head(ix: &Index, query: &str, list: &mut Vec<usize>, scene: &[f32]) {
+        if list.is_empty() {
+            return;
+        }
+        let head = list[0];
+        let tail = list[1..].to_vec();
+        let ordered = seat_wh_tail(ix, query, &tail, &[], scene, 0);
+        list.clear();
+        list.push(head);
+        list.extend(ordered);
+    }
     fn haystack() -> Vec<Session> {
         vec![
             s("a", vec![
@@ -8305,7 +9391,7 @@ mod recall_cue_tests {
         scene[old] = 3.0;
         scene[fresh] = 1.0;
         let mut list = vec![old, fresh];
-        rank1_gatekeeper(&ix, "which camera", &mut list, &scene);
+        order_with_wh(&ix, "which camera", &mut list, &scene);
         assert_eq!(list[0], fresh, "a superseded turn cannot hold rank 1");
     }
 
@@ -8315,15 +9401,21 @@ mod recall_cue_tests {
             t("plain", "user", "We met downtown after the show."),
             t("clock", "user", "We met at 18:40 after the show."),
         ])];
-        let ix = ix_of(&sessions);
+        let mut ix = ix_of(&sessions);
         let plain = idx(&ix, "plain");
         let clock = idx(&ix, "clock");
-        assert!(ix.turns[clock].form_clock);
-        assert!(!ix.turns[plain].form_clock);
+        let empty = HashSet::new();
+        assert!(has_novel_clock_or_date(&ix.turns[clock].body, &empty));
+        assert!(!has_novel_clock_or_date(&ix.turns[plain].body, &empty));
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, clock];
-        rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
-        assert_eq!(list[0], clock);
+        // Wh is one vote. On a tied scene the clock form wins that vote.
+        order_with_wh(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list, vec![clock, plain]);
+        ix.turns[plain].exact_edges.push((1, clock));
+        let mut lifted = vec![plain, clock];
+        order_with_wh(&ix, "When did we meet?", &mut lifted, &scene);
+        assert_eq!(lifted[0], clock, "wh plus degree still prefers the clock form");
     }
 
     #[test]
@@ -8333,13 +9425,14 @@ mod recall_cue_tests {
             t("other", "user", "We met downtown after the show again."),
             t("clock", "user", "We met at 18:40 after the show."),
         ])];
-        let ix = ix_of(&sessions);
+        let mut ix = ix_of(&sessions);
         let plain = idx(&ix, "plain");
         let other = idx(&ix, "other");
         let clock = idx(&ix, "clock");
+        ix.turns[other].exact_edges.push((1, clock));
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, other, clock];
-        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene);
+        lock_head(&ix, "When did we meet?", &mut list, &scene);
         assert_eq!(list, vec![plain, clock, other]);
     }
 
@@ -8361,9 +9454,373 @@ mod recall_cue_tests {
         scene[old] = 3.0;
         scene[fresh] = 1.0;
         let mut list = vec![head, old, fresh];
-        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene);
+        lock_head(&ix, "which camera", &mut list, &scene);
         assert_eq!(list[0], head, "slot 1 stays the RSB head");
         assert_eq!(list[1], fresh, "ATMS still demotes a superseded turn inside the tail");
+    }
+
+    #[test]
+    fn wh_head_stays_for_every_question_type() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "We met downtown after the show."),
+            t("other", "user", "We met downtown after the show again."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let other = idx(&ix, "other");
+        let clock = idx(&ix, "clock");
+        let scene = vec![1.0f32; ix.turns.len()];
+        let queries = [
+            "Who called?",
+            "Whom did we call?",
+            "Whose keys are these?",
+            "When did we meet?",
+            "Where did we meet?",
+            "Why did we leave?",
+            "What time did we meet?",
+            "Which year was that?",
+            "How many boxes arrived?",
+            "How much did it cost?",
+            "How many days between the trip and the move?",
+            "How many days ago?",
+            "How many weeks ago?",
+            "How many months ago?",
+            "How many years ago?",
+            "How many hours ago?",
+            "How many minutes ago?",
+        ];
+        for query in queries {
+            let mut list = vec![head, other, clock];
+            lock_head(&ix, query, &mut list, &scene);
+            assert_eq!(list[0], head, "slot 0 stays the RSB head for {query}");
+        }
+    }
+
+    #[test]
+    fn how_many_days_is_a_closed_class_quantity() {
+        assert_eq!(wh_class("How many days between the trip and the move?"), WH_HOW_MANY);
+        assert_eq!(wh_class("What did we decide?"), WH_NONE);
+        assert_eq!(wh_class("What did I do a month ago?"), WH_NONE);
+        assert_eq!(wh_class("What year was the trip?"), WH_NONE);
+        assert_eq!(wh_class("What date was the trip?"), WH_NONE);
+        assert_eq!(wh_class("What month was the trip?"), WH_NONE);
+        assert_eq!(wh_class("Why did we leave?"), WH_NONE);
+        assert_eq!(wh_class("How long was the trip?"), WH_HOW_LONG);
+        assert_eq!(wh_class("What city was the trip?"), WH_NONE);
+        assert_eq!(wh_class("What country was the trip?"), WH_NONE);
+        assert_eq!(wh_class("Who called?"), WH_WHO);
+        assert_eq!(wh_class("Where did we meet?"), WH_WHERE);
+        assert_eq!(wh_class("how many days ago"), WH_HOW_MANY);
+        assert_eq!(wh_class("how long ago"), WH_HOW_LONG);
+        assert_eq!(wh_class("how much time passed"), WH_HOW_MANY);
+        assert_eq!(wh_class("how many boxes arrived"), WH_HOW_MANY);
+        assert_eq!(wh_class("when"), WH_WHEN);
+        assert_eq!(wh_class("why"), WH_NONE);
+    }
+
+    #[test]
+    fn wh_is_one_equal_vote() {
+        assert_eq!(wh_vote(true, false), 1);
+        assert_eq!(wh_vote(false, true), -1);
+        assert_eq!(wh_vote(true, true), 0);
+        assert_eq!(wh_vote(false, false), 0);
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let clock = idx(&ix, "clock");
+        let excluded = wh_excluded("When did we meet?");
+        assert_eq!(wh_class("When did we meet?"), WH_WHEN);
+        assert!(wh_residual(&ix, clock, WH_WHEN, &excluded));
+        assert!(!wh_residual(&ix, plain, WH_WHEN, &excluded));
+        let degree = pool_structural_degree(&ix, &[plain, clock], false);
+        assert_eq!(degree, vec![0, 0]);
+        assert_eq!(ix.turns[plain].stability, 0.0);
+        assert_eq!(ix.turns[clock].stability, 0.0);
+        let vote = wh_vote(
+            wh_residual(&ix, clock, WH_WHEN, &excluded),
+            wh_residual(&ix, plain, WH_WHEN, &excluded),
+        );
+        assert_eq!(vote, 1);
+        assert_eq!(pair_margin(1.0, 1.0, 0, 0, 0.0, 0.0, vote), WH_MARGIN_SCALE);
+        assert_eq!(pair_margin(1.0, 1.0, 0, 0, 0.0, 0.0, 0), 0);
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![plain, clock];
+        order_with_wh(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list, vec![clock, plain], "one wh vote breaks a tied scene toward the clock form");
+        let mut scene_gap = vec![1.0f32; ix.turns.len()];
+        scene_gap[plain] = 5.0;
+        scene_gap[clock] = 1.0;
+        let mut ordered = vec![plain, clock];
+        order_with_wh(&ix, "When did we meet?", &mut ordered, &scene_gap);
+        assert_eq!(ordered, vec![plain, clock], "wh alone does not cancel a higher scene");
+        ix.turns[plain].exact_edges.push((1, clock));
+        let mut majority = vec![plain, clock];
+        order_with_wh(&ix, "When did we meet?", &mut majority, &scene_gap);
+        assert_eq!(majority, vec![clock, plain], "wh plus degree overturns scene");
+        assert_eq!(pair_margin(5.0, 1.0, 0, 0, 0.0, 0.0, 1), 2 * WH_MARGIN_SCALE);
+    }
+
+    #[test]
+    fn wh_weight_cannot_overturn_a_two_to_one_majority() {
+        assert_eq!(wh_weight_milli(50, 0), WH_MARGIN_SCALE);
+        assert_eq!(wh_weight_milli(50, 50), 0);
+        for n in 1..=64 {
+            for p in 0..=n {
+                let w = wh_weight_milli(n, p);
+                assert!(w >= 0 && w <= WH_MARGIN_SCALE, "n={n} p={p} w={w}");
+                // Two ballots against wh, the third abstaining. Wh cannot win.
+                assert!(ballot_margin(1, 1, 0, -1, w) > 0, "n={n} p={p} w={w}");
+                assert!(ballot_margin(1, 0, 1, -1, w) > 0, "n={n} p={p} w={w}");
+                assert!(ballot_margin(0, 1, 1, -1, w) > 0, "n={n} p={p} w={w}");
+                // A 2-1 majority of the other ballots is not overturned when wh
+                // joins the single dissenting ballot.
+                assert!(ballot_margin(1, 1, -1, -1, w) >= 0, "n={n} p={p} w={w}");
+                assert!(ballot_margin(1, -1, 1, -1, w) >= 0, "n={n} p={p} w={w}");
+                assert!(ballot_margin(-1, 1, 1, -1, w) >= 0, "n={n} p={p} w={w}");
+            }
+        }
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let clock = idx(&ix, "clock");
+        ix.turns[plain].stability = 3.0;
+        ix.turns[clock].stability = 0.0;
+        ix.turns[plain].exact_edges.push((1, clock));
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[plain] = 5.0;
+        scene[clock] = 1.0;
+        let mut list = vec![plain, clock];
+        order_with_wh(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list, vec![plain, clock], "wh plus degree does not beat scene plus stability");
+    }
+
+    #[test]
+    fn below_window_turn_enters_when_it_beats_the_worst_seated_tail_turn() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "We met downtown after the show."),
+            t("seated", "user", "We met downtown after the show again."),
+            t("low", "user", "We met at 18:40 after the show."),
+            t("winner", "user", "We met at 19:05 after the show."),
+            t("filler", "user", "We met downtown after the show once more."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let seated = idx(&ix, "seated");
+        let low = idx(&ix, "low");
+        let winner = idx(&ix, "winner");
+        let filler = idx(&ix, "filler");
+        ix.turns[seated].stability = 5.0;
+        ix.turns[winner].stability = 5.0;
+        ix.turns[low].stability = 0.0;
+        ix.turns[head].exact_edges.push((1, winner));
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 10.0;
+        scene[seated] = 4.0;
+        scene[low] = 1.0;
+        // 3.5 meets WH_CLOSED_SCENE_FLOOR 0.85 of last seated (3.4); 2.5 would not.
+        scene[winner] = 3.5;
+        scene[filler] = 0.5;
+        let query = "When did we meet?";
+        let excluded = wh_excluded(query);
+        assert!(wh_residual(&ix, low, WH_WHEN, &excluded));
+        assert!(wh_residual(&ix, winner, WH_WHEN, &excluded));
+        assert!(!wh_residual(&ix, seated, WH_WHEN, &excluded));
+        assert!(!wh_residual(&ix, filler, WH_WHEN, &excluded));
+        let pool = [seated, low, winner, filler];
+        let degree = pool_structural_degree(&ix, &pool, false);
+        assert!(degree[2] > degree[0], "{degree:?}");
+        assert_eq!(degree[1], 0, "the low clock has no true graph edge: {degree:?}");
+        let rejected = seat_wh_tail(&ix, query, &[seated], &[low, filler], &scene, 0);
+        assert_eq!(rejected, vec![seated], "a clock below the t_scene floor does not take the seat: {}", ids(&ix, &rejected).join(","));
+        let admitted = seat_wh_tail(&ix, query, &[seated], &[low, winner, filler], &scene, 0);
+        assert_eq!(admitted, vec![winner], "the clock that meets the floor and beats the worst seated turn takes the seat: {}", ids(&ix, &admitted).join(","));
+    }
+
+    #[test]
+    fn when_passes_on_a_clock_or_iso_date_not_a_weekday_or_session_clock() {
+        let mut session = s("s", vec![t("plain", "user", "We met downtown after the show.")]);
+        session.timestamp = 1_700_000_000;
+        let ix = ix_of(&[session]);
+        let plain = idx(&ix, "plain");
+        let excluded = wh_excluded("When did we meet?");
+        assert!(!wh_residual(&ix, plain, WH_WHEN, &excluded));
+        let friday = s("s2", vec![t("friday", "user", "We met on Friday after the show.")]);
+        let ix = ix_of(&[friday]);
+        assert!(!wh_residual(&ix, idx(&ix, "friday"), WH_WHEN, &excluded));
+        let dated = s("s3", vec![t("dated", "user", "We met on 2023-05-08 after the show.")]);
+        let ix = ix_of(&[dated]);
+        assert!(wh_residual(&ix, idx(&ix, "dated"), WH_WHEN, &excluded));
+        assert!(has_novel_clock_or_date(&ix.turns[idx(&ix, "dated")].body, &HashSet::new()));
+        let slash = s("s3b", vec![t("slash", "user", "We met on 05/08/2023 after the show.")]);
+        let ix = ix_of(&[slash]);
+        assert!(wh_residual(&ix, idx(&ix, "slash"), WH_WHEN, &excluded));
+        assert!(has_slash_date("We met on 05/08/2023 after the show."));
+        let digits = s("s4", vec![t("digits", "user", "We met and the party was 40 people.")]);
+        let ix = ix_of(&[digits]);
+        assert!(!wh_residual(&ix, idx(&ix, "digits"), WH_WHEN, &excluded), "a bare digit is not a when");
+        let year = s("s4b", vec![t("year", "user", "We met in 2023 after the show.")]);
+        let ix = ix_of(&[year]);
+        assert!(wh_residual(&ix, idx(&ix, "year"), WH_WHEN, &excluded), "a 4-digit calendar year is a when");
+        let early = s("s4c", vec![t("early", "user", "We met in 1899 after the show.")]);
+        let ix = ix_of(&[early]);
+        assert!(!wh_residual(&ix, idx(&ix, "early"), WH_WHEN, &excluded), "a 4-digit token outside 1900-2099 is not a year");
+        let echo_year_q = "When in 2023 did we meet?";
+        let echo_year_ex = wh_excluded(echo_year_q);
+        let echoed_year = s("s4d", vec![t("echoed_year", "user", "We met in 2023 after the show.")]);
+        let ix = ix_of(&[echoed_year]);
+        assert!(
+            !wh_residual(&ix, idx(&ix, "echoed_year"), WH_WHEN, &echo_year_ex),
+            "a year the query already said is not a novel answer"
+        );
+        let echo_q = "When did we meet at 18:40?";
+        let echo_ex = wh_excluded(echo_q);
+        let echoed = s("s5", vec![t("echoed", "user", "We met at 18:40 after the show.")]);
+        let ix = ix_of(&[echoed]);
+        assert!(
+            !wh_residual(&ix, idx(&ix, "echoed"), WH_WHEN, &echo_ex),
+            "a clock the query already said is not a novel answer"
+        );
+        let other = s("s6", vec![t("other", "user", "We met at 19:05 after the show.")]);
+        let ix = ix_of(&[other]);
+        assert!(wh_residual(&ix, idx(&ix, "other"), WH_WHEN, &echo_ex));
+    }
+
+    #[test]
+    fn non_wh_query_still_reorders_by_degree() {
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We kept the walnut oil on the shelf."),
+            t("linked", "user", "We kept the walnut oil in the tin."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let linked = idx(&ix, "linked");
+        ix.turns[plain].exact_edges.push((1, linked));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![plain, linked];
+        order_with_wh(&ix, "What did we decide?", &mut list, &scene);
+        assert_eq!(list, vec![linked, plain], "degree still reorders a query with no wh class");
+    }
+
+    #[test]
+    fn wh_none_keeps_a_full_window_when_an_rsb_cause_sits_outside_it() {
+        let query = "What about the walnut cabinet oil and the maple drawer rails?";
+        assert_eq!(wh_class(query), WH_NONE);
+        let ranked = rank(&RankRequest {
+            sessions: vec![s("s", vec![
+                t("cause", "user", "Always write the answer in markdown tables."),
+                t("sym", "assistant", "The walnut cabinet oil was mixed and brushed onto the wood."),
+                t("maple", "user", "The maple drawer rails were cut and sanded today."),
+            ])],
+            queries: vec![Query { text: query.into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        });
+        let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["maple", "sym"], "{ids:?}");
+        assert!(!ids.contains(&"cause"), "a full window must not import the outside cause, got {ids:?}");
+    }
+
+    #[test]
+    fn echo_who_prefers_the_companion_over_the_booking() {
+        let excluded = wh_excluded("Who did Maya travel with?");
+        let flight = t("flight", "user", "We booked the flight for the travel.");
+        let gap = t("gap", "user", "We discussed the travel plans again.");
+        let elena = t("elena", "user", "Maya and Elena landed in Lisbon after the travel.");
+        let mut fillers = vec![flight, gap, elena];
+        for i in 0..8 {
+            fillers.push(t(&format!("p{i}"), "user", "We discussed the travel plans again."));
+        }
+        let ix = ix_of(&[s("s", fillers)]);
+        assert!(wh_residual(&ix, idx(&ix, "elena"), WH_WHO, &excluded));
+        assert!(!wh_residual(&ix, idx(&ix, "flight"), WH_WHO, &excluded));
+        let echo = s("echo", vec![t("echo", "user", "The companion on the travel was Maya.")]);
+        let ix_echo = ix_of(&[echo]);
+        assert!(
+            !wh_residual(&ix_echo, idx(&ix_echo, "echo"), WH_WHO, &excluded),
+            "a mid-sentence name that only repeats the query does not pass"
+        );
+        let acronym = s("acr", vec![t("acr", "user", "The API and the TV and OK failed after the travel.")]);
+        let ix_acr = ix_of(&[acronym]);
+        assert!(
+            !wh_residual(&ix_acr, idx(&ix_acr, "acr"), WH_WHO, &excluded),
+            "all-caps tokens are not TitleCase names"
+        );
+        let ranked = rank(&RankRequest {
+            sessions: vec![s("s", vec![
+                t("gap", "user", "We discussed the travel plans again."),
+                t("flight", "user", "Maya booked her flight for the travel."),
+                t("p0", "user", "We discussed the travel plans again."),
+                t("elena", "user", "Maya and Elena landed in Lisbon after the travel."),
+                t("p1", "user", "We discussed the travel plans again today."),
+                t("p2", "user", "We discussed the travel plans once more."),
+            ])],
+            queries: vec![Query { text: "Who did Maya travel with?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        });
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(ids.first().map(String::as_str), Some("elena"), "{ids:?}");
+        if let Some(flight_at) = ids.iter().position(|id| id == "flight") {
+            let elena_at = ids.iter().position(|id| id == "elena").unwrap();
+            assert!(elena_at < flight_at, "{ids:?}");
+        }
+    }
+
+    #[test]
+    fn deep_pool_can_lift_a_time_turn_without_moving_a_passing_head() {
+        let query = "When did we meet?";
+        let mut head = t("head", "user", "When did we meet at 09:15?");
+        head.stability = 1.0;
+        let mut sessions = vec![Session {
+            id: "head".into(),
+            date: String::new(),
+            timestamp: 500,
+            turns: vec![head],
+        }];
+        let notes = ["alpha", "beta", "gamma", "delta"];
+        for (i, note) in notes.iter().enumerate() {
+            sessions.push(Session {
+                id: format!("f{i}"),
+                date: String::new(),
+                timestamp: 400 - i as i64,
+                turns: vec![t(
+                    &format!("f{i}"),
+                    "user",
+                    &format!("We met downtown after the show and then walked home, {note}."),
+                )],
+            });
+        }
+        // Long enough to sit below the seated window, short enough that
+        // t_scene still meets WH_CLOSED_SCENE_FLOOR of the last seated turn.
+        let mut clock = t(
+            "clock",
+            "user",
+            "We met at 18:40 after a long unrelated walk around the block.",
+        );
+        clock.stability = 5.0;
+        sessions.push(Session {
+            id: "clock".into(),
+            date: String::new(),
+            timestamp: 1,
+            turns: vec![clock],
+        });
+        let ranked = rank(&RankRequest {
+            sessions,
+            queries: vec![Query { text: query.into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        });
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(ids.first().map(String::as_str), Some("head"), "a passing head stays: {ids:?}");
+        assert!(ids.contains(&"clock".to_string()), "the later clock enters the window: {ids:?}");
+        assert_eq!(ids.len(), 5, "admission replaces a seat, it does not grow the window: {ids:?}");
     }
 
     #[test]
@@ -8379,5 +9836,99 @@ mod recall_cue_tests {
         let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
         let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ta, tb);
+    }
+
+    #[test]
+    fn sentence_initial_name_counts_only_when_df_lower_is_zero() {
+        let excluded = wh_excluded("Who went hiking?");
+        let ix = ix_of(&[s("s", vec![
+            t("caroline", "user", "Caroline went hiking at the lake."),
+            t("lake", "user", "the lake was cold that morning."),
+        ])]);
+        assert!(
+            ix.lowercase_attested.contains("the") && ix.lowercase_attested.contains("lake"),
+            "{:?}",
+            ix.lowercase_attested
+        );
+        assert!(!ix.lowercase_attested.contains("caroline"), "{:?}", ix.lowercase_attested);
+        assert!(wh_residual(&ix, idx(&ix, "caroline"), WH_WHO, &excluded));
+        assert!(!wh_residual(&ix, idx(&ix, "lake"), WH_WHO, &excluded));
+        let the = ix_of(&[s("t", vec![
+            t("starter", "user", "The camera takes great shots."),
+            t("lower", "user", "I put the camera on the shelf."),
+        ])]);
+        assert!(the.lowercase_attested.contains("the"), "{:?}", the.lowercase_attested);
+        assert!(!wh_residual(&the, idx(&the, "starter"), WH_WHO, &wh_excluded("Who has the camera?")));
+    }
+
+    #[test]
+    fn closed_classes_use_the_715_degree_including_rsb_antecedent() {
+        let sessions = vec![s("s", vec![
+            t("user", "user", "We met downtown after the show."),
+            t("asst", "assistant", "We met downtown after the show, got it."),
+        ])];
+        let ix = ix_of(&sessions);
+        let user = idx(&ix, "user");
+        let asst = idx(&ix, "asst");
+        assert_eq!(rsb_antecedent(&ix, asst), Some(user));
+        let with_rsb = pool_structural_degree(&ix, &[user, asst], true);
+        let graph_only = pool_structural_degree(&ix, &[user, asst], false);
+        assert!(with_rsb[0] > 0, "the 715 degree still counts the antecedent: {with_rsb:?}");
+        assert_eq!(graph_only, vec![0, 0], "plain turn-taking is not a graph edge: {graph_only:?}");
+        let ctx = wh_ctx(&ix, "When did we meet?", &[user, asst], &[], 0);
+        assert_eq!(ctx.degree.get(&user).copied(), Some(with_rsb[0]), "217 stack: closed classes use degree_none");
+        assert_eq!(ctx.degree.get(&asst).copied(), Some(with_rsb[1]));
+        let none = wh_ctx(&ix, "What did we decide?", &[user, asst], &[], 0);
+        assert_eq!(none.degree.get(&user).copied(), Some(with_rsb[0]));
+        assert!(!none.continuous_scene);
+        assert!(ctx.continuous_scene);
+    }
+
+    #[test]
+    fn continuous_scene_breaks_a_near_tie_and_blocks_a_wide_gap() {
+        assert_eq!(scene_margin_milli(5.0, 1.0), 800);
+        assert_eq!(scene_margin_milli(1.0, 5.0), -800);
+        assert_eq!(scene_margin_milli(1.0, 1.02), -20);
+        assert_eq!(scene_margin_milli(0.0, 0.0), 0);
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let clock = idx(&ix, "clock");
+        let mut near = vec![0.0f32; ix.turns.len()];
+        near[plain] = 1.02;
+        near[clock] = 1.0;
+        let mut list = vec![plain, clock];
+        order_with_wh(&ix, "When did we meet?", &mut list, &near);
+        assert_eq!(list, vec![clock, plain], "a 2% scene gap is a near-tie, so the clock residual wins");
+        let mut wide = vec![0.0f32; ix.turns.len()];
+        wide[plain] = 5.0;
+        wide[clock] = 1.0;
+        let mut ordered = vec![plain, clock];
+        order_with_wh(&ix, "When did we meet?", &mut ordered, &wide);
+        assert_eq!(ordered, vec![plain, clock], "a large scene gap still blocks the clock residual alone");
+        let mut none_near = vec![plain, clock];
+        order_with_wh(&ix, "What did we decide?", &mut none_near, &near);
+        assert_eq!(none_near, vec![plain, clock], "WH_NONE keeps the 715 sign ballot, so a 2% gap is a full scene vote");
+    }
+
+    #[test]
+    fn rsb_cause_is_rebound_after_the_tail_order() {
+        let sessions = vec![s("s", vec![
+            t("cause", "user", "We met at 18:40 after the show and then walked home."),
+            t("sym", "assistant", "Got it, you met after the show."),
+            t("other", "user", "We met downtown after the show again later on."),
+        ])];
+        let ix = ix_of(&sessions);
+        let cause = idx(&ix, "cause");
+        let sym = idx(&ix, "sym");
+        let other = idx(&ix, "other");
+        assert_eq!(rsb_cause(&ix, sym), Some(cause));
+        let mut list = vec![sym, other, cause];
+        rsb_seat_behind(&ix, &mut list, 3);
+        assert_eq!(ids(&ix, &list), vec!["sym", "cause", "other"]);
+        assert_eq!(list[0], sym, "slot 0 stays the head");
     }
 }
