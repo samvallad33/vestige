@@ -16,6 +16,10 @@
 
 #![allow(clippy::all)]
 
+use crate::wh_slot_guard::{
+    wh_weight_milli, GATEKEEPER_POOL, WH_LOCK_RATIO, WH_MARGIN_SCALE, WH_SELECT_WINDOW,
+    WH_SWAP_PASS_MAX, WH_SWAP_RATIO, WH_UNINFORMATIVE,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -5775,16 +5779,23 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         final_turn_indices.iter().enumerate().map(|(i, &t)| (t, i)).collect();
     let head = final_turn_indices.first().copied();
     if let Some(head) = head {
-        let mut tail: Vec<usize> = final_turn_indices
+        let tail_pool: Vec<usize> = final_turn_indices
             .iter()
             .copied()
             .skip(1)
             .take(GATEKEEPER_POOL.saturating_sub(1))
             .collect();
-        rank1_gatekeeper(ix, &q.text, &mut tail, &t_scene);
+        let seated_len = k.saturating_sub(1).min(tail_pool.len());
+        let tail = seat_wh_tail(
+            ix,
+            &q.text,
+            &tail_pool[..seated_len],
+            &tail_pool[seated_len..],
+            &t_scene,
+        );
         let mut out = Vec::with_capacity(k);
         out.push(head);
-        out.extend(tail.into_iter().take(k.saturating_sub(1)));
+        out.extend(tail);
         let swapped = wh_guarded_swap(ix, &q.text, &mut out, &t_scene, &final_turn_indices);
         WH_QUERIES.fetch_add(1, Ordering::Relaxed);
         if swapped {
@@ -6524,23 +6535,6 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
-/// Tail vote depth. Ranks 2..50, then cut back to the caller's k.
-/// Fixed before the card.
-const GATEKEEPER_POOL: usize = 50;
-/// Selectivity is measured on this many candidates. Fixed before the card.
-const WH_SELECT_WINDOW: usize = 30;
-/// A pass rate above this carries no information, so the wh ballot is withheld.
-const WH_UNINFORMATIVE: f64 = 0.65;
-/// The guarded swap requires the top-30 pass rate to be at most this.
-const WH_SWAP_PASS_MAX: f64 = 0.35;
-/// Slot 0 stays when its score exceeds the next score by this factor.
-const WH_LOCK_RATIO: f32 = 1.25;
-/// A top-3 candidate may swap into slot 0 only at or above this fraction of slot 0's score.
-const WH_SWAP_RATIO: f32 = 0.82;
-/// Scene, degree and stability stay one vote each. The wh vote is this many
-/// milli-votes times its idf, so a rare slot can outweigh one tied ballot.
-const WH_MARGIN_SCALE: i64 = 1000;
-
 const WH_NONE: u8 = 0;
 const WH_WHEN: u8 = 1;
 const WH_HOW_LONG: u8 = 2;
@@ -6678,14 +6672,6 @@ fn wh_class(query: &str) -> u8 {
 
 fn wh_excluded(query: &str) -> HashSet<String> {
     query_tokens(query).into_iter().collect()
-}
-
-fn wh_idf_milli(n: usize, passing: usize) -> i64 {
-    if n == 0 {
-        return 0;
-    }
-    let idf = ((n as f64 + 1.0) / (passing as f64 + 1.0)).ln();
-    (idf * WH_MARGIN_SCALE as f64).round() as i64
 }
 
 fn wh_pass_rate(passing: usize, n: usize) -> f64 {
@@ -6964,14 +6950,17 @@ fn novel_spatial(text: &str, excluded: &HashSet<String>) -> bool {
 }
 
 fn novel_causal(text: &str, excluded: &HashSet<String>) -> bool {
-    let lower = text.to_ascii_lowercase();
-    let padded = format!(" {lower} ");
+    let tokens = body_tokens(text);
     for cue in CAUSAL_WORDS {
-        let word = cue.trim();
-        if word.is_empty() || !novel_word(excluded, word) {
+        let parts: Vec<&str> = cue.split_whitespace().collect();
+        if parts.is_empty() || parts.iter().any(|word| !novel_word(excluded, word)) {
             continue;
         }
-        if padded.contains(cue) || lower.contains(word) {
+        let n = parts.len();
+        if tokens.len() < n {
+            continue;
+        }
+        if tokens.windows(n).any(|window| window.iter().zip(parts.iter()).all(|(got, want)| got == want)) {
             return true;
         }
     }
@@ -7130,74 +7119,101 @@ fn wh_guarded_swap(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f3
     true
 }
 
-/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
-/// grow the window. The pool is that window, so its size is the caller's k.
-fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
-    let n = list.len();
-    if n < 2 {
-        return;
+struct WhCtx {
+    ok: HashMap<usize, bool>,
+    degree: HashMap<usize, i64>,
+    weight: i64,
+    informative: bool,
+    active: bool,
+}
+
+fn sign_of(ord: std::cmp::Ordering) -> i64 {
+    match ord {
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
     }
+}
+
+/// Four ballots in milli-votes. `wh_weight` is at most one ballot.
+fn ballot_margin(scene_v: i64, deg_v: i64, stab_v: i64, wh_v: i64, wh_weight: i64) -> i64 {
+    (scene_v + deg_v + stab_v) * WH_MARGIN_SCALE + wh_v * wh_weight
+}
+
+fn wh_ctx(ix: &Index, query: &str, pool: &[usize]) -> WhCtx {
     let class = wh_class(query);
-    // No slot: degree and stability must not reorder the scene order.
+    let degree_v = pool_structural_degree(ix, pool);
+    let mut degree = HashMap::with_capacity(pool.len());
+    for (i, &ti) in pool.iter().enumerate() {
+        degree.insert(ti, degree_v[i]);
+    }
     if class == WH_NONE {
+        return WhCtx { ok: HashMap::new(), degree, weight: 0, informative: false, active: false };
+    }
+    let excluded = wh_excluded(query);
+    let cause_in = incoming_cause_flags(ix);
+    let mut ok = HashMap::with_capacity(pool.len());
+    let mut passing = 0usize;
+    for &ti in pool {
+        let pass = wh_residual(ix, ti, class, &excluded, cause_in.get(ti).copied().unwrap_or(false));
+        if pass {
+            passing += 1;
+        }
+        ok.insert(ti, pass);
+    }
+    let n = pool.len();
+    WhCtx {
+        ok,
+        degree,
+        weight: wh_weight_milli(n, passing),
+        informative: wh_pass_rate(passing, n) <= WH_UNINFORMATIVE,
+        active: true,
+    }
+}
+
+/// Margin of `ta` over `tb`. Positive means `ta` wins the pair.
+/// `count` records the votes that set an order. Admission checks pass false.
+fn directed_margin(ix: &Index, ctx: &WhCtx, ta: usize, tb: usize, t_scene: &[f32], count: bool) -> i64 {
+    let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
+    let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
+    let scene_v = sign_of(scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal));
+    let deg_a = ctx.degree.get(&ta).copied().unwrap_or(0);
+    let deg_b = ctx.degree.get(&tb).copied().unwrap_or(0);
+    let deg_v = sign_of(deg_a.cmp(&deg_b));
+    let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
+    let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
+    let stab_v = sign_of(stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut wh_v = if ctx.informative {
+        wh_vote(ctx.ok.get(&ta).copied().unwrap_or(false), ctx.ok.get(&tb).copied().unwrap_or(false))
+    } else {
+        0
+    };
+    if count && wh_v != 0 {
+        WH_VOTE_NZ.fetch_add(1, Ordering::Relaxed);
+    }
+    // Wh overturns scene only with a structural vote on the same side.
+    let opposes_scene = scene_v == 0 || scene_v == -wh_v;
+    let structural_agrees = (deg_v == wh_v && deg_v != 0) || (stab_v == wh_v && stab_v != 0);
+    if wh_v != 0 && opposes_scene && !structural_agrees {
+        wh_v = 0;
+    }
+    let margin = ballot_margin(scene_v, deg_v, stab_v, wh_v, ctx.weight);
+    if count && margin < 0 {
+        WH_AGAINST.fetch_add(1, Ordering::Relaxed);
+    }
+    margin
+}
+
+fn order_pool(ix: &Index, list: &mut Vec<usize>, t_scene: &[f32], ctx: &WhCtx) {
+    let n = list.len();
+    if n < 2 || !ctx.active {
         return;
     }
     let pool = list.clone();
-    let excluded = wh_excluded(query);
-    let degree = pool_structural_degree(ix, &pool);
-    let cause_in = incoming_cause_flags(ix);
-    let mut ok = vec![false; n];
-    let mut passing = 0usize;
-    if class != WH_NONE {
-        for (i, &ti) in pool.iter().enumerate() {
-            ok[i] = wh_residual(ix, ti, class, &excluded, cause_in.get(ti).copied().unwrap_or(false));
-            if ok[i] {
-                passing += 1;
-            }
-        }
-    }
-    let idf_milli = wh_idf_milli(n, passing);
-    let informative = wh_pass_rate(passing, n) <= WH_UNINFORMATIVE;
     let mut net = vec![vec![0i64; n]; n];
     for a in 0..n {
         for b in (a + 1)..n {
-            let (ta, tb) = (pool[a], pool[b]);
-            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
-            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-            let scene_v = match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => 1,
-                std::cmp::Ordering::Less => -1,
-                std::cmp::Ordering::Equal => 0,
-            };
-            let deg_v = match degree[a].cmp(&degree[b]) {
-                std::cmp::Ordering::Greater => 1,
-                std::cmp::Ordering::Less => -1,
-                std::cmp::Ordering::Equal => 0,
-            };
-            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
-            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
-            let stab_v = match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => 1,
-                std::cmp::Ordering::Less => -1,
-                std::cmp::Ordering::Equal => 0,
-            };
-            // +1 means the earlier input turn beats the later one.
-            let mut wh_v = if informative { wh_vote(ok[a], ok[b]) } else { 0 };
-            if wh_v != 0 {
-                WH_VOTE_NZ.fetch_add(1, Ordering::Relaxed);
-            }
-            // Wh overturns scene only with a structural vote on the same side.
-            // Alone it is not a ballot, so it cannot tie scene and fall back
-            // to the input order.
-            let opposes_scene = scene_v == 0 || scene_v == -wh_v;
-            let structural_agrees = (deg_v == wh_v && deg_v != 0) || (stab_v == wh_v && stab_v != 0);
-            if wh_v != 0 && opposes_scene && !structural_agrees {
-                wh_v = 0;
-            }
-            let margin = (scene_v + deg_v + stab_v) * WH_MARGIN_SCALE + wh_v * idf_milli;
-            if margin < 0 {
-                WH_AGAINST.fetch_add(1, Ordering::Relaxed);
-            }
+            let margin = directed_margin(ix, ctx, pool[a], pool[b], t_scene, true);
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -7217,6 +7233,53 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     *list = turned;
 }
 
+/// Rank-1 gatekeeper. Runs after RSB. Reorders the list it is given.
+/// A query with no wh slot keeps the scene order.
+fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+    if list.len() < 2 {
+        return;
+    }
+    let ctx = wh_ctx(ix, query, list);
+    order_pool(ix, list, t_scene, &ctx);
+}
+
+/// Order the RSB tail. `seated` is the top-k tail the within-window gatekeeper
+/// already owns. `below` is the rest of the pool, past that top k.
+///
+/// A below-window turn is added to the Kemeny set only when it beats every
+/// seated tail turn by a strict four-ballot majority. The returned tail has
+/// the same length as `seated`. When nobody qualifies, the result is the
+/// within-window order.
+fn seat_wh_tail(ix: &Index, query: &str, seated: &[usize], below: &[usize], t_scene: &[f32]) -> Vec<usize> {
+    if seated.is_empty() {
+        return Vec::new();
+    }
+    let mut pool = Vec::with_capacity(seated.len() + below.len());
+    pool.extend_from_slice(seated);
+    pool.extend_from_slice(below);
+    let ctx = wh_ctx(ix, query, &pool);
+    if !ctx.active {
+        return seated.to_vec();
+    }
+    let mut admitted = Vec::new();
+    for &cand in below {
+        let beats_all = seated.iter().all(|&seat| directed_margin(ix, &ctx, cand, seat, t_scene, false) > 0);
+        if beats_all {
+            admitted.push(cand);
+        }
+    }
+    if admitted.is_empty() {
+        let mut ordered = seated.to_vec();
+        order_pool(ix, &mut ordered, t_scene, &ctx);
+        return ordered;
+    }
+    let mut combined = seated.to_vec();
+    combined.extend(admitted);
+    order_pool(ix, &mut combined, t_scene, &ctx);
+    combined.truncate(seated.len());
+    combined
+}
+
 /// The wh ballot. One equal vote: +1, -1, or 0. Not a bonus and not a veto.
 fn wh_vote(ok_a: bool, ok_b: bool) -> i64 {
     match (ok_a, ok_b) {
@@ -7226,8 +7289,7 @@ fn wh_vote(ok_a: bool, ok_b: bool) -> i64 {
     }
 }
 
-/// Degree, stability, and the wh vote. Scene is not a ballot: a zero margin
-/// keeps the input order, which is the scene order.
+/// Scene, degree, stability, and one full wh ballot. Used by the equal-vote test.
 fn pair_margin(
     scene_a: f32,
     scene_b: f32,
@@ -7237,23 +7299,10 @@ fn pair_margin(
     stab_b: f32,
     wh: i64,
 ) -> i64 {
-    let mut margin = 0i64;
-    match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
-        std::cmp::Ordering::Greater => margin += 1,
-        std::cmp::Ordering::Less => margin -= 1,
-        std::cmp::Ordering::Equal => {}
-    }
-    match degree_a.cmp(&degree_b) {
-        std::cmp::Ordering::Greater => margin += 1,
-        std::cmp::Ordering::Less => margin -= 1,
-        std::cmp::Ordering::Equal => {}
-    }
-    match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
-        std::cmp::Ordering::Greater => margin += 1,
-        std::cmp::Ordering::Less => margin -= 1,
-        std::cmp::Ordering::Equal => {}
-    }
-    margin + wh
+    let scene_v = sign_of(scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal));
+    let deg_v = sign_of(degree_a.cmp(&degree_b));
+    let stab_v = sign_of(stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal));
+    ballot_margin(scene_v, deg_v, stab_v, wh, WH_MARGIN_SCALE)
 }
 
 /// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
@@ -9205,7 +9254,7 @@ mod recall_cue_tests {
             wh_satisfied(&ix, plain, slots, false),
         );
         assert_eq!(vote, 1);
-        assert_eq!(pair_margin(1.0, 1.0, 0, 0, 0.0, 0.0, vote), 1);
+        assert_eq!(pair_margin(1.0, 1.0, 0, 0, 0.0, 0.0, vote), WH_MARGIN_SCALE);
         assert_eq!(pair_margin(1.0, 1.0, 0, 0, 0.0, 0.0, 0), 0);
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, clock];
@@ -9221,7 +9270,92 @@ mod recall_cue_tests {
         let mut majority = vec![plain, clock];
         rank1_gatekeeper(&ix, "When did we meet?", &mut majority, &scene_gap);
         assert_eq!(majority, vec![clock, plain], "wh plus degree overturns scene");
-        assert_eq!(pair_margin(5.0, 1.0, 0, 0, 0.0, 0.0, 1), 2);
+        assert_eq!(pair_margin(5.0, 1.0, 0, 0, 0.0, 0.0, 1), 2 * WH_MARGIN_SCALE);
+    }
+
+    #[test]
+    fn wh_weight_cannot_overturn_a_two_to_one_majority() {
+        assert_eq!(wh_weight_milli(50, 0), WH_MARGIN_SCALE);
+        assert_eq!(wh_weight_milli(50, 50), 0);
+        for n in 1..=64 {
+            for p in 0..=n {
+                let w = wh_weight_milli(n, p);
+                assert!(w >= 0 && w <= WH_MARGIN_SCALE, "n={n} p={p} w={w}");
+                // Scene and stability against degree and wh.
+                assert!(ballot_margin(-1, 1, -1, 1, w) <= 0, "n={n} p={p} w={w}");
+                // Scene and degree against stability and wh.
+                assert!(ballot_margin(-1, -1, 1, 1, w) <= 0, "n={n} p={p} w={w}");
+            }
+        }
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let clock = idx(&ix, "clock");
+        ix.turns[plain].stability = 3.0;
+        ix.turns[clock].stability = 0.0;
+        ix.turns[plain].exact_edges.push((1, clock));
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[plain] = 5.0;
+        scene[clock] = 1.0;
+        let mut list = vec![plain, clock];
+        rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list, vec![plain, clock], "wh plus degree does not beat scene plus stability");
+    }
+
+    #[test]
+    fn below_window_turn_enters_only_when_it_beats_every_seated_tail_turn() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "We met downtown after the show."),
+            t("seated", "user", "We met downtown after the show again."),
+            t("loser", "user", "We met at 18:40 after the show."),
+            t("winner", "user", "We met at 19:05 after the show."),
+            t("filler", "user", "We met downtown after the show once more."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let seated = idx(&ix, "seated");
+        let loser = idx(&ix, "loser");
+        let winner = idx(&ix, "winner");
+        let filler = idx(&ix, "filler");
+        ix.turns[seated].stability = 5.0;
+        ix.turns[winner].stability = 5.0;
+        ix.turns[loser].stability = 0.0;
+        ix.turns[head].exact_edges.push((1, winner));
+        ix.turns[head].exact_edges.push((1, loser));
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 10.0;
+        scene[seated] = 4.0;
+        scene[loser] = 1.0;
+        scene[winner] = 1.0;
+        scene[filler] = 0.5;
+        let query = "When did we meet?";
+        let excluded = wh_excluded(query);
+        assert!(wh_residual(&ix, loser, WH_WHEN, &excluded, false));
+        assert!(wh_residual(&ix, winner, WH_WHEN, &excluded, false));
+        assert!(!wh_residual(&ix, seated, WH_WHEN, &excluded, false));
+        assert!(!wh_residual(&ix, filler, WH_WHEN, &excluded, false));
+        let pool = [seated, loser, winner, filler];
+        let degree = pool_structural_degree(&ix, &pool);
+        assert!(degree[2] > degree[0] && degree[1] > degree[0], "{degree:?}");
+        let rejected = seat_wh_tail(&ix, query, &[seated], &[loser, filler], &scene);
+        assert_eq!(rejected, vec![seated], "a 2-1 loss does not take the seat: {}", ids(&ix, &rejected).join(","));
+        let admitted = seat_wh_tail(&ix, query, &[seated], &[loser, winner, filler], &scene);
+        assert_eq!(admitted, vec![winner], "the turn that beats every seated tail turn takes the seat: {}", ids(&ix, &admitted).join(","));
+    }
+
+    #[test]
+    fn novel_causal_matches_whole_tokens() {
+        let excluded = wh_excluded("Why did we leave?");
+        assert!(!novel_causal("The claim stood.", &excluded));
+        assert!(!novel_causal("The gift was unwanted.", &excluded));
+        assert!(novel_causal("The aim was rest.", &excluded));
+        assert!(novel_causal("We left because the hall closed.", &excluded));
+        assert!(novel_causal("We left due to the rain.", &excluded));
+        let echoed = wh_excluded("Why did we leave because of the rain?");
+        assert!(!novel_causal("We left because of the rain.", &echoed));
     }
 
     #[test]

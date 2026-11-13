@@ -5,7 +5,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         eprintln!("Usage: retrieval-bench [--worker]");
-        eprintln!("Reads line-delimited JSON RankRequest from stdin and writes line-delimited JSON RankResponse to stdout.");
+        eprintln!(
+            "Reads line-delimited JSON RankRequest from stdin and writes line-delimited JSON RankResponse to stdout."
+        );
         return;
     }
 
@@ -35,8 +37,23 @@ fn main() {
             }
         }
     }
-    let (queries, swaps, below_k, vote_nz, against, lifts) = vestige_core::retrieval::wh_pool_counts();
-    eprintln!(
+    let (queries, swaps, below_k, vote_nz, against, lifts) =
+        vestige_core::retrieval::wh_pool_counts();
+    let line = format!(
         "vestige_wh_pool queries={queries} swaps={swaps} below_k={below_k} wh_vote_nz={vote_nz} against_order={against} lifts_into_top5={lifts}"
     );
+    println!("{line}");
+    eprintln!("{line}");
+    if let Ok(path) = std::env::var("VESTIGE_WH_POOL_FILE") {
+        if !path.is_empty() {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = writeln!(file, "{line}");
+            }
+        }
+    }
 }
