@@ -6573,7 +6573,55 @@ fn kemeny_pool(
     order.iter().map(|&i| pool[i]).collect()
 }
 
-/// Tail pool: the current tail, then already-scored turns the selector cut,
+/// Turns one stored factor away from the window: supersedes, policy backlink,
+/// exact edge, RSB antecedent, or the adjacent turn in the same session.
+/// One hop. The next scene-ranked turn with none of those edges is not a
+/// candidate. Filling the extra window with it re-admits a cut the selector
+/// already made, and the scene ballot then moves it without the factor graph.
+fn structural_neighbors(ix: &Index, seeds: &[usize]) -> HashSet<usize> {
+    let mut seed_at = vec![false; ix.turns.len()];
+    for &s in seeds {
+        if let Some(slot) = seed_at.get_mut(s) {
+            *slot = true;
+        }
+    }
+    let mut neigh = HashSet::new();
+    let link = |src: usize, other: usize, seed_at: &[bool], neigh: &mut HashSet<usize>| {
+        if other == src || other >= seed_at.len() {
+            return;
+        }
+        if seed_at[src] && !seed_at[other] {
+            neigh.insert(other);
+        } else if seed_at[other] && !seed_at[src] {
+            neigh.insert(src);
+        }
+    };
+    for (src, turn) in ix.turns.iter().enumerate() {
+        if src >= seed_at.len() {
+            break;
+        }
+        for &tgt in &turn.policy_backlinks {
+            link(src, tgt, &seed_at, &mut neigh);
+        }
+        for &tgt in &turn.supersedes_turns {
+            link(src, tgt, &seed_at, &mut neigh);
+        }
+        for &(_, tgt) in &turn.exact_edges {
+            link(src, tgt, &seed_at, &mut neigh);
+        }
+        if let Some(tgt) = rsb_antecedent(ix, src) {
+            link(src, tgt, &seed_at, &mut neigh);
+        }
+    }
+    for members in &ix.session_turns {
+        for pair in members.windows(2) {
+            link(pair[0], pair[1], &seed_at, &mut neigh);
+        }
+    }
+    neigh
+}
+
+/// Tail pool: the current tail, then structural neighbors the selector cut,
 /// up to one extra window. Slot 0 is not a member.
 fn factor_tail_pool(ix: &Index, window: &[usize], t_scene: &[f32], k: usize) -> Vec<usize> {
     let head = window[0];
@@ -6594,6 +6642,7 @@ fn factor_tail_pool(ix: &Index, window: &[usize], t_scene: &[f32], k: usize) -> 
             seen[ti] = true;
         }
     }
+    let neigh = structural_neighbors(ix, window);
     let turn_ts: Vec<i64> = ix
         .turns
         .iter()
@@ -6603,10 +6652,7 @@ fn factor_tail_pool(ix: &Index, window: &[usize], t_scene: &[f32], k: usize) -> 
         if pool.len() >= target {
             break;
         }
-        if t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
-            break;
-        }
-        if seen.get(ti).copied().unwrap_or(true) {
+        if !neigh.contains(&ti) || seen.get(ti).copied().unwrap_or(true) {
             continue;
         }
         seen[ti] = true;
@@ -8766,6 +8812,30 @@ mod recall_cue_tests {
         rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
         assert_eq!(list[0], head);
         assert_ne!(list[0], later);
+    }
+
+    #[test]
+    fn factor_graph_does_not_admit_an_unrelated_high_scene_turn() {
+        let sessions = vec![
+            s("s", vec![
+                t("head", "user", "Alpha signal stays on the record."),
+                t("earlier", "user", "Beta signal stays on the record."),
+            ]),
+            s("other", vec![
+                t("outsider", "user", "Delta signal stays on the record."),
+            ]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let outsider = idx(&ix, "outsider");
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[outsider] = 50.0;
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list, vec![head, earlier]);
+        assert!(!fired);
+        assert_ne!(list[1], outsider);
     }
 
     #[test]
