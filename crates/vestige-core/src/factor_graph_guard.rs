@@ -3,6 +3,13 @@
 //! Every quantity the loopy sum-product vote uses is fixed here, before any
 //! benchmark card. Nothing in this file is a rank weight. The Kemeny ballot
 //! that consumes the marginals is still +1, −1, or 0.
+//!
+//! Scene, structural degree, stability, and the wh slot are one ±1 each on
+//! every pair, including a pair that crosses the cut. The factor marginal is
+//! the same ±1, and only on a pair that crosses the cut. There is no extra
+//! threshold. Degree is not silent across the cut: the forensics on `920928c0`
+//! showed the displaced gold had the higher in-degree, and silencing that
+//! ballot let a scene advantage win the pair alone.
 
 /// One extra window past the caller's `top_k`.
 ///
@@ -39,14 +46,3 @@ pub const FACTOR_DAMPING: f64 = 0.1;
 /// coupling puts one nat between the favored state and the opposite state.
 /// It is not a per-edge weight and it does not scale the Kemeny ballot.
 pub const FACTOR_COUPLING: f64 = 1.0;
-
-/// Seats on the non-scene committee: the factor marginal, structural degree,
-/// and stability.
-///
-/// A below-cut turn takes a pair against an in-window turn only when it wins
-/// a strict majority of these seats (more than half, so two of the three).
-/// One seat is not a majority. Scene and the wh slot stay ballots inside the
-/// window and do not carry a pair across the cut. The committee size is the
-/// number of named ballots, and the threshold is the definition of a strict
-/// majority of that committee.
-pub const FACTOR_NONSCENE_BALLOTS: usize = 3;

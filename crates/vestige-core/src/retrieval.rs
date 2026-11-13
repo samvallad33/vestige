@@ -24,7 +24,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::factor_graph_guard::{
     FACTOR_COUPLING, FACTOR_DAMPING, FACTOR_EXTRA_WINDOWS, FACTOR_ITERATIONS,
-    FACTOR_NONSCENE_BALLOTS,
 };
 
 // =========================================================================
@@ -6567,35 +6566,16 @@ struct PairBallots {
 
 impl PairBallots {
     fn margin(&self) -> i64 {
-        if !self.cross_cut {
-            return self.scene + self.degree + self.stability + self.wh + self.factor;
-        }
-        // Strict majority of the non-scene committee. One ballot, including a
-        // scene advantage, does not move the pair.
-        let mut for_a = 0i64;
-        let mut for_b = 0i64;
-        for sign in [self.degree, self.stability, self.factor] {
-            if sign > 0 {
-                for_a += 1;
-            } else if sign < 0 {
-                for_b += 1;
-            }
-        }
-        let seats = FACTOR_NONSCENE_BALLOTS as i64;
-        if for_a * 2 > seats {
-            1
-        } else if for_b * 2 > seats {
-            -1
-        } else {
-            0
-        }
+        // One ±1 per ballot. Degree votes on a cross-cut pair too, so a scene
+        // advantage against a higher-degree turn is a tie unless another
+        // ballot breaks it. The factor sign is already 0 when both turns sit
+        // inside the window.
+        self.scene + self.degree + self.stability + self.wh + self.factor
     }
 }
 
 /// Ballots on one unordered pair, signed so a positive value means pool index
-/// `a` beats `b`. Inside the window the margin is the sum of the ballots.
-/// Across the cut the margin is the strict majority of factor, degree, and
-/// stability.
+/// `a` beats `b`.
 fn pair_ballots(
     ix: &Index,
     pool: &[usize],
@@ -6608,10 +6588,9 @@ fn pair_ballots(
     b: usize,
 ) -> PairBallots {
     let (ta, tb) = (pool[a], pool[b]);
-    // Scene is recorded on every pair and summed only inside the window.
-    // Across the cut it does not carry the pair: the forensics on 920928c0
-    // showed a scene advantage with degree silent was enough to move gold
-    // out of the top 5.
+    // Scene is one ballot on every pair. Degree is too. A scene advantage
+    // against a higher in-degree is a tie unless stability, wh, or the
+    // factor marginal breaks it.
     let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
     let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
     let scene = sign_of(
@@ -7118,9 +7097,8 @@ fn record_factor_trace(
 }
 
 /// Slot 0 stays the RSB head. The tail Kemeny runs on the current tail plus
-/// one window of already-scored turns below it. A below-cut turn beats an
-/// in-window turn only with a strict majority of the factor, degree, and
-/// stability ballots.
+/// one window of already-scored turns below it. Each ballot is ±1. Degree
+/// votes across the cut. The factor marginal votes only across the cut.
 fn rank1_gatekeeper_keep_rsb_head(
     ix: &Index,
     query: &str,
@@ -9029,9 +9007,6 @@ mod recall_cue_tests {
         let earlier = idx(&ix, "earlier");
         let later = idx(&ix, "later");
         ix.turns[later].exact_edges.push((1, head));
-        // Factor alone is one seat. Stability is the second, so the later
-        // turn holds a strict majority of the non-scene committee.
-        ix.turns[later].stability = 1.0;
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![head, earlier];
         let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
@@ -9050,7 +9025,7 @@ mod recall_cue_tests {
     }
 
     #[test]
-    fn factor_graph_one_factor_ballot_does_not_cross_the_cut() {
+    fn factor_graph_scene_advantage_against_higher_degree_ties() {
         let sessions = vec![s("s", vec![
             t("head", "user", "Alpha signal stays on the record."),
             t("earlier", "user", "Beta signal stays on the record."),
@@ -9060,34 +9035,15 @@ mod recall_cue_tests {
         let head = idx(&ix, "head");
         let earlier = idx(&ix, "earlier");
         let later = idx(&ix, "later");
-        ix.turns[later].exact_edges.push((1, head));
-        let scene = vec![1.0f32; ix.turns.len()];
-        let mut list = vec![head, earlier];
-        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
-        assert_eq!(list, vec![head, earlier]);
-        assert!(!fired, "one factor ballot is not a strict majority");
-        assert_ne!(list[1], later);
-    }
-
-    #[test]
-    fn factor_graph_higher_scene_without_a_nonscene_majority_stays_below() {
-        let sessions = vec![s("s", vec![
-            t("head", "user", "Alpha signal stays on the record."),
-            t("earlier", "user", "Beta signal stays on the record."),
-            t("later", "user", "Gamma signal stays on the record."),
-        ])];
-        let mut ix = ix_of(&sessions);
-        let head = idx(&ix, "head");
-        let earlier = idx(&ix, "earlier");
-        let later = idx(&ix, "later");
-        ix.turns[later].exact_edges.push((1, head));
+        // The edge points at the in-window turn, so that turn holds the degree.
+        ix.turns[later].exact_edges.push((1, earlier));
         let mut scene = vec![1.0f32; ix.turns.len()];
         scene[later] = 50.0;
         let mut list = vec![head, earlier];
         let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
         assert_eq!(list[0], head);
         assert_eq!(list, vec![head, earlier]);
-        assert!(!fired, "a scene advantage is not a non-scene majority");
+        assert!(!fired, "scene +1 against degree -1 is a tie when the marginal does not break it");
     }
 
     #[test]
