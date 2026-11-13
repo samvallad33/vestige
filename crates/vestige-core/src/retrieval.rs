@@ -231,6 +231,10 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// The group-testing rule trigger changed this query's turn list.
+    pub group_testing_fired: bool,
+    /// A positive pool had more defectives than `GBS_DEFECTIVE_COUNT`, so nothing was seated.
+    pub group_testing_ambiguous: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5745,6 +5749,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    let gt = group_testing_rule_trigger(ix, &q.text, &mut final_turn_indices, k);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5754,7 +5759,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult {
+        intent: plan.intent,
+        sessions,
+        turns,
+        standing_rules,
+        group_testing_fired: gt.fired,
+        group_testing_ambiguous: gt.ambiguous,
+    }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -6524,6 +6536,221 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
     list.clear();
     list.push(head);
     list.extend(tail);
+}
+
+struct GroupTestingSeat {
+    fired: bool,
+    ambiguous: bool,
+}
+
+/// Hwang's generalized binary splitting for a known defective count.
+///
+/// `mask[i]` is the individual oracle: item `i` is defective. A group test is
+/// the Boolean OR of that oracle, which is the defining property of classical
+/// group testing (Dorfman, "The detection of defective members of large
+/// populations", Annals of Mathematical Statistics 14, 1943). The search is
+/// Hwang's algorithm G: while defectives remain, test a group of size
+/// 2^floor(log2((n-d+1)/d)); a negative group is discarded; a positive group
+/// is binary-split to one defective. Items stay in index order, so the splits
+/// are deterministic.
+///
+/// Returns the defective indexes in the order the algorithm identifies them.
+fn hwang_gbs(mask: &[bool], d: usize) -> Vec<usize> {
+    if d == 0 || mask.is_empty() {
+        return Vec::new();
+    }
+    let mut remaining: Vec<usize> = (0..mask.len()).collect();
+    let mut d_left = d;
+    let mut found = Vec::new();
+    while d_left > 0 && !remaining.is_empty() {
+        let n = remaining.len();
+        if n <= d_left.saturating_mul(2).saturating_sub(2) {
+            for i in remaining.iter().copied() {
+                if mask[i] {
+                    found.push(i);
+                }
+            }
+            break;
+        }
+        let l = n - d_left + 1;
+        let ratio = l / d_left;
+        if ratio == 0 {
+            break;
+        }
+        let alpha = (usize::BITS - 1 - ratio.leading_zeros()).min(62);
+        let size = (1usize << alpha).min(n);
+        let positive = remaining[..size].iter().any(|&i| mask[i]);
+        if !positive {
+            remaining.drain(..size);
+            continue;
+        }
+        let defective = binary_split_defective(mask, &remaining[..size]);
+        found.push(defective);
+        d_left -= 1;
+        // Identified goods are the negative halves inside the contaminated
+        // group. The defective leaves. The untested tail stays.
+        let goods = binary_split_goods(mask, &remaining[..size], defective);
+        let mut drop = goods;
+        drop.push(defective);
+        drop.sort_unstable();
+        remaining.retain(|i| drop.binary_search(i).is_err());
+    }
+    found
+}
+
+/// One defective inside a group the oracle has already called positive.
+fn binary_split_defective(mask: &[bool], group: &[usize]) -> usize {
+    let mut g = group.to_vec();
+    while g.len() > 1 {
+        let mid = g.len() / 2;
+        if g[..mid].iter().any(|&i| mask[i]) {
+            g.truncate(mid);
+        } else {
+            g.drain(..mid);
+        }
+    }
+    g[0]
+}
+
+/// Items proved good while binary-splitting `group` down to `defective`.
+/// Only a negative half is good. The untested half stays in the pool.
+fn binary_split_goods(mask: &[bool], group: &[usize], defective: usize) -> Vec<usize> {
+    let mut goods = Vec::new();
+    let mut g = group.to_vec();
+    while g.len() > 1 {
+        let mid = g.len() / 2;
+        if g[..mid].iter().any(|&i| mask[i]) {
+            g.truncate(mid);
+        } else {
+            goods.extend_from_slice(&g[..mid]);
+            g.drain(..mid);
+        }
+    }
+    debug_assert_eq!(g.first().copied(), Some(defective));
+    goods
+}
+
+fn episode_root(ix: &Index, mut session: usize) -> usize {
+    let n = ix.session_episode_prev.len();
+    let mut guard = 0usize;
+    while let Some(prev) = ix.session_episode_prev[session] {
+        session = prev;
+        guard += 1;
+        if guard > n {
+            break;
+        }
+    }
+    session
+}
+
+/// A standing policy in a later session of the head's episode.
+///
+/// `policy_backlinks` point backward and seating them moved BEAM turn Any@5
+/// from 59.15 to 58.87. A later policy in the head's own session, an
+/// `rsb_antecedent`, and an exact query token are the seats that left
+/// LongMemEval turn Any@5 at 372/470 and LoCoMo turn R@5 at 69.01. LoCoMo
+/// sessions do not share a date, so those fires were not this predicate.
+/// The BEAM instruction is a later sub-session of the retrieved head's episode.
+fn later_episode_policy(ix: &Index, head: usize, cand: usize) -> bool {
+    let head_turn = &ix.turns[head];
+    let cand_turn = &ix.turns[cand];
+    cand > head
+        && cand_turn.session != head_turn.session
+        && cand_turn.is_standing_policy
+        && episode_root(ix, head_turn.session) == episode_root(ix, cand_turn.session)
+}
+
+enum GroupFamily {
+    Silent,
+    Unique(usize),
+    Impure,
+}
+
+/// Hwang's (1, n) result on one family. An empty family is silent. A positive
+/// complement means the family is not (1, n), so it identifies nobody.
+fn classify_family(mask: &[bool]) -> GroupFamily {
+    if !mask.iter().any(|&d| d) {
+        return GroupFamily::Silent;
+    }
+    let d = crate::group_testing_guard::GBS_DEFECTIVE_COUNT;
+    let identified = hwang_gbs(mask, d);
+    if identified.len() != d || identified.iter().any(|&i| !mask[i]) {
+        return GroupFamily::Impure;
+    }
+    let mut got = identified.clone();
+    got.sort_unstable();
+    if mask.iter().enumerate().any(|(i, &def)| def && got.binary_search(&i).is_err()) {
+        return GroupFamily::Impure;
+    }
+    GroupFamily::Unique(identified[0])
+}
+
+/// Group-testing rule trigger. Runs after the RSB head is frozen.
+///
+/// One family. The population is every standing policy below the window that
+/// sits in a later session of the frozen head's episode. Hwang's (1, n)
+/// search identifies that policy. An impure family identifies nobody. Slot 0
+/// is not a seat.
+///
+/// Session and time are not tested again here. SalienceJoin already wrote
+/// `policy_backlinks` from the session id and the episode key, and counting
+/// that field a second time would count one edge twice. Edges from later
+/// window turns are not part of this test: each of those turns belongs to its
+/// own episode, and folding them in made the complement positive on 303 of
+/// 355 BEAM queries.
+///
+/// A single identified turn is inserted immediately after the earliest window
+/// turn that points at it. A later policy has no such pointer, so it takes the
+/// last index inside `SEAT_HORIZON`, clamped to `k - 1`. Slot 0 is not a
+/// candidate. The tail past k drops because the window length stays k.
+fn group_testing_rule_trigger(ix: &Index, _query: &str, list: &mut Vec<usize>, k: usize) -> GroupTestingSeat {
+    let none = GroupTestingSeat { fired: false, ambiguous: false };
+    if k <= crate::group_testing_guard::SEAT_FLOOR || list.is_empty() {
+        return none;
+    }
+    let window: Vec<usize> = list.iter().copied().take(k).collect();
+    if window.is_empty() {
+        return none;
+    }
+    let window_set: HashSet<usize> = window.iter().copied().collect();
+    let head = window[0];
+    let pool: Vec<usize> = (0..ix.turns.len())
+        .filter(|&ti| !window_set.contains(&ti) && ix.turns[ti].is_standing_policy)
+        .collect();
+    if pool.is_empty() {
+        return none;
+    }
+    let edge_mask: Vec<bool> = pool.iter().map(|&cand| later_episode_policy(ix, head, cand)).collect();
+    let found_at = match classify_family(&edge_mask) {
+        GroupFamily::Unique(i) => i,
+        GroupFamily::Silent => return none,
+        GroupFamily::Impure => return GroupTestingSeat { fired: false, ambiguous: true },
+    };
+    let found = pool[found_at];
+    let symptom = window.iter().position(|&w| {
+        let t = &ix.turns[w];
+        t.policy_backlinks.contains(&found)
+            || t.supersedes_turns.contains(&found)
+            || t.exact_edges.iter().any(|&(_, p)| p == found)
+            || rsb_antecedent(ix, w) == Some(found)
+    });
+    let seat = symptom.map(|i| i + 1).unwrap_or_else(|| {
+        let horizon = crate::group_testing_guard::SEAT_HORIZON;
+        (horizon - 1).min(k - 1).min(list.len())
+    });
+    if seat < crate::group_testing_guard::SEAT_FLOOR || seat >= k || seat > list.len() {
+        return none;
+    }
+    if list.contains(&found) {
+        return none;
+    }
+    let head = list[0];
+    list.insert(seat, found);
+    if list.len() > k {
+        list.truncate(k);
+    }
+    debug_assert_eq!(list.first().copied(), Some(head));
+    GroupTestingSeat { fired: true, ambiguous: false }
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8379,5 +8606,221 @@ mod recall_cue_tests {
         let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
         let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ta, tb);
+    }
+
+    #[test]
+    fn hwang_gbs_finds_the_single_defective_wherever_it_sits() {
+        let mut mask = vec![false; 13];
+        mask[5] = true;
+        assert_eq!(hwang_gbs(&mask, 1), vec![5]);
+        assert_eq!(hwang_gbs(&mask, 1), hwang_gbs(&mask, 1));
+        mask[5] = false;
+        mask[0] = true;
+        assert_eq!(hwang_gbs(&mask, 1), vec![0]);
+        mask[12] = true;
+        let found = hwang_gbs(&mask, 1);
+        assert_eq!(found.len(), 1);
+        assert!(mask[found[0]], "binary splitting returns a real defective");
+        let none = vec![false; 8];
+        assert!(hwang_gbs(&none, 1).is_empty());
+    }
+
+    #[test]
+    fn group_testing_seats_a_rule_behind_the_head_and_repeats() {
+        let sessions = vec![
+            s("conv1_b0_s0", vec![
+                t("fact", "user", "The migration checklist covers backups and rollback."),
+                t("reply", "assistant", "The migration checklist covers backups and rollback today."),
+                t("other", "user", "Packing cubes fit in the hallway closet."),
+            ]),
+            s("conv1_b0_s1", vec![
+                t("rule", "user", "Always include Atlas in the weekly note."),
+            ]),
+        ];
+        let ix = ix_of(&sessions);
+        let rule = idx(&ix, "rule");
+        let fact = idx(&ix, "fact");
+        let reply = idx(&ix, "reply");
+        let other = idx(&ix, "other");
+        assert!(ix.turns[rule].is_standing_policy);
+        assert!(rule > fact);
+        assert!(!ix.turns[fact].policy_backlinks.contains(&rule));
+        let run = || {
+            let mut list = vec![fact, reply, other];
+            let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 3);
+            (gt.fired, gt.ambiguous, list)
+        };
+        let (fired, ambiguous, list) = run();
+        let (fired_b, ambiguous_b, list_b) = run();
+        assert!(fired && !ambiguous);
+        assert_eq!(fired, fired_b);
+        assert_eq!(ambiguous, ambiguous_b);
+        assert_eq!(list, list_b);
+        assert_eq!(list[0], fact, "slot 0 stays the head");
+        assert_eq!(list[2], rule, "the rule takes the last seat inside the horizon");
+        assert!(!list.contains(&other), "the tail past k drops");
+        assert_eq!(ids(&ix, &list), vec!["fact".to_string(), "reply".into(), "rule".into()]);
+    }
+
+    #[test]
+    fn group_testing_leaves_the_window_alone_when_two_rules_trigger() {
+        let sessions = vec![
+            s("conv1_b0_s0", vec![
+                t("fact", "user", "The migration checklist covers backups and rollback."),
+                t("other", "user", "Packing cubes fit in the hallway closet."),
+            ]),
+            s("conv1_b0_s1", vec![
+                t("rule_a", "user", "Always include Atlas in the weekly note."),
+                t("rule_b", "user", "Always include Nova in the weekly note."),
+            ]),
+        ];
+        let ix = ix_of(&sessions);
+        let fact = idx(&ix, "fact");
+        let other = idx(&ix, "other");
+        let mut list = vec![fact, other];
+        let before = list.clone();
+        let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 2);
+        assert!(!gt.fired && gt.ambiguous);
+        assert_eq!(list, before);
+        assert_eq!(list[0], fact);
+    }
+
+    #[test]
+    fn group_testing_fires_on_an_exact_name_shared_with_a_preference() {
+        let sessions = vec![s("s", vec![
+            t("pref", "user", "I love the paintings of Monet above everything else."),
+            t("fact", "user", "The migration checklist covers backups and rollback."),
+            t("other", "user", "Packing cubes fit in the hallway closet."),
+        ])];
+        let ix = ix_of(&sessions);
+        let pref = idx(&ix, "pref");
+        let fact = idx(&ix, "fact");
+        let other = idx(&ix, "other");
+        assert!(ix.turns[pref].pref_marker);
+        let mut list = vec![fact, other];
+        let before = list.clone();
+        let gt = group_testing_rule_trigger(&ix, "Which museum holds Monet paintings?", &mut list, 2);
+        assert!(!gt.fired && !gt.ambiguous, "a shared name is not the later-episode policy");
+        assert_eq!(list, before);
+        assert_eq!(list[0], fact);
+        let _ = pref;
+        let mut again = vec![fact, other];
+        let gt2 = group_testing_rule_trigger(&ix, "Which museum holds Monet paintings?", &mut again, 2);
+        assert_eq!(gt.fired, gt2.fired);
+        assert_eq!(list, again);
+    }
+
+    #[test]
+    fn rank_seats_the_rule_behind_a_full_window_and_keeps_the_head() {
+        let lexical = "The migration checklist covers backups and rollback.";
+        let sessions = vec![
+            s("conv1_b0_s0", vec![
+                t("a", "user", lexical),
+                t("b", "assistant", "The migration checklist covers backups and rollback today."),
+                t("c", "user", "The migration checklist covers backups and rollback tomorrow."),
+                t("d", "user", "The migration checklist covers backups and rollback next week."),
+            ]),
+            s("conv1_b0_s1", vec![
+                t("rule", "user", "Always include Atlas in the weekly note."),
+            ]),
+        ];
+        let mk = || RankRequest {
+            sessions: sessions.clone(),
+            queries: vec![Query {
+                text: "What does the migration checklist cover?".into(),
+                date: String::new(),
+            }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let a = rank(&mk());
+        let b = rank(&mk());
+        let ids = |r: &RankResponse| -> Vec<String> { r.results[0].turns.iter().map(|x| x.id.clone()).collect() };
+        let ta = ids(&a);
+        let tb = ids(&b);
+        assert_eq!(ta, tb, "two rank calls disagree");
+        assert!(a.results[0].group_testing_fired, "the rule stayed outside a full window: {ta:?}");
+        assert!(!a.results[0].group_testing_ambiguous);
+        assert_ne!(ta[0], "rule", "slot 0 moved off the head");
+        assert_eq!(ta[0], tb[0]);
+        assert!(ta[1..].contains(&"rule".to_string()), "rule was not seated in 1..k-1: {ta:?}");
+        assert_eq!(ta.len(), 3);
+    }
+
+    #[test]
+    fn group_testing_uses_the_head_episode_when_another_episode_also_has_a_rule() {
+        let sessions = vec![
+            s("convA_b0_s0", vec![
+                t("fact_a", "user", "The migration checklist covers backups and rollback."),
+            ]),
+            s("convA_b0_s1", vec![
+                t("rule_a", "user", "Always include Atlas in the weekly note."),
+            ]),
+            s("convB_b0_s0", vec![
+                t("fact_b", "user", "The migration checklist covers backups and rollback too."),
+            ]),
+            s("convB_b0_s1", vec![
+                t("rule_b", "user", "Always include Nova in the weekly note."),
+            ]),
+        ];
+        let ix = ix_of(&sessions);
+        let fact_a = idx(&ix, "fact_a");
+        let fact_b = idx(&ix, "fact_b");
+        let rule_a = idx(&ix, "rule_a");
+        let mut list = vec![fact_a, fact_b];
+        let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 2);
+        assert!(gt.fired && !gt.ambiguous, "the other episode's rule is a different family");
+        assert_eq!(list[0], fact_a);
+        assert_eq!(list[1], rule_a);
+    }
+
+    #[test]
+    fn group_testing_does_not_let_an_impure_token_family_veto_the_head_rule() {
+        let sessions = vec![
+            s("conv1_b0_s0", vec![
+                t("pref_a", "user", "I love the paintings of Monet above everything else."),
+                t("pref_b", "user", "I prefer the sketches of Monet to the late oils."),
+                t("fact", "user", "The migration checklist covers backups and rollback."),
+                t("other", "user", "Packing cubes fit in the hallway closet."),
+            ]),
+            s("conv1_b0_s1", vec![
+                t("rule", "user", "Always include Atlas in the weekly note."),
+            ]),
+        ];
+        let ix = ix_of(&sessions);
+        let fact = idx(&ix, "fact");
+        let other = idx(&ix, "other");
+        let rule = idx(&ix, "rule");
+        let mut list = vec![fact, other];
+        let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover for Monet?", &mut list, 2);
+        assert!(gt.fired && !gt.ambiguous, "two Monet preferences do not veto the one head rule");
+        assert_eq!(list[0], fact);
+        assert_eq!(list[1], rule);
+    }
+
+    #[test]
+    fn group_testing_seats_a_later_rule_in_the_head_episode() {
+        let sessions = vec![s("conv1_b0_s0", vec![
+            t("fact", "user", "The migration checklist covers backups and rollback."),
+            t("other", "user", "The migration checklist covers backups and rollback tomorrow."),
+        ]), s("conv1_b0_s1", vec![
+            t("rule", "user", "Always include Atlas in the weekly note."),
+        ])];
+        let ix = ix_of(&sessions);
+        let fact = idx(&ix, "fact");
+        let other = idx(&ix, "other");
+        let rule = idx(&ix, "rule");
+        assert_eq!(episode_root(&ix, ix.turns[fact].session), episode_root(&ix, ix.turns[rule].session));
+        assert!(!ix.turns[fact].policy_backlinks.contains(&rule));
+        let mut list = vec![fact, other];
+        let mut second = vec![fact, other];
+        let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 2);
+        let gt2 = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut second, 2);
+        assert!(gt.fired && !gt.ambiguous);
+        assert_eq!(gt.fired, gt2.fired);
+        assert_eq!(gt.ambiguous, gt2.ambiguous);
+        assert_eq!(list, second);
+        assert_eq!(list[0], fact, "slot 0 stays the head");
+        assert_eq!(list[1], rule);
     }
 }

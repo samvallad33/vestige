@@ -164,6 +164,7 @@ async function runBeam(args) {
   let turnAny1 = 0, turnAny3 = 0, turnAny5 = 0, turnAny10 = 0;
   let turnAll5 = 0, turnAll10 = 0, turnMrrSum = 0;
   let pktTurnAny5 = 0, pktTurnAll5 = 0;
+  let gtFired = 0, gtAmbiguous = 0;
 
   const categoryStats = {};
   const t0 = Date.now();
@@ -241,8 +242,9 @@ async function runBeam(args) {
         categoryStats[cat] = {
           total: 0,
           sessAny5: 0, sessAll5: 0, sessAny10: 0, sessAll10: 0,
-          turnAny5: 0, turnAll5: 0, turnAny10: 0,
+          turnAny1: 0, turnAny5: 0, turnAll5: 0, turnAny10: 0,
           pktSessAny5: 0, pktSessAll5: 0, pktTurnAny5: 0, pktTurnAll5: 0,
+          gtFired: 0, gtAmbiguous: 0,
         };
       }
       const st = categoryStats[cat];
@@ -268,9 +270,11 @@ async function runBeam(args) {
       const sRank = retSessIds.findIndex(id => goldSessIds.includes(id));
       if (sRank >= 0) sessMrrSum += 1.0 / (sRank + 1);
 
-      if (tAny(1)) turnAny1++;
+      if (tAny(1)) { turnAny1++; st.turnAny1++; }
       if (tAny(3)) turnAny3++;
       if (tAny(5)) { turnAny5++; st.turnAny5++; }
+      if (res?.group_testing_fired) { gtFired++; st.gtFired++; }
+      if (res?.group_testing_ambiguous) { gtAmbiguous++; st.gtAmbiguous++; }
       if (tAny(10)) { turnAny10++; st.turnAny10++; }
       if (tAll(5)) { turnAll5++; st.turnAll5++; }
       if (tAll(10)) turnAll10++;
@@ -295,6 +299,7 @@ async function runBeam(args) {
   console.log(`Total Qs: ${totalQuestions} | Scored (non-empty source_chat_ids): ${scoredQuestions}`);
   console.log(`Session RecallAny@1: ${pct(sessAny1)}% | Any@3: ${pct(sessAny3)}% | Any@5: ${pct(sessAny5)}% | Any@10: ${pct(sessAny10)}% | All@5: ${pct(sessAll5)}% | All@10: ${pct(sessAll10)}% | MRR: ${(sessMrrSum / scoredQuestions).toFixed(4)}`);
   console.log(`Turn    RecallAny@1: ${pct(turnAny1)}% | Any@3: ${pct(turnAny3)}% | Any@5: ${pct(turnAny5)}% | Any@10: ${pct(turnAny10)}% | All@5: ${pct(turnAll5)}% | All@10: ${pct(turnAll10)}% | MRR: ${(turnMrrSum / scoredQuestions).toFixed(4)}`);
+  console.log(`Group-testing rule triggers: fired ${gtFired} / ambiguous ${gtAmbiguous} / scored ${scoredQuestions}`);
   console.log(`Stratified Packet (sessions[0..5] + standing_rules[0..2]): Sess Any@5: ${pct(pktSessAny5)}% All@5: ${pct(pktSessAll5)}% | Turn Any@5: ${pct(pktTurnAny5)}% All@5: ${pct(pktTurnAll5)}%`);
   console.log(`Time: ${elapsedSec}s | API Cost: $0.00`);
 
@@ -306,7 +311,8 @@ async function runBeam(args) {
         `  ${c.padEnd(26)} (${String(st.total).padStart(3)}): ` +
         `Sess Any@5=${rate(st.sessAny5)}% All@5=${rate(st.sessAll5)}% ` +
         `(Pkt Any ${rate(st.pktSessAny5)}% All ${rate(st.pktSessAll5)}%) Any@10=${rate(st.sessAny10)}% | ` +
-        `Turn Any@5=${rate(st.turnAny5)}% All@5=${rate(st.turnAll5)}% ` +
+        `Turn Any@1=${rate(st.turnAny1)}% Any@5=${rate(st.turnAny5)}% All@5=${rate(st.turnAll5)}% ` +
+        `GT fired ${st.gtFired} ambiguous ${st.gtAmbiguous} | ` +
         `(Pkt Any ${rate(st.pktTurnAny5)}% All ${rate(st.pktTurnAll5)}%) Any@10=${rate(st.turnAny10)}%`
       );
     }
@@ -339,6 +345,8 @@ async function runBeam(args) {
       turn_recall_all_at_5: pct(turnAll5),
       turn_recall_all_at_10: pct(turnAll10),
       turn_mrr: parseFloat((turnMrrSum / scoredQuestions).toFixed(4)),
+      group_testing_fired: gtFired,
+      group_testing_ambiguous: gtAmbiguous,
       stratified_packet_session_recall_any_at_5: pct(pktSessAny5),
       stratified_packet_session_recall_all_at_5: pct(pktSessAll5),
       stratified_packet_turn_recall_any_at_5: pct(pktTurnAny5),

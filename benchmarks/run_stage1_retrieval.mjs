@@ -210,8 +210,8 @@ async function runLongMemEval(params, quiet = false) {
   if (!LME_DATA) LME_DATA = JSON.parse(readFileSync('benchmarks/data/longmemeval_s_cleaned.json', 'utf8'));
   const data = LME_DATA.slice(0, LIMIT);
   const buckets = {};
-  const all = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 };
-  const nonAbs = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 };
+  const all = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0, t1: 0, t5: 0, fired: 0, ambiguous: 0 };
+  const nonAbs = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0, t1: 0, t5: 0, fired: 0, ambiguous: 0 };
   const lat = [];
   let sessionsSeen = 0, turnsSeen = 0;
   for (const item of data) {
@@ -221,6 +221,15 @@ async function runLongMemEval(params, quiet = false) {
     lat.push(performance.now() - t0);
     sessionsSeen += res.sessions_indexed; turnsSeen += res.turns_indexed;
     const ids = res.results[0].sessions.map(s => s.id);
+    const retTurns = (res.results[0].turns || []).map(t => t.id);
+    const goldTurns = new Set();
+    item.haystack_sessions.forEach((sess, i) => {
+      (sess || []).forEach((turn, j) => {
+        if (turn && turn.has_answer) goldTurns.add(`${item.haystack_session_ids[i]}#${j}`);
+      });
+    });
+    const fired = res.results[0].group_testing_fired === true;
+    const ambiguous = res.results[0].group_testing_ambiguous === true;
 
     const gold = new Set(item.answer_session_ids || []);
     const type = item.question_type;
@@ -232,10 +241,16 @@ async function runLongMemEval(params, quiet = false) {
       all5: gold.size > 0 && [...gold].every(g => ids.slice(0, 5).includes(g)),
       all10: gold.size > 0 && [...gold].every(g => ids.slice(0, 10).includes(g)),
       ndcg10: ndcg(ids, gold, 10),
+      t1: [...goldTurns].some(g => retTurns.slice(0, 1).includes(g)),
+      t5: [...goldTurns].some(g => retTurns.slice(0, 5).includes(g)),
+      fired,
+      ambiguous,
     };
-    for (const acc of [all, isAbs ? null : nonAbs, (buckets[type] ??= { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 })]) {
+    const typeAcc = isAbs ? null : (buckets[type] ??= { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0, t1: 0, t5: 0, fired: 0, ambiguous: 0 });
+    for (const acc of [all, isAbs ? null : nonAbs, typeAcc]) {
       if (!acc) continue;
       acc.n++; acc.r1 += m.r1; acc.r5 += m.r5; acc.r10 += m.r10; acc.all5 += m.all5; acc.all10 += m.all10; acc.ndcg10 += m.ndcg10;
+      acc.t1 += m.t1; acc.t5 += m.t5; acc.fired += m.fired; acc.ambiguous += m.ambiguous;
     }
   }
   if (!quiet) {
@@ -248,13 +263,16 @@ async function runLongMemEval(params, quiet = false) {
     console.log(`  RecallAny@1:  ${pct(nonAbs.r1, nonAbs.n)}%`);
     console.log(`  RecallAny@5:  ${pct(nonAbs.r5, nonAbs.n)}%`);
     console.log(`  RecallAny@10: ${pct(nonAbs.r10, nonAbs.n)}%`);
+    console.log(`  Turn Any@1:   ${pct(nonAbs.t1, nonAbs.n)}% (${nonAbs.t1}/${nonAbs.n})`);
+    console.log(`  Turn Any@5:   ${pct(nonAbs.t5, nonAbs.n)}% (${nonAbs.t5}/${nonAbs.n})`);
+    console.log(`  Group-testing rule triggers: fired ${nonAbs.fired} / ambiguous ${nonAbs.ambiguous} / non-abstention ${nonAbs.n} (all questions fired ${all.fired} / ambiguous ${all.ambiguous})`);
 
     console.log(`\n[All 500 questions (includes 30 abstentions, recall_any)]`);
     console.log(`  RecallAny@1:  ${pct(all.r1, all.n)}% | RecallAny@5: ${pct(all.r5, all.n)}% | RecallAny@10: ${pct(all.r10, all.n)}% | RecallAll@5: ${pct(all.all5, all.n)}% | NDCG@10: ${(all.ndcg10 / all.n).toFixed(4)}`);
 
     console.log(`\nQuestion Type Breakdown (Non-Abstention at same k):`);
     for (const [t, s] of Object.entries(buckets)) {
-      console.log(`  ${t.padEnd(26)} R@5 ${pct(s.r5, s.n).padStart(6)}% | R@10 ${pct(s.r10, s.n).padStart(6)}% | RecallAll@5 ${pct(s.all5, s.n).padStart(6)}% | NDCG@10 ${(s.ndcg10 / s.n).toFixed(3)} (${s.n})`);
+      console.log(`  ${t.padEnd(26)} R@1 ${pct(s.r1, s.n).padStart(6)}% | R@5 ${pct(s.r5, s.n).padStart(6)}% | Turn Any@1 ${pct(s.t1, s.n).padStart(6)}% | Turn Any@5 ${pct(s.t5, s.n).padStart(6)}% (${s.t5}/${s.n}) | GT fired ${s.fired} ambiguous ${s.ambiguous} | RecallAll@5 ${pct(s.all5, s.n).padStart(6)}% | NDCG@10 ${(s.ndcg10 / s.n).toFixed(3)} (${s.n})`);
     }
     console.log(`\nLatency per question: avg ${(lat.reduce((a, b) => a + b, 0) / lat.length).toFixed(2)} ms | p50 ${pctile(lat, 0.5).toFixed(2)} ms | p95 ${pctile(lat, 0.95).toFixed(2)} ms`);
   }
@@ -266,6 +284,12 @@ async function runLongMemEval(params, quiet = false) {
     recall_all_r5: Number(pct(a.all5, a.n)),
     recall_all_r10: Number(pct(a.all10, a.n)),
     ndcg_10: Number((a.ndcg10 / a.n).toFixed(4)),
+    turn_any_at_1: Number(pct(a.t1, a.n)),
+    turn_any_at_1_n: a.t1,
+    turn_any_at_5: Number(pct(a.t5, a.n)),
+    turn_any_at_5_n: a.t5,
+    group_testing_fired: a.fired,
+    group_testing_ambiguous: a.ambiguous,
   });
   return {
     official_470_non_abs: formatLme(nonAbs),
@@ -285,7 +309,7 @@ async function runLoCoMo(params, quiet = false, convList = null) {
     else convs = LOCOMO_DATA;
   }
   const names = { 1: 'Multi-Hop', 2: 'Temporal', 3: 'Open-Domain', 4: 'Single-Hop', 5: 'Adversarial' };
-  const blank = () => ({ n: 0, noEvidence: 0, sR1: 0, sR5: 0, tR1: 0, tR5: 0, tR10: 0, softR1: 0, softR5: 0, fracR5: 0 });
+  const blank = () => ({ n: 0, noEvidence: 0, sR1: 0, sR5: 0, tR1: 0, tR5: 0, tR10: 0, softR1: 0, softR5: 0, fracR5: 0, fired: 0, ambiguous: 0 });
   const cats = {}; const core = blank(); const total = blank();
   const lat = [];
   let qCount = 0;
@@ -301,6 +325,8 @@ async function runLoCoMo(params, quiet = false, convList = null) {
       const goldTurns = new Set((qa.evidence || []).flatMap(e => String(e).split(/[;,\s]+/)).filter(e => /^D\d+:\d+$/.test(e)));
       const goldSess = new Set([...goldTurns].map(e => e.split(':')[0]));
       const accs = [(cats[cat] ??= blank()), total, cat === 5 ? null : core].filter(Boolean);
+      if (r.group_testing_fired) accs.forEach(a => { a.fired += 1; });
+      if (r.group_testing_ambiguous) accs.forEach(a => { a.ambiguous += 1; });
       if (goldTurns.size === 0) { accs.forEach(a => a.noEvidence++); return; }
       const t = r.turns.map(x => x.id), s = r.sessions.map(x => x.id);
 
@@ -344,6 +370,7 @@ async function runLoCoMo(params, quiet = false, convList = null) {
     const line = (label, a) => console.log(`${label.padEnd(28)} Session [R@1: ${pct(a.sR1, a.n)}%, R@5: ${pct(a.sR5, a.n)}%] | Turn Exact R@5: ${pct(a.tR5, a.n)}% | Turn Soft R@5: ${pct(a.softR5, a.n)}% | Exact [R@1: ${pct(a.tR1, a.n)}%, R@10: ${pct(a.tR10, a.n)}%] (${a.n} scored${a.noEvidence ? `, ${a.noEvidence} without evidence excluded` : ''})`);
     line('CORE (Cat 1-4)', core);
     line('ALL (Cat 1-5)', total);
+    console.log(`Group-testing rule triggers: fired ${total.fired} / ambiguous ${total.ambiguous} (core fired ${core.fired} / ambiguous ${core.ambiguous})`);
     for (const c of [1, 2, 3, 4, 5]) if (cats[c]) line(`  Cat ${c} ${names[c]}`, cats[c]);
     console.log(`Latency per question: avg ${(lat.reduce((a, b) => a + b, 0) / lat.length).toFixed(3)} ms`);
   }
@@ -357,6 +384,8 @@ async function runLoCoMo(params, quiet = false, convList = null) {
     turn_exact_r10: Number(pct(a.tR10, a.n)),
     turn_soft_r1: Number(pct(a.softR1, a.n)),
     turn_soft_r5: Number(pct(a.softR5, a.n)),
+    group_testing_fired: a.fired,
+    group_testing_ambiguous: a.ambiguous,
   });
 
   return {

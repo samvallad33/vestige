@@ -182,6 +182,7 @@ def main():
 
         r1_any1 = r1_any5 = r1_any10 = r1_all5 = r1_all10 = 0
         r1_mrr = 0.0
+        r1_fired = r1_ambiguous = 0
         for qi, q in enumerate(r1['questions']):
             tset = {f[0] for f in hp_by_q[q.strip()]['supporting_facts']}
             ret_titles = [docs1[int(s['id'].split('_')[1]) - 1].splitlines()[0].strip() for s in resp1['results'][qi]['sessions']]
@@ -199,10 +200,15 @@ def main():
                 if t in tset:
                     r1_mrr += 1.0 / (ri + 1)
                     break
+            if resp1['results'][qi].get('group_testing_fired'):
+                r1_fired += 1
+            if resp1['results'][qi].get('group_testing_ambiguous'):
+                r1_ambiguous += 1
 
         n1 = len(r1['questions'])
         print(f'\nRow 1 (ruler_qa2_421K, {len(docs1)} docs, {n1} Qs) in {dt1:.2f}s:')
         print(f'  Any@1={r1_any1/n1*100:.2f}% Any@5={r1_any5/n1*100:.2f}% Any@10={r1_any10/n1*100:.2f}% All@5={r1_all5/n1*100:.2f}% All@10={r1_all10/n1*100:.2f}% MRR={r1_mrr/n1:.4f}')
+        print(f'  Group-testing rule triggers: fired {r1_fired} / ambiguous {r1_ambiguous} / {n1}')
 
         # 3. Rows 17..21: All 5 longmemeval_s* 400K merged scenarios (300 Qs, 287 non-abs)
         lme_rows = []
@@ -338,6 +344,8 @@ def main():
                 'recall_all_at_5': round(r1_all5 / n1 * 100, 2),
                 'recall_all_at_10': round(r1_all10 / n1 * 100, 2),
                 'mrr': round(r1_mrr / n1, 4),
+                'group_testing_fired': r1_fired,
+                'group_testing_ambiguous': r1_ambiguous,
             },
             'longmemeval_s_star': {
                 'rows': [17, 18, 19, 20, 21],
