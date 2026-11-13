@@ -7169,17 +7169,25 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, _t_scene: &[
     for a in 0..n {
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
-            let wh = if informative { wh_vote(ok[a], ok[b]) } else { 0 };
-            // Scene is the input order and the only tie-break. It is not a ballot.
-            let votes = pair_margin(
-                0.0,
-                0.0,
-                degree[a],
-                degree[b],
-                ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0),
-                ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0),
-                0,
-            );
+            // Ballots apply inside the top-30 selectivity window of the full
+            // list. The head occupies slot 0, so the tail's first 29 entries
+            // are ranks 2..30. Outside that window the margin stays 0 and the
+            // input order, which is the scene order, stands.
+            let in_select = a < WH_SELECT_WINDOW.saturating_sub(1) && b < WH_SELECT_WINDOW.saturating_sub(1);
+            let wh = if informative && in_select { wh_vote(ok[a], ok[b]) } else { 0 };
+            let votes = if in_select {
+                pair_margin(
+                    0.0,
+                    0.0,
+                    degree[a],
+                    degree[b],
+                    ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0),
+                    ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0),
+                    0,
+                )
+            } else {
+                0
+            };
             let margin = votes * WH_MARGIN_SCALE + wh * idf_milli;
             if wh != 0 {
                 WH_VOTE_NZ.fetch_add(1, Ordering::Relaxed);
