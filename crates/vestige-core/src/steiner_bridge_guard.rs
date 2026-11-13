@@ -58,6 +58,16 @@ pub const STEINER_EXACT_MAX_NODES: usize = 160;
 /// on BEAM and on MemoryAgentBench.
 pub const STEINER_UNIQUE_PAIR: bool = true;
 
+/// The seated bridge's session is absent from the window.
+///
+/// v3 (unique stored/token pair, co-session edge ignored) fired on 713
+/// LoCoMo queries and moved Multi-Hop turn R@5 from 138/282 to 135/282 and
+/// core turn R@5 from 1067/1536 (69.47%) to 1057/1536 (68.82%). The bridge
+/// usually lived in a session the window already held, so the insert
+/// evicted a top-5 turn without adding a session. A bridge is new evidence
+/// only when its session is not already a terminal.
+pub const STEINER_NEW_SESSION: bool = true;
+
 /// Non-terminal Steiner nodes seated per query.
 /// One node, the one nearest the frozen head on the tree.
 /// Seating it directly behind that head (slot 1 when the head is an

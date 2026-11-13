@@ -48,7 +48,8 @@ mod guard;
 
 use guard::{
     STEINER_BELOW_CAP, STEINER_DIGIT_MIN_CHARS, STEINER_EXACT_MAX_NODES, STEINER_EXACT_MAX_TERMINALS,
-    STEINER_HUB_DF_MAX, STEINER_MAX_BRIDGES, STEINER_TOKEN_DF_MIN, STEINER_UNIQUE_PAIR,
+    STEINER_HUB_DF_MAX, STEINER_MAX_BRIDGES, STEINER_NEW_SESSION, STEINER_TOKEN_DF_MIN,
+    STEINER_UNIQUE_PAIR,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -256,7 +257,9 @@ fn bridge_turns(ix: &super::Index, window: &[usize], t_scene: &[f32]) -> Vec<(us
             }
         }
         let useful = touch.iter().any(|&a| touch.iter().any(|&b| a < b && !term_link[a][b]));
-        if useful {
+        let new_session = !STEINER_NEW_SESSION
+            || terminals.iter().all(|&term| ix.turns[term].session != ix.turns[nb].session);
+        if useful && new_session {
             let touches_head = touch.contains(&0);
             group1.push((!touches_head, nb, touch));
         } else if !touch.is_empty() {
