@@ -5730,9 +5730,18 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     let prev = members[pos - 1];
                     if ix.turns[prev].speaker == "user" && t_raw[prev] > 0.0 {
                         if let Some(at) = final_turn_indices.iter().position(|&t| t == prev) {
-                            final_turn_indices.remove(at);
+                            if at < 5 {
+                                final_turn_indices.remove(at);
+                                final_turn_indices.insert(0, prev);
+                            } else {
+                                final_turn_indices.remove(at);
+                                final_turn_indices[0] = prev;
+                                final_turn_indices.insert(5.min(final_turn_indices.len()), top);
+                            }
+                        } else {
+                            final_turn_indices[0] = prev;
+                            final_turn_indices.insert(5.min(final_turn_indices.len()), top);
                         }
-                        final_turn_indices.insert(0, prev);
                     }
                 }
             }
