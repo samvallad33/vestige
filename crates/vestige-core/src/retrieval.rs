@@ -8349,6 +8349,44 @@ mod recall_cue_tests {
     }
 
     #[test]
+    fn ascent_bridge_never_moves_the_rsb_head() {
+        let sessions = vec![s(
+            "conv_s0",
+            vec![
+                t("root", "user", "Always write the answer in markdown tables."),
+                t("mid", "user", "Always cite the source beside the answer."),
+                t("near", "user", "Always keep the backup on a separate disk."),
+                t("later", "user", "Could you outline a backup routine?"),
+                t("other", "user", "The kettle whistled at noon."),
+            ],
+        )];
+        let ix = ix_of(&sessions);
+        let turns = ["later", "near", "mid", "root", "other"];
+        let ids_of: Vec<usize> = turns.iter().map(|id| idx(&ix, id)).collect();
+        for head in &ids_of {
+            let mut list = vec![*head];
+            for id in &ids_of {
+                if id != head {
+                    list.push(*id);
+                }
+            }
+            let before = list[0];
+            let k = list.len();
+            ascent_bridge(&ix, &mut list, k);
+            assert_eq!(list[0], before, "slot 0 stays {}", ix.turns[before].id);
+            let mut short = vec![*head];
+            for id in &ids_of {
+                if id != head && short.len() < 2 {
+                    short.push(*id);
+                }
+            }
+            let short_head = short[0];
+            ascent_bridge(&ix, &mut short, 5);
+            assert_eq!(short[0], short_head);
+        }
+    }
+
+    #[test]
     fn kemeny_puts_the_condorcet_winner_first() {
         let net = vec![
             vec![0, 1, 1],
