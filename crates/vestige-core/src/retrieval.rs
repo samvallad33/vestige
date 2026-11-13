@@ -5793,23 +5793,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         if out.iter().take(k).any(|t| rsb_at.get(t).copied().unwrap_or(0) >= k) {
             WH_BELOW_K.fetch_add(1, Ordering::Relaxed);
         }
-        final_turn_indices = out;
-        if let Ok(path) = std::env::var("VESTIGE_WH_SELECT") {
-            let class = wh_class(&q.text);
-            let excluded = wh_excluded(&q.text);
-            let cause_in = incoming_cause_flags(ix);
-            let window: Vec<usize> = final_turn_indices.iter().copied().take(WH_SELECT_WINDOW).collect();
-            let mut passing = 0usize;
-            for &ti in &window {
-                if wh_residual(ix, ti, class, &excluded, cause_in.get(ti).copied().unwrap_or(false)) {
-                    passing += 1;
-                }
-            }
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(f, "{class}\t{passing}\t{}", window.len());
-            }
+        if out.iter().take(5).any(|t| rsb_at.get(t).copied().unwrap_or(0) >= 10) {
+            WH_LIFTS.fetch_add(1, Ordering::Relaxed);
         }
+        final_turn_indices = out;
     }
     let turns = final_turn_indices
         .into_iter()
@@ -6537,9 +6524,9 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
-/// Second-stage pool. Nogueira and Cho rerank the top 1000 first-stage
-/// hits, then keep the caller's top k. Fixed before the card.
-const GATEKEEPER_POOL: usize = 1000;
+/// Tail vote depth. Ranks 2..50, then cut back to the caller's k.
+/// Fixed before the card.
+const GATEKEEPER_POOL: usize = 50;
 /// Selectivity is measured on this many candidates. Fixed before the card.
 const WH_SELECT_WINDOW: usize = 30;
 /// A pass rate above this carries no information, so the wh ballot is withheld.
@@ -6567,14 +6554,16 @@ static WH_SWAPS: AtomicU64 = AtomicU64::new(0);
 static WH_BELOW_K: AtomicU64 = AtomicU64::new(0);
 static WH_VOTE_NZ: AtomicU64 = AtomicU64::new(0);
 static WH_AGAINST: AtomicU64 = AtomicU64::new(0);
+static WH_LIFTS: AtomicU64 = AtomicU64::new(0);
 
-pub fn wh_pool_counts() -> (u64, u64, u64, u64, u64) {
+pub fn wh_pool_counts() -> (u64, u64, u64, u64, u64, u64) {
     (
         WH_QUERIES.load(Ordering::Relaxed),
         WH_SWAPS.load(Ordering::Relaxed),
         WH_BELOW_K.load(Ordering::Relaxed),
         WH_VOTE_NZ.load(Ordering::Relaxed),
         WH_AGAINST.load(Ordering::Relaxed),
+        WH_LIFTS.load(Ordering::Relaxed),
     )
 }
 
@@ -7143,13 +7132,17 @@ fn wh_guarded_swap(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f3
 
 /// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
 /// grow the window. The pool is that window, so its size is the caller's k.
-fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, _t_scene: &[f32]) {
+fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
     let n = list.len();
     if n < 2 {
         return;
     }
-    let pool = list.clone();
     let class = wh_class(query);
+    // No slot: degree and stability must not reorder the scene order.
+    if class == WH_NONE {
+        return;
+    }
+    let pool = list.clone();
     let excluded = wh_excluded(query);
     let degree = pool_structural_degree(ix, &pool);
     let cause_in = incoming_cause_flags(ix);
@@ -7163,35 +7156,45 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, _t_scene: &[
             }
         }
     }
-    let idf_milli = wh_idf_milli(pool.len(), passing);
-    let informative = class != WH_NONE && wh_pass_rate(passing, pool.len()) <= WH_UNINFORMATIVE;
+    let idf_milli = wh_idf_milli(n, passing);
+    let informative = wh_pass_rate(passing, n) <= WH_UNINFORMATIVE;
     let mut net = vec![vec![0i64; n]; n];
     for a in 0..n {
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
-            // Ballots apply inside the top-30 selectivity window of the full
-            // list. The head occupies slot 0, so the tail's first 29 entries
-            // are ranks 2..30. Outside that window the margin stays 0 and the
-            // input order, which is the scene order, stands.
-            let in_select = a < WH_SELECT_WINDOW.saturating_sub(1) && b < WH_SELECT_WINDOW.saturating_sub(1);
-            let wh = if informative && in_select { wh_vote(ok[a], ok[b]) } else { 0 };
-            let votes = if in_select {
-                pair_margin(
-                    0.0,
-                    0.0,
-                    degree[a],
-                    degree[b],
-                    ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0),
-                    ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0),
-                    0,
-                )
-            } else {
-                0
+            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
+            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
+            let scene_v = match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Greater => 1,
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
             };
-            let margin = votes * WH_MARGIN_SCALE + wh * idf_milli;
-            if wh != 0 {
+            let deg_v = match degree[a].cmp(&degree[b]) {
+                std::cmp::Ordering::Greater => 1,
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+            };
+            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
+            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
+            let stab_v = match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Greater => 1,
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+            };
+            // +1 means the earlier input turn beats the later one.
+            let mut wh_v = if informative { wh_vote(ok[a], ok[b]) } else { 0 };
+            if wh_v != 0 {
                 WH_VOTE_NZ.fetch_add(1, Ordering::Relaxed);
             }
+            // Wh overturns scene only with a structural vote on the same side.
+            // Alone it is not a ballot, so it cannot tie scene and fall back
+            // to the input order.
+            let opposes_scene = scene_v == 0 || scene_v == -wh_v;
+            let structural_agrees = (deg_v == wh_v && deg_v != 0) || (stab_v == wh_v && stab_v != 0);
+            if wh_v != 0 && opposes_scene && !structural_agrees {
+                wh_v = 0;
+            }
+            let margin = (scene_v + deg_v + stab_v) * WH_MARGIN_SCALE + wh_v * idf_milli;
             if margin < 0 {
                 WH_AGAINST.fetch_add(1, Ordering::Relaxed);
             }
@@ -7234,8 +7237,12 @@ fn pair_margin(
     stab_b: f32,
     wh: i64,
 ) -> i64 {
-    let _scene_kept_for_callers = (scene_a, scene_b);
     let mut margin = 0i64;
+    match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
+        std::cmp::Ordering::Greater => margin += 1,
+        std::cmp::Ordering::Less => margin -= 1,
+        std::cmp::Ordering::Equal => {}
+    }
     match degree_a.cmp(&degree_b) {
         std::cmp::Ordering::Greater => margin += 1,
         std::cmp::Ordering::Less => margin -= 1,
@@ -9053,15 +9060,20 @@ mod recall_cue_tests {
             t("plain", "user", "We met downtown after the show."),
             t("clock", "user", "We met at 18:40 after the show."),
         ])];
-        let ix = ix_of(&sessions);
+        let mut ix = ix_of(&sessions);
         let plain = idx(&ix, "plain");
         let clock = idx(&ix, "clock");
         assert!(ix.turns[clock].form_clock);
         assert!(!ix.turns[plain].form_clock);
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, clock];
+        // Wh alone does not overturn an equal scene. A structural vote must agree.
         rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
-        assert_eq!(list[0], clock);
+        assert_eq!(list, vec![plain, clock]);
+        ix.turns[plain].exact_edges.push((1, clock));
+        let mut lifted = vec![plain, clock];
+        rank1_gatekeeper(&ix, "When did we meet?", &mut lifted, &scene);
+        assert_eq!(lifted[0], clock, "wh plus degree is a majority against a tied scene");
     }
 
     #[test]
@@ -9071,10 +9083,11 @@ mod recall_cue_tests {
             t("other", "user", "We met downtown after the show again."),
             t("clock", "user", "We met at 18:40 after the show."),
         ])];
-        let ix = ix_of(&sessions);
+        let mut ix = ix_of(&sessions);
         let plain = idx(&ix, "plain");
         let other = idx(&ix, "other");
         let clock = idx(&ix, "clock");
+        ix.turns[other].exact_edges.push((1, clock));
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, other, clock];
         rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene);
@@ -9176,7 +9189,7 @@ mod recall_cue_tests {
             t("plain", "user", "We met downtown after the show."),
             t("clock", "user", "We met at 18:40 after the show."),
         ])];
-        let ix = ix_of(&sessions);
+        let mut ix = ix_of(&sessions);
         let plain = idx(&ix, "plain");
         let clock = idx(&ix, "clock");
         let slots = wh_slots("When did we meet?");
@@ -9197,14 +9210,18 @@ mod recall_cue_tests {
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, clock];
         rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
-        assert_eq!(list, vec![clock, plain]);
+        assert_eq!(list, vec![plain, clock], "wh alone does not flip a tied scene");
         let mut scene_gap = vec![1.0f32; ix.turns.len()];
         scene_gap[plain] = 5.0;
         scene_gap[clock] = 1.0;
         let mut ordered = vec![plain, clock];
         rank1_gatekeeper(&ix, "When did we meet?", &mut ordered, &scene_gap);
-        assert_eq!(ordered, vec![clock, plain], "scene is the tie-break, not a ballot");
-        assert_eq!(pair_margin(5.0, 1.0, 0, 0, 0.0, 0.0, 1), 1);
+        assert_eq!(ordered, vec![plain, clock], "wh alone does not cancel a higher scene");
+        ix.turns[plain].exact_edges.push((1, clock));
+        let mut majority = vec![plain, clock];
+        rank1_gatekeeper(&ix, "When did we meet?", &mut majority, &scene_gap);
+        assert_eq!(majority, vec![clock, plain], "wh plus degree overturns scene");
+        assert_eq!(pair_margin(5.0, 1.0, 0, 0, 0.0, 0.0, 1), 2);
     }
 
     #[test]
@@ -9272,6 +9289,7 @@ mod recall_cue_tests {
             turns.push(t(&format!("f{i}"), "user", "When did we meet?"));
         }
         turns.push(t("clock", "user", "When did we meet at 18:40?"));
+        turns[1].links.push(TurnLink { kind: "ref".into(), to: "clock".into(), degree: 1 });
         let ranked = rank(&RankRequest {
             sessions: vec![s("s", turns)],
             queries: vec![Query { text: "When did we meet?".into(), date: String::new() }],
