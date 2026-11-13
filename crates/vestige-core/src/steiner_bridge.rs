@@ -6,6 +6,9 @@
 //! distance-network 2-approximation) connects them. Non-terminal nodes of
 //! that tree are bridge turns. They are drawn from candidates below the
 //! window and seated in slots 1..k-1. Slot 0 is not a candidate.
+//! A length-2 candidate is seated only when it is the only turn adjacent
+//! to that disconnected terminal pair (`STEINER_UNIQUE_PAIR`). An index
+//! is not a vote.
 //!
 //! Edges are unweighted. Two turns are adjacent when any one of these holds:
 //! a stored `policy_backlinks`, `supersedes_turns`, or `exact_edges` link,
@@ -45,7 +48,7 @@ mod guard;
 
 use guard::{
     STEINER_BELOW_CAP, STEINER_DIGIT_MIN_CHARS, STEINER_EXACT_MAX_NODES, STEINER_EXACT_MAX_TERMINALS,
-    STEINER_HUB_DF_MAX, STEINER_MAX_BRIDGES, STEINER_TOKEN_DF_MIN,
+    STEINER_HUB_DF_MAX, STEINER_MAX_BRIDGES, STEINER_TOKEN_DF_MIN, STEINER_UNIQUE_PAIR,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -237,7 +240,7 @@ fn bridge_turns(ix: &super::Index, window: &[usize], t_scene: &[f32]) -> Vec<(us
             }
         }
     }
-    let mut group1: Vec<(bool, usize)> = Vec::new();
+    let mut group1: Vec<(bool, usize, Vec<usize>)> = Vec::new();
     let mut group2: Vec<usize> = Vec::new();
     for nb in hop1 {
         if t_scene.get(nb).copied().unwrap_or(0.0) <= 0.0 {
@@ -249,20 +252,30 @@ fn bridge_turns(ix: &super::Index, window: &[usize], t_scene: &[f32]) -> Vec<(us
                 touch.push(i);
             }
         }
-        let useful = touch.iter().any(|&a| {
-            touch.iter().any(|&b| a < b && !term_link[a][b])
-        });
+        let useful = touch.iter().any(|&a| touch.iter().any(|&b| a < b && !term_link[a][b]));
         if useful {
             let touches_head = touch.contains(&0);
-            group1.push((!touches_head, nb));
+            group1.push((!touches_head, nb, touch));
         } else if !touch.is_empty() {
             group2.push(nb);
         }
     }
-    group1.sort_by_key(|&(not_head, nb)| (not_head, nb));
+    group1.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    if STEINER_UNIQUE_PAIR {
+        let forced = unique_pair_mask(&group1, &term_link);
+        group1 = group1
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| forced[*i])
+            .map(|(_, row)| row)
+            .collect();
+        // A length-3 waypoint is not a pair bridge. It stays out of the
+        // graph so it cannot win an index tie against the unique pair.
+        group2.clear();
+    }
     group2.sort_unstable();
     let mut extras: Vec<usize> = Vec::new();
-    for (_, nb) in group1 {
+    for (_, nb, _) in group1 {
         if extras.len() == STEINER_BELOW_CAP {
             break;
         }
@@ -378,6 +391,32 @@ fn structural_index(ix: &super::Index) -> (Vec<Vec<usize>>, HashMap<u32, Vec<usi
         }
     }
     (stored, postings)
+}
+
+fn unique_pair_mask(group1: &[(bool, usize, Vec<usize>)], term_link: &[Vec<bool>]) -> Vec<bool> {
+    let n = group1.len();
+    let mut forced = vec![false; n];
+    for i in 0..n {
+        let touch = &group1[i].2;
+        for a in 0..touch.len() {
+            for b in (a + 1)..touch.len() {
+                let (ta, tb) = (touch[a], touch[b]);
+                if term_link[ta][tb] {
+                    continue;
+                }
+                let mut support = 0usize;
+                for row in group1 {
+                    if row.2.contains(&ta) && row.2.contains(&tb) {
+                        support += 1;
+                    }
+                }
+                if support == 1 {
+                    forced[i] = true;
+                }
+            }
+        }
+    }
+    forced
 }
 
 fn terminal_graph_connected(link: &[Vec<bool>]) -> bool {

@@ -8521,6 +8521,23 @@ mod recall_cue_tests {
     }
 
     #[test]
+    fn steiner_bridge_does_not_break_an_equal_tie() {
+        let mut ix = steiner_quad();
+        let head = idx(&ix, "head");
+        let other = idx(&ix, "other");
+        let bridge = idx(&ix, "bridge");
+        let filler = idx(&ix, "filler");
+        for turn in [bridge, filler] {
+            ix.turns[turn].exact_edges.push((2, head));
+            ix.turns[turn].exact_edges.push((2, other));
+        }
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, other];
+        assert!(!steiner_bridge::apply(&ix, &mut list, 3, &scene));
+        assert_eq!(list, vec![head, other]);
+    }
+
+    #[test]
     fn steiner_bridge_fires_inside_rank_and_keeps_slot_zero() {
         let mut bridge = t("bridge", "user", "A sprain was noted in the margin.");
         bridge.links = vec![

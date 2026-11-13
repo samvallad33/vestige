@@ -41,6 +41,17 @@ pub const STEINER_EXACT_MAX_TERMINALS: usize = 12;
 /// a top-10 window plus the below cap is 138 nodes.
 pub const STEINER_EXACT_MAX_NODES: usize = 160;
 
+/// v2. A length-2 candidate is seated only when it is the only below-window
+/// turn adjacent to that disconnected terminal pair.
+///
+/// v1 broke the tie by turn index. On the measured card that seated an
+/// arbitrary neighbor: LoCoMo changed 1547 queries, core turn R@5 moved
+/// 1067/1536 (69.47%) to 1047/1536 (68.16%), Multi-Hop stayed 138/282,
+/// Open-Domain moved 36/92 to 31/92, and LongMemEval turn Any@5 moved
+/// 376/470 to 375/470. An index is not a vote. Equal votes with no unique
+/// bridge seat nothing.
+pub const STEINER_UNIQUE_PAIR: bool = true;
+
 /// Non-terminal Steiner nodes seated per query.
 /// One node, the one nearest the frozen head on the tree.
 /// Seating it directly behind that head (slot 1 when the head is an
