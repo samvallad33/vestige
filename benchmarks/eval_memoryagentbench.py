@@ -162,7 +162,9 @@ def main():
 
         print(f'Row 0 (ruler_qa1_197K, {len(docs0)} docs, 100 Qs) in {dt0:.2f}s:')
         print(f'  Unique-Doc Gold ({u_n} Qs): R@1={u_r1/u_n*100:.2f}% R@5={u_r5/u_n*100:.2f}% R@10={u_r10/u_n*100:.2f}% MRR={u_mrr/u_n:.4f}')
+        fires0 = sum(1 for row in resp0['results'] if row.get('suffix_automaton_fired') is True)
         print(f'  Answer-Containing ({a_n} Qs): R@1={a_r1/a_n*100:.2f}% R@5={a_r5/a_n*100:.2f}% R@10={a_r10/a_n*100:.2f}% MRR={a_mrr/a_n:.4f}')
+        print(f'  Suffix automaton fires: {fires0}/{len(resp0["results"])}')
 
         # 2. Row 1: ruler_qa2_421K (3,307 docs, 100 multi-hop Qs, exact HotpotQA supporting_facts)
         with open(os.path.join(data_dir, 'memoryagentbench_row_1.json'), encoding='utf-8') as f:
@@ -201,8 +203,10 @@ def main():
                     break
 
         n1 = len(r1['questions'])
+        fires1 = sum(1 for row in resp1['results'] if row.get('suffix_automaton_fired') is True)
         print(f'\nRow 1 (ruler_qa2_421K, {len(docs1)} docs, {n1} Qs) in {dt1:.2f}s:')
         print(f'  Any@1={r1_any1/n1*100:.2f}% Any@5={r1_any5/n1*100:.2f}% Any@10={r1_any10/n1*100:.2f}% All@5={r1_all5/n1*100:.2f}% All@10={r1_all10/n1*100:.2f}% MRR={r1_mrr/n1:.4f}')
+        print(f'  Suffix automaton fires: {fires1}/{n1}')
 
         # 3. Rows 17..21: All 5 longmemeval_s* 400K merged scenarios (300 Qs, 287 non-abs)
         lme_rows = []
@@ -293,7 +297,9 @@ def main():
                 tb['all10'] += int(l10)
 
             n_r = row_stat['n']
-            print(f"Row {row_idx} (longmemeval_s*, {len(sessions)} sess, {n_r}/{row_stat['n_total']} non-abs, {row_stat['n_abs']} abs, {dt:.2f}s): Any@1={row_stat['any1']/n_r*100:.2f}% Any@5={row_stat['any5']/n_r*100:.2f}% Any@10={row_stat['any10']/n_r*100:.2f}% All@5={row_stat['all5']/n_r*100:.2f}% All@10={row_stat['all10']/n_r*100:.2f}% MRR={row_stat['mrr']/n_r:.4f}")
+            row_fires = sum(1 for row in resp['results'] if row.get('suffix_automaton_fired') is True)
+            row_stat['fires'] = row_fires
+            print(f"Row {row_idx} (longmemeval_s*, {len(sessions)} sess, {n_r}/{row_stat['n_total']} non-abs, {row_stat['n_abs']} abs, {dt:.2f}s): Any@1={row_stat['any1']/n_r*100:.2f}% Any@5={row_stat['any5']/n_r*100:.2f}% Any@10={row_stat['any10']/n_r*100:.2f}% All@5={row_stat['all5']/n_r*100:.2f}% All@10={row_stat['all10']/n_r*100:.2f}% MRR={row_stat['mrr']/n_r:.4f} | fires {row_fires}/{len(resp['results'])}")
             lme_rows.append(row_stat)
     finally:
         proc.terminate()
@@ -338,6 +344,7 @@ def main():
                 'recall_all_at_5': round(r1_all5 / n1 * 100, 2),
                 'recall_all_at_10': round(r1_all10 / n1 * 100, 2),
                 'mrr': round(r1_mrr / n1, 4),
+                'suffix_automaton_fires': fires1,
             },
             'longmemeval_s_star': {
                 'rows': [17, 18, 19, 20, 21],
