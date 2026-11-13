@@ -3,29 +3,24 @@
 //! Fixed before any benchmark run. These are the algorithm's own constants.
 //! They are not fitted to a score.
 //!
-//! v2 population, after the v1 card. v1 tested one OR over every stored edge
-//! from every turn in the window. 303 of 355 BEAM queries were then impure:
-//! each episode in the window contributed its own standing rule, so the
-//! complement of a (1, n) find stayed positive and nothing was seated.
-//! A family is now its own group. The edge family is the rule and preference
-//! turns outside the window that the frozen head points at, plus a standing
-//! policy in the head's episode. The token family is the rule and preference
-//! turns outside the window that share one exact identical token with the
-//! query. Hwang's (1, n) search has to identify a single defective inside a
-//! family. An impure family identifies nobody and does not veto a family that
-//! did. Two pure families that name different turns are a (2, n) population,
-//! and nothing is seated.
+//! The seated family is one standing policy in a later session of the frozen
+//! head's episode. Hwang's (1, n) search identifies it. An impure family
+//! identifies nobody.
 //!
-//! The episode member is a standing policy in a later session of the head's
-//! episode. A later policy in the head's own session is not a member: that
-//! seat is what moved LoCoMo and LongMemEval turn Any@5 down while the BEAM
-//! instruction lives in a later sub-session.
-//! `policy_backlinks` point from a later turn at an earlier policy. Seating
-//! that earlier policy fired 86 times on the v2 card and moved BEAM turn
-//! Any@5 from 59.15 to 58.87. The probed instruction sits in a later sub than
-//! the retrieved head. The episode key is the stored session id (`_s` digits)
-//! or the stored date. A later policy is one Boolean with the other edge
-//! kinds, not a second vote.
+//! Measured and not seated. Each of these moved a rank-5 gold out and left
+//! the preference slice at 12/30.
+//!
+//! - One OR over every window turn's edges: 303 of 355 BEAM queries were impure.
+//! - Backward `policy_backlinks`: BEAM turn Any@5 moved from 59.15 to 58.87.
+//! - A later policy in the head's own session, `rsb_antecedent`, and an exact
+//!   query token: LongMemEval turn Any@5 moved from 376/470 to 372/470 and
+//!   LoCoMo turn R@5 moved from 69.47 to 69.01. LoCoMo sessions do not share a
+//!   date, so those fires were not this predicate.
+//!
+//! The episode key is the stored session id (`_s` digits) or the stored date.
+//! A one-digit column is not disjunct (Kautz and Singleton, IEEE Trans. IT 10,
+//! 1964). The token family that used that bound is one of the families above
+//! and is not seated.
 
 /// Defective count for Hwang's generalized binary splitting.
 ///
@@ -36,15 +31,6 @@
 /// Association 67 (1972). The same bound is Theorem 2.2.1 in Du and Hwang,
 /// Combinatorial Group Testing and Its Applications (World Scientific, 1993).
 pub const GBS_DEFECTIVE_COUNT: usize = 1;
-
-/// Shortest digit run treated as an exact identity token.
-///
-/// A one-digit column is contained in a large fraction of turns, so it is not
-/// a disjunct column: the union of other columns covers it. Kautz and
-/// Singleton, "Nonrandom binary superimposed codes", IEEE Transactions on
-/// Information Theory 10 (1964). Two digits is the shortest run that can be
-/// its own column.
-pub const EXACT_DIGIT_MIN_LEN: usize = 2;
 
 /// Lowest seat index. Slot 0 is the RSB head and is not a seat.
 pub const SEAT_FLOOR: usize = 1;

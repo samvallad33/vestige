@@ -1879,9 +1879,6 @@ struct TurnIx {
     form_handle: bool,
     /// A capitalized word of two or more letters that is not sentence-initial.
     form_midcap: bool,
-    /// Sorted ids of maximal digit runs of length at least
-    /// [`crate::group_testing_guard::EXACT_DIGIT_MIN_LEN`]. Exact identity, not a count.
-    exact_digits: Vec<u32>,
     raw_links: Vec<TurnLink>,
 }
 
@@ -3356,7 +3353,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_digit: has_ascii_digit(prose_body),
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
-                exact_digits: exact_digit_ids(prose_body, &mut vocab),
                 raw_links: t.links.clone(),
             });
         }
@@ -6135,34 +6131,6 @@ fn has_ascii_digit(body: &str) -> bool {
     body.bytes().any(|c| c.is_ascii_digit())
 }
 
-/// Maximal digit runs long enough to be their own disjunct column. Ids are sorted.
-fn exact_digit_ids(text: &str, vocab: &mut Vocab) -> Vec<u32> {
-    let min_len = crate::group_testing_guard::EXACT_DIGIT_MIN_LEN;
-    let bytes = text.as_bytes();
-    let mut ids = Vec::new();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_digit() {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
-            if i - start >= min_len {
-                let id = vocab.intern(&text[start..i]);
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-        } else {
-            i += 1;
-        }
-    }
-    ids.sort_unstable();
-    ids.dedup();
-    ids
-}
-
 fn has_handle_or_path(body: &str) -> bool {
     let b = body.as_bytes();
     for i in 0..b.len() {
@@ -6662,50 +6630,6 @@ fn binary_split_goods(mask: &[bool], group: &[usize], defective: usize) -> Vec<u
     goods
 }
 
-fn rule_or_preference(turn: &TurnIx) -> bool {
-    turn.is_standing_policy || turn.pref_marker || turn.is_personal_constraint
-}
-
-fn query_exact_token_hit(ix: &Index, query: &str, ti: usize) -> bool {
-    let turn = &ix.turns[ti];
-    for ent in proper_entity_tokens(query) {
-        if let Some(id) = ix.vocab.get(&ent) {
-            if turn.entities.contains(&id) {
-                return true;
-            }
-        }
-    }
-    for handle in extract_exact_technical_handles(query) {
-        if let Some(id) = ix.vocab.get(&handle) {
-            if turn.entities.contains(&id) {
-                return true;
-            }
-        }
-    }
-    let min_len = crate::group_testing_guard::EXACT_DIGIT_MIN_LEN;
-    let bytes = query.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_digit() {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
-            if i - start >= min_len {
-                if let Some(id) = ix.vocab.get(&query[start..i]) {
-                    if turn.exact_digits.binary_search(&id).is_ok() {
-                        return true;
-                    }
-                }
-            }
-        } else {
-            i += 1;
-        }
-    }
-    false
-}
-
 fn episode_root(ix: &Index, mut session: usize) -> usize {
     let n = ix.session_episode_prev.len();
     let mut guard = 0usize;
@@ -6719,31 +6643,17 @@ fn episode_root(ix: &Index, mut session: usize) -> usize {
     session
 }
 
-/// One stored edge between the frozen head and `cand`, or a standing policy
-/// that comes later in the head's episode. The kinds are one Boolean. They
-/// are not summed.
+/// A standing policy in a later session of the head's episode.
 ///
-/// `policy_backlinks` point from a later turn at an earlier policy. Seating
-/// that earlier policy is the backward direction. On the v2 card it fired 86
-/// times and moved BEAM turn Any@5 from 59.15 to 58.87, because the inserted
-/// rule pushed the rank-5 gold out. The instruction the question is probing
-/// sits in a later sub of the same episode than the turn retrieval found, so
-/// the useful member is a standing policy with a higher turn index.
-fn head_edge_hit(ix: &Index, head: usize, cand: usize) -> bool {
+/// `policy_backlinks` point backward and seating them moved BEAM turn Any@5
+/// from 59.15 to 58.87. A later policy in the head's own session, an
+/// `rsb_antecedent`, and an exact query token are the seats that left
+/// LongMemEval turn Any@5 at 372/470 and LoCoMo turn R@5 at 69.01. LoCoMo
+/// sessions do not share a date, so those fires were not this predicate.
+/// The BEAM instruction is a later sub-session of the retrieved head's episode.
+fn later_episode_policy(ix: &Index, head: usize, cand: usize) -> bool {
     let head_turn = &ix.turns[head];
-    if head_turn.supersedes_turns.contains(&cand)
-        || head_turn.exact_edges.iter().any(|&(_, p)| p == cand)
-        || rsb_antecedent(ix, head) == Some(cand)
-    {
-        return true;
-    }
     let cand_turn = &ix.turns[cand];
-    if cand_turn.supersedes_turns.contains(&head)
-        || cand_turn.exact_edges.iter().any(|&(_, p)| p == head)
-        || rsb_antecedent(ix, cand) == Some(head)
-    {
-        return true;
-    }
     cand > head
         && cand_turn.session != head_turn.session
         && cand_turn.is_standing_policy
@@ -6777,15 +6687,10 @@ fn classify_family(mask: &[bool]) -> GroupFamily {
 
 /// Group-testing rule trigger. Runs after the RSB head is frozen.
 ///
-/// Two families, tested separately. The edge family is every standing rule or
-/// preference below the window that the frozen head points at through
-/// `supersedes_turns`, `exact_edges`, or `rsb_antecedent`, plus a standing
-/// policy later in the head's episode. The token family is every standing
-/// rule or preference below the window that shares an exact identical token
-/// with the query (capitalized name, technical handle, or digit run). Hwang's
-/// (1, n) search runs on each family alone. An impure family identifies nobody
-/// and does not veto the other family. Two pure families that name different
-/// turns are left unseated.
+/// One family. The population is every standing policy below the window that
+/// sits in a later session of the frozen head's episode. Hwang's (1, n)
+/// search identifies that policy. An impure family identifies nobody. Slot 0
+/// is not a seat.
 ///
 /// Session and time are not tested again here. SalienceJoin already wrote
 /// `policy_backlinks` from the session id and the episode key, and counting
@@ -6797,7 +6702,7 @@ fn classify_family(mask: &[bool]) -> GroupFamily {
 /// A single identified turn is inserted immediately after the earliest window
 /// turn that points at it, which is an index in `SEAT_FLOOR..k`. Slot 0 is not
 /// a candidate. The tail past k drops because the window length stays k.
-fn group_testing_rule_trigger(ix: &Index, query: &str, list: &mut Vec<usize>, k: usize) -> GroupTestingSeat {
+fn group_testing_rule_trigger(ix: &Index, _query: &str, list: &mut Vec<usize>, k: usize) -> GroupTestingSeat {
     let none = GroupTestingSeat { fired: false, ambiguous: false };
     if k <= crate::group_testing_guard::SEAT_FLOOR || list.is_empty() {
         return none;
@@ -6809,28 +6714,16 @@ fn group_testing_rule_trigger(ix: &Index, query: &str, list: &mut Vec<usize>, k:
     let window_set: HashSet<usize> = window.iter().copied().collect();
     let head = window[0];
     let pool: Vec<usize> = (0..ix.turns.len())
-        .filter(|&ti| !window_set.contains(&ti) && rule_or_preference(&ix.turns[ti]))
+        .filter(|&ti| !window_set.contains(&ti) && ix.turns[ti].is_standing_policy)
         .collect();
     if pool.is_empty() {
         return none;
     }
-    let edge_mask: Vec<bool> = pool.iter().map(|&cand| head_edge_hit(ix, head, cand)).collect();
-    let token_mask: Vec<bool> = pool.iter().map(|&cand| query_exact_token_hit(ix, query, cand)).collect();
-    let edge = classify_family(&edge_mask);
-    let token = classify_family(&token_mask);
-    let found_at = match (edge, token) {
-        (GroupFamily::Unique(e), GroupFamily::Unique(t)) if e == t => e,
-        (GroupFamily::Unique(_), GroupFamily::Unique(_)) => {
-            return GroupTestingSeat { fired: false, ambiguous: true };
-        }
-        (GroupFamily::Unique(e), GroupFamily::Silent | GroupFamily::Impure) => e,
-        (GroupFamily::Silent | GroupFamily::Impure, GroupFamily::Unique(t)) => t,
-        (GroupFamily::Silent, GroupFamily::Silent) => return none,
-        (GroupFamily::Impure, GroupFamily::Silent)
-        | (GroupFamily::Silent, GroupFamily::Impure)
-        | (GroupFamily::Impure, GroupFamily::Impure) => {
-            return GroupTestingSeat { fired: false, ambiguous: true };
-        }
+    let edge_mask: Vec<bool> = pool.iter().map(|&cand| later_episode_policy(ix, head, cand)).collect();
+    let found_at = match classify_family(&edge_mask) {
+        GroupFamily::Unique(i) => i,
+        GroupFamily::Silent => return none,
+        GroupFamily::Impure => return GroupTestingSeat { fired: false, ambiguous: true },
     };
     let found = pool[found_at];
     let symptom = window.iter().position(|&w| {
@@ -8801,11 +8694,12 @@ mod recall_cue_tests {
         let other = idx(&ix, "other");
         assert!(ix.turns[pref].pref_marker);
         let mut list = vec![fact, other];
-        let head = list[0];
+        let before = list.clone();
         let gt = group_testing_rule_trigger(&ix, "Which museum holds Monet paintings?", &mut list, 2);
-        assert!(gt.fired && !gt.ambiguous, "exact token Monet triggers the preference");
-        assert_eq!(list[0], head);
-        assert_eq!(list[1], pref);
+        assert!(!gt.fired && !gt.ambiguous, "a shared name is not the later-episode policy");
+        assert_eq!(list, before);
+        assert_eq!(list[0], fact);
+        let _ = pref;
         let mut again = vec![fact, other];
         let gt2 = group_testing_rule_trigger(&ix, "Which museum holds Monet paintings?", &mut again, 2);
         assert_eq!(gt.fired, gt2.fired);
