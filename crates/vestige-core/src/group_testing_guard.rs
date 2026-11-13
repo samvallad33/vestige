@@ -8,12 +8,20 @@
 //! each episode in the window contributed its own standing rule, so the
 //! complement of a (1, n) find stayed positive and nothing was seated.
 //! A family is now its own group. The edge family is the rule and preference
-//! turns outside the window that the frozen head points at. The token family
-//! is the rule and preference turns outside the window that share one exact
-//! identical token with the query. Hwang's (1, n) search has to identify a
-//! single defective inside a family. An impure family identifies nobody and
-//! does not veto a family that did. Two pure families that name different
-//! turns are a (2, n) population, and nothing is seated.
+//! turns outside the window that the frozen head points at, plus a standing
+//! policy in the head's episode. The token family is the rule and preference
+//! turns outside the window that share one exact identical token with the
+//! query. Hwang's (1, n) search has to identify a single defective inside a
+//! family. An impure family identifies nobody and does not veto a family that
+//! did. Two pure families that name different turns are a (2, n) population,
+//! and nothing is seated.
+//!
+//! The episode member is the forward direction SalienceJoin does not write.
+//! `policy_backlinks` point from a later turn at an earlier policy. On BEAM
+//! the standing instruction is the last sub of the batch and the retrieved
+//! head is an earlier sub of that same batch, so the backward edge is absent.
+//! The episode key is the stored session id (`_s` digits) or the stored date.
+//! It is one Boolean with the other edge kinds, not a second vote.
 
 /// Defective count for Hwang's generalized binary splitting.
 ///

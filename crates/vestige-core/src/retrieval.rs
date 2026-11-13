@@ -6706,8 +6706,24 @@ fn query_exact_token_hit(ix: &Index, query: &str, ti: usize) -> bool {
     false
 }
 
-/// One stored edge between the frozen head and `cand`, in either direction.
-/// The four edge kinds are one Boolean. They are not summed.
+fn episode_root(ix: &Index, mut session: usize) -> usize {
+    let n = ix.session_episode_prev.len();
+    let mut guard = 0usize;
+    while let Some(prev) = ix.session_episode_prev[session] {
+        session = prev;
+        guard += 1;
+        if guard > n {
+            break;
+        }
+    }
+    session
+}
+
+/// One stored edge between the frozen head and `cand`, in either direction,
+/// or a standing policy in the head's episode. The kinds are one Boolean.
+/// They are not summed. The episode arm is the forward direction:
+/// `policy_backlinks` point from later turns at earlier policies, and the
+/// instruction in a batch sits after the turn the question retrieves.
 fn head_edge_hit(ix: &Index, head: usize, cand: usize) -> bool {
     let head_turn = &ix.turns[head];
     if head_turn.policy_backlinks.contains(&cand)
@@ -6718,10 +6734,15 @@ fn head_edge_hit(ix: &Index, head: usize, cand: usize) -> bool {
         return true;
     }
     let cand_turn = &ix.turns[cand];
-    cand_turn.policy_backlinks.contains(&head)
+    if cand_turn.policy_backlinks.contains(&head)
         || cand_turn.supersedes_turns.contains(&head)
         || cand_turn.exact_edges.iter().any(|&(_, p)| p == head)
         || rsb_antecedent(ix, cand) == Some(head)
+    {
+        return true;
+    }
+    cand_turn.is_standing_policy
+        && episode_root(ix, ix.turns[head].session) == episode_root(ix, cand_turn.session)
 }
 
 enum GroupFamily {
@@ -8852,6 +8873,32 @@ mod recall_cue_tests {
         let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover for Monet?", &mut list, 2);
         assert!(gt.fired && !gt.ambiguous, "two Monet preferences do not veto the one head rule");
         assert_eq!(list[0], fact);
+        assert_eq!(list[1], rule);
+    }
+
+    #[test]
+    fn group_testing_seats_a_later_rule_in_the_head_episode() {
+        let sessions = vec![s("conv1_b0_s0", vec![
+            t("fact", "user", "The migration checklist covers backups and rollback."),
+            t("other", "user", "The migration checklist covers backups and rollback tomorrow."),
+        ]), s("conv1_b0_s1", vec![
+            t("rule", "user", "Always include Atlas in the weekly note."),
+        ])];
+        let ix = ix_of(&sessions);
+        let fact = idx(&ix, "fact");
+        let other = idx(&ix, "other");
+        let rule = idx(&ix, "rule");
+        assert_eq!(episode_root(&ix, ix.turns[fact].session), episode_root(&ix, ix.turns[rule].session));
+        assert!(!ix.turns[fact].policy_backlinks.contains(&rule));
+        let mut list = vec![fact, other];
+        let mut second = vec![fact, other];
+        let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 2);
+        let gt2 = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut second, 2);
+        assert!(gt.fired && !gt.ambiguous);
+        assert_eq!(gt.fired, gt2.fired);
+        assert_eq!(gt.ambiguous, gt2.ambiguous);
+        assert_eq!(list, second);
+        assert_eq!(list[0], fact, "slot 0 stays the head");
         assert_eq!(list[1], rule);
     }
 }
