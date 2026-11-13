@@ -7153,10 +7153,12 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, _t_scene: &[
     let excluded = wh_excluded(query);
     let degree = pool_structural_degree(ix, &pool);
     let cause_in = incoming_cause_flags(ix);
+    let mut ok = vec![false; n];
     let mut passing = 0usize;
     if class != WH_NONE {
         for (i, &ti) in pool.iter().enumerate() {
-            if wh_residual(ix, ti, class, &excluded, degree[i] > 0 || cause_in[ti]) {
+            ok[i] = wh_residual(ix, ti, class, &excluded, cause_in.get(ti).copied().unwrap_or(false));
+            if ok[i] {
                 passing += 1;
             }
         }
@@ -7167,13 +7169,7 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, _t_scene: &[
     for a in 0..n {
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
-            let wh = if informative {
-                let ok_a = wh_residual(ix, ta, class, &excluded, degree[a] > 0 || cause_in[ta]);
-                let ok_b = wh_residual(ix, tb, class, &excluded, degree[b] > 0 || cause_in[tb]);
-                wh_vote(ok_a, ok_b)
-            } else {
-                0
-            };
+            let wh = if informative { wh_vote(ok[a], ok[b]) } else { 0 };
             // Scene is the input order and the only tie-break. It is not a ballot.
             let votes = pair_margin(
                 0.0,
