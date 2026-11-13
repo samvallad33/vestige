@@ -18,20 +18,30 @@
 //! - LEMON `MinCut` / Gomory-Hu: <https://lemon.cs.elte.hu/pub/doc/1.3.1/a00616.html>
 //!
 //! The deep-pool width is the turn-level PPR seed width already in
-//! `rank_one` (`order(&t_scene, &turn_ts).take(16)`). Those 16 seats are
-//! the head's cross-session neighbors: policy backlinks, supersession,
+//! `rank_one` (`order(&t_scene, &turn_ts).take(16)`). Those 16 candidates
+//! are the head's cross-session neighbors: policy backlinks, supersession,
 //! exact edges, exact name/handle tokens, and one turn of a
 //! `session_episode_prev` session, in that same scene order. Adjacent
-//! turns already in the pool share one edge, so the answer beside the
-//! head stays on the island. The local RSB reply stays in the degree ballot
-//! and is not a second island edge. The token session range is the
-//! ingest-time exact-handle gate (`2..=6`) and the header-anchor session
-//! degree cap (`1..=6`). A token is the capitalized form on that turn.
-//! The known-proper backfill is not an identity edge.
+//! turns already in the pool share one edge, so a below-window answer
+//! beside a named turn stays on that turn's island. The local RSB reply
+//! stays in the degree ballot and is not a second island edge. The token
+//! session range is the ingest-time exact-handle gate (`2..=6`) and the
+//! header-anchor session degree cap (`1..=6`). A token is the capitalized
+//! form on that turn. The known-proper backfill is not an identity edge.
+//!
+//! Entry, fixed before the v-next card and not fit to a slice. The seated
+//! tail is ordered by the gatekeeper without this vote. A deep turn is
+//! seated only when its margin against every seated tail turn is strictly
+//! positive on the same five ballots (scene, structural degree, stability,
+//! wh-slot, island). Qualifiers are ordered by Kemeny among themselves and
+//! evict from the bottom of the tail. When none qualify, the tail stays in
+//! that baseline order. The island ballot is one of the five votes. It is
+//! not a second pass over the window.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Turns taken from below the post-RSB window and placed in the tail pool.
+/// Cross-session neighbors of the head considered for a tail seat.
+/// A neighbor is seated only when it beats every seated tail turn.
 pub const MINCUT_DEEP_POOL: usize = 16;
 
 /// Session cardinality of a capitalized name or a handle that may add one

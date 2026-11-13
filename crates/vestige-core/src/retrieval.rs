@@ -6825,6 +6825,69 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     rank1_gatekeeper_ballots(ix, query, list, t_scene, &[]);
 }
 
+/// One equal vote per ballot. `+1` means turn A beats turn B on that ballot.
+#[derive(Clone, Copy)]
+struct PairVotes {
+    scene: i8,
+    degree: i8,
+    stability: i8,
+    wh: i8,
+    island: i8,
+}
+
+fn vote_cmp<T: PartialOrd>(a: T, b: T) -> i8 {
+    match a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal) {
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
+fn pair_votes(
+    ix: &Index,
+    slots: u8,
+    ta: usize,
+    tb: usize,
+    deg_a: i64,
+    deg_b: i64,
+    scene_a: f32,
+    scene_b: f32,
+    island_a: Option<bool>,
+    island_b: Option<bool>,
+) -> PairVotes {
+    let mut votes = PairVotes {
+        scene: vote_cmp(scene_a, scene_b),
+        degree: vote_cmp(deg_a, deg_b),
+        stability: 0,
+        wh: 0,
+        island: 0,
+    };
+    let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
+    let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
+    votes.stability = vote_cmp(stab_a, stab_b);
+    if slots != 0 {
+        let ok_a = wh_satisfied(ix, ta, slots, deg_a > 0);
+        let ok_b = wh_satisfied(ix, tb, slots, deg_b > 0);
+        if ok_a && !ok_b {
+            votes.wh = 1;
+        } else if ok_b && !ok_a {
+            votes.wh = -1;
+        }
+    }
+    if let (Some(ia), Some(ib)) = (island_a, island_b) {
+        if ia != ib {
+            votes.island = if ia { 1 } else { -1 };
+        }
+    }
+    votes
+}
+
+impl PairVotes {
+    fn margin(self) -> i64 {
+        i64::from(self.scene) + i64::from(self.degree) + i64::from(self.stability) + i64::from(self.wh) + i64::from(self.island)
+    }
+}
+
 /// Same four ballots, plus one equal vote when `same_island` is the length of
 /// the list: a turn on the RSB head's island beats a turn that is not. Both
 /// on the island, or both off it, and the vote abstains.
@@ -6847,42 +6910,21 @@ fn rank1_gatekeeper_ballots(
     for a in 0..n {
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
-            let mut margin = 0i64;
-            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
-            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-            match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            match degree[a].cmp(&degree[b]) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
-            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
-            match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            if slots != 0 {
-                let ok_a = wh_satisfied(ix, ta, slots, degree[a] > 0);
-                let ok_b = wh_satisfied(ix, tb, slots, degree[b] > 0);
-                if ok_a && !ok_b {
-                    margin += 1;
-                } else if ok_b && !ok_a {
-                    margin -= 1;
-                }
-            }
-            if island && same_island[a] != same_island[b] {
-                if same_island[a] {
-                    margin += 1;
-                } else {
-                    margin -= 1;
-                }
-            }
+            let island_a = if island { Some(same_island[a]) } else { None };
+            let island_b = if island { Some(same_island[b]) } else { None };
+            let votes = pair_votes(
+                ix,
+                slots,
+                ta,
+                tb,
+                degree[a],
+                degree[b],
+                t_scene.get(ta).copied().unwrap_or(0.0),
+                t_scene.get(tb).copied().unwrap_or(0.0),
+                island_a,
+                island_b,
+            );
+            let margin = votes.margin();
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -6902,11 +6944,13 @@ fn rank1_gatekeeper_ballots(
     *list = turned;
 }
 
-/// Slot 0 is the RSB head and is not a Kemeny candidate. The tail pool is the
-/// tail plus the guard's deep turns. Kemeny runs once, with the island ballot,
-/// then the pool is cut back to the original tail length so a deep turn can
-/// replace a window turn. Returns whether that tail differs from the
-/// gatekeeper without the island vote and without the deep pool.
+/// Slot 0 is the RSB head and is not a candidate. The seated tail is ordered
+/// by the gatekeeper without the island vote, the same order PR 715 returns.
+/// A deep turn takes a seat only when it beats every seated tail turn by a
+/// strict pairwise majority on the five ballots, island included. Qualifiers
+/// are ordered by Kemeny among themselves and evict from the bottom of that
+/// tail. Otherwise the tail stays the baseline order: the island vote does
+/// not reshuffle the window. Returns whether a deep turn took a seat.
 fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) -> bool {
     if list.len() < 2 {
         return false;
@@ -6921,21 +6965,62 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
             pool.push(ti);
         }
     }
+    let write = |list: &mut Vec<usize>, tail: &[usize]| {
+        list.clear();
+        list.push(head);
+        list.extend(tail.iter().copied());
+    };
+    if pool.len() == tail.len() {
+        write(list, &baseline);
+        return false;
+    }
     let mut graph_nodes = Vec::with_capacity(pool.len() + 1);
     graph_nodes.push(head);
     graph_nodes.extend(pool.iter().copied());
     let islands = episode_islands(ix, &graph_nodes);
     let head_island = islands.first().copied().unwrap_or(0);
     let same: Vec<bool> = islands.iter().skip(1).map(|&id| id == head_island).collect();
-    rank1_gatekeeper_ballots(ix, query, &mut pool, t_scene, &same);
-    pool.truncate(tail.len());
-    let fired = pool != baseline;
+    let slots = wh_slots(query);
+    let degree = pool_structural_degree(ix, &pool);
+    let beats = |a: usize, b: usize| -> bool {
+        let votes = pair_votes(
+            ix,
+            slots,
+            pool[a],
+            pool[b],
+            degree[a],
+            degree[b],
+            t_scene.get(pool[a]).copied().unwrap_or(0.0),
+            t_scene.get(pool[b]).copied().unwrap_or(0.0),
+            Some(same[a]),
+            Some(same[b]),
+        );
+        votes.margin() > 0
+    };
+    let deep_start = tail.len();
+    let mut qualifiers: Vec<usize> = Vec::new();
+    for a in deep_start..pool.len() {
+        if (0..deep_start).all(|b| beats(a, b)) {
+            qualifiers.push(pool[a]);
+        }
+    }
+    if qualifiers.is_empty() {
+        write(list, &baseline);
+        return false;
+    }
+    let q_same: Vec<bool> = qualifiers
+        .iter()
+        .map(|ti| pool.iter().position(|p| p == ti).map(|i| same[i]).unwrap_or(false))
+        .collect();
+    rank1_gatekeeper_ballots(ix, query, &mut qualifiers, t_scene, &q_same);
+    let mut final_tail = qualifiers;
+    final_tail.extend(baseline.iter().copied());
+    final_tail.truncate(tail.len());
+    let fired = final_tail != baseline;
     if fired {
         crate::mincut_guard::record_fire();
     }
-    list.clear();
-    list.push(head);
-    list.extend(pool);
+    write(list, &final_tail);
     fired
 }
 
@@ -8922,9 +9007,77 @@ mod recall_cue_tests {
         scene[local] = 3.0;
         let mut tied = vec![head, noise, local];
         let tied_fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut tied, &scene);
-        assert!(tied_fired);
-        assert_eq!(tied[0], head);
-        assert_eq!(tied[1], local, "an in-window neighbor of the head stays on the island");
+        assert!(!tied_fired, "a deep turn that ties a seated turn does not take a seat");
+        assert_eq!(tied, vec![head, noise, local], "the seated tail stays the baseline order");
+    }
+
+    #[test]
+    fn a_deep_turn_that_loses_one_pair_does_not_reorder_the_window() {
+        let sessions = vec![
+            s("a", vec![
+                t("head", "user", "I left the spare key with Sam."),
+                t("near", "user", "The drawer is blue."),
+            ]),
+            s("b", vec![t("deep", "user", "The spare key was left with Sam in the blue drawer.")]),
+            s("c", vec![t("off", "user", "The forecast called for rain tomorrow.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let near = idx(&ix, "near");
+        let deep = idx(&ix, "deep");
+        let off = idx(&ix, "off");
+        let islands = episode_islands(&ix, &[head, near, off, deep]);
+        assert_eq!(islands[0], islands[1], "the adjacent answer shares the head island");
+        assert_eq!(islands[0], islands[3], "the shared name puts the deep turn on the head island");
+        assert_ne!(islands[0], islands[2]);
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 5.0;
+        scene[off] = 5.0;
+        scene[near] = 1.0;
+        scene[deep] = 4.0;
+        let mut list = vec![head, off, near];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(!fired);
+        assert_eq!(list, vec![head, off, near], "island membership does not reshuffle the seated tail");
+        assert_eq!(list[0], head);
+    }
+
+    #[test]
+    fn qualifiers_evict_from_the_bottom_in_kemeny_order() {
+        let sessions = vec![
+            s("a", vec![t("head", "user", "I left the spare key with Sam.")]),
+            s("b", vec![t("high", "user", "The spare key was left with Sam on the hook.")]),
+            s("c", vec![t("low", "user", "The spare key from Sam is labeled.")]),
+            s("d", vec![t("s0", "user", "The forecast called for rain tomorrow.")]),
+            s("e", vec![t("s1", "user", "Traffic was slow on the bridge.")]),
+            s("f", vec![t("s2", "user", "The bakery sold out of rye.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let high = idx(&ix, "high");
+        let low = idx(&ix, "low");
+        let s0 = idx(&ix, "s0");
+        let s1 = idx(&ix, "s1");
+        let s2 = idx(&ix, "s2");
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 9.0;
+        scene[high] = 4.0;
+        scene[low] = 3.0;
+        scene[s0] = 2.0;
+        scene[s1] = 1.0;
+        scene[s2] = 1.0;
+        let mut list = vec![head, s0, s1, s2];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(fired);
+        assert_eq!(list, vec![head, high, low, s0], "qualifiers lead, and only the bottom of the tail leaves");
+        let mut again = vec![head, s0, s1, s2];
+        let fired_again = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut again, &scene);
+        assert_eq!(list, again);
+        assert_eq!(fired, fired_again);
+        scene[high] = 100.0;
+        let mut huge = vec![head, s0, s1, s2];
+        rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut huge, &scene);
+        assert_eq!(huge[0], head, "slot 0 stays the RSB head");
     }
 
     #[test]
