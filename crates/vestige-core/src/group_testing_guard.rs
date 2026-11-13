@@ -2,6 +2,18 @@
 //!
 //! Fixed before any benchmark run. These are the algorithm's own constants.
 //! They are not fitted to a score.
+//!
+//! v2 population, after the v1 card. v1 tested one OR over every stored edge
+//! from every turn in the window. 303 of 355 BEAM queries were then impure:
+//! each episode in the window contributed its own standing rule, so the
+//! complement of a (1, n) find stayed positive and nothing was seated.
+//! A family is now its own group. The edge family is the rule and preference
+//! turns outside the window that the frozen head points at. The token family
+//! is the rule and preference turns outside the window that share one exact
+//! identical token with the query. Hwang's (1, n) search has to identify a
+//! single defective inside a family. An impure family identifies nobody and
+//! does not veto a family that did. Two pure families that name different
+//! turns are a (2, n) population, and nothing is seated.
 
 /// Defective count for Hwang's generalized binary splitting.
 ///

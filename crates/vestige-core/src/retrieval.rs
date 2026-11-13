@@ -6706,54 +6706,70 @@ fn query_exact_token_hit(ix: &Index, query: &str, ti: usize) -> bool {
     false
 }
 
-/// A stored edge from the window into `cand`, or from `cand` back into the window.
-/// Each family is one Boolean test. The families are not summed.
-fn window_edge_families(
-    ix: &Index,
-    window_set: &HashSet<usize>,
-    policy_from_window: &HashSet<usize>,
-    supersedes_from_window: &HashSet<usize>,
-    exact_from_window: &HashSet<usize>,
-    ante_from_window: &HashSet<usize>,
-    cand: usize,
-) -> bool {
-    if policy_from_window.contains(&cand)
-        || supersedes_from_window.contains(&cand)
-        || exact_from_window.contains(&cand)
-        || ante_from_window.contains(&cand)
+/// One stored edge between the frozen head and `cand`, in either direction.
+/// The four edge kinds are one Boolean. They are not summed.
+fn head_edge_hit(ix: &Index, head: usize, cand: usize) -> bool {
+    let head_turn = &ix.turns[head];
+    if head_turn.policy_backlinks.contains(&cand)
+        || head_turn.supersedes_turns.contains(&cand)
+        || head_turn.exact_edges.iter().any(|&(_, p)| p == cand)
+        || rsb_antecedent(ix, head) == Some(cand)
     {
         return true;
     }
-    let t = &ix.turns[cand];
-    if t.policy_backlinks.iter().any(|p| window_set.contains(p))
-        || t.supersedes_turns.iter().any(|p| window_set.contains(p))
-        || t.exact_edges.iter().any(|&(_, p)| window_set.contains(&p))
-    {
-        return true;
+    let cand_turn = &ix.turns[cand];
+    cand_turn.policy_backlinks.contains(&head)
+        || cand_turn.supersedes_turns.contains(&head)
+        || cand_turn.exact_edges.iter().any(|&(_, p)| p == head)
+        || rsb_antecedent(ix, cand) == Some(head)
+}
+
+enum GroupFamily {
+    Silent,
+    Unique(usize),
+    Impure,
+}
+
+/// Hwang's (1, n) result on one family. An empty family is silent. A positive
+/// complement means the family is not (1, n), so it identifies nobody.
+fn classify_family(mask: &[bool]) -> GroupFamily {
+    if !mask.iter().any(|&d| d) {
+        return GroupFamily::Silent;
     }
-    rsb_antecedent(ix, cand).is_some_and(|a| window_set.contains(&a))
+    let d = crate::group_testing_guard::GBS_DEFECTIVE_COUNT;
+    let identified = hwang_gbs(mask, d);
+    if identified.len() != d || identified.iter().any(|&i| !mask[i]) {
+        return GroupFamily::Impure;
+    }
+    let mut got = identified.clone();
+    got.sort_unstable();
+    if mask.iter().enumerate().any(|(i, &def)| def && got.binary_search(&i).is_err()) {
+        return GroupFamily::Impure;
+    }
+    GroupFamily::Unique(identified[0])
 }
 
 /// Group-testing rule trigger. Runs after the RSB head is frozen.
 ///
-/// The population is every standing rule or preference turn below the top-k
-/// window. A turn is defective when one stored family triggers it: a
-/// `policy_backlinks`, `supersedes_turns`, `exact_edges`, or `rsb_antecedent`
-/// touch with the window, or an exact identical token with the query
-/// (capitalized name, technical handle, or digit run). Each family is one
-/// Boolean test. The group test is their OR. There is no weight, bonus, or
-/// second ordering of the window.
+/// Two families, tested separately. The edge family is every standing rule or
+/// preference below the window that the frozen head points at through
+/// `policy_backlinks`, `supersedes_turns`, `exact_edges`, or `rsb_antecedent`.
+/// The token family is every standing rule or preference below the window that
+/// shares an exact identical token with the query (capitalized name, technical
+/// handle, or digit run). Hwang's (1, n) search runs on each family alone. An
+/// impure family identifies nobody and does not veto the other family. Two
+/// pure families that name different turns are left unseated.
 ///
 /// Session and time are not tested again here. SalienceJoin already wrote
 /// `policy_backlinks` from the session id and the episode key, and counting
-/// that field a second time would count one edge twice.
+/// that field a second time would count one edge twice. Edges from later
+/// window turns are not part of this test: each of those turns belongs to its
+/// own episode, and folding them in made the complement positive on 303 of
+/// 355 BEAM queries.
 ///
-/// Hwang's (1, n) search identifies the defective. A positive test on the
-/// complement means more than one defective, the (1, n) model is false, and
-/// the window is left alone. A single defective is inserted immediately after
-/// the earliest window turn that points at it, which is an index in
-/// `SEAT_FLOOR..k`. Slot 0 is not a candidate. The tail past k drops because
-/// the window length stays k.
+/// A single identified turn is inserted immediately after the earliest window
+/// turn that points at it, which is an index in `SEAT_FLOOR..k`. Slot 0 is not
+/// a candidate. The tail past k drops because the window length stays k.
 fn group_testing_rule_trigger(ix: &Index, query: &str, list: &mut Vec<usize>, k: usize) -> GroupTestingSeat {
     let none = GroupTestingSeat { fired: false, ambiguous: false };
     if k <= crate::group_testing_guard::SEAT_FLOOR || list.is_empty() {
@@ -6764,54 +6780,32 @@ fn group_testing_rule_trigger(ix: &Index, query: &str, list: &mut Vec<usize>, k:
         return none;
     }
     let window_set: HashSet<usize> = window.iter().copied().collect();
-    let mut policy_from_window = HashSet::new();
-    let mut supersedes_from_window = HashSet::new();
-    let mut exact_from_window = HashSet::new();
-    let mut ante_from_window = HashSet::new();
-    for &w in &window {
-        let t = &ix.turns[w];
-        policy_from_window.extend(t.policy_backlinks.iter().copied());
-        supersedes_from_window.extend(t.supersedes_turns.iter().copied());
-        exact_from_window.extend(t.exact_edges.iter().map(|&(_, p)| p));
-        if let Some(a) = rsb_antecedent(ix, w) {
-            ante_from_window.insert(a);
-        }
-    }
+    let head = window[0];
     let pool: Vec<usize> = (0..ix.turns.len())
         .filter(|&ti| !window_set.contains(&ti) && rule_or_preference(&ix.turns[ti]))
         .collect();
     if pool.is_empty() {
         return none;
     }
-    let mask: Vec<bool> = pool
-        .iter()
-        .map(|&cand| {
-            window_edge_families(
-                ix,
-                &window_set,
-                &policy_from_window,
-                &supersedes_from_window,
-                &exact_from_window,
-                &ante_from_window,
-                cand,
-            ) || query_exact_token_hit(ix, query, cand)
-        })
-        .collect();
-    if !mask.iter().any(|&d| d) {
-        return none;
-    }
-    let d = crate::group_testing_guard::GBS_DEFECTIVE_COUNT;
-    let identified = hwang_gbs(&mask, d);
-    if identified.len() != d || identified.iter().any(|&i| !mask[i]) {
-        return GroupTestingSeat { fired: false, ambiguous: true };
-    }
-    let mut identified_set = identified.clone();
-    identified_set.sort_unstable();
-    let complement_positive = mask.iter().enumerate().any(|(i, &def)| def && identified_set.binary_search(&i).is_err());
-    if complement_positive {
-        return GroupTestingSeat { fired: false, ambiguous: true };
-    }
-    let found = pool[identified[0]];
+    let edge_mask: Vec<bool> = pool.iter().map(|&cand| head_edge_hit(ix, head, cand)).collect();
+    let token_mask: Vec<bool> = pool.iter().map(|&cand| query_exact_token_hit(ix, query, cand)).collect();
+    let edge = classify_family(&edge_mask);
+    let token = classify_family(&token_mask);
+    let found_at = match (edge, token) {
+        (GroupFamily::Unique(e), GroupFamily::Unique(t)) if e == t => e,
+        (GroupFamily::Unique(_), GroupFamily::Unique(_)) => {
+            return GroupTestingSeat { fired: false, ambiguous: true };
+        }
+        (GroupFamily::Unique(e), GroupFamily::Silent | GroupFamily::Impure) => e,
+        (GroupFamily::Silent | GroupFamily::Impure, GroupFamily::Unique(t)) => t,
+        (GroupFamily::Silent, GroupFamily::Silent) => return none,
+        (GroupFamily::Impure, GroupFamily::Silent)
+        | (GroupFamily::Silent, GroupFamily::Impure)
+        | (GroupFamily::Impure, GroupFamily::Impure) => {
+            return GroupTestingSeat { fired: false, ambiguous: true };
+        }
+    };
+    let found = pool[found_at];
     let symptom = window.iter().position(|&w| {
         let t = &ix.turns[w];
         t.policy_backlinks.contains(&found)
@@ -8816,5 +8810,48 @@ mod recall_cue_tests {
         assert_eq!(ta[0], tb[0]);
         assert!(ta[1..].contains(&"rule".to_string()), "rule was not seated in 1..k-1: {ta:?}");
         assert_eq!(ta.len(), 3);
+    }
+
+    #[test]
+    fn group_testing_uses_the_head_episode_when_another_episode_also_has_a_rule() {
+        let sessions = vec![
+            s("ep_a", vec![
+                t("rule_a", "user", "Always include Atlas in the weekly note."),
+                t("fact_a", "user", "The migration checklist covers backups and rollback."),
+            ]),
+            s("ep_b", vec![
+                t("rule_b", "user", "Always include Nova in the weekly note."),
+                t("fact_b", "user", "The migration checklist covers backups and rollback too."),
+            ]),
+        ];
+        let ix = ix_of(&sessions);
+        let fact_a = idx(&ix, "fact_a");
+        let fact_b = idx(&ix, "fact_b");
+        let rule_a = idx(&ix, "rule_a");
+        let mut list = vec![fact_a, fact_b];
+        let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 2);
+        assert!(gt.fired && !gt.ambiguous, "the other episode's rule is a different family");
+        assert_eq!(list[0], fact_a);
+        assert_eq!(list[1], rule_a);
+    }
+
+    #[test]
+    fn group_testing_does_not_let_an_impure_token_family_veto_the_head_rule() {
+        let sessions = vec![s("s", vec![
+            t("rule", "user", "Always include Atlas in the weekly note."),
+            t("pref_a", "user", "I love the paintings of Monet above everything else."),
+            t("pref_b", "user", "I prefer the sketches of Monet to the late oils."),
+            t("fact", "user", "The migration checklist covers backups and rollback."),
+            t("other", "user", "Packing cubes fit in the hallway closet."),
+        ])];
+        let ix = ix_of(&sessions);
+        let fact = idx(&ix, "fact");
+        let other = idx(&ix, "other");
+        let rule = idx(&ix, "rule");
+        let mut list = vec![fact, other];
+        let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover for Monet?", &mut list, 2);
+        assert!(gt.fired && !gt.ambiguous, "two Monet preferences do not veto the one head rule");
+        assert_eq!(list[0], fact);
+        assert_eq!(list[1], rule);
     }
 }
