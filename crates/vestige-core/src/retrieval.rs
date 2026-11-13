@@ -1947,6 +1947,30 @@ struct Index {
     header_max_words: usize,
     /// Unique title-case speaker nickname bindings (`Mel` -> `melanie`).
     nicks: SpeakerNickIndex,
+    /// Recall cues: per turn, the sorted ids of the kernel tokens (`raw_tokens` + `stem`) of its
+    /// full content, in a private id space (`cue_vocab`) so the ranker vocabulary is untouched.
+    turn_cues: Vec<Vec<u32>>,
+    cue_vocab: HashMap<String, u32>,
+    /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
+    role_cues: HashSet<u32>,
+}
+
+/// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
+fn cue_tokens(text: &str) -> Vec<String> {
+    raw_tokens(text).into_iter().map(|w| stem(&w)).collect()
+}
+
+fn intern_cues(text: &str, vocab: &mut HashMap<String, u32>) -> Vec<u32> {
+    let mut ids: Vec<u32> = cue_tokens(text)
+        .into_iter()
+        .map(|w| {
+            let next = vocab.len() as u32;
+            *vocab.entry(w).or_insert(next)
+        })
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 const PREF_AXIS: &str = "\u{1}pref";
@@ -2943,6 +2967,9 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut raw_standing_rules: Vec<(String, usize, usize, i64, bool, Vec<String>)> = Vec::new();
     let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
     let mut turn_prose_cache: Vec<String> = Vec::new();
+    let mut cue_vocab: HashMap<String, u32> = HashMap::new();
+    let mut turn_cues: Vec<Vec<u32>> = Vec::new();
+    let mut role_cues: HashSet<u32> = HashSet::new();
     let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
     let hard_constraint_set: HashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
     let mut constraint_terms: HashSet<u32> = HashSet::new();
@@ -3268,6 +3295,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             };
             turn_tech_handles.push(tech_handles);
             turn_prose_cache.push(prose_body.to_string());
+            turn_cues.push(intern_cues(&t.content, &mut cue_vocab));
+            role_cues.extend(intern_cues(&t.role, &mut cue_vocab));
             members.push(turn_idx);
             turns.push(TurnIx {
                 session: si,
@@ -3721,6 +3750,9 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         header_dict,
         header_max_words,
         nicks,
+        turn_cues,
+        cue_vocab,
+        role_cues,
     }
 }
 
@@ -5634,6 +5666,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             }
         }
     }
+    // BoundaryPrimacy: runs after ReplySource, on the final list, so it shares one path with live recall.
+    let q_cues = query_cues(ix, &q.text);
+    boundary_primacy(ix, &q_cues, &mut final_turn_indices);
+    // GivenNew runs after BoundaryPrimacy on the same final list (one path for live and bench).
+    given_new(ix, &q_cues, &mut final_turn_indices);
+    // SessionOpenerLift runs after GivenNew, on the same final list (one path for live and bench).
+    session_opener_lift(ix, &q_cues, &mut final_turn_indices);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5647,7 +5686,177 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
+// =========================================================================
+// RECALL-CUE SLOT-1 RULES (position, session, role field, token identity only)
+// =========================================================================
+
+/// BoundaryPrimacy window: the session opener must already sit inside the top 5 the kernel
+/// selected. Fixed before any run; the top-5 membership never changes.
+const PRIMACY_WINDOW: usize = 5;
+
+/// Query cues: distinct kernel tokens of the query that occur somewhere in the haystack, minus
+/// any token that occurs in a turn's role/speaker field (structural metadata, no word list).
+fn query_cues(ix: &Index, text: &str) -> Vec<u32> {
+    let mut ids: Vec<u32> = cue_tokens(text)
+        .into_iter()
+        .filter_map(|w| ix.cue_vocab.get(&w).copied())
+        .filter(|id| !ix.role_cues.contains(id))
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// `cues(x)`: the query cues present on turn `ti` (both sides sorted, so a merge walk).
+fn turn_query_cues(ix: &Index, q_cues: &[u32], ti: usize) -> Vec<u32> {
+    let t = &ix.turn_cues[ti];
+    let (mut i, mut j, mut out) = (0usize, 0usize, Vec::new());
+    while i < t.len() && j < q_cues.len() {
+        match t[i].cmp(&q_cues[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out.push(t[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out
+}
+
+/// `sup ⊇ sub` for sorted, deduplicated id lists.
+fn covers_cues(sup: &[u32], sub: &[u32]) -> bool {
+    let mut i = 0usize;
+    for x in sub {
+        while i < sup.len() && sup[i] < *x {
+            i += 1;
+        }
+        if i >= sup.len() || sup[i] != *x {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Position of turn `ti` inside its own session.
+fn turn_pos(ix: &Index, ti: usize) -> Option<usize> {
+    ix.session_turns[ix.turns[ti].session].iter().position(|&m| m == ti)
+}
+
+/// BoundaryPrimacy (event-boundary primacy; Zheng 2022, Ezzyat & Davachi 2011). If rank 1 is not
+/// its session's opening turn, it matched at least one query cue, and that session's opener is
+/// already inside the top `PRIMACY_WINDOW` and carries every cue rank 1 matched, the opener takes
+/// slot 1 and the rest keep their order. Never crosses sessions; never changes the top-5 set.
+fn boundary_primacy(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let top = list[0];
+    if turn_pos(ix, top) == Some(0) {
+        return false;
+    }
+    let top_cues = turn_query_cues(ix, q_cues, top);
+    if top_cues.is_empty() {
+        return false;
+    }
+    let sess = ix.turns[top].session;
+    let Some(&opener) = ix.session_turns[sess].first() else { return false };
+    let window = list.len().min(PRIMACY_WINDOW);
+    let Some(at) = list[1..window].iter().position(|&t| t == opener).map(|i| i + 1) else { return false };
+    if !covers_cues(&turn_query_cues(ix, q_cues, opener), &top_cues) {
+        return false;
+    }
+    list.remove(at);
+    list.insert(0, opener);
+    true
+}
+
+/// GivenNew window: the earliest covering turn must already sit in the kernel's top 10.
+/// Fixed before any run.
+const GIVEN_NEW_WINDOW: usize = 10;
+/// GivenNew variant, fixed before the run. `false` = card 2a (any role). `true` = card 2b: fires
+/// only when rank 1's role field is the chat schema value `user` or `assistant` (structural field).
+const GIVEN_NEW_CHAT_ROLES_ONLY: bool = true;
+
+/// GivenNew (given/new information, Prince 1981; first attestation in lexicography). If rank 1
+/// matched at least one query cue, take the earliest turn of rank 1's own session whose cues cover
+/// every cue rank 1 matched. When that turn comes before rank 1 and is already inside the top
+/// `GIVEN_NEW_WINDOW`, it takes slot 1 and the rest keep their order. Never crosses sessions.
+fn given_new(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let top = list[0];
+    if GIVEN_NEW_CHAT_ROLES_ONLY {
+        let sp = ix.turns[top].speaker.as_str();
+        if sp != "user" && sp != "assistant" {
+            return false;
+        }
+    }
+    let top_cues = turn_query_cues(ix, q_cues, top);
+    if top_cues.is_empty() {
+        return false;
+    }
+    for &z in &ix.session_turns[ix.turns[top].session] {
+        if z == top {
+            return false;
+        }
+        if covers_cues(&turn_query_cues(ix, q_cues, z), &top_cues) {
+            let window = list.len().min(GIVEN_NEW_WINDOW);
+            let Some(at) = list[1..window].iter().position(|&t| t == z).map(|i| i + 1) else { return false };
+            list.remove(at);
+            list.insert(0, z);
+            return true;
+        }
+    }
+    false
+}
+
+/// SessionOpenerLift window: the session opener must already sit inside the top 5 the kernel
+/// selected. Fixed at 5 before any run; the top-5 membership never changes.
+const SESSION_OPENER_LIFT_WINDOW: usize = 5;
+
+/// SessionOpenerLift generalizes BoundaryPrimacy by dropping the same-session clause and
+/// keeping the chat role gate. If rank 1 is a user or assistant turn, is not position 0 of
+/// its session, and matched at least one query cue, take the first turn at ranks 2 through
+/// `SESSION_OPENER_LIFT_WINDOW` that opens any session and whose cues cover every cue rank 1
+/// matched. That opener takes slot 1 and the rest keep their order. Never changes the top-5 set.
+fn session_opener_lift(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let top = list[0];
+    let sp = ix.turns[top].speaker.as_str();
+    if sp != "user" && sp != "assistant" {
+        return false;
+    }
+    if turn_pos(ix, top) == Some(0) {
+        return false;
+    }
+    let top_cues = turn_query_cues(ix, q_cues, top);
+    if top_cues.is_empty() {
+        return false;
+    }
+    let window = list.len().min(SESSION_OPENER_LIFT_WINDOW);
+    for i in 1..window {
+        let cand = list[i];
+        if turn_pos(ix, cand) != Some(0) {
+            continue;
+        }
+        if !covers_cues(&turn_query_cues(ix, q_cues, cand), &top_cues) {
+            continue;
+        }
+        list.remove(i);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
 pub fn rank(req: &RankRequest) -> RankResponse {
+
     let ix = build_index(&req.sessions, &req.params);
     let results = req.queries.iter().map(|q| rank_one(&ix, q, &req.params, req.top_k)).collect();
     RankResponse {
@@ -6871,5 +7080,294 @@ mod tests {
         assert!(ranked.results[0].intent.preference);
         assert_eq!(ranked.results[0].sessions[0].id, "choice");
         assert_eq!(ranked.results[0].turns[0].session_id, "choice");
+    }
+}
+
+#[cfg(test)]
+mod recall_cue_tests {
+    use super::*;
+
+    fn t(id: &str, role: &str, content: &str) -> Turn {
+        Turn { id: id.into(), role: role.into(), content: content.into(), ..Turn::default() }
+    }
+    fn s(id: &str, turns: Vec<Turn>) -> Session {
+        Session { id: id.into(), date: String::new(), timestamp: 0, turns }
+    }
+    fn ix_of(sessions: &[Session]) -> Index {
+        build_index(sessions, &Params::default())
+    }
+    fn idx(ix: &Index, id: &str) -> usize {
+        ix.turns.iter().position(|x| x.id == id).unwrap()
+    }
+    fn ids(ix: &Index, list: &[usize]) -> Vec<String> {
+        list.iter().map(|&i| ix.turns[i].id.clone()).collect()
+    }
+    fn haystack() -> Vec<Session> {
+        vec![
+            s("a", vec![
+                t("a0", "user", "My new camera is a Sony A7 and I shoot street photos."),
+                t("a1", "assistant", "Nice choice for street work."),
+                t("a2", "user", "The Sony camera battery dies fast though."),
+            ]),
+            s("b", vec![
+                t("b0", "user", "Let's talk about gardening tomatoes."),
+                t("b1", "user", "My Sony camera takes great tomato shots."),
+            ]),
+        ]
+    }
+
+    #[test]
+    fn primacy_moves_opener_that_covers_rank1_cues() {
+        let ix = ix_of(&haystack());
+        let qc = query_cues(&ix, "Which Sony camera do I have?");
+        let mut list = vec![idx(&ix, "a2"), idx(&ix, "a1"), idx(&ix, "a0")];
+        assert!(boundary_primacy(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a0", "a2", "a1"]);
+    }
+
+    #[test]
+    fn primacy_holds_when_opener_lacks_a_rank1_cue() {
+        let ix = ix_of(&haystack());
+        // rank 1 (a2) matches "battery"; the opener a0 does not carry it.
+        let qc = query_cues(&ix, "How is the Sony camera battery?");
+        let mut list = vec![idx(&ix, "a2"), idx(&ix, "a0"), idx(&ix, "a1")];
+        assert!(!boundary_primacy(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a2", "a0", "a1"]);
+    }
+
+    #[test]
+    fn primacy_never_crosses_sessions() {
+        let ix = ix_of(&haystack());
+        let qc = query_cues(&ix, "Which Sony camera do I have?");
+        // rank 1 is in session b; a0 is an opener that covers, but of another session.
+        let mut list = vec![idx(&ix, "b1"), idx(&ix, "a0"), idx(&ix, "a2")];
+        assert!(!boundary_primacy(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["b1", "a0", "a2"]);
+    }
+
+    #[test]
+    fn primacy_respects_top5_window() {
+        let ix = ix_of(&haystack());
+        let qc = query_cues(&ix, "Which Sony camera do I have?");
+        let (a0, a1, a2, b0, b1) = (idx(&ix, "a0"), idx(&ix, "a1"), idx(&ix, "a2"), idx(&ix, "b0"), idx(&ix, "b1"));
+        // a0 sits at slot 6, outside the window (a1 repeated only to pad the list).
+        let mut list = vec![a2, a1, b0, b1, a1, a0];
+        let before = list.clone();
+        assert!(!boundary_primacy(&ix, &qc, &mut list));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn speaker_name_tokens_are_not_cues() {
+        let ix = ix_of(&[s("d", vec![
+            t("d0", "Caroline", "Hey, I went hiking at the lake yesterday."),
+            t("d1", "Melanie", "Caroline that sounds fun, Caroline loves the lake."),
+        ])]);
+        let qc = query_cues(&ix, "What did Caroline do at the lake?");
+        let caroline = ix.cue_vocab.get(&cue_tokens("Caroline")[0]).copied().unwrap();
+        assert!(!qc.contains(&caroline));
+        // Without the name token, the opener d0 covers d1's cue set and moves up.
+        let mut list = vec![idx(&ix, "d1"), idx(&ix, "d0")];
+        assert!(boundary_primacy(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["d0", "d1"]);
+    }
+
+    #[test]
+    fn primacy_is_deterministic_under_shuffled_sessions() {
+        let h = haystack();
+        let mut rev = h.clone();
+        rev.reverse();
+        for hs in [h, rev] {
+            let ix = ix_of(&hs);
+            let qc = query_cues(&ix, "Which Sony camera do I have?");
+            let mut list = vec![idx(&ix, "a2"), idx(&ix, "b1"), idx(&ix, "a0")];
+            boundary_primacy(&ix, &qc, &mut list);
+            assert_eq!(ids(&ix, &list), vec!["a0", "a2", "b1"]);
+        }
+    }
+
+    fn chat() -> Vec<Session> {
+        vec![
+            s("c", vec![
+                t("c0", "user", "Morning! Planning a trip."),
+                t("c1", "user", "I booked a flight to Lisbon for March."),
+                t("c2", "assistant", "Great, Lisbon in March is lovely."),
+                t("c3", "user", "Remind me later about the Lisbon flight in March."),
+            ]),
+            s("e", vec![t("e0", "user", "Lisbon flight prices in March are high.")]),
+        ]
+    }
+
+    #[test]
+    fn given_new_picks_earliest_covering_turn() {
+        let ix = ix_of(&chat());
+        let qc = query_cues(&ix, "When is my Lisbon flight?");
+        let (c1, c2, c3) = (idx(&ix, "c1"), idx(&ix, "c2"), idx(&ix, "c3"));
+        let mut list = vec![c3, c2, c1];
+        assert!(given_new(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["c1", "c3", "c2"]);
+    }
+
+    #[test]
+    fn given_new_does_not_reach_past_top10() {
+        let ix = ix_of(&chat());
+        let qc = query_cues(&ix, "When is my Lisbon flight?");
+        let (c0, c1, c2, c3, e0) = (idx(&ix, "c0"), idx(&ix, "c1"), idx(&ix, "c2"), idx(&ix, "c3"), idx(&ix, "e0"));
+        // c1 at slot 11 (padding repeats only fill the list).
+        let mut list = vec![c3, c2, c0, e0, c2, c0, e0, c2, c0, e0, c1];
+        let before = list.clone();
+        assert!(!given_new(&ix, &qc, &mut list));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn given_new_never_crosses_sessions() {
+        let ix = ix_of(&chat());
+        let qc = query_cues(&ix, "When is my Lisbon flight?");
+        // rank 1 is e0 (session e, position 0). c1 covers its cues but lives in session c.
+        let mut list = vec![idx(&ix, "e0"), idx(&ix, "c1")];
+        assert!(!given_new(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["e0", "c1"]);
+    }
+
+    #[test]
+    fn given_new_is_deterministic_under_shuffled_sessions() {
+        let h = chat();
+        let mut rev = h.clone();
+        rev.reverse();
+        for hs in [h, rev] {
+            let ix = ix_of(&hs);
+            let qc = query_cues(&ix, "When is my Lisbon flight?");
+            let mut list = vec![idx(&ix, "c3"), idx(&ix, "e0"), idx(&ix, "c1")];
+            given_new(&ix, &qc, &mut list);
+            assert_eq!(ids(&ix, &list), vec!["c1", "c3", "e0"]);
+        }
+    }
+
+    #[test]
+    fn given_new_role_gate_matches_variant() {
+        let ix = ix_of(&[s("n", vec![
+            t("n0", "Caroline", "I adopted a dog named Biscuit."),
+            t("n1", "Melanie", "Biscuit the dog is adorable."),
+        ])]);
+        let qc = query_cues(&ix, "Biscuit dog?");
+        let mut list = vec![idx(&ix, "n1"), idx(&ix, "n0")];
+        let moved = given_new(&ix, &qc, &mut list);
+        assert_eq!(moved, !GIVEN_NEW_CHAT_ROLES_ONLY);
+    }
+
+    fn haystack_two_openers() -> Vec<Session> {
+        vec![
+            s("a", vec![
+                t("a0", "user", "My new camera is a Sony A7 and I shoot street photos."),
+                t("a1", "assistant", "Nice choice for street work."),
+                t("a2", "user", "The Sony camera battery dies fast though."),
+            ]),
+            s("b", vec![
+                t("b0", "user", "Let's talk about gardening tomatoes."),
+                t("b1", "user", "My Sony camera takes great tomato shots."),
+            ]),
+            s("c", vec![
+                t("c0", "user", "The Sony camera I keep in the bag is an A7."),
+            ]),
+        ]
+    }
+
+    #[test]
+    fn session_opener_lift_moves_cross_session_opener() {
+        let ix = ix_of(&haystack());
+        let qc = query_cues(&ix, "Which Sony camera do I have?");
+        // rank 1 is b1, not an opener. a0 opens a different session, sits in the window, and covers.
+        let mut list = vec![idx(&ix, "b1"), idx(&ix, "a0"), idx(&ix, "a2")];
+        assert!(session_opener_lift(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a0", "b1", "a2"]);
+    }
+
+    #[test]
+    fn session_opener_lift_holds_when_opener_lacks_a_rank1_cue() {
+        let ix = ix_of(&haystack());
+        // rank 1 (a2) matches "battery"; openers a0 and b0 do not carry it.
+        let qc = query_cues(&ix, "How is the Sony camera battery?");
+        let mut list = vec![idx(&ix, "a2"), idx(&ix, "a0"), idx(&ix, "b0")];
+        assert!(!session_opener_lift(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a2", "a0", "b0"]);
+    }
+
+    #[test]
+    fn session_opener_lift_role_gate() {
+        let ix = ix_of(&[s("n", vec![
+            t("n0", "Caroline", "I adopted a dog named Biscuit."),
+            t("n1", "Melanie", "Biscuit the dog is adorable."),
+        ]), s("p", vec![
+            t("p0", "user", "Biscuit the dog lives here."),
+        ])]);
+        let qc = query_cues(&ix, "Biscuit dog?");
+        let mut list = vec![idx(&ix, "n1"), idx(&ix, "p0")];
+        assert!(!session_opener_lift(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["n1", "p0"]);
+    }
+
+    #[test]
+    fn session_opener_lift_skips_when_rank1_is_an_opener() {
+        let ix = ix_of(&haystack());
+        let qc = query_cues(&ix, "Which Sony camera do I have?");
+        let mut list = vec![idx(&ix, "a0"), idx(&ix, "b1")];
+        assert!(!session_opener_lift(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a0", "b1"]);
+    }
+
+    #[test]
+    fn session_opener_lift_respects_top5_window() {
+        let ix = ix_of(&haystack());
+        let qc = query_cues(&ix, "Which Sony camera do I have?");
+        let (a0, a1, a2, b0, b1) = (idx(&ix, "a0"), idx(&ix, "a1"), idx(&ix, "a2"), idx(&ix, "b0"), idx(&ix, "b1"));
+        // a0 sits at slot 6, outside the window (a1 repeated only to pad the list).
+        let mut list = vec![b1, a1, a2, b0, a1, a0];
+        let before = list.clone();
+        assert!(!session_opener_lift(&ix, &qc, &mut list));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn session_opener_lift_picks_first_covering_opener_in_rank_order() {
+        let ix = ix_of(&haystack_two_openers());
+        let qc = query_cues(&ix, "Which Sony camera do I have?");
+        let (b1, a0, c0) = (idx(&ix, "b1"), idx(&ix, "a0"), idx(&ix, "c0"));
+        // a0 and c0 both open a session and cover b1's cues; the earlier rank wins.
+        let mut list = vec![b1, a0, c0];
+        assert!(session_opener_lift(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a0", "b1", "c0"]);
+        let mut list = vec![b1, c0, a0];
+        assert!(session_opener_lift(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["c0", "b1", "a0"]);
+    }
+
+    #[test]
+    fn session_opener_lift_is_deterministic_under_shuffled_sessions() {
+        let h = haystack();
+        let mut rev = h.clone();
+        rev.reverse();
+        for hs in [h, rev] {
+            let ix = ix_of(&hs);
+            let qc = query_cues(&ix, "Which Sony camera do I have?");
+            let mut list = vec![idx(&ix, "b1"), idx(&ix, "a2"), idx(&ix, "a0")];
+            session_opener_lift(&ix, &qc, &mut list);
+            assert_eq!(ids(&ix, &list), vec!["a0", "b1", "a2"]);
+        }
+    }
+
+    #[test]
+    fn rank_is_identical_across_repeated_calls() {
+        let mk = || RankRequest {
+            sessions: haystack(),
+            queries: vec![Query { text: "Which Sony camera do I have?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let a = rank(&mk());
+        let b = rank(&mk());
+        let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
+        let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
+        assert_eq!(ta, tb);
     }
 }
