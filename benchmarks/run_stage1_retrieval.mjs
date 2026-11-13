@@ -140,6 +140,20 @@ function ingestLongMemEval(item) {
   return { sessions, query };
 }
 
+// Labels stay on this side of the worker. Turn ids match ingestLongMemEval.
+function goldAnswerTurnIds(item) {
+  const ids = [];
+  const sessions = item.haystack_sessions || [];
+  for (let i = 0; i < sessions.length; i++) {
+    const sid = String(item.haystack_session_ids[i]);
+    const sess = sessions[i] || [];
+    for (let j = 0; j < sess.length; j++) {
+      if (sess[j] && sess[j].has_answer === true) ids.push(`${sid}#${j}`);
+    }
+  }
+  return ids;
+}
+
 function ingestLoCoMo(conv) {
   const c = conv.conversation;
   const sessions = [];
@@ -210,8 +224,9 @@ async function runLongMemEval(params, quiet = false) {
   if (!LME_DATA) LME_DATA = JSON.parse(readFileSync('benchmarks/data/longmemeval_s_cleaned.json', 'utf8'));
   const data = LME_DATA.slice(0, LIMIT);
   const buckets = {};
-  const all = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 };
-  const nonAbs = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 };
+  const blankLme = () => ({ n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0, t1: 0, t5: 0, fires: 0 });
+  const all = blankLme();
+  const nonAbs = blankLme();
   const lat = [];
   let sessionsSeen = 0, turnsSeen = 0;
   for (const item of data) {
@@ -221,6 +236,9 @@ async function runLongMemEval(params, quiet = false) {
     lat.push(performance.now() - t0);
     sessionsSeen += res.sessions_indexed; turnsSeen += res.turns_indexed;
     const ids = res.results[0].sessions.map(s => s.id);
+    const turnIds = res.results[0].turns.map(t => t.id);
+    const goldTurns = goldAnswerTurnIds(item);
+    const fired = res.results[0].suffix_automaton_fired === true;
 
     const gold = new Set(item.answer_session_ids || []);
     const type = item.question_type;
@@ -232,10 +250,14 @@ async function runLongMemEval(params, quiet = false) {
       all5: gold.size > 0 && [...gold].every(g => ids.slice(0, 5).includes(g)),
       all10: gold.size > 0 && [...gold].every(g => ids.slice(0, 10).includes(g)),
       ndcg10: ndcg(ids, gold, 10),
+      t1: goldTurns.some(g => turnIds.slice(0, 1).includes(g)),
+      t5: goldTurns.some(g => turnIds.slice(0, 5).includes(g)),
+      fires: fired ? 1 : 0,
     };
-    for (const acc of [all, isAbs ? null : nonAbs, (buckets[type] ??= { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 })]) {
+    for (const acc of [all, isAbs ? null : nonAbs, (buckets[type] ??= blankLme())]) {
       if (!acc) continue;
       acc.n++; acc.r1 += m.r1; acc.r5 += m.r5; acc.r10 += m.r10; acc.all5 += m.all5; acc.all10 += m.all10; acc.ndcg10 += m.ndcg10;
+      acc.t1 += m.t1; acc.t5 += m.t5; acc.fires += m.fires;
     }
   }
   if (!quiet) {
@@ -248,13 +270,16 @@ async function runLongMemEval(params, quiet = false) {
     console.log(`  RecallAny@1:  ${pct(nonAbs.r1, nonAbs.n)}%`);
     console.log(`  RecallAny@5:  ${pct(nonAbs.r5, nonAbs.n)}%`);
     console.log(`  RecallAny@10: ${pct(nonAbs.r10, nonAbs.n)}%`);
+    console.log(`  Turn Any@1:   ${nonAbs.t1}/${nonAbs.n} (${pct(nonAbs.t1, nonAbs.n)}%)`);
+    console.log(`  Turn Any@5:   ${nonAbs.t5}/${nonAbs.n} (${pct(nonAbs.t5, nonAbs.n)}%)`);
+    console.log(`  Suffix automaton fires: ${nonAbs.fires}/${nonAbs.n} non-abstention, ${all.fires}/${all.n} all`);
 
     console.log(`\n[All 500 questions (includes 30 abstentions, recall_any)]`);
     console.log(`  RecallAny@1:  ${pct(all.r1, all.n)}% | RecallAny@5: ${pct(all.r5, all.n)}% | RecallAny@10: ${pct(all.r10, all.n)}% | RecallAll@5: ${pct(all.all5, all.n)}% | NDCG@10: ${(all.ndcg10 / all.n).toFixed(4)}`);
 
     console.log(`\nQuestion Type Breakdown (Non-Abstention at same k):`);
     for (const [t, s] of Object.entries(buckets)) {
-      console.log(`  ${t.padEnd(26)} R@5 ${pct(s.r5, s.n).padStart(6)}% | R@10 ${pct(s.r10, s.n).padStart(6)}% | RecallAll@5 ${pct(s.all5, s.n).padStart(6)}% | NDCG@10 ${(s.ndcg10 / s.n).toFixed(3)} (${s.n})`);
+      console.log(`  ${t.padEnd(26)} R@1 ${pct(s.r1, s.n).padStart(6)}% (${s.r1}/${s.n}) | R@5 ${pct(s.r5, s.n).padStart(6)}% | R@10 ${pct(s.r10, s.n).padStart(6)}% | RecallAll@5 ${pct(s.all5, s.n).padStart(6)}% | NDCG@10 ${(s.ndcg10 / s.n).toFixed(3)} | Turn Any@1 ${s.t1}/${s.n} Any@5 ${s.t5}/${s.n} | fires ${s.fires}/${s.n}`);
     }
     console.log(`\nLatency per question: avg ${(lat.reduce((a, b) => a + b, 0) / lat.length).toFixed(2)} ms | p50 ${pctile(lat, 0.5).toFixed(2)} ms | p95 ${pctile(lat, 0.95).toFixed(2)} ms`);
   }
@@ -266,6 +291,9 @@ async function runLongMemEval(params, quiet = false) {
     recall_all_r5: Number(pct(a.all5, a.n)),
     recall_all_r10: Number(pct(a.all10, a.n)),
     ndcg_10: Number((a.ndcg10 / a.n).toFixed(4)),
+    turn_any_at_1: a.t1,
+    turn_any_at_5: a.t5,
+    suffix_automaton_fires: a.fires,
   });
   return {
     official_470_non_abs: formatLme(nonAbs),
@@ -285,7 +313,7 @@ async function runLoCoMo(params, quiet = false, convList = null) {
     else convs = LOCOMO_DATA;
   }
   const names = { 1: 'Multi-Hop', 2: 'Temporal', 3: 'Open-Domain', 4: 'Single-Hop', 5: 'Adversarial' };
-  const blank = () => ({ n: 0, noEvidence: 0, sR1: 0, sR5: 0, tR1: 0, tR5: 0, tR10: 0, softR1: 0, softR5: 0, fracR5: 0 });
+  const blank = () => ({ n: 0, noEvidence: 0, sR1: 0, sR5: 0, tR1: 0, tR5: 0, tR10: 0, softR1: 0, softR5: 0, fracR5: 0, fires: 0 });
   const cats = {}; const core = blank(); const total = blank();
   const lat = [];
   let qCount = 0;
@@ -329,10 +357,11 @@ async function runLoCoMo(params, quiet = false, convList = null) {
         softR1: t.slice(0, 1).some(i => softGold.has(i)),
         softR5: t.slice(0, 5).some(i => softGold.has(i)),
         fracR5,
+        fires: r.suffix_automaton_fired === true ? 1 : 0,
       };
       for (const a of accs) {
         a.n++;
-        for (const k of ['sR1', 'sR5', 'tR1', 'tR5', 'tR10', 'softR1', 'softR5', 'fracR5']) a[k] += m[k];
+        for (const k of ['sR1', 'sR5', 'tR1', 'tR5', 'tR10', 'softR1', 'softR5', 'fracR5', 'fires']) a[k] += m[k];
       }
     });
   }
@@ -341,7 +370,7 @@ async function runLoCoMo(params, quiet = false, convList = null) {
     console.log(`\n--- LoCoMo-10 (locomo10.json) | ${convs.length} dialogues${splitLabel} | ranking 100% in Rust kernel ---`);
     console.log('Note: "Soft" turn retrieval defines a match as the gold turn or ±1 adjacent turn in the same exchange.');
     console.log('Note: Cat 5 (Adversarial) measures finding the source passage for the adversarial question, not resisting the false premise.');
-    const line = (label, a) => console.log(`${label.padEnd(28)} Session [R@1: ${pct(a.sR1, a.n)}%, R@5: ${pct(a.sR5, a.n)}%] | Turn Exact R@5: ${pct(a.tR5, a.n)}% | Turn Soft R@5: ${pct(a.softR5, a.n)}% | Exact [R@1: ${pct(a.tR1, a.n)}%, R@10: ${pct(a.tR10, a.n)}%] (${a.n} scored${a.noEvidence ? `, ${a.noEvidence} without evidence excluded` : ''})`);
+    const line = (label, a) => console.log(`${label.padEnd(28)} Session [R@1: ${pct(a.sR1, a.n)}% (${a.sR1}/${a.n}), R@5: ${pct(a.sR5, a.n)}%] | Turn Exact R@5: ${pct(a.tR5, a.n)}% (${a.tR5}/${a.n}) | Turn Soft R@5: ${pct(a.softR5, a.n)}% | Exact [R@1: ${pct(a.tR1, a.n)}% (${a.tR1}/${a.n}), R@10: ${pct(a.tR10, a.n)}%] | fires ${a.fires}/${a.n} (${a.n} scored${a.noEvidence ? `, ${a.noEvidence} without evidence excluded` : ''})`);
     line('CORE (Cat 1-4)', core);
     line('ALL (Cat 1-5)', total);
     for (const c of [1, 2, 3, 4, 5]) if (cats[c]) line(`  Cat ${c} ${names[c]}`, cats[c]);
@@ -357,6 +386,10 @@ async function runLoCoMo(params, quiet = false, convList = null) {
     turn_exact_r10: Number(pct(a.tR10, a.n)),
     turn_soft_r1: Number(pct(a.softR1, a.n)),
     turn_soft_r5: Number(pct(a.softR5, a.n)),
+    suffix_automaton_fires: a.fires,
+    turn_exact_r1_count: a.tR1,
+    turn_exact_r5_count: a.tR5,
+    session_r1_count: a.sR1,
   });
 
   return {

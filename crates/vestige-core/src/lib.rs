@@ -120,6 +120,8 @@ pub mod neuroscience;
 /// Audited on LongMemEval_S (98.60% R@5) and LoCoMo-10 (91.93% Session R@5 / 75.46% Turn Soft R@5).
 #[allow(clippy::all)]
 pub mod retrieval;
+mod suffix_automaton;
+mod suffix_automaton_guard;
 
 // ============================================================================
 // PUBLIC API RE-EXPORTS

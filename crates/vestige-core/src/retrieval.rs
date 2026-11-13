@@ -231,6 +231,8 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// This query's tail order changed because of the suffix-automaton ballot.
+    pub suffix_automaton_fired: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1876,6 +1878,8 @@ struct TurnIx {
     /// A capitalized word of two or more letters that is not sentence-initial.
     form_midcap: bool,
     raw_links: Vec<TurnLink>,
+    /// Case-folded exact token ids, in order. No stems and no word list.
+    exact_run: Vec<u32>,
 }
 
 struct Stats {
@@ -1964,6 +1968,8 @@ struct Index {
     cue_vocab: HashMap<String, u32>,
     /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
     role_cues: HashSet<u32>,
+    /// Exact-token vocabulary for the suffix automaton. Ids are first-seen order.
+    exact_vocab: HashMap<String, u32>,
 }
 
 /// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
@@ -2979,6 +2985,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
     let mut turn_prose_cache: Vec<String> = Vec::new();
     let mut cue_vocab: HashMap<String, u32> = HashMap::new();
+    let mut exact_vocab: HashMap<String, u32> = HashMap::new();
     let mut turn_cues: Vec<Vec<u32>> = Vec::new();
     let mut role_cues: HashSet<u32> = HashSet::new();
     let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
@@ -3308,6 +3315,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             turn_prose_cache.push(prose_body.to_string());
             turn_cues.push(intern_cues(&t.content, &mut cue_vocab));
             role_cues.extend(intern_cues(&t.role, &mut cue_vocab));
+            let exact_run = crate::suffix_automaton::intern_exact_tokens(&mut exact_vocab, &t.content);
             members.push(turn_idx);
             turns.push(TurnIx {
                 session: si,
@@ -3350,6 +3358,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
                 raw_links: t.links.clone(),
+                exact_run,
             });
         }
         for d in s_doms {
@@ -3810,6 +3819,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         turn_cues,
         cue_vocab,
         role_cues,
+        exact_vocab,
     }
 }
 
@@ -5744,7 +5754,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
-    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    let suffix_automaton_fired = rank1_gatekeeper_keep_rsb_head(
+        ix,
+        &q.text,
+        &mut final_turn_indices,
+        &t_scene,
+        !it.is_event_sequence,
+    );
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5754,7 +5770,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult { intent: plan.intent, sessions, turns, standing_rules, suffix_automaton_fired }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -6449,9 +6465,17 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
-/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
-/// grow the window. The pool is that window, so its size is the caller's k.
-fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+/// Rank-1 gatekeeper. Runs after RSB. Reorders the pool it is given. It does
+/// not grow that pool. `exact_run` is the longest exact token run of each turn
+/// against the query, indexed by turn. A longer run is one equal ballot.
+/// Equal lengths cast no ballot.
+fn rank1_gatekeeper(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+    exact_run: Option<&[u32]>,
+) {
     let n = list.len();
     if n < 2 {
         return;
@@ -6492,6 +6516,15 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
                     margin -= 1;
                 }
             }
+            if let Some(runs) = exact_run {
+                let ra = runs.get(ta).copied().unwrap_or(0);
+                let rb = runs.get(tb).copied().unwrap_or(0);
+                match ra.cmp(&rb) {
+                    std::cmp::Ordering::Greater => margin += 1,
+                    std::cmp::Ordering::Less => margin -= 1,
+                    std::cmp::Ordering::Equal => {}
+                }
+            }
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -6511,19 +6544,77 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     *list = turned;
 }
 
-/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
-/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
-/// they do on a full window. The head is not a candidate for demotion.
-fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+/// Slot 0 is the RSB head. The gatekeeper reorders only the tail.
+///
+/// The tail pool also holds up to `SUFFIX_BELOW_WINDOW` turns that are not in
+/// the window and whose exact token run with the query is strictly longer
+/// than the shortest run already in the tail. Those seats are the longest
+/// such runs, ties broken by the existing scene score then turn index. The
+/// returned list keeps its length, so an outside turn enters only by taking
+/// a tail seat. The head is not a candidate. `expand_below` is false for an
+/// event sequence: that selector already keeps one turn per session, and a
+/// longer echo of the question would stack that session back into the window.
+fn rank1_gatekeeper_keep_rsb_head(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+    expand_below: bool,
+) -> bool {
     if list.len() < 2 {
-        return;
+        return false;
     }
     let head = list[0];
-    let mut tail = list[1..].to_vec();
-    rank1_gatekeeper(ix, query, &mut tail, t_scene);
+    let tail = list[1..].to_vec();
+    let tail_len = tail.len();
+    let mut baseline = tail.clone();
+    rank1_gatekeeper(ix, query, &mut baseline, t_scene, None);
+
+    let q_ids = crate::suffix_automaton::query_exact_ids(&ix.exact_vocab, query);
+    let sam = crate::suffix_automaton::SuffixAutomaton::build(&q_ids);
+    let mut runs = vec![0u32; ix.turns.len()];
+    let mut min_tail = u32::MAX;
+    for &ti in &tail {
+        let len = sam.longest_match(&ix.turns[ti].exact_run);
+        runs[ti] = len;
+        min_tail = min_tail.min(len);
+    }
+    let mut pool = tail;
+    if expand_below {
+        let mut in_list = vec![false; ix.turns.len()];
+        for &ti in list.iter() {
+            if let Some(slot) = in_list.get_mut(ti) {
+                *slot = true;
+            }
+        }
+        let mut extras: Vec<(u32, f32, usize)> = Vec::new();
+        for ti in 0..ix.turns.len() {
+            if in_list[ti] {
+                continue;
+            }
+            let run = &ix.turns[ti].exact_run;
+            if (run.len() as u32) <= min_tail {
+                continue;
+            }
+            let len = sam.longest_match(run);
+            runs[ti] = len;
+            if len > min_tail {
+                let scene = t_scene.get(ti).copied().unwrap_or(0.0);
+                extras.push((len, scene, ti));
+            }
+        }
+        extras.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.total_cmp(&a.1)).then(a.2.cmp(&b.2)));
+        for (_, _, ti) in extras.into_iter().take(crate::suffix_automaton::below_window()) {
+            pool.push(ti);
+        }
+    }
+    rank1_gatekeeper(ix, query, &mut pool, t_scene, Some(&runs));
+    pool.truncate(tail_len);
+    let fired = pool != baseline;
     list.clear();
     list.push(head);
-    list.extend(tail);
+    list.extend(pool);
+    fired
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8305,7 +8396,7 @@ mod recall_cue_tests {
         scene[old] = 3.0;
         scene[fresh] = 1.0;
         let mut list = vec![old, fresh];
-        rank1_gatekeeper(&ix, "which camera", &mut list, &scene);
+        rank1_gatekeeper(&ix, "which camera", &mut list, &scene, None);
         assert_eq!(list[0], fresh, "a superseded turn cannot hold rank 1");
     }
 
@@ -8322,7 +8413,7 @@ mod recall_cue_tests {
         assert!(!ix.turns[plain].form_clock);
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, clock];
-        rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
+        rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene, None);
         assert_eq!(list[0], clock);
     }
 
@@ -8339,7 +8430,7 @@ mod recall_cue_tests {
         let clock = idx(&ix, "clock");
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, other, clock];
-        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene);
+        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene, true);
         assert_eq!(list, vec![plain, clock, other]);
     }
 
@@ -8361,7 +8452,7 @@ mod recall_cue_tests {
         scene[old] = 3.0;
         scene[fresh] = 1.0;
         let mut list = vec![head, old, fresh];
-        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene);
+        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene, true);
         assert_eq!(list[0], head, "slot 1 stays the RSB head");
         assert_eq!(list[1], fresh, "ATMS still demotes a superseded turn inside the tail");
     }
@@ -8379,5 +8470,61 @@ mod recall_cue_tests {
         let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
         let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ta, tb);
+        assert_eq!(a.results[0].suffix_automaton_fired, b.results[0].suffix_automaton_fired);
+    }
+
+    #[test]
+    fn suffix_automaton_keeps_slot_zero_and_fires_on_a_longer_exact_run() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "The policy stands."),
+            t("weak", "user", "Noted."),
+            t("echo", "user", "Ship the crate by Friday using the side gate."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let weak = idx(&ix, "weak");
+        let echo = idx(&ix, "echo");
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[head] = 1.0;
+        scene[weak] = 1.0;
+        scene[echo] = 1.0;
+        let query = "Ship the crate by Friday using the side gate.";
+        let mut list = vec![head, weak];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, query, &mut list, &scene, true);
+        assert_eq!(list[0], head, "slot 0 stays the RSB head");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[1], echo, "the longer exact run takes the tail seat, got {:?}", ids(&ix, &list));
+        assert!(fired);
+        let mut again = vec![head, weak];
+        let fired_again = rank1_gatekeeper_keep_rsb_head(&ix, query, &mut again, &scene, true);
+        assert_eq!(again, list);
+        assert_eq!(fired_again, fired);
+    }
+
+    #[test]
+    fn suffix_automaton_does_not_let_one_vote_override_a_higher_scene() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "The policy stands."),
+            t("weak", "user", "Noted."),
+            t("echo", "user", "Ship the crate by Friday using the side gate."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let weak = idx(&ix, "weak");
+        let echo = idx(&ix, "echo");
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 1.0;
+        scene[weak] = 2.0;
+        scene[echo] = 1.0;
+        let mut list = vec![head, weak];
+        let fired = rank1_gatekeeper_keep_rsb_head(
+            &ix,
+            "Ship the crate by Friday using the side gate.",
+            &mut list,
+            &scene,
+            true,
+        );
+        assert_eq!(list, vec![head, weak], "a longer run is one vote, not a veto");
+        assert!(!fired);
     }
 }
