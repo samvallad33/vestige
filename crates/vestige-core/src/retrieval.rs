@@ -5521,7 +5521,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     0.0
                 };
 
-                let gain = sc * (1.0 + 0.60 * uncovered_ratio) * diversity_factor;
+                let s_rank = final_session_indices.iter().take(5).position(|&s| s == t_sess);
+                let couple = s_rank.map(|r| 1.0 + 0.50 / (1.0 + r as f32)).unwrap_or(1.0);
+                let gain = sc * (1.0 + 0.60 * uncovered_ratio) * diversity_factor * couple;
                 let stab = ix.turns[ti].stability;
                 let take = match best_turn {
                     None => true,
