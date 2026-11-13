@@ -6558,13 +6558,19 @@ fn kemeny_pool(
                     margin -= 1;
                 }
             }
+            // The factor ballot answers whether a turn from below the cut
+            // should take a tail seat. It does not reshuffle two turns the
+            // selector already kept. v3 did that, fired on 462/470 non-abstention
+            // LME questions, and the tail got worse.
             if let Some(belief) = beliefs {
-                let ba = belief.get(a).copied().unwrap_or(0.5);
-                let bb = belief.get(b).copied().unwrap_or(0.5);
-                match ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal) {
-                    std::cmp::Ordering::Greater => margin += 1,
-                    std::cmp::Ordering::Less => margin -= 1,
-                    std::cmp::Ordering::Equal => {}
+                if a >= inside || b >= inside {
+                    let ba = belief.get(a).copied().unwrap_or(0.5);
+                    let bb = belief.get(b).copied().unwrap_or(0.5);
+                    match ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal) {
+                        std::cmp::Ordering::Greater => margin += 1,
+                        std::cmp::Ordering::Less => margin -= 1,
+                        std::cmp::Ordering::Equal => {}
+                    }
                 }
             }
             net[a][b] = margin;
@@ -6743,17 +6749,9 @@ fn structural_beliefs(ix: &Index, clamp: Option<usize>, pool: &[usize]) -> Vec<f
     for &ti in pool {
         consider(ti);
     }
-    for members in &ix.session_turns {
-        let mut in_pool: Vec<usize> = Vec::new();
-        for &ti in members {
-            if ti < loc.len() && loc[ti] >= 0 {
-                in_pool.push(loc[ti] as usize);
-            }
-        }
-        for w in in_pool.windows(2) {
-            upsert(w[1] as i64, w[0] as i64, 0, true);
-        }
-    }
+    // No successive-turn time factor. A later-preferred chain over the tail is
+    // a second recency sort. Scene already voted on recency when it built the
+    // window, and v1–v3 showed that chain firing on almost every query.
 
     let j = FACTOR_COUPLING;
     let pos = j.exp();
@@ -8857,6 +8855,25 @@ mod recall_cue_tests {
         assert_eq!(list, vec![head, earlier]);
         assert!(!fired);
         assert_ne!(list[1], later);
+    }
+
+    #[test]
+    fn factor_graph_does_not_reshuffle_two_turns_already_in_the_window() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        ix.turns[later].exact_edges.push((1, head));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, earlier, later];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 3, true);
+        assert_eq!(list, vec![head, earlier, later]);
+        assert!(!fired);
     }
 
     #[test]
