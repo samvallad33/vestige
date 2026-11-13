@@ -6534,10 +6534,15 @@ fn kemeny_pool(
                     std::cmp::Ordering::Equal => {}
                 }
             }
-            match degree[a].cmp(&degree[b]) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
+            // Degree counts the same stored edges the factor marginal counts.
+            // Across the cut those edges get one ballot, the marginal. Inside
+            // the window degree stays the ballot the gatekeeper already had.
+            if a < inside && b < inside {
+                match degree[a].cmp(&degree[b]) {
+                    std::cmp::Ordering::Greater => margin += 1,
+                    std::cmp::Ordering::Less => margin -= 1,
+                    std::cmp::Ordering::Equal => {}
+                }
             }
             let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
             let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
@@ -8873,6 +8878,29 @@ mod recall_cue_tests {
         let mut list = vec![head, earlier, later];
         let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 3, true);
         assert_eq!(list, vec![head, earlier, later]);
+        assert!(!fired);
+    }
+
+    #[test]
+    fn factor_graph_does_not_count_one_edge_twice_across_the_cut() {
+        let sessions = vec![
+            s("s", vec![
+                t("head", "user", "Alpha signal stays on the record."),
+                t("earlier", "user", "Beta signal stays on the record."),
+            ]),
+            s("other", vec![
+                t("outsider", "user", "Gamma signal stays on the record."),
+            ]),
+        ];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let outsider = idx(&ix, "outsider");
+        ix.turns[outsider].exact_edges.push((1, earlier));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list, vec![head, earlier]);
         assert!(!fired);
     }
 
