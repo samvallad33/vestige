@@ -51,7 +51,8 @@ mod guard;
 use guard::{
     STEINER_BELOW_CAP, STEINER_DIGIT_MIN_CHARS, STEINER_EXACT_MAX_NODES, STEINER_EXACT_MAX_TERMINALS,
     STEINER_HUB_DF_MAX, STEINER_KEEP_SIGNAL_MATE, STEINER_KEEP_SOLE_SESSION, STEINER_MAX_BRIDGES,
-    STEINER_NEW_SESSION, STEINER_REPLACE_SIBLING, STEINER_SESSION_SUCCESSOR, STEINER_STORED_PAIR,
+    STEINER_BOUNDARY_SLOT, STEINER_NEW_SESSION, STEINER_REPLACE_SIBLING, STEINER_SESSION_SUCCESSOR,
+    STEINER_STORED_PAIR,
     STEINER_TOKEN_DF_MIN, STEINER_UNIQUE_PAIR,
 };
 use std::collections::{HashMap, HashSet};
@@ -515,21 +516,28 @@ fn is_session_successor(ix: &super::Index, bridge: usize, window: &[usize]) -> b
     max_mate.is_some_and(|mate| bpos == mate + 1)
 }
 
-/// Latest top-5 slot of the bridge's session, behind the frozen head.
-/// Another turn of that session has to remain, so the session is not dropped.
+/// Latest slot of the bridge's session in `1..STEINER_BOUNDARY_SLOT`.
+/// Index 4 is the top-5 boundary and is not a slot the bridge can take.
+/// Another turn of that session has to sit in the top 5, so the session
+/// is not dropped. That other turn may be the head or the boundary.
 fn sibling_slot(ix: &super::Index, list: &[usize], bridge: usize) -> Option<usize> {
     let session = ix.turns[bridge].session;
-    let limit = list.len().min(5);
-    let mut members = Vec::new();
-    for i in 0..limit {
-        if ix.turns[list[i]].session == session {
-            members.push(i);
+    let top = list.len().min(5);
+    let mut in_top = 0usize;
+    let mut interior: Option<usize> = None;
+    for i in 0..top {
+        if ix.turns[list[i]].session != session {
+            continue;
+        }
+        in_top += 1;
+        if i >= 1 && i < STEINER_BOUNDARY_SLOT {
+            interior = Some(i);
         }
     }
-    if members.len() < 2 {
+    if in_top < 2 {
         return None;
     }
-    members.into_iter().filter(|&i| i >= 1).next_back()
+    interior
 }
 
 fn pair_signal(ix: &super::Index, a: usize, b: usize) -> bool {

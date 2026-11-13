@@ -109,11 +109,18 @@ pub const STEINER_STORED_PAIR: bool = true;
 /// over unseen turns of that session is not the successor.
 pub const STEINER_SESSION_SUCCESSOR: bool = true;
 
-/// The successor takes the latest top-5 slot of its own session behind
-/// the frozen head. Slot 0 is not a slot it can take. Inserting at
-/// 1..4 would instead drop whichever turn sits at index 4, including a
-/// turn from a session the bridge does not extend.
+/// The successor takes the latest interior slot of its own session.
+/// Slot 0 is not a slot it can take. Inserting at 1..4 would instead
+/// drop whichever turn sits at index 4, including a turn from a session
+/// the bridge does not extend.
 pub const STEINER_REPLACE_SIBLING: bool = true;
+
+/// Top-5 boundary. Slots the bridge may take are `1..STEINER_BOUNDARY_SLOT`.
+/// Index 4 is the last member of the top 5 on a k=10 list. v7 replaced
+/// that slot on 26 LoCoMo fires and moved core turn R@5 from 1067/1536
+/// to 1068/1536, with Multi-Hop staying 138/282: one gain and one loss,
+/// and the loss was this boundary. The boundary stays.
+pub const STEINER_BOUNDARY_SLOT: usize = 4;
 
 /// Non-terminal Steiner nodes seated per query.
 /// One node, the one nearest the frozen head on the tree.

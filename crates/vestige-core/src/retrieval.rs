@@ -8624,10 +8624,35 @@ mod recall_cue_tests {
         let mut list = vec![head, b, c, d, b2];
         assert!(steiner_bridge::apply(&ix, &mut list, 5, &scene), "{:?}", ids(&ix, &list));
         assert_eq!(list[0], head);
-        assert_eq!(list[4], bridge, "the successor takes the latest sibling slot");
-        assert!(!list.contains(&b2));
-        assert!(list.contains(&b));
+        assert_eq!(list[1], bridge, "the successor takes the interior sibling slot");
+        assert_eq!(list[4], b2, "the top-5 boundary stays");
+        assert!(!list.contains(&b));
         assert_eq!(list.len(), 5);
+    }
+
+    #[test]
+    fn steiner_bridge_does_not_take_the_top5_boundary() {
+        let mut ix = ix_of(&[
+            s("a", vec![t("head", "user", "The battery died after the show.")]),
+            s("b", vec![
+                t("b2", "user", "The drawer also holds tape."),
+                t("bridge", "user", "A notebook is in the bag."),
+            ]),
+            s("c", vec![t("c", "user", "The garden needs water tomorrow.")]),
+            s("d", vec![t("d", "user", "Oat milk is on the counter.")]),
+            s("e", vec![t("e", "user", "The train leaves at noon.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let b2 = idx(&ix, "b2");
+        let bridge = idx(&ix, "bridge");
+        let c = idx(&ix, "c");
+        ix.turns[bridge].exact_edges.push((2, b2));
+        ix.turns[bridge].exact_edges.push((2, c));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, c, idx(&ix, "d"), idx(&ix, "e"), b2];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 5, &scene));
+        assert_eq!(list, before);
     }
 
     #[test]
