@@ -1861,6 +1861,9 @@ struct TurnIx {
     answers: Option<usize>,
     /// Caller & ingest-time RSB edges resolved to `(degree, target)` — strictly backward.
     exact_edges: Vec<(u32, usize)>,
+    /// SalienceJoin v2: earlier standing-policy turns this later turn points at.
+    /// Promoted only when that policy is a standing rule that fired for the query.
+    policy_backlinks: Vec<usize>,
     /// Backward state-revision / contradiction edges (`t_new -> t_old`).
     supersedes_turns: Vec<usize>,
     stability: f32,
@@ -3331,6 +3334,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 is_initiative,
                 answers: None,
                 exact_edges: Vec::new(),
+                policy_backlinks: Vec::new(),
                 supersedes_turns: Vec::new(),
                 stability: t.stability,
                 raw_links: t.links.clone(),
@@ -3526,6 +3530,47 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                     }
                 }
                 break;
+            }
+        }
+    }
+
+    // 4. SalienceJoin. A later turn records a backward link to an earlier
+    //    standing policy in the same session, or in an earlier session that shares
+    //    the episode key. The link is session or episode identity, not a word match.
+    //    It is not a general exact edge and it does not write session_rsb_back.
+    //    v1's global winner seat raised a rule from a different batch. v3 does not
+    //    require the policy to match the query. Rank time seats it behind the
+    //    retrieved turn that points at it.
+    for si in 0..ns_count {
+        let members = &session_turns[si];
+        for (pos, &p_ti) in members.iter().enumerate() {
+            if !turns[p_ti].is_standing_policy {
+                continue;
+            }
+            for &t_ti in &members[pos + 1..] {
+                if !turns[t_ti].policy_backlinks.contains(&p_ti) {
+                    turns[t_ti].policy_backlinks.push(p_ti);
+                }
+            }
+        }
+    }
+    for si in 0..ns_count {
+        if session_ep_keys[si].is_empty() {
+            continue;
+        }
+        for sj in 0..si {
+            if session_ep_keys[sj] != session_ep_keys[si] {
+                continue;
+            }
+            for &p_ti in &session_turns[sj] {
+                if !turns[p_ti].is_standing_policy {
+                    continue;
+                }
+                for &t_ti in &session_turns[si] {
+                    if !turns[t_ti].policy_backlinks.contains(&p_ti) {
+                        turns[t_ti].policy_backlinks.push(p_ti);
+                    }
+                }
             }
         }
     }
@@ -4929,6 +4974,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // drop the standing-policy floor. Only count-snipers and event sequences do.
     let policy_blocked = it.sniper_how_many || it.is_event_sequence;
     let standing_rules = rank_standing_rules(ix, &plan, episodic_user_quote, &t_mask, k);
+    // Winner floor stays inside task_under_rules, including multi-hop task rules.
+    // v1 moved this seat outside that block and excluded multi-hop. Temporal queries
+    // then received a global policy seat and displaced gold. v2 does not do that.
     let (s_policy_floored, t_policy_floored) = if it.task_under_rules && !policy_blocked {
         let mut s_floored = raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
@@ -5675,6 +5723,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     session_opener_lift(ix, &q_cues, &mut final_turn_indices);
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
     hearsay(ix, &q_cues, &mut final_turn_indices);
+    // RSB v3: the retrieved turn is the symptom. Seat its structural cause
+    // immediately after it. The cause can share no words with the query.
+    // Never in front of the symptom, never from another episode.
+    if !it.is_event_sequence {
+        rsb_seat_behind(ix, &mut final_turn_indices, k);
+    }
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5891,6 +5945,59 @@ fn hearsay(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
         return true;
     }
     false
+}
+
+/// Nearest preceding self-contained turn in the same session. A follow-up is an
+/// assistant turn or a turn flagged anaphoric at ingest. The antecedent is the
+/// cause; it need not share words with the follow-up.
+fn rsb_antecedent(ix: &Index, ti: usize) -> Option<usize> {
+    let t = &ix.turns[ti];
+    if t.speaker != "assistant" && !t.anaphoric {
+        return None;
+    }
+    let members = &ix.session_turns[t.session];
+    let pos = members.iter().position(|&m| m == ti)?;
+    for &prev in members[..pos].iter().rev() {
+        let p = &ix.turns[prev];
+        if p.field == 0 && !p.anaphoric && !p.is_backchannel {
+            return Some(prev);
+        }
+    }
+    None
+}
+
+/// One structural cause for a retrieved symptom: the antecedent if this turn is
+/// a follow-up, otherwise the nearest earlier standing policy in the same episode.
+fn rsb_cause(ix: &Index, ti: usize) -> Option<usize> {
+    if let Some(ante) = rsb_antecedent(ix, ti) {
+        return Some(ante);
+    }
+    ix.turns[ti].policy_backlinks.last().copied()
+}
+
+/// Seat each cause immediately after the symptom that points at it. The symptom
+/// stays ahead. Causes already in the list are left where they are. The list
+/// stays length k.
+fn rsb_seat_behind(ix: &Index, list: &mut Vec<usize>, k: usize) {
+    if list.is_empty() || k == 0 {
+        return;
+    }
+    let snapshot = list.clone();
+    let mut planned: Vec<(usize, usize)> = Vec::new();
+    let mut seen = snapshot.clone();
+    for (i, &ti) in snapshot.iter().enumerate() {
+        let Some(cause) = rsb_cause(ix, ti) else { continue };
+        if seen.contains(&cause) {
+            continue;
+        }
+        seen.push(cause);
+        planned.push((i, cause));
+    }
+    for (i, cause) in planned.into_iter().rev() {
+        let Some(at) = list.iter().position(|&t| t == snapshot[i]) else { continue };
+        list.insert(at + 1, cause);
+    }
+    list.truncate(k);
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -7488,6 +7595,108 @@ mod recall_cue_tests {
             hearsay(&ix, &qc, &mut list);
             assert_eq!(ids(&ix, &list), vec!["b0", "a1", "a2"]);
         }
+    }
+
+    #[test]
+    fn salience_join_writes_a_backward_edge_from_a_later_turn_to_an_earlier_policy() {
+        let ix = ix_of(&[s("s", vec![
+            t("rule", "user", "Always write the answer in markdown tables."),
+            t("later", "user", "Please summarize today's notes."),
+        ])]);
+        let rule = idx(&ix, "rule");
+        let later = idx(&ix, "later");
+        assert!(ix.turns[rule].is_standing_policy, "the earlier turn should be a standing policy");
+        assert!(
+            ix.turns[later].policy_backlinks.contains(&rule),
+            "SalienceJoin should record a backward later->policy link, got {:?}",
+            ix.turns[later].policy_backlinks
+        );
+        assert!(
+            !ix.turns[rule].policy_backlinks.contains(&later),
+            "must not write a forward link"
+        );
+        assert!(
+            !ix.turns[later].exact_edges.iter().any(|&(_, target)| target == rule),
+            "v2 must not put the policy link on the general exact-edge list"
+        );
+    }
+
+    #[test]
+    fn salience_join_seats_a_fired_policy_when_a_later_turn_is_retrieved() {
+        let sessions = vec![
+            s("conv_s0", vec![
+                t("rule", "user", "Always write the answer in markdown tables."),
+                t("ack", "assistant", "I will follow that."),
+            ]),
+            s("conv_s1", vec![
+                t("later", "user", "Could you outline a backup routine?"),
+                t("reply", "assistant", "Here is the outline."),
+            ]),
+        ];
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "Could you outline a backup routine?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(ranked.results[0].intent.task_under_rules);
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|x| x.id.clone()).collect();
+        let later_at = ids.iter().position(|id| id == "later").expect("symptom retrieved");
+        let rule_at = ids.iter().position(|id| id == "rule").expect(&format!("cause missing, got {ids:?}"));
+        assert!(rule_at > later_at, "cause sits behind the symptom, got {ids:?}");
+    }
+
+    #[test]
+    fn salience_join_raises_a_policy_that_shares_no_words_with_the_query() {
+        let sessions = vec![
+            s("conv_s0", vec![
+                t("rule", "user", "Always write the answer in markdown tables."),
+            ]),
+            s("conv_s1", vec![
+                t("later", "user", "When did the soup boil?"),
+            ]),
+        ];
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "When did the soup boil?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert!(!ranked.results[0].intent.task_under_rules);
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|x| x.id.clone()).collect();
+        let later_at = ids.iter().position(|id| id == "later").expect("symptom retrieved");
+        let rule_at = ids.iter().position(|id| id == "rule").expect(&format!("zero-overlap cause missing, got {ids:?}"));
+        assert!(rule_at > later_at, "cause sits behind the symptom, got {ids:?}");
+    }
+
+    #[test]
+    fn salience_join_does_not_seat_a_policy_from_another_episode_on_a_temporal_question() {
+        let sessions = vec![
+            s("batch_a", vec![
+                t("gold", "user", "I reached 1200 in the emergency fund on June 5."),
+                t("reply", "assistant", "Reaching 1200 in the emergency fund on June 5 is a milestone."),
+            ]),
+            s("batch_b", vec![
+                t("rule", "user", "Always write the answer in markdown tables."),
+            ]),
+        ];
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query {
+                text: "How long after June 5 did the emergency fund get to 2000?".into(),
+                date: String::new(),
+            }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|x| x.id.clone()).collect();
+        assert!(
+            !ids.contains(&"rule".to_string()),
+            "a temporal question must not import a policy from another episode, got {ids:?}"
+        );
     }
 
     #[test]
