@@ -94,10 +94,14 @@ pub struct RankRequest {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Params {
+    /// Parsed so older requests still decode. The first stage does not read it.
+    /// Saturation is `Stats::k1`, the mean positive term weight of the bags being scored.
     pub k1: f32,
+    /// Parsed so older requests still decode. Length normalisation is `Stats::b`.
     pub b_user: f32,
+    /// Parsed so older requests still decode. Length normalisation is `Stats::b`.
     pub b_assistant: f32,
-    /// Length normalisation on assistant turns when the query attributes content to "you".
+    /// Parsed so older requests still decode. Length normalisation is `Stats::b`.
     pub b_assistant_attributed: f32,
     pub stem_weight: f32,
     pub hypernym_weight: f32,
@@ -1882,22 +1886,34 @@ struct Stats {
     n: f32,
     df: HashMap<u32, u32>,
     avg: [f32; 3],
+    /// Length-normalisation per field. Variance share of the second moment
+    /// of that field's lengths: 0 when every length is equal.
+    b: [f32; 3],
+    /// TF saturation. Mean of the positive term weights in these bags.
+    /// One, when the bags have no terms.
+    k1: f32,
 }
 
 fn stats_of(bags: &[Bag]) -> Stats {
     let mut df: HashMap<u32, u32> = HashMap::new();
     let mut sum = [0.0f32; 3];
+    let mut sum_sq = [0.0f32; 3];
     let mut cnt = [0.0f32; 3];
+    let mut tf_sum = 0.0f32;
+    let mut postings = 0.0f32;
     for b in bags {
         let mut seen: HashSet<u32> = HashSet::new();
         for f in 0..3 {
             for (&t, &v) in &b.tf[f] {
                 if v > 0.0 {
                     seen.insert(t);
+                    tf_sum += v;
+                    postings += 1.0;
                 }
             }
             if b.len[f] > 0.0 {
                 sum[f] += b.len[f];
+                sum_sq[f] += b.len[f] * b.len[f];
                 cnt[f] += 1.0;
             }
         }
@@ -1905,14 +1921,30 @@ fn stats_of(bags: &[Bag]) -> Stats {
             *df.entry(t).or_insert(0) += 1;
         }
     }
+    let avg = [
+        if cnt[0] > 0.0 { sum[0] / cnt[0] } else { 1.0 },
+        if cnt[1] > 0.0 { sum[1] / cnt[1] } else { 1.0 },
+        if cnt[2] > 0.0 { sum[2] / cnt[2] } else { 1.0 },
+    ];
+    let mut b = [0.0f32; 3];
+    for f in 0..3 {
+        if cnt[f] <= 0.0 {
+            continue;
+        }
+        let mean = avg[f];
+        let second = sum_sq[f] / cnt[f];
+        let var = (second - mean * mean).max(0.0);
+        let denom = var + mean * mean;
+        if denom > 0.0 {
+            b[f] = var / denom;
+        }
+    }
     Stats {
         n: bags.len() as f32,
         df,
-        avg: [
-            if cnt[0] > 0.0 { sum[0] / cnt[0] } else { 1.0 },
-            if cnt[1] > 0.0 { sum[1] / cnt[1] } else { 1.0 },
-            if cnt[2] > 0.0 { sum[2] / cnt[2] } else { 1.0 },
-        ],
+        avg,
+        b,
+        k1: if postings > 0.0 { tf_sum / postings } else { 1.0 },
     }
 }
 
@@ -4181,7 +4213,6 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
 
 struct Fields {
     w: [f32; 3],
-    b: [f32; 3],
 }
 
 /// 3-Field BM25F (`user`, `assistant`, `blip_caption`) with IDF power law, IDF-weighted
@@ -4207,11 +4238,11 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
             if tf <= 0.0 {
                 continue;
             }
-            let norm = 1.0 - fl.b[f] + fl.b[f] * (bag.len[f].max(1.0) / st.avg[f].max(1.0));
+            let norm = 1.0 - st.b[f] + st.b[f] * (bag.len[f].max(1.0) / st.avg[f].max(1.0));
             tfp += fl.w[f] * tf / norm.max(0.05);
         }
         if tfp > 0.0 {
-            score += qt.weight * idf * tfp * (p.k1 + 1.0) / (tfp + p.k1);
+            score += qt.weight * idf * tfp * (st.k1 + 1.0) / (tfp + st.k1);
             if let Some(g) = qt.group {
                 g_hit[g] = true;
                 if g < 64 {
@@ -4483,13 +4514,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         && !it.task_under_rules
         && !summary_hold;
     let fl = if p.enable_roles && it.assistant_attribution {
-        Fields { w: [1.0, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
+        Fields { w: [1.0, p.assistant_attribution_weight, 0.75] }
     } else if user_role {
-        Fields { w: [p.user_attribution_weight, 0.35, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
+        Fields { w: [p.user_attribution_weight, 0.35, 0.75] }
     } else if p.enable_roles && pref_on {
-        Fields { w: [1.45, 0.55, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
+        Fields { w: [1.45, 0.55, 0.75] }
     } else {
-        Fields { w: [1.0, 1.0, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
+        Fields { w: [1.0, 1.0, 0.75] }
     };
     let ns = ix.session_bags.len();
 
@@ -6544,6 +6575,52 @@ mod tests {
 
     fn turn(role: &str, content: &str) -> Turn {
         Turn { role: role.into(), content: content.into(), ..Turn::default() }
+    }
+
+    #[test]
+    fn bm25_derives_k1_and_b_from_the_bags() {
+        let mut short = Bag { tf: [HashMap::new(), HashMap::new(), HashMap::new()], len: [2.0, 0.0, 0.0] };
+        short.tf[0].insert(1, 1.0);
+        let mut long = Bag { tf: [HashMap::new(), HashMap::new(), HashMap::new()], len: [6.0, 0.0, 0.0] };
+        long.tf[0].insert(1, 1.0);
+        long.tf[0].insert(2, 3.0);
+        let st = stats_of(&[short, long]);
+        assert!((st.avg[0] - 4.0).abs() < 1e-5);
+        // lengths 2 and 6: variance 4, mean 4, b = 4 / (4 + 16) = 0.2
+        assert!((st.b[0] - 0.2).abs() < 1e-5);
+        assert!((st.k1 - 5.0 / 3.0).abs() < 1e-5);
+        assert_eq!(st.b[1], 0.0);
+
+        let mut a = Bag { tf: [HashMap::new(), HashMap::new(), HashMap::new()], len: [4.0, 0.0, 0.0] };
+        a.tf[0].insert(1, 2.0);
+        let mut b = Bag { tf: [HashMap::new(), HashMap::new(), HashMap::new()], len: [4.0, 0.0, 0.0] };
+        b.tf[0].insert(1, 2.0);
+        let flat = stats_of(&[a, b]);
+        assert!(flat.b[0].abs() < 1e-5, "equal lengths do not normalise");
+        assert!((flat.k1 - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn request_k1_does_not_change_the_ranking() {
+        let sessions = vec![Session {
+            id: "s".into(),
+            date: String::new(),
+            timestamp: 0,
+            turns: vec![
+                Turn { id: "short".into(), role: "user".into(), content: "camera".into(), ..Turn::default() },
+                Turn { id: "long".into(), role: "user".into(), content: "camera camera camera extra words here".into(), ..Turn::default() },
+            ],
+        }];
+        let ids = |k1: f32| {
+            let ranked = rank(&RankRequest {
+                sessions: sessions.clone(),
+                queries: vec![Query { text: "camera".into(), date: String::new() }],
+                top_k: 2,
+                params: Params { k1, b_user: 0.1, b_assistant: 0.9, ..Params::default() },
+            });
+            ranked.results[0].turns.iter().map(|t| t.id.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(ids(0.2), ids(8.0));
     }
 
     #[test]
