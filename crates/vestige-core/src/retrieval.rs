@@ -1882,9 +1882,48 @@ struct Stats {
     n: f32,
     df: HashMap<u32, u32>,
     avg: [f32; 3],
+    /// Term-specific BM25 saturation from Lv & Zhai, ECIR 2012, eq. (9).
+    k1: HashMap<u32, f32>,
+    /// Mean of `k1` over terms that have one. Used only if a scored term was not seen.
+    k1_mean: f32,
 }
 
-fn stats_of(bags: &[Bag]) -> Stats {
+/// g(k1) in Lv & Zhai 2012, eq. (10). Natural log: g is continuous at 1 only for ln.
+fn ll_g(k: f64) -> f64 {
+    if (k - 1.0).abs() < 1e-8 {
+        1.0
+    } else {
+        (k / (k - 1.0)) * k.ln()
+    }
+}
+
+/// Invert eq. (10) so g(k1) equals the mean log moment. g increases from 0 to
+/// infinity on (0, infinity). Sixty bisections on [1e-6, 1e6]. Solver precision,
+/// fixed before the run, not a retrieval knob.
+fn k1_from_log_moment(target: f64) -> f32 {
+    if !target.is_finite() || target <= 0.0 {
+        return 1e-6;
+    }
+    let mut lo = 1e-6f64;
+    let mut hi = 1e6f64;
+    if target <= ll_g(lo) {
+        return lo as f32;
+    }
+    if target >= ll_g(hi) {
+        return hi as f32;
+    }
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if ll_g(mid) < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (0.5 * (lo + hi)) as f32
+}
+
+fn stats_of(bags: &[Bag], slope: [f32; 3]) -> Stats {
     let mut df: HashMap<u32, u32> = HashMap::new();
     let mut sum = [0.0f32; 3];
     let mut cnt = [0.0f32; 3];
@@ -1905,15 +1944,48 @@ fn stats_of(bags: &[Bag]) -> Stats {
             *df.entry(t).or_insert(0) += 1;
         }
     }
-    Stats {
-        n: bags.len() as f32,
-        df,
-        avg: [
-            if cnt[0] > 0.0 { sum[0] / cnt[0] } else { 1.0 },
-            if cnt[1] > 0.0 { sum[1] / cnt[1] } else { 1.0 },
-            if cnt[2] > 0.0 { sum[2] / cnt[2] } else { 1.0 },
-        ],
+    let avg = [
+        if cnt[0] > 0.0 { sum[0] / cnt[0] } else { 1.0 },
+        if cnt[1] > 0.0 { sum[1] / cnt[1] } else { 1.0 },
+        if cnt[2] > 0.0 { sum[2] / cnt[2] } else { 1.0 },
+    ];
+    let mut moment: HashMap<u32, (f64, u32)> = HashMap::new();
+    for b in bags {
+        let mut best: HashMap<u32, (f32, usize)> = HashMap::new();
+        for f in 0..3 {
+            for (&t, &v) in &b.tf[f] {
+                if v <= 0.0 {
+                    continue;
+                }
+                let slot = best.entry(t).or_insert((v, f));
+                if v > slot.0 {
+                    *slot = (v, f);
+                }
+            }
+        }
+        for (t, (tf, f)) in best {
+            if b.len[f] <= 0.0 {
+                continue;
+            }
+            let norm = 1.0 - slope[f] + slope[f] * (b.len[f] / avg[f].max(1.0));
+            let cprime = tf / norm.max(1e-6);
+            let entry = moment.entry(t).or_insert((0.0, 0));
+            entry.0 += (f64::from(cprime) + 1.0).ln();
+            entry.1 += 1;
+        }
     }
+    let mut k1: HashMap<u32, f32> = HashMap::with_capacity(moment.len());
+    let mut ksum = 0.0f64;
+    for (t, (sum_ln, nobs)) in moment {
+        if nobs == 0 {
+            continue;
+        }
+        let hat = k1_from_log_moment(sum_ln / f64::from(nobs));
+        ksum += f64::from(hat);
+        k1.insert(t, hat);
+    }
+    let k1_mean = if k1.is_empty() { 1.0 } else { (ksum / k1.len() as f64) as f32 };
+    Stats { n: bags.len() as f32, df, avg, k1, k1_mean }
 }
 
 struct HeaderKey {
@@ -3684,10 +3756,14 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         }
     }
 
-    let s_stats = stats_of(&session_bags);
-    let t_own_stats = stats_of(&turn_own_bags);
-    let t_stats = stats_of(&turn_bags);
-    let w_stats = stats_of(&window_bags);
+    // Slopes are the request's length slopes. Lv & Zhai 2012 do not derive b;
+    // c' in their eq. (3) uses the same b the scorer uses. Blip stays at 0,
+    // which is the slope already wired into every Fields value.
+    let slope = [p.b_user, p.b_assistant, 0.0];
+    let s_stats = stats_of(&session_bags, slope);
+    let t_own_stats = stats_of(&turn_own_bags, slope);
+    let t_stats = stats_of(&turn_bags, slope);
+    let w_stats = stats_of(&window_bags, slope);
 
     // Precompute rarest non-hub tokens per session (`df >= 2 && df <= 0.20 * N`, up to 32 sorted)
     // for GhostLink Ochiai divergence (`1 - |Nt(a) & Nt(b)| / sqrt(|Nt(a)| * |Nt(b)|)`).
@@ -4211,7 +4287,8 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
             tfp += fl.w[f] * tf / norm.max(0.05);
         }
         if tfp > 0.0 {
-            score += qt.weight * idf * tfp * (p.k1 + 1.0) / (tfp + p.k1);
+            let k1 = st.k1.get(&qt.id).copied().unwrap_or(st.k1_mean);
+            score += qt.weight * idf * tfp * (k1 + 1.0) / (tfp + k1);
             if let Some(g) = qt.group {
                 g_hit[g] = true;
                 if g < 64 {
@@ -6544,6 +6621,42 @@ mod tests {
 
     fn turn(role: &str, content: &str) -> Turn {
         Turn { role: role.into(), content: content.into(), ..Turn::default() }
+    }
+
+    #[test]
+    fn loglogistic_k1_matches_a_constant_normalized_tf() {
+        // g(0.5) = ln(2). Every c' = 1 gives mean ln(c'+1) = ln(2), so k1 = 0.5.
+        assert!((ll_g(0.5) - 2.0f64.ln()).abs() < 1e-9);
+        assert!((f64::from(k1_from_log_moment(2.0f64.ln())) - 0.5).abs() < 1e-4);
+        let mut bag = Bag { tf: [HashMap::new(), HashMap::new(), HashMap::new()], len: [4.0, 0.0, 0.0] };
+        bag.tf[0].insert(7, 1.0);
+        let st = stats_of(&[bag], [0.0, 0.0, 0.0]);
+        // b = 0 and len = avg, so c' = tf = 1.
+        let hat = st.k1.get(&7).copied().unwrap();
+        assert!((hat - 0.5).abs() < 1e-3, "got {hat}");
+    }
+
+    #[test]
+    fn request_k1_does_not_change_the_ranking() {
+        let sessions = vec![Session {
+            id: "s".into(),
+            date: String::new(),
+            timestamp: 0,
+            turns: vec![
+                Turn { id: "a".into(), role: "user".into(), content: "camera".into(), ..Turn::default() },
+                Turn { id: "b".into(), role: "user".into(), content: "camera camera extra words".into(), ..Turn::default() },
+            ],
+        }];
+        let ids = |k1: f32| {
+            let ranked = rank(&RankRequest {
+                sessions: sessions.clone(),
+                queries: vec![Query { text: "camera".into(), date: String::new() }],
+                top_k: 2,
+                params: Params { k1, ..Params::default() },
+            });
+            ranked.results[0].turns.iter().map(|t| t.id.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(ids(0.2), ids(8.0));
     }
 
     #[test]
