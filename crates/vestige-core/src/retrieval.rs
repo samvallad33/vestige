@@ -17,7 +17,10 @@
 #![allow(clippy::all)]
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::OnceLock;
 
 // =========================================================================
@@ -1876,6 +1879,9 @@ struct TurnIx {
     /// A capitalized word of two or more letters that is not sentence-initial.
     form_midcap: bool,
     raw_links: Vec<TurnLink>,
+    /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
+    /// Never read by ranking.
+    body: String,
 }
 
 struct Stats {
@@ -3350,6 +3356,11 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
                 raw_links: t.links.clone(),
+                body: if replay_dump_path().is_some() {
+                    prose_body.to_string()
+                } else {
+                    String::new()
+                },
             });
         }
         for d in s_doms {
@@ -5415,7 +5426,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         .filter(|&&si| smax > 0.0 && !s_policy_floored[si] && !s_pref_floored[si] && (s_score[si] + bridge_boost[si]) >= 0.62 * smax)
         .count();
     let sessions = final_session_indices
-        .into_iter()
+        .iter()
+        .copied()
         .map(|i| RankedItem {
             id: ix.session_ids[i].clone(),
             session_id: ix.session_ids[i].clone(),
@@ -5716,11 +5728,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             if let Some(pos) = members.iter().position(|&m| m == top) {
                 if pos > 0 {
                     let prev = members[pos - 1];
-                    if ix.turns[prev].speaker == "user" {
-                        if let Some(at) = final_turn_indices.iter().take(5).position(|&t| t == prev) {
+                    if ix.turns[prev].speaker == "user" && t_raw[prev] > 0.0 {
+                        if let Some(at) = final_turn_indices.iter().position(|&t| t == prev) {
                             final_turn_indices.remove(at);
-                            final_turn_indices.insert(0, prev);
                         }
+                        final_turn_indices.insert(0, prev);
                     }
                 }
             }
@@ -5745,6 +5757,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6526,10 +6539,383 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
     list.extend(tail);
 }
 
+
+// =========================================================================
+// REPLAY DUMP (off unless VESTIGE_REPLAY_DUMP is set; never changes ranking)
+// =========================================================================
+
+fn replay_dump_path() -> Option<String> {
+    match std::env::var("VESTIGE_REPLAY_DUMP") {
+        Ok(p) if !p.is_empty() => Some(p),
+        _ => None,
+    }
+}
+
+/// Snapshot only. No HashMap/HashSet: those would advance Rust's hasher
+/// seed and change later queries in the same RankRequest.
+struct ReplaySnap {
+    query_text: String,
+    query_date: String,
+    k: usize,
+    is_event_sequence: bool,
+    temporal: bool,
+    seated: Vec<usize>,
+    final_session_indices: Vec<usize>,
+    t_scene: Vec<f32>,
+}
+
+thread_local! {
+    static REPLAY_SNAPS: std::cell::RefCell<Vec<ReplaySnap>> = std::cell::RefCell::new(Vec::new());
+}
+
+fn maybe_dump_replay(
+    _ix: &Index,
+    q: &Query,
+    k: usize,
+    it: &QueryIntent,
+    t_scene: &[f32],
+    seated: &[usize],
+    final_session_indices: &[usize],
+) {
+    if replay_dump_path().is_none() {
+        return;
+    }
+    REPLAY_SNAPS.with(|slot| {
+        slot.borrow_mut().push(ReplaySnap {
+            query_text: q.text.clone(),
+            query_date: q.date.clone(),
+            k,
+            is_event_sequence: it.is_event_sequence,
+            temporal: it.temporal,
+            seated: seated.to_vec(),
+            final_session_indices: final_session_indices.to_vec(),
+            t_scene: t_scene.to_vec(),
+        });
+    });
+}
+
+fn flush_replay_dumps(ix: &Index) {
+    let Some(path) = replay_dump_path() else {
+        return;
+    };
+    let snaps = REPLAY_SNAPS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+    if snaps.is_empty() {
+        return;
+    }
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => std::io::BufWriter::new(f),
+        Err(e) => {
+            eprintln!("VESTIGE_REPLAY_DUMP open failed: {e}");
+            return;
+        }
+    };
+    for snap in snaps {
+        write_one_replay_dump(ix, &snap, &mut file);
+    }
+    let _ = file.flush();
+}
+
+/// Dump-only. ASCII alphanumeric split, same character geometry as the later
+/// `query_tokens` helper. Not wired into ranking.
+fn dump_query_tokens(query: &str) -> Vec<String> {
+    query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// Dump-only information content from the conversation's own counts.
+/// `((n+1)/(df+1)).ln()`. Not wired into ranking.
+fn dump_token_ic(n: usize, df: usize) -> f64 {
+    ((n as f64 + 1.0) / (df as f64 + 1.0)).ln()
+}
+
+/// Last non-space character is ASCII '?'. Dump-only. Not wired into ranking.
+fn dump_ends_with_question(body: &str) -> bool {
+    body.as_bytes()
+        .iter()
+        .rev()
+        .find(|&&b| b != b' ' && b != b'\t' && b != b'\n' && b != b'\r')
+        .copied()
+        == Some(b'?')
+}
+
+/// Direct same-session reply: the next turn in this session whose stored
+/// `answers` edge points at `ti`. None when that edge is absent. Dump-only.
+fn dump_response_turn_of(ix: &Index, ti: usize) -> Option<usize> {
+    let t = ix.turns.get(ti)?;
+    let members = ix.session_turns.get(t.session)?;
+    let pos = members.iter().position(|&m| m == ti)?;
+    let next = *members.get(pos + 1)?;
+    if ix.turns.get(next).and_then(|n| n.answers) == Some(ti) {
+        Some(next)
+    } else {
+        None
+    }
+}
+
+/// `IC_novel(t \ Q)`: sum of dump_token_ic over the turn's distinct raw_tokens
+/// that are not in the query token set, using the engine tokenizer and
+/// `t_own_stats` df. Tokens the engine never interned are skipped. Dump-only.
+fn dump_turn_ic_novel(ix: &Index, ti: usize, qset: &HashSet<String>, n_docs: usize) -> f64 {
+    let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut sum = 0.0;
+    for w in raw_tokens(body) {
+        if !seen.insert(w.clone()) || qset.contains(&w) {
+            continue;
+        }
+        let Some(id) = ix.vocab.get(&w) else {
+            continue;
+        };
+        let df = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+        sum += dump_token_ic(n_docs, df);
+    }
+    sum
+}
+
+fn dump_edge_ids(ix: &Index, targets: impl IntoIterator<Item = usize>) -> Vec<String> {
+    targets
+        .into_iter()
+        .filter_map(|tgt| ix.turns.get(tgt).map(|t| t.id.clone()))
+        .collect()
+}
+
+/// Dump-only copy of `pool_structural_degree` with an optional antecedent arm.
+/// Not wired into ranking. `include_rsb_antecedent = false` is `degree_none`.
+fn dump_pool_structural_degree(ix: &Index, pool: &[usize], include_rsb_antecedent: bool) -> Vec<i64> {
+    let mut at = vec![None; ix.turns.len()];
+    for (i, &ti) in pool.iter().enumerate() {
+        if let Some(slot) = at.get_mut(ti) {
+            *slot = Some(i);
+        }
+    }
+    let mut degree = vec![0i64; pool.len()];
+    for (src, t) in ix.turns.iter().enumerate() {
+        let mut hit = |target: usize| {
+            if target == src {
+                return;
+            }
+            if let Some(Some(slot)) = at.get(target) {
+                degree[*slot] += 1;
+            }
+        };
+        for &target in &t.policy_backlinks {
+            hit(target);
+        }
+        for &target in &t.supersedes_turns {
+            hit(target);
+        }
+        for &(_, target) in &t.exact_edges {
+            hit(target);
+        }
+        if include_rsb_antecedent {
+            if let Some(target) = rsb_antecedent(ix, src) {
+                hit(target);
+            }
+        }
+    }
+    degree
+}
+
+fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufWriter<std::fs::File>) {
+    let n_docs = ix.turns.len();
+    let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
+    let mut pool: Vec<usize> = snap.seated.clone();
+    for ti in order(&snap.t_scene, &turn_ts) {
+        if pool.len() >= 50 {
+            break;
+        }
+        if snap.t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        if !pool.contains(&ti) {
+            pool.push(ti);
+        }
+    }
+    let mut pre_rank: HashMap<usize, usize> = HashMap::with_capacity(pool.len());
+    for (i, &ti) in pool.iter().enumerate() {
+        pre_rank.insert(ti, i);
+    }
+    let mut final_rank: HashMap<usize, usize> = HashMap::new();
+    for (i, &ti) in snap.seated.iter().enumerate() {
+        final_rank.insert(ti, i);
+    }
+    let deg_closed = dump_pool_structural_degree(ix, &pool, true);
+    let deg_none = dump_pool_structural_degree(ix, &pool, false);
+    let mut degree_closed: HashMap<usize, i64> = HashMap::new();
+    let mut degree_none: HashMap<usize, i64> = HashMap::new();
+    for (i, &ti) in pool.iter().enumerate() {
+        degree_closed.insert(ti, deg_closed[i]);
+        degree_none.insert(ti, deg_none[i]);
+    }
+
+    let qset: HashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
+    let mut qtoks: Vec<Value> = Vec::new();
+    let mut seen_tok: HashSet<String> = HashSet::new();
+    for tok in dump_query_tokens(&snap.query_text) {
+        if !seen_tok.insert(tok.clone()) {
+            continue;
+        }
+        let mut df = 0usize;
+        let mut ids: Vec<u32> = Vec::new();
+        if let Some(id) = ix.vocab.get(&tok) {
+            ids.push(id);
+            df = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+        }
+        let stemmed = stem(&tok);
+        if stemmed != tok {
+            if let Some(id) = ix.vocab.get(&stemmed) {
+                ids.push(id);
+                let d2 = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+                if d2 > df {
+                    df = d2;
+                }
+            }
+        }
+        let ic = dump_token_ic(n_docs, df);
+        qtoks.push(json!({
+            "tok": tok,
+            "df": df,
+            "ic": ic,
+            "ids": ids,
+        }));
+    }
+
+    let qtok_present = |ti: usize| -> Vec<bool> {
+        let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
+        let body_toks: HashSet<String> = dump_query_tokens(body).into_iter().collect();
+        let content = ix.turns.get(ti).map(|t| &t.content);
+        let mut present: Vec<bool> = Vec::with_capacity(qtoks.len());
+        for tok in qtoks.iter() {
+            let t = tok.get("tok").and_then(|v| v.as_str()).unwrap_or("");
+            let mut hit = body_toks.contains(t);
+            if !hit {
+                if let Some(arr) = tok.get("ids").and_then(|v| v.as_array()) {
+                    if let Some(content) = content {
+                        for idv in arr {
+                            if let Some(id) = idv.as_u64() {
+                                if content.contains(&(id as u32)) {
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            present.push(hit);
+        }
+        present
+    };
+
+    let emit_turn = |ti: usize, rank_pre: Option<usize>| -> Value {
+        let t = &ix.turns[ti];
+        let cause = rsb_cause(ix, ti);
+        let cause_id = cause.map(|c| ix.turns[c].id.clone());
+        let cause_rank = cause.and_then(|c| pre_rank.get(&c).copied());
+        let mut symptom_ids: Vec<String> = Vec::new();
+        for &s in &snap.seated {
+            if rsb_cause(ix, s) == Some(ti) {
+                symptom_ids.push(ix.turns[s].id.clone());
+            }
+        }
+        let sess = t.session;
+        let session_order = turn_pos(ix, ti).unwrap_or(0);
+        let parent_id = t.answers.and_then(|p| ix.turns.get(p).map(|x| x.id.clone()));
+        json!({
+            "id": t.id,
+            "idx": ti,
+            "rank_pre": rank_pre,
+            "rank": final_rank.get(&ti).copied(),
+            "t_scene": snap.t_scene.get(ti).copied().unwrap_or(0.0),
+            "t_scene_bits": snap.t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+            "stability": t.stability,
+            "stability_bits": t.stability.to_bits(),
+            "session": sess,
+            "session_id": ix.session_ids.get(sess).cloned().unwrap_or_default(),
+            "session_order": session_order,
+            "role": t.speaker,
+            "ends_with_question": dump_ends_with_question(&t.body),
+            "is_question": t.is_question,
+            "turn_ic_novel": dump_turn_ic_novel(ix, ti, &qset, n_docs),
+            "ts": ix.session_ts.get(sess).copied().unwrap_or(0),
+            "superseded": turn_is_superseded(ix, ti),
+            "response_turn_id": dump_response_turn_of(ix, ti).map(|r| ix.turns[r].id.clone()),
+            "parent_user_turn_id": parent_id,
+            "rsb_seated": final_rank.contains_key(&ti),
+            "rsb_cause_id": cause_id,
+            "rsb_cause_rank": cause_rank,
+            "rsb_symptom_ids": symptom_ids,
+            "exact_edges": dump_edge_ids(ix, t.exact_edges.iter().map(|&(_, tgt)| tgt)),
+            "policy_backlinks": dump_edge_ids(ix, t.policy_backlinks.iter().copied()),
+            "degree_closed": degree_closed.get(&ti).copied().unwrap_or(0),
+            "degree_none": degree_none.get(&ti).copied().unwrap_or(0),
+            "qtok_present": qtok_present(ti),
+        })
+    };
+
+    let mut cands: Vec<Value> = Vec::with_capacity(pool.len());
+    for (rank, &ti) in pool.iter().enumerate() {
+        cands.push(emit_turn(ti, Some(rank)));
+    }
+
+    // Sessions in official turn top-10 or official session top-10: every turn.
+    let mut sess_keep: HashSet<usize> = HashSet::new();
+    for &ti in snap.seated.iter().take(10) {
+        sess_keep.insert(ix.turns[ti].session);
+    }
+    for &si in snap.final_session_indices.iter().take(10) {
+        sess_keep.insert(si);
+    }
+    let mut sess_keys: Vec<usize> = sess_keep.into_iter().collect();
+    sess_keys.sort_unstable();
+    let mut session_turns: Vec<Value> = Vec::new();
+    for sess in sess_keys {
+        let members = match ix.session_turns.get(sess) {
+            Some(m) => m,
+            None => continue,
+        };
+        for &ti in members {
+            session_turns.push(emit_turn(ti, pre_rank.get(&ti).copied()));
+        }
+    }
+
+    let query_ts = parse_date(&snap.query_date);
+    let slots = wh_slots(&snap.query_text);
+    let rec = json!({
+        "query_text": snap.query_text,
+        "query_date": snap.query_date,
+        "query_ts": query_ts,
+        "first_session_id": ix.session_ids.first().cloned().unwrap_or_default(),
+        "n_sessions": ix.session_ids.len(),
+        "n_turns": ix.turns.len(),
+        "k": snap.k,
+        "wh_slots": slots,
+        "wh_class": format!("WH_SLOTS_{slots}"),
+        "is_event_sequence": snap.is_event_sequence,
+        "temporal": snap.temporal,
+        "pool_size": pool.len(),
+        "pre_ids": pool.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "seated_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "final_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "final_session_ids": snap.final_session_indices.iter().map(|&si| ix.session_ids[si].clone()).collect::<Vec<_>>(),
+        "head_id": snap.seated.first().map(|&ti| ix.turns[ti].id.clone()),
+        "query_tokens": qtoks,
+        "candidates": cands,
+        "session_turns": session_turns,
+    });
+    let _ = writeln!(file, "{rec}");
+}
+
+
 pub fn rank(req: &RankRequest) -> RankResponse {
 
     let ix = build_index(&req.sessions, &req.params);
     let results = req.queries.iter().map(|q| rank_one(&ix, q, &req.params, req.top_k)).collect();
+    flush_replay_dumps(&ix);
     RankResponse {
         engine: ENGINE,
         sessions_indexed: ix.session_ids.len(),
