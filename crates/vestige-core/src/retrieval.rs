@@ -231,6 +231,9 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// The min-cut island vote changed this query's tail. Slot 0 is not part of the comparison.
+    #[serde(default)]
+    pub mincut_fired: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1964,6 +1967,9 @@ struct Index {
     cue_vocab: HashMap<String, u32>,
     /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
     role_cues: HashSet<u32>,
+    /// Capitalized-name and handle ids whose session cardinality sits in the
+    /// guard's closed range. Exact identity, not a similarity weight.
+    turn_bridge_tokens: Vec<Vec<u32>>,
 }
 
 /// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
@@ -3780,6 +3786,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         });
     }
 
+    let turn_bridge_tokens = bridge_token_rows(&turns, &vocab, &turn_prose_cache);
     Index {
         vocab,
         session_ids,
@@ -3810,7 +3817,62 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         turn_cues,
         cue_vocab,
         role_cues,
+        turn_bridge_tokens,
     }
+}
+
+/// Exact capitalized-name and handle ids that bridge a handful of sessions.
+/// A token counts only where it is capitalized in that turn, or where it is
+/// the speaker's name. The known-proper backfill tags later lowercase repeats
+/// ("month", "summer") and is not an identity edge. The speaker name on every
+/// session falls outside the guard range and adds no edge. A token inside one
+/// session adds no edge either.
+fn bridge_token_rows(turns: &[TurnIx], vocab: &Vocab, prose: &[String]) -> Vec<Vec<u32>> {
+    let mut per_turn: Vec<Vec<u32>> = Vec::with_capacity(turns.len());
+    let mut sessions_of: HashMap<u32, HashSet<usize>> = HashMap::new();
+    for (t, text) in turns.iter().zip(prose.iter()) {
+        let mut ids = Vec::new();
+        for ent in proper_entity_tokens(text) {
+            if !(ent.starts_with("\u{1}ent:") || ent.starts_with("\u{1}h:")) {
+                continue;
+            }
+            if let Some(id) = vocab.get(&ent) {
+                ids.push(id);
+            }
+        }
+        for handle in extract_exact_technical_handles(text) {
+            if let Some(id) = vocab.get(&handle) {
+                ids.push(id);
+            }
+        }
+        if !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant" {
+            for w in raw_tokens(&t.speaker) {
+                if let Some(id) = vocab.get(&format!("\u{1}ent:{w}")) {
+                    ids.push(id);
+                }
+            }
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        for &id in &ids {
+            sessions_of.entry(id).or_default().insert(t.session);
+        }
+        per_turn.push(ids);
+    }
+    let keep: HashSet<u32> = sessions_of
+        .into_iter()
+        .filter(|(_, sessions)| {
+            let n = sessions.len() as u32;
+            (crate::mincut_guard::MINCUT_TOKEN_SESSION_DF_MIN
+                ..=crate::mincut_guard::MINCUT_TOKEN_SESSION_DF_MAX)
+                .contains(&n)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    per_turn
+        .into_iter()
+        .map(|ids| ids.into_iter().filter(|id| keep.contains(id)).collect())
+        .collect()
 }
 
 // =========================================================================
@@ -5741,10 +5803,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
-    // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
-    // same Kemeny-Young order as PR 710, computed on that window with the head
-    // removed. No new constant: the frozen slot is position 0 of this window.
-    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Event sequences have no RSB head. The island vote is membership of that
+    // head, so it does not run here. The pre-existing tail gatekeeper still
+    // reorders the window it was given, which is what keeps one turn per date.
+    let mincut_fired = if it.is_event_sequence {
+        if final_turn_indices.len() >= 2 {
+            let head = final_turn_indices[0];
+            let mut tail = final_turn_indices[1..].to_vec();
+            rank1_gatekeeper(ix, &q.text, &mut tail, &t_scene);
+            final_turn_indices.clear();
+            final_turn_indices.push(head);
+            final_turn_indices.extend(tail);
+        }
+        false
+    } else {
+        rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene)
+    };
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5754,7 +5828,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult { intent: plan.intent, sessions, turns, standing_rules, mincut_fired }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -6449,9 +6523,381 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
-/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
-/// grow the window. The pool is that window, so its size is the caller's k.
+/// Stoer-Wagner global min-cut (JACM 1997). The start vertex is the lowest
+/// alive index. Tightness ties take the lowest index. The first phase that
+/// strictly improves the cut is kept, so a later equal cut cannot move the
+/// partition. A zero cut is a legal answer: NetworkX refuses a disconnected
+/// graph, and a dialogue pool is usually disconnected.
+fn stoer_wagner_min_cut(weight: &[Vec<i64>]) -> (i64, Vec<bool>) {
+    let n = weight.len();
+    if n < 2 {
+        return (0, vec![false; n]);
+    }
+    let mut w = weight.to_vec();
+    let mut alive: Vec<usize> = (0..n).collect();
+    let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    let mut best = i64::MAX;
+    let mut best_side: Vec<usize> = Vec::new();
+    while alive.len() > 1 {
+        let start = alive[0];
+        let mut in_a = vec![false; n];
+        let mut tight = vec![0i64; n];
+        in_a[start] = true;
+        let mut added = vec![start];
+        let mut cut_of_phase = 0i64;
+        for _ in 1..alive.len() {
+            let prev = *added.last().unwrap();
+            for &v in &alive {
+                if !in_a[v] {
+                    tight[v] += w[prev][v];
+                }
+            }
+            let mut pick = alive[0];
+            let mut best_tight = i64::MIN;
+            let mut found = false;
+            for &v in &alive {
+                if in_a[v] {
+                    continue;
+                }
+                if !found || tight[v] > best_tight || (tight[v] == best_tight && v < pick) {
+                    best_tight = tight[v];
+                    pick = v;
+                    found = true;
+                }
+            }
+            in_a[pick] = true;
+            added.push(pick);
+            cut_of_phase = best_tight;
+        }
+        let t = *added.last().unwrap();
+        let s = added[added.len() - 2];
+        if cut_of_phase < best {
+            best = cut_of_phase;
+            best_side = members[t].clone();
+        }
+        for &v in &alive {
+            if v == s || v == t {
+                continue;
+            }
+            let add = w[t][v];
+            w[s][v] += add;
+            w[v][s] += add;
+        }
+        for v in 0..n {
+            w[t][v] = 0;
+            w[v][t] = 0;
+        }
+        let taken = std::mem::take(&mut members[t]);
+        members[s].extend(taken);
+        alive.retain(|&v| v != t);
+    }
+    let mut side = vec![false; n];
+    for i in best_side {
+        if i < n {
+            side[i] = true;
+        }
+    }
+    if side.iter().all(|b| *b) || side.iter().all(|b| !*b) {
+        return (best, vec![false; n]);
+    }
+    (best, side)
+}
+
+/// Islands are the blocks whose Stoer-Wagner cut is at least the guard's
+/// connectivity. A cut of 0 is a disconnection (Ford-Fulkerson). A positive
+/// unit cut stays one island, so a single name bridge is not split.
+fn assign_islands(weight: &[Vec<i64>]) -> Vec<usize> {
+    fn rec(weight: &[Vec<i64>], nodes: &[usize], out: &mut [usize], next_id: &mut usize) {
+        if nodes.is_empty() {
+            return;
+        }
+        if nodes.len() == 1 {
+            out[nodes[0]] = *next_id;
+            *next_id += 1;
+            return;
+        }
+        let m = nodes.len();
+        let mut local = vec![vec![0i64; m]; m];
+        for i in 0..m {
+            for j in 0..m {
+                local[i][j] = weight[nodes[i]][nodes[j]];
+            }
+        }
+        let (cut, side) = stoer_wagner_min_cut(&local);
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        if cut < crate::mincut_guard::MINCUT_ISLAND_CONNECTIVITY {
+            for i in 0..m {
+                if side[i] {
+                    right.push(nodes[i]);
+                } else {
+                    left.push(nodes[i]);
+                }
+            }
+        }
+        if left.is_empty() || right.is_empty() {
+            let id = *next_id;
+            *next_id += 1;
+            for &node in nodes {
+                out[node] = id;
+            }
+            return;
+        }
+        rec(weight, &left, out, next_id);
+        rec(weight, &right, out, next_id);
+    }
+    let n = weight.len();
+    let mut out = vec![0usize; n];
+    let nodes: Vec<usize> = (0..n).collect();
+    let mut next_id = 0usize;
+    rec(weight, &nodes, &mut out, &mut next_id);
+    out
+}
+
+fn unit_link(weight: &mut [Vec<i64>], a: usize, b: usize) {
+    if a != b && weight[a][b] == 0 {
+        weight[a][b] = 1;
+        weight[b][a] = 1;
+    }
+}
+
+/// Unit-capacity structural graph on `pool`, then its episode islands.
+/// A second reason for the same pair does not raise the capacity.
+fn episode_islands(ix: &Index, pool: &[usize]) -> Vec<usize> {
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for &ti in pool {
+        if ti < ix.turns.len() && seen.insert(ti) {
+            nodes.push(ti);
+        }
+    }
+    let n = nodes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut weight = vec![vec![0i64; n]; n];
+    let pos: HashMap<usize, usize> = nodes.iter().enumerate().map(|(i, &ti)| (ti, i)).collect();
+    for (i, &ti) in nodes.iter().enumerate() {
+        let t = &ix.turns[ti];
+        for &target in &t.policy_backlinks {
+            if let Some(&j) = pos.get(&target) {
+                unit_link(&mut weight, i, j);
+            }
+        }
+        for &target in &t.supersedes_turns {
+            if let Some(&j) = pos.get(&target) {
+                unit_link(&mut weight, i, j);
+            }
+        }
+        for &(_, target) in &t.exact_edges {
+            if let Some(&j) = pos.get(&target) {
+                unit_link(&mut weight, i, j);
+            }
+        }
+    }
+    let mut first_posting: HashMap<u32, usize> = HashMap::new();
+    for (i, &ti) in nodes.iter().enumerate() {
+        for &tok in &ix.turn_bridge_tokens[ti] {
+            if let Some(&hub) = first_posting.get(&tok) {
+                unit_link(&mut weight, hub, i);
+            } else {
+                first_posting.insert(tok, i);
+            }
+        }
+    }
+    // True neighbors already in the pool share one edge. The answer often
+    // sits beside the head and does not repeat the name. A path cannot pull
+    // a turn that was left out of the pool: the deep pool is cross-session.
+    for members in &ix.session_turns {
+        for pair in members.windows(2) {
+            if let (Some(&a), Some(&b)) = (pos.get(&pair[0]), pos.get(&pair[1])) {
+                unit_link(&mut weight, a, b);
+            }
+        }
+    }
+    for (si, prev) in ix.session_episode_prev.iter().enumerate() {
+        let Some(pj) = *prev else { continue };
+        let a = ix.session_turns.get(si).and_then(|members| members.iter().find_map(|ti| pos.get(ti).copied()));
+        let b = ix.session_turns.get(pj).and_then(|members| members.iter().find_map(|ti| pos.get(ti).copied()));
+        if let (Some(a), Some(b)) = (a, b) {
+            unit_link(&mut weight, a, b);
+        }
+    }
+    assign_islands(&weight)
+}
+
+/// Cross-session turns with one unit edge to the RSB head: a stored edge
+/// other than the local RSB reply, a shared bridge token, or the turn that
+/// carries a session-episode link. The reply star stays in the degree ballot.
+/// It is not a second island edge, and it is not a deep-pool candidate:
+/// v1 showed that star filling the tail with the head's own thread.
+/// Scan order is turn index. The caller sorts.
+fn head_structural_neighbors(ix: &Index, head: usize) -> Vec<usize> {
+    if head >= ix.turns.len() {
+        return Vec::new();
+    }
+    let mut seen = vec![false; ix.turns.len()];
+    seen[head] = true;
+    let mut out = Vec::new();
+    let push = |ti: usize, seen: &mut [bool], out: &mut Vec<usize>| {
+        if ti < seen.len() && !seen[ti] {
+            seen[ti] = true;
+            out.push(ti);
+        }
+    };
+    let t = &ix.turns[head];
+    for &target in &t.policy_backlinks {
+        push(target, &mut seen, &mut out);
+    }
+    for &target in &t.supersedes_turns {
+        push(target, &mut seen, &mut out);
+    }
+    for &(_, target) in &t.exact_edges {
+        push(target, &mut seen, &mut out);
+    }
+    for ti in 0..ix.turns.len() {
+        if seen[ti] {
+            continue;
+        }
+        let other = &ix.turns[ti];
+        let points = other.policy_backlinks.contains(&head)
+            || other.supersedes_turns.contains(&head)
+            || other.exact_edges.iter().any(|&(_, target)| target == head);
+        if points {
+            push(ti, &mut seen, &mut out);
+        }
+    }
+    if !ix.turn_bridge_tokens[head].is_empty() {
+        let tokens: HashSet<u32> = ix.turn_bridge_tokens[head].iter().copied().collect();
+        for ti in 0..ix.turns.len() {
+            if ix.turn_bridge_tokens[ti].iter().any(|tok| tokens.contains(tok)) {
+                push(ti, &mut seen, &mut out);
+            }
+        }
+    }
+    let si = ix.turns[head].session;
+    let mut linked = Vec::new();
+    if let Some(Some(prev)) = ix.session_episode_prev.get(si) {
+        linked.push(*prev);
+    }
+    for (sj, prev) in ix.session_episode_prev.iter().enumerate() {
+        if *prev == Some(si) {
+            linked.push(sj);
+        }
+    }
+    for sj in linked {
+        if let Some(&ti) = ix.session_turns.get(sj).and_then(|members| members.first()) {
+            push(ti, &mut seen, &mut out);
+        }
+    }
+    let home = ix.turns[head].session;
+    out.retain(|&ti| ix.turns[ti].session != home);
+    out
+}
+
+/// Up to `MINCUT_DEEP_POOL` structural neighbors of the head that sit outside
+/// the window, highest scene first. The width is the guard. Scene order is
+/// the same order the PPR seed uses. A high-scene turn with no structural
+/// edge to the head is not a candidate.
+fn mincut_deep_turns(ix: &Index, window: &[usize], t_scene: &[f32]) -> Vec<usize> {
+    if window.is_empty() || t_scene.len() != ix.turns.len() {
+        return Vec::new();
+    }
+    let in_window: HashSet<usize> = window.iter().copied().collect();
+    let ts: Vec<i64> = (0..ix.turns.len())
+        .map(|i| ix.session_ts.get(ix.turns[i].session).copied().unwrap_or(0))
+        .collect();
+    let rank = order(t_scene, &ts);
+    let mut place = vec![0usize; ix.turns.len()];
+    for (i, &ti) in rank.iter().enumerate() {
+        place[ti] = i;
+    }
+    let mut cands = head_structural_neighbors(ix, window[0]);
+    cands.retain(|ti| !in_window.contains(ti));
+    cands.sort_by_key(|&ti| place[ti]);
+    cands.truncate(crate::mincut_guard::MINCUT_DEEP_POOL);
+    cands
+}
+
+/// Rank-1 gatekeeper. The island slice is empty here, so this is the ballot
+/// set the tail had before the min-cut vote. Tests and the fire baseline use it.
 fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+    rank1_gatekeeper_ballots(ix, query, list, t_scene, &[]);
+}
+
+/// One equal vote per ballot. `+1` means turn A beats turn B on that ballot.
+#[derive(Clone, Copy)]
+struct PairVotes {
+    scene: i8,
+    degree: i8,
+    stability: i8,
+    wh: i8,
+    island: i8,
+}
+
+fn vote_cmp<T: PartialOrd>(a: T, b: T) -> i8 {
+    match a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal) {
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
+fn pair_votes(
+    ix: &Index,
+    slots: u8,
+    ta: usize,
+    tb: usize,
+    deg_a: i64,
+    deg_b: i64,
+    scene_a: f32,
+    scene_b: f32,
+    island_a: Option<bool>,
+    island_b: Option<bool>,
+) -> PairVotes {
+    let mut votes = PairVotes {
+        scene: vote_cmp(scene_a, scene_b),
+        degree: vote_cmp(deg_a, deg_b),
+        stability: 0,
+        wh: 0,
+        island: 0,
+    };
+    let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
+    let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
+    votes.stability = vote_cmp(stab_a, stab_b);
+    if slots != 0 {
+        let ok_a = wh_satisfied(ix, ta, slots, deg_a > 0);
+        let ok_b = wh_satisfied(ix, tb, slots, deg_b > 0);
+        if ok_a && !ok_b {
+            votes.wh = 1;
+        } else if ok_b && !ok_a {
+            votes.wh = -1;
+        }
+    }
+    if let (Some(ia), Some(ib)) = (island_a, island_b) {
+        if ia != ib {
+            votes.island = if ia { 1 } else { -1 };
+        }
+    }
+    votes
+}
+
+impl PairVotes {
+    fn margin(self) -> i64 {
+        i64::from(self.scene) + i64::from(self.degree) + i64::from(self.stability) + i64::from(self.wh) + i64::from(self.island)
+    }
+}
+
+/// Same four ballots, plus one equal vote when `same_island` is the length of
+/// the list: a turn on the RSB head's island beats a turn that is not. Both
+/// on the island, or both off it, and the vote abstains.
+fn rank1_gatekeeper_ballots(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+    same_island: &[bool],
+) {
     let n = list.len();
     if n < 2 {
         return;
@@ -6459,39 +6905,26 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     let pool = list.clone();
     let slots = wh_slots(query);
     let degree = pool_structural_degree(ix, &pool);
+    let island = same_island.len() == n;
     let mut net = vec![vec![0i64; n]; n];
     for a in 0..n {
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
-            let mut margin = 0i64;
-            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
-            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-            match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            match degree[a].cmp(&degree[b]) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
-            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
-            match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            if slots != 0 {
-                let ok_a = wh_satisfied(ix, ta, slots, degree[a] > 0);
-                let ok_b = wh_satisfied(ix, tb, slots, degree[b] > 0);
-                if ok_a && !ok_b {
-                    margin += 1;
-                } else if ok_b && !ok_a {
-                    margin -= 1;
-                }
-            }
+            let island_a = if island { Some(same_island[a]) } else { None };
+            let island_b = if island { Some(same_island[b]) } else { None };
+            let votes = pair_votes(
+                ix,
+                slots,
+                ta,
+                tb,
+                degree[a],
+                degree[b],
+                t_scene.get(ta).copied().unwrap_or(0.0),
+                t_scene.get(tb).copied().unwrap_or(0.0),
+                island_a,
+                island_b,
+            );
+            let margin = votes.margin();
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -6511,19 +6944,84 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     *list = turned;
 }
 
-/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
-/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
-/// they do on a full window. The head is not a candidate for demotion.
-fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+/// Slot 0 is the RSB head and is not a candidate. The seated tail is ordered
+/// by the gatekeeper without the island vote, the same order PR 715 returns.
+/// A deep turn takes a seat only when it beats every seated tail turn by a
+/// strict pairwise majority on the five ballots, island included. Qualifiers
+/// are ordered by Kemeny among themselves and evict from the bottom of that
+/// tail. Otherwise the tail stays the baseline order: the island vote does
+/// not reshuffle the window. Returns whether a deep turn took a seat.
+fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) -> bool {
     if list.len() < 2 {
-        return;
+        return false;
     }
     let head = list[0];
-    let mut tail = list[1..].to_vec();
-    rank1_gatekeeper(ix, query, &mut tail, t_scene);
-    list.clear();
-    list.push(head);
-    list.extend(tail);
+    let tail = list[1..].to_vec();
+    let mut baseline = tail.clone();
+    rank1_gatekeeper(ix, query, &mut baseline, t_scene);
+    let mut pool = tail.clone();
+    for ti in mincut_deep_turns(ix, list, t_scene) {
+        if ti != head && !pool.contains(&ti) {
+            pool.push(ti);
+        }
+    }
+    let write = |list: &mut Vec<usize>, tail: &[usize]| {
+        list.clear();
+        list.push(head);
+        list.extend(tail.iter().copied());
+    };
+    if pool.len() == tail.len() {
+        write(list, &baseline);
+        return false;
+    }
+    let mut graph_nodes = Vec::with_capacity(pool.len() + 1);
+    graph_nodes.push(head);
+    graph_nodes.extend(pool.iter().copied());
+    let islands = episode_islands(ix, &graph_nodes);
+    let head_island = islands.first().copied().unwrap_or(0);
+    let same: Vec<bool> = islands.iter().skip(1).map(|&id| id == head_island).collect();
+    let slots = wh_slots(query);
+    let degree = pool_structural_degree(ix, &pool);
+    let beats = |a: usize, b: usize| -> bool {
+        let votes = pair_votes(
+            ix,
+            slots,
+            pool[a],
+            pool[b],
+            degree[a],
+            degree[b],
+            t_scene.get(pool[a]).copied().unwrap_or(0.0),
+            t_scene.get(pool[b]).copied().unwrap_or(0.0),
+            Some(same[a]),
+            Some(same[b]),
+        );
+        votes.margin() > 0
+    };
+    let deep_start = tail.len();
+    let mut qualifiers: Vec<usize> = Vec::new();
+    for a in deep_start..pool.len() {
+        if (0..deep_start).all(|b| beats(a, b)) {
+            qualifiers.push(pool[a]);
+        }
+    }
+    if qualifiers.is_empty() {
+        write(list, &baseline);
+        return false;
+    }
+    let q_same: Vec<bool> = qualifiers
+        .iter()
+        .map(|ti| pool.iter().position(|p| p == ti).map(|i| same[i]).unwrap_or(false))
+        .collect();
+    rank1_gatekeeper_ballots(ix, query, &mut qualifiers, t_scene, &q_same);
+    let mut final_tail = qualifiers;
+    final_tail.extend(baseline.iter().copied());
+    final_tail.truncate(tail.len());
+    let fired = final_tail != baseline;
+    if fired {
+        crate::mincut_guard::record_fire();
+    }
+    write(list, &final_tail);
+    fired
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8379,5 +8877,248 @@ mod recall_cue_tests {
         let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
         let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ta, tb);
+        assert_eq!(a.results[0].mincut_fired, b.results[0].mincut_fired);
+    }
+
+    fn nx_weight() -> Vec<Vec<i64>> {
+        // NetworkX stoer_wagner docs. Cut value is 4.
+        // x-a 3, x-b 1, a-c 3, b-c 5, b-d 4, d-e 2, c-y 2, e-y 3.
+        let mut w = vec![vec![0i64; 7]; 7];
+        let edge = |w: &mut Vec<Vec<i64>>, a: usize, b: usize, c: i64| {
+            w[a][b] = c;
+            w[b][a] = c;
+        };
+        edge(&mut w, 0, 1, 3);
+        edge(&mut w, 0, 2, 1);
+        edge(&mut w, 1, 3, 3);
+        edge(&mut w, 2, 3, 5);
+        edge(&mut w, 2, 4, 4);
+        edge(&mut w, 4, 5, 2);
+        edge(&mut w, 3, 6, 2);
+        edge(&mut w, 5, 6, 3);
+        w
+    }
+
+    #[test]
+    fn stoer_wagner_matches_the_networkx_cut_value() {
+        let (cut, side) = stoer_wagner_min_cut(&nx_weight());
+        assert_eq!(cut, 4);
+        assert!(side.iter().any(|s| *s) && side.iter().any(|s| !*s));
+    }
+
+    #[test]
+    fn a_unit_bridge_stays_one_island() {
+        let mut w = vec![vec![0i64; 6]; 6];
+        let link = |w: &mut Vec<Vec<i64>>, a: usize, b: usize| {
+            w[a][b] = 1;
+            w[b][a] = 1;
+        };
+        link(&mut w, 0, 1);
+        link(&mut w, 1, 2);
+        link(&mut w, 0, 2);
+        link(&mut w, 3, 4);
+        link(&mut w, 4, 5);
+        link(&mut w, 3, 5);
+        link(&mut w, 2, 3);
+        let (cut, _) = stoer_wagner_min_cut(&w);
+        assert_eq!(cut, 1);
+        let islands = assign_islands(&w);
+        assert!(islands.iter().all(|&id| id == islands[0]));
+    }
+
+    #[test]
+    fn a_zero_cut_splits_the_components() {
+        let mut w = vec![vec![0i64; 6]; 6];
+        let link = |w: &mut Vec<Vec<i64>>, a: usize, b: usize| {
+            w[a][b] = 1;
+            w[b][a] = 1;
+        };
+        link(&mut w, 0, 1);
+        link(&mut w, 1, 2);
+        link(&mut w, 0, 2);
+        link(&mut w, 3, 4);
+        link(&mut w, 4, 5);
+        link(&mut w, 3, 5);
+        let islands = assign_islands(&w);
+        assert_ne!(islands[0], islands[3]);
+        assert_eq!(islands[0], islands[1]);
+        assert_eq!(islands[3], islands[4]);
+    }
+
+    #[test]
+    fn mincut_promotes_a_below_window_turn_on_the_head_island() {
+        let sessions = vec![
+            s("a", vec![t("head", "user", "I left the spare key with Sam.")]),
+            s("b", vec![t("gold", "user", "The spare key was left with Sam in the blue drawer.")]),
+            s("c", vec![t("noise", "user", "The forecast called for rain tomorrow.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let gold = idx(&ix, "gold");
+        let noise = idx(&ix, "noise");
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 5.0;
+        scene[noise] = 3.0;
+        scene[gold] = 3.0;
+        let graph = episode_islands(&ix, &[head, noise, gold]);
+        assert_eq!(graph[0], graph[2], "the shared name keeps head and gold one island");
+        assert_ne!(graph[0], graph[1], "the off-episode turn is a different island");
+        let mut list = vec![head, noise];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(fired);
+        assert_eq!(list, vec![head, gold]);
+        let mut again = vec![head, noise];
+        let fired_again = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut again, &scene);
+        assert_eq!(list, again);
+        assert_eq!(fired, fired_again);
+        scene[gold] = 100.0;
+        let mut high = vec![head, noise];
+        rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut high, &scene);
+        assert_eq!(high[0], head, "slot 0 stays the RSB head");
+        assert_eq!(high[1], gold);
+    }
+
+    #[test]
+    fn same_session_adjacency_does_not_import_the_head_thread() {
+        let sessions = vec![
+            s("a", vec![
+                t("head", "user", "I left the spare key with Sam."),
+                t("local", "user", "The weather looks clear this afternoon."),
+            ]),
+            s("b", vec![t("gold", "user", "The spare key was left with Sam in the blue drawer.")]),
+            s("c", vec![t("noise", "user", "The forecast called for rain tomorrow.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let local = idx(&ix, "local");
+        let gold = idx(&ix, "gold");
+        let noise = idx(&ix, "noise");
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 5.0;
+        scene[local] = 100.0;
+        scene[noise] = 3.0;
+        scene[gold] = 3.0;
+        let mut list = vec![head, noise];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(fired);
+        assert_eq!(list, vec![head, gold], "a same-session neighbor is not an island edge");
+        assert!(!list.contains(&local));
+        scene[gold] = 0.0;
+        scene[local] = 3.0;
+        let mut tied = vec![head, noise, local];
+        let tied_fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut tied, &scene);
+        assert!(!tied_fired, "a deep turn that ties a seated turn does not take a seat");
+        assert_eq!(tied, vec![head, noise, local], "the seated tail stays the baseline order");
+    }
+
+    #[test]
+    fn a_deep_turn_that_loses_one_pair_does_not_reorder_the_window() {
+        let sessions = vec![
+            s("a", vec![
+                t("head", "user", "I left the spare key with Sam."),
+                t("near", "user", "The drawer is blue."),
+            ]),
+            s("b", vec![t("deep", "user", "The spare key was left with Sam in the blue drawer.")]),
+            s("c", vec![t("off", "user", "The forecast called for rain tomorrow.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let near = idx(&ix, "near");
+        let deep = idx(&ix, "deep");
+        let off = idx(&ix, "off");
+        let islands = episode_islands(&ix, &[head, near, off, deep]);
+        assert_eq!(islands[0], islands[1], "the adjacent answer shares the head island");
+        assert_eq!(islands[0], islands[3], "the shared name puts the deep turn on the head island");
+        assert_ne!(islands[0], islands[2]);
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 5.0;
+        scene[off] = 5.0;
+        scene[near] = 1.0;
+        scene[deep] = 4.0;
+        let mut list = vec![head, off, near];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(!fired);
+        assert_eq!(list, vec![head, off, near], "island membership does not reshuffle the seated tail");
+        assert_eq!(list[0], head);
+    }
+
+    #[test]
+    fn qualifiers_evict_from_the_bottom_in_kemeny_order() {
+        let sessions = vec![
+            s("a", vec![t("head", "user", "I left the spare key with Sam.")]),
+            s("b", vec![t("high", "user", "The spare key was left with Sam on the hook.")]),
+            s("c", vec![t("low", "user", "The spare key from Sam is labeled.")]),
+            s("d", vec![t("s0", "user", "The forecast called for rain tomorrow.")]),
+            s("e", vec![t("s1", "user", "Traffic was slow on the bridge.")]),
+            s("f", vec![t("s2", "user", "The bakery sold out of rye.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let high = idx(&ix, "high");
+        let low = idx(&ix, "low");
+        let s0 = idx(&ix, "s0");
+        let s1 = idx(&ix, "s1");
+        let s2 = idx(&ix, "s2");
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 9.0;
+        scene[high] = 4.0;
+        scene[low] = 3.0;
+        scene[s0] = 2.0;
+        scene[s1] = 1.0;
+        scene[s2] = 1.0;
+        let mut list = vec![head, s0, s1, s2];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(fired);
+        assert_eq!(list, vec![head, high, low, s0], "qualifiers lead, and only the bottom of the tail leaves");
+        let mut again = vec![head, s0, s1, s2];
+        let fired_again = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut again, &scene);
+        assert_eq!(list, again);
+        assert_eq!(fired, fired_again);
+        scene[high] = 100.0;
+        let mut huge = vec![head, s0, s1, s2];
+        rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut huge, &scene);
+        assert_eq!(huge[0], head, "slot 0 stays the RSB head");
+    }
+
+    #[test]
+    fn a_name_in_seven_sessions_is_not_a_bridge() {
+        let mut sessions = Vec::new();
+        for i in 0..7 {
+            sessions.push(s(
+                &format!("s{i}"),
+                vec![t("t", "user", "I met Sam at the station.")],
+            ));
+        }
+        sessions.push(s("p", vec![t("p0", "user", "The note from Jordan is on the desk.")]));
+        sessions.push(s("q", vec![t("q0", "user", "I found the note from Jordan.")]));
+        let ix = ix_of(&sessions);
+        let mut sam_rows = 0usize;
+        for row in &ix.turn_bridge_tokens {
+            if !row.is_empty() {
+                sam_rows += 1;
+            }
+        }
+        assert!(sam_rows < 7, "a seven-session name is a hub and adds no identity edge");
+        let p0 = idx(&ix, "p0");
+        let q0 = idx(&ix, "q0");
+        assert!(!ix.turn_bridge_tokens[p0].is_empty());
+        let islands = episode_islands(&ix, &[p0, q0]);
+        assert_eq!(islands[0], islands[1]);
+    }
+
+    #[test]
+    fn a_lowercase_repeat_is_not_an_identity_edge() {
+        let sessions = vec![
+            s("a", vec![t("head", "user", "We are going camping next month.")]),
+            s("b", vec![t("pride", "user", "I walked past the rainbow sidewalk for Pride Month.")]),
+            s("c", vec![t("other", "user", "The show is next month too.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let other = idx(&ix, "other");
+        assert!(ix.turn_bridge_tokens[head].is_empty());
+        assert!(ix.turn_bridge_tokens[other].is_empty());
+        let neigh = head_structural_neighbors(&ix, head);
+        assert!(!neigh.contains(&other));
     }
 }

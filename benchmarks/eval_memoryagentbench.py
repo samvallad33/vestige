@@ -109,6 +109,15 @@ def main():
             raise RuntimeError(resp['error'])
         return resp
 
+    # Queries whose tail the min-cut island vote changed. Scoring does not read this.
+    mincut_fires = 0
+
+    def count_fires(resp):
+        nonlocal mincut_fires
+        for row in resp.get('results', []):
+            if row.get('mincut_fired'):
+                mincut_fires += 1
+
     t_start = time.time()
 
     try:
@@ -124,6 +133,7 @@ def main():
         queries0 = [{'text': q, 'date': ''} for q in r0['questions']]
         t0 = time.time()
         resp0 = rank({'sessions': sessions0, 'queries': queries0, 'top_k': 10})
+        count_fires(resp0)
         dt0 = time.time() - t0
 
         u_n = u_r1 = u_r5 = u_r10 = 0
@@ -178,6 +188,7 @@ def main():
         queries1 = [{'text': q, 'date': ''} for q in r1['questions']]
         t0 = time.time()
         resp1 = rank({'sessions': sessions1, 'queries': queries1, 'top_k': 10})
+        count_fires(resp1)
         dt1 = time.time() - t0
 
         r1_any1 = r1_any5 = r1_any10 = r1_all5 = r1_all10 = 0
@@ -248,6 +259,7 @@ def main():
 
             t0 = time.time()
             resp = rank({'sessions': sessions, 'queries': queries, 'top_k': 10})
+            count_fires(resp)
             dt = time.time() - t0
 
             row_stat = {
@@ -300,6 +312,7 @@ def main():
 
     nt = lme_tot['n']
     print(f"\nALL 5 longmemeval_s* Rows ({nt} non-abs / {lme_tot['n_total']} total Qs): Any@1={lme_tot['any1']/nt*100:.2f}% Any@3={lme_tot['any3']/nt*100:.2f}% Any@5={lme_tot['any5']/nt*100:.2f}% Any@10={lme_tot['any10']/nt*100:.2f}% | All@5={lme_tot['all5']/nt*100:.2f}% All@10={lme_tot['all10']/nt*100:.2f}% | MRR={lme_tot['mrr']/nt:.4f}")
+    print(f'MINCUT_ISLAND_FIRES {mincut_fires}')
     for qt, tb in sorted(lme_types.items()):
         qn = tb['n']
         print(f"  {qt:26s} ({qn:3d}): Any@1={tb['any1']/qn*100:6.2f}% Any@5={tb['any5']/qn*100:6.2f}% All@5={tb['all5']/qn*100:6.2f}% Any@10={tb['any10']/qn*100:6.2f}%")
@@ -312,6 +325,7 @@ def main():
         'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'elapsed_seconds': round(total_dt, 2),
         'cost_usd': 0,
+        'mincut_island_fires': mincut_fires,
         'splits': {
             'ruler_qa1_197K': {
                 'row': 0, 'docs': len(docs0), 'total_questions': 100,

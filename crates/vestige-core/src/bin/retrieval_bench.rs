@@ -35,4 +35,5 @@ fn main() {
             }
         }
     }
+    eprintln!("MINCUT_ISLAND_FIRES {}", vestige_core::mincut_guard::fires());
 }
