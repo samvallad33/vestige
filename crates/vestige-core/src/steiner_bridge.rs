@@ -48,8 +48,8 @@ mod guard;
 
 use guard::{
     STEINER_BELOW_CAP, STEINER_DIGIT_MIN_CHARS, STEINER_EXACT_MAX_NODES, STEINER_EXACT_MAX_TERMINALS,
-    STEINER_HUB_DF_MAX, STEINER_KEEP_SOLE_SESSION, STEINER_MAX_BRIDGES, STEINER_NEW_SESSION,
-    STEINER_TOKEN_DF_MIN, STEINER_UNIQUE_PAIR,
+    STEINER_HUB_DF_MAX, STEINER_KEEP_SIGNAL_MATE, STEINER_KEEP_SOLE_SESSION, STEINER_MAX_BRIDGES,
+    STEINER_NEW_SESSION, STEINER_TOKEN_DF_MIN, STEINER_UNIQUE_PAIR,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -190,6 +190,9 @@ pub(super) fn apply(ix: &super::Index, list: &mut Vec<usize>, k: usize, t_scene:
             if !duplicated {
                 continue;
             }
+        }
+        if STEINER_KEEP_SIGNAL_MATE && seat < 5 && list.len() >= 5 && pair_signal(ix, turn, list[4]) {
+            continue;
         }
         list.insert(seat, turn);
         if list.len() > k {
@@ -468,6 +471,23 @@ fn terminal_links(ix: &super::Index, terminals: &[usize], stored: &[Vec<usize>])
         }
     }
     link
+}
+
+fn pair_signal(ix: &super::Index, a: usize, b: usize) -> bool {
+    if a == b {
+        return false;
+    }
+    if share(&ix.bridge_tokens[a], &ix.bridge_tokens[b]) {
+        return true;
+    }
+    let linked = |from: usize, to: usize| {
+        let turn = &ix.turns[from];
+        turn.exact_edges.iter().any(|&(_, t)| t == to)
+            || turn.policy_backlinks.contains(&to)
+            || turn.supersedes_turns.contains(&to)
+            || super::rsb_antecedent(ix, from) == Some(to)
+    };
+    linked(a, b) || linked(b, a)
 }
 
 fn signal_adjacent(ix: &super::Index, stored: &[Vec<usize>], a: usize, b: usize) -> bool {

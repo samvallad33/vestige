@@ -8612,6 +8612,34 @@ mod recall_cue_tests {
     }
 
     #[test]
+    fn steiner_bridge_keeps_a_signal_mate_in_the_top_five() {
+        let mut ix = ix_of(&[
+            s("a", vec![t("head", "user", "The battery died after the show.")]),
+            s("b", vec![
+                t("b", "user", "A spare charger is in the drawer."),
+                t("b2", "user", "The drawer also holds tape."),
+            ]),
+            s("c", vec![t("c", "user", "The garden needs water tomorrow.")]),
+            s("d", vec![t("d", "user", "Oat milk is on the counter.")]),
+            s("f", vec![t("bridge", "user", "A notebook is in the bag.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let b = idx(&ix, "b");
+        let b2 = idx(&ix, "b2");
+        let c = idx(&ix, "c");
+        let d = idx(&ix, "d");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, c));
+        ix.turns[bridge].exact_edges.push((2, b2));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, b, c, d, b2];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 5, &scene));
+        assert_eq!(list, before);
+    }
+
+    #[test]
     fn steiner_bridge_fires_inside_rank_and_keeps_slot_zero() {
         let mut bridge = t("bridge", "user", "A sprain was noted in the margin.");
         bridge.links = vec![

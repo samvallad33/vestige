@@ -78,6 +78,18 @@ pub const STEINER_NEW_SESSION: bool = true;
 /// representative stays.
 pub const STEINER_KEEP_SOLE_SESSION: bool = true;
 
+/// Do not push a top-5 turn out of the top 5 when it already shares a
+/// stored edge or an exact token with the bridge.
+///
+/// Any seat in 1..4 replaces the same top-5 member: the old index 4.
+/// v5 fired on 177 LoCoMo queries and moved Multi-Hop turn R@5 from
+/// 138/282 to 137/282 and core turn R@5 from 1067/1536 (69.47%) to
+/// 1062/1536 (69.14%). Open-domain returned to 36/92 and turn R@10
+/// returned to 1179/1536 (76.76%). The remaining loss is that swap.
+/// A marginal turn that already carries the bridge's token or edge is
+/// the mention the bridge would repeat. It stays.
+pub const STEINER_KEEP_SIGNAL_MATE: bool = true;
+
 /// Non-terminal Steiner nodes seated per query.
 /// One node, the one nearest the frozen head on the tree.
 /// Seating it directly behind that head (slot 1 when the head is an
