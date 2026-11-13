@@ -5741,9 +5741,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
-    // Rank-1 gatekeeper. RSB has already seated the cause. This only reorders
-    // that window. Pool size is the window, bounded by the caller's k.
-    rank1_gatekeeper(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
+    // same Kemeny-Young order as PR 710, computed on that window with the head
+    // removed. No new constant: the frozen slot is position 0 of this window.
+    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6508,6 +6509,21 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
         }
     }
     *list = turned;
+}
+
+/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
+/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
+/// they do on a full window. The head is not a candidate for demotion.
+fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+    if list.len() < 2 {
+        return;
+    }
+    let head = list[0];
+    let mut tail = list[1..].to_vec();
+    rank1_gatekeeper(ix, query, &mut tail, t_scene);
+    list.clear();
+    list.push(head);
+    list.extend(tail);
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8308,6 +8324,46 @@ mod recall_cue_tests {
         let mut list = vec![plain, clock];
         rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
         assert_eq!(list[0], clock);
+    }
+
+    #[test]
+    fn gatekeeper_v2_keeps_the_rsb_head_and_reorders_the_tail() {
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("other", "user", "We met downtown after the show again."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let other = idx(&ix, "other");
+        let clock = idx(&ix, "clock");
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![plain, other, clock];
+        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list, vec![plain, clock, other]);
+    }
+
+    #[test]
+    fn gatekeeper_v2_does_not_demote_the_rsb_head() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "The camera is a Sony A7."),
+            t("old", "user", "The lens is a fifty."),
+            t("fresh", "user", "The lens is a thirty five."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let old = idx(&ix, "old");
+        let fresh = idx(&ix, "fresh");
+        ix.turns[fresh].supersedes_turns.push(head);
+        ix.turns[fresh].supersedes_turns.push(old);
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 1.0;
+        scene[old] = 3.0;
+        scene[fresh] = 1.0;
+        let mut list = vec![head, old, fresh];
+        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene);
+        assert_eq!(list[0], head, "slot 1 stays the RSB head");
+        assert_eq!(list[1], fresh, "ATMS still demotes a superseded turn inside the tail");
     }
 
     #[test]
