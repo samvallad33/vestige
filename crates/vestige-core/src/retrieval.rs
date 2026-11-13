@@ -4459,6 +4459,13 @@ fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &HashSet<u32>, names: &HashSet<S
     t.pre_question_ids.is_empty() || clause_hits_query(&t.question_clause_ids, g, ix, names)
 }
 
+fn carry_mode_is_parity() -> bool {
+    static PARITY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PARITY.get_or_init(|| {
+        std::env::var("VESTIGE_CARRY_MODE").map(|v| v == "parity").unwrap_or(false)
+    })
+}
+
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
@@ -4613,6 +4620,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let nt = ix.turns.len();
     let mut t_own = vec![0.0f32; nt];
     let mut t_raw = vec![0.0f32; nt];
+    let mut t_turn_raw = vec![0.0f32; ix.turns.len()];
     let mut t_mask = vec![0u64; nt];
     let mut t_exact_mask = vec![0u64; nt];
     for ti in 0..nt {
@@ -4648,6 +4656,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
+        // Content-token count: TurnIx.content is HashSet<u32> of content term ids
+        // (same field the s5 gate analysis used). This is NOT a UTF-8 char count.
+        let content_tokens = t.content.len();
+        let keep_full_carry = t.speaker == "assistant" || t.is_short_reply || content_tokens <= 8;
+        if carry_mode_is_parity() {
+            t_turn_raw[ti] = sc_own + 1.0 * (sc - sc_own);
+        } else if keep_full_carry {
+            t_turn_raw[ti] = sc.max(sc_own);
+        } else {
+            t_turn_raw[ti] = sc_own + 0.18 * (sc - sc_own).max(0.0);
+        }
         t_mask[ti] = m;
         t_exact_mask[ti] = em_own;
     }
@@ -4658,6 +4677,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // - On `user`/`assistant` dialogues (`BEAM` / `LME`), preserve symmetric `t_raw` pooling so
     //   concise user turns ending in `?` are never inverted beneath verbose assistant expansions!
     let mut t_scene = vec![0.0f32; nt];
+    let mut t_scene_sess = vec![0.0f32; nt];
     if p.enable_scene {
         for members in &ix.session_turns {
             let has_named_dialogue = members.iter().any(|&m| {
@@ -4701,10 +4721,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         t_scene[ti] = 0.92 * t_scene[prev];
                     }
                 }
+                for &ti in members.iter() {
+                    t_scene_sess[ti] = t_scene[ti];
+                }
             } else {
                 for (pos, &ti) in members.iter().enumerate() {
-                    let prev_raw = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
-                    let next_raw = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
                     let prev_w = if ix.turns[ti].speaker == "user" && !ix.turns[ti].is_short_reply {
                         0.0
                     } else if ix.turns[ti].is_backchannel {
@@ -4714,7 +4735,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     } else {
                         0.55
                     };
-                    t_scene[ti] = 1.0 * t_raw[ti] + prev_w * prev_raw + 0.55 * next_raw;
+                    let prev_sess = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
+                    let next_sess = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
+                    t_scene_sess[ti] = 1.0 * t_raw[ti] + prev_w * prev_sess + 0.55 * next_sess;
+                    let prev_tr = if pos > 0 { t_turn_raw[members[pos - 1]] } else { 0.0 };
+                    let next_tr = if pos + 1 < members.len() { t_turn_raw[members[pos + 1]] } else { 0.0 };
+                    t_scene[ti] = 1.0 * t_turn_raw[ti] + prev_w * prev_tr + 0.55 * next_tr;
                     if pos > 0 && !ix.turns[ti].is_backchannel {
                         t_mask[ti] |= t_mask[members[pos - 1]];
                     }
@@ -4725,262 +4751,276 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             }
         }
     } else {
-        t_scene = t_raw.clone();
+        t_scene = t_turn_raw.clone();
+        t_scene_sess = t_raw.clone();
     }
 
     // Named-speaker boost (never a filter): 1.06x tie-breaker gated on t_own[ti] > 0 or t_raw[ti] > 0.
-    for ti in 0..nt {
-        if t_raw[ti] <= 0.0 && t_own[ti] <= 0.0 {
-            continue;
-        }
-        let sp = ix.turns[ti].speaker.as_str();
-        if !sp.is_empty() && sp != "user" && sp != "assistant" && plan.groups.iter().any(|g| g == sp) {
-            t_scene[ti] *= 1.06;
+    for t_sc in [&mut t_scene[..], &mut t_scene_sess[..]] {
+        for ti in 0..nt {
+            if t_raw[ti] <= 0.0 && t_own[ti] <= 0.0 {
+                continue;
+            }
+            let sp = ix.turns[ti].speaker.as_str();
+            if !sp.is_empty() && sp != "user" && sp != "assistant" && plan.groups.iter().any(|g| g == sp) {
+                t_sc[ti] *= 1.06;
+            }
         }
     }
 
     // Turn-level role alignment: suppress assistant turns on explicit user-role queries,
     // except when no user turn in the same session covers that assistant turn's exact query bits!
-    if user_role {
-        for ti in 0..nt {
-            if ix.turns[ti].field == 1 {
-                let s_idx = ix.turns[ti].session;
-                let a_bits = t_exact_mask[ti];
-                let user_covers = a_bits == 0
-                    || ix.session_turns[s_idx]
-                        .iter()
-                        .any(|&u| ix.turns[u].field == 0 && (t_exact_mask[u] & a_bits) == a_bits);
-                if user_covers {
-                    t_scene[ti] *= 0.35;
-                } else {
-                    t_scene[ti] *= 0.72;
+    let apply_scene_refinements = |t_scene: &mut [f32], t_mask: &mut [u64], t_exact_mask: &mut [u64]| {
+        if user_role {
+            for ti in 0..nt {
+                if ix.turns[ti].field == 1 {
+                    let s_idx = ix.turns[ti].session;
+                    let a_bits = t_exact_mask[ti];
+                    let user_covers = a_bits == 0
+                        || ix.session_turns[s_idx]
+                            .iter()
+                            .any(|&u| ix.turns[u].field == 0 && (t_exact_mask[u] & a_bits) == a_bits);
+                    if user_covers {
+                        t_scene[ti] *= 0.35;
+                    } else {
+                        t_scene[ti] *= 0.72;
+                    }
                 }
             }
         }
-    }
 
-    // Standing policy invariant boost:
-    for ti in 0..nt {
-        let t = &ix.turns[ti];
-        if t.is_standing_policy && t_scene[ti] > 0.0 {
-            t_scene[ti] *= 2.5;
+        // Standing policy invariant boost:
+        for ti in 0..nt {
+            let t = &ix.turns[ti];
+            if t.is_standing_policy && t_scene[ti] > 0.0 {
+                t_scene[ti] *= 2.5;
+            }
         }
-    }
 
-    let exact_groups = exact_query_group_ids(&plan);
+        let exact_groups = exact_query_group_ids(&plan);
 
-    // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
-    if p.enable_sniper {
-        for members in &ix.session_turns {
-            let has_named_dialogue = members.iter().any(|&m| {
-                let sp = ix.turns[m].speaker.as_str();
-                !sp.is_empty() && sp != "user" && sp != "assistant"
-            });
-            let speaker_names = if has_named_dialogue {
-                session_speaker_names(ix, members)
-            } else {
-                HashSet::new()
-            };
-            let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
-            for &ti in members {
-                if t_scene[ti] <= 0.0 {
-                    continue;
-                }
-                let t = &ix.turns[ti];
-                if it.sniper_when {
-                    if t.has_temporal {
+        // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
+        if p.enable_sniper {
+            for members in &ix.session_turns {
+                let has_named_dialogue = members.iter().any(|&m| {
+                    let sp = ix.turns[m].speaker.as_str();
+                    !sp.is_empty() && sp != "user" && sp != "assistant"
+                });
+                let speaker_names = if has_named_dialogue {
+                    session_speaker_names(ix, members)
+                } else {
+                    HashSet::new()
+                };
+                let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
+                for &ti in members {
+                    if t_scene[ti] <= 0.0 {
+                        continue;
+                    }
+                    let t = &ix.turns[ti];
+                    if it.sniper_when {
+                        if t.has_temporal {
+                            t_scene[ti] *= 1.65;
+                        }
+                        if t.is_question {
+                            t_scene[ti] *= 0.55;
+                        }
+                    } else if has_named_dialogue
+                        && has_declarative_peer
+                        && !episodic_user_quote
+                        && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
+                    {
+                        t_scene[ti] *= 0.62;
+                    }
+                    if it.sniper_how_many && t.has_numeric {
                         t_scene[ti] *= 1.65;
                     }
-                    if t.is_question {
+                    if it.sniper_where && t.has_spatial {
+                        t_scene[ti] *= 1.60;
+                    }
+                    if it.sniper_why && t.has_causal {
+                        t_scene[ti] *= 1.55;
+                    }
+                    if t.is_short_question {
+                        t_scene[ti] *= 0.50;
+                    }
+                    if t.is_backchannel {
                         t_scene[ti] *= 0.55;
                     }
-                } else if has_named_dialogue
-                    && has_declarative_peer
-                    && !episodic_user_quote
-                    && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
-                {
-                    t_scene[ti] *= 0.62;
-                }
-                if it.sniper_how_many && t.has_numeric {
-                    t_scene[ti] *= 1.65;
-                }
-                if it.sniper_where && t.has_spatial {
-                    t_scene[ti] *= 1.60;
-                }
-                if it.sniper_why && t.has_causal {
-                    t_scene[ti] *= 1.55;
-                }
-                if t.is_short_question {
-                    t_scene[ti] *= 0.50;
-                }
-                if t.is_backchannel {
-                    t_scene[ti] *= 0.55;
                 }
             }
         }
-    }
 
-    // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
-    let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
-    for ent in proper_entity_tokens(&q.text) {
-        if let Some(id) = ix.vocab.get(&ent) {
-            q_ents_and_vocatives.insert(id);
-        }
-    }
-    for w in raw_tokens(&q.text) {
-        if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{w}")) {
-            q_ents_and_vocatives.insert(id);
-        }
-    }
-    let query_has_temp = it.temporal || it.sniper_when || !inline_date_tokens(&q.text).is_empty();
-    let query_has_num = it.sniper_how_many || q.text.chars().any(|c| c.is_ascii_digit());
-    if p.enable_dyad {
-        for members in &ix.session_turns {
-            let speaker_names = session_speaker_names(ix, members);
-            if speaker_names.is_empty() {
-                continue;
+        // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
+        let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
+        for ent in proper_entity_tokens(&q.text) {
+            if let Some(id) = ix.vocab.get(&ent) {
+                q_ents_and_vocatives.insert(id);
             }
-            let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
-            for sw in &speaker_names {
-                if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
-                    sess_speaker_ents.insert(id);
-                }
+        }
+        for w in raw_tokens(&q.text) {
+            if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{w}")) {
+                q_ents_and_vocatives.insert(id);
             }
-            for pos in 0..members.len() {
-                let qi = members[pos];
-                let qt = &ix.turns[qi];
-                if t_scene[qi] <= 0.0 || !turn_echoes_query(ix, qt, &exact_groups, &speaker_names) {
+        }
+        let query_has_temp = it.temporal || it.sniper_when || !inline_date_tokens(&q.text).is_empty();
+        let query_has_num = it.sniper_how_many || q.text.chars().any(|c| c.is_ascii_digit());
+        if p.enable_dyad {
+            for members in &ix.session_turns {
+                let speaker_names = session_speaker_names(ix, members);
+                if speaker_names.is_empty() {
                     continue;
                 }
-                let novel_temp = qt.has_temporal && !query_has_temp;
-                let novel_num = qt.has_numeric && !query_has_num;
-                let novel_ent = qt
-                    .entities
-                    .iter()
-                    .any(|eid| !q_ents_and_vocatives.contains(eid) && !sess_speaker_ents.contains(eid));
-                if novel_temp || novel_num || novel_ent {
-                    continue;
-                }
-                if let Some(&ai) = members.get(pos + 1) {
-                    let ans = &ix.turns[ai];
-                    if named_partner(&qt.speaker, &ans.speaker) && !ans.is_question && !ans.is_backchannel {
-                        t_mask[ai] |= t_mask[qi];
-                        t_exact_mask[ai] |= t_exact_mask[qi];
-                        if t_scene[qi] > t_scene[ai] {
-                            t_scene[ai] = t_scene[ai].max(t_scene[qi] * 1.06);
-                            t_scene[qi] *= 0.65;
-                        }
+                let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
+                for sw in &speaker_names {
+                    if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
+                        sess_speaker_ents.insert(id);
                     }
                 }
-            }
-        }
-    }
-
-    // Weapon 3: Bounded Length-Normalized 2-Iteration Sparse PPR (Turn Level)
-    if p.enable_ppr && nt > 5 {
-        let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
-        let seed_indices: Vec<usize> = order(&t_scene, &turn_ts)
-            .into_iter()
-            .take(16)
-            .filter(|&i| t_scene[i] > 0.0)
-            .collect();
-
-        if let Some(&t0) = seed_indices.first() {
-            let t_max = t_scene[t0];
-            let t0_mask = t_mask[t0];
-            if t_max > 0.0 {
-                let mut activation: HashMap<u32, f32> = HashMap::new();
-                let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
-
-                // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities + Rare Exact Symbols
-                for &s in &seed_indices {
-                    if t_scene[s] < 0.15 * t_max {
-                        break;
+                for pos in 0..members.len() {
+                    let qi = members[pos];
+                    let qt = &ix.turns[qi];
+                    if t_scene[qi] <= 0.0 || !turn_echoes_query(ix, qt, &exact_groups, &speaker_names) {
+                        continue;
                     }
-                    let seed_norm = (t_scene[s] / t_max) / ((ix.turns[s].content.len() + 4) as f32).sqrt();
-                    for &e in &ix.turns[s].entities {
-                        if is_technical_handle(&ix.vocab, e) {
-                            continue;
-                        }
-                        if let Some(&df) = ix.t_stats.df.get(&e) {
-                            if df >= 2 && df <= max_df {
-                                let idf_term = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
-                                *activation.entry(e).or_insert(0.0) += 2.0 * seed_norm * idf_term;
-                            }
-                        }
+                    let novel_temp = qt.has_temporal && !query_has_temp;
+                    let novel_num = qt.has_numeric && !query_has_num;
+                    let novel_ent = qt
+                        .entities
+                        .iter()
+                        .any(|eid| !q_ents_and_vocatives.contains(eid) && !sess_speaker_ents.contains(eid));
+                    if novel_temp || novel_num || novel_ent {
+                        continue;
                     }
-                    for &w in &ix.turns[s].content {
-                        if plan.group_of.contains_key(&w) {
-                            continue;
-                        }
-                        if let Some(&df) = ix.t_stats.df.get(&w) {
-                            if df >= 2 && df <= max_df {
-                                let idf_term = 1.2 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
-                                *activation.entry(w).or_insert(0.0) += 0.75 * seed_norm * idf_term;
+                    if let Some(&ai) = members.get(pos + 1) {
+                        let ans = &ix.turns[ai];
+                        if named_partner(&qt.speaker, &ans.speaker) && !ans.is_question && !ans.is_backchannel {
+                            t_mask[ai] |= t_mask[qi];
+                            t_exact_mask[ai] |= t_exact_mask[qi];
+                            if t_scene[qi] > t_scene[ai] {
+                                t_scene[ai] = t_scene[ai].max(t_scene[qi] * 1.06);
+                                t_scene[qi] *= 0.65;
                             }
                         }
                     }
                 }
+            }
+        }
 
-                // Pass 2: Bridge Entities -> Normalized, Bounded 2nd-Hop Turns
-                if !activation.is_empty() {
-                    for ti in 0..nt {
-                        let mut ent_hit = 0.0f32;
-                        for &e in &ix.turns[ti].entities {
-                            if let Some(&act) = activation.get(&e) {
-                                ent_hit += 2.0 * act;
+        // Weapon 3: Bounded Length-Normalized 2-Iteration Sparse PPR (Turn Level)
+        if p.enable_ppr && nt > 5 {
+            let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
+            let seed_indices: Vec<usize> = order(&t_scene, &turn_ts)
+                .into_iter()
+                .take(16)
+                .filter(|&i| t_scene[i] > 0.0)
+                .collect();
+
+            if let Some(&t0) = seed_indices.first() {
+                let t_max = t_scene[t0];
+                let t0_mask = t_mask[t0];
+                if t_max > 0.0 {
+                    let mut activation: HashMap<u32, f32> = HashMap::new();
+                    let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
+
+                    // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities + Rare Exact Symbols
+                    for &s in &seed_indices {
+                        if t_scene[s] < 0.15 * t_max {
+                            break;
+                        }
+                        let seed_norm = (t_scene[s] / t_max) / ((ix.turns[s].content.len() + 4) as f32).sqrt();
+                        for &e in &ix.turns[s].entities {
+                            if is_technical_handle(&ix.vocab, e) {
+                                continue;
+                            }
+                            if let Some(&df) = ix.t_stats.df.get(&e) {
+                                if df >= 2 && df <= max_df {
+                                    let idf_term = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
+                                    *activation.entry(e).or_insert(0.0) += 2.0 * seed_norm * idf_term;
+                                }
                             }
                         }
-                        let mut ppr_sum = ent_hit;
-                        for &w in &ix.turns[ti].content {
-                            if let Some(&act) = activation.get(&w) {
-                                ppr_sum += 0.75 * act;
+                        for &w in &ix.turns[s].content {
+                            if plan.group_of.contains_key(&w) {
+                                continue;
+                            }
+                            if let Some(&df) = ix.t_stats.df.get(&w) {
+                                if df >= 2 && df <= max_df {
+                                    let idf_term = 1.2 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
+                                    *activation.entry(w).or_insert(0.0) += 0.75 * seed_norm * idf_term;
+                                }
                             }
                         }
-                        if ppr_sum > 0.0 && (t_scene[ti] > 0.0 || ent_hit > 0.0) {
-                            let target_norm = ppr_sum / ((ix.turns[ti].content.len() + 4) as f32).sqrt();
-                            let sat = target_norm / (target_norm + 0.45);
-                            let mult = if (t_mask[ti] & !t0_mask) != 0 { 1.65 } else { 1.0 };
-                            let boost = t_max * 0.25 * mult * sat;
-                            t_scene[ti] += boost;
+                    }
+
+                    // Pass 2: Bridge Entities -> Normalized, Bounded 2nd-Hop Turns
+                    if !activation.is_empty() {
+                        for ti in 0..nt {
+                            let mut ent_hit = 0.0f32;
+                            for &e in &ix.turns[ti].entities {
+                                if let Some(&act) = activation.get(&e) {
+                                    ent_hit += 2.0 * act;
+                                }
+                            }
+                            let mut ppr_sum = ent_hit;
+                            for &w in &ix.turns[ti].content {
+                                if let Some(&act) = activation.get(&w) {
+                                    ppr_sum += 0.75 * act;
+                                }
+                            }
+                            if ppr_sum > 0.0 && (t_scene[ti] > 0.0 || ent_hit > 0.0) {
+                                let target_norm = ppr_sum / ((ix.turns[ti].content.len() + 4) as f32).sqrt();
+                                let sat = target_norm / (target_norm + 0.45);
+                                let mult = if (t_mask[ti] & !t0_mask) != 0 { 1.65 } else { 1.0 };
+                                let boost = t_max * 0.25 * mult * sat;
+                                t_scene[ti] += boost;
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    // Hierarchical session-to-turn funnel.
-    if p.enable_funnel && smax > 0.0 {
-        for ti in 0..nt {
-            if t_scene[ti] > 0.0 {
-                t_scene[ti] *= 1.0 + p.funnel * (s_score[ix.turns[ti].session] / smax);
+        // Hierarchical session-to-turn funnel.
+        if p.enable_funnel && smax > 0.0 {
+            for ti in 0..nt {
+                if t_scene[ti] > 0.0 {
+                    t_scene[ti] *= 1.0 + p.funnel * (s_score[ix.turns[ti].session] / smax);
+                }
             }
         }
-    }
 
-    // Adjacency-pair dyad coupling: answers to questions AND short commitment/value replies
-    // to statements ("Done.", "Last Tuesday.", "Me too!") ride alongside their setup turn.
-    if p.enable_dyad {
-        let base = t_scene.clone();
-        for members in &ix.session_turns {
-            for pos in 1..members.len() {
-                let (a, b) = (members[pos - 1], members[pos]);
-                if !ix.turns[b].answers_question && !ix.turns[b].is_short_reply {
-                    continue;
+        // Adjacency-pair dyad coupling: answers to questions AND short commitment/value replies
+        // to statements ("Done.", "Last Tuesday.", "Me too!") ride alongside their setup turn.
+        if p.enable_dyad {
+            let base = t_scene.to_vec();
+            for members in &ix.session_turns {
+                for pos in 1..members.len() {
+                    let (a, b) = (members[pos - 1], members[pos]);
+                    if !ix.turns[b].answers_question && !ix.turns[b].is_short_reply {
+                        continue;
+                    }
+                    let partner_ratio = if ix.turns[b].answers_question { p.dyad_partner } else { 0.84 };
+                    let (hi, lo) = if base[a] >= base[b] { (a, b) } else { (b, a) };
+                    if base[hi] <= 0.0 {
+                        continue;
+                    }
+                    let dyad = base[hi] + p.dyad * base[lo];
+                    t_scene[hi] = t_scene[hi].max(dyad);
+                    t_scene[lo] = t_scene[lo].max(dyad * partner_ratio);
+                    t_mask[lo] |= t_mask[hi];
                 }
-                let partner_ratio = if ix.turns[b].answers_question { p.dyad_partner } else { 0.84 };
-                let (hi, lo) = if base[a] >= base[b] { (a, b) } else { (b, a) };
-                if base[hi] <= 0.0 {
-                    continue;
-                }
-                let dyad = base[hi] + p.dyad * base[lo];
-                t_scene[hi] = t_scene[hi].max(dyad);
-                t_scene[lo] = t_scene[lo].max(dyad * partner_ratio);
-                t_mask[lo] |= t_mask[hi];
             }
         }
-    }
+
+    };
+    // Run session-path refinements first on a mask copy, then restore and run the
+    // turn-path refinements so PPR seeds see pre-dyad masks (floor behavior).
+    let t_mask_snap = t_mask.clone();
+    let t_exact_snap = t_exact_mask.clone();
+    apply_scene_refinements(&mut t_scene_sess, &mut t_mask, &mut t_exact_mask);
+    t_mask.copy_from_slice(&t_mask_snap);
+    t_exact_mask.copy_from_slice(&t_exact_snap);
+    apply_scene_refinements(&mut t_scene, &mut t_mask, &mut t_exact_mask);
 
     let k = top_k.max(1);
 
@@ -4990,6 +5030,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // zero-overlap rule does not become a PPR anchor. The standing floor is
     // applied to the policy turn itself, not only its session.
     let lexical_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
+    let lexical_tmax_sess = t_scene_sess.iter().cloned().fold(0.0f32, f32::max);
     let lexical_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
     let multi_evidence_intent = it.multi_hop
         || it.sniper_how_many
@@ -5043,6 +5084,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
         });
         let _ = raise_floor(&mut t_scene, lexical_tmax, 0.38, |ti| ix.turns[ti].is_initiative);
+        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.38, |ti| ix.turns[ti].is_initiative);
+    }
+    // Mirror standing/pref floors onto the session-path t_scene (bridge_boost reads this).
+    if it.task_under_rules && !policy_blocked {
+        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.68, |ti| ix.turns[ti].is_standing_policy);
+        if let Some(top) = standing_rules.first() {
+            let t_win_floor = policy_spec_winner_floor(lexical_tmax_sess);
+            if let Some(top_rule_turn) = ix.turns.iter().position(|t| t.id == top.id) {
+                if t_scene_sess[top_rule_turn] < t_win_floor {
+                    t_scene_sess[top_rule_turn] = t_win_floor;
+                }
+            }
+        }
+    }
+    if pref_on && !multi_evidence_intent {
+        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.50, |ti| ix.turns[ti].is_personal_constraint);
     }
     let initiative_content: Vec<HashSet<u32>> = if it.is_event_sequence {
         ix.session_turns.iter().map(|members| {
@@ -5117,13 +5174,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 for &anc in &anchors {
                     let anc_w = (s_score[anc] / smax).clamp(0.35, 1.0);
                     let members = &ix.session_turns[anc];
-                    let anc_tmax = members.iter().map(|&ti| t_scene[ti]).fold(0.0f32, f32::max);
+                    let anc_tmax = members.iter().map(|&ti| t_scene_sess[ti]).fold(0.0f32, f32::max);
                     let use_hot = anc_tmax > 0.0 && members.len() > 2;
                     for &ti in members {
-                        if use_hot && t_scene[ti] < 0.25 * anc_tmax {
+                        if use_hot && t_scene_sess[ti] < 0.25 * anc_tmax {
                             continue;
                         }
-                        let hot_turn_bonus = if anc_tmax > 0.0 && t_scene[ti] >= 0.60 * anc_tmax { 1.18 } else { 1.0 };
+                        let hot_turn_bonus = if anc_tmax > 0.0 && t_scene_sess[ti] >= 0.60 * anc_tmax { 1.18 } else { 1.0 };
                         let toks = ix.turns[ti].span_ids_cache.get_or_init(|| {
                             ix.turns[ti]
                                 .body_for_headers
@@ -5183,10 +5240,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let anc_w = (s_score[anc] / smax).clamp(0.25, 1.0);
                 // Prefer highest-scoring matching turns inside anchor session so bridge entities come from hot passage.
                 let members = &ix.session_turns[anc];
-                let anc_tmax = members.iter().map(|&ti| t_scene[ti]).fold(0.0f32, f32::max);
+                let anc_tmax = members.iter().map(|&ti| t_scene_sess[ti]).fold(0.0f32, f32::max);
                 let use_hot = anc_tmax > 0.0 && members.len() > 2;
                 for &ti in members {
-                    if use_hot && t_scene[ti] < 0.25 * anc_tmax {
+                    if use_hot && t_scene_sess[ti] < 0.25 * anc_tmax {
                         continue;
                     }
                     let turn_len_norm = ((ix.turns[ti].content.len() + 6) as f32).sqrt();
