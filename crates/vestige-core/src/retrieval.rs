@@ -5238,7 +5238,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     if sum > 0.0 && (s_score[si] > 0.0 || allow_zero_hit) {
                         let slen = (ix.session_bags[si].len[0] + ix.session_bags[si].len[1] + 8.0).sqrt();
                         let norm = sum / slen;
-                        let sat = norm / (norm + 0.05);
+                        let bridge_k = if pref_on { 0.05 } else { 0.50 };
+                        let sat = norm / (norm + bridge_k);
                         let mut coeff = if it.multi_hop || plan.groups.len() >= 3 { 0.55 } else { 0.12 };
                         if (s_exact_mask[si] & !s_exact_mask[top0]) != 0 {
                             coeff *= 1.30;
