@@ -6745,6 +6745,7 @@ fn head_edge_hit(ix: &Index, head: usize, cand: usize) -> bool {
         return true;
     }
     cand > head
+        && cand_turn.session != head_turn.session
         && cand_turn.is_standing_policy
         && episode_root(ix, head_turn.session) == episode_root(ix, cand_turn.session)
 }
@@ -8729,12 +8730,16 @@ mod recall_cue_tests {
 
     #[test]
     fn group_testing_seats_a_rule_behind_the_head_and_repeats() {
-        let sessions = vec![s("s", vec![
-            t("fact", "user", "The migration checklist covers backups and rollback."),
-            t("reply", "assistant", "The migration checklist covers backups and rollback today."),
-            t("other", "user", "Packing cubes fit in the hallway closet."),
-            t("rule", "user", "Always include Atlas in the weekly note."),
-        ])];
+        let sessions = vec![
+            s("conv1_b0_s0", vec![
+                t("fact", "user", "The migration checklist covers backups and rollback."),
+                t("reply", "assistant", "The migration checklist covers backups and rollback today."),
+                t("other", "user", "Packing cubes fit in the hallway closet."),
+            ]),
+            s("conv1_b0_s1", vec![
+                t("rule", "user", "Always include Atlas in the weekly note."),
+            ]),
+        ];
         let ix = ix_of(&sessions);
         let rule = idx(&ix, "rule");
         let fact = idx(&ix, "fact");
@@ -8762,12 +8767,16 @@ mod recall_cue_tests {
 
     #[test]
     fn group_testing_leaves_the_window_alone_when_two_rules_trigger() {
-        let sessions = vec![s("s", vec![
-            t("fact", "user", "The migration checklist covers backups and rollback."),
-            t("other", "user", "Packing cubes fit in the hallway closet."),
-            t("rule_a", "user", "Always include Atlas in the weekly note."),
-            t("rule_b", "user", "Always include Nova in the weekly note."),
-        ])];
+        let sessions = vec![
+            s("conv1_b0_s0", vec![
+                t("fact", "user", "The migration checklist covers backups and rollback."),
+                t("other", "user", "Packing cubes fit in the hallway closet."),
+            ]),
+            s("conv1_b0_s1", vec![
+                t("rule_a", "user", "Always include Atlas in the weekly note."),
+                t("rule_b", "user", "Always include Nova in the weekly note."),
+            ]),
+        ];
         let ix = ix_of(&sessions);
         let fact = idx(&ix, "fact");
         let other = idx(&ix, "other");
@@ -8843,12 +8852,16 @@ mod recall_cue_tests {
     #[test]
     fn group_testing_uses_the_head_episode_when_another_episode_also_has_a_rule() {
         let sessions = vec![
-            s("ep_a", vec![
+            s("convA_b0_s0", vec![
                 t("fact_a", "user", "The migration checklist covers backups and rollback."),
+            ]),
+            s("convA_b0_s1", vec![
                 t("rule_a", "user", "Always include Atlas in the weekly note."),
             ]),
-            s("ep_b", vec![
+            s("convB_b0_s0", vec![
                 t("fact_b", "user", "The migration checklist covers backups and rollback too."),
+            ]),
+            s("convB_b0_s1", vec![
                 t("rule_b", "user", "Always include Nova in the weekly note."),
             ]),
         ];
@@ -8865,13 +8878,17 @@ mod recall_cue_tests {
 
     #[test]
     fn group_testing_does_not_let_an_impure_token_family_veto_the_head_rule() {
-        let sessions = vec![s("s", vec![
-            t("pref_a", "user", "I love the paintings of Monet above everything else."),
-            t("pref_b", "user", "I prefer the sketches of Monet to the late oils."),
-            t("fact", "user", "The migration checklist covers backups and rollback."),
-            t("other", "user", "Packing cubes fit in the hallway closet."),
-            t("rule", "user", "Always include Atlas in the weekly note."),
-        ])];
+        let sessions = vec![
+            s("conv1_b0_s0", vec![
+                t("pref_a", "user", "I love the paintings of Monet above everything else."),
+                t("pref_b", "user", "I prefer the sketches of Monet to the late oils."),
+                t("fact", "user", "The migration checklist covers backups and rollback."),
+                t("other", "user", "Packing cubes fit in the hallway closet."),
+            ]),
+            s("conv1_b0_s1", vec![
+                t("rule", "user", "Always include Atlas in the weekly note."),
+            ]),
+        ];
         let ix = ix_of(&sessions);
         let fact = idx(&ix, "fact");
         let other = idx(&ix, "other");

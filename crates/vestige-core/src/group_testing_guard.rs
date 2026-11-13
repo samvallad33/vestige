@@ -16,7 +16,10 @@
 //! did. Two pure families that name different turns are a (2, n) population,
 //! and nothing is seated.
 //!
-//! The episode member is a standing policy that comes later than the head.
+//! The episode member is a standing policy in a later session of the head's
+//! episode. A later policy in the head's own session is not a member: that
+//! seat is what moved LoCoMo and LongMemEval turn Any@5 down while the BEAM
+//! instruction lives in a later sub-session.
 //! `policy_backlinks` point from a later turn at an earlier policy. Seating
 //! that earlier policy fired 86 times on the v2 card and moved BEAM turn
 //! Any@5 from 59.15 to 58.87. The probed instruction sits in a later sub than
