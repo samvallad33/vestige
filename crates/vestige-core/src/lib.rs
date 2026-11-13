@@ -121,6 +121,8 @@ pub mod neuroscience;
 #[allow(clippy::all)]
 pub mod retrieval;
 
+mod fca_bridge_guard;
+
 // ============================================================================
 // PUBLIC API RE-EXPORTS
 // ============================================================================

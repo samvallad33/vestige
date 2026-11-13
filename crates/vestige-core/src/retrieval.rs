@@ -1875,6 +1875,8 @@ struct TurnIx {
     form_handle: bool,
     /// A capitalized word of two or more letters that is not sentence-initial.
     form_midcap: bool,
+    /// Exact name, handle, and digit token ids for the FCA bridge. Sorted, unique.
+    fca_tokens: Vec<u32>,
     raw_links: Vec<TurnLink>,
 }
 
@@ -2944,6 +2946,17 @@ impl SpeakerNickIndex {
     }
 }
 
+fn intern_fca_keys(vocab: &mut HashMap<String, u32>, keys: &[String]) -> Vec<u32> {
+    let mut ids = Vec::with_capacity(keys.len());
+    for key in keys {
+        let next = vocab.len() as u32;
+        ids.push(*vocab.entry(key.clone()).or_insert(next));
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
 fn build_index(sessions: &[Session], p: &Params) -> Index {
     const BACKCHANNEL_LEADS: &[&str] = &[
         "wow", "oh", "aw", "aww", "haha", "hahaha", "lol", "nice", "cool", "awesome",
@@ -2979,6 +2992,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
     let mut turn_prose_cache: Vec<String> = Vec::new();
     let mut cue_vocab: HashMap<String, u32> = HashMap::new();
+    let mut fca_vocab: HashMap<String, u32> = HashMap::new();
     let mut turn_cues: Vec<Vec<u32>> = Vec::new();
     let mut role_cues: HashSet<u32> = HashSet::new();
     let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
@@ -3294,6 +3308,13 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 ));
             }
             let id = if t.id.is_empty() { format!("{}#{}", s.id, ti) } else { t.id.clone() };
+            let mut fca_keys = crate::fca_bridge_guard::surface_keys(&t.content);
+            for handle in extract_exact_technical_handles(&t.content) {
+                fca_keys.push(format!("t:{handle}"));
+            }
+            fca_keys.sort();
+            fca_keys.dedup();
+            let fca_tokens = intern_fca_keys(&mut fca_vocab, &fca_keys);
             let body_for_headers = if header_max_words > 0 {
                 let body = if extract_header_titles(prose_body).is_some() {
                     prose_body.split_once('\n').map(|(_, rest)| rest).unwrap_or(prose_body)
@@ -3349,6 +3370,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_digit: has_ascii_digit(prose_body),
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
+                fca_tokens,
                 raw_links: t.links.clone(),
             });
         }
@@ -5745,6 +5767,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // FCA bridge. Slot 0 stays the RSB head. A turn from below the window is
+    // seated inside Recall@5 only when stored edges close a two-hop through
+    // it. A shared token is not a ballot. Reordering this window cannot
+    // change recall; the insert changes the set.
+    fca_second_stage(ix, &mut final_turn_indices, &t_scene, k);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6524,6 +6551,90 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
     list.clear();
     list.push(head);
     list.extend(tail);
+}
+
+fn push_fca_edge(edges: &mut Vec<(usize, usize)>, pool: &[bool], a: usize, b: usize) {
+    if a != b && a < pool.len() && b < pool.len() && pool[a] && pool[b] {
+        edges.push(if a < b { (a, b) } else { (b, a) });
+    }
+}
+
+/// Seat one below-window bridge. Index 0 is the RSB head and is not a seat.
+/// The bridge is the middle of a stored-edge path between two in-window turns.
+fn fca_second_stage(ix: &Index, list: &mut Vec<usize>, scene: &[f32], k: usize) {
+    if list.len() < 2 || k < 2 {
+        return;
+    }
+    let n = ix.turns.len();
+    let mut in_window = vec![false; n];
+    for &ti in list.iter() {
+        if ti < n {
+            in_window[ti] = true;
+        }
+    }
+    let mut below: Vec<usize> = (0..n)
+        .filter(|&ti| !in_window[ti] && scene.get(ti).copied().unwrap_or(0.0) > 0.0)
+        .collect();
+    below.sort_by(|&a, &b| {
+        let sa = scene.get(a).copied().unwrap_or(0.0);
+        let sb = scene.get(b).copied().unwrap_or(0.0);
+        sb.total_cmp(&sa).then(a.cmp(&b))
+    });
+    below.truncate(crate::fca_bridge_guard::FCA_BELOW);
+    if below.is_empty() {
+        return;
+    }
+    let window: Vec<crate::fca_bridge_guard::FcaObj> = list
+        .iter()
+        .copied()
+        .filter(|&ti| ti < n)
+        .map(|ti| crate::fca_bridge_guard::FcaObj {
+            turn: ti,
+            session: ix.turns[ti].session,
+            tokens: ix.turns[ti].fca_tokens.clone(),
+        })
+        .collect();
+    let tail: Vec<crate::fca_bridge_guard::FcaObj> = below
+        .iter()
+        .copied()
+        .map(|ti| crate::fca_bridge_guard::FcaObj {
+            turn: ti,
+            session: ix.turns[ti].session,
+            tokens: ix.turns[ti].fca_tokens.clone(),
+        })
+        .collect();
+    let mut pool = in_window;
+    for &ti in &below {
+        pool[ti] = true;
+    }
+    let mut edges = Vec::new();
+    for &ti in list.iter().chain(below.iter()) {
+        if ti >= n {
+            continue;
+        }
+        let turn = &ix.turns[ti];
+        for &target in turn.policy_backlinks.iter().chain(turn.supersedes_turns.iter()) {
+            push_fca_edge(&mut edges, &pool, ti, target);
+        }
+        for &(_, target) in &turn.exact_edges {
+            push_fca_edge(&mut edges, &pool, ti, target);
+        }
+        if let Some(target) = rsb_antecedent(ix, ti) {
+            push_fca_edge(&mut edges, &pool, ti, target);
+        }
+    }
+    edges.sort_unstable();
+    edges.dedup();
+    let Some(bridge) = crate::fca_bridge_guard::select_bridge(&window, &tail, &edges, k) else {
+        return;
+    };
+    if crate::fca_bridge_guard::place_bridge(list, bridge, k) {
+        crate::fca_bridge_guard::note_fire();
+    }
+}
+
+pub fn fca_bridge_fires() -> u64 {
+    crate::fca_bridge_guard::fires()
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8379,5 +8490,121 @@ mod recall_cue_tests {
         let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
         let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ta, tb);
+    }
+}
+
+#[cfg(test)]
+mod fca_bridge_tests {
+    use super::*;
+
+    fn t(id: &str, role: &str, content: &str) -> Turn {
+        Turn { id: id.into(), role: role.into(), content: content.into(), ..Turn::default() }
+    }
+
+    fn s(id: &str, turns: Vec<Turn>) -> Session {
+        Session { id: id.into(), date: String::new(), timestamp: 0, turns }
+    }
+
+    fn turn_of(ix: &Index, id: &str) -> usize {
+        ix.turns.iter().position(|turn| turn.id == id).unwrap()
+    }
+
+    #[test]
+    fn fca_bridge_fires_and_keeps_the_head() {
+        let sessions = vec![s(
+            "s",
+            vec![
+                t("head", "user", "Helena opened the kiln."),
+                t("other", "user", "The studio is in Riverside today."),
+                t("pad2", "user", "We baked bread at noon."),
+                t("pad3", "user", "The garden needs water."),
+                t("pad4", "user", "A package arrived yesterday."),
+                t("pad5", "user", "Traffic was slow downtown."),
+                t("bridge", "user", "Helena left Riverside before noon."),
+            ],
+        )];
+        let mut ix = build_index(&sessions, &Params::default());
+        let head = turn_of(&ix, "head");
+        let other = turn_of(&ix, "other");
+        let pad2 = turn_of(&ix, "pad2");
+        let pad3 = turn_of(&ix, "pad3");
+        let pad4 = turn_of(&ix, "pad4");
+        let pad5 = turn_of(&ix, "pad5");
+        let bridge = turn_of(&ix, "bridge");
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        for &ti in &[head, other, pad2, pad3, pad4, pad5, bridge] {
+            scene[ti] = 1.0;
+        }
+        scene[bridge] = 0.1;
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, other));
+        let mut list = vec![head, other, pad2, pad3, pad4, pad5];
+        let before = fca_bridge_fires();
+        fca_second_stage(&ix, &mut list, &scene, 10);
+        assert!(fca_bridge_fires() > before, "the constructed bridge did not fire");
+        assert_eq!(list[0], head);
+        assert_eq!(list[4], bridge);
+        assert_eq!(&list[..4], &[head, other, pad2, pad3]);
+    }
+
+    #[test]
+    fn fca_bridge_does_not_fire_on_shared_names_alone() {
+        let sessions = vec![s(
+            "s",
+            vec![
+                t("head", "user", "Helena opened the kiln."),
+                t("other", "user", "The studio is in Riverside today."),
+                t("pad2", "user", "We baked bread at noon."),
+                t("pad3", "user", "The garden needs water."),
+                t("pad4", "user", "A package arrived yesterday."),
+                t("pad5", "user", "Traffic was slow downtown."),
+                t("bridge", "user", "Helena left Riverside before noon."),
+            ],
+        )];
+        let ix = build_index(&sessions, &Params::default());
+        let ids = ["head", "other", "pad2", "pad3", "pad4", "pad5", "bridge"];
+        let at = |name: &str| ix.turns.iter().position(|turn| turn.id == name).unwrap();
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        for name in ids {
+            scene[at(name)] = if name == "bridge" { 0.1 } else { 1.0 };
+        }
+        let mut list = vec![at("head"), at("other"), at("pad2"), at("pad3"), at("pad4"), at("pad5")];
+        let before = list.clone();
+        fca_second_stage(&ix, &mut list, &scene, 10);
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn fca_bridge_is_deterministic_and_does_not_move_the_head_through_rank() {
+        let mut bridge = t("c", "user", "Helena missed the Riverside studio signup.");
+        bridge.links = vec![
+            TurnLink { kind: "exact".into(), to: "a".into(), degree: 2 },
+            TurnLink { kind: "exact".into(), to: "b".into(), degree: 2 },
+        ];
+        let req = || RankRequest {
+            sessions: vec![s(
+                "s",
+                vec![
+                    t("a", "user", "The pottery class met at Riverside yesterday."),
+                    t("b", "user", "Helena reserved kiln time for the pottery class."),
+                    bridge.clone(),
+                ],
+            )],
+            queries: vec![Query {
+                text: "Where did Helena go for the pottery class".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let once = rank(&req());
+        let twice = rank(&req());
+        let ids = |resp: &RankResponse| -> Vec<String> {
+            resp.results[0].turns.iter().map(|turn| turn.id.clone()).collect()
+        };
+        let first = ids(&once);
+        assert_eq!(first, ids(&twice));
+        assert_ne!(first[0], "c", "the RSB head moved: {first:?}");
+        assert!(first.contains(&"c".to_string()), "bridge was not seated: {first:?}");
     }
 }

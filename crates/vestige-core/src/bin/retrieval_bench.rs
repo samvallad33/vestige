@@ -35,4 +35,8 @@ fn main() {
             }
         }
     }
+    eprintln!(
+        "fca_bridge_fires={}",
+        vestige_core::retrieval::fca_bridge_fires()
+    );
 }
