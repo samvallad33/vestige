@@ -166,6 +166,7 @@ async function runBeam(args) {
   let pktTurnAny5 = 0, pktTurnAll5 = 0;
 
   const categoryStats = {};
+  let steinerFires = 0;
   const t0 = Date.now();
   const convsToRun = args.limit ? convDirs.slice(0, args.limit) : convDirs;
 
@@ -226,6 +227,7 @@ async function runBeam(args) {
       queries: queryEntries.map(e => ({ text: e.question, date: '' })),
       top_k: 10,
     });
+    steinerFires += Number(resp.steiner_bridge_fires || 0);
 
     for (let qi = 0; qi < queryEntries.length; qi++) {
       const { cat, goldTurnIds, goldSessIds } = queryEntries[qi];
@@ -240,8 +242,8 @@ async function runBeam(args) {
       if (!categoryStats[cat]) {
         categoryStats[cat] = {
           total: 0,
-          sessAny5: 0, sessAll5: 0, sessAny10: 0, sessAll10: 0,
-          turnAny5: 0, turnAll5: 0, turnAny10: 0,
+          sessAny5: 0, sessAll5: 0, sessAny10: 0, sessAll10: 0, sessAny1: 0,
+          turnAny1: 0, turnAny5: 0, turnAll5: 0, turnAny10: 0,
           pktSessAny5: 0, pktSessAll5: 0, pktTurnAny5: 0, pktTurnAll5: 0,
         };
       }
@@ -257,7 +259,7 @@ async function runBeam(args) {
       const pTAny5 = goldTurnIds.some(g => pktTurn5.includes(g));
       const pTAll5 = goldTurnIds.length > 0 && goldTurnIds.every(g => pktTurn5.includes(g));
 
-      if (sAny(1)) sessAny1++;
+      if (sAny(1)) { sessAny1++; st.sessAny1++; }
       if (sAny(3)) sessAny3++;
       if (sAny(5)) { sessAny5++; st.sessAny5++; }
       if (sAny(10)) { sessAny10++; st.sessAny10++; }
@@ -268,7 +270,7 @@ async function runBeam(args) {
       const sRank = retSessIds.findIndex(id => goldSessIds.includes(id));
       if (sRank >= 0) sessMrrSum += 1.0 / (sRank + 1);
 
-      if (tAny(1)) turnAny1++;
+      if (tAny(1)) { turnAny1++; st.turnAny1++; }
       if (tAny(3)) turnAny3++;
       if (tAny(5)) { turnAny5++; st.turnAny5++; }
       if (tAny(10)) { turnAny10++; st.turnAny10++; }
@@ -296,6 +298,7 @@ async function runBeam(args) {
   console.log(`Session RecallAny@1: ${pct(sessAny1)}% | Any@3: ${pct(sessAny3)}% | Any@5: ${pct(sessAny5)}% | Any@10: ${pct(sessAny10)}% | All@5: ${pct(sessAll5)}% | All@10: ${pct(sessAll10)}% | MRR: ${(sessMrrSum / scoredQuestions).toFixed(4)}`);
   console.log(`Turn    RecallAny@1: ${pct(turnAny1)}% | Any@3: ${pct(turnAny3)}% | Any@5: ${pct(turnAny5)}% | Any@10: ${pct(turnAny10)}% | All@5: ${pct(turnAll5)}% | All@10: ${pct(turnAll10)}% | MRR: ${(turnMrrSum / scoredQuestions).toFixed(4)}`);
   console.log(`Stratified Packet (sessions[0..5] + standing_rules[0..2]): Sess Any@5: ${pct(pktSessAny5)}% All@5: ${pct(pktSessAll5)}% | Turn Any@5: ${pct(pktTurnAny5)}% All@5: ${pct(pktTurnAll5)}%`);
+  console.log(`steiner_bridge_fires=${steinerFires}`);
   console.log(`Time: ${elapsedSec}s | API Cost: $0.00`);
 
   console.log(`\n--- Category Breakdown ---`);
@@ -306,7 +309,7 @@ async function runBeam(args) {
         `  ${c.padEnd(26)} (${String(st.total).padStart(3)}): ` +
         `Sess Any@5=${rate(st.sessAny5)}% All@5=${rate(st.sessAll5)}% ` +
         `(Pkt Any ${rate(st.pktSessAny5)}% All ${rate(st.pktSessAll5)}%) Any@10=${rate(st.sessAny10)}% | ` +
-        `Turn Any@5=${rate(st.turnAny5)}% All@5=${rate(st.turnAll5)}% ` +
+        `Turn Any@1=${st.turnAny1}/${st.total} Any@5=${rate(st.turnAny5)}% All@5=${rate(st.turnAll5)}% ` +
         `(Pkt Any ${rate(st.pktTurnAny5)}% All ${rate(st.pktTurnAll5)}%) Any@10=${rate(st.turnAny10)}%`
       );
     }
@@ -319,6 +322,7 @@ async function runBeam(args) {
     timestamp: new Date().toISOString(),
     elapsed_seconds: parseFloat(elapsedSec),
     cost_usd: 0.0,
+    steiner_bridge_fires: steinerFires,
     conversations: convsToRun.length,
     sub_sessions: totalSubSessions,
     turns: totalTurns,

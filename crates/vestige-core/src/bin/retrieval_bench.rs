@@ -35,4 +35,5 @@ fn main() {
             }
         }
     }
+    eprintln!("steiner_bridge_fires={}", vestige_core::retrieval::steiner_bridge_fire_count());
 }
