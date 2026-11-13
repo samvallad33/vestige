@@ -1867,6 +1867,14 @@ struct TurnIx {
     /// Backward state-revision / contradiction edges (`t_new -> t_old`).
     supersedes_turns: Vec<usize>,
     stability: f32,
+    /// ISO date or HH:MM in the turn text. Character form, not a month name.
+    form_clock: bool,
+    /// An ASCII digit in the turn text. Number words do not count.
+    form_digit: bool,
+    /// An @handle, a URL, or a path token.
+    form_handle: bool,
+    /// A capitalized word of two or more letters that is not sentence-initial.
+    form_midcap: bool,
     raw_links: Vec<TurnLink>,
 }
 
@@ -3337,6 +3345,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 policy_backlinks: Vec::new(),
                 supersedes_turns: Vec::new(),
                 stability: t.stability,
+                form_clock: has_iso_or_hhmm(prose_body),
+                form_digit: has_ascii_digit(prose_body),
+                form_handle: has_handle_or_path(prose_body),
+                form_midcap: has_mid_sentence_name(prose_body),
                 raw_links: t.links.clone(),
             });
         }
@@ -5729,6 +5741,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
+    // Rank-1 gatekeeper. RSB has already seated the cause. This only reorders
+    // that window. Pool size is the window, bounded by the caller's k.
+    rank1_gatekeeper(ix, &q.text, &mut final_turn_indices, &t_scene);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6021,6 +6036,478 @@ fn rsb_seat_behind(ix: &Index, list: &mut Vec<usize>, k: usize) {
             list.insert(sym_at + 1, cause);
         }
     }
+}
+
+/// Exact Kemeny-Young inside one Condorcet component. 8! = 40320 is the
+/// largest search this branch-and-bound solves exactly. Larger components
+/// use Copeland plus adjacent swaps. Fixed from the size of the search,
+/// before any card.
+const KEMENY_EXACT_CAP: usize = 8;
+
+const WH_TIME: u8 = 1;
+const WH_QTY: u8 = 2;
+const WH_PERSON: u8 = 4;
+const WH_PLACE: u8 = 8;
+const WH_CAUSE: u8 = 16;
+
+/// Closed class of English interrogative function words. Not a topical list.
+fn wh_slots(query: &str) -> u8 {
+    let lower = query.to_ascii_lowercase();
+    let tokens: Vec<String> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_string())
+        .collect();
+    let mut slots = 0u8;
+    let has = |w: &str| tokens.iter().any(|t| t == w);
+    let phrase = |a: &str, b: &str| {
+        tokens.windows(2).any(|p| p[0] == a && p[1] == b)
+    };
+    if phrase("what", "time") || phrase("which", "year") || has("when") {
+        slots |= WH_TIME;
+    }
+    if phrase("how", "many") || phrase("how", "much") {
+        slots |= WH_QTY;
+    }
+    if has("who") || has("whom") || has("whose") {
+        slots |= WH_PERSON;
+    }
+    if has("where") {
+        slots |= WH_PLACE;
+    }
+    if has("why") {
+        slots |= WH_CAUSE;
+    }
+    slots
+}
+
+fn has_iso_or_hhmm(body: &str) -> bool {
+    let b = body.as_bytes();
+    if b.len() >= 10 {
+        for i in 0..=b.len() - 10 {
+            if b[i].is_ascii_digit()
+                && b[i + 1].is_ascii_digit()
+                && b[i + 2].is_ascii_digit()
+                && b[i + 3].is_ascii_digit()
+                && b[i + 4] == b'-'
+                && b[i + 5].is_ascii_digit()
+                && b[i + 6].is_ascii_digit()
+                && b[i + 7] == b'-'
+                && b[i + 8].is_ascii_digit()
+                && b[i + 9].is_ascii_digit()
+            {
+                return true;
+            }
+        }
+    }
+    for i in 0..b.len() {
+        if b[i] == b':'
+            && i > 0
+            && i + 2 < b.len()
+            && b[i - 1].is_ascii_digit()
+            && b[i + 1].is_ascii_digit()
+            && b[i + 2].is_ascii_digit()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_ascii_digit(body: &str) -> bool {
+    body.bytes().any(|c| c.is_ascii_digit())
+}
+
+fn has_handle_or_path(body: &str) -> bool {
+    let b = body.as_bytes();
+    for i in 0..b.len() {
+        if b[i] == b'@' && i + 1 < b.len() && b[i + 1].is_ascii_alphanumeric() {
+            return true;
+        }
+        if i + 2 < b.len() && b[i] == b':' && b[i + 1] == b'/' && b[i + 2] == b'/' {
+            return true;
+        }
+    }
+    body.split_whitespace().any(|tok| tok.contains('/') && tok.len() > 1)
+}
+
+/// A capitalized word of at least two letters that is not the first word of a sentence.
+fn has_mid_sentence_name(body: &str) -> bool {
+    let chars: Vec<char> = body.chars().collect();
+    let mut sentence_start = true;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '.' || c == '!' || c == '?' || c == '\n' {
+            sentence_start = true;
+            i += 1;
+            continue;
+        }
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        if c.is_uppercase() {
+            let start = i;
+            while i < chars.len() && chars[i].is_alphabetic() {
+                i += 1;
+            }
+            if !sentence_start && i - start >= 2 {
+                return true;
+            }
+            sentence_start = false;
+            continue;
+        }
+        sentence_start = false;
+        i += 1;
+    }
+    false
+}
+
+fn wh_satisfied(ix: &Index, ti: usize, slots: u8, has_cause_edge: bool) -> bool {
+    if slots == 0 {
+        return true;
+    }
+    let turn = &ix.turns[ti];
+    let ts = ix.session_ts.get(turn.session).copied().unwrap_or(0);
+    if slots & WH_TIME != 0 && ts == 0 && !turn.form_clock {
+        return false;
+    }
+    if slots & WH_QTY != 0 && !turn.form_digit {
+        return false;
+    }
+    if slots & WH_PERSON != 0 && !turn.form_handle && !turn.form_midcap {
+        return false;
+    }
+    if slots & WH_PLACE != 0 && !turn.form_midcap && !turn.form_handle {
+        return false;
+    }
+    if slots & WH_CAUSE != 0 && !has_cause_edge {
+        return false;
+    }
+    true
+}
+
+/// In-degree inside the pool from edges the index already stored, plus the
+/// RSB antecedent. One pass over the log, not one pass per candidate.
+fn pool_structural_degree(ix: &Index, pool: &[usize]) -> Vec<i64> {
+    let mut at = vec![None; ix.turns.len()];
+    for (i, &ti) in pool.iter().enumerate() {
+        if let Some(slot) = at.get_mut(ti) {
+            *slot = Some(i);
+        }
+    }
+    let mut degree = vec![0i64; pool.len()];
+    for (src, t) in ix.turns.iter().enumerate() {
+        let mut hit = |target: usize| {
+            if target == src {
+                return;
+            }
+            if let Some(Some(slot)) = at.get(target) {
+                degree[*slot] += 1;
+            }
+        };
+        for &target in &t.policy_backlinks {
+            hit(target);
+        }
+        for &target in &t.supersedes_turns {
+            hit(target);
+        }
+        for &(_, target) in &t.exact_edges {
+            hit(target);
+        }
+        if let Some(target) = rsb_antecedent(ix, src) {
+            hit(target);
+        }
+    }
+    degree
+}
+
+fn turn_is_superseded(ix: &Index, ti: usize) -> bool {
+    ix.turns.iter().any(|t| t.supersedes_turns.contains(&ti))
+}
+
+fn kemeny_pair_score(order: &[usize], net: &[Vec<i64>]) -> i64 {
+    let mut score = 0i64;
+    for i in 0..order.len() {
+        for j in (i + 1)..order.len() {
+            score += net[order[i]][order[j]];
+        }
+    }
+    score
+}
+
+fn kemeny_bound(prefix: &[usize], used: &[bool], net: &[Vec<i64>]) -> i64 {
+    let m = used.len();
+    let mut score = kemeny_pair_score(prefix, net);
+    for &p in prefix {
+        for c in 0..m {
+            if !used[c] {
+                score += net[p][c];
+            }
+        }
+    }
+    let rest: Vec<usize> = (0..m).filter(|&c| !used[c]).collect();
+    for i in 0..rest.len() {
+        for j in (i + 1)..rest.len() {
+            score += net[rest[i]][rest[j]].abs();
+        }
+    }
+    score
+}
+
+/// Exact Kemeny order of a component. Equal scores keep the RSB order,
+/// which is the initial incumbent, so a tie never falls through to turn id.
+fn kemeny_branch_and_bound(members: &[usize], net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
+    let m = members.len();
+    let mut local = vec![vec![0i64; m]; m];
+    for i in 0..m {
+        for j in 0..m {
+            local[i][j] = net[members[i]][members[j]];
+        }
+    }
+    let mut start: Vec<usize> = (0..m).collect();
+    start.sort_by(|&a, &b| rsb[members[a]].cmp(&rsb[members[b]]));
+    let key_of = |order: &[usize]| -> Vec<usize> {
+        order.iter().map(|&i| rsb[members[i]]).collect()
+    };
+    let mut best_score = kemeny_pair_score(&start, &local);
+    let mut best = start;
+    let mut best_key = key_of(&best);
+    let mut used = vec![false; m];
+    let mut prefix: Vec<usize> = Vec::with_capacity(m);
+    fn rec(
+        local: &[Vec<i64>],
+        members: &[usize],
+        rsb: &[usize],
+        used: &mut [bool],
+        prefix: &mut Vec<usize>,
+        best_score: &mut i64,
+        best: &mut Vec<usize>,
+        best_key: &mut Vec<usize>,
+    ) {
+        let m = used.len();
+        if prefix.len() == m {
+            let score = kemeny_pair_score(prefix, local);
+            let key: Vec<usize> = prefix.iter().map(|&i| rsb[members[i]]).collect();
+            if score > *best_score || (score == *best_score && key < *best_key) {
+                *best_score = score;
+                *best_key = key;
+                *best = prefix.clone();
+            }
+            return;
+        }
+        if kemeny_bound(prefix, used, local) < *best_score {
+            return;
+        }
+        for c in 0..m {
+            if used[c] {
+                continue;
+            }
+            used[c] = true;
+            prefix.push(c);
+            rec(local, members, rsb, used, prefix, best_score, best, best_key);
+            prefix.pop();
+            used[c] = false;
+        }
+    }
+    rec(&local, members, rsb, &mut used, &mut prefix, &mut best_score, &mut best, &mut best_key);
+    best.into_iter().map(|i| members[i]).collect()
+}
+
+fn kemeny_copeland(members: &[usize], net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
+    let mut order = members.to_vec();
+    order.sort_by(|&a, &b| {
+        let sa: i64 = members.iter().map(|&c| (net[a][c] > 0) as i64 - (net[a][c] < 0) as i64).sum();
+        let sb: i64 = members.iter().map(|&c| (net[b][c] > 0) as i64 - (net[b][c] < 0) as i64).sum();
+        sb.cmp(&sa).then(rsb[a].cmp(&rsb[b]))
+    });
+    let mut improved = true;
+    while improved {
+        improved = false;
+        for i in 0..order.len().saturating_sub(1) {
+            let a = order[i];
+            let b = order[i + 1];
+            if net[a][b] < 0 {
+                order.swap(i, i + 1);
+                improved = true;
+            }
+        }
+    }
+    order
+}
+
+fn tarjan_sccs_best_first(net: &[Vec<i64>], rsb: &[usize]) -> Vec<Vec<usize>> {
+    let n = net.len();
+    let mut index = 0usize;
+    let mut indices = vec![None; n];
+    let mut low = vec![0usize; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut on = vec![false; n];
+    let mut sccs: Vec<Vec<usize>> = Vec::new();
+    fn strong(
+        v: usize,
+        net: &[Vec<i64>],
+        index: &mut usize,
+        indices: &mut [Option<usize>],
+        low: &mut [usize],
+        stack: &mut Vec<usize>,
+        on: &mut [bool],
+        sccs: &mut Vec<Vec<usize>>,
+    ) {
+        indices[v] = Some(*index);
+        low[v] = *index;
+        *index += 1;
+        stack.push(v);
+        on[v] = true;
+        for w in 0..net.len() {
+            if v != w && net[v][w] > 0 {
+                if indices[w].is_none() {
+                    strong(w, net, index, indices, low, stack, on, sccs);
+                    low[v] = low[v].min(low[w]);
+                } else if on[w] {
+                    low[v] = low[v].min(indices[w].unwrap_or(0));
+                }
+            }
+        }
+        if low[v] == indices[v].unwrap_or(0) {
+            let mut comp = Vec::new();
+            while let Some(w) = stack.pop() {
+                on[w] = false;
+                comp.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            sccs.push(comp);
+        }
+    }
+    for v in 0..n {
+        if indices[v].is_none() {
+            strong(v, net, &mut index, &mut indices, &mut low, &mut stack, &mut on, &mut sccs);
+        }
+    }
+    let mut id_of = vec![0usize; n];
+    for (i, comp) in sccs.iter().enumerate() {
+        for &v in comp {
+            id_of[v] = i;
+        }
+    }
+    let ns = sccs.len();
+    let mut indeg = vec![0usize; ns];
+    let mut next: Vec<Vec<usize>> = vec![Vec::new(); ns];
+    for a in 0..n {
+        for b in 0..n {
+            if a != b && net[a][b] > 0 && id_of[a] != id_of[b] {
+                let (u, v) = (id_of[a], id_of[b]);
+                if !next[u].contains(&v) {
+                    next[u].push(v);
+                    indeg[v] += 1;
+                }
+            }
+        }
+    }
+    let anchor = |comp: &[usize]| comp.iter().map(|&v| rsb.get(v).copied().unwrap_or(usize::MAX)).min().unwrap_or(usize::MAX);
+    let mut ready: Vec<usize> = (0..ns).filter(|&s| indeg[s] == 0).collect();
+    let sort_ready = |ready: &mut Vec<usize>, sccs: &[Vec<usize>]| {
+        ready.sort_by(|&a, &b| anchor(&sccs[b]).cmp(&anchor(&sccs[a])).then(b.cmp(&a)));
+    };
+    sort_ready(&mut ready, &sccs);
+    let mut ordered = Vec::with_capacity(ns);
+    while let Some(u) = ready.pop() {
+        ordered.push(u);
+        let mut outs = next[u].clone();
+        outs.sort_unstable();
+        for v in outs {
+            indeg[v] -= 1;
+            if indeg[v] == 0 {
+                ready.push(v);
+            }
+        }
+        sort_ready(&mut ready, &sccs);
+    }
+    if ordered.len() != ns {
+        ordered = (0..ns).collect();
+    }
+    // Tarjan's component ids are not best-first. Kahn from sources of the
+    // "beats" condensation puts undefeated components first.
+    ordered.into_iter().map(|i| sccs[i].clone()).collect()
+}
+
+fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
+    let mut out = Vec::with_capacity(net.len());
+    for scc in tarjan_sccs_best_first(net, rsb) {
+        if scc.len() <= 1 {
+            out.extend(scc);
+        } else if scc.len() <= KEMENY_EXACT_CAP {
+            out.extend(kemeny_branch_and_bound(&scc, net, rsb));
+        } else {
+            out.extend(kemeny_copeland(&scc, net, rsb));
+        }
+    }
+    out
+}
+
+/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
+/// grow the window. The pool is that window, so its size is the caller's k.
+fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+    let n = list.len();
+    if n < 2 {
+        return;
+    }
+    let pool = list.clone();
+    let slots = wh_slots(query);
+    let degree = pool_structural_degree(ix, &pool);
+    let mut net = vec![vec![0i64; n]; n];
+    for a in 0..n {
+        for b in (a + 1)..n {
+            let (ta, tb) = (pool[a], pool[b]);
+            let mut margin = 0i64;
+            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
+            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
+            match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Greater => margin += 1,
+                std::cmp::Ordering::Less => margin -= 1,
+                std::cmp::Ordering::Equal => {}
+            }
+            match degree[a].cmp(&degree[b]) {
+                std::cmp::Ordering::Greater => margin += 1,
+                std::cmp::Ordering::Less => margin -= 1,
+                std::cmp::Ordering::Equal => {}
+            }
+            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
+            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
+            match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Greater => margin += 1,
+                std::cmp::Ordering::Less => margin -= 1,
+                std::cmp::Ordering::Equal => {}
+            }
+            if slots != 0 {
+                let ok_a = wh_satisfied(ix, ta, slots, degree[a] > 0);
+                let ok_b = wh_satisfied(ix, tb, slots, degree[b] > 0);
+                if ok_a && !ok_b {
+                    margin += 1;
+                } else if ok_b && !ok_a {
+                    margin -= 1;
+                }
+            }
+            net[a][b] = margin;
+            net[b][a] = -margin;
+        }
+    }
+    let rsb: Vec<usize> = (0..n).collect();
+    let mut order = kemeny_young(&net, &rsb);
+    if order.len() != n {
+        order = rsb.clone();
+    }
+    let mut turned: Vec<usize> = order.iter().map(|&i| pool[i]).collect();
+    if turn_is_superseded(ix, turned[0]) {
+        if let Some(pos) = turned.iter().position(|&ti| !turn_is_superseded(ix, ti)) {
+            let keeper = turned.remove(pos);
+            turned.insert(0, keeper);
+        }
+    }
+    *list = turned;
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -7720,6 +8207,107 @@ mod recall_cue_tests {
             !ids.contains(&"rule".to_string()),
             "a temporal question must not import a policy from another episode, got {ids:?}"
         );
+    }
+
+    #[test]
+    fn kemeny_puts_the_condorcet_winner_first() {
+        let net = vec![
+            vec![0, 1, 1],
+            vec![-1, 0, 1],
+            vec![-1, -1, 0],
+        ];
+        assert_eq!(kemeny_young(&net, &[0, 1, 2]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn kemeny_branch_and_bound_matches_brute_force() {
+        let net = vec![
+            vec![0, 2, -1, 1],
+            vec![-2, 0, 3, -1],
+            vec![1, -3, 0, 2],
+            vec![-1, 1, -2, 0],
+        ];
+        let rsb = [0, 1, 2, 3];
+        let solved = kemeny_branch_and_bound(&[0, 1, 2, 3], &net, &rsb);
+        let mut best = i64::MIN;
+        let mut best_order = Vec::new();
+        let mut perm = vec![0usize, 1, 2, 3];
+        fn walk(perm: &mut [usize], i: usize, net: &[Vec<i64>], best: &mut i64, best_order: &mut Vec<usize>) {
+            if i == perm.len() {
+                let score = kemeny_pair_score(perm, net);
+                if score > *best {
+                    *best = score;
+                    *best_order = perm.to_vec();
+                }
+                return;
+            }
+            for j in i..perm.len() {
+                perm.swap(i, j);
+                walk(perm, i + 1, net, best, best_order);
+                perm.swap(i, j);
+            }
+        }
+        walk(&mut perm, 0, &net, &mut best, &mut best_order);
+        assert_eq!(kemeny_pair_score(&solved, &net), best);
+        let solved_key: Vec<usize> = solved.iter().copied().collect();
+        let mut lex_best = solved_key.clone();
+        let mut perm = vec![0usize, 1, 2, 3];
+        fn walk_lex(perm: &mut [usize], i: usize, net: &[Vec<i64>], best: i64, lex_best: &mut Vec<usize>) {
+            if i == perm.len() {
+                if kemeny_pair_score(perm, net) == best && perm < lex_best {
+                    *lex_best = perm.to_vec();
+                }
+                return;
+            }
+            for j in i..perm.len() {
+                perm.swap(i, j);
+                walk_lex(perm, i + 1, net, best, lex_best);
+                perm.swap(i, j);
+            }
+        }
+        walk_lex(&mut perm, 0, &net, best, &mut lex_best);
+        assert_eq!(solved_key, lex_best);
+    }
+
+    #[test]
+    fn kemeny_tie_keeps_the_rsb_order() {
+        let net = vec![vec![0i64; 4]; 4];
+        assert_eq!(kemeny_young(&net, &[0, 1, 2, 3]), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn gatekeeper_demotes_a_superseded_rank_one() {
+        let sessions = vec![s("s", vec![
+            t("old", "user", "The camera is a Sony A7."),
+            t("fresh", "user", "The camera is a Sony A7C."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let old = idx(&ix, "old");
+        let fresh = idx(&ix, "fresh");
+        ix.turns[fresh].supersedes_turns.push(old);
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[old] = 3.0;
+        scene[fresh] = 1.0;
+        let mut list = vec![old, fresh];
+        rank1_gatekeeper(&ix, "which camera", &mut list, &scene);
+        assert_eq!(list[0], fresh, "a superseded turn cannot hold rank 1");
+    }
+
+    #[test]
+    fn gatekeeper_when_query_prefers_a_clock_form() {
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let clock = idx(&ix, "clock");
+        assert!(ix.turns[clock].form_clock);
+        assert!(!ix.turns[plain].form_clock);
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![plain, clock];
+        rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list[0], clock);
     }
 
     #[test]
