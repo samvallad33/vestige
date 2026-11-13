@@ -6476,9 +6476,9 @@ pub fn factor_graph_fires() -> u64 {
     FACTOR_GRAPH_FIRES.load(Ordering::Relaxed)
 }
 
-/// Rank-1 gatekeeper. Runs after RSB. Reorders the list it is given.
-/// The four ballots and ATMS. No factor-graph vote: that vote is added
-/// by `rank1_gatekeeper_keep_rsb_head` on the deeper tail.
+/// Rank-1 gatekeeper without the factor-graph ballot. Tests lock this order.
+/// Production uses `rank1_gatekeeper_keep_rsb_head`, which adds that ballot.
+#[cfg(test)]
 fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
     if list.len() < 2 {
         return;
