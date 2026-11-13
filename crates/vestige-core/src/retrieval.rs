@@ -19,6 +19,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // =========================================================================
 // INPUT / OUTPUT CONTRACT
@@ -1958,6 +1959,14 @@ struct Index {
     header_max_words: usize,
     /// Unique title-case speaker nickname bindings (`Mel` -> `melanie`).
     nicks: SpeakerNickIndex,
+    /// Body text of each turn, header line removed. The wh residual checks read
+    /// this and nothing from the session clock.
+    prose: Vec<String>,
+    /// Title-case tokens that occur in at least two turns, excluding calendar
+    /// words and place suffixes. Built once at index time.
+    recurring_names: HashSet<String>,
+    /// Speaker-role tokens other than `user` and `assistant`, lowercased.
+    speaker_names: HashSet<String>,
     /// Recall cues: per turn, the sorted ids of the kernel tokens (`raw_tokens` + `stem`) of its
     /// full content, in a private id space (`cue_vocab`) so the ranker vocabulary is untouched.
     turn_cues: Vec<Vec<u32>>,
@@ -3807,6 +3816,9 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         header_dict,
         header_max_words,
         nicks,
+        prose: turn_prose_cache.clone(),
+        recurring_names: recurring_name_set(&turn_prose_cache),
+        speaker_names: speaker_name_set(sessions),
         turn_cues,
         cue_vocab,
         role_cues,
@@ -5735,16 +5747,70 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     session_opener_lift(ix, &q_cues, &mut final_turn_indices);
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
     hearsay(ix, &q_cues, &mut final_turn_indices);
+    // Second-stage pool. The prefix of length k is the list the head-window
+    // boosters already expect. Turns after that are the next positive-score
+    // candidates, up to GATEKEEPER_POOL.
+    let pool_cap = k.max(GATEKEEPER_POOL);
+    if final_turn_indices.len() < pool_cap {
+        let mut seen: HashSet<usize> = final_turn_indices.iter().copied().collect();
+        for ti in order(&t_scene, &turn_ts) {
+            if t_scene[ti] <= 0.0 {
+                continue;
+            }
+            if seen.insert(ti) {
+                final_turn_indices.push(ti);
+                if final_turn_indices.len() >= pool_cap {
+                    break;
+                }
+            }
+        }
+    }
     // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
-    // Never in front of the symptom. A full window does not grow.
+    // Never in front of the symptom. A full window does not grow past the pool.
     if !it.is_event_sequence {
-        rsb_seat_behind(ix, &mut final_turn_indices, k);
+        rsb_seat_behind(ix, &mut final_turn_indices, pool_cap);
     }
-    // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
-    // same Kemeny-Young order as PR 710, computed on that window with the head
-    // removed. No new constant: the frozen slot is position 0 of this window.
-    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    let rsb_at: HashMap<usize, usize> =
+        final_turn_indices.iter().enumerate().map(|(i, &t)| (t, i)).collect();
+    let head = final_turn_indices.first().copied();
+    if let Some(head) = head {
+        let mut tail: Vec<usize> = final_turn_indices
+            .iter()
+            .copied()
+            .skip(1)
+            .take(GATEKEEPER_POOL.saturating_sub(1))
+            .collect();
+        rank1_gatekeeper(ix, &q.text, &mut tail, &t_scene);
+        let mut out = Vec::with_capacity(k);
+        out.push(head);
+        out.extend(tail.into_iter().take(k.saturating_sub(1)));
+        let swapped = wh_guarded_swap(ix, &q.text, &mut out, &t_scene, &final_turn_indices);
+        WH_QUERIES.fetch_add(1, Ordering::Relaxed);
+        if swapped {
+            WH_SWAPS.fetch_add(1, Ordering::Relaxed);
+        }
+        if out.iter().take(k).any(|t| rsb_at.get(t).copied().unwrap_or(0) >= k) {
+            WH_BELOW_K.fetch_add(1, Ordering::Relaxed);
+        }
+        final_turn_indices = out;
+        if let Ok(path) = std::env::var("VESTIGE_WH_SELECT") {
+            let class = wh_class(&q.text);
+            let excluded = wh_excluded(&q.text);
+            let cause_in = incoming_cause_flags(ix);
+            let window: Vec<usize> = final_turn_indices.iter().copied().take(WH_SELECT_WINDOW).collect();
+            let mut passing = 0usize;
+            for &ti in &window {
+                if wh_residual(ix, ti, class, &excluded, cause_in.get(ti).copied().unwrap_or(false)) {
+                    passing += 1;
+                }
+            }
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "{class}\t{passing}\t{}", window.len());
+            }
+        }
+    }
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6471,37 +6537,660 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
+/// Second-stage pool. Nogueira and Cho rerank the top 1000 first-stage
+/// hits, then keep the caller's top k. Fixed before the card.
+const GATEKEEPER_POOL: usize = 1000;
+/// Selectivity is measured on this many candidates. Fixed before the card.
+const WH_SELECT_WINDOW: usize = 30;
+/// A pass rate above this carries no information, so the wh ballot is withheld.
+const WH_UNINFORMATIVE: f64 = 0.65;
+/// The guarded swap requires the top-30 pass rate to be at most this.
+const WH_SWAP_PASS_MAX: f64 = 0.35;
+/// Slot 0 stays when its score exceeds the next score by this factor.
+const WH_LOCK_RATIO: f32 = 1.25;
+/// A top-3 candidate may swap into slot 0 only at or above this fraction of slot 0's score.
+const WH_SWAP_RATIO: f32 = 0.82;
+/// Scene, degree and stability stay one vote each. The wh vote is this many
+/// milli-votes times its idf, so a rare slot can outweigh one tied ballot.
+const WH_MARGIN_SCALE: i64 = 1000;
+
+const WH_NONE: u8 = 0;
+const WH_WHEN: u8 = 1;
+const WH_HOW_LONG: u8 = 2;
+const WH_HOW_MANY: u8 = 3;
+const WH_WHO: u8 = 4;
+const WH_WHERE: u8 = 5;
+const WH_WHY: u8 = 6;
+
+static WH_QUERIES: AtomicU64 = AtomicU64::new(0);
+static WH_SWAPS: AtomicU64 = AtomicU64::new(0);
+static WH_BELOW_K: AtomicU64 = AtomicU64::new(0);
+static WH_VOTE_NZ: AtomicU64 = AtomicU64::new(0);
+static WH_AGAINST: AtomicU64 = AtomicU64::new(0);
+
+pub fn wh_pool_counts() -> (u64, u64, u64, u64, u64) {
+    (
+        WH_QUERIES.load(Ordering::Relaxed),
+        WH_SWAPS.load(Ordering::Relaxed),
+        WH_BELOW_K.load(Ordering::Relaxed),
+        WH_VOTE_NZ.load(Ordering::Relaxed),
+        WH_AGAINST.load(Ordering::Relaxed),
+    )
+}
+
+const HOW_LONG_UNITS: &[&str] = &[
+    "day", "days", "week", "weeks", "month", "months", "year", "years", "hour", "hours",
+];
+const CARDINAL_WORDS: &[&str] = &[
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "dozen",
+];
+const KINSHIP_ROLES: &[&str] = &[
+    "sister", "brother", "mother", "father", "mom", "dad", "wife", "husband", "daughter", "son",
+    "boss",
+];
+const NAME_TITLES: &[&str] = &["dr", "mr", "mrs", "ms", "prof"];
+const LOCATIVE_PREP: &[&str] = &["in", "at", "on", "near", "from", "to", "into", "onto"];
+const PLACE_SUFFIX: &[&str] = &["st", "ave", "park", "cafe", "airport", "university"];
+
+fn list_has(list: &[&str], word: &str) -> bool {
+    list.iter().any(|w| *w == word)
+}
+
+fn recurring_name_set(prose: &[String]) -> HashSet<String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for text in prose {
+        let mut seen = HashSet::new();
+        for tok in surface_tokens(text) {
+            if !tok.title_case || tok.lower.len() < 3 {
+                continue;
+            }
+            if list_has(MONTHS.as_slice(), &tok.lower)
+                || list_has(WEEKDAYS.as_slice(), &tok.lower)
+                || list_has(PLACE_SUFFIX, &tok.lower)
+                || common_speaker_token(&tok.lower)
+            {
+                continue;
+            }
+            seen.insert(tok.lower);
+        }
+        for name in seen {
+            *counts.entry(name).or_insert(0) += 1;
+        }
+    }
+    counts.into_iter().filter(|(_, n)| *n >= 2).map(|(w, _)| w).collect()
+}
+
+fn speaker_name_set(sessions: &[Session]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for s in sessions {
+        for t in &s.turns {
+            let role = t.role.trim();
+            if role.is_empty()
+                || role.eq_ignore_ascii_case("user")
+                || role.eq_ignore_ascii_case("assistant")
+            {
+                continue;
+            }
+            for w in raw_tokens(role) {
+                if w.len() >= 2 {
+                    out.insert(w);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn query_tokens(query: &str) -> Vec<String> {
+    query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// One class. Ambiguous `what` / `which` questions stay `WH_NONE`.
+/// `how long` and `how many` plus a duration unit are checked before bare `how many`.
+fn wh_class(query: &str) -> u8 {
+    let tokens = query_tokens(query);
+    let has = |w: &str| tokens.iter().any(|t| t == w);
+    let phrase = |a: &str, b: &str| tokens.windows(2).any(|p| p[0] == a && p[1] == b);
+    let how_span = tokens.windows(3).any(|p| {
+        p[0] == "how" && (p[1] == "many" || p[1] == "much") && list_has(HOW_LONG_UNITS, &p[2])
+    });
+    if phrase("how", "long") || how_span {
+        return WH_HOW_LONG;
+    }
+    if has("when")
+        || phrase("what", "time")
+        || phrase("which", "year")
+        || phrase("what", "year")
+        || phrase("what", "date")
+        || phrase("what", "month")
+    {
+        return WH_WHEN;
+    }
+    if phrase("how", "many") || phrase("how", "much") {
+        return WH_HOW_MANY;
+    }
+    if has("who") || has("whom") || has("whose") {
+        return WH_WHO;
+    }
+    if has("where") || phrase("what", "city") || phrase("what", "country") {
+        return WH_WHERE;
+    }
+    if has("why") {
+        return WH_WHY;
+    }
+    WH_NONE
+}
+
+fn wh_excluded(query: &str) -> HashSet<String> {
+    query_tokens(query).into_iter().collect()
+}
+
+fn wh_idf_milli(n: usize, passing: usize) -> i64 {
+    if n == 0 {
+        return 0;
+    }
+    let idf = ((n as f64 + 1.0) / (passing as f64 + 1.0)).ln();
+    (idf * WH_MARGIN_SCALE as f64).round() as i64
+}
+
+fn wh_pass_rate(passing: usize, n: usize) -> f64 {
+    if n == 0 {
+        0.0
+    } else {
+        passing as f64 / n as f64
+    }
+}
+
+fn novel_word(excluded: &HashSet<String>, word: &str) -> bool {
+    !word.is_empty() && !excluded.contains(word)
+}
+
+fn body_tokens(text: &str) -> Vec<String> {
+    surface_tokens(text).into_iter().map(|t| t.lower).collect()
+}
+
+fn has_clock(text: &str) -> bool {
+    let b = text.as_bytes();
+    for i in 0..b.len() {
+        if b[i] == b':' && i > 0 && i + 2 < b.len() && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit() && b[i + 2].is_ascii_digit()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_year(text: &str, excluded: &HashSet<String>) -> bool {
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i + 4 <= b.len() {
+        if b[i..i + 4].iter().all(|c| c.is_ascii_digit()) {
+            let boundary_before = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+            let boundary_after = i + 4 == b.len() || !b[i + 4].is_ascii_alphanumeric();
+            if boundary_before && boundary_after {
+                let year = &text[i..i + 4];
+                if (year.starts_with("19") || year.starts_with("20")) && novel_word(excluded, year) {
+                    return true;
+                }
+            }
+            i += 1;
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn has_deictic(lower: &str, excluded: &HashSet<String>) -> bool {
+    if lower.contains("yesterday") && novel_word(excluded, "yesterday") {
+        return true;
+    }
+    if lower.contains("tomorrow") && novel_word(excluded, "tomorrow") {
+        return true;
+    }
+    let tokens = body_tokens(lower);
+    for w in tokens.windows(2) {
+        if (w[0] == "last" || w[0] == "this" || w[0] == "next")
+            && list_has(WEEKDAYS.as_slice(), &w[1])
+            && (novel_word(excluded, &w[0]) || novel_word(excluded, &w[1]))
+        {
+            return true;
+        }
+    }
+    for w in tokens.windows(3) {
+        let number = w[0].chars().all(|c| c.is_ascii_digit()) || list_has(CARDINAL_WORDS, &w[0]);
+        if number
+            && list_has(HOW_LONG_UNITS, &w[1])
+            && w[2] == "ago"
+            && novel_word(excluded, &w[0])
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn calendar_mentions(text: &str, excluded: &HashSet<String>) -> usize {
+    let mut found = HashSet::new();
+    for tok in surface_tokens(text) {
+        if list_has(MONTHS.as_slice(), &tok.lower) && novel_word(excluded, &tok.lower) {
+            found.insert(tok.lower.clone());
+        }
+        if list_has(WEEKDAYS.as_slice(), &tok.lower) && novel_word(excluded, &tok.lower) {
+            found.insert(tok.lower.clone());
+        }
+    }
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i + 4 <= b.len() {
+        if b[i..i + 4].iter().all(|c| c.is_ascii_digit()) {
+            let year = &text[i..i + 4];
+            if (year.starts_with("19") || year.starts_with("20")) && novel_word(excluded, year) {
+                found.insert(year.to_string());
+            }
+        }
+        i += 1;
+    }
+    found.len()
+}
+
+fn number_unit(text: &str, excluded: &HashSet<String>, units: &[&str]) -> bool {
+    let tokens = body_tokens(&text.to_ascii_lowercase());
+    for w in tokens.windows(2) {
+        let number = w[0].chars().all(|c| c.is_ascii_digit()) || list_has(CARDINAL_WORDS, &w[0]);
+        if number && list_has(units, &w[1]) && novel_word(excluded, &w[0]) {
+            return true;
+        }
+    }
+    false
+}
+
+fn span_is_date_or_version(text: &str, start: usize, end: usize) -> bool {
+    let b = text.as_bytes();
+    let before = if start > 0 { b[start - 1] } else { b' ' };
+    let after = if end < b.len() { b[end] } else { b' ' };
+    if before.is_ascii_alphabetic() || after.is_ascii_alphabetic() {
+        return true;
+    }
+    if before == b':' || after == b':' || before == b'/' || after == b'/' || before == b'-' || after == b'-' || before == b'.' || after == b'.' || before == b'#' || before == b'v' || before == b'V'
+    {
+        return true;
+    }
+    false
+}
+
+fn has_quantity(text: &str, excluded: &HashSet<String>) -> bool {
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'$' || b[i] == b'%' {
+            return true;
+        }
+        if b[i].is_ascii_digit() {
+            let start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            let number = &text[start..i];
+            let year = number.len() == 4 && (number.starts_with("19") || number.starts_with("20"));
+            if !year && novel_word(excluded, number) && !span_is_date_or_version(text, start, i) {
+                return true;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    for tok in body_tokens(text) {
+        if list_has(CARDINAL_WORDS, &tok) && novel_word(excluded, &tok) {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_who(ix: &Index, ti: usize, excluded: &HashSet<String>) -> bool {
+    let text = ix.prose.get(ti).map(|s| s.as_str()).unwrap_or("");
+    let tokens = surface_tokens(text);
+    for tok in &tokens {
+        if !novel_word(excluded, &tok.lower) {
+            continue;
+        }
+        if ix.speaker_names.contains(&tok.lower) || ix.recurring_names.contains(&tok.lower) {
+            return true;
+        }
+        // A mid-sentence title-case name is novel evidence even on its first
+        // occurrence. Sentence-initial tokens still have to recur.
+        if tok.title_case
+            && !tok.sentence_initial
+            && tok.lower.len() >= 3
+            && !list_has(MONTHS.as_slice(), &tok.lower)
+            && !list_has(WEEKDAYS.as_slice(), &tok.lower)
+            && !list_has(PLACE_SUFFIX, &tok.lower)
+        {
+            return true;
+        }
+    }
+    let lower = body_tokens(text);
+    for w in lower.windows(2) {
+        if list_has(NAME_TITLES, &w[0]) && novel_word(excluded, &w[1]) && w[1].len() >= 2 {
+            return true;
+        }
+        if matches!(w[0].as_str(), "my" | "her" | "his" | "their" | "our")
+            && list_has(KINSHIP_ROLES, &w[1])
+            && novel_word(excluded, &w[1])
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_where(text: &str, excluded: &HashSet<String>) -> bool {
+    if has_handle_or_path(text) {
+        return true;
+    }
+    let tokens = surface_tokens(text);
+    for i in 0..tokens.len() {
+        if list_has(PLACE_SUFFIX, &tokens[i].lower) && novel_word(excluded, &tokens[i].lower) {
+            return true;
+        }
+        if i + 1 < tokens.len()
+            && list_has(LOCATIVE_PREP, &tokens[i].lower)
+            && tokens[i + 1].title_case
+            && novel_word(excluded, &tokens[i + 1].lower)
+            && !list_has(MONTHS.as_slice(), &tokens[i + 1].lower)
+            && !list_has(WEEKDAYS.as_slice(), &tokens[i + 1].lower)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn episode_dates(ix: &Index, ti: usize, excluded: &HashSet<String>) -> usize {
+    let session = ix.turns.get(ti).map(|t| t.session).unwrap_or(0);
+    let mut found = HashSet::new();
+    let members = ix.session_turns.get(session).map(|v| v.as_slice()).unwrap_or(&[]);
+    for &other in members {
+        let text = ix.prose.get(other).map(|s| s.as_str()).unwrap_or("");
+        for tok in surface_tokens(text) {
+            if (list_has(MONTHS.as_slice(), &tok.lower) || list_has(WEEKDAYS.as_slice(), &tok.lower))
+                && novel_word(excluded, &tok.lower)
+            {
+                found.insert(tok.lower);
+            }
+        }
+    }
+    found.len()
+}
+
+fn novel_temporal(text: &str, excluded: &HashSet<String>) -> bool {
+    for tok in surface_tokens(text) {
+        if token_is_temporal_word(&tok.lower) && novel_word(excluded, &tok.lower) {
+            return true;
+        }
+    }
+    inline_date_tokens(text).into_iter().any(|d| novel_word(excluded, &d.to_ascii_lowercase()))
+}
+
+fn novel_clock(text: &str, excluded: &HashSet<String>) -> bool {
+    if !has_clock(text) {
+        return false;
+    }
+    let b = text.as_bytes();
+    for i in 0..b.len() {
+        if b[i] == b':' && i > 0 && i + 2 < b.len() && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit()
+        {
+            let mut a = i;
+            while a > 0 && b[a - 1].is_ascii_digit() {
+                a -= 1;
+            }
+            let hour = &text[a..i];
+            let minute = &text[i + 1..i + 3];
+            if novel_word(excluded, hour) || novel_word(excluded, minute) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn novel_spatial(text: &str, excluded: &HashSet<String>) -> bool {
+    const PREPS: &[&str] = &["in", "at", "to", "from", "near"];
+    for tok in surface_tokens(text) {
+        if PREPS.contains(&tok.lower.as_str()) {
+            continue;
+        }
+        if SPATIAL_WORDS.contains(&tok.lower.as_str()) && novel_word(excluded, &tok.lower) {
+            return true;
+        }
+    }
+    false
+}
+
+fn novel_causal(text: &str, excluded: &HashSet<String>) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let padded = format!(" {lower} ");
+    for cue in CAUSAL_WORDS {
+        let word = cue.trim();
+        if word.is_empty() || !novel_word(excluded, word) {
+            continue;
+        }
+        if padded.contains(cue) || lower.contains(word) {
+            return true;
+        }
+    }
+    false
+}
+
+fn wh_residual(ix: &Index, ti: usize, class: u8, excluded: &HashSet<String>, _cause: bool) -> bool {
+    let text = ix.prose.get(ti).map(|s| s.as_str()).unwrap_or("");
+    let lower = text.to_ascii_lowercase();
+    let turn = match ix.turns.get(ti) {
+        Some(t) => t,
+        None => return false,
+    };
+    match class {
+        WH_WHEN => {
+            novel_temporal(text, excluded)
+                || novel_clock(text, excluded)
+                || turn.form_clock && novel_clock(text, excluded)
+                || number_unit(text, excluded, HOW_LONG_UNITS)
+                || has_deictic(&lower, excluded)
+                || has_year(text, excluded)
+        }
+        WH_HOW_LONG => {
+            number_unit(text, excluded, HOW_LONG_UNITS)
+                || calendar_mentions(text, excluded) >= 2
+                || (episode_dates(ix, ti, excluded) >= 2 && calendar_mentions(text, excluded) >= 1)
+        }
+        WH_HOW_MANY => has_quantity(text, excluded),
+        WH_WHO => has_who(ix, ti, excluded),
+        WH_WHERE => has_where(text, excluded) || novel_spatial(text, excluded),
+        WH_WHY => novel_causal(text, excluded),
+        _ => false,
+    }
+}
+
+fn incoming_cause_flags(ix: &Index) -> Vec<bool> {
+    let mut cause = vec![false; ix.turns.len()];
+    for (src, turn) in ix.turns.iter().enumerate() {
+        let mut mark = |target: usize| {
+            if target != src && target < cause.len() {
+                cause[target] = true;
+            }
+        };
+        for &target in &turn.policy_backlinks {
+            mark(target);
+        }
+        for &target in &turn.supersedes_turns {
+            mark(target);
+        }
+        for &(_, target) in &turn.exact_edges {
+            mark(target);
+        }
+        if let Some(target) = rsb_antecedent(ix, src) {
+            mark(target);
+        }
+    }
+    cause
+}
+
+fn response_turn(ix: &Index, ti: usize) -> Option<usize> {
+    let turn = ix.turns.get(ti)?;
+    let members = ix.session_turns.get(turn.session)?;
+    let pos = members.iter().position(|&m| m == ti)?;
+    if pos + 1 < members.len() {
+        return Some(members[pos + 1]);
+    }
+    if pos > 0 {
+        return Some(members[pos - 1]);
+    }
+    None
+}
+
+fn adjacent_passes(ix: &Index, ti: usize, class: u8, excluded: &HashSet<String>, cause_in: &[bool]) -> bool {
+    let turn = match ix.turns.get(ti) {
+        Some(t) => t,
+        None => return false,
+    };
+    let members = match ix.session_turns.get(turn.session) {
+        Some(m) => m,
+        None => return false,
+    };
+    let Some(pos) = members.iter().position(|&m| m == ti) else { return false };
+    for nb in [pos.checked_sub(1), pos.checked_add(1)].into_iter().flatten() {
+        if let Some(&other) = members.get(nb) {
+            if wh_residual(ix, other, class, excluded, cause_in.get(other).copied().unwrap_or(false)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Margin-guarded swap of index 0, which is RSB's rank 1.
+/// Returns whether index 0 changed. Only indexes 1 and 2 (ranks 2 and 3)
+/// may move into index 0, and only when every lock below is open:
+/// the class is WHEN, HOW_MANY, HOW_LONG, WHO, or WHERE; index 0 and its
+/// response turn have no novel residual evidence; neither index 0 nor a
+/// same-session neighbor passes; score[0] is not above 1.25 times score[1];
+/// at most 35% of the top 30 pass; the candidate passes and scores at least
+/// 0.82 times score[0].
+fn wh_guarded_swap(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32], pool: &[usize]) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let class = wh_class(query);
+    if class == WH_NONE || class == WH_WHY {
+        return false;
+    }
+    let excluded = wh_excluded(query);
+    let cause_in = incoming_cause_flags(ix);
+    let window: Vec<usize> = pool.iter().copied().take(WH_SELECT_WINDOW).collect();
+    let mut passing = 0usize;
+    for &ti in &window {
+        if wh_residual(ix, ti, class, &excluded, cause_in.get(ti).copied().unwrap_or(false)) {
+            passing += 1;
+        }
+    }
+    let rate = wh_pass_rate(passing, window.len());
+    let head = list[0];
+    let head_pass = wh_residual(ix, head, class, &excluded, cause_in.get(head).copied().unwrap_or(false));
+    if head_pass || adjacent_passes(ix, head, class, &excluded, &cause_in) {
+        return false;
+    }
+    let score0 = t_scene.get(head).copied().unwrap_or(0.0);
+    let score1 = t_scene.get(list[1]).copied().unwrap_or(0.0);
+    if score1 > 0.0 && score0 > WH_LOCK_RATIO * score1 {
+        return false;
+    }
+    if rate > WH_SWAP_PASS_MAX {
+        return false;
+    }
+    let response_clear = match response_turn(ix, head) {
+        Some(resp) => !wh_residual(ix, resp, class, &excluded, cause_in.get(resp).copied().unwrap_or(false)),
+        None => true,
+    };
+    if !response_clear {
+        return false;
+    }
+    let last = list.len().min(3);
+    let mut best: Option<usize> = None;
+    for pos in 1..last {
+        let cand = list[pos];
+        let score = t_scene.get(cand).copied().unwrap_or(0.0);
+        if score0 > 0.0 && score < WH_SWAP_RATIO * score0 {
+            continue;
+        }
+        if !wh_residual(ix, cand, class, &excluded, cause_in.get(cand).copied().unwrap_or(false)) {
+            continue;
+        }
+        best = Some(pos);
+        break;
+    }
+    let Some(pos) = best else { return false };
+    let chosen = list.remove(pos);
+    list.insert(0, chosen);
+    true
+}
+
 /// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
 /// grow the window. The pool is that window, so its size is the caller's k.
-fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, _t_scene: &[f32]) {
     let n = list.len();
     if n < 2 {
         return;
     }
     let pool = list.clone();
-    let slots = wh_slots(query);
+    let class = wh_class(query);
+    let excluded = wh_excluded(query);
     let degree = pool_structural_degree(ix, &pool);
+    let cause_in = incoming_cause_flags(ix);
+    let mut passing = 0usize;
+    if class != WH_NONE {
+        for (i, &ti) in pool.iter().enumerate() {
+            if wh_residual(ix, ti, class, &excluded, degree[i] > 0 || cause_in[ti]) {
+                passing += 1;
+            }
+        }
+    }
+    let idf_milli = wh_idf_milli(pool.len(), passing);
+    let informative = class != WH_NONE && wh_pass_rate(passing, pool.len()) <= WH_UNINFORMATIVE;
     let mut net = vec![vec![0i64; n]; n];
     for a in 0..n {
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
-            let wh = if slots == 0 {
-                0
+            let wh = if informative {
+                let ok_a = wh_residual(ix, ta, class, &excluded, degree[a] > 0 || cause_in[ta]);
+                let ok_b = wh_residual(ix, tb, class, &excluded, degree[b] > 0 || cause_in[tb]);
+                wh_vote(ok_a, ok_b)
             } else {
-                wh_vote(
-                    wh_satisfied(ix, ta, slots, degree[a] > 0),
-                    wh_satisfied(ix, tb, slots, degree[b] > 0),
-                )
+                0
             };
-            let margin = pair_margin(
-                t_scene.get(ta).copied().unwrap_or(0.0),
-                t_scene.get(tb).copied().unwrap_or(0.0),
+            // Scene is the input order and the only tie-break. It is not a ballot.
+            let votes = pair_margin(
+                0.0,
+                0.0,
                 degree[a],
                 degree[b],
                 ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0),
                 ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0),
-                wh,
+                0,
             );
+            let margin = votes * WH_MARGIN_SCALE + wh * idf_milli;
+            if wh != 0 {
+                WH_VOTE_NZ.fetch_add(1, Ordering::Relaxed);
+            }
+            if margin < 0 {
+                WH_AGAINST.fetch_add(1, Ordering::Relaxed);
+            }
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -6530,8 +7219,8 @@ fn wh_vote(ok_a: bool, ok_b: bool) -> i64 {
     }
 }
 
-/// Four equal ballots. Each disagreement adds exactly one. `wh` is already
-/// the single wh vote, so it is added once.
+/// Degree, stability, and the wh vote. Scene is not a ballot: a zero margin
+/// keeps the input order, which is the scene order.
 fn pair_margin(
     scene_a: f32,
     scene_b: f32,
@@ -6541,12 +7230,8 @@ fn pair_margin(
     stab_b: f32,
     wh: i64,
 ) -> i64 {
+    let _scene_kept_for_callers = (scene_a, scene_b);
     let mut margin = 0i64;
-    match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
-        std::cmp::Ordering::Greater => margin += 1,
-        std::cmp::Ordering::Less => margin -= 1,
-        std::cmp::Ordering::Equal => {}
-    }
     match degree_a.cmp(&degree_b) {
         std::cmp::Ordering::Greater => margin += 1,
         std::cmp::Ordering::Less => margin -= 1,
@@ -8456,6 +9141,15 @@ mod recall_cue_tests {
     #[test]
     fn how_many_days_is_a_time_slot() {
         assert_eq!(wh_slots("How many days between the trip and the move?"), WH_TIME);
+        assert_eq!(wh_class("How many days between the trip and the move?"), WH_HOW_LONG);
+        assert_eq!(wh_class("What did we decide?"), WH_NONE);
+        assert_eq!(wh_class("What did I do a month ago?"), WH_NONE);
+        assert_eq!(wh_class("What year was the trip?"), WH_WHEN);
+        assert_eq!(wh_class("What date was the trip?"), WH_WHEN);
+        assert_eq!(wh_class("What month was the trip?"), WH_WHEN);
+        assert_eq!(wh_class("How long was the trip?"), WH_HOW_LONG);
+        assert_eq!(wh_class("What city was the trip?"), WH_WHERE);
+        assert_eq!(wh_class("What country was the trip?"), WH_WHERE);
         assert_eq!(wh_slots("how many days ago"), WH_TIME);
         assert_eq!(wh_slots("how many weeks ago"), WH_TIME);
         assert_eq!(wh_slots("how many months ago"), WH_TIME);
@@ -8500,6 +9194,89 @@ mod recall_cue_tests {
         let mut list = vec![plain, clock];
         rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
         assert_eq!(list, vec![clock, plain]);
+        let mut scene_gap = vec![1.0f32; ix.turns.len()];
+        scene_gap[plain] = 5.0;
+        scene_gap[clock] = 1.0;
+        let mut ordered = vec![plain, clock];
+        rank1_gatekeeper(&ix, "When did we meet?", &mut ordered, &scene_gap);
+        assert_eq!(ordered, vec![clock, plain], "scene is the tie-break, not a ballot");
+        assert_eq!(pair_margin(5.0, 1.0, 0, 0, 0.0, 0.0, 1), 1);
+    }
+
+    #[test]
+    fn when_does_not_pass_on_a_session_timestamp_alone() {
+        let mut session = s("s", vec![t("plain", "user", "We met downtown after the show.")]);
+        session.timestamp = 1_700_000_000;
+        let ix = ix_of(&[session]);
+        let plain = idx(&ix, "plain");
+        let excluded = wh_excluded("When did we meet?");
+        assert!(!wh_residual(&ix, plain, WH_WHEN, &excluded, false));
+        let dated = s("s2", vec![t("dated", "user", "We met on Friday after the show.")]);
+        let ix = ix_of(&[dated]);
+        let dated_i = idx(&ix, "dated");
+        assert!(wh_residual(&ix, dated_i, WH_WHEN, &excluded, false));
+    }
+
+    #[test]
+    fn echo_who_prefers_the_companion_over_the_booking() {
+        let excluded = wh_excluded("Who did Maya travel with?");
+        let flight = t("flight", "user", "Who did Maya travel with? Maya booked her flight.");
+        let gap = t("gap", "user", "We discussed the travel plans again.");
+        let elena = t("elena", "user", "Maya and Elena landed in Lisbon after the travel.");
+        let mut fillers = vec![flight, gap, elena];
+        for i in 0..8 {
+            fillers.push(t(&format!("p{i}"), "user", "We discussed the travel plans again."));
+        }
+        let ix = ix_of(&[s("s", fillers)]);
+        assert!(wh_residual(&ix, idx(&ix, "elena"), WH_WHO, &excluded, false));
+        assert!(!wh_residual(&ix, idx(&ix, "flight"), WH_WHO, &excluded, false));
+        let mut list = vec![idx(&ix, "flight"), idx(&ix, "elena")];
+        list.push(idx(&ix, "gap"));
+        for i in 0..8 {
+            list.push(idx(&ix, &format!("p{i}")));
+        }
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[idx(&ix, "flight")] = 1.0;
+        scene[idx(&ix, "elena")] = 0.9;
+        let pool = list.clone();
+        assert!(wh_guarded_swap(&ix, "Who did Maya travel with?", &mut list, &scene, &pool));
+        assert_eq!(ix.turns[list[0]].id, "elena");
+        let ranked = rank(&RankRequest {
+            sessions: vec![s("s", vec![
+                t("gap", "user", "We discussed the travel plans again."),
+                t("flight", "user", "Maya booked her flight for the travel."),
+                t("p0", "user", "We discussed the travel plans again."),
+                t("elena", "user", "Maya and Elena landed in Lisbon after the travel."),
+                t("p1", "user", "We discussed the travel plans again today."),
+                t("p2", "user", "We discussed the travel plans once more."),
+            ])],
+            queries: vec![Query { text: "Who did Maya travel with?".into(), date: String::new() }],
+            top_k: 5,
+            params: Params::default(),
+        });
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|t| t.id.clone()).collect();
+        let elena_at = ids.iter().position(|id| id == "elena");
+        let flight_at = ids.iter().position(|id| id == "flight");
+        assert!(elena_at.is_some() && flight_at.is_some(), "{ids:?}");
+        assert!(elena_at.unwrap() < flight_at.unwrap(), "{ids:?}");
+    }
+
+    #[test]
+    fn deep_pool_can_lift_a_time_turn_without_moving_a_passing_head() {
+        let mut turns = vec![t("head", "user", "When did we meet? When did we meet?")];
+        for i in 0..12 {
+            turns.push(t(&format!("f{i}"), "user", "When did we meet?"));
+        }
+        turns.push(t("clock", "user", "When did we meet at 18:40?"));
+        let ranked = rank(&RankRequest {
+            sessions: vec![s("s", turns)],
+            queries: vec![Query { text: "When did we meet?".into(), date: String::new() }],
+            top_k: 10,
+            params: Params::default(),
+        });
+        let ids: Vec<String> = ranked.results[0].turns.iter().map(|t| t.id.clone()).collect();
+        assert!(ids.iter().take(5).any(|id| id == "clock"), "{ids:?}");
+        assert_eq!(ids.len(), 10, "{ids:?}");
     }
 
     #[test]

@@ -35,4 +35,8 @@ fn main() {
             }
         }
     }
+    let (queries, swaps, below_k, vote_nz, against) = vestige_core::retrieval::wh_pool_counts();
+    eprintln!(
+        "vestige_wh_pool queries={queries} swaps={swaps} below_k={below_k} wh_vote_nz={vote_nz} against_order={against}"
+    );
 }
