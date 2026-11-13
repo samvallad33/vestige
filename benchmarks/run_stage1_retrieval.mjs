@@ -58,14 +58,33 @@ rl.on('line', (line) => {
   }
 });
 
-child.on('error', (err) => {
+function failQueue(err) {
   while (queue.length > 0) {
     queue.shift().reject(err);
   }
+}
+
+child.on('error', failQueue);
+child.on('exit', (code, signal) => {
+  if (queue.length === 0) return;
+  failQueue(new Error(`retrieval_bench exited code=${code} signal=${signal}`));
+});
+child.stdin.on('error', (err) => {
+  // A dead worker closes stdin. Without this listener Node raises an uncaught EPIPE
+  // and the card dies before the benchmark can report the worker exit.
+  if (err && err.code === 'EPIPE') {
+    failQueue(new Error('retrieval_bench stdin EPIPE (worker closed)'));
+    return;
+  }
+  failQueue(err);
 });
 
 function rank(payload) {
   return new Promise((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode) {
+      reject(new Error(`retrieval_bench already exited code=${child.exitCode} signal=${child.signalCode}`));
+      return;
+    }
     queue.push({ resolve, reject });
     child.stdin.write(JSON.stringify(payload) + '\n');
   });

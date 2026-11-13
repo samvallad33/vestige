@@ -95,9 +95,15 @@ def main():
     )
 
     def rank(payload):
+        if proc.poll() is not None:
+            err = proc.stderr.read() if proc.stderr else ''
+            raise RuntimeError(f'retrieval_bench exited {proc.returncode} before write: {err[-2000:]}')
         proc.stdin.write(json.dumps(payload) + '\n')
         proc.stdin.flush()
         line = proc.stdout.readline()
+        if not line:
+            err = proc.stderr.read() if proc.stderr else ''
+            raise RuntimeError(f'retrieval_bench closed stdout exit={proc.poll()} stderr={err[-2000:]}')
         resp = json.loads(line)
         if 'error' in resp:
             raise RuntimeError(resp['error'])
