@@ -1963,14 +1963,6 @@ struct Index {
     header_max_words: usize,
     /// Unique title-case speaker nickname bindings (`Mel` -> `melanie`).
     nicks: SpeakerNickIndex,
-    /// Body text of each turn, header line removed. The wh residual checks read
-    /// this and nothing from the session clock.
-    prose: Vec<String>,
-    /// Title-case tokens that occur in at least two turns, excluding calendar
-    /// words and place suffixes. Built once at index time.
-    recurring_names: HashSet<String>,
-    /// Speaker-role tokens other than `user` and `assistant`, lowercased.
-    speaker_names: HashSet<String>,
     /// Recall cues: per turn, the sorted ids of the kernel tokens (`raw_tokens` + `stem`) of its
     /// full content, in a private id space (`cue_vocab`) so the ranker vocabulary is untouched.
     turn_cues: Vec<Vec<u32>>,
@@ -3820,9 +3812,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         header_dict,
         header_max_words,
         nicks,
-        prose: turn_prose_cache.clone(),
-        recurring_names: recurring_name_set(&turn_prose_cache),
-        speaker_names: speaker_name_set(sessions),
         turn_cues,
         cue_vocab,
         role_cues,
@@ -6115,55 +6104,23 @@ const WH_PERSON: u8 = 4;
 const WH_PLACE: u8 = 8;
 const WH_CAUSE: u8 = 16;
 
-/// Duration heads. "how many" or "how much" followed by one of these is a
-/// time question, not a quantity. Singular and plural only. Fixed before
-/// the card. Li and Roth NUMERIC:period, not NUMERIC:count.
-const WH_TIME_UNITS: &[&str] = &[
-    "day", "days", "week", "weeks", "month", "months", "year", "years", "hour", "hours",
-    "minute", "minutes",
-];
-
-fn wh_time_unit(word: &str) -> bool {
-    WH_TIME_UNITS.iter().any(|unit| *unit == word)
-}
-
 /// Closed class of English interrogative function words. Not a topical list.
 fn wh_slots(query: &str) -> u8 {
-    let lower = query.to_ascii_lowercase();
-    let tokens: Vec<String> = lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_string())
-        .collect();
-    let mut slots = 0u8;
+    let tokens = query_tokens(query);
     let has = |w: &str| tokens.iter().any(|t| t == w);
-    let phrase = |a: &str, b: &str| {
-        tokens.windows(2).any(|p| p[0] == a && p[1] == b)
-    };
-    if phrase("what", "time") || phrase("which", "year") || has("when") {
+    let phrase = |a: &str, b: &str| tokens.windows(2).any(|p| p[0] == a && p[1] == b);
+    let mut slots = 0u8;
+    if has("when") || phrase("how", "long") {
         slots |= WH_TIME;
     }
-    for i in 0..tokens.len() {
-        if tokens[i] != "how" || i + 1 >= tokens.len() {
-            continue;
-        }
-        if tokens[i + 1] != "many" && tokens[i + 1] != "much" {
-            continue;
-        }
-        if i + 2 < tokens.len() && wh_time_unit(&tokens[i + 2]) {
-            slots |= WH_TIME;
-        } else {
-            slots |= WH_QTY;
-        }
+    if phrase("how", "many") {
+        slots |= WH_QTY;
     }
     if has("who") || has("whom") || has("whose") {
         slots |= WH_PERSON;
     }
     if has("where") {
         slots |= WH_PLACE;
-    }
-    if has("why") {
-        slots |= WH_CAUSE;
     }
     slots
 }
@@ -6256,8 +6213,7 @@ fn wh_satisfied(ix: &Index, ti: usize, slots: u8, has_cause_edge: bool) -> bool 
         return true;
     }
     let turn = &ix.turns[ti];
-    let ts = ix.session_ts.get(turn.session).copied().unwrap_or(0);
-    if slots & WH_TIME != 0 && ts == 0 && !turn.form_clock {
+    if slots & WH_TIME != 0 && !turn.form_clock && !turn.form_digit {
         return false;
     }
     if slots & WH_QTY != 0 && !turn.form_digit {
@@ -6561,70 +6517,6 @@ pub fn wh_pool_counts() -> (u64, u64, u64, u64, u64, u64) {
     )
 }
 
-const HOW_LONG_UNITS: &[&str] = &[
-    "day", "days", "week", "weeks", "month", "months", "year", "years", "hour", "hours",
-];
-const CARDINAL_WORDS: &[&str] = &[
-    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-    "eleven", "twelve", "dozen",
-];
-const KINSHIP_ROLES: &[&str] = &[
-    "sister", "brother", "mother", "father", "mom", "dad", "wife", "husband", "daughter", "son",
-    "boss",
-];
-const NAME_TITLES: &[&str] = &["dr", "mr", "mrs", "ms", "prof"];
-const LOCATIVE_PREP: &[&str] = &["in", "at", "on", "near", "from", "to", "into", "onto"];
-const PLACE_SUFFIX: &[&str] = &["st", "ave", "park", "cafe", "airport", "university"];
-
-fn list_has(list: &[&str], word: &str) -> bool {
-    list.iter().any(|w| *w == word)
-}
-
-fn recurring_name_set(prose: &[String]) -> HashSet<String> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for text in prose {
-        let mut seen = HashSet::new();
-        for tok in surface_tokens(text) {
-            if !tok.title_case || tok.lower.len() < 3 {
-                continue;
-            }
-            if list_has(MONTHS.as_slice(), &tok.lower)
-                || list_has(WEEKDAYS.as_slice(), &tok.lower)
-                || list_has(PLACE_SUFFIX, &tok.lower)
-                || common_speaker_token(&tok.lower)
-            {
-                continue;
-            }
-            seen.insert(tok.lower);
-        }
-        for name in seen {
-            *counts.entry(name).or_insert(0) += 1;
-        }
-    }
-    counts.into_iter().filter(|(_, n)| *n >= 2).map(|(w, _)| w).collect()
-}
-
-fn speaker_name_set(sessions: &[Session]) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for s in sessions {
-        for t in &s.turns {
-            let role = t.role.trim();
-            if role.is_empty()
-                || role.eq_ignore_ascii_case("user")
-                || role.eq_ignore_ascii_case("assistant")
-            {
-                continue;
-            }
-            for w in raw_tokens(role) {
-                if w.len() >= 2 {
-                    out.insert(w);
-                }
-            }
-        }
-    }
-    out
-}
-
 fn query_tokens(query: &str) -> Vec<String> {
     query
         .to_ascii_lowercase()
@@ -6634,38 +6526,25 @@ fn query_tokens(query: &str) -> Vec<String> {
         .collect()
 }
 
-/// One class. Ambiguous `what` / `which` questions stay `WH_NONE`.
-/// `how long` and `how many` plus a duration unit are checked before bare `how many`.
+/// Closed interrogatives only. `what` and `which` stay `WH_NONE`.
 fn wh_class(query: &str) -> u8 {
     let tokens = query_tokens(query);
     let has = |w: &str| tokens.iter().any(|t| t == w);
     let phrase = |a: &str, b: &str| tokens.windows(2).any(|p| p[0] == a && p[1] == b);
-    let how_span = tokens.windows(3).any(|p| {
-        p[0] == "how" && (p[1] == "many" || p[1] == "much") && list_has(HOW_LONG_UNITS, &p[2])
-    });
-    if phrase("how", "long") || how_span {
+    if phrase("how", "long") {
         return WH_HOW_LONG;
     }
-    if has("when")
-        || phrase("what", "time")
-        || phrase("which", "year")
-        || phrase("what", "year")
-        || phrase("what", "date")
-        || phrase("what", "month")
-    {
-        return WH_WHEN;
-    }
-    if phrase("how", "many") || phrase("how", "much") {
+    if phrase("how", "many") {
         return WH_HOW_MANY;
+    }
+    if has("when") {
+        return WH_WHEN;
     }
     if has("who") || has("whom") || has("whose") {
         return WH_WHO;
     }
-    if has("where") || phrase("what", "city") || phrase("what", "country") {
+    if has("where") {
         return WH_WHERE;
-    }
-    if has("why") {
-        return WH_WHY;
     }
     WH_NONE
 }
@@ -6682,316 +6561,17 @@ fn wh_pass_rate(passing: usize, n: usize) -> f64 {
     }
 }
 
-fn novel_word(excluded: &HashSet<String>, word: &str) -> bool {
-    !word.is_empty() && !excluded.contains(word)
-}
-
-fn body_tokens(text: &str) -> Vec<String> {
-    surface_tokens(text).into_iter().map(|t| t.lower).collect()
-}
-
-fn has_clock(text: &str) -> bool {
-    let b = text.as_bytes();
-    for i in 0..b.len() {
-        if b[i] == b':' && i > 0 && i + 2 < b.len() && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit() && b[i + 2].is_ascii_digit()
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn has_year(text: &str, excluded: &HashSet<String>) -> bool {
-    let b = text.as_bytes();
-    let mut i = 0;
-    while i + 4 <= b.len() {
-        if b[i..i + 4].iter().all(|c| c.is_ascii_digit()) {
-            let boundary_before = i == 0 || !b[i - 1].is_ascii_alphanumeric();
-            let boundary_after = i + 4 == b.len() || !b[i + 4].is_ascii_alphanumeric();
-            if boundary_before && boundary_after {
-                let year = &text[i..i + 4];
-                if (year.starts_with("19") || year.starts_with("20")) && novel_word(excluded, year) {
-                    return true;
-                }
-            }
-            i += 1;
-            continue;
-        }
-        i += 1;
-    }
-    false
-}
-
-fn has_deictic(lower: &str, excluded: &HashSet<String>) -> bool {
-    if lower.contains("yesterday") && novel_word(excluded, "yesterday") {
-        return true;
-    }
-    if lower.contains("tomorrow") && novel_word(excluded, "tomorrow") {
-        return true;
-    }
-    let tokens = body_tokens(lower);
-    for w in tokens.windows(2) {
-        if (w[0] == "last" || w[0] == "this" || w[0] == "next")
-            && list_has(WEEKDAYS.as_slice(), &w[1])
-            && (novel_word(excluded, &w[0]) || novel_word(excluded, &w[1]))
-        {
-            return true;
-        }
-    }
-    for w in tokens.windows(3) {
-        let number = w[0].chars().all(|c| c.is_ascii_digit()) || list_has(CARDINAL_WORDS, &w[0]);
-        if number
-            && list_has(HOW_LONG_UNITS, &w[1])
-            && w[2] == "ago"
-            && novel_word(excluded, &w[0])
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn calendar_mentions(text: &str, excluded: &HashSet<String>) -> usize {
-    let mut found = HashSet::new();
-    for tok in surface_tokens(text) {
-        if list_has(MONTHS.as_slice(), &tok.lower) && novel_word(excluded, &tok.lower) {
-            found.insert(tok.lower.clone());
-        }
-        if list_has(WEEKDAYS.as_slice(), &tok.lower) && novel_word(excluded, &tok.lower) {
-            found.insert(tok.lower.clone());
-        }
-    }
-    let b = text.as_bytes();
-    let mut i = 0;
-    while i + 4 <= b.len() {
-        if b[i..i + 4].iter().all(|c| c.is_ascii_digit()) {
-            let year = &text[i..i + 4];
-            if (year.starts_with("19") || year.starts_with("20")) && novel_word(excluded, year) {
-                found.insert(year.to_string());
-            }
-        }
-        i += 1;
-    }
-    found.len()
-}
-
-fn number_unit(text: &str, excluded: &HashSet<String>, units: &[&str]) -> bool {
-    let tokens = body_tokens(&text.to_ascii_lowercase());
-    for w in tokens.windows(2) {
-        let number = w[0].chars().all(|c| c.is_ascii_digit()) || list_has(CARDINAL_WORDS, &w[0]);
-        if number && list_has(units, &w[1]) && novel_word(excluded, &w[0]) {
-            return true;
-        }
-    }
-    false
-}
-
-fn span_is_date_or_version(text: &str, start: usize, end: usize) -> bool {
-    let b = text.as_bytes();
-    let before = if start > 0 { b[start - 1] } else { b' ' };
-    let after = if end < b.len() { b[end] } else { b' ' };
-    if before.is_ascii_alphabetic() || after.is_ascii_alphabetic() {
-        return true;
-    }
-    if before == b':' || after == b':' || before == b'/' || after == b'/' || before == b'-' || after == b'-' || before == b'.' || after == b'.' || before == b'#' || before == b'v' || before == b'V'
-    {
-        return true;
-    }
-    false
-}
-
-fn has_quantity(text: &str, excluded: &HashSet<String>) -> bool {
-    let b = text.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'$' || b[i] == b'%' {
-            return true;
-        }
-        if b[i].is_ascii_digit() {
-            let start = i;
-            while i < b.len() && b[i].is_ascii_digit() {
-                i += 1;
-            }
-            let number = &text[start..i];
-            let year = number.len() == 4 && (number.starts_with("19") || number.starts_with("20"));
-            if !year && novel_word(excluded, number) && !span_is_date_or_version(text, start, i) {
-                return true;
-            }
-            continue;
-        }
-        i += 1;
-    }
-    for tok in body_tokens(text) {
-        if list_has(CARDINAL_WORDS, &tok) && novel_word(excluded, &tok) {
-            return true;
-        }
-    }
-    false
-}
-
-fn has_who(ix: &Index, ti: usize, excluded: &HashSet<String>) -> bool {
-    let text = ix.prose.get(ti).map(|s| s.as_str()).unwrap_or("");
-    let tokens = surface_tokens(text);
-    for tok in &tokens {
-        if !novel_word(excluded, &tok.lower) {
-            continue;
-        }
-        if ix.speaker_names.contains(&tok.lower) || ix.recurring_names.contains(&tok.lower) {
-            return true;
-        }
-        // A mid-sentence title-case name is novel evidence even on its first
-        // occurrence. Sentence-initial tokens still have to recur.
-        if tok.title_case
-            && !tok.sentence_initial
-            && tok.lower.len() >= 3
-            && !list_has(MONTHS.as_slice(), &tok.lower)
-            && !list_has(WEEKDAYS.as_slice(), &tok.lower)
-            && !list_has(PLACE_SUFFIX, &tok.lower)
-        {
-            return true;
-        }
-    }
-    let lower = body_tokens(text);
-    for w in lower.windows(2) {
-        if list_has(NAME_TITLES, &w[0]) && novel_word(excluded, &w[1]) && w[1].len() >= 2 {
-            return true;
-        }
-        if matches!(w[0].as_str(), "my" | "her" | "his" | "their" | "our")
-            && list_has(KINSHIP_ROLES, &w[1])
-            && novel_word(excluded, &w[1])
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn has_where(text: &str, excluded: &HashSet<String>) -> bool {
-    if has_handle_or_path(text) {
-        return true;
-    }
-    let tokens = surface_tokens(text);
-    for i in 0..tokens.len() {
-        if list_has(PLACE_SUFFIX, &tokens[i].lower) && novel_word(excluded, &tokens[i].lower) {
-            return true;
-        }
-        if i + 1 < tokens.len()
-            && list_has(LOCATIVE_PREP, &tokens[i].lower)
-            && tokens[i + 1].title_case
-            && novel_word(excluded, &tokens[i + 1].lower)
-            && !list_has(MONTHS.as_slice(), &tokens[i + 1].lower)
-            && !list_has(WEEKDAYS.as_slice(), &tokens[i + 1].lower)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn episode_dates(ix: &Index, ti: usize, excluded: &HashSet<String>) -> usize {
-    let session = ix.turns.get(ti).map(|t| t.session).unwrap_or(0);
-    let mut found = HashSet::new();
-    let members = ix.session_turns.get(session).map(|v| v.as_slice()).unwrap_or(&[]);
-    for &other in members {
-        let text = ix.prose.get(other).map(|s| s.as_str()).unwrap_or("");
-        for tok in surface_tokens(text) {
-            if (list_has(MONTHS.as_slice(), &tok.lower) || list_has(WEEKDAYS.as_slice(), &tok.lower))
-                && novel_word(excluded, &tok.lower)
-            {
-                found.insert(tok.lower);
-            }
-        }
-    }
-    found.len()
-}
-
-fn novel_temporal(text: &str, excluded: &HashSet<String>) -> bool {
-    for tok in surface_tokens(text) {
-        if token_is_temporal_word(&tok.lower) && novel_word(excluded, &tok.lower) {
-            return true;
-        }
-    }
-    inline_date_tokens(text).into_iter().any(|d| novel_word(excluded, &d.to_ascii_lowercase()))
-}
-
-fn novel_clock(text: &str, excluded: &HashSet<String>) -> bool {
-    if !has_clock(text) {
-        return false;
-    }
-    let b = text.as_bytes();
-    for i in 0..b.len() {
-        if b[i] == b':' && i > 0 && i + 2 < b.len() && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit()
-        {
-            let mut a = i;
-            while a > 0 && b[a - 1].is_ascii_digit() {
-                a -= 1;
-            }
-            let hour = &text[a..i];
-            let minute = &text[i + 1..i + 3];
-            if novel_word(excluded, hour) || novel_word(excluded, minute) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn novel_spatial(text: &str, excluded: &HashSet<String>) -> bool {
-    const PREPS: &[&str] = &["in", "at", "to", "from", "near"];
-    for tok in surface_tokens(text) {
-        if PREPS.contains(&tok.lower.as_str()) {
-            continue;
-        }
-        if SPATIAL_WORDS.contains(&tok.lower.as_str()) && novel_word(excluded, &tok.lower) {
-            return true;
-        }
-    }
-    false
-}
-
-fn novel_causal(text: &str, excluded: &HashSet<String>) -> bool {
-    let tokens = body_tokens(text);
-    for cue in CAUSAL_WORDS {
-        let parts: Vec<&str> = cue.split_whitespace().collect();
-        if parts.is_empty() || parts.iter().any(|word| !novel_word(excluded, word)) {
-            continue;
-        }
-        let n = parts.len();
-        if tokens.len() < n {
-            continue;
-        }
-        if tokens.windows(n).any(|window| window.iter().zip(parts.iter()).all(|(got, want)| got == want)) {
-            return true;
-        }
-    }
-    false
-}
-
-fn wh_residual(ix: &Index, ti: usize, class: u8, excluded: &HashSet<String>, _cause: bool) -> bool {
-    let text = ix.prose.get(ti).map(|s| s.as_str()).unwrap_or("");
-    let lower = text.to_ascii_lowercase();
+fn wh_residual(ix: &Index, ti: usize, class: u8, _excluded: &HashSet<String>, _cause: bool) -> bool {
     let turn = match ix.turns.get(ti) {
         Some(t) => t,
         None => return false,
     };
     match class {
-        WH_WHEN => {
-            novel_temporal(text, excluded)
-                || novel_clock(text, excluded)
-                || turn.form_clock && novel_clock(text, excluded)
-                || number_unit(text, excluded, HOW_LONG_UNITS)
-                || has_deictic(&lower, excluded)
-                || has_year(text, excluded)
-        }
-        WH_HOW_LONG => {
-            number_unit(text, excluded, HOW_LONG_UNITS)
-                || calendar_mentions(text, excluded) >= 2
-                || (episode_dates(ix, ti, excluded) >= 2 && calendar_mentions(text, excluded) >= 1)
-        }
-        WH_HOW_MANY => has_quantity(text, excluded),
-        WH_WHO => has_who(ix, ti, excluded),
-        WH_WHERE => has_where(text, excluded) || novel_spatial(text, excluded),
-        WH_WHY => novel_causal(text, excluded),
+        WH_WHEN => turn.form_clock,
+        WH_HOW_LONG => turn.form_digit || turn.form_clock,
+        WH_HOW_MANY => turn.form_digit,
+        WH_WHO => turn.form_midcap,
+        WH_WHERE => turn.form_handle,
         _ => false,
     }
 }
@@ -7124,7 +6704,6 @@ struct WhCtx {
     degree: HashMap<usize, i64>,
     weight: i64,
     informative: bool,
-    active: bool,
 }
 
 fn sign_of(ord: std::cmp::Ordering) -> i64 {
@@ -7148,7 +6727,7 @@ fn wh_ctx(ix: &Index, query: &str, pool: &[usize]) -> WhCtx {
         degree.insert(ti, degree_v[i]);
     }
     if class == WH_NONE {
-        return WhCtx { ok: HashMap::new(), degree, weight: 0, informative: false, active: false };
+        return WhCtx { ok: HashMap::new(), degree, weight: 0, informative: false };
     }
     let excluded = wh_excluded(query);
     let cause_in = incoming_cause_flags(ix);
@@ -7167,7 +6746,6 @@ fn wh_ctx(ix: &Index, query: &str, pool: &[usize]) -> WhCtx {
         degree,
         weight: wh_weight_milli(n, passing),
         informative: wh_pass_rate(passing, n) <= WH_UNINFORMATIVE,
-        active: true,
     }
 }
 
@@ -7183,19 +6761,13 @@ fn directed_margin(ix: &Index, ctx: &WhCtx, ta: usize, tb: usize, t_scene: &[f32
     let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
     let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
     let stab_v = sign_of(stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal));
-    let mut wh_v = if ctx.informative {
+    let wh_v = if ctx.informative {
         wh_vote(ctx.ok.get(&ta).copied().unwrap_or(false), ctx.ok.get(&tb).copied().unwrap_or(false))
     } else {
         0
     };
     if count && wh_v != 0 {
         WH_VOTE_NZ.fetch_add(1, Ordering::Relaxed);
-    }
-    // Wh overturns scene only with a structural vote on the same side.
-    let opposes_scene = scene_v == 0 || scene_v == -wh_v;
-    let structural_agrees = (deg_v == wh_v && deg_v != 0) || (stab_v == wh_v && stab_v != 0);
-    if wh_v != 0 && opposes_scene && !structural_agrees {
-        wh_v = 0;
     }
     let margin = ballot_margin(scene_v, deg_v, stab_v, wh_v, ctx.weight);
     if count && margin < 0 {
@@ -7206,7 +6778,7 @@ fn directed_margin(ix: &Index, ctx: &WhCtx, ta: usize, tb: usize, t_scene: &[f32
 
 fn order_pool(ix: &Index, list: &mut Vec<usize>, t_scene: &[f32], ctx: &WhCtx) {
     let n = list.len();
-    if n < 2 || !ctx.active {
+    if n < 2 {
         return;
     }
     let pool = list.clone();
@@ -7234,7 +6806,7 @@ fn order_pool(ix: &Index, list: &mut Vec<usize>, t_scene: &[f32], ctx: &WhCtx) {
 }
 
 /// Rank-1 gatekeeper. Runs after RSB. Reorders the list it is given.
-/// A query with no wh slot keeps the scene order.
+/// With no wh class the wh vote is 0 and scene, degree, and stability still run.
 fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
     if list.len() < 2 {
         return;
@@ -7258,10 +6830,14 @@ fn seat_wh_tail(ix: &Index, query: &str, seated: &[usize], below: &[usize], t_sc
     pool.extend_from_slice(seated);
     pool.extend_from_slice(below);
     let ctx = wh_ctx(ix, query, &pool);
-    if !ctx.active {
-        return seated.to_vec();
-    }
+    // No wh class: reorder the seated tail only, which is what PR 715 does.
+    // Below-window entry is the wh slot's way in, and it stays on that path.
     let mut admitted = Vec::new();
+    if wh_class(query) == WH_NONE {
+        let mut ordered = seated.to_vec();
+        order_pool(ix, &mut ordered, t_scene, &ctx);
+        return ordered;
+    }
     for &cand in below {
         let beats_all = seated.iter().all(|&seat| directed_margin(ix, &ctx, cand, seat, t_scene, false) > 0);
         if beats_all {
@@ -9116,13 +8692,13 @@ mod recall_cue_tests {
         assert!(!ix.turns[plain].form_clock);
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, clock];
-        // Wh alone does not overturn an equal scene. A structural vote must agree.
+        // Wh is one vote. On a tied scene the clock form wins that vote.
         rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
-        assert_eq!(list, vec![plain, clock]);
+        assert_eq!(list, vec![clock, plain]);
         ix.turns[plain].exact_edges.push((1, clock));
         let mut lifted = vec![plain, clock];
         rank1_gatekeeper(&ix, "When did we meet?", &mut lifted, &scene);
-        assert_eq!(lifted[0], clock, "wh plus degree is a majority against a tied scene");
+        assert_eq!(lifted[0], clock, "wh plus degree still prefers the clock form");
     }
 
     #[test]
@@ -9205,27 +8781,26 @@ mod recall_cue_tests {
     }
 
     #[test]
-    fn how_many_days_is_a_time_slot() {
-        assert_eq!(wh_slots("How many days between the trip and the move?"), WH_TIME);
-        assert_eq!(wh_class("How many days between the trip and the move?"), WH_HOW_LONG);
+    fn how_many_days_is_a_closed_class_quantity() {
+        assert_eq!(wh_slots("How many days between the trip and the move?"), WH_QTY);
+        assert_eq!(wh_class("How many days between the trip and the move?"), WH_HOW_MANY);
         assert_eq!(wh_class("What did we decide?"), WH_NONE);
         assert_eq!(wh_class("What did I do a month ago?"), WH_NONE);
-        assert_eq!(wh_class("What year was the trip?"), WH_WHEN);
-        assert_eq!(wh_class("What date was the trip?"), WH_WHEN);
-        assert_eq!(wh_class("What month was the trip?"), WH_WHEN);
+        assert_eq!(wh_class("What year was the trip?"), WH_NONE);
+        assert_eq!(wh_class("What date was the trip?"), WH_NONE);
+        assert_eq!(wh_class("What month was the trip?"), WH_NONE);
+        assert_eq!(wh_class("Why did we leave?"), WH_NONE);
         assert_eq!(wh_class("How long was the trip?"), WH_HOW_LONG);
-        assert_eq!(wh_class("What city was the trip?"), WH_WHERE);
-        assert_eq!(wh_class("What country was the trip?"), WH_WHERE);
-        assert_eq!(wh_slots("how many days ago"), WH_TIME);
-        assert_eq!(wh_slots("how many weeks ago"), WH_TIME);
-        assert_eq!(wh_slots("how many months ago"), WH_TIME);
-        assert_eq!(wh_slots("how many years ago"), WH_TIME);
-        assert_eq!(wh_slots("how many hours ago"), WH_TIME);
-        assert_eq!(wh_slots("how many minutes ago"), WH_TIME);
-        assert_eq!(wh_slots("how much time passed"), WH_QTY);
+        assert_eq!(wh_class("What city was the trip?"), WH_NONE);
+        assert_eq!(wh_class("What country was the trip?"), WH_NONE);
+        assert_eq!(wh_class("Who called?"), WH_WHO);
+        assert_eq!(wh_class("Where did we meet?"), WH_WHERE);
+        assert_eq!(wh_slots("how many days ago"), WH_QTY);
+        assert_eq!(wh_slots("how long ago"), WH_TIME);
+        assert_eq!(wh_slots("how much time passed"), 0);
         assert_eq!(wh_slots("how many boxes arrived"), WH_QTY);
-        assert_eq!(wh_slots("how many"), WH_QTY);
-        assert_eq!(wh_slots("how many days") & WH_QTY, 0);
+        assert_eq!(wh_slots("when"), WH_TIME);
+        assert_eq!(wh_slots("why"), 0);
     }
 
     #[test]
@@ -9259,7 +8834,7 @@ mod recall_cue_tests {
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, clock];
         rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
-        assert_eq!(list, vec![plain, clock], "wh alone does not flip a tied scene");
+        assert_eq!(list, vec![clock, plain], "one wh vote breaks a tied scene toward the clock form");
         let mut scene_gap = vec![1.0f32; ix.turns.len()];
         scene_gap[plain] = 5.0;
         scene_gap[clock] = 1.0;
@@ -9281,10 +8856,15 @@ mod recall_cue_tests {
             for p in 0..=n {
                 let w = wh_weight_milli(n, p);
                 assert!(w >= 0 && w <= WH_MARGIN_SCALE, "n={n} p={p} w={w}");
-                // Scene and stability against degree and wh.
-                assert!(ballot_margin(-1, 1, -1, 1, w) <= 0, "n={n} p={p} w={w}");
-                // Scene and degree against stability and wh.
-                assert!(ballot_margin(-1, -1, 1, 1, w) <= 0, "n={n} p={p} w={w}");
+                // Two ballots against wh, the third abstaining. Wh cannot win.
+                assert!(ballot_margin(1, 1, 0, -1, w) > 0, "n={n} p={p} w={w}");
+                assert!(ballot_margin(1, 0, 1, -1, w) > 0, "n={n} p={p} w={w}");
+                assert!(ballot_margin(0, 1, 1, -1, w) > 0, "n={n} p={p} w={w}");
+                // A 2-1 majority of the other ballots is not overturned when wh
+                // joins the single dissenting ballot.
+                assert!(ballot_margin(1, 1, -1, -1, w) >= 0, "n={n} p={p} w={w}");
+                assert!(ballot_margin(1, -1, 1, -1, w) >= 0, "n={n} p={p} w={w}");
+                assert!(ballot_margin(-1, 1, 1, -1, w) >= 0, "n={n} p={p} w={w}");
             }
         }
         let sessions = vec![s("s", vec![
@@ -9347,35 +8927,42 @@ mod recall_cue_tests {
     }
 
     #[test]
-    fn novel_causal_matches_whole_tokens() {
-        let excluded = wh_excluded("Why did we leave?");
-        assert!(!novel_causal("The claim stood.", &excluded));
-        assert!(!novel_causal("The gift was unwanted.", &excluded));
-        assert!(novel_causal("The aim was rest.", &excluded));
-        assert!(novel_causal("We left because the hall closed.", &excluded));
-        assert!(novel_causal("We left due to the rain.", &excluded));
-        let echoed = wh_excluded("Why did we leave because of the rain?");
-        assert!(!novel_causal("We left because of the rain.", &echoed));
-    }
-
-    #[test]
-    fn when_does_not_pass_on_a_session_timestamp_alone() {
+    fn when_passes_on_a_clock_or_iso_date_not_a_weekday_or_session_clock() {
         let mut session = s("s", vec![t("plain", "user", "We met downtown after the show.")]);
         session.timestamp = 1_700_000_000;
         let ix = ix_of(&[session]);
         let plain = idx(&ix, "plain");
         let excluded = wh_excluded("When did we meet?");
         assert!(!wh_residual(&ix, plain, WH_WHEN, &excluded, false));
-        let dated = s("s2", vec![t("dated", "user", "We met on Friday after the show.")]);
+        let friday = s("s2", vec![t("friday", "user", "We met on Friday after the show.")]);
+        let ix = ix_of(&[friday]);
+        assert!(!wh_residual(&ix, idx(&ix, "friday"), WH_WHEN, &excluded, false));
+        let dated = s("s3", vec![t("dated", "user", "We met on 2023-05-08 after the show.")]);
         let ix = ix_of(&[dated]);
-        let dated_i = idx(&ix, "dated");
-        assert!(wh_residual(&ix, dated_i, WH_WHEN, &excluded, false));
+        assert!(wh_residual(&ix, idx(&ix, "dated"), WH_WHEN, &excluded, false));
+        assert!(ix.turns[idx(&ix, "dated")].form_clock);
+    }
+
+    #[test]
+    fn non_wh_query_still_reorders_by_degree() {
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We kept the walnut oil on the shelf."),
+            t("linked", "user", "We kept the walnut oil in the tin."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let linked = idx(&ix, "linked");
+        ix.turns[plain].exact_edges.push((1, linked));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![plain, linked];
+        rank1_gatekeeper(&ix, "What did we decide?", &mut list, &scene);
+        assert_eq!(list, vec![linked, plain], "degree still reorders a query with no wh class");
     }
 
     #[test]
     fn echo_who_prefers_the_companion_over_the_booking() {
         let excluded = wh_excluded("Who did Maya travel with?");
-        let flight = t("flight", "user", "Who did Maya travel with? Maya booked her flight.");
+        let flight = t("flight", "user", "We booked the flight for the travel.");
         let gap = t("gap", "user", "We discussed the travel plans again.");
         let elena = t("elena", "user", "Maya and Elena landed in Lisbon after the travel.");
         let mut fillers = vec![flight, gap, elena];

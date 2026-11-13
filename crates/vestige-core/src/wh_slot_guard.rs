@@ -2,25 +2,31 @@
 //!
 //! Four ballots, each at most one vote: scene, structural degree, stability,
 //! and the wh residual. Scene is a ballot and the tie-break (a zero margin
-//! keeps the input order). Wh overturns scene only when degree or stability
-//! is on wh's side.
+//! keeps the input order). Wh is one vote, +1, -1, or 0, including on a query
+//! with no wh class, where that vote is 0 and the other three ballots still run.
 //!
 //! The wh weight is the scarcity of the slot in the pool, scaled so it cannot
 //! exceed one ballot:
 //!
 //! `round(1000 * ln((n + 1) / (p + 1)) / ln(n + 1))`
 //!
-//! This is 1000 when no turn passes and 0 when every turn passes. A 2–1
-//! structural majority is never overturned by wh: wh plus one structural vote
-//! is at most 2000 milli-votes, and scene plus the other structural vote is
-//! 2000. A tie keeps the scene order.
+//! clamped to 0..=1000. This is 1000 when no turn passes and 0 when every turn
+//! passes. Two of the other ballots beat wh: 2000 milli-votes against at most
+//! 1000. A 2-1 majority of those ballots is not overturned when wh joins the
+//! single dissenting ballot, because that side is then at most 2000 as well.
 //!
 //! Below-window entry, the same rule as the suffix-automaton v2 admission:
 //! the gatekeeper orders the RSB top-k tail only. A turn from beyond that
 //! top k is seated only when its four-ballot margin is strictly positive
 //! against every currently seated tail turn. Otherwise the seated top-k
-//! order stays as that within-window gatekeeper leaves it. Slot 0 is not a
-//! pool seat.
+//! order is the within-window order. Slot 0 is not a pool seat.
+//!
+//! The query class is the closed interrogative set: when, who, whom, whose,
+//! where, how many, how long. Residuals are character forms already on the
+//! turn: `form_clock` (ISO date or HH:MM) for when, `form_digit` for how many
+//! and how long, `form_midcap` for who, `form_handle` for where. Why, and the
+//! content-word lists that used to mark durations, names, and places, are not
+//! part of this ballot.
 
 /// Tail pool. Ranks 2..=50 are eligible to be compared. The returned list
 /// stays the caller's k. Fixed before the card.
