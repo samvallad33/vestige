@@ -17,8 +17,13 @@
 #![allow(clippy::all)]
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::factor_graph_guard::{
+    FACTOR_COUPLING, FACTOR_DAMPING, FACTOR_EXTRA_WINDOWS, FACTOR_ITERATIONS,
+};
 
 // =========================================================================
 // INPUT / OUTPUT CONTRACT
@@ -231,6 +236,8 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// The structural factor-graph vote changed this query's tail.
+    pub factor_graph_fired: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5741,10 +5748,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
-    // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
-    // same Kemeny-Young order as PR 710, computed on that window with the head
-    // removed. No new constant: the frozen slot is position 0 of this window.
-    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Slot 0 stays the RSB head. The tail Kemeny gains one factor-graph ballot
+    // and a pool that reaches one window below this cut. Constants live in
+    // factor_graph_guard.
+    let factor_graph_fired = rank1_gatekeeper_keep_rsb_head(
+        ix,
+        &q.text,
+        &mut final_turn_indices,
+        &t_scene,
+        k,
+        !it.is_event_sequence,
+    );
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5754,7 +5768,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult {
+        intent: plan.intent,
+        sessions,
+        turns,
+        standing_rules,
+        factor_graph_fired,
+    }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -6449,16 +6469,50 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
-/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
-/// grow the window. The pool is that window, so its size is the caller's k.
+static FACTOR_GRAPH_FIRES: AtomicU64 = AtomicU64::new(0);
+
+/// Queries whose tail the structural factor-graph vote changed.
+pub fn factor_graph_fires() -> u64 {
+    FACTOR_GRAPH_FIRES.load(Ordering::Relaxed)
+}
+
+/// Rank-1 gatekeeper. Runs after RSB. Reorders the list it is given.
+/// The four ballots and ATMS. No factor-graph vote: that vote is added
+/// by `rank1_gatekeeper_keep_rsb_head` on the deeper tail.
 fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
-    let n = list.len();
-    if n < 2 {
+    if list.len() < 2 {
         return;
     }
-    let pool = list.clone();
+    let mut turned = kemeny_pool(ix, query, list, t_scene, None);
+    atms_demote_superseded_front(ix, &mut turned);
+    *list = turned;
+}
+
+fn atms_demote_superseded_front(ix: &Index, turned: &mut Vec<usize>) {
+    if turned.is_empty() {
+        return;
+    }
+    if turn_is_superseded(ix, turned[0]) {
+        if let Some(pos) = turned.iter().position(|&ti| !turn_is_superseded(ix, ti)) {
+            let keeper = turned.remove(pos);
+            turned.insert(0, keeper);
+        }
+    }
+}
+
+fn kemeny_pool(
+    ix: &Index,
+    query: &str,
+    pool: &[usize],
+    t_scene: &[f32],
+    beliefs: Option<&[f64]>,
+) -> Vec<usize> {
+    let n = pool.len();
+    if n < 2 {
+        return pool.to_vec();
+    }
     let slots = wh_slots(query);
-    let degree = pool_structural_degree(ix, &pool);
+    let degree = pool_structural_degree(ix, pool);
     let mut net = vec![vec![0i64; n]; n];
     for a in 0..n {
         for b in (a + 1)..n {
@@ -6466,7 +6520,10 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
             let mut margin = 0i64;
             let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
             let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-            match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
+            match scene_a
+                .partial_cmp(&scene_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+            {
                 std::cmp::Ordering::Greater => margin += 1,
                 std::cmp::Ordering::Less => margin -= 1,
                 std::cmp::Ordering::Equal => {}
@@ -6478,7 +6535,10 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
             }
             let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
             let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
-            match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
+            match stab_a
+                .partial_cmp(&stab_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+            {
                 std::cmp::Ordering::Greater => margin += 1,
                 std::cmp::Ordering::Less => margin -= 1,
                 std::cmp::Ordering::Equal => {}
@@ -6492,6 +6552,15 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
                     margin -= 1;
                 }
             }
+            if let Some(belief) = beliefs {
+                let ba = belief.get(a).copied().unwrap_or(0.5);
+                let bb = belief.get(b).copied().unwrap_or(0.5);
+                match ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal) {
+                    std::cmp::Ordering::Greater => margin += 1,
+                    std::cmp::Ordering::Less => margin -= 1,
+                    std::cmp::Ordering::Equal => {}
+                }
+            }
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -6499,31 +6568,314 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     let rsb: Vec<usize> = (0..n).collect();
     let mut order = kemeny_young(&net, &rsb);
     if order.len() != n {
-        order = rsb.clone();
+        order = rsb;
     }
-    let mut turned: Vec<usize> = order.iter().map(|&i| pool[i]).collect();
-    if turn_is_superseded(ix, turned[0]) {
-        if let Some(pos) = turned.iter().position(|&ti| !turn_is_superseded(ix, ti)) {
-            let keeper = turned.remove(pos);
-            turned.insert(0, keeper);
-        }
-    }
-    *list = turned;
+    order.iter().map(|&i| pool[i]).collect()
 }
 
-/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
-/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
-/// they do on a full window. The head is not a candidate for demotion.
-fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+/// Tail pool: the current tail, then already-scored turns the selector cut,
+/// up to one extra window. Slot 0 is not a member.
+fn factor_tail_pool(ix: &Index, window: &[usize], t_scene: &[f32], k: usize) -> Vec<usize> {
+    let head = window[0];
+    let mut pool: Vec<usize> = window[1..].to_vec();
+    let target = k
+        .saturating_mul(1 + FACTOR_EXTRA_WINDOWS)
+        .saturating_sub(1)
+        .max(pool.len());
+    if pool.len() >= target || ix.turns.is_empty() {
+        return pool;
+    }
+    let mut seen = vec![false; ix.turns.len()];
+    if head < seen.len() {
+        seen[head] = true;
+    }
+    for &ti in &pool {
+        if ti < seen.len() {
+            seen[ti] = true;
+        }
+    }
+    let turn_ts: Vec<i64> = ix
+        .turns
+        .iter()
+        .map(|t| ix.session_ts.get(t.session).copied().unwrap_or(0))
+        .collect();
+    for ti in order(t_scene, &turn_ts) {
+        if pool.len() >= target {
+            break;
+        }
+        if t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
+            break;
+        }
+        if seen.get(ti).copied().unwrap_or(true) {
+            continue;
+        }
+        seen[ti] = true;
+        pool.push(ti);
+    }
+    pool
+}
+
+const LOC_OUT: i32 = -2;
+const LOC_HEAD: i32 = -1;
+
+#[derive(Clone, Copy)]
+struct FactorSpec {
+    priority: u8,
+    later_is_lo: bool,
+}
+
+fn structural_beliefs(ix: &Index, clamp: Option<usize>, pool: &[usize]) -> Vec<f64> {
+    let n = pool.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut loc = vec![LOC_OUT; ix.turns.len()];
+    if let Some(h) = clamp {
+        if h < loc.len() {
+            loc[h] = LOC_HEAD;
+        }
+    }
+    for (i, &ti) in pool.iter().enumerate() {
+        if ti < loc.len() {
+            loc[ti] = i as i32;
+        }
+    }
+    let enc = |at: i32| -> i64 { if at == LOC_HEAD { -1 } else { at as i64 } };
+    let mut pairs: BTreeMap<(i64, i64), FactorSpec> = BTreeMap::new();
+    let mut upsert = |a: i64, b: i64, priority: u8, later_is_a: bool| {
+        if a == b {
+            return;
+        }
+        let (lo, hi, later_is_lo) = if a < b {
+            (a, b, later_is_a)
+        } else {
+            (b, a, !later_is_a)
+        };
+        match pairs.get(&(lo, hi)) {
+            Some(spec) if spec.priority >= priority => {}
+            _ => {
+                pairs.insert(
+                    (lo, hi),
+                    FactorSpec {
+                        priority,
+                        later_is_lo,
+                    },
+                );
+            }
+        }
+    };
+    let mut consider = |src: usize| {
+        if src >= loc.len() || loc[src] == LOC_OUT {
+            return;
+        }
+        let src_e = enc(loc[src]);
+        let turn = &ix.turns[src];
+        for &tgt in &turn.supersedes_turns {
+            if tgt < loc.len() && loc[tgt] != LOC_OUT {
+                upsert(src_e, enc(loc[tgt]), 2, true);
+            }
+        }
+        for &tgt in &turn.policy_backlinks {
+            if tgt < loc.len() && loc[tgt] != LOC_OUT {
+                upsert(src_e, enc(loc[tgt]), 1, false);
+            }
+        }
+        for &(_, tgt) in &turn.exact_edges {
+            if tgt < loc.len() && loc[tgt] != LOC_OUT {
+                upsert(src_e, enc(loc[tgt]), 1, false);
+            }
+        }
+        if let Some(tgt) = rsb_antecedent(ix, src) {
+            if tgt < loc.len() && loc[tgt] != LOC_OUT {
+                upsert(src_e, enc(loc[tgt]), 1, false);
+            }
+        }
+    };
+    if let Some(h) = clamp {
+        consider(h);
+    }
+    for &ti in pool {
+        consider(ti);
+    }
+    for members in &ix.session_turns {
+        let mut in_pool: Vec<usize> = Vec::new();
+        for &ti in members {
+            if ti < loc.len() && loc[ti] >= 0 {
+                in_pool.push(loc[ti] as usize);
+            }
+        }
+        for w in in_pool.windows(2) {
+            upsert(w[1] as i64, w[0] as i64, 0, true);
+        }
+    }
+
+    let j = FACTOR_COUPLING;
+    let pos = j.exp();
+    let neg = (-j).exp();
+    let agree = [[pos, neg], [neg, pos]];
+    let later_pot = [[1.0, neg], [pos, 1.0]];
+    let mut unary = vec![[1.0f64, 1.0]; n];
+    struct PairFactor {
+        left: usize,
+        right: usize,
+        pot: [[f64; 2]; 2],
+    }
+    let mut factors: Vec<PairFactor> = Vec::new();
+    for ((lo, hi), spec) in &pairs {
+        let as_pool = |e: i64| -> Option<usize> { if e < 0 { None } else { Some(e as usize) } };
+        let lo_p = as_pool(*lo);
+        let hi_p = as_pool(*hi);
+        let agree_factor = spec.priority == 1;
+        if agree_factor {
+            match (lo_p, hi_p) {
+                (Some(a), Some(b)) => factors.push(PairFactor {
+                    left: a,
+                    right: b,
+                    pot: agree,
+                }),
+                (Some(v), None) | (None, Some(v)) => {
+                    unary[v][0] *= neg;
+                    unary[v][1] *= pos;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let later_is_lo = spec.later_is_lo;
+        let (later, earlier) = if later_is_lo {
+            (lo_p, hi_p)
+        } else {
+            (hi_p, lo_p)
+        };
+        match (later, earlier) {
+            (Some(l), Some(r)) => factors.push(PairFactor {
+                left: l,
+                right: r,
+                pot: later_pot,
+            }),
+            (None, Some(earlier)) => {
+                unary[earlier][0] *= later_pot[1][0];
+                unary[earlier][1] *= later_pot[1][1];
+            }
+            (Some(later), None) => {
+                unary[later][0] *= later_pot[0][1];
+                unary[later][1] *= later_pot[1][1];
+            }
+            _ => {}
+        }
+    }
+
+    let m = factors.len();
+    let mut f2v = vec![[[0.5f64, 0.5], [0.5, 0.5]]; m];
+    let mut v2f = vec![[[0.5f64, 0.5], [0.5, 0.5]]; m];
+    #[derive(Clone)]
+    struct Touch {
+        fac: usize,
+        side: usize,
+    }
+    let mut touch: Vec<Vec<Touch>> = vec![Vec::new(); n];
+    for (fi, f) in factors.iter().enumerate() {
+        touch[f.left].push(Touch { fac: fi, side: 0 });
+        touch[f.right].push(Touch { fac: fi, side: 1 });
+    }
+    let norm = |mut msg: [f64; 2]| -> [f64; 2] {
+        let s = msg[0] + msg[1];
+        if s.is_finite() && s > 0.0 {
+            msg[0] /= s;
+            msg[1] /= s;
+            msg
+        } else {
+            [0.5, 0.5]
+        }
+    };
+    let damp = |prev: [f64; 2], computed: [f64; 2]| -> [f64; 2] {
+        let eta = FACTOR_DAMPING;
+        norm([
+            (1.0 - eta) * computed[0] + eta * prev[0],
+            (1.0 - eta) * computed[1] + eta * prev[1],
+        ])
+    };
+    for _ in 0..FACTOR_ITERATIONS {
+        let old_v2f = v2f.clone();
+        let old_f2v = f2v.clone();
+        for fi in 0..m {
+            let pot = &factors[fi].pot;
+            let mut to_left = [0.0, 0.0];
+            let mut to_right = [0.0, 0.0];
+            for l in 0..2 {
+                for r in 0..2 {
+                    to_left[l] += pot[l][r] * old_v2f[fi][1][r];
+                    to_right[r] += pot[l][r] * old_v2f[fi][0][l];
+                }
+            }
+            f2v[fi][0] = damp(old_f2v[fi][0], norm(to_left));
+            f2v[fi][1] = damp(old_f2v[fi][1], norm(to_right));
+        }
+        for v in 0..n {
+            for t in &touch[v] {
+                let mut acc = unary[v];
+                for o in &touch[v] {
+                    if o.fac == t.fac {
+                        continue;
+                    }
+                    let incoming = old_f2v[o.fac][o.side];
+                    acc[0] *= incoming[0];
+                    acc[1] *= incoming[1];
+                }
+                v2f[t.fac][t.side] = damp(old_v2f[t.fac][t.side], norm(acc));
+            }
+        }
+    }
+    let mut out = vec![0.5; n];
+    for v in 0..n {
+        let mut acc = unary[v];
+        for t in &touch[v] {
+            acc[0] *= f2v[t.fac][t.side][0];
+            acc[1] *= f2v[t.fac][t.side][1];
+        }
+        out[v] = norm(acc)[1];
+    }
+    out
+}
+
+/// Slot 0 stays the RSB head. The tail Kemeny runs on the current tail plus
+/// one window of already-scored turns below it. Sum-product marginals are
+/// one ballot beside scene, degree, stability, and the wh slot.
+fn rank1_gatekeeper_keep_rsb_head(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+    k: usize,
+    expand: bool,
+) -> bool {
     if list.len() < 2 {
-        return;
+        return false;
     }
     let head = list[0];
-    let mut tail = list[1..].to_vec();
-    rank1_gatekeeper(ix, query, &mut tail, t_scene);
+    let tail = list[1..].to_vec();
+    let mut baseline = kemeny_pool(ix, query, &tail, t_scene, None);
+    atms_demote_superseded_front(ix, &mut baseline);
+    // An event-sequence window is already one turn per date. Growing it
+    // re-admits the turns that spread just cut. The factor vote still runs
+    // on the window the selector returned.
+    let pool = if expand {
+        factor_tail_pool(ix, list, t_scene, k)
+    } else {
+        tail.clone()
+    };
+    let beliefs = structural_beliefs(ix, Some(head), &pool);
+    let mut ranked = kemeny_pool(ix, query, &pool, t_scene, Some(&beliefs));
+    ranked.truncate(tail.len());
+    atms_demote_superseded_front(ix, &mut ranked);
+    let fired = ranked != baseline;
+    if fired {
+        FACTOR_GRAPH_FIRES.fetch_add(1, Ordering::Relaxed);
+    }
     list.clear();
     list.push(head);
-    list.extend(tail);
+    list.extend(ranked);
+    fired
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8339,7 +8691,8 @@ mod recall_cue_tests {
         let clock = idx(&ix, "clock");
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, other, clock];
-        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene);
+        let k = list.len();
+        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene, k, true);
         assert_eq!(list, vec![plain, clock, other]);
     }
 
@@ -8361,9 +8714,58 @@ mod recall_cue_tests {
         scene[old] = 3.0;
         scene[fresh] = 1.0;
         let mut list = vec![head, old, fresh];
-        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene);
+        let k = list.len();
+        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene, k, true);
         assert_eq!(list[0], head, "slot 1 stays the RSB head");
         assert_eq!(list[1], fresh, "ATMS still demotes a superseded turn inside the tail");
+    }
+
+
+    #[test]
+    fn factor_graph_keeps_the_head_and_fires_below_the_window() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list[0], head, "slot 0 stays the RSB head");
+        assert_eq!(list[1], later, "the later same-session turn enters from below the window");
+        assert!(fired, "the factor-graph vote changed the tail");
+        let pool = vec![earlier, later];
+        let once = structural_beliefs(&ix, Some(head), &pool);
+        let twice = structural_beliefs(&ix, Some(head), &pool);
+        assert_eq!(once, twice);
+        assert!(once[1] > once[0]);
+        let mut again = vec![head, earlier];
+        let fired_again = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut again, &scene, 2, true);
+        assert_eq!(again, list);
+        assert_eq!(fired_again, fired);
+    }
+
+    #[test]
+    fn factor_graph_higher_scene_below_the_window_cannot_pass_the_head() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[later] = 50.0;
+        let mut list = vec![head, earlier];
+        rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list[0], head);
+        assert_ne!(list[0], later);
     }
 
     #[test]
