@@ -4635,7 +4635,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             sc_own *= 1.05;
         }
         if pref_on && t.field == 0 {
-            if t.pref_marker {
+            if t.speaker == "user" && turn_pos(ix, ti).map_or(false, |p| p <= 4) {
                 sc *= p.preference_boost;
                 sc_own *= p.preference_boost;
             } else if t.is_user_schema && t.schema_domains.iter().any(|d| plan.focal_domains.contains(d)) {
