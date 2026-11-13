@@ -31,6 +31,9 @@ import urllib.request
 
 
 def find_binary():
+    override = os.environ.get("VESTIGE_RETRIEVAL_BENCH")
+    if override and os.path.exists(override):
+        return override
     candidates = [
         os.path.join('target', 'release', 'retrieval_bench.exe'),
         os.path.join('target', 'release', 'retrieval_bench'),
@@ -94,7 +97,10 @@ def main():
         encoding='utf-8',
     )
 
+    fires = 0
+
     def rank(payload):
+        nonlocal fires
         if proc.poll() is not None:
             err = proc.stderr.read() if proc.stderr else ''
             raise RuntimeError(f'retrieval_bench exited {proc.returncode} before write: {err[-2000:]}')
@@ -107,6 +113,9 @@ def main():
         resp = json.loads(line)
         if 'error' in resp:
             raise RuntimeError(resp['error'])
+        for result in resp.get('results') or []:
+            if result.get('factor_graph_fired'):
+                fires += 1
         return resp
 
     t_start = time.time()
@@ -312,6 +321,7 @@ def main():
         'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'elapsed_seconds': round(total_dt, 2),
         'cost_usd': 0,
+        'factor_graph_fires': fires,
         'splits': {
             'ruler_qa1_197K': {
                 'row': 0, 'docs': len(docs0), 'total_questions': 100,

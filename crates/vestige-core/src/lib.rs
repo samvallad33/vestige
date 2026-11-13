@@ -109,6 +109,9 @@ pub mod advanced;
 pub mod codebase;
 pub mod projection;
 
+/// Fixed loopy belief-propagation constants for the structural factor-graph vote.
+/// Committed before any benchmark card. Not a tuning surface.
+pub mod factor_graph_guard;
 /// Neuroscience-inspired memory mechanisms
 ///
 /// Implements cutting-edge neuroscience findings including:

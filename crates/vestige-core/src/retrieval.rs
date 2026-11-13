@@ -17,8 +17,14 @@
 #![allow(clippy::all)]
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::factor_graph_guard::{
+    FACTOR_COUPLING, FACTOR_DAMPING, FACTOR_EXTRA_WINDOWS, FACTOR_ITERATIONS,
+};
 
 // =========================================================================
 // INPUT / OUTPUT CONTRACT
@@ -231,6 +237,48 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// The structural factor-graph vote changed this query's tail.
+    pub factor_graph_fired: bool,
+    /// Pair ballots for the tail the factor vote just ranked. Present only when
+    /// `VESTIGE_FACTOR_TRACE` is set. The order does not read this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub factor_trace: Option<FactorTrace>,
+}
+
+/// One cross-cut or in-window pair, signed so a positive margin means `a` beats `b`.
+#[derive(Debug, Clone, Serialize)]
+pub struct FactorPairTrace {
+    pub a: String,
+    pub b: String,
+    pub scene: i8,
+    pub degree: i8,
+    /// False when the degree sign was computed and then left out of the margin.
+    pub degree_counted: bool,
+    pub stability: i8,
+    pub wh: i8,
+    pub factor: i8,
+    pub margin: i8,
+    /// True when at least one side sits below the selector cut.
+    pub cross_cut: bool,
+}
+
+/// Stored edges that admitted one below-cut turn into the factor pool.
+#[derive(Debug, Clone, Serialize)]
+pub struct FactorEdgeTrace {
+    pub id: String,
+    pub edges: Vec<String>,
+}
+
+/// The pool, the no-factor order, the factor order, and every pair ballot.
+#[derive(Debug, Clone, Serialize)]
+pub struct FactorTrace {
+    pub baseline_ids: Vec<String>,
+    pub ranked_ids: Vec<String>,
+    pub pool_ids: Vec<String>,
+    pub inside: usize,
+    pub beliefs: Vec<f64>,
+    pub below_cut: Vec<FactorEdgeTrace>,
+    pub pairs: Vec<FactorPairTrace>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5741,10 +5789,21 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
-    // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
-    // same Kemeny-Young order as PR 710, computed on that window with the head
-    // removed. No new constant: the frozen slot is position 0 of this window.
-    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Slot 0 stays the RSB head. The tail Kemeny gains one factor-graph ballot
+    // and a pool that reaches one window below this cut. Constants live in
+    // factor_graph_guard.
+    FACTOR_TRACE.with(|slot| {
+        slot.borrow_mut().take();
+    });
+    let factor_graph_fired = rank1_gatekeeper_keep_rsb_head(
+        ix,
+        &q.text,
+        &mut final_turn_indices,
+        &t_scene,
+        k,
+        !it.is_event_sequence,
+    );
+    let factor_trace = FACTOR_TRACE.with(|slot| slot.borrow_mut().take());
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5754,7 +5813,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult {
+        intent: plan.intent,
+        sessions,
+        turns,
+        standing_rules,
+        factor_graph_fired,
+        factor_trace,
+    }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -6449,49 +6515,150 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
-/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
-/// grow the window. The pool is that window, so its size is the caller's k.
+static FACTOR_GRAPH_FIRES: AtomicU64 = AtomicU64::new(0);
+
+/// Queries whose tail the structural factor-graph vote changed.
+pub fn factor_graph_fires() -> u64 {
+    FACTOR_GRAPH_FIRES.load(Ordering::Relaxed)
+}
+
+/// Rank-1 gatekeeper without the factor-graph ballot. Tests lock this order.
+/// Production uses `rank1_gatekeeper_keep_rsb_head`, which adds that ballot.
+#[cfg(test)]
 fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
-    let n = list.len();
-    if n < 2 {
+    if list.len() < 2 {
         return;
     }
-    let pool = list.clone();
+    let mut turned = kemeny_pool(ix, query, list, t_scene, None, list.len());
+    atms_demote_superseded_front(ix, &mut turned);
+    *list = turned;
+}
+
+fn atms_demote_superseded_front(ix: &Index, turned: &mut Vec<usize>) {
+    if turned.is_empty() {
+        return;
+    }
+    if turn_is_superseded(ix, turned[0]) {
+        if let Some(pos) = turned.iter().position(|&ti| !turn_is_superseded(ix, ti)) {
+            let keeper = turned.remove(pos);
+            turned.insert(0, keeper);
+        }
+    }
+}
+
+fn sign_of(ord: std::cmp::Ordering) -> i64 {
+    match ord {
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
+struct PairBallots {
+    scene: i64,
+    degree: i64,
+    degree_counted: bool,
+    stability: i64,
+    wh: i64,
+    factor: i64,
+    cross_cut: bool,
+}
+
+impl PairBallots {
+    fn margin(&self) -> i64 {
+        // One ±1 per ballot. Degree votes on a cross-cut pair too, so a scene
+        // advantage against a higher-degree turn is a tie unless another
+        // ballot breaks it. The factor sign is already 0 when both turns sit
+        // inside the window.
+        self.scene + self.degree + self.stability + self.wh + self.factor
+    }
+}
+
+/// Ballots on one unordered pair, signed so a positive value means pool index
+/// `a` beats `b`.
+fn pair_ballots(
+    ix: &Index,
+    pool: &[usize],
+    t_scene: &[f32],
+    beliefs: Option<&[f64]>,
+    inside: usize,
+    degree: &[i64],
+    slots: u8,
+    a: usize,
+    b: usize,
+) -> PairBallots {
+    let (ta, tb) = (pool[a], pool[b]);
+    // Scene is one ballot on every pair. Degree is too. A scene advantage
+    // against a higher in-degree is a tie unless stability, wh, or the
+    // factor marginal breaks it.
+    let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
+    let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
+    let scene = sign_of(
+        scene_a
+            .partial_cmp(&scene_b)
+            .unwrap_or(std::cmp::Ordering::Equal),
+    );
+    // Degree is one ballot inside the window and one seat on the cross-cut
+    // committee. The sign is the comparison of in-edges from the whole index.
+    let degree_sign = sign_of(degree[a].cmp(&degree[b]));
+    let cross_cut = a >= inside || b >= inside;
+    let degree_counted = true;
+    let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
+    let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
+    let stability = sign_of(
+        stab_a
+            .partial_cmp(&stab_b)
+            .unwrap_or(std::cmp::Ordering::Equal),
+    );
+    let mut wh = 0i64;
+    if slots != 0 {
+        let ok_a = wh_satisfied(ix, ta, slots, degree[a] > 0);
+        let ok_b = wh_satisfied(ix, tb, slots, degree[b] > 0);
+        if ok_a && !ok_b {
+            wh = 1;
+        } else if ok_b && !ok_a {
+            wh = -1;
+        }
+    }
+    // The factor ballot answers whether a turn from below the cut should take
+    // a tail seat. It does not reshuffle two turns the selector already kept.
+    let mut factor = 0i64;
+    if let Some(belief) = beliefs {
+        if a >= inside || b >= inside {
+            let ba = belief.get(a).copied().unwrap_or(0.5);
+            let bb = belief.get(b).copied().unwrap_or(0.5);
+            factor = sign_of(ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal));
+        }
+    }
+    PairBallots {
+        scene,
+        degree: degree_sign,
+        degree_counted,
+        stability,
+        wh,
+        factor,
+        cross_cut,
+    }
+}
+
+fn kemeny_pool(
+    ix: &Index,
+    query: &str,
+    pool: &[usize],
+    t_scene: &[f32],
+    beliefs: Option<&[f64]>,
+    inside: usize,
+) -> Vec<usize> {
+    let n = pool.len();
+    if n < 2 {
+        return pool.to_vec();
+    }
     let slots = wh_slots(query);
-    let degree = pool_structural_degree(ix, &pool);
+    let degree = pool_structural_degree(ix, pool);
     let mut net = vec![vec![0i64; n]; n];
     for a in 0..n {
         for b in (a + 1)..n {
-            let (ta, tb) = (pool[a], pool[b]);
-            let mut margin = 0i64;
-            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
-            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-            match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            match degree[a].cmp(&degree[b]) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
-            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
-            match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            if slots != 0 {
-                let ok_a = wh_satisfied(ix, ta, slots, degree[a] > 0);
-                let ok_b = wh_satisfied(ix, tb, slots, degree[b] > 0);
-                if ok_a && !ok_b {
-                    margin += 1;
-                } else if ok_b && !ok_a {
-                    margin -= 1;
-                }
-            }
+            let margin = pair_ballots(ix, pool, t_scene, beliefs, inside, &degree, slots, a, b).margin();
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -6499,31 +6666,490 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     let rsb: Vec<usize> = (0..n).collect();
     let mut order = kemeny_young(&net, &rsb);
     if order.len() != n {
-        order = rsb.clone();
+        order = rsb;
     }
-    let mut turned: Vec<usize> = order.iter().map(|&i| pool[i]).collect();
-    if turn_is_superseded(ix, turned[0]) {
-        if let Some(pos) = turned.iter().position(|&ti| !turn_is_superseded(ix, ti)) {
-            let keeper = turned.remove(pos);
-            turned.insert(0, keeper);
-        }
-    }
-    *list = turned;
+    order.iter().map(|&i| pool[i]).collect()
 }
 
-/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
-/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
-/// they do on a full window. The head is not a candidate for demotion.
-fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+/// Turns one stored edge away from the window: supersedes, policy backlink,
+/// exact edge, or RSB antecedent. One hop. Same-session adjacency is a factor
+/// inside the pool, not an admission ticket. v1 admitted the next scene-ranked
+/// turns and the scene ballot pulled them back across the cut.
+fn structural_neighbors(ix: &Index, seeds: &[usize]) -> HashSet<usize> {
+    let mut seed_at = vec![false; ix.turns.len()];
+    for &s in seeds {
+        if let Some(slot) = seed_at.get_mut(s) {
+            *slot = true;
+        }
+    }
+    let mut neigh = HashSet::new();
+    let link = |src: usize, other: usize, seed_at: &[bool], neigh: &mut HashSet<usize>| {
+        if other == src || other >= seed_at.len() {
+            return;
+        }
+        if seed_at[src] && !seed_at[other] {
+            neigh.insert(other);
+        } else if seed_at[other] && !seed_at[src] {
+            neigh.insert(src);
+        }
+    };
+    for (src, turn) in ix.turns.iter().enumerate() {
+        if src >= seed_at.len() {
+            break;
+        }
+        for &tgt in &turn.policy_backlinks {
+            link(src, tgt, &seed_at, &mut neigh);
+        }
+        for &tgt in &turn.supersedes_turns {
+            link(src, tgt, &seed_at, &mut neigh);
+        }
+        for &(_, tgt) in &turn.exact_edges {
+            link(src, tgt, &seed_at, &mut neigh);
+        }
+        if let Some(tgt) = rsb_antecedent(ix, src) {
+            link(src, tgt, &seed_at, &mut neigh);
+        }
+    }
+    neigh
+}
+
+/// Tail pool: the current tail, then structural neighbors the selector cut,
+/// up to one extra window. Slot 0 is not a member.
+fn factor_tail_pool(ix: &Index, window: &[usize], t_scene: &[f32], k: usize) -> Vec<usize> {
+    let head = window[0];
+    let mut pool: Vec<usize> = window[1..].to_vec();
+    let target = k
+        .saturating_mul(1 + FACTOR_EXTRA_WINDOWS)
+        .saturating_sub(1)
+        .max(pool.len());
+    if pool.len() >= target || ix.turns.is_empty() {
+        return pool;
+    }
+    let mut seen = vec![false; ix.turns.len()];
+    if head < seen.len() {
+        seen[head] = true;
+    }
+    for &ti in &pool {
+        if ti < seen.len() {
+            seen[ti] = true;
+        }
+    }
+    let neigh = structural_neighbors(ix, window);
+    let turn_ts: Vec<i64> = ix
+        .turns
+        .iter()
+        .map(|t| ix.session_ts.get(t.session).copied().unwrap_or(0))
+        .collect();
+    for ti in order(t_scene, &turn_ts) {
+        if pool.len() >= target {
+            break;
+        }
+        if !neigh.contains(&ti) || seen.get(ti).copied().unwrap_or(true) {
+            continue;
+        }
+        seen[ti] = true;
+        pool.push(ti);
+    }
+    pool
+}
+
+const LOC_OUT: i32 = -2;
+const LOC_HEAD: i32 = -1;
+
+#[derive(Clone, Copy)]
+struct FactorSpec {
+    priority: u8,
+    later_is_lo: bool,
+}
+
+fn structural_beliefs(ix: &Index, clamp: Option<usize>, pool: &[usize]) -> Vec<f64> {
+    let n = pool.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut loc = vec![LOC_OUT; ix.turns.len()];
+    if let Some(h) = clamp {
+        if h < loc.len() {
+            loc[h] = LOC_HEAD;
+        }
+    }
+    for (i, &ti) in pool.iter().enumerate() {
+        if ti < loc.len() {
+            loc[ti] = i as i32;
+        }
+    }
+    let enc = |at: i32| -> i64 { if at == LOC_HEAD { -1 } else { at as i64 } };
+    let mut pairs: BTreeMap<(i64, i64), FactorSpec> = BTreeMap::new();
+    let mut upsert = |a: i64, b: i64, priority: u8, later_is_a: bool| {
+        if a == b {
+            return;
+        }
+        let (lo, hi, later_is_lo) = if a < b {
+            (a, b, later_is_a)
+        } else {
+            (b, a, !later_is_a)
+        };
+        match pairs.get(&(lo, hi)) {
+            Some(spec) if spec.priority >= priority => {}
+            _ => {
+                pairs.insert(
+                    (lo, hi),
+                    FactorSpec {
+                        priority,
+                        later_is_lo,
+                    },
+                );
+            }
+        }
+    };
+    let mut consider = |src: usize| {
+        if src >= loc.len() || loc[src] == LOC_OUT {
+            return;
+        }
+        let src_e = enc(loc[src]);
+        let turn = &ix.turns[src];
+        for &tgt in &turn.supersedes_turns {
+            if tgt < loc.len() && loc[tgt] != LOC_OUT {
+                upsert(src_e, enc(loc[tgt]), 2, true);
+            }
+        }
+        for &tgt in &turn.policy_backlinks {
+            if tgt < loc.len() && loc[tgt] != LOC_OUT {
+                upsert(src_e, enc(loc[tgt]), 1, false);
+            }
+        }
+        for &(_, tgt) in &turn.exact_edges {
+            if tgt < loc.len() && loc[tgt] != LOC_OUT {
+                upsert(src_e, enc(loc[tgt]), 1, false);
+            }
+        }
+        if let Some(tgt) = rsb_antecedent(ix, src) {
+            if tgt < loc.len() && loc[tgt] != LOC_OUT {
+                upsert(src_e, enc(loc[tgt]), 1, false);
+            }
+        }
+    };
+    if let Some(h) = clamp {
+        consider(h);
+    }
+    for &ti in pool {
+        consider(ti);
+    }
+    // No successive-turn time factor. A later-preferred chain over the tail is
+    // a second recency sort. Scene already voted on recency when it built the
+    // window, and v1–v3 showed that chain firing on almost every query.
+
+    let j = FACTOR_COUPLING;
+    let pos = j.exp();
+    let neg = (-j).exp();
+    let agree = [[pos, neg], [neg, pos]];
+    let later_pot = [[1.0, neg], [pos, 1.0]];
+    let mut unary = vec![[1.0f64, 1.0]; n];
+    struct PairFactor {
+        left: usize,
+        right: usize,
+        pot: [[f64; 2]; 2],
+    }
+    let mut factors: Vec<PairFactor> = Vec::new();
+    for ((lo, hi), spec) in &pairs {
+        let as_pool = |e: i64| -> Option<usize> { if e < 0 { None } else { Some(e as usize) } };
+        let lo_p = as_pool(*lo);
+        let hi_p = as_pool(*hi);
+        let agree_factor = spec.priority == 1;
+        if agree_factor {
+            match (lo_p, hi_p) {
+                (Some(a), Some(b)) => factors.push(PairFactor {
+                    left: a,
+                    right: b,
+                    pot: agree,
+                }),
+                (Some(v), None) | (None, Some(v)) => {
+                    unary[v][0] *= neg;
+                    unary[v][1] *= pos;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let later_is_lo = spec.later_is_lo;
+        let (later, earlier) = if later_is_lo {
+            (lo_p, hi_p)
+        } else {
+            (hi_p, lo_p)
+        };
+        match (later, earlier) {
+            (Some(l), Some(r)) => factors.push(PairFactor {
+                left: l,
+                right: r,
+                pot: later_pot,
+            }),
+            (None, Some(earlier)) => {
+                unary[earlier][0] *= later_pot[1][0];
+                unary[earlier][1] *= later_pot[1][1];
+            }
+            (Some(later), None) => {
+                unary[later][0] *= later_pot[0][1];
+                unary[later][1] *= later_pot[1][1];
+            }
+            _ => {}
+        }
+    }
+
+    let m = factors.len();
+    let mut f2v = vec![[[0.5f64, 0.5], [0.5, 0.5]]; m];
+    let mut v2f = vec![[[0.5f64, 0.5], [0.5, 0.5]]; m];
+    #[derive(Clone)]
+    struct Touch {
+        fac: usize,
+        side: usize,
+    }
+    let mut touch: Vec<Vec<Touch>> = vec![Vec::new(); n];
+    for (fi, f) in factors.iter().enumerate() {
+        touch[f.left].push(Touch { fac: fi, side: 0 });
+        touch[f.right].push(Touch { fac: fi, side: 1 });
+    }
+    let norm = |mut msg: [f64; 2]| -> [f64; 2] {
+        let s = msg[0] + msg[1];
+        if s.is_finite() && s > 0.0 {
+            msg[0] /= s;
+            msg[1] /= s;
+            msg
+        } else {
+            [0.5, 0.5]
+        }
+    };
+    let damp = |prev: [f64; 2], computed: [f64; 2]| -> [f64; 2] {
+        let eta = FACTOR_DAMPING;
+        norm([
+            (1.0 - eta) * computed[0] + eta * prev[0],
+            (1.0 - eta) * computed[1] + eta * prev[1],
+        ])
+    };
+    for _ in 0..FACTOR_ITERATIONS {
+        let old_v2f = v2f.clone();
+        let old_f2v = f2v.clone();
+        for fi in 0..m {
+            let pot = &factors[fi].pot;
+            let mut to_left = [0.0, 0.0];
+            let mut to_right = [0.0, 0.0];
+            for l in 0..2 {
+                for r in 0..2 {
+                    to_left[l] += pot[l][r] * old_v2f[fi][1][r];
+                    to_right[r] += pot[l][r] * old_v2f[fi][0][l];
+                }
+            }
+            f2v[fi][0] = damp(old_f2v[fi][0], norm(to_left));
+            f2v[fi][1] = damp(old_f2v[fi][1], norm(to_right));
+        }
+        for v in 0..n {
+            for t in &touch[v] {
+                let mut acc = unary[v];
+                for o in &touch[v] {
+                    if o.fac == t.fac {
+                        continue;
+                    }
+                    let incoming = old_f2v[o.fac][o.side];
+                    acc[0] *= incoming[0];
+                    acc[1] *= incoming[1];
+                }
+                v2f[t.fac][t.side] = damp(old_v2f[t.fac][t.side], norm(acc));
+            }
+        }
+    }
+    let mut out = vec![0.5; n];
+    for v in 0..n {
+        let mut acc = unary[v];
+        for t in &touch[v] {
+            acc[0] *= f2v[t.fac][t.side][0];
+            acc[1] *= f2v[t.fac][t.side][1];
+        }
+        out[v] = norm(acc)[1];
+    }
+    out
+}
+
+thread_local! {
+    static FACTOR_TRACE: RefCell<Option<FactorTrace>> = RefCell::new(None);
+}
+
+fn tracing_factor_graph() -> bool {
+    std::env::var_os("VESTIGE_FACTOR_TRACE").is_some()
+}
+
+/// Stored edges from `outsider` into the selector window, either direction.
+fn admission_edges(ix: &Index, seeds: &[usize], outsider: usize) -> Vec<String> {
+    if outsider >= ix.turns.len() {
+        return Vec::new();
+    }
+    let mut seed_at = vec![false; ix.turns.len()];
+    for &seed in seeds {
+        if let Some(slot) = seed_at.get_mut(seed) {
+            *slot = true;
+        }
+    }
+    if seed_at[outsider] {
+        return Vec::new();
+    }
+    let mut labels = Vec::new();
+    let note = |kind: &str, src: usize, tgt: usize, labels: &mut Vec<String>| {
+        if src >= seed_at.len() || tgt >= seed_at.len() || src == tgt {
+            return;
+        }
+        let crosses = seed_at[src] != seed_at[tgt];
+        let touches = src == outsider || tgt == outsider;
+        if crosses && touches {
+            labels.push(format!(
+                "{kind}:{}->{}",
+                ix.turns[src].id, ix.turns[tgt].id
+            ));
+        }
+    };
+    for (src, turn) in ix.turns.iter().enumerate() {
+        for &tgt in &turn.policy_backlinks {
+            note("policy_backlink", src, tgt, &mut labels);
+        }
+        for &tgt in &turn.supersedes_turns {
+            note("supersedes", src, tgt, &mut labels);
+        }
+        for &(_, tgt) in &turn.exact_edges {
+            note("exact_edge", src, tgt, &mut labels);
+        }
+        if let Some(tgt) = rsb_antecedent(ix, src) {
+            note("rsb_antecedent", src, tgt, &mut labels);
+        }
+    }
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
+fn record_factor_trace(
+    ix: &Index,
+    query: &str,
+    window: &[usize],
+    pool: &[usize],
+    t_scene: &[f32],
+    beliefs: &[f64],
+    inside: usize,
+    baseline: &[usize],
+    ranked: &[usize],
+) {
+    let id_of = |ti: usize| -> String {
+        ix.turns
+            .get(ti)
+            .map(|t| t.id.clone())
+            .unwrap_or_default()
+    };
+    let degree = pool_structural_degree(ix, pool);
+    let slots = wh_slots(query);
+    let mut pairs = Vec::new();
+    for a in 0..pool.len() {
+        for b in (a + 1)..pool.len() {
+            let ball = pair_ballots(
+                ix,
+                pool,
+                t_scene,
+                Some(beliefs),
+                inside,
+                &degree,
+                slots,
+                a,
+                b,
+            );
+            pairs.push(FactorPairTrace {
+                a: id_of(pool[a]),
+                b: id_of(pool[b]),
+                scene: ball.scene as i8,
+                degree: ball.degree as i8,
+                degree_counted: ball.degree_counted,
+                stability: ball.stability as i8,
+                wh: ball.wh as i8,
+                factor: ball.factor as i8,
+                margin: ball.margin() as i8,
+                cross_cut: ball.cross_cut,
+            });
+        }
+    }
+    let below_cut = pool
+        .iter()
+        .skip(inside)
+        .map(|&ti| FactorEdgeTrace {
+            id: id_of(ti),
+            edges: admission_edges(ix, window, ti),
+        })
+        .collect();
+    let head = window[0];
+    let mut baseline_ids = vec![id_of(head)];
+    baseline_ids.extend(baseline.iter().copied().map(id_of));
+    let mut ranked_ids = vec![id_of(head)];
+    ranked_ids.extend(ranked.iter().copied().map(id_of));
+    FACTOR_TRACE.with(|slot| {
+        *slot.borrow_mut() = Some(FactorTrace {
+            baseline_ids,
+            ranked_ids,
+            pool_ids: pool.iter().copied().map(id_of).collect(),
+            inside,
+            beliefs: beliefs.to_vec(),
+            below_cut,
+            pairs,
+        });
+    });
+}
+
+/// Slot 0 stays the RSB head. The tail Kemeny runs on the current tail plus
+/// one window of already-scored turns below it. Each ballot is ±1. Degree
+/// votes across the cut. The factor marginal votes only across the cut.
+fn rank1_gatekeeper_keep_rsb_head(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+    k: usize,
+    expand: bool,
+) -> bool {
+    FACTOR_TRACE.with(|slot| {
+        slot.borrow_mut().take();
+    });
     if list.len() < 2 {
-        return;
+        return false;
     }
     let head = list[0];
-    let mut tail = list[1..].to_vec();
-    rank1_gatekeeper(ix, query, &mut tail, t_scene);
+    let tail = list[1..].to_vec();
+    let mut baseline = kemeny_pool(ix, query, &tail, t_scene, None, tail.len());
+    atms_demote_superseded_front(ix, &mut baseline);
+    // An event-sequence window is already one turn per date. Growing it
+    // re-admits the turns that spread just cut. The factor vote still runs
+    // on the window the selector returned.
+    let pool = if expand {
+        factor_tail_pool(ix, list, t_scene, k)
+    } else {
+        tail.clone()
+    };
+    let beliefs = structural_beliefs(ix, Some(head), &pool);
+    let mut ranked = kemeny_pool(ix, query, &pool, t_scene, Some(&beliefs), tail.len());
+    ranked.truncate(tail.len());
+    atms_demote_superseded_front(ix, &mut ranked);
+    let fired = ranked != baseline;
+    if fired {
+        FACTOR_GRAPH_FIRES.fetch_add(1, Ordering::Relaxed);
+    }
+    if tracing_factor_graph() {
+        record_factor_trace(
+            ix,
+            query,
+            list,
+            &pool,
+            t_scene,
+            &beliefs,
+            tail.len(),
+            &baseline,
+            &ranked,
+        );
+    }
     list.clear();
     list.push(head);
-    list.extend(tail);
+    list.extend(ranked);
+    fired
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8339,7 +8965,8 @@ mod recall_cue_tests {
         let clock = idx(&ix, "clock");
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![plain, other, clock];
-        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene);
+        let k = list.len();
+        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene, k, true);
         assert_eq!(list, vec![plain, clock, other]);
     }
 
@@ -8361,9 +8988,188 @@ mod recall_cue_tests {
         scene[old] = 3.0;
         scene[fresh] = 1.0;
         let mut list = vec![head, old, fresh];
-        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene);
+        let k = list.len();
+        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene, k, true);
         assert_eq!(list[0], head, "slot 1 stays the RSB head");
         assert_eq!(list[1], fresh, "ATMS still demotes a superseded turn inside the tail");
+    }
+
+
+    #[test]
+    fn factor_graph_keeps_the_head_and_fires_below_the_window() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        ix.turns[later].exact_edges.push((1, head));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list[0], head, "slot 0 stays the RSB head");
+        assert_eq!(list[1], later, "the later same-session turn enters from below the window");
+        assert!(fired, "the factor-graph vote changed the tail");
+        let pool = vec![earlier, later];
+        let once = structural_beliefs(&ix, Some(head), &pool);
+        let twice = structural_beliefs(&ix, Some(head), &pool);
+        assert_eq!(once, twice);
+        assert!(once[1] > once[0]);
+        let mut again = vec![head, earlier];
+        let fired_again = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut again, &scene, 2, true);
+        assert_eq!(again, list);
+        assert_eq!(fired_again, fired);
+    }
+
+    #[test]
+    fn factor_graph_scene_advantage_against_higher_degree_ties() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        // The edge points at the in-window turn, so that turn holds the degree.
+        ix.turns[later].exact_edges.push((1, earlier));
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[later] = 50.0;
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list[0], head);
+        assert_eq!(list, vec![head, earlier]);
+        assert!(!fired, "scene +1 against degree -1 is a tie when the marginal does not break it");
+    }
+
+    #[test]
+    fn factor_graph_higher_scene_below_the_window_cannot_pass_the_head() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[later] = 50.0;
+        let mut list = vec![head, earlier];
+        rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list[0], head);
+        assert_ne!(list[0], later);
+    }
+
+    #[test]
+    fn factor_graph_does_not_admit_an_unrelated_high_scene_turn() {
+        let sessions = vec![
+            s("s", vec![
+                t("head", "user", "Alpha signal stays on the record."),
+                t("earlier", "user", "Beta signal stays on the record."),
+            ]),
+            s("other", vec![
+                t("outsider", "user", "Delta signal stays on the record."),
+            ]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let outsider = idx(&ix, "outsider");
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[outsider] = 50.0;
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list, vec![head, earlier]);
+        assert!(!fired);
+        assert_ne!(list[1], outsider);
+    }
+
+    #[test]
+    fn factor_graph_same_session_adjacency_is_not_an_admission_ticket() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[later] = 50.0;
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list, vec![head, earlier]);
+        assert!(!fired);
+        assert_ne!(list[1], later);
+    }
+
+    #[test]
+    fn factor_graph_does_not_reshuffle_two_turns_already_in_the_window() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        ix.turns[later].exact_edges.push((1, head));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, earlier, later];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 3, true);
+        assert_eq!(list, vec![head, earlier, later]);
+        assert!(!fired);
+    }
+
+    #[test]
+    fn factor_graph_does_not_count_one_edge_twice_across_the_cut() {
+        let sessions = vec![
+            s("s", vec![
+                t("head", "user", "Alpha signal stays on the record."),
+                t("earlier", "user", "Beta signal stays on the record."),
+            ]),
+            s("other", vec![
+                t("outsider", "user", "Gamma signal stays on the record."),
+            ]),
+        ];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let outsider = idx(&ix, "outsider");
+        ix.turns[outsider].exact_edges.push((1, earlier));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list, vec![head, earlier]);
+        assert!(!fired);
+    }
+
+    #[test]
+    fn factor_graph_lower_scene_neighbor_does_not_jump_the_tail() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        ix.turns[later].exact_edges.push((1, head));
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[later] = 0.5;
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list[0], head);
+        assert_eq!(list, vec![head, earlier]);
+        assert!(!fired);
     }
 
     #[test]
