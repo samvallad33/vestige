@@ -68,6 +68,16 @@ pub const STEINER_UNIQUE_PAIR: bool = true;
 /// only when its session is not already a terminal.
 pub const STEINER_NEW_SESSION: bool = true;
 
+/// Do not push the only top-5 turn of a session out of the top 5.
+///
+/// Inserting at seat s < 5 shifts the old index 4 to index 5. v4 fired
+/// 259 LoCoMo queries and moved Multi-Hop turn R@5 from 138/282 to
+/// 137/282 and core turn R@5 from 1067/1536 (69.47%) to 1060/1536
+/// (69.01%). The turn that left the top 5 was often the only representative
+/// of its session. A duplicate-session turn may leave the top 5. A sole
+/// representative stays.
+pub const STEINER_KEEP_SOLE_SESSION: bool = true;
+
 /// Non-terminal Steiner nodes seated per query.
 /// One node, the one nearest the frozen head on the tree.
 /// Seating it directly behind that head (slot 1 when the head is an

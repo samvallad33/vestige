@@ -8562,6 +8562,56 @@ mod recall_cue_tests {
     }
 
     #[test]
+    fn steiner_bridge_keeps_a_sole_session_in_the_top_five() {
+        let mut ix = ix_of(&[
+            s("a", vec![t("head", "user", "The battery died after the show.")]),
+            s("b", vec![t("b", "user", "A spare charger is in the drawer.")]),
+            s("c", vec![t("c", "user", "The garden needs water tomorrow.")]),
+            s("d", vec![t("d", "user", "Oat milk is on the counter.")]),
+            s("e", vec![t("e", "user", "The train leaves at noon.")]),
+            s("f", vec![t("bridge", "user", "A notebook is in the bag.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let b = idx(&ix, "b");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, b));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, b, idx(&ix, "c"), idx(&ix, "d"), idx(&ix, "e")];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 5, &scene));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn steiner_bridge_may_shift_a_duplicate_session() {
+        let mut ix = ix_of(&[
+            s("a", vec![t("head", "user", "The battery died after the show.")]),
+            s("b", vec![
+                t("b", "user", "A spare charger is in the drawer."),
+                t("b2", "user", "The drawer also holds tape."),
+            ]),
+            s("c", vec![t("c", "user", "The garden needs water tomorrow.")]),
+            s("d", vec![t("d", "user", "Oat milk is on the counter.")]),
+            s("f", vec![t("bridge", "user", "A notebook is in the bag.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let b = idx(&ix, "b");
+        let b2 = idx(&ix, "b2");
+        let c = idx(&ix, "c");
+        let d = idx(&ix, "d");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, c));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, b, c, d, b2];
+        assert!(steiner_bridge::apply(&ix, &mut list, 5, &scene), "{:?}", ids(&ix, &list));
+        assert_eq!(list[0], head);
+        assert!(list.contains(&bridge));
+        assert_eq!(list.len(), 5);
+    }
+
+    #[test]
     fn steiner_bridge_fires_inside_rank_and_keeps_slot_zero() {
         let mut bridge = t("bridge", "user", "A sprain was noted in the margin.");
         bridge.links = vec![

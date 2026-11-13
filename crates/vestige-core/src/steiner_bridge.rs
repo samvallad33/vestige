@@ -48,8 +48,8 @@ mod guard;
 
 use guard::{
     STEINER_BELOW_CAP, STEINER_DIGIT_MIN_CHARS, STEINER_EXACT_MAX_NODES, STEINER_EXACT_MAX_TERMINALS,
-    STEINER_HUB_DF_MAX, STEINER_MAX_BRIDGES, STEINER_NEW_SESSION, STEINER_TOKEN_DF_MIN,
-    STEINER_UNIQUE_PAIR,
+    STEINER_HUB_DF_MAX, STEINER_KEEP_SOLE_SESSION, STEINER_MAX_BRIDGES, STEINER_NEW_SESSION,
+    STEINER_TOKEN_DF_MIN, STEINER_UNIQUE_PAIR,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -180,6 +180,16 @@ pub(super) fn apply(ix: &super::Index, list: &mut Vec<usize>, k: usize, t_scene:
         let seat = seat.max(1).min(k - 1).min(list.len());
         if seat == 0 {
             continue;
+        }
+        // Inserting before index 5 shifts the old index 4 out of the top 5.
+        // Keep that turn when it is the only top-5 member of its session.
+        if STEINER_KEEP_SOLE_SESSION && seat < 5 && list.len() >= 5 {
+            let leaving = list[4];
+            let sess = ix.turns[leaving].session;
+            let duplicated = list[..4].iter().any(|&t| ix.turns[t].session == sess);
+            if !duplicated {
+                continue;
+            }
         }
         list.insert(seat, turn);
         if list.len() > k {
