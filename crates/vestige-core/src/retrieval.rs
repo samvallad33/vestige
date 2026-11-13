@@ -6700,8 +6700,9 @@ fn classify_family(mask: &[bool]) -> GroupFamily {
 /// 355 BEAM queries.
 ///
 /// A single identified turn is inserted immediately after the earliest window
-/// turn that points at it, which is an index in `SEAT_FLOOR..k`. Slot 0 is not
-/// a candidate. The tail past k drops because the window length stays k.
+/// turn that points at it. A later policy has no such pointer, so it takes the
+/// last index inside `SEAT_HORIZON`, clamped to `k - 1`. Slot 0 is not a
+/// candidate. The tail past k drops because the window length stays k.
 fn group_testing_rule_trigger(ix: &Index, _query: &str, list: &mut Vec<usize>, k: usize) -> GroupTestingSeat {
     let none = GroupTestingSeat { fired: false, ambiguous: false };
     if k <= crate::group_testing_guard::SEAT_FLOOR || list.is_empty() {
@@ -6733,7 +6734,10 @@ fn group_testing_rule_trigger(ix: &Index, _query: &str, list: &mut Vec<usize>, k
             || t.exact_edges.iter().any(|&(_, p)| p == found)
             || rsb_antecedent(ix, w) == Some(found)
     });
-    let seat = symptom.map(|i| i + 1).unwrap_or(crate::group_testing_guard::SEAT_FLOOR);
+    let seat = symptom.map(|i| i + 1).unwrap_or_else(|| {
+        let horizon = crate::group_testing_guard::SEAT_HORIZON;
+        (horizon - 1).min(k - 1).min(list.len())
+    });
     if seat < crate::group_testing_guard::SEAT_FLOOR || seat >= k || seat > list.len() {
         return none;
     }
@@ -8653,9 +8657,9 @@ mod recall_cue_tests {
         assert_eq!(ambiguous, ambiguous_b);
         assert_eq!(list, list_b);
         assert_eq!(list[0], fact, "slot 0 stays the head");
-        assert_eq!(list[1], rule, "the triggered rule takes the seat behind the head");
+        assert_eq!(list[2], rule, "the rule takes the last seat inside the horizon");
         assert!(!list.contains(&other), "the tail past k drops");
-        assert_eq!(ids(&ix, &list), vec!["fact".to_string(), "rule".into(), "reply".into()]);
+        assert_eq!(ids(&ix, &list), vec!["fact".to_string(), "reply".into(), "rule".into()]);
     }
 
     #[test]

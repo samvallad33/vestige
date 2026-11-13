@@ -34,3 +34,12 @@ pub const GBS_DEFECTIVE_COUNT: usize = 1;
 
 /// Lowest seat index. Slot 0 is the RSB head and is not a seat.
 pub const SEAT_FLOOR: usize = 1;
+
+/// 1-based depth of the published Any@5 cutoff.
+///
+/// A later episode policy has no backward edge from the window, so nothing
+/// names a seat. Any index in `SEAT_FLOOR..SEAT_HORIZON` drops the same
+/// previous occupant from the first five positions. The last of those indexes
+/// leaves the turns already placed at ranks 2 and 3 where they are. This is
+/// that index, not a weight and not a value searched on a score.
+pub const SEAT_HORIZON: usize = 5;
