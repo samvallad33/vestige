@@ -121,6 +121,9 @@ pub mod neuroscience;
 #[allow(clippy::all)]
 pub mod retrieval;
 
+/// Frozen constants for the group-testing rule trigger. See the module docs.
+mod group_testing_guard;
+
 // ============================================================================
 // PUBLIC API RE-EXPORTS
 // ============================================================================

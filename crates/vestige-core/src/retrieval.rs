@@ -231,6 +231,10 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// The group-testing rule trigger changed this query's turn list.
+    pub group_testing_fired: bool,
+    /// A positive pool had more defectives than `GBS_DEFECTIVE_COUNT`, so nothing was seated.
+    pub group_testing_ambiguous: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1875,6 +1879,9 @@ struct TurnIx {
     form_handle: bool,
     /// A capitalized word of two or more letters that is not sentence-initial.
     form_midcap: bool,
+    /// Sorted ids of maximal digit runs of length at least
+    /// [`crate::group_testing_guard::EXACT_DIGIT_MIN_LEN`]. Exact identity, not a count.
+    exact_digits: Vec<u32>,
     raw_links: Vec<TurnLink>,
 }
 
@@ -3349,6 +3356,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_digit: has_ascii_digit(prose_body),
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
+                exact_digits: exact_digit_ids(prose_body, &mut vocab),
                 raw_links: t.links.clone(),
             });
         }
@@ -5745,6 +5753,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    let gt = group_testing_rule_trigger(ix, &q.text, &mut final_turn_indices, k);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5754,7 +5763,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult {
+        intent: plan.intent,
+        sessions,
+        turns,
+        standing_rules,
+        group_testing_fired: gt.fired,
+        group_testing_ambiguous: gt.ambiguous,
+    }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -6117,6 +6133,34 @@ fn has_iso_or_hhmm(body: &str) -> bool {
 
 fn has_ascii_digit(body: &str) -> bool {
     body.bytes().any(|c| c.is_ascii_digit())
+}
+
+/// Maximal digit runs long enough to be their own disjunct column. Ids are sorted.
+fn exact_digit_ids(text: &str, vocab: &mut Vocab) -> Vec<u32> {
+    let min_len = crate::group_testing_guard::EXACT_DIGIT_MIN_LEN;
+    let bytes = text.as_bytes();
+    let mut ids = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i - start >= min_len {
+                let id = vocab.intern(&text[start..i]);
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 fn has_handle_or_path(body: &str) -> bool {
@@ -6524,6 +6568,271 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
     list.clear();
     list.push(head);
     list.extend(tail);
+}
+
+struct GroupTestingSeat {
+    fired: bool,
+    ambiguous: bool,
+}
+
+/// Hwang's generalized binary splitting for a known defective count.
+///
+/// `mask[i]` is the individual oracle: item `i` is defective. A group test is
+/// the Boolean OR of that oracle, which is the defining property of classical
+/// group testing (Dorfman, "The detection of defective members of large
+/// populations", Annals of Mathematical Statistics 14, 1943). The search is
+/// Hwang's algorithm G: while defectives remain, test a group of size
+/// 2^floor(log2((n-d+1)/d)); a negative group is discarded; a positive group
+/// is binary-split to one defective. Items stay in index order, so the splits
+/// are deterministic.
+///
+/// Returns the defective indexes in the order the algorithm identifies them.
+fn hwang_gbs(mask: &[bool], d: usize) -> Vec<usize> {
+    if d == 0 || mask.is_empty() {
+        return Vec::new();
+    }
+    let mut remaining: Vec<usize> = (0..mask.len()).collect();
+    let mut d_left = d;
+    let mut found = Vec::new();
+    while d_left > 0 && !remaining.is_empty() {
+        let n = remaining.len();
+        if n <= d_left.saturating_mul(2).saturating_sub(2) {
+            for i in remaining.iter().copied() {
+                if mask[i] {
+                    found.push(i);
+                }
+            }
+            break;
+        }
+        let l = n - d_left + 1;
+        let ratio = l / d_left;
+        if ratio == 0 {
+            break;
+        }
+        let alpha = (usize::BITS - 1 - ratio.leading_zeros()).min(62);
+        let size = (1usize << alpha).min(n);
+        let positive = remaining[..size].iter().any(|&i| mask[i]);
+        if !positive {
+            remaining.drain(..size);
+            continue;
+        }
+        let defective = binary_split_defective(mask, &remaining[..size]);
+        found.push(defective);
+        d_left -= 1;
+        // Identified goods are the negative halves inside the contaminated
+        // group. The defective leaves. The untested tail stays.
+        let goods = binary_split_goods(mask, &remaining[..size], defective);
+        let mut drop = goods;
+        drop.push(defective);
+        drop.sort_unstable();
+        remaining.retain(|i| drop.binary_search(i).is_err());
+    }
+    found
+}
+
+/// One defective inside a group the oracle has already called positive.
+fn binary_split_defective(mask: &[bool], group: &[usize]) -> usize {
+    let mut g = group.to_vec();
+    while g.len() > 1 {
+        let mid = g.len() / 2;
+        if g[..mid].iter().any(|&i| mask[i]) {
+            g.truncate(mid);
+        } else {
+            g.drain(..mid);
+        }
+    }
+    g[0]
+}
+
+/// Items proved good while binary-splitting `group` down to `defective`.
+/// Only a negative half is good. The untested half stays in the pool.
+fn binary_split_goods(mask: &[bool], group: &[usize], defective: usize) -> Vec<usize> {
+    let mut goods = Vec::new();
+    let mut g = group.to_vec();
+    while g.len() > 1 {
+        let mid = g.len() / 2;
+        if g[..mid].iter().any(|&i| mask[i]) {
+            g.truncate(mid);
+        } else {
+            goods.extend_from_slice(&g[..mid]);
+            g.drain(..mid);
+        }
+    }
+    debug_assert_eq!(g.first().copied(), Some(defective));
+    goods
+}
+
+fn rule_or_preference(turn: &TurnIx) -> bool {
+    turn.is_standing_policy || turn.pref_marker || turn.is_personal_constraint
+}
+
+fn query_exact_token_hit(ix: &Index, query: &str, ti: usize) -> bool {
+    let turn = &ix.turns[ti];
+    for ent in proper_entity_tokens(query) {
+        if let Some(id) = ix.vocab.get(&ent) {
+            if turn.entities.contains(&id) {
+                return true;
+            }
+        }
+    }
+    for handle in extract_exact_technical_handles(query) {
+        if let Some(id) = ix.vocab.get(&handle) {
+            if turn.entities.contains(&id) {
+                return true;
+            }
+        }
+    }
+    let min_len = crate::group_testing_guard::EXACT_DIGIT_MIN_LEN;
+    let bytes = query.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i - start >= min_len {
+                if let Some(id) = ix.vocab.get(&query[start..i]) {
+                    if turn.exact_digits.binary_search(&id).is_ok() {
+                        return true;
+                    }
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// A stored edge from the window into `cand`, or from `cand` back into the window.
+/// Each family is one Boolean test. The families are not summed.
+fn window_edge_families(
+    ix: &Index,
+    window_set: &HashSet<usize>,
+    policy_from_window: &HashSet<usize>,
+    supersedes_from_window: &HashSet<usize>,
+    exact_from_window: &HashSet<usize>,
+    ante_from_window: &HashSet<usize>,
+    cand: usize,
+) -> bool {
+    if policy_from_window.contains(&cand)
+        || supersedes_from_window.contains(&cand)
+        || exact_from_window.contains(&cand)
+        || ante_from_window.contains(&cand)
+    {
+        return true;
+    }
+    let t = &ix.turns[cand];
+    if t.policy_backlinks.iter().any(|p| window_set.contains(p))
+        || t.supersedes_turns.iter().any(|p| window_set.contains(p))
+        || t.exact_edges.iter().any(|&(_, p)| window_set.contains(&p))
+    {
+        return true;
+    }
+    rsb_antecedent(ix, cand).is_some_and(|a| window_set.contains(&a))
+}
+
+/// Group-testing rule trigger. Runs after the RSB head is frozen.
+///
+/// The population is every standing rule or preference turn below the top-k
+/// window. A turn is defective when one stored family triggers it: a
+/// `policy_backlinks`, `supersedes_turns`, `exact_edges`, or `rsb_antecedent`
+/// touch with the window, or an exact identical token with the query
+/// (capitalized name, technical handle, or digit run). Each family is one
+/// Boolean test. The group test is their OR. There is no weight, bonus, or
+/// second ordering of the window.
+///
+/// Session and time are not tested again here. SalienceJoin already wrote
+/// `policy_backlinks` from the session id and the episode key, and counting
+/// that field a second time would count one edge twice.
+///
+/// Hwang's (1, n) search identifies the defective. A positive test on the
+/// complement means more than one defective, the (1, n) model is false, and
+/// the window is left alone. A single defective is inserted immediately after
+/// the earliest window turn that points at it, which is an index in
+/// `SEAT_FLOOR..k`. Slot 0 is not a candidate. The tail past k drops because
+/// the window length stays k.
+fn group_testing_rule_trigger(ix: &Index, query: &str, list: &mut Vec<usize>, k: usize) -> GroupTestingSeat {
+    let none = GroupTestingSeat { fired: false, ambiguous: false };
+    if k <= crate::group_testing_guard::SEAT_FLOOR || list.is_empty() {
+        return none;
+    }
+    let window: Vec<usize> = list.iter().copied().take(k).collect();
+    if window.is_empty() {
+        return none;
+    }
+    let window_set: HashSet<usize> = window.iter().copied().collect();
+    let mut policy_from_window = HashSet::new();
+    let mut supersedes_from_window = HashSet::new();
+    let mut exact_from_window = HashSet::new();
+    let mut ante_from_window = HashSet::new();
+    for &w in &window {
+        let t = &ix.turns[w];
+        policy_from_window.extend(t.policy_backlinks.iter().copied());
+        supersedes_from_window.extend(t.supersedes_turns.iter().copied());
+        exact_from_window.extend(t.exact_edges.iter().map(|&(_, p)| p));
+        if let Some(a) = rsb_antecedent(ix, w) {
+            ante_from_window.insert(a);
+        }
+    }
+    let pool: Vec<usize> = (0..ix.turns.len())
+        .filter(|&ti| !window_set.contains(&ti) && rule_or_preference(&ix.turns[ti]))
+        .collect();
+    if pool.is_empty() {
+        return none;
+    }
+    let mask: Vec<bool> = pool
+        .iter()
+        .map(|&cand| {
+            window_edge_families(
+                ix,
+                &window_set,
+                &policy_from_window,
+                &supersedes_from_window,
+                &exact_from_window,
+                &ante_from_window,
+                cand,
+            ) || query_exact_token_hit(ix, query, cand)
+        })
+        .collect();
+    if !mask.iter().any(|&d| d) {
+        return none;
+    }
+    let d = crate::group_testing_guard::GBS_DEFECTIVE_COUNT;
+    let identified = hwang_gbs(&mask, d);
+    if identified.len() != d || identified.iter().any(|&i| !mask[i]) {
+        return GroupTestingSeat { fired: false, ambiguous: true };
+    }
+    let mut identified_set = identified.clone();
+    identified_set.sort_unstable();
+    let complement_positive = mask.iter().enumerate().any(|(i, &def)| def && identified_set.binary_search(&i).is_err());
+    if complement_positive {
+        return GroupTestingSeat { fired: false, ambiguous: true };
+    }
+    let found = pool[identified[0]];
+    let symptom = window.iter().position(|&w| {
+        let t = &ix.turns[w];
+        t.policy_backlinks.contains(&found)
+            || t.supersedes_turns.contains(&found)
+            || t.exact_edges.iter().any(|&(_, p)| p == found)
+            || rsb_antecedent(ix, w) == Some(found)
+    });
+    let seat = symptom.map(|i| i + 1).unwrap_or(crate::group_testing_guard::SEAT_FLOOR);
+    if seat < crate::group_testing_guard::SEAT_FLOOR || seat >= k || seat > list.len() {
+        return none;
+    }
+    if list.contains(&found) {
+        return none;
+    }
+    let head = list[0];
+    list.insert(seat, found);
+    if list.len() > k {
+        list.truncate(k);
+    }
+    debug_assert_eq!(list.first().copied(), Some(head));
+    GroupTestingSeat { fired: true, ambiguous: false }
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8379,5 +8688,133 @@ mod recall_cue_tests {
         let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
         let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ta, tb);
+    }
+
+    #[test]
+    fn hwang_gbs_finds_the_single_defective_wherever_it_sits() {
+        let mut mask = vec![false; 13];
+        mask[5] = true;
+        assert_eq!(hwang_gbs(&mask, 1), vec![5]);
+        assert_eq!(hwang_gbs(&mask, 1), hwang_gbs(&mask, 1));
+        mask[5] = false;
+        mask[0] = true;
+        assert_eq!(hwang_gbs(&mask, 1), vec![0]);
+        mask[12] = true;
+        let found = hwang_gbs(&mask, 1);
+        assert_eq!(found.len(), 1);
+        assert!(mask[found[0]], "binary splitting returns a real defective");
+        let none = vec![false; 8];
+        assert!(hwang_gbs(&none, 1).is_empty());
+    }
+
+    #[test]
+    fn group_testing_seats_a_rule_behind_the_head_and_repeats() {
+        let sessions = vec![s("s", vec![
+            t("rule", "user", "Always include Atlas in the weekly note."),
+            t("fact", "user", "The migration checklist covers backups and rollback."),
+            t("reply", "assistant", "The migration checklist covers backups and rollback today."),
+            t("other", "user", "Packing cubes fit in the hallway closet."),
+        ])];
+        let ix = ix_of(&sessions);
+        let rule = idx(&ix, "rule");
+        let fact = idx(&ix, "fact");
+        let reply = idx(&ix, "reply");
+        let other = idx(&ix, "other");
+        assert!(ix.turns[rule].is_standing_policy);
+        assert!(ix.turns[fact].policy_backlinks.contains(&rule));
+        let run = || {
+            let mut list = vec![fact, reply, other];
+            let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 3);
+            (gt.fired, gt.ambiguous, list)
+        };
+        let (fired, ambiguous, list) = run();
+        let (fired_b, ambiguous_b, list_b) = run();
+        assert!(fired && !ambiguous);
+        assert_eq!(fired, fired_b);
+        assert_eq!(ambiguous, ambiguous_b);
+        assert_eq!(list, list_b);
+        assert_eq!(list[0], fact, "slot 0 stays the head");
+        assert_eq!(list[1], rule, "the triggered rule takes the seat behind the head");
+        assert!(!list.contains(&other), "the tail past k drops");
+        assert_eq!(ids(&ix, &list), vec!["fact".to_string(), "rule".into(), "reply".into()]);
+    }
+
+    #[test]
+    fn group_testing_leaves_the_window_alone_when_two_rules_trigger() {
+        let sessions = vec![s("s", vec![
+            t("rule_a", "user", "Always include Atlas in the weekly note."),
+            t("rule_b", "user", "Always include Nova in the weekly note."),
+            t("fact", "user", "The migration checklist covers backups and rollback."),
+            t("other", "user", "Packing cubes fit in the hallway closet."),
+        ])];
+        let ix = ix_of(&sessions);
+        let fact = idx(&ix, "fact");
+        let other = idx(&ix, "other");
+        let mut list = vec![fact, other];
+        let before = list.clone();
+        let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 2);
+        assert!(!gt.fired && gt.ambiguous);
+        assert_eq!(list, before);
+        assert_eq!(list[0], fact);
+    }
+
+    #[test]
+    fn group_testing_fires_on_an_exact_name_shared_with_a_preference() {
+        let sessions = vec![s("s", vec![
+            t("pref", "user", "I love the paintings of Monet above everything else."),
+            t("fact", "user", "The migration checklist covers backups and rollback."),
+            t("other", "user", "Packing cubes fit in the hallway closet."),
+        ])];
+        let ix = ix_of(&sessions);
+        let pref = idx(&ix, "pref");
+        let fact = idx(&ix, "fact");
+        let other = idx(&ix, "other");
+        assert!(ix.turns[pref].pref_marker);
+        let mut list = vec![fact, other];
+        let head = list[0];
+        let gt = group_testing_rule_trigger(&ix, "Which museum holds Monet paintings?", &mut list, 2);
+        assert!(gt.fired && !gt.ambiguous, "exact token Monet triggers the preference");
+        assert_eq!(list[0], head);
+        assert_eq!(list[1], pref);
+        let mut again = vec![fact, other];
+        let gt2 = group_testing_rule_trigger(&ix, "Which museum holds Monet paintings?", &mut again, 2);
+        assert_eq!(gt.fired, gt2.fired);
+        assert_eq!(list, again);
+    }
+
+    #[test]
+    fn rank_seats_the_rule_behind_a_full_window_and_keeps_the_head() {
+        let lexical = "The migration checklist covers backups and rollback.";
+        let sessions = vec![s(
+            "s",
+            vec![
+                t("rule", "user", "Always include Atlas in the weekly note."),
+                t("a", "user", lexical),
+                t("b", "assistant", "The migration checklist covers backups and rollback today."),
+                t("c", "user", "The migration checklist covers backups and rollback tomorrow."),
+                t("d", "user", "The migration checklist covers backups and rollback next week."),
+            ],
+        )];
+        let mk = || RankRequest {
+            sessions: sessions.clone(),
+            queries: vec![Query {
+                text: "What does the migration checklist cover?".into(),
+                date: String::new(),
+            }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let a = rank(&mk());
+        let b = rank(&mk());
+        let ids = |r: &RankResponse| -> Vec<String> { r.results[0].turns.iter().map(|x| x.id.clone()).collect() };
+        let ta = ids(&a);
+        let tb = ids(&b);
+        assert_eq!(ta, tb, "two rank calls disagree");
+        assert!(a.results[0].group_testing_fired, "the rule stayed outside a full window: {ta:?}");
+        assert!(!a.results[0].group_testing_ambiguous);
+        assert_ne!(ta[0], "rule", "slot 0 moved off the head");
+        assert_eq!(ta[0], tb[0]);
+        assert!(ta[1..].contains(&"rule".to_string()), "rule was not seated in 1..k-1: {ta:?}");
+        assert_eq!(ta.len(), 3);
     }
 }
