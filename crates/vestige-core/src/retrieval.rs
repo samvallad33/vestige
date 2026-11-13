@@ -6483,7 +6483,7 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     if list.len() < 2 {
         return;
     }
-    let mut turned = kemeny_pool(ix, query, list, t_scene, None);
+    let mut turned = kemeny_pool(ix, query, list, t_scene, None, list.len());
     atms_demote_superseded_front(ix, &mut turned);
     *list = turned;
 }
@@ -6506,6 +6506,7 @@ fn kemeny_pool(
     pool: &[usize],
     t_scene: &[f32],
     beliefs: Option<&[f64]>,
+    inside: usize,
 ) -> Vec<usize> {
     let n = pool.len();
     if n < 2 {
@@ -6518,15 +6519,20 @@ fn kemeny_pool(
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
             let mut margin = 0i64;
-            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
-            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-            match scene_a
-                .partial_cmp(&scene_b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-            {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
+            // Scene already voted when the window was built. Counting it again
+            // between an insider and a cut turn double-counts that score.
+            // Inside the window it stays one equal ballot.
+            if a < inside && b < inside {
+                let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
+                let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
+                match scene_a
+                    .partial_cmp(&scene_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                {
+                    std::cmp::Ordering::Greater => margin += 1,
+                    std::cmp::Ordering::Less => margin -= 1,
+                    std::cmp::Ordering::Equal => {}
+                }
             }
             match degree[a].cmp(&degree[b]) {
                 std::cmp::Ordering::Greater => margin += 1,
@@ -6573,11 +6579,10 @@ fn kemeny_pool(
     order.iter().map(|&i| pool[i]).collect()
 }
 
-/// Turns one stored factor away from the window: supersedes, policy backlink,
-/// exact edge, RSB antecedent, or the adjacent turn in the same session.
-/// One hop. The next scene-ranked turn with none of those edges is not a
-/// candidate. Filling the extra window with it re-admits a cut the selector
-/// already made, and the scene ballot then moves it without the factor graph.
+/// Turns one stored edge away from the window: supersedes, policy backlink,
+/// exact edge, or RSB antecedent. One hop. Same-session adjacency is a factor
+/// inside the pool, not an admission ticket. v1 admitted the next scene-ranked
+/// turns and the scene ballot pulled them back across the cut.
 fn structural_neighbors(ix: &Index, seeds: &[usize]) -> HashSet<usize> {
     let mut seed_at = vec![false; ix.turns.len()];
     for &s in seeds {
@@ -6611,11 +6616,6 @@ fn structural_neighbors(ix: &Index, seeds: &[usize]) -> HashSet<usize> {
         }
         if let Some(tgt) = rsb_antecedent(ix, src) {
             link(src, tgt, &seed_at, &mut neigh);
-        }
-    }
-    for members in &ix.session_turns {
-        for pair in members.windows(2) {
-            link(pair[0], pair[1], &seed_at, &mut neigh);
         }
     }
     neigh
@@ -6900,7 +6900,7 @@ fn rank1_gatekeeper_keep_rsb_head(
     }
     let head = list[0];
     let tail = list[1..].to_vec();
-    let mut baseline = kemeny_pool(ix, query, &tail, t_scene, None);
+    let mut baseline = kemeny_pool(ix, query, &tail, t_scene, None, tail.len());
     atms_demote_superseded_front(ix, &mut baseline);
     // An event-sequence window is already one turn per date. Growing it
     // re-admits the turns that spread just cut. The factor vote still runs
@@ -6911,7 +6911,7 @@ fn rank1_gatekeeper_keep_rsb_head(
         tail.clone()
     };
     let beliefs = structural_beliefs(ix, Some(head), &pool);
-    let mut ranked = kemeny_pool(ix, query, &pool, t_scene, Some(&beliefs));
+    let mut ranked = kemeny_pool(ix, query, &pool, t_scene, Some(&beliefs), tail.len());
     ranked.truncate(tail.len());
     atms_demote_superseded_front(ix, &mut ranked);
     let fired = ranked != baseline;
@@ -8774,10 +8774,11 @@ mod recall_cue_tests {
             t("earlier", "user", "Beta signal stays on the record."),
             t("later", "user", "Gamma signal stays on the record."),
         ])];
-        let ix = ix_of(&sessions);
+        let mut ix = ix_of(&sessions);
         let head = idx(&ix, "head");
         let earlier = idx(&ix, "earlier");
         let later = idx(&ix, "later");
+        ix.turns[later].exact_edges.push((1, head));
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![head, earlier];
         let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
@@ -8836,6 +8837,26 @@ mod recall_cue_tests {
         assert_eq!(list, vec![head, earlier]);
         assert!(!fired);
         assert_ne!(list[1], outsider);
+    }
+
+    #[test]
+    fn factor_graph_same_session_adjacency_is_not_an_admission_ticket() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[later] = 50.0;
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list, vec![head, earlier]);
+        assert!(!fired);
+        assert_ne!(list[1], later);
     }
 
     #[test]
