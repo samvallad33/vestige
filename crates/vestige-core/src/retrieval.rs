@@ -5768,8 +5768,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
     // FCA bridge. Slot 0 stays the RSB head. A turn from below the window is
-    // seated inside Recall@5 only when the concept lattice shows it closes a
-    // two-hop between two in-window turns. Reordering this window cannot
+    // seated inside Recall@5 only when stored edges close a two-hop through
+    // it. A shared token is not a ballot. Reordering this window cannot
     // change recall; the insert changes the set.
     fca_second_stage(ix, &mut final_turn_indices, &t_scene, k);
     let turns = final_turn_indices
@@ -6560,6 +6560,7 @@ fn push_fca_edge(edges: &mut Vec<(usize, usize)>, pool: &[bool], a: usize, b: us
 }
 
 /// Seat one below-window bridge. Index 0 is the RSB head and is not a seat.
+/// The bridge is the middle of a stored-edge path between two in-window turns.
 fn fca_second_stage(ix: &Index, list: &mut Vec<usize>, scene: &[f32], k: usize) {
     if list.len() < 2 || k < 2 {
         return;
@@ -8522,7 +8523,7 @@ mod fca_bridge_tests {
                 t("bridge", "user", "Helena left Riverside before noon."),
             ],
         )];
-        let ix = build_index(&sessions, &Params::default());
+        let mut ix = build_index(&sessions, &Params::default());
         let head = turn_of(&ix, "head");
         let other = turn_of(&ix, "other");
         let pad2 = turn_of(&ix, "pad2");
@@ -8535,6 +8536,8 @@ mod fca_bridge_tests {
             scene[ti] = 1.0;
         }
         scene[bridge] = 0.1;
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, other));
         let mut list = vec![head, other, pad2, pad3, pad4, pad5];
         let before = fca_bridge_fires();
         fca_second_stage(&ix, &mut list, &scene, 10);
@@ -8545,14 +8548,46 @@ mod fca_bridge_tests {
     }
 
     #[test]
+    fn fca_bridge_does_not_fire_on_shared_names_alone() {
+        let sessions = vec![s(
+            "s",
+            vec![
+                t("head", "user", "Helena opened the kiln."),
+                t("other", "user", "The studio is in Riverside today."),
+                t("pad2", "user", "We baked bread at noon."),
+                t("pad3", "user", "The garden needs water."),
+                t("pad4", "user", "A package arrived yesterday."),
+                t("pad5", "user", "Traffic was slow downtown."),
+                t("bridge", "user", "Helena left Riverside before noon."),
+            ],
+        )];
+        let ix = build_index(&sessions, &Params::default());
+        let ids = ["head", "other", "pad2", "pad3", "pad4", "pad5", "bridge"];
+        let at = |name: &str| ix.turns.iter().position(|turn| turn.id == name).unwrap();
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        for name in ids {
+            scene[at(name)] = if name == "bridge" { 0.1 } else { 1.0 };
+        }
+        let mut list = vec![at("head"), at("other"), at("pad2"), at("pad3"), at("pad4"), at("pad5")];
+        let before = list.clone();
+        fca_second_stage(&ix, &mut list, &scene, 10);
+        assert_eq!(list, before);
+    }
+
+    #[test]
     fn fca_bridge_is_deterministic_and_does_not_move_the_head_through_rank() {
+        let mut bridge = t("c", "user", "Helena missed the Riverside studio signup.");
+        bridge.links = vec![
+            TurnLink { kind: "exact".into(), to: "a".into(), degree: 2 },
+            TurnLink { kind: "exact".into(), to: "b".into(), degree: 2 },
+        ];
         let req = || RankRequest {
             sessions: vec![s(
                 "s",
                 vec![
                     t("a", "user", "The pottery class met at Riverside yesterday."),
                     t("b", "user", "Helena reserved kiln time for the pottery class."),
-                    t("c", "user", "Helena missed the Riverside studio signup."),
+                    bridge.clone(),
                 ],
             )],
             queries: vec![Query {

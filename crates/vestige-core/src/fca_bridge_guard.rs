@@ -11,9 +11,11 @@
 //! a pair: support 1 is not shared, and support above 2 is not a pair.
 //!
 //! Concepts are the closed sets of Ganter's NextClosure. A below-window turn
-//! is a bridge when the lattice contains two concepts of extent size 2, each
-//! pairing it with a different in-window turn, and each intent has an
-//! attribute the other intent does not. Each such pair of window turns is one
+//! is a bridge when stored edges form a two-hop path through it: the lattice
+//! contains two concepts of extent size 2, each pairing it with a different
+//! in-window turn, and each of those intents contains the stored edge between
+//! that pair. A shared name, handle, digit, or session is an endpoint ballot
+//! and does not vote. Each pair of window turns joined by such edges is one
 //! vote. The greatest vote wins. A tie keeps the earlier tail turn, which is
 //! the kernel's order. The winner is inserted at the last index inside
 //! [`FCA_RECALL_DEPTH`] and the tail drops off `k`. Index 0 is not written.
@@ -306,20 +308,35 @@ pub(crate) fn select_bridge(
     let mut best_turn = None;
     for b in n_window..n {
         let mut hops: Vec<Bits> = Vec::new();
+        let turn_b = objs[b].turn;
         for w in 0..n_window {
+            let turn_w = objs[w].turn;
+            let edge_key = if turn_w < turn_b {
+                (turn_w, turn_b)
+            } else {
+                (turn_b, turn_w)
+            };
+            // The hop is the concept of this stored edge. A token or session
+            // shared with the endpoint is not a ballot.
+            let Some(&edge_attr) = edge_at.get(&edge_key) else {
+                continue;
+            };
             let shared = obj_bits[w].intersect(&obj_bits[b]);
-            if shared.is_empty() {
+            if !shared.has(edge_attr) {
                 continue;
             }
             let intent = close(&shared, &obj_bits, &bottom);
-            if intent.is_empty() {
+            if !intent.has(edge_attr) {
                 continue;
             }
             let ext = extent_of(&intent, &obj_bits);
             if ext.count_ones() != 2 || !ext.has(w) || !ext.has(b) || !concepts.contains(&ext) {
                 continue;
             }
-            if hops.iter().any(|prev| !intent.difference_any(prev) && !prev.difference_any(&intent)) {
+            if hops
+                .iter()
+                .any(|prev| !intent.difference_any(prev) && !prev.difference_any(&intent))
+            {
                 continue;
             }
             hops.push(intent);
@@ -390,10 +407,6 @@ impl Bits {
 
     fn has(&self, index: usize) -> bool {
         self.words[index / 64] & (1u64 << (index % 64)) != 0
-    }
-
-    fn is_empty(&self) -> bool {
-        self.words.iter().all(|word| *word == 0)
     }
 
     fn count_ones(&self) -> usize {
@@ -598,11 +611,18 @@ mod tests {
     }
 
     #[test]
-    fn two_pair_concepts_select_the_below_turn() {
+    fn two_token_concepts_are_not_a_bridge() {
         let window = vec![obj(0, 0, &[1]), obj(1, 1, &[2])];
         let below = vec![obj(2, 2, &[1, 2])];
-        assert_eq!(select_bridge(&window, &below, &[], 10), Some(2));
-        assert_eq!(select_bridge(&window, &below, &[], 10), Some(2));
+        assert_eq!(select_bridge(&window, &below, &[], 10), None);
+    }
+
+    #[test]
+    fn two_stored_edges_select_the_below_turn() {
+        let window = vec![obj(0, 0, &[1]), obj(1, 1, &[2])];
+        let below = vec![obj(2, 2, &[1, 2])];
+        assert_eq!(select_bridge(&window, &below, &[(0, 2), (1, 2)], 10), Some(2));
+        assert_eq!(select_bridge(&window, &below, &[(0, 2), (1, 2)], 10), Some(2));
     }
 
     #[test]
@@ -620,24 +640,26 @@ mod tests {
     }
 
     #[test]
-    fn an_edge_and_a_token_are_the_two_hops() {
+    fn an_edge_and_a_token_are_not_a_path() {
         let window = vec![obj(0, 0, &[7]), obj(1, 1, &[])];
         let below = vec![obj(2, 2, &[7])];
-        assert_eq!(select_bridge(&window, &below, &[(1, 2)], 10), Some(2));
+        assert_eq!(select_bridge(&window, &below, &[(1, 2)], 10), None);
     }
 
     #[test]
     fn equal_votes_keep_the_earlier_tail_turn() {
-        let window = vec![obj(0, 0, &[1, 3]), obj(1, 1, &[2, 4])];
-        let below = vec![obj(10, 3, &[1, 2]), obj(11, 4, &[3, 4])];
-        assert_eq!(select_bridge(&window, &below, &[], 10), Some(10));
+        let window = vec![obj(0, 0, &[]), obj(1, 1, &[])];
+        let below = vec![obj(10, 3, &[]), obj(11, 4, &[])];
+        let edges = [(0, 10), (1, 10), (0, 11), (1, 11)];
+        assert_eq!(select_bridge(&window, &below, &edges, 10), Some(10));
     }
 
     #[test]
     fn more_votes_beat_an_earlier_tail_turn() {
-        let window = vec![obj(0, 0, &[1, 3, 5]), obj(1, 1, &[2, 4]), obj(2, 2, &[6])];
-        let below = vec![obj(10, 3, &[1, 2]), obj(11, 4, &[3, 4, 5, 6])];
-        assert_eq!(select_bridge(&window, &below, &[], 10), Some(11));
+        let window = vec![obj(0, 0, &[]), obj(1, 1, &[]), obj(2, 2, &[])];
+        let below = vec![obj(10, 3, &[]), obj(11, 4, &[])];
+        let edges = [(0, 10), (1, 10), (0, 11), (1, 11), (2, 11)];
+        assert_eq!(select_bridge(&window, &below, &edges, 10), Some(11));
     }
 
     #[test]
