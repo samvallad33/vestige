@@ -30,14 +30,15 @@
 //! form on that turn. The known-proper backfill is not an identity edge.
 //!
 //! Entry. The seated tail is ordered by the gatekeeper without this vote.
-//! A deep turn passes a seated turn only when its margin on the five
-//! ballots (scene, structural degree, stability, wh-slot, island) is
-//! strictly positive. Qualifiers are the deep turns that beat the bottom
-//! of that tail. They are ordered by Kemeny among themselves, then merged
-//! so a qualifier advances only past seated turns it beats. Truncation
-//! drops the bottom. When none qualify, the tail stays in the baseline
-//! order. The island ballot is one of the five votes. It does not reorder
-//! two seated turns.
+//! A deep turn may lead a suffix of that tail only when its margin on the
+//! five ballots (scene, structural degree, stability, wh-slot, island) is
+//! strictly positive against every turn in the suffix. Beating the turn at
+//! the cursor is not enough, because the rest of the suffix would sit below
+//! it. Qualifiers beat the bottom turn, are ordered by Kemeny among
+//! themselves, and take that suffix in that order. Truncation drops the
+//! bottom. When none qualify, the tail stays in the baseline order. The
+//! island ballot is one of the five votes. It does not reorder two seated
+//! turns.
 //!
 //! The whole-tail bar (a deep turn had to beat every seated turn) was the
 //! rule in the commit before this one. One card of that binary fired on

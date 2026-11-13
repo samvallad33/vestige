@@ -7014,11 +7014,15 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
     }
     let q_same: Vec<bool> = qualifiers.iter().map(|&ti| same[at(ti)]).collect();
     rank1_gatekeeper_ballots(ix, query, &mut qualifiers, t_scene, &q_same);
+    // A qualifier may lead a suffix only when it beats every turn in it.
+    // Beating the turn at the cursor is not enough: the later turns would
+    // sit below it after the insert.
+    let beats_suffix = |q: usize, from: usize| (from..baseline.len()).all(|k| beats_turn(q, baseline[k]));
     let mut i = 0usize;
     let mut j = 0usize;
     let mut final_tail = Vec::with_capacity(tail.len());
     while final_tail.len() < tail.len() && (i < qualifiers.len() || j < baseline.len()) {
-        let take_qualifier = i < qualifiers.len() && (j == baseline.len() || beats_turn(qualifiers[i], baseline[j]));
+        let take_qualifier = i < qualifiers.len() && (j == baseline.len() || beats_suffix(qualifiers[i], j));
         if take_qualifier {
             final_tail.push(qualifiers[i]);
             i += 1;
@@ -9094,6 +9098,35 @@ mod recall_cue_tests {
         let mut huge = vec![head, s0, s1, s2];
         rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut huge, &scene);
         assert_eq!(huge[0], head, "slot 0 stays the RSB head");
+    }
+
+    #[test]
+    fn a_deep_turn_does_not_pass_a_later_turn_it_loses() {
+        let sessions = vec![
+            s("a", vec![t("head", "user", "I left the spare key with Sam.")]),
+            s("b", vec![t("first", "user", "The bakery sold out of rye.")]),
+            s("c", vec![t("mid", "user", "The forecast called for rain tomorrow.")]),
+            s("d", vec![t("weak", "user", "Traffic was slow on the bridge.")]),
+            s("e", vec![t("deep", "user", "The spare key was left with Sam on the hook.")]),
+        ];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let first = idx(&ix, "first");
+        let mid = idx(&ix, "mid");
+        let weak = idx(&ix, "weak");
+        let deep = idx(&ix, "deep");
+        ix.turns[first].stability = 10.0;
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 9.0;
+        scene[first] = 1.0;
+        scene[mid] = 8.0;
+        scene[weak] = 2.0;
+        scene[deep] = 3.0;
+        let mut list = vec![head, first, mid, weak];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(fired);
+        assert_eq!(list[0], head);
+        assert_eq!(list, vec![head, first, mid, deep], "a win against the front turn does not jump the later turn it loses");
     }
 
     #[test]
