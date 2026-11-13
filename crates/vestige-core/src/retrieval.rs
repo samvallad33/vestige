@@ -5745,10 +5745,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
-    // Wh-slot type gate. One pairwise vote: a turn that fills the question's
-    // closed-class type stays ahead of one that does not. Ties keep this order.
-    // Not a score bonus. RSB has already seated the cause.
-    wh_type_gate(ix, &q.text, &mut final_turn_indices);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6055,6 +6051,18 @@ const WH_PERSON: u8 = 4;
 const WH_PLACE: u8 = 8;
 const WH_CAUSE: u8 = 16;
 
+/// Duration heads. "how many" or "how much" followed by one of these is a
+/// time question, not a quantity. Singular and plural only. Fixed before
+/// the card. Li and Roth NUMERIC:period, not NUMERIC:count.
+const WH_TIME_UNITS: &[&str] = &[
+    "day", "days", "week", "weeks", "month", "months", "year", "years", "hour", "hours",
+    "minute", "minutes",
+];
+
+fn wh_time_unit(word: &str) -> bool {
+    WH_TIME_UNITS.iter().any(|unit| *unit == word)
+}
+
 /// Closed class of English interrogative function words. Not a topical list.
 fn wh_slots(query: &str) -> u8 {
     let lower = query.to_ascii_lowercase();
@@ -6071,8 +6079,18 @@ fn wh_slots(query: &str) -> u8 {
     if phrase("what", "time") || phrase("which", "year") || has("when") {
         slots |= WH_TIME;
     }
-    if phrase("how", "many") || phrase("how", "much") {
-        slots |= WH_QTY;
+    for i in 0..tokens.len() {
+        if tokens[i] != "how" || i + 1 >= tokens.len() {
+            continue;
+        }
+        if tokens[i + 1] != "many" && tokens[i + 1] != "much" {
+            continue;
+        }
+        if i + 2 < tokens.len() && wh_time_unit(&tokens[i + 2]) {
+            slots |= WH_TIME;
+        } else {
+            slots |= WH_QTY;
+        }
     }
     if has("who") || has("whom") || has("whose") {
         slots |= WH_PERSON;
@@ -6467,35 +6485,23 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     for a in 0..n {
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
-            let mut margin = 0i64;
-            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
-            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-            match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            match degree[a].cmp(&degree[b]) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
-            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
-            match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Greater => margin += 1,
-                std::cmp::Ordering::Less => margin -= 1,
-                std::cmp::Ordering::Equal => {}
-            }
-            if slots != 0 {
-                let ok_a = wh_satisfied(ix, ta, slots, degree[a] > 0);
-                let ok_b = wh_satisfied(ix, tb, slots, degree[b] > 0);
-                if ok_a && !ok_b {
-                    margin += 1;
-                } else if ok_b && !ok_a {
-                    margin -= 1;
-                }
-            }
+            let wh = if slots == 0 {
+                0
+            } else {
+                wh_vote(
+                    wh_satisfied(ix, ta, slots, degree[a] > 0),
+                    wh_satisfied(ix, tb, slots, degree[b] > 0),
+                )
+            };
+            let margin = pair_margin(
+                t_scene.get(ta).copied().unwrap_or(0.0),
+                t_scene.get(tb).copied().unwrap_or(0.0),
+                degree[a],
+                degree[b],
+                ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0),
+                ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0),
+                wh,
+            );
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -6515,52 +6521,43 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     *list = turned;
 }
 
-/// One pairwise vote on the window RSB and the gatekeeper already produced.
-/// A turn that fills the question's closed-class type stays ahead of a turn
-/// that does not. Satisfiers keep their relative order, then everyone else
-/// does. If nobody satisfies the slot, the list is left as it is. Not a
-/// score bonus, and not a deletion.
-fn wh_type_gate(ix: &Index, query: &str, list: &mut Vec<usize>) {
-    let slots = wh_slots(query);
-    if slots == 0 || list.len() < 2 {
-        return;
+/// The wh ballot. One equal vote: +1, -1, or 0. Not a bonus and not a veto.
+fn wh_vote(ok_a: bool, ok_b: bool) -> i64 {
+    match (ok_a, ok_b) {
+        (true, false) => 1,
+        (false, true) => -1,
+        _ => 0,
     }
-    let mut cause = vec![false; ix.turns.len()];
-    for (src, turn) in ix.turns.iter().enumerate() {
-        let mut mark = |target: usize| {
-            if target != src && target < cause.len() {
-                cause[target] = true;
-            }
-        };
-        for &target in &turn.policy_backlinks {
-            mark(target);
-        }
-        for &target in &turn.supersedes_turns {
-            mark(target);
-        }
-        for &(_, target) in &turn.exact_edges {
-            mark(target);
-        }
-        if let Some(target) = rsb_antecedent(ix, src) {
-            mark(target);
-        }
+}
+
+/// Four equal ballots. Each disagreement adds exactly one. `wh` is already
+/// the single wh vote, so it is added once.
+fn pair_margin(
+    scene_a: f32,
+    scene_b: f32,
+    degree_a: i64,
+    degree_b: i64,
+    stab_a: f32,
+    stab_b: f32,
+    wh: i64,
+) -> i64 {
+    let mut margin = 0i64;
+    match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
+        std::cmp::Ordering::Greater => margin += 1,
+        std::cmp::Ordering::Less => margin -= 1,
+        std::cmp::Ordering::Equal => {}
     }
-    let mut yes = Vec::with_capacity(list.len());
-    let mut no = Vec::new();
-    for &ti in list.iter() {
-        let edge = cause.get(ti).copied().unwrap_or(false);
-        if wh_satisfied(ix, ti, slots, edge) {
-            yes.push(ti);
-        } else {
-            no.push(ti);
-        }
+    match degree_a.cmp(&degree_b) {
+        std::cmp::Ordering::Greater => margin += 1,
+        std::cmp::Ordering::Less => margin -= 1,
+        std::cmp::Ordering::Equal => {}
     }
-    if yes.is_empty() {
-        return;
+    match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
+        std::cmp::Ordering::Greater => margin += 1,
+        std::cmp::Ordering::Less => margin -= 1,
+        std::cmp::Ordering::Equal => {}
     }
-    list.clear();
-    list.extend(yes);
-    list.extend(no);
+    margin + wh
 }
 
 /// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
@@ -8419,25 +8416,90 @@ mod recall_cue_tests {
     }
 
     #[test]
-    fn wh_type_gate_is_one_order_vote() {
+    fn wh_head_stays_for_every_question_type() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "We met downtown after the show."),
+            t("other", "user", "We met downtown after the show again."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let other = idx(&ix, "other");
+        let clock = idx(&ix, "clock");
+        let scene = vec![1.0f32; ix.turns.len()];
+        let queries = [
+            "Who called?",
+            "Whom did we call?",
+            "Whose keys are these?",
+            "When did we meet?",
+            "Where did we meet?",
+            "Why did we leave?",
+            "What time did we meet?",
+            "Which year was that?",
+            "How many boxes arrived?",
+            "How much did it cost?",
+            "How many days between the trip and the move?",
+            "How many days ago?",
+            "How many weeks ago?",
+            "How many months ago?",
+            "How many years ago?",
+            "How many hours ago?",
+            "How many minutes ago?",
+        ];
+        for query in queries {
+            let mut list = vec![head, other, clock];
+            rank1_gatekeeper_keep_rsb_head(&ix, query, &mut list, &scene);
+            assert_eq!(list[0], head, "slot 0 stays the RSB head for {query}");
+        }
+    }
+
+    #[test]
+    fn how_many_days_is_a_time_slot() {
+        assert_eq!(wh_slots("How many days between the trip and the move?"), WH_TIME);
+        assert_eq!(wh_slots("how many days ago"), WH_TIME);
+        assert_eq!(wh_slots("how many weeks ago"), WH_TIME);
+        assert_eq!(wh_slots("how many months ago"), WH_TIME);
+        assert_eq!(wh_slots("how many years ago"), WH_TIME);
+        assert_eq!(wh_slots("how many hours ago"), WH_TIME);
+        assert_eq!(wh_slots("how many minutes ago"), WH_TIME);
+        assert_eq!(wh_slots("how much time passed"), WH_QTY);
+        assert_eq!(wh_slots("how many boxes arrived"), WH_QTY);
+        assert_eq!(wh_slots("how many"), WH_QTY);
+        assert_eq!(wh_slots("how many days") & WH_QTY, 0);
+    }
+
+    #[test]
+    fn wh_is_one_equal_vote() {
+        assert_eq!(wh_vote(true, false), 1);
+        assert_eq!(wh_vote(false, true), -1);
+        assert_eq!(wh_vote(true, true), 0);
+        assert_eq!(wh_vote(false, false), 0);
         let sessions = vec![s("s", vec![
             t("plain", "user", "We met downtown after the show."),
             t("clock", "user", "We met at 18:40 after the show."),
-            t("later", "user", "We met at 19:05 after the show."),
         ])];
         let ix = ix_of(&sessions);
         let plain = idx(&ix, "plain");
         let clock = idx(&ix, "clock");
-        let later = idx(&ix, "later");
-        let mut list = vec![plain, clock, later];
-        wh_type_gate(&ix, "When did we meet?", &mut list);
-        assert_eq!(ids(&ix, &list), vec!["clock", "later", "plain"]);
-        let mut tied = vec![clock, later, plain];
-        wh_type_gate(&ix, "When did we meet?", &mut tied);
-        assert_eq!(ids(&ix, &tied), vec!["clock", "later", "plain"]);
-        let mut untouched = vec![plain, clock];
-        wh_type_gate(&ix, "Please repeat that.", &mut untouched);
-        assert_eq!(ids(&ix, &untouched), vec!["plain", "clock"]);
+        let slots = wh_slots("When did we meet?");
+        assert_eq!(slots, WH_TIME);
+        assert!(wh_satisfied(&ix, clock, slots, false));
+        assert!(!wh_satisfied(&ix, plain, slots, false));
+        let degree = pool_structural_degree(&ix, &[plain, clock]);
+        assert_eq!(degree, vec![0, 0]);
+        assert_eq!(ix.turns[plain].stability, 0.0);
+        assert_eq!(ix.turns[clock].stability, 0.0);
+        let vote = wh_vote(
+            wh_satisfied(&ix, clock, slots, false),
+            wh_satisfied(&ix, plain, slots, false),
+        );
+        assert_eq!(vote, 1);
+        assert_eq!(pair_margin(1.0, 1.0, 0, 0, 0.0, 0.0, vote), 1);
+        assert_eq!(pair_margin(1.0, 1.0, 0, 0, 0.0, 0.0, 0), 0);
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![plain, clock];
+        rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list, vec![clock, plain]);
     }
 
     #[test]
