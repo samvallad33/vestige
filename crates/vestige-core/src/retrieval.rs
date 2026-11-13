@@ -6519,20 +6519,18 @@ fn kemeny_pool(
         for b in (a + 1)..n {
             let (ta, tb) = (pool[a], pool[b]);
             let mut margin = 0i64;
-            // Scene already voted when the window was built. Counting it again
-            // between an insider and a cut turn double-counts that score.
-            // Inside the window it stays one equal ballot.
-            if a < inside && b < inside {
-                let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
-                let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
-                match scene_a
-                    .partial_cmp(&scene_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                {
-                    std::cmp::Ordering::Greater => margin += 1,
-                    std::cmp::Ordering::Less => margin -= 1,
-                    std::cmp::Ordering::Equal => {}
-                }
+            // Scene stays one equal ballot on every pair, including a turn from
+            // below the cut. v5 silenced it there, and a lower-scene neighbor of
+            // the head then jumped the tail on the marginal alone.
+            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
+            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
+            match scene_a
+                .partial_cmp(&scene_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+            {
+                std::cmp::Ordering::Greater => margin += 1,
+                std::cmp::Ordering::Less => margin -= 1,
+                std::cmp::Ordering::Equal => {}
             }
             // Degree counts the same stored edges the factor marginal counts.
             // Across the cut those edges get one ballot, the marginal. Inside
@@ -8900,6 +8898,27 @@ mod recall_cue_tests {
         let scene = vec![1.0f32; ix.turns.len()];
         let mut list = vec![head, earlier];
         let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list, vec![head, earlier]);
+        assert!(!fired);
+    }
+
+    #[test]
+    fn factor_graph_lower_scene_neighbor_does_not_jump_the_tail() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "Alpha signal stays on the record."),
+            t("earlier", "user", "Beta signal stays on the record."),
+            t("later", "user", "Gamma signal stays on the record."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let earlier = idx(&ix, "earlier");
+        let later = idx(&ix, "later");
+        ix.turns[later].exact_edges.push((1, head));
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[later] = 0.5;
+        let mut list = vec![head, earlier];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "signal record", &mut list, &scene, 2, true);
+        assert_eq!(list[0], head);
         assert_eq!(list, vec![head, earlier]);
         assert!(!fired);
     }
