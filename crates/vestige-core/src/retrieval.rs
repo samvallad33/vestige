@@ -3786,7 +3786,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         });
     }
 
-    let turn_bridge_tokens = bridge_token_rows(&turns, &vocab);
+    let turn_bridge_tokens = bridge_token_rows(&turns, &vocab, &turn_prose_cache);
     Index {
         vocab,
         session_ids,
@@ -3822,18 +3822,42 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
 }
 
 /// Exact capitalized-name and handle ids that bridge a handful of sessions.
-/// The speaker name on every session falls outside the guard range and adds
-/// no edge. A token inside one session adds no edge either.
-fn bridge_token_rows(turns: &[TurnIx], vocab: &Vocab) -> Vec<Vec<u32>> {
+/// A token counts only where it is capitalized in that turn, or where it is
+/// the speaker's name. The known-proper backfill tags later lowercase repeats
+/// ("month", "summer") and is not an identity edge. The speaker name on every
+/// session falls outside the guard range and adds no edge. A token inside one
+/// session adds no edge either.
+fn bridge_token_rows(turns: &[TurnIx], vocab: &Vocab, prose: &[String]) -> Vec<Vec<u32>> {
+    let mut per_turn: Vec<Vec<u32>> = Vec::with_capacity(turns.len());
     let mut sessions_of: HashMap<u32, HashSet<usize>> = HashMap::new();
-    for t in turns {
-        for &eid in &t.entities {
-            let Some(name) = vocab.names.get(eid as usize) else { continue };
-            if !(name.starts_with("\u{1}ent:") || name.starts_with("\u{1}h:")) {
+    for (t, text) in turns.iter().zip(prose.iter()) {
+        let mut ids = Vec::new();
+        for ent in proper_entity_tokens(text) {
+            if !(ent.starts_with("\u{1}ent:") || ent.starts_with("\u{1}h:")) {
                 continue;
             }
-            sessions_of.entry(eid).or_default().insert(t.session);
+            if let Some(id) = vocab.get(&ent) {
+                ids.push(id);
+            }
         }
+        for handle in extract_exact_technical_handles(text) {
+            if let Some(id) = vocab.get(&handle) {
+                ids.push(id);
+            }
+        }
+        if !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant" {
+            for w in raw_tokens(&t.speaker) {
+                if let Some(id) = vocab.get(&format!("\u{1}ent:{w}")) {
+                    ids.push(id);
+                }
+            }
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        for &id in &ids {
+            sessions_of.entry(id).or_default().insert(t.session);
+        }
+        per_turn.push(ids);
     }
     let keep: HashSet<u32> = sessions_of
         .into_iter()
@@ -3845,14 +3869,9 @@ fn bridge_token_rows(turns: &[TurnIx], vocab: &Vocab) -> Vec<Vec<u32>> {
         })
         .map(|(id, _)| id)
         .collect();
-    turns
-        .iter()
-        .map(|t| {
-            let mut ids: Vec<u32> = t.entities.iter().copied().filter(|id| keep.contains(id)).collect();
-            ids.sort_unstable();
-            ids.dedup();
-            ids
-        })
+    per_turn
+        .into_iter()
+        .map(|ids| ids.into_iter().filter(|id| keep.contains(id)).collect())
         .collect()
 }
 
@@ -8924,5 +8943,21 @@ mod recall_cue_tests {
         assert!(!ix.turn_bridge_tokens[p0].is_empty());
         let islands = episode_islands(&ix, &[p0, q0]);
         assert_eq!(islands[0], islands[1]);
+    }
+
+    #[test]
+    fn a_lowercase_repeat_is_not_an_identity_edge() {
+        let sessions = vec![
+            s("a", vec![t("head", "user", "We are going camping next month.")]),
+            s("b", vec![t("pride", "user", "I walked past the rainbow sidewalk for Pride Month.")]),
+            s("c", vec![t("other", "user", "The show is next month too.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let other = idx(&ix, "other");
+        assert!(ix.turn_bridge_tokens[head].is_empty());
+        assert!(ix.turn_bridge_tokens[other].is_empty());
+        let neigh = head_structural_neighbors(&ix, head);
+        assert!(!neigh.contains(&other));
     }
 }

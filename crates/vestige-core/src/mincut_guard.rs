@@ -25,7 +25,8 @@
 //! turns are not edges. The local RSB reply stays in the degree ballot
 //! and is not a second island edge. The token session range is the
 //! ingest-time exact-handle gate (`2..=6`) and the header-anchor session
-//! degree cap (`1..=6`).
+//! degree cap (`1..=6`). A token is the capitalized form on that turn.
+//! The known-proper backfill is not an identity edge.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
