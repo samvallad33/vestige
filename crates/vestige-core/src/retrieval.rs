@@ -6515,11 +6515,11 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     *list = turned;
 }
 
-/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
-/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
-/// they do on a full window. The head is not a candidate for demotion.
-/// One ballot. Satisfiers keep their relative order, then everyone else does.
-/// If nobody satisfies the slot, the list is left as it is.
+/// One pairwise vote on the window RSB and the gatekeeper already produced.
+/// A turn that fills the question's closed-class type stays ahead of a turn
+/// that does not. Satisfiers keep their relative order, then everyone else
+/// does. If nobody satisfies the slot, the list is left as it is. Not a
+/// score bonus, and not a deletion.
 fn wh_type_gate(ix: &Index, query: &str, list: &mut Vec<usize>) {
     let slots = wh_slots(query);
     if slots == 0 || list.len() < 2 {
@@ -6563,6 +6563,9 @@ fn wh_type_gate(ix: &Index, query: &str, list: &mut Vec<usize>) {
     list.extend(no);
 }
 
+/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
+/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
+/// they do on a full window. The head is not a candidate for demotion.
 fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
     if list.len() < 2 {
         return;
