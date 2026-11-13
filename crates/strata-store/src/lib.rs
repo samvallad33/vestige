@@ -89,10 +89,12 @@ pub use canonical::{
 pub use error::StoreError;
 pub use gate_log::StrataEventLog;
 pub use ghostlink::{
-    composition_pair, parse_weave_source, weave_source, BridgeCandidate, BridgeReport,
+    composition_pair, hypothesis_record, parse_weave_source, weave_source, BridgeCandidate,
+    BridgeReport,
     CompositionRecord, DivergentEval, DivergentPage, DivergentSummary, GhostSnapshot, Lane,
     PathStep, PathVia, PoolFilter, ADMITTING_KINDS, BEYOND_RADIUS, BRIDGE_MAX_HOPS,
     COMPOSITION_NODE_TYPE, DEFAULT_PER_MEMORY_CAP, DIVERGENT_RADIUS, GHOSTLINK_TAG,
+    HYPOTHESIS_NODE_TYPE, HYPOTHESIS_SOURCE_PREFIX, HYPOTHESIS_TAG,
     LEGACY_INFERRED, LENS_TAG_PREFIX, MEASURED_MEMBER_CAP, OUTCOME_TAG_PREFIX, WEAVE_SOURCE_PREFIX,
     WEAVE_TAG, W_CLOSED_BY, W_DERIVED_FROM, W_TOUCHED_ARTIFACT, W_TOUCHED_ASSOCIATION,
 };
