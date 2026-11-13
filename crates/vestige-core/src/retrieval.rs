@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+#[path = "steiner_bridge.rs"]
+mod steiner_bridge;
+
 // =========================================================================
 // INPUT / OUTPUT CONTRACT
 // =========================================================================
@@ -231,6 +234,8 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// The Steiner bridge moved this query's turn window.
+    pub steiner_bridge_fired: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,6 +244,14 @@ pub struct RankResponse {
     pub sessions_indexed: usize,
     pub turns_indexed: usize,
     pub results: Vec<RankResult>,
+    /// Queries in this request whose turn window the Steiner bridge changed.
+    pub steiner_bridge_fires: u64,
+}
+
+/// Process-wide count of queries whose turn window the Steiner bridge changed.
+/// One retrieval_bench worker is one benchmark process, so this is that benchmark's fire count.
+pub fn steiner_bridge_fire_count() -> u64 {
+    steiner_bridge::fire_count()
 }
 
 pub const ENGINE: &str = "stara-total-recall/2 (bm25f+idf^p+coverage+proximity+stem+hypernym+pref-axis+carry+deictic+window+scene+sniper+ppr+submodular+funnel+dyad+recency)";
@@ -1964,6 +1977,9 @@ struct Index {
     cue_vocab: HashMap<String, u32>,
     /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
     role_cues: HashSet<u32>,
+    /// Exact bridge tokens per turn: capitalized names, technical handles, and
+    /// digit strings that survived the Steiner guard. Sorted, deduplicated.
+    bridge_tokens: Vec<Vec<u32>>,
 }
 
 /// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
@@ -3780,6 +3796,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         });
     }
 
+    let bridge_tokens = steiner_bridge::collect_bridge_tokens(&vocab, &turns, &nicks);
+
     Index {
         vocab,
         session_ids,
@@ -3810,6 +3828,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         turn_cues,
         cue_vocab,
         role_cues,
+        bridge_tokens,
     }
 }
 
@@ -5745,6 +5764,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Steiner bridges. Terminals are the window the gatekeeper just froze,
+    // including the RSB head. The tree may only pull a below-window turn into
+    // slots 1..k-1. Slot 0 stays the head. Reordering the window cannot move
+    // recall, so a bridge that is already inside it is not a seat.
+    let steiner_bridge_fired = steiner_bridge::apply(ix, &mut final_turn_indices, k, &t_scene);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5754,7 +5778,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult { intent: plan.intent, sessions, turns, standing_rules, steiner_bridge_fired }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -6529,12 +6553,14 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
 pub fn rank(req: &RankRequest) -> RankResponse {
 
     let ix = build_index(&req.sessions, &req.params);
-    let results = req.queries.iter().map(|q| rank_one(&ix, q, &req.params, req.top_k)).collect();
+    let results: Vec<RankResult> = req.queries.iter().map(|q| rank_one(&ix, q, &req.params, req.top_k)).collect();
+    let steiner_bridge_fires = results.iter().filter(|r| r.steiner_bridge_fired).count() as u64;
     RankResponse {
         engine: ENGINE,
         sessions_indexed: ix.session_ids.len(),
         turns_indexed: ix.turns.len(),
         results,
+        steiner_bridge_fires,
     }
 }
 
@@ -8379,5 +8405,312 @@ mod recall_cue_tests {
         let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
         let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ta, tb);
+        assert_eq!(a.results[0].turns[0].id, b.results[0].turns[0].id);
+        assert_eq!(a.steiner_bridge_fires, b.steiner_bridge_fires);
+    }
+
+    /// Head, then a same-session sibling, then the bridge as the next turn.
+    /// The bridge stores an edge to that sibling and to a terminal in another
+    /// session. That is a length-2 Steiner node and a session successor.
+    fn steiner_successor() -> Index {
+        let mut ix = ix_of(&[
+            s("s0", vec![
+                t("head", "user", "The battery died after the show."),
+                t("sibling", "user", "A spare charger is in the drawer."),
+                t("bridge", "user", "Leave the spare next to the battery."),
+            ]),
+            s("s1", vec![t("other", "user", "The clinic logged the visit.")]),
+            s("s2", vec![t("filler", "user", "The garden needs water tomorrow.")]),
+        ]);
+        let sibling = idx(&ix, "sibling");
+        let other = idx(&ix, "other");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[bridge].exact_edges.push((2, sibling));
+        ix.turns[bridge].exact_edges.push((2, other));
+        ix
+    }
+
+    #[test]
+    fn steiner_bridge_fires_and_keeps_the_head() {
+        let ix = steiner_successor();
+        let head = idx(&ix, "head");
+        let sibling = idx(&ix, "sibling");
+        let other = idx(&ix, "other");
+        let bridge = idx(&ix, "bridge");
+        let filler = idx(&ix, "filler");
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, sibling, other, filler];
+        let fired = steiner_bridge::apply(&ix, &mut list, 4, &scene);
+        assert!(fired, "the successor below the window has to enter the window");
+        assert_eq!(list[0], head, "slot 0 stays the head");
+        assert_eq!(list[1], bridge, "the successor takes the sibling slot");
+        assert!(!list.contains(&sibling), "the extended turn leaves its slot");
+        assert!(list.contains(&other));
+        assert!(list.contains(&filler));
+        assert_eq!(list.len(), 4);
+    }
+
+    #[test]
+    fn steiner_bridge_is_deterministic() {
+        let ix = steiner_successor();
+        let head = idx(&ix, "head");
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut a = vec![head, idx(&ix, "sibling"), idx(&ix, "other"), idx(&ix, "filler")];
+        let mut b = a.clone();
+        assert!(steiner_bridge::apply(&ix, &mut a, 4, &scene));
+        assert!(steiner_bridge::apply(&ix, &mut b, 4, &scene));
+        assert_eq!(a, b);
+        assert_eq!(a[0], head);
+    }
+
+    #[test]
+    fn steiner_bridge_does_not_fire_when_terminals_are_already_joined() {
+        let mut ix = ix_of(&[
+            s("s0", vec![
+                t("head", "user", "The battery died after the show."),
+                t("other", "user", "A spare charger is in the drawer."),
+            ]),
+            s("s1", vec![t("bridge", "user", "Leave the spare next to the battery.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let other = idx(&ix, "other");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, other));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, other];
+        let fired = steiner_bridge::apply(&ix, &mut list, 3, &scene);
+        assert!(!fired);
+        assert_eq!(list, vec![head, other]);
+    }
+
+    #[test]
+    fn steiner_bridge_ignores_a_zero_scene_turn() {
+        let ix = steiner_successor();
+        let head = idx(&ix, "head");
+        let bridge = idx(&ix, "bridge");
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[bridge] = 0.0;
+        let mut list = vec![head, idx(&ix, "sibling"), idx(&ix, "other"), idx(&ix, "filler")];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 4, &scene));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn steiner_bridge_fires_on_a_shared_capitalized_name() {
+        let ix = ix_of(&[
+            s("s0", vec![t("head", "user", "My dog Scout has been limping since Monday.")]),
+            s("s1", vec![t("other", "user", "We drove past the Riverside Clinic this morning.")]),
+            s("s2", vec![t("bridge", "user", "I booked Scout at the Riverside Clinic.")]),
+            s("s3", vec![t("filler", "user", "We bought oat milk at the market.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let other = idx(&ix, "other");
+        let bridge = idx(&ix, "bridge");
+        let filler = idx(&ix, "filler");
+        let names = |ti: usize| -> Vec<String> {
+            ix.bridge_tokens[ti].iter().map(|&id| ix.vocab.names[id as usize].clone()).collect()
+        };
+        assert!(names(head).iter().any(|n| n.contains("scout")), "{:?}", names(head));
+        assert!(names(other).iter().any(|n| n.contains("riverside")), "{:?}", names(other));
+        assert!(names(bridge).iter().any(|n| n.contains("scout")), "{:?}", names(bridge));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut once = vec![head, other, filler];
+        let before = once.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut once, 3, &scene));
+        assert_eq!(once, before);
+        assert_ne!(before[0], bridge);
+    }
+
+    #[test]
+    fn steiner_bridge_does_not_break_an_equal_tie() {
+        let mut ix = ix_of(&[
+            s("s0", vec![
+                t("head", "user", "The battery died after the show."),
+                t("sibling", "user", "A spare charger is in the drawer."),
+                t("bridge", "user", "Leave the spare next to the battery."),
+            ]),
+            s("s1", vec![
+                t("other", "user", "The clinic logged the visit."),
+                t("sib2", "user", "The visit was filed."),
+                t("bridge2", "user", "The file names the battery."),
+            ]),
+        ]);
+        let head = idx(&ix, "head");
+        let sibling = idx(&ix, "sibling");
+        let other = idx(&ix, "other");
+        let sib2 = idx(&ix, "sib2");
+        let bridge = idx(&ix, "bridge");
+        let bridge2 = idx(&ix, "bridge2");
+        ix.turns[bridge].exact_edges.push((2, sibling));
+        ix.turns[bridge].exact_edges.push((2, other));
+        ix.turns[bridge2].exact_edges.push((2, sibling));
+        ix.turns[bridge2].exact_edges.push((2, other));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, sibling, other, sib2];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 4, &scene));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn steiner_bridge_skips_a_turn_that_is_not_the_successor() {
+        let mut ix = ix_of(&[
+            s("s0", vec![
+                t("head", "user", "The battery died after the show."),
+                t("sibling", "user", "A spare charger is in the drawer."),
+                t("gap", "user", "The drawer also holds tape."),
+                t("bridge", "user", "Leave the spare next to the battery."),
+            ]),
+            s("s1", vec![t("other", "user", "The clinic logged the visit.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let sibling = idx(&ix, "sibling");
+        let other = idx(&ix, "other");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[bridge].exact_edges.push((2, sibling));
+        ix.turns[bridge].exact_edges.push((2, other));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, sibling, other];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 3, &scene));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn steiner_bridge_keeps_a_sole_session_in_the_top_five() {
+        let mut ix = ix_of(&[
+            s("a", vec![t("head", "user", "The battery died after the show.")]),
+            s("b", vec![t("b", "user", "A spare charger is in the drawer.")]),
+            s("c", vec![t("c", "user", "The garden needs water tomorrow.")]),
+            s("d", vec![t("d", "user", "Oat milk is on the counter.")]),
+            s("e", vec![t("e", "user", "The train leaves at noon.")]),
+            s("f", vec![t("bridge", "user", "A notebook is in the bag.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let b = idx(&ix, "b");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, b));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, b, idx(&ix, "c"), idx(&ix, "d"), idx(&ix, "e")];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 5, &scene));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn steiner_bridge_replaces_the_latest_sibling() {
+        let mut ix = ix_of(&[
+            s("a", vec![t("head", "user", "The battery died after the show.")]),
+            s("b", vec![
+                t("b", "user", "A spare charger is in the drawer."),
+                t("b2", "user", "The drawer also holds tape."),
+                t("bridge", "user", "A notebook is in the bag."),
+            ]),
+            s("c", vec![t("c", "user", "The garden needs water tomorrow.")]),
+            s("d", vec![t("d", "user", "Oat milk is on the counter.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let b = idx(&ix, "b");
+        let b2 = idx(&ix, "b2");
+        let c = idx(&ix, "c");
+        let d = idx(&ix, "d");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[bridge].exact_edges.push((2, b2));
+        ix.turns[bridge].exact_edges.push((2, c));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, b, c, d, b2];
+        assert!(steiner_bridge::apply(&ix, &mut list, 5, &scene), "{:?}", ids(&ix, &list));
+        assert_eq!(list[0], head);
+        assert_eq!(list[1], bridge, "the successor takes the interior sibling slot");
+        assert_eq!(list[4], b2, "the top-5 boundary stays");
+        assert!(!list.contains(&b));
+        assert_eq!(list.len(), 5);
+    }
+
+    #[test]
+    fn steiner_bridge_does_not_take_the_top5_boundary() {
+        let mut ix = ix_of(&[
+            s("a", vec![t("head", "user", "The battery died after the show.")]),
+            s("b", vec![
+                t("b2", "user", "The drawer also holds tape."),
+                t("bridge", "user", "A notebook is in the bag."),
+            ]),
+            s("c", vec![t("c", "user", "The garden needs water tomorrow.")]),
+            s("d", vec![t("d", "user", "Oat milk is on the counter.")]),
+            s("e", vec![t("e", "user", "The train leaves at noon.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let b2 = idx(&ix, "b2");
+        let bridge = idx(&ix, "bridge");
+        let c = idx(&ix, "c");
+        ix.turns[bridge].exact_edges.push((2, b2));
+        ix.turns[bridge].exact_edges.push((2, c));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, c, idx(&ix, "d"), idx(&ix, "e"), b2];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 5, &scene));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn steiner_bridge_does_not_replace_the_head() {
+        let mut ix = ix_of(&[
+            s("a", vec![
+                t("head", "user", "The battery died after the show."),
+                t("bridge", "user", "A notebook is in the bag."),
+            ]),
+            s("c", vec![t("c", "user", "The garden needs water tomorrow.")]),
+            s("d", vec![t("d", "user", "Oat milk is on the counter.")]),
+            s("e", vec![t("e", "user", "The train leaves at noon.")]),
+            s("f", vec![t("f", "user", "The window faces the alley.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let bridge = idx(&ix, "bridge");
+        let c = idx(&ix, "c");
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, c));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, c, idx(&ix, "d"), idx(&ix, "e"), idx(&ix, "f")];
+        let before = list.clone();
+        assert!(!steiner_bridge::apply(&ix, &mut list, 5, &scene));
+        assert_eq!(list, before, "the only same-session terminal is the head");
+    }
+
+    #[test]
+    fn steiner_bridge_rank_keeps_slot_zero() {
+        let mut bridge = t("bridge", "user", "A sprain was noted in the margin.");
+        bridge.links = vec![
+            TurnLink { kind: "exact".into(), to: "sibling".into(), degree: 2 },
+            TurnLink { kind: "exact".into(), to: "other".into(), degree: 2 },
+        ];
+        let sessions = vec![
+            s("s0", vec![
+                t("head", "user", "The limping sprain started on the trail after a long hike yesterday."),
+                t("sibling", "user", "The limping sprain was wrapped before the hike ended yesterday."),
+                bridge,
+            ]),
+            s("s1", vec![t("other", "user", "The limping sprain was treated at the clinic after the hike.")]),
+            s("s2", vec![t("filler", "user", "The garden needs water tomorrow and the oats are dry.")]),
+        ];
+        let req = RankRequest {
+            sessions,
+            queries: vec![Query { text: "When did the limping sprain start?".into(), date: String::new() }],
+            top_k: 4,
+            params: Params::default(),
+        };
+        let a = rank(&req);
+        let b = rank(&req);
+        let ids = |r: &RankResponse| r.results[0].turns.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&a), ids(&b));
+        assert_eq!(a.results[0].turns[0].id, b.results[0].turns[0].id);
+        assert_eq!(a.steiner_bridge_fires, b.steiner_bridge_fires);
+        // The successor matches the query, so the ranker already holds it.
+        // Seating is covered by `steiner_bridge_fires_and_keeps_the_head`.
+        // This call checks the integrated path: slot 0 is not the bridge.
+        assert_eq!(a.results[0].turns[0].id, "head", "window={:?}", ids(&a));
+        assert_ne!(a.results[0].turns[0].id, "bridge");
     }
 }

@@ -212,17 +212,27 @@ async function runLongMemEval(params, quiet = false) {
   const buckets = {};
   const all = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 };
   const nonAbs = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 };
+  const turnNonAbs = { n: 0, r1: 0, r5: 0, r10: 0 };
+  const turnBuckets = {};
   const lat = [];
-  let sessionsSeen = 0, turnsSeen = 0;
+  let sessionsSeen = 0, turnsSeen = 0, steinerFires = 0;
   for (const item of data) {
     const { sessions, query } = ingestLongMemEval(item);
     const t0 = performance.now();
     const res = await rank({ sessions, queries: [query], top_k: 10, params });
     lat.push(performance.now() - t0);
     sessionsSeen += res.sessions_indexed; turnsSeen += res.turns_indexed;
+    steinerFires += Number(res.steiner_bridge_fires || 0);
     const ids = res.results[0].sessions.map(s => s.id);
+    const turnIds = res.results[0].turns.map(t => t.id);
 
     const gold = new Set(item.answer_session_ids || []);
+    const turnGold = new Set();
+    item.haystack_sessions.forEach((sess, i) => {
+      sess.forEach((turn, j) => {
+        if (turn.has_answer) turnGold.add(`${item.haystack_session_ids[i]}#${j}`);
+      });
+    });
     const type = item.question_type;
     const isAbs = String(item.question_id).endsWith('_abs');
     const m = {
@@ -236,6 +246,16 @@ async function runLongMemEval(params, quiet = false) {
     for (const acc of [all, isAbs ? null : nonAbs, (buckets[type] ??= { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 })]) {
       if (!acc) continue;
       acc.n++; acc.r1 += m.r1; acc.r5 += m.r5; acc.r10 += m.r10; acc.all5 += m.all5; acc.all10 += m.all10; acc.ndcg10 += m.ndcg10;
+    }
+    if (!isAbs && turnGold.size > 0) {
+      const tm = {
+        r1: turnIds.slice(0, 1).some(i => turnGold.has(i)),
+        r5: turnIds.slice(0, 5).some(i => turnGold.has(i)),
+        r10: turnIds.slice(0, 10).some(i => turnGold.has(i)),
+      };
+      turnNonAbs.n++; turnNonAbs.r1 += tm.r1; turnNonAbs.r5 += tm.r5; turnNonAbs.r10 += tm.r10;
+      const tb = (turnBuckets[type] ??= { n: 0, r1: 0, r5: 0, r10: 0 });
+      tb.n++; tb.r1 += tm.r1; tb.r5 += tm.r5; tb.r10 += tm.r10;
     }
   }
   if (!quiet) {
@@ -254,8 +274,16 @@ async function runLongMemEval(params, quiet = false) {
 
     console.log(`\nQuestion Type Breakdown (Non-Abstention at same k):`);
     for (const [t, s] of Object.entries(buckets)) {
-      console.log(`  ${t.padEnd(26)} R@5 ${pct(s.r5, s.n).padStart(6)}% | R@10 ${pct(s.r10, s.n).padStart(6)}% | RecallAll@5 ${pct(s.all5, s.n).padStart(6)}% | NDCG@10 ${(s.ndcg10 / s.n).toFixed(3)} (${s.n})`);
+      console.log(`  ${t.padEnd(26)} Any@1 ${s.r1}/${s.n} (${pct(s.r1, s.n)}%) | R@5 ${pct(s.r5, s.n).padStart(6)}% | R@10 ${pct(s.r10, s.n).padStart(6)}% | RecallAll@5 ${pct(s.all5, s.n).padStart(6)}% | NDCG@10 ${(s.ndcg10 / s.n).toFixed(3)} (${s.n})`);
     }
+    console.log(`\n[Turn-level has_answer, non-abstention]`);
+    console.log(`  RecallAny@1:  ${turnNonAbs.r1}/${turnNonAbs.n} (${pct(turnNonAbs.r1, turnNonAbs.n)}%)`);
+    console.log(`  RecallAny@5:  ${turnNonAbs.r5}/${turnNonAbs.n} (${pct(turnNonAbs.r5, turnNonAbs.n)}%)`);
+    console.log(`  RecallAny@10: ${turnNonAbs.r10}/${turnNonAbs.n} (${pct(turnNonAbs.r10, turnNonAbs.n)}%)`);
+    for (const [t, s] of Object.entries(turnBuckets)) {
+      console.log(`  ${t.padEnd(26)} turn Any@1 ${s.r1}/${s.n} | Any@5 ${s.r5}/${s.n}`);
+    }
+    console.log(`steiner_bridge_fires=${steinerFires}`);
     console.log(`\nLatency per question: avg ${(lat.reduce((a, b) => a + b, 0) / lat.length).toFixed(2)} ms | p50 ${pctile(lat, 0.5).toFixed(2)} ms | p95 ${pctile(lat, 0.95).toFixed(2)} ms`);
   }
   const formatLme = (a) => ({
@@ -271,7 +299,16 @@ async function runLongMemEval(params, quiet = false) {
     official_470_non_abs: formatLme(nonAbs),
     all_500: formatLme(all),
     types: Object.fromEntries(Object.entries(buckets).map(([t, s]) => [t, formatLme(s)])),
-    raw: { all, nonAbs, buckets },
+    turn_non_abs: {
+      n: turnNonAbs.n,
+      recall_any_r1: Number(pct(turnNonAbs.r1, turnNonAbs.n)),
+      recall_any_r5: Number(pct(turnNonAbs.r5, turnNonAbs.n)),
+      recall_any_r10: Number(pct(turnNonAbs.r10, turnNonAbs.n)),
+      hits: { r1: turnNonAbs.r1, r5: turnNonAbs.r5, r10: turnNonAbs.r10 },
+      types: turnBuckets,
+    },
+    steiner_bridge_fires: steinerFires,
+    raw: { all, nonAbs, buckets, turnNonAbs, turnBuckets },
   };
 }
 
@@ -289,10 +326,12 @@ async function runLoCoMo(params, quiet = false, convList = null) {
   const cats = {}; const core = blank(); const total = blank();
   const lat = [];
   let qCount = 0;
+  let steinerFires = 0;
   for (const conv of convs) {
     const { sessions, queries } = ingestLoCoMo(conv);
     const t0 = performance.now();
     const res = await rank({ sessions, queries, top_k: 10, params });
+    steinerFires += Number(res.steiner_bridge_fires || 0);
     lat.push((performance.now() - t0) / Math.max(1, queries.length));
     res.results.forEach((r, qi) => {
       if (qCount++ >= LIMIT * 4) return;
@@ -341,10 +380,11 @@ async function runLoCoMo(params, quiet = false, convList = null) {
     console.log(`\n--- LoCoMo-10 (locomo10.json) | ${convs.length} dialogues${splitLabel} | ranking 100% in Rust kernel ---`);
     console.log('Note: "Soft" turn retrieval defines a match as the gold turn or ±1 adjacent turn in the same exchange.');
     console.log('Note: Cat 5 (Adversarial) measures finding the source passage for the adversarial question, not resisting the false premise.');
-    const line = (label, a) => console.log(`${label.padEnd(28)} Session [R@1: ${pct(a.sR1, a.n)}%, R@5: ${pct(a.sR5, a.n)}%] | Turn Exact R@5: ${pct(a.tR5, a.n)}% | Turn Soft R@5: ${pct(a.softR5, a.n)}% | Exact [R@1: ${pct(a.tR1, a.n)}%, R@10: ${pct(a.tR10, a.n)}%] (${a.n} scored${a.noEvidence ? `, ${a.noEvidence} without evidence excluded` : ''})`);
+    const line = (label, a) => console.log(`${label.padEnd(28)} Session [R@1: ${pct(a.sR1, a.n)}%, R@5: ${pct(a.sR5, a.n)}%] | Turn Exact R@5: ${a.tR5}/${a.n} (${pct(a.tR5, a.n)}%) | Turn Soft R@5: ${pct(a.softR5, a.n)}% | Exact [R@1: ${a.tR1}/${a.n} (${pct(a.tR1, a.n)}%), R@10: ${a.tR10}/${a.n} (${pct(a.tR10, a.n)}%)] (${a.n} scored${a.noEvidence ? `, ${a.noEvidence} without evidence excluded` : ''})`);
     line('CORE (Cat 1-4)', core);
     line('ALL (Cat 1-5)', total);
     for (const c of [1, 2, 3, 4, 5]) if (cats[c]) line(`  Cat ${c} ${names[c]}`, cats[c]);
+    console.log(`steiner_bridge_fires=${steinerFires}`);
     console.log(`Latency per question: avg ${(lat.reduce((a, b) => a + b, 0) / lat.length).toFixed(3)} ms`);
   }
   const formatAcc = (a) => ({
@@ -364,6 +404,7 @@ async function runLoCoMo(params, quiet = false, convList = null) {
     core: formatAcc(core),
     total: formatAcc(total),
     categories: Object.fromEntries(Object.entries(cats).map(([c, a]) => [names[c] || c, formatAcc(a)])),
+    steiner_bridge_fires: steinerFires,
     raw: { core, total, cats },
   };
 }

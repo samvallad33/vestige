@@ -110,6 +110,7 @@ def main():
         return resp
 
     t_start = time.time()
+    steiner_fires = 0
 
     try:
         # 1. Row 0: ruler_qa1_197K (1,204 docs, 100 Qs)
@@ -124,6 +125,7 @@ def main():
         queries0 = [{'text': q, 'date': ''} for q in r0['questions']]
         t0 = time.time()
         resp0 = rank({'sessions': sessions0, 'queries': queries0, 'top_k': 10})
+        steiner_fires += int(resp0.get('steiner_bridge_fires') or 0)
         dt0 = time.time() - t0
 
         u_n = u_r1 = u_r5 = u_r10 = 0
@@ -178,6 +180,7 @@ def main():
         queries1 = [{'text': q, 'date': ''} for q in r1['questions']]
         t0 = time.time()
         resp1 = rank({'sessions': sessions1, 'queries': queries1, 'top_k': 10})
+        steiner_fires += int(resp1.get('steiner_bridge_fires') or 0)
         dt1 = time.time() - t0
 
         r1_any1 = r1_any5 = r1_any10 = r1_all5 = r1_all10 = 0
@@ -202,7 +205,7 @@ def main():
 
         n1 = len(r1['questions'])
         print(f'\nRow 1 (ruler_qa2_421K, {len(docs1)} docs, {n1} Qs) in {dt1:.2f}s:')
-        print(f'  Any@1={r1_any1/n1*100:.2f}% Any@5={r1_any5/n1*100:.2f}% Any@10={r1_any10/n1*100:.2f}% All@5={r1_all5/n1*100:.2f}% All@10={r1_all10/n1*100:.2f}% MRR={r1_mrr/n1:.4f}')
+        print(f'  Any@1={r1_any1}/{n1} ({r1_any1/n1*100:.2f}%) Any@5={r1_any5}/{n1} ({r1_any5/n1*100:.2f}%) Any@10={r1_any10}/{n1} ({r1_any10/n1*100:.2f}%) All@5={r1_all5}/{n1} ({r1_all5/n1*100:.2f}%) All@10={r1_all10}/{n1} ({r1_all10/n1*100:.2f}%) MRR={r1_mrr/n1:.4f}')
 
         # 3. Rows 17..21: All 5 longmemeval_s* 400K merged scenarios (300 Qs, 287 non-abs)
         lme_rows = []
@@ -248,6 +251,7 @@ def main():
 
             t0 = time.time()
             resp = rank({'sessions': sessions, 'queries': queries, 'top_k': 10})
+            steiner_fires += int(resp.get('steiner_bridge_fires') or 0)
             dt = time.time() - t0
 
             row_stat = {
@@ -300,6 +304,7 @@ def main():
 
     nt = lme_tot['n']
     print(f"\nALL 5 longmemeval_s* Rows ({nt} non-abs / {lme_tot['n_total']} total Qs): Any@1={lme_tot['any1']/nt*100:.2f}% Any@3={lme_tot['any3']/nt*100:.2f}% Any@5={lme_tot['any5']/nt*100:.2f}% Any@10={lme_tot['any10']/nt*100:.2f}% | All@5={lme_tot['all5']/nt*100:.2f}% All@10={lme_tot['all10']/nt*100:.2f}% | MRR={lme_tot['mrr']/nt:.4f}")
+    print(f'steiner_bridge_fires={steiner_fires}')
     for qt, tb in sorted(lme_types.items()):
         qn = tb['n']
         print(f"  {qt:26s} ({qn:3d}): Any@1={tb['any1']/qn*100:6.2f}% Any@5={tb['any5']/qn*100:6.2f}% All@5={tb['all5']/qn*100:6.2f}% Any@10={tb['any10']/qn*100:6.2f}%")
@@ -312,6 +317,7 @@ def main():
         'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'elapsed_seconds': round(total_dt, 2),
         'cost_usd': 0,
+        'steiner_bridge_fires': steiner_fires,
         'splits': {
             'ruler_qa1_197K': {
                 'row': 0, 'docs': len(docs0), 'total_questions': 100,
