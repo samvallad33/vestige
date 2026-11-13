@@ -92,6 +92,7 @@ pub mod consolidation;
 pub mod data_dir;
 /// Durable profile contracts for local embedding vector spaces.
 pub mod fsrs;
+pub mod h2sk;
 /// Evidence-aware future intentions with deterministic local evaluation.
 pub mod intention_graph;
 pub mod memory;

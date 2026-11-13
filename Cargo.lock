@@ -2717,6 +2717,7 @@ dependencies = [
  "directories",
  "ed25519-dalek",
  "getrandom 0.4.3",
+ "libm",
  "reqwest",
  "serde",
  "serde_json",
