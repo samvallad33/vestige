@@ -4705,7 +4705,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 for (pos, &ti) in members.iter().enumerate() {
                     let prev_raw = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
                     let next_raw = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
-                    let prev_w = if ix.turns[ti].is_backchannel {
+                    let prev_w = if ix.turns[ti].speaker == "user" && !ix.turns[ti].is_short_reply {
+                        0.0
+                    } else if ix.turns[ti].is_backchannel {
                         0.25
                     } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
                         0.75
