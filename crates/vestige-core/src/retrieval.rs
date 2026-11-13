@@ -1880,6 +1880,14 @@ struct TurnIx {
     form_handle: bool,
     /// A capitalized word of two or more letters that is not sentence-initial.
     form_midcap: bool,
+    /// Raw ISO-date and HH:MM spans. A residual keeps one only after the query's tokens are blanked.
+    clock_spans: Vec<String>,
+    /// Lowercased alphanumeric tokens that contain an ASCII digit.
+    digit_toks: Vec<String>,
+    /// Lowercased mid-sentence capitalized words.
+    midcap_toks: Vec<String>,
+    /// Raw @handle, URL, or path tokens.
+    handle_spans: Vec<String>,
     raw_links: Vec<TurnLink>,
 }
 
@@ -3354,6 +3362,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_digit: has_ascii_digit(prose_body),
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
+                clock_spans: clock_spans(prose_body),
+                digit_toks: digit_tokens(prose_body),
+                midcap_toks: midcap_tokens(prose_body),
+                handle_spans: handle_spans(prose_body),
                 raw_links: t.links.clone(),
             });
         }
@@ -5740,52 +5752,46 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     session_opener_lift(ix, &q_cues, &mut final_turn_indices);
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
     hearsay(ix, &q_cues, &mut final_turn_indices);
-    // Second-stage pool. The prefix of length k is the list the head-window
-    // boosters already expect. Turns after that are the next positive-score
-    // candidates, up to GATEKEEPER_POOL.
+    // RSB seats into the caller's k, the same call PR 715 makes. A full
+    // window does not grow, so a cause cannot push a gold turn past k.
+    if !it.is_event_sequence {
+        rsb_seat_behind(ix, &mut final_turn_indices, k);
+    }
+    let seated: Vec<usize> = final_turn_indices.iter().copied().take(k).collect();
+    // Deeper candidates are appended after the seat. They are not passed to
+    // rsb_seat_behind and they do not shift the seated window.
+    let mut below: Vec<usize> = Vec::new();
     let pool_cap = k.max(GATEKEEPER_POOL);
-    if final_turn_indices.len() < pool_cap {
-        let mut seen: HashSet<usize> = final_turn_indices.iter().copied().collect();
+    if seated.len() < pool_cap {
+        let mut seen: HashSet<usize> = seated.iter().copied().collect();
         for ti in order(&t_scene, &turn_ts) {
             if t_scene[ti] <= 0.0 {
                 continue;
             }
             if seen.insert(ti) {
-                final_turn_indices.push(ti);
-                if final_turn_indices.len() >= pool_cap {
+                below.push(ti);
+                if seated.len() + below.len() >= pool_cap {
                     break;
                 }
             }
         }
     }
-    // RSB: the retrieved turn is the symptom. Seat its structural cause
-    // immediately after it. The cause can share no words with the query.
-    // Never in front of the symptom. A full window does not grow past the pool.
-    if !it.is_event_sequence {
-        rsb_seat_behind(ix, &mut final_turn_indices, pool_cap);
+    let mut rsb_at: HashMap<usize, usize> = HashMap::with_capacity(seated.len() + below.len());
+    for (i, &t) in seated.iter().enumerate() {
+        rsb_at.insert(t, i);
     }
-    let rsb_at: HashMap<usize, usize> =
-        final_turn_indices.iter().enumerate().map(|(i, &t)| (t, i)).collect();
-    let head = final_turn_indices.first().copied();
+    for (j, &t) in below.iter().enumerate() {
+        rsb_at.entry(t).or_insert(k + j);
+    }
+    let head = seated.first().copied();
     if let Some(head) = head {
-        let tail_pool: Vec<usize> = final_turn_indices
-            .iter()
-            .copied()
-            .skip(1)
-            .take(GATEKEEPER_POOL.saturating_sub(1))
-            .collect();
-        let seated_len = k.saturating_sub(1).min(tail_pool.len());
-        let tail = seat_wh_tail(
-            ix,
-            &q.text,
-            &tail_pool[..seated_len],
-            &tail_pool[seated_len..],
-            &t_scene,
-        );
+        let tail = seat_wh_tail(ix, &q.text, &seated[1..], &below, &t_scene);
         let mut out = Vec::with_capacity(k);
         out.push(head);
         out.extend(tail);
-        let swapped = wh_guarded_swap(ix, &q.text, &mut out, &t_scene, &final_turn_indices);
+        let mut swap_pool = seated.clone();
+        swap_pool.extend(below.iter().copied());
+        let swapped = wh_guarded_swap(ix, &q.text, &mut out, &t_scene, &swap_pool);
         WH_QUERIES.fetch_add(1, Ordering::Relaxed);
         if swapped {
             WH_SWAPS.fetch_add(1, Ordering::Relaxed);
@@ -6098,13 +6104,19 @@ fn rsb_seat_behind(ix: &Index, list: &mut Vec<usize>, k: usize) {
 /// before any card.
 const KEMENY_EXACT_CAP: usize = 8;
 
+#[allow(dead_code)] // pinned by the equal-ballot tests; production uses wh_class
 const WH_TIME: u8 = 1;
+#[allow(dead_code)]
 const WH_QTY: u8 = 2;
+#[allow(dead_code)]
 const WH_PERSON: u8 = 4;
+#[allow(dead_code)]
 const WH_PLACE: u8 = 8;
+#[allow(dead_code)]
 const WH_CAUSE: u8 = 16;
 
 /// Closed class of English interrogative function words. Not a topical list.
+#[allow(dead_code)] // production classifier is wh_class; this pins the 715 slot set
 fn wh_slots(query: &str) -> u8 {
     let tokens = query_tokens(query);
     let has = |w: &str| tokens.iter().any(|t| t == w);
@@ -6175,6 +6187,195 @@ fn has_handle_or_path(body: &str) -> bool {
     body.split_whitespace().any(|tok| tok.contains('/') && tok.len() > 1)
 }
 
+fn dedup_strings(mut toks: Vec<String>) -> Vec<String> {
+    toks.sort();
+    toks.dedup();
+    toks
+}
+
+/// ISO dates and HH:MM spans, byte slices of `body`. ASCII clock forms only.
+fn clock_spans(body: &str) -> Vec<String> {
+    let b = body.as_bytes();
+    let mut spans = Vec::new();
+    if b.len() >= 10 {
+        let mut i = 0;
+        while i + 10 <= b.len() {
+            if b[i].is_ascii_digit()
+                && b[i + 1].is_ascii_digit()
+                && b[i + 2].is_ascii_digit()
+                && b[i + 3].is_ascii_digit()
+                && b[i + 4] == b'-'
+                && b[i + 5].is_ascii_digit()
+                && b[i + 6].is_ascii_digit()
+                && b[i + 7] == b'-'
+                && b[i + 8].is_ascii_digit()
+                && b[i + 9].is_ascii_digit()
+            {
+                spans.push(body[i..i + 10].to_string());
+                i += 10;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b':'
+            && i > 0
+            && i + 2 < b.len()
+            && b[i - 1].is_ascii_digit()
+            && b[i + 1].is_ascii_digit()
+            && b[i + 2].is_ascii_digit()
+        {
+            let mut start = i;
+            while start > 0 && b[start - 1].is_ascii_digit() {
+                start -= 1;
+            }
+            let mut end = i + 1;
+            while end < b.len() && b[end].is_ascii_digit() {
+                end += 1;
+            }
+            spans.push(body[start..end].to_string());
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    dedup_strings(spans)
+}
+
+fn digit_tokens(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut has_digit = false;
+    for c in body.chars() {
+        if c.is_ascii_alphanumeric() {
+            if c.is_ascii_digit() {
+                has_digit = true;
+            }
+            cur.push(c.to_ascii_lowercase());
+        } else if !cur.is_empty() {
+            if has_digit {
+                out.push(std::mem::take(&mut cur));
+            } else {
+                cur.clear();
+            }
+            has_digit = false;
+        }
+    }
+    if has_digit && !cur.is_empty() {
+        out.push(cur);
+    }
+    dedup_strings(out)
+}
+
+fn midcap_tokens(body: &str) -> Vec<String> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut sentence_start = true;
+    let mut i = 0;
+    let mut out = Vec::new();
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '.' || c == '!' || c == '?' || c == '\n' {
+            sentence_start = true;
+            i += 1;
+            continue;
+        }
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        if c.is_uppercase() {
+            let start = i;
+            while i < chars.len() && chars[i].is_alphabetic() {
+                i += 1;
+            }
+            if !sentence_start && i - start >= 2 {
+                let word: String = chars[start..i].iter().flat_map(|ch| ch.to_lowercase()).collect();
+                out.push(word.to_ascii_lowercase());
+            }
+            sentence_start = false;
+            continue;
+        }
+        sentence_start = false;
+        i += 1;
+    }
+    dedup_strings(out)
+}
+
+fn handle_spans(body: &str) -> Vec<String> {
+    let mut spans = Vec::new();
+    let b = body.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'@' {
+            let start = i;
+            let mut end = i + 1;
+            while end < b.len() && b[end].is_ascii_alphanumeric() {
+                end += 1;
+            }
+            if end > start + 1 {
+                spans.push(body[start..end].to_string());
+            }
+            i = end;
+            continue;
+        }
+        i += 1;
+    }
+    for tok in body.split_whitespace() {
+        if tok.contains("://") || (tok.contains('/') && tok.len() > 1) {
+            spans.push(tok.to_string());
+        }
+    }
+    dedup_strings(spans)
+}
+
+/// Blank alphanumeric tokens that occur in the query. Punctuation stays, so a
+/// clock or a path can be re-tested on what the query did not already say.
+fn blank_query_tokens(text: &str, excluded: &HashSet<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cur = String::new();
+    let flush = |cur: &mut String, out: &mut String| {
+        if cur.is_empty() {
+            return;
+        }
+        if excluded.contains(&cur.to_ascii_lowercase()) {
+            for _ in 0..cur.chars().count() {
+                out.push(' ');
+            }
+        } else {
+            out.push_str(cur);
+        }
+        cur.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() {
+            cur.push(c);
+        } else {
+            flush(&mut cur, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+fn novel_clock(spans: &[String], excluded: &HashSet<String>) -> bool {
+    spans.iter().any(|span| has_iso_or_hhmm(&blank_query_tokens(span, excluded)))
+}
+
+fn novel_digit(toks: &[String], excluded: &HashSet<String>) -> bool {
+    toks.iter().any(|tok| !excluded.contains(tok))
+}
+
+fn novel_midcap(toks: &[String], excluded: &HashSet<String>) -> bool {
+    toks.iter().any(|tok| !excluded.contains(tok))
+}
+
+fn novel_handle(spans: &[String], excluded: &HashSet<String>) -> bool {
+    spans.iter().any(|span| has_handle_or_path(&blank_query_tokens(span, excluded)))
+}
+
 /// A capitalized word of at least two letters that is not the first word of a sentence.
 fn has_mid_sentence_name(body: &str) -> bool {
     let chars: Vec<char> = body.chars().collect();
@@ -6208,6 +6409,7 @@ fn has_mid_sentence_name(body: &str) -> bool {
     false
 }
 
+#[allow(dead_code)] // the live residual is wh_residual; this pins the 715 satisfaction rule
 fn wh_satisfied(ix: &Index, ti: usize, slots: u8, has_cause_edge: bool) -> bool {
     if slots == 0 {
         return true;
@@ -6561,17 +6763,22 @@ fn wh_pass_rate(passing: usize, n: usize) -> f64 {
     }
 }
 
-fn wh_residual(ix: &Index, ti: usize, class: u8, _excluded: &HashSet<String>, _cause: bool) -> bool {
+/// One residual, on the character form that survives after the query's own
+/// tokens are removed. A turn that only repeats a query word does not pass.
+/// WHEN is a clock or a digit. The session timestamp is not a clock.
+fn wh_residual(ix: &Index, ti: usize, class: u8, excluded: &HashSet<String>, _cause: bool) -> bool {
     let turn = match ix.turns.get(ti) {
         Some(t) => t,
         None => return false,
     };
+    let clock = turn.form_clock && novel_clock(&turn.clock_spans, excluded);
+    let digit = turn.form_digit && novel_digit(&turn.digit_toks, excluded);
     match class {
-        WH_WHEN => turn.form_clock,
-        WH_HOW_LONG => turn.form_digit || turn.form_clock,
-        WH_HOW_MANY => turn.form_digit,
-        WH_WHO => turn.form_midcap,
-        WH_WHERE => turn.form_handle,
+        WH_WHEN => clock || digit,
+        WH_HOW_LONG => digit || clock,
+        WH_HOW_MANY => digit,
+        WH_WHO => turn.form_midcap && novel_midcap(&turn.midcap_toks, excluded),
+        WH_WHERE => turn.form_handle && novel_handle(&turn.handle_spans, excluded),
         _ => false,
     }
 }
@@ -6807,6 +7014,7 @@ fn order_pool(ix: &Index, list: &mut Vec<usize>, t_scene: &[f32], ctx: &WhCtx) {
 
 /// Rank-1 gatekeeper. Runs after RSB. Reorders the list it is given.
 /// With no wh class the wh vote is 0 and scene, degree, and stability still run.
+#[allow(dead_code)] // production tail order is seat_wh_tail; tests call this directly
 fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
     if list.len() < 2 {
         return;
@@ -6866,6 +7074,7 @@ fn wh_vote(ok_a: bool, ok_b: bool) -> i64 {
 }
 
 /// Scene, degree, stability, and one full wh ballot. Used by the equal-vote test.
+#[allow(dead_code)] // equal-ballot test helper
 fn pair_margin(
     scene_a: f32,
     scene_b: f32,
@@ -6884,6 +7093,7 @@ fn pair_margin(
 /// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
 /// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
 /// they do on a full window. The head is not a candidate for demotion.
+#[allow(dead_code)] // production keeps the head in rank_one; tests call this directly
 fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
     if list.len() < 2 {
         return;
@@ -8941,6 +9151,20 @@ mod recall_cue_tests {
         let ix = ix_of(&[dated]);
         assert!(wh_residual(&ix, idx(&ix, "dated"), WH_WHEN, &excluded, false));
         assert!(ix.turns[idx(&ix, "dated")].form_clock);
+        let digits = s("s4", vec![t("digits", "user", "We met and the party was 40 people.")]);
+        let ix = ix_of(&[digits]);
+        assert!(wh_residual(&ix, idx(&ix, "digits"), WH_WHEN, &excluded, false));
+        let echo_q = "When did we meet at 18:40?";
+        let echo_ex = wh_excluded(echo_q);
+        let echoed = s("s5", vec![t("echoed", "user", "We met at 18:40 after the show.")]);
+        let ix = ix_of(&[echoed]);
+        assert!(
+            !wh_residual(&ix, idx(&ix, "echoed"), WH_WHEN, &echo_ex, false),
+            "a clock the query already said is not a novel answer"
+        );
+        let other = s("s6", vec![t("other", "user", "We met at 19:05 after the show.")]);
+        let ix = ix_of(&[other]);
+        assert!(wh_residual(&ix, idx(&ix, "other"), WH_WHEN, &echo_ex, false));
     }
 
     #[test]
@@ -8960,6 +9184,25 @@ mod recall_cue_tests {
     }
 
     #[test]
+    fn wh_none_keeps_a_full_window_when_an_rsb_cause_sits_outside_it() {
+        let query = "What about the walnut cabinet oil and the maple drawer rails?";
+        assert_eq!(wh_class(query), WH_NONE);
+        let ranked = rank(&RankRequest {
+            sessions: vec![s("s", vec![
+                t("cause", "user", "Always write the answer in markdown tables."),
+                t("sym", "assistant", "The walnut cabinet oil was mixed and brushed onto the wood."),
+                t("maple", "user", "The maple drawer rails were cut and sanded today."),
+            ])],
+            queries: vec![Query { text: query.into(), date: String::new() }],
+            top_k: 2,
+            params: Params::default(),
+        });
+        let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["maple", "sym"], "{ids:?}");
+        assert!(!ids.contains(&"cause"), "a full window must not import the outside cause, got {ids:?}");
+    }
+
+    #[test]
     fn echo_who_prefers_the_companion_over_the_booking() {
         let excluded = wh_excluded("Who did Maya travel with?");
         let flight = t("flight", "user", "We booked the flight for the travel.");
@@ -8972,6 +9215,12 @@ mod recall_cue_tests {
         let ix = ix_of(&[s("s", fillers)]);
         assert!(wh_residual(&ix, idx(&ix, "elena"), WH_WHO, &excluded, false));
         assert!(!wh_residual(&ix, idx(&ix, "flight"), WH_WHO, &excluded, false));
+        let echo = s("echo", vec![t("echo", "user", "The companion on the travel was Maya.")]);
+        let ix_echo = ix_of(&[echo]);
+        assert!(
+            !wh_residual(&ix_echo, idx(&ix_echo, "echo"), WH_WHO, &excluded, false),
+            "a mid-sentence name that only repeats the query does not pass"
+        );
         let mut list = vec![idx(&ix, "flight"), idx(&ix, "elena")];
         list.push(idx(&ix, "gap"));
         for i in 0..8 {
@@ -8997,29 +9246,59 @@ mod recall_cue_tests {
             params: Params::default(),
         });
         let ids: Vec<String> = ranked.results[0].turns.iter().map(|t| t.id.clone()).collect();
-        let elena_at = ids.iter().position(|id| id == "elena");
-        let flight_at = ids.iter().position(|id| id == "flight");
-        assert!(elena_at.is_some() && flight_at.is_some(), "{ids:?}");
-        assert!(elena_at.unwrap() < flight_at.unwrap(), "{ids:?}");
+        assert_eq!(ids.first().map(String::as_str), Some("elena"), "{ids:?}");
+        if let Some(flight_at) = ids.iter().position(|id| id == "flight") {
+            let elena_at = ids.iter().position(|id| id == "elena").unwrap();
+            assert!(elena_at < flight_at, "{ids:?}");
+        }
     }
 
     #[test]
     fn deep_pool_can_lift_a_time_turn_without_moving_a_passing_head() {
-        let mut turns = vec![t("head", "user", "When did we meet? When did we meet?")];
-        for i in 0..12 {
-            turns.push(t(&format!("f{i}"), "user", "When did we meet?"));
+        let query = "When did we meet?";
+        let mut head = t("head", "user", "When did we meet at 09:15?");
+        head.stability = 1.0;
+        let mut sessions = vec![Session {
+            id: "head".into(),
+            date: String::new(),
+            timestamp: 500,
+            turns: vec![head],
+        }];
+        let notes = ["alpha", "beta", "gamma", "delta"];
+        for (i, note) in notes.iter().enumerate() {
+            sessions.push(Session {
+                id: format!("f{i}"),
+                date: String::new(),
+                timestamp: 400 - i as i64,
+                turns: vec![t(
+                    &format!("f{i}"),
+                    "user",
+                    &format!("We met downtown after the show and then walked home, {note}."),
+                )],
+            });
         }
-        turns.push(t("clock", "user", "When did we meet at 18:40?"));
-        turns[1].links.push(TurnLink { kind: "ref".into(), to: "clock".into(), degree: 1 });
+        let mut clock = t(
+            "clock",
+            "user",
+            "We met at 18:40 after a long unrelated walk around the block and back again before dinner.",
+        );
+        clock.stability = 5.0;
+        sessions.push(Session {
+            id: "clock".into(),
+            date: String::new(),
+            timestamp: 1,
+            turns: vec![clock],
+        });
         let ranked = rank(&RankRequest {
-            sessions: vec![s("s", turns)],
-            queries: vec![Query { text: "When did we meet?".into(), date: String::new() }],
-            top_k: 10,
+            sessions,
+            queries: vec![Query { text: query.into(), date: String::new() }],
+            top_k: 5,
             params: Params::default(),
         });
         let ids: Vec<String> = ranked.results[0].turns.iter().map(|t| t.id.clone()).collect();
-        assert!(ids.iter().take(5).any(|id| id == "clock"), "{ids:?}");
-        assert_eq!(ids.len(), 10, "{ids:?}");
+        assert_eq!(ids.first().map(String::as_str), Some("head"), "a passing head stays: {ids:?}");
+        assert!(ids.contains(&"clock".to_string()), "the later clock enters the window: {ids:?}");
+        assert_eq!(ids.len(), 5, "admission replaces a seat, it does not grow the window: {ids:?}");
     }
 
     #[test]
