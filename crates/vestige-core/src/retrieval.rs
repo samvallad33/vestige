@@ -6548,12 +6548,13 @@ fn rank1_gatekeeper(
 ///
 /// The tail pool also holds up to `SUFFIX_BELOW_WINDOW` turns that are not in
 /// the window and whose exact token run with the query is strictly longer
-/// than the shortest run already in the tail. Those seats are the longest
-/// such runs, ties broken by the existing scene score then turn index. The
-/// returned list keeps its length, so an outside turn enters only by taking
-/// a tail seat. The head is not a candidate. `expand_below` is false for an
-/// event sequence: that selector already keeps one turn per session, and a
-/// longer echo of the question would stack that session back into the window.
+/// than every run already in the tail. A shorter run loses the exact-run
+/// ballot to a seated turn, so it is not a new seat. Ties on length break
+/// toward the existing scene score, then the turn index. The returned list
+/// keeps its length, so an outside turn enters only by taking a tail seat.
+/// The head is not a candidate. `expand_below` is false for an event
+/// sequence: that selector already keeps one turn per session, and a longer
+/// echo of the question would stack that session back into the window.
 fn rank1_gatekeeper_keep_rsb_head(
     ix: &Index,
     query: &str,
@@ -6573,11 +6574,11 @@ fn rank1_gatekeeper_keep_rsb_head(
     let q_ids = crate::suffix_automaton::query_exact_ids(&ix.exact_vocab, query);
     let sam = crate::suffix_automaton::SuffixAutomaton::build(&q_ids);
     let mut runs = vec![0u32; ix.turns.len()];
-    let mut min_tail = u32::MAX;
+    let mut max_tail = 0u32;
     for &ti in &tail {
         let len = sam.longest_match(&ix.turns[ti].exact_run);
         runs[ti] = len;
-        min_tail = min_tail.min(len);
+        max_tail = max_tail.max(len);
     }
     let mut pool = tail;
     if expand_below {
@@ -6593,12 +6594,14 @@ fn rank1_gatekeeper_keep_rsb_head(
                 continue;
             }
             let run = &ix.turns[ti].exact_run;
-            if (run.len() as u32) <= min_tail {
+            // A run cannot be longer than the turn. Skip turns that cannot
+            // beat every seated run on the exact-run ballot.
+            if (run.len() as u32) <= max_tail {
                 continue;
             }
             let len = sam.longest_match(run);
             runs[ti] = len;
-            if len > min_tail {
+            if len > max_tail {
                 let scene = t_scene.get(ti).copied().unwrap_or(0.0);
                 extras.push((len, scene, ti));
             }
@@ -8526,5 +8529,42 @@ mod recall_cue_tests {
         );
         assert_eq!(list, vec![head, weak], "a longer run is one vote, not a veto");
         assert!(!fired);
+    }
+
+    #[test]
+    fn suffix_automaton_does_not_seat_a_run_that_loses_to_the_tail() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "The policy stands."),
+            t("noted", "user", "Noted."),
+            t("seated", "user", "Ship the crate by Friday using the side gate."),
+            t("mid", "user", "Ship the crate tomorrow."),
+        ])];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let noted = idx(&ix, "noted");
+        let seated = idx(&ix, "seated");
+        let mid = idx(&ix, "mid");
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, noted, seated];
+        let fired = rank1_gatekeeper_keep_rsb_head(
+            &ix,
+            "Ship the crate by Friday using the side gate.",
+            &mut list,
+            &scene,
+            true,
+        );
+        assert_eq!(list[0], head);
+        assert!(!list.contains(&mid), "a run shorter than the longest tail run is not a seat");
+        assert!(list.contains(&seated) && list.contains(&noted));
+        let mut again = vec![head, noted, seated];
+        rank1_gatekeeper_keep_rsb_head(
+            &ix,
+            "Ship the crate by Friday using the side gate.",
+            &mut again,
+            &scene,
+            true,
+        );
+        assert_eq!(again, list);
+        assert!(fired);
     }
 }
