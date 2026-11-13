@@ -1130,6 +1130,11 @@ impl StrataStore {
     // ------------------------------------------------------------------
 
     fn replay(&mut self) -> Result<(), StoreError> {
+        self.replay_through(u64::MAX)
+    }
+
+    /// Fold frames whose seq is at or below `max_seq`. `u64::MAX` is the live head.
+    fn replay_through(&mut self, max_seq: u64) -> Result<(), StoreError> {
         let frames = self.log.read_frames(1)?;
 
         // Gate-space structures (gate frames only, dense 0-based seqs).
@@ -1143,6 +1148,9 @@ impl StrataStore {
         let mut imported_ids: HashMap<u64, String> = HashMap::new();
 
         for frame in frames {
+            if frame.seq > max_seq {
+                break;
+            }
             let seq = frame.seq;
             if let Some(kind) = RecordKind::from_u8(frame.kind) {
                 let gseq = gate_seq_counter;
@@ -3286,7 +3294,28 @@ impl StrataStore {
         let frames = self.log.read_frames(1)?;
         let frame_count = frames.len() as u64;
         let gate_mismatches = gate_verdict_mismatches(self, &frames)?;
-        let mut scratch = Self {
+        let mut scratch = self.fresh_scratch();
+        scratch.replay()?;
+        let mut retrievability = BTreeMap::new();
+        for id in scratch.nodes.keys() {
+            if let Some(score) = scratch.retrievability(id)? {
+                retrievability.insert(id.clone(), score);
+            }
+        }
+        let gaps = self.sweep().iter().map(gap_label).collect::<Vec<_>>();
+        Ok(Refold {
+            frames: frame_count,
+            state_digest: scratch.state_digest(),
+            nodes: scratch.nodes,
+            origins: scratch.origins,
+            retrievability,
+            gate_mismatches,
+            gaps,
+        })
+    }
+
+    fn fresh_scratch(&self) -> Self {
+        Self {
             dir: self.dir.clone(),
             log_dir: self.log_dir.clone(),
             log: self.log.clone(),
@@ -3310,31 +3339,26 @@ impl StrataStore {
             anchors: AnchorIndex::default(),
             effect_index: EffectIndex::default(),
             node_canonical_index: BTreeMap::new(),
-            // Replay cannot re-derive caller intent ids; the scratch copy
-            // only needs the log-derived maps Refold reports.
             intent_index: BTreeMap::new(),
             intent_log_len: 0,
             echo_index: BTreeMap::new(),
             backfill_history: Vec::new(),
             backfill_pairs: BTreeSet::new(),
-        };
-        scratch.replay()?;
-        let mut retrievability = BTreeMap::new();
-        for id in scratch.nodes.keys() {
-            if let Some(score) = scratch.retrievability(id)? {
-                retrievability.insert(id.clone(), score);
-            }
         }
-        let gaps = self.sweep().iter().map(gap_label).collect::<Vec<_>>();
-        Ok(Refold {
-            frames: frame_count,
-            state_digest: scratch.state_digest(),
-            nodes: scratch.nodes,
-            origins: scratch.origins,
-            retrievability,
-            gate_mismatches,
-            gaps,
-        })
+    }
+
+    /// Fold the log through `bound_seq` and return a read-only view.
+    /// A bound above the acked head is refused and names that head.
+    pub fn as_of(&self, bound_seq: u64) -> Result<AsOfView, StoreError> {
+        let head = self.log.head().last_acked_seq;
+        if bound_seq > head {
+            return Err(StoreError::InvalidInput(format!(
+                "as_of bound {bound_seq} is above the log head {head}"
+            )));
+        }
+        let mut scratch = self.fresh_scratch();
+        scratch.replay_through(bound_seq)?;
+        Ok(AsOfView { store: scratch, seq: bound_seq })
     }
 
     /// Strict read of every segment. A torn frame, blake3 miss, or broken
@@ -3654,6 +3678,27 @@ fn supersede_component(hops: &[SupersedeHop], id: &str) -> Vec<SupersedeHop> {
         .filter(|hop| ids.contains(&hop.id) && ids.contains(&hop.superseded_by))
         .cloned()
         .collect()
+}
+
+/// Read-only fold of the log through one seq. The store is private, so a
+/// past state cannot admit a write.
+pub struct AsOfView {
+    store: StrataStore,
+    seq: u64,
+}
+
+impl AsOfView {
+    pub fn seq(&self) -> u64 {
+        self.seq
+    }
+
+    pub fn state_digest(&self) -> [u8; 32] {
+        self.store.state_digest()
+    }
+
+    pub fn get_node(&self, id: &str) -> Option<NodeRecord> {
+        self.store.get_node(id)
+    }
 }
 
 /// Fresh fold of one log. Receipt replay compares this to the live maps.

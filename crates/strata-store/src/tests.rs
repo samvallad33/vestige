@@ -538,6 +538,29 @@ fn every_store_write_has_an_admitting_effect() {
 }
 
 #[test]
+fn as_of_a_prefix_matches_the_store_at_that_seq() {
+    let dir = temp_dir("as-of-prefix");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let first = store.ingest(input("the earlier belief", &[])).expect("first");
+    let bound = store.log().head().last_acked_seq;
+    let prefix = store.state_digest();
+    let second = store.ingest(input("the later belief", &[])).expect("second");
+    let view = store.as_of(bound).expect("as of the first head");
+    assert_eq!(view.seq(), bound);
+    assert_eq!(view.state_digest(), prefix);
+    assert!(view.get_node(&first).is_some());
+    assert!(view.get_node(&second).is_none());
+    let head = store.log().head().last_acked_seq;
+    let err = match store.as_of(head + 1) {
+        Err(err) => err,
+        Ok(_) => panic!("a bound above the head must be refused"),
+    };
+    let text = err.to_string();
+    assert!(text.contains(&head.to_string()), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn reads_append_nothing() {
     let dir = temp_dir("reads");
     let mut store = StrataStore::open(&dir).expect("open");
