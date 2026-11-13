@@ -39,3 +39,14 @@ pub const FACTOR_DAMPING: f64 = 0.1;
 /// coupling puts one nat between the favored state and the opposite state.
 /// It is not a per-edge weight and it does not scale the Kemeny ballot.
 pub const FACTOR_COUPLING: f64 = 1.0;
+
+/// Seats on the non-scene committee: the factor marginal, structural degree,
+/// and stability.
+///
+/// A below-cut turn takes a pair against an in-window turn only when it wins
+/// a strict majority of these seats (more than half, so two of the three).
+/// One seat is not a majority. Scene and the wh slot stay ballots inside the
+/// window and do not carry a pair across the cut. The committee size is the
+/// number of named ballots, and the threshold is the definition of a strict
+/// majority of that committee.
+pub const FACTOR_NONSCENE_BALLOTS: usize = 3;
