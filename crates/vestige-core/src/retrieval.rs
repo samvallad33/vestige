@@ -5673,6 +5673,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     given_new(ix, &q_cues, &mut final_turn_indices);
     // SessionOpenerLift runs after GivenNew, on the same final list (one path for live and bench).
     session_opener_lift(ix, &q_cues, &mut final_turn_indices);
+    // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
+    hearsay(ix, &q_cues, &mut final_turn_indices);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5843,6 +5845,42 @@ fn session_opener_lift(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> boo
     for i in 1..window {
         let cand = list[i];
         if turn_pos(ix, cand) != Some(0) {
+            continue;
+        }
+        if !covers_cues(&turn_query_cues(ix, q_cues, cand), &top_cues) {
+            continue;
+        }
+        list.remove(i);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
+/// Hearsay window: the covering user turn must already sit inside the top 5 the kernel
+/// selected. Fixed at 5 before any run; the top-5 membership never changes.
+const HEARSAY_WINDOW: usize = 5;
+
+/// Hearsay (provenance / hearsay rule). If rank 1 is an assistant turn and matched at
+/// least one query cue, take the first user turn at ranks 2 through `HEARSAY_WINDOW`,
+/// from any session, whose cues cover every cue rank 1 matched. That user turn takes
+/// slot 1 and the rest keep their order. Never changes the top-5 set.
+fn hearsay(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker.as_str() != "assistant" {
+        return false;
+    }
+    let top_cues = turn_query_cues(ix, q_cues, top);
+    if top_cues.is_empty() {
+        return false;
+    }
+    let window = list.len().min(HEARSAY_WINDOW);
+    for i in 1..window {
+        let cand = list[i];
+        if ix.turns[cand].speaker.as_str() != "user" {
             continue;
         }
         if !covers_cues(&turn_query_cues(ix, q_cues, cand), &top_cues) {
@@ -7353,6 +7391,102 @@ mod recall_cue_tests {
             let mut list = vec![idx(&ix, "b1"), idx(&ix, "a2"), idx(&ix, "a0")];
             session_opener_lift(&ix, &qc, &mut list);
             assert_eq!(ids(&ix, &list), vec!["a0", "b1", "a2"]);
+        }
+    }
+
+    fn hearsay_haystack() -> Vec<Session> {
+        vec![
+            s("a", vec![
+                t("a0", "user", "I booked a flight to Lisbon for March."),
+                t("a1", "assistant", "Lisbon March looks great."),
+                t("a2", "assistant", "I can also look at hotels later."),
+            ]),
+            s("b", vec![
+                t("b0", "user", "Lisbon March works on my side too."),
+                t("b1", "assistant", "Noted for the Lisbon March trip."),
+            ]),
+            s("c", vec![
+                t("c0", "user", "Lisbon March is already on the calendar."),
+            ]),
+        ]
+    }
+
+    #[test]
+    fn hearsay_moves_covering_user_turn_from_any_session() {
+        let ix = ix_of(&hearsay_haystack());
+        let qc = query_cues(&ix, "When is the Lisbon trip in March?");
+        // rank 1 is assistant a1. b0 is a user turn in another session, sits in the window, and covers.
+        let mut list = vec![idx(&ix, "a1"), idx(&ix, "b0"), idx(&ix, "a0")];
+        assert!(hearsay(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["b0", "a1", "a0"]);
+    }
+
+    #[test]
+    fn hearsay_holds_when_user_turn_lacks_a_rank1_cue() {
+        let ix = ix_of(&hearsay_haystack());
+        // a1 matches Lisbon March; a0 also covers those, but b0-less candidate: use a2 as rank 1
+        // with a cue ("hotels") that no user turn carries.
+        let qc = query_cues(&ix, "Can you look at hotels in Lisbon in March?");
+        let mut list = vec![idx(&ix, "a2"), idx(&ix, "b0"), idx(&ix, "a0")];
+        assert!(!hearsay(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a2", "b0", "a0"]);
+    }
+
+    #[test]
+    fn hearsay_skips_when_rank1_is_not_assistant() {
+        let ix = ix_of(&hearsay_haystack());
+        let qc = query_cues(&ix, "When is the Lisbon trip in March?");
+        let mut list = vec![idx(&ix, "a0"), idx(&ix, "b0")];
+        assert!(!hearsay(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a0", "b0"]);
+    }
+
+    #[test]
+    fn hearsay_skips_non_user_candidates() {
+        let ix = ix_of(&hearsay_haystack());
+        let qc = query_cues(&ix, "When is the Lisbon trip in March?");
+        // b1 is an assistant turn that covers; it must not move.
+        let mut list = vec![idx(&ix, "a1"), idx(&ix, "b1"), idx(&ix, "a2")];
+        assert!(!hearsay(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["a1", "b1", "a2"]);
+    }
+
+    #[test]
+    fn hearsay_respects_top5_window() {
+        let ix = ix_of(&hearsay_haystack());
+        let qc = query_cues(&ix, "When is the Lisbon trip in March?");
+        let (a1, a2, b1, b0) = (idx(&ix, "a1"), idx(&ix, "a2"), idx(&ix, "b1"), idx(&ix, "b0"));
+        // b0 sits at slot 6, outside the window (a2/b1 repeated only to pad the list).
+        let mut list = vec![a1, a2, b1, a2, b1, b0];
+        let before = list.clone();
+        assert!(!hearsay(&ix, &qc, &mut list));
+        assert_eq!(list, before);
+    }
+
+    #[test]
+    fn hearsay_picks_first_covering_user_in_rank_order() {
+        let ix = ix_of(&hearsay_haystack());
+        let qc = query_cues(&ix, "When is the Lisbon trip in March?");
+        let (a1, b0, c0) = (idx(&ix, "a1"), idx(&ix, "b0"), idx(&ix, "c0"));
+        let mut list = vec![a1, b0, c0];
+        assert!(hearsay(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["b0", "a1", "c0"]);
+        let mut list = vec![a1, c0, b0];
+        assert!(hearsay(&ix, &qc, &mut list));
+        assert_eq!(ids(&ix, &list), vec!["c0", "a1", "b0"]);
+    }
+
+    #[test]
+    fn hearsay_is_deterministic_under_shuffled_sessions() {
+        let h = hearsay_haystack();
+        let mut rev = h.clone();
+        rev.reverse();
+        for hs in [h, rev] {
+            let ix = ix_of(&hs);
+            let qc = query_cues(&ix, "When is the Lisbon trip in March?");
+            let mut list = vec![idx(&ix, "a1"), idx(&ix, "a2"), idx(&ix, "b0")];
+            hearsay(&ix, &qc, &mut list);
+            assert_eq!(ids(&ix, &list), vec!["b0", "a1", "a2"]);
         }
     }
 
