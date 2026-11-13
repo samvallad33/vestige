@@ -8,7 +8,9 @@
 //! window and seated in slots 1..k-1. Slot 0 is not a candidate.
 //! A length-2 candidate is seated only when it is the only turn adjacent
 //! to that disconnected terminal pair (`STEINER_UNIQUE_PAIR`). An index
-//! is not a vote.
+//! is not a vote. v7 admits that candidate only when one hop is a stored
+//! edge and the turn is the immediate next turn of its own session. It
+//! replaces that session's latest top-5 slot behind the head.
 //!
 //! Edges are unweighted. Two turns are adjacent when any one of these holds:
 //! a stored `policy_backlinks`, `supersedes_turns`, or `exact_edges` link,
@@ -49,7 +51,8 @@ mod guard;
 use guard::{
     STEINER_BELOW_CAP, STEINER_DIGIT_MIN_CHARS, STEINER_EXACT_MAX_NODES, STEINER_EXACT_MAX_TERMINALS,
     STEINER_HUB_DF_MAX, STEINER_KEEP_SIGNAL_MATE, STEINER_KEEP_SOLE_SESSION, STEINER_MAX_BRIDGES,
-    STEINER_NEW_SESSION, STEINER_TOKEN_DF_MIN, STEINER_UNIQUE_PAIR,
+    STEINER_NEW_SESSION, STEINER_REPLACE_SIBLING, STEINER_SESSION_SUCCESSOR, STEINER_STORED_PAIR,
+    STEINER_TOKEN_DF_MIN, STEINER_UNIQUE_PAIR,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -181,6 +184,15 @@ pub(super) fn apply(ix: &super::Index, list: &mut Vec<usize>, k: usize, t_scene:
         if seat == 0 {
             continue;
         }
+        // The bridge is the next turn of a session the window already holds.
+        // It takes that session's latest top-5 slot behind the head. Slot 0
+        // stays. A different session's marginal turn stays too.
+        if STEINER_REPLACE_SIBLING {
+            if let Some(drop) = sibling_slot(ix, list, turn) {
+                list[drop] = turn;
+            }
+            continue;
+        }
         // Inserting before index 5 shifts the old index 4 out of the top 5.
         // Keep that turn when it is the only top-5 member of its session.
         if STEINER_KEEP_SOLE_SESSION && seat < 5 && list.len() >= 5 {
@@ -272,10 +284,18 @@ fn bridge_turns(ix: &super::Index, window: &[usize], t_scene: &[f32]) -> Vec<(us
         let useful = touch.iter().any(|&a| touch.iter().any(|&b| a < b && !term_link[a][b]));
         let new_session = !STEINER_NEW_SESSION
             || terminals.iter().all(|&term| ix.turns[term].session != ix.turns[nb].session);
-        if useful && new_session {
+        let stored_touch = touch.iter().any(|&i| {
+            stored.get(nb).is_some_and(|row| row.binary_search(&terminals[i]).is_ok())
+        });
+        // A length-2 Steiner node is incident to exactly one disconnected
+        // terminal pair, and one of those hops is a stored edge. A name that
+        // touches the whole window is a hub, not a bridge.
+        let stored_pair = !STEINER_STORED_PAIR || (touch.len() == 2 && stored_touch);
+        let successor = !STEINER_SESSION_SUCCESSOR || is_session_successor(ix, nb, &terminals);
+        if useful && new_session && stored_pair && successor {
             let touches_head = touch.contains(&0);
             group1.push((!touches_head, nb, touch));
-        } else if !touch.is_empty() {
+        } else if !STEINER_STORED_PAIR && !touch.is_empty() {
             group2.push(nb);
         }
     }
@@ -471,6 +491,45 @@ fn terminal_links(ix: &super::Index, terminals: &[usize], stored: &[Vec<usize>])
         }
     }
     link
+}
+
+/// The bridge is the next turn in its session after the latest in-window
+/// turn of that session. Session order is the ingest order, not a score.
+fn is_session_successor(ix: &super::Index, bridge: usize, window: &[usize]) -> bool {
+    let session = ix.turns[bridge].session;
+    let Some(members) = ix.session_turns.get(session) else {
+        return false;
+    };
+    let Some(bpos) = members.iter().position(|&m| m == bridge) else {
+        return false;
+    };
+    let mut max_mate: Option<usize> = None;
+    for &turn in window {
+        if turn == bridge || ix.turns.get(turn).is_none_or(|t| t.session != session) {
+            continue;
+        }
+        if let Some(pos) = members.iter().position(|&m| m == turn) {
+            max_mate = Some(max_mate.map_or(pos, |m| m.max(pos)));
+        }
+    }
+    max_mate.is_some_and(|mate| bpos == mate + 1)
+}
+
+/// Latest top-5 slot of the bridge's session, behind the frozen head.
+/// Another turn of that session has to remain, so the session is not dropped.
+fn sibling_slot(ix: &super::Index, list: &[usize], bridge: usize) -> Option<usize> {
+    let session = ix.turns[bridge].session;
+    let limit = list.len().min(5);
+    let mut members = Vec::new();
+    for i in 0..limit {
+        if ix.turns[list[i]].session == session {
+            members.push(i);
+        }
+    }
+    if members.len() < 2 {
+        return None;
+    }
+    members.into_iter().filter(|&i| i >= 1).next_back()
 }
 
 fn pair_signal(ix: &super::Index, a: usize, b: usize) -> bool {

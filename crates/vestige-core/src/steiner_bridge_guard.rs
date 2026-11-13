@@ -58,15 +58,15 @@ pub const STEINER_EXACT_MAX_NODES: usize = 160;
 /// on BEAM and on MemoryAgentBench.
 pub const STEINER_UNIQUE_PAIR: bool = true;
 
-/// The seated bridge's session is absent from the window.
+/// When true, the bridge's session is absent from the window.
 ///
 /// v3 (unique stored/token pair, co-session edge ignored) fired on 713
 /// LoCoMo queries and moved Multi-Hop turn R@5 from 138/282 to 135/282 and
-/// core turn R@5 from 1067/1536 (69.47%) to 1057/1536 (68.82%). The bridge
-/// usually lived in a session the window already held, so the insert
-/// evicted a top-5 turn without adding a session. A bridge is new evidence
-/// only when its session is not already a terminal.
-pub const STEINER_NEW_SESSION: bool = true;
+/// core turn R@5 from 1067/1536 (69.47%) to 1057/1536 (68.82%). Inserting
+/// a same-session turn evicted a top-5 turn from a different session.
+/// v7 turns this off. The bridge is the next turn of a session the window
+/// already holds, and it replaces that session's own slot.
+pub const STEINER_NEW_SESSION: bool = false;
 
 /// Do not push the only top-5 turn of a session out of the top 5.
 ///
@@ -88,7 +88,32 @@ pub const STEINER_KEEP_SOLE_SESSION: bool = true;
 /// returned to 1179/1536 (76.76%). The remaining loss is that swap.
 /// A marginal turn that already carries the bridge's token or edge is
 /// the mention the bridge would repeat. It stays.
+/// v6 kept that rule and still moved core turn R@5 from 1067/1536 to
+/// 1063/1536, with Multi-Hop at 137/282. The four core losses were name
+/// hubs. v7 does not insert, so this guard applies only if replacement
+/// is off.
 pub const STEINER_KEEP_SIGNAL_MATE: bool = true;
+
+/// A bridge touches exactly two terminals, and one hop is a stored edge
+/// (`exact_edges`, `policy_backlinks`, `supersedes_turns`, or the RSB
+/// antecedent). A capitalized name that touches the whole window is not
+/// a Steiner node of one pair.
+///
+/// v6's 146 LoCoMo fires changed turn R@5 only as losses (core 1067/1536
+/// to 1063/1536, Multi-Hop 138/282 to 137/282). Each seated turn was a
+/// name co-mention. This constant lands before v7 is benchmarked.
+pub const STEINER_STORED_PAIR: bool = true;
+
+/// The bridge is the immediate next turn, in ingest order, after the
+/// latest in-window turn of its own session. A later turn that skips
+/// over unseen turns of that session is not the successor.
+pub const STEINER_SESSION_SUCCESSOR: bool = true;
+
+/// The successor takes the latest top-5 slot of its own session behind
+/// the frozen head. Slot 0 is not a slot it can take. Inserting at
+/// 1..4 would instead drop whichever turn sits at index 4, including a
+/// turn from a session the bridge does not extend.
+pub const STEINER_REPLACE_SIBLING: bool = true;
 
 /// Non-terminal Steiner nodes seated per query.
 /// One node, the one nearest the frozen head on the tree.
