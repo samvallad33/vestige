@@ -18,9 +18,14 @@
 //! - LEMON `MinCut` / Gomory-Hu: <https://lemon.cs.elte.hu/pub/doc/1.3.1/a00616.html>
 //!
 //! The deep-pool width is the turn-level PPR seed width already in
-//! `rank_one` (`order(&t_scene, &turn_ts).take(16)`). The token session
-//! range is the ingest-time exact-handle gate (`2..=6`) and the
-//! header-anchor session degree cap (`1..=6`).
+//! `rank_one` (`order(&t_scene, &turn_ts).take(16)`). Those 16 seats are
+//! the head's cross-session neighbors: policy backlinks, supersession,
+//! exact edges, exact name/handle tokens, and one turn of a
+//! `session_episode_prev` session, in that same scene order. Adjacent
+//! turns are not edges. The local RSB reply stays in the degree ballot
+//! and is not a second island edge. The token session range is the
+//! ingest-time exact-handle gate (`2..=6`) and the header-anchor session
+//! degree cap (`1..=6`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

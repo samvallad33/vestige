@@ -6675,11 +6675,6 @@ fn episode_islands(ix: &Index, pool: &[usize]) -> Vec<usize> {
                 unit_link(&mut weight, i, j);
             }
         }
-        if let Some(target) = rsb_antecedent(ix, ti) {
-            if let Some(&j) = pos.get(&target) {
-                unit_link(&mut weight, i, j);
-            }
-        }
     }
     let mut first_posting: HashMap<u32, usize> = HashMap::new();
     for (i, &ti) in nodes.iter().enumerate() {
@@ -6691,13 +6686,9 @@ fn episode_islands(ix: &Index, pool: &[usize]) -> Vec<usize> {
             }
         }
     }
-    for members in &ix.session_turns {
-        for pair in members.windows(2) {
-            if let (Some(&a), Some(&b)) = (pos.get(&pair[0]), pos.get(&pair[1])) {
-                unit_link(&mut weight, a, b);
-            }
-        }
-    }
+    // Adjacent turns are not edges. A unit path has min-cut 1, so adjacency
+    // would weld every in-pool turn of the head's session into one island
+    // and the vote would prefer that thread over the other episode.
     for (si, prev) in ix.session_episode_prev.iter().enumerate() {
         let Some(pj) = *prev else { continue };
         let a = ix.session_turns.get(si).and_then(|members| members.iter().find_map(|ti| pos.get(ti).copied()));
@@ -6709,27 +6700,97 @@ fn episode_islands(ix: &Index, pool: &[usize]) -> Vec<usize> {
     assign_islands(&weight)
 }
 
-/// The next scene-positive turns under the post-RSB window. Width is the
-/// guard. A turn already in the window is not taken again.
+/// Cross-session turns with one unit edge to the RSB head: a stored edge
+/// other than the local RSB reply, a shared bridge token, or the turn that
+/// carries a session-episode link. The reply star stays in the degree ballot.
+/// It is not a second island edge, and it is not a deep-pool candidate:
+/// v1 showed that star filling the tail with the head's own thread.
+/// Scan order is turn index. The caller sorts.
+fn head_structural_neighbors(ix: &Index, head: usize) -> Vec<usize> {
+    if head >= ix.turns.len() {
+        return Vec::new();
+    }
+    let mut seen = vec![false; ix.turns.len()];
+    seen[head] = true;
+    let mut out = Vec::new();
+    let push = |ti: usize, seen: &mut [bool], out: &mut Vec<usize>| {
+        if ti < seen.len() && !seen[ti] {
+            seen[ti] = true;
+            out.push(ti);
+        }
+    };
+    let t = &ix.turns[head];
+    for &target in &t.policy_backlinks {
+        push(target, &mut seen, &mut out);
+    }
+    for &target in &t.supersedes_turns {
+        push(target, &mut seen, &mut out);
+    }
+    for &(_, target) in &t.exact_edges {
+        push(target, &mut seen, &mut out);
+    }
+    for ti in 0..ix.turns.len() {
+        if seen[ti] {
+            continue;
+        }
+        let other = &ix.turns[ti];
+        let points = other.policy_backlinks.contains(&head)
+            || other.supersedes_turns.contains(&head)
+            || other.exact_edges.iter().any(|&(_, target)| target == head);
+        if points {
+            push(ti, &mut seen, &mut out);
+        }
+    }
+    if !ix.turn_bridge_tokens[head].is_empty() {
+        let tokens: HashSet<u32> = ix.turn_bridge_tokens[head].iter().copied().collect();
+        for ti in 0..ix.turns.len() {
+            if ix.turn_bridge_tokens[ti].iter().any(|tok| tokens.contains(tok)) {
+                push(ti, &mut seen, &mut out);
+            }
+        }
+    }
+    let si = ix.turns[head].session;
+    let mut linked = Vec::new();
+    if let Some(Some(prev)) = ix.session_episode_prev.get(si) {
+        linked.push(*prev);
+    }
+    for (sj, prev) in ix.session_episode_prev.iter().enumerate() {
+        if *prev == Some(si) {
+            linked.push(sj);
+        }
+    }
+    for sj in linked {
+        if let Some(&ti) = ix.session_turns.get(sj).and_then(|members| members.first()) {
+            push(ti, &mut seen, &mut out);
+        }
+    }
+    let home = ix.turns[head].session;
+    out.retain(|&ti| ix.turns[ti].session != home);
+    out
+}
+
+/// Up to `MINCUT_DEEP_POOL` structural neighbors of the head that sit outside
+/// the window, highest scene first. The width is the guard. Scene order is
+/// the same order the PPR seed uses. A high-scene turn with no structural
+/// edge to the head is not a candidate.
 fn mincut_deep_turns(ix: &Index, window: &[usize], t_scene: &[f32]) -> Vec<usize> {
-    if t_scene.len() != ix.turns.len() {
+    if window.is_empty() || t_scene.len() != ix.turns.len() {
         return Vec::new();
     }
     let in_window: HashSet<usize> = window.iter().copied().collect();
     let ts: Vec<i64> = (0..ix.turns.len())
         .map(|i| ix.session_ts.get(ix.turns[i].session).copied().unwrap_or(0))
         .collect();
-    let mut out = Vec::new();
-    for ti in order(t_scene, &ts) {
-        if t_scene[ti] <= 0.0 || in_window.contains(&ti) {
-            continue;
-        }
-        out.push(ti);
-        if out.len() == crate::mincut_guard::MINCUT_DEEP_POOL {
-            break;
-        }
+    let rank = order(t_scene, &ts);
+    let mut place = vec![0usize; ix.turns.len()];
+    for (i, &ti) in rank.iter().enumerate() {
+        place[ti] = i;
     }
-    out
+    let mut cands = head_structural_neighbors(ix, window[0]);
+    cands.retain(|ti| !in_window.contains(ti));
+    cands.sort_by_key(|&ti| place[ti]);
+    cands.truncate(crate::mincut_guard::MINCUT_DEEP_POOL);
+    cands
 }
 
 /// Rank-1 gatekeeper. The island slice is empty here, so this is the ballot
@@ -8804,6 +8865,39 @@ mod recall_cue_tests {
         rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut high, &scene);
         assert_eq!(high[0], head, "slot 0 stays the RSB head");
         assert_eq!(high[1], gold);
+    }
+
+    #[test]
+    fn same_session_adjacency_does_not_import_the_head_thread() {
+        let sessions = vec![
+            s("a", vec![
+                t("head", "user", "I left the spare key with Sam."),
+                t("local", "user", "The weather looks clear this afternoon."),
+            ]),
+            s("b", vec![t("gold", "user", "The spare key was left with Sam in the blue drawer.")]),
+            s("c", vec![t("noise", "user", "The forecast called for rain tomorrow.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let local = idx(&ix, "local");
+        let gold = idx(&ix, "gold");
+        let noise = idx(&ix, "noise");
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 5.0;
+        scene[local] = 100.0;
+        scene[noise] = 3.0;
+        scene[gold] = 3.0;
+        let mut list = vec![head, noise];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(fired);
+        assert_eq!(list, vec![head, gold], "a same-session neighbor is not an island edge");
+        assert!(!list.contains(&local));
+        scene[gold] = 0.0;
+        scene[local] = 3.0;
+        let mut tied = vec![head, noise, local];
+        let tied_fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut tied, &scene);
+        assert!(!tied_fired, "adjacency is not a vote, and a lower-scene name does not break the tie");
+        assert_eq!(tied, vec![head, noise, local]);
     }
 
     #[test]
