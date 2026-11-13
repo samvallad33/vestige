@@ -5723,9 +5723,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     session_opener_lift(ix, &q_cues, &mut final_turn_indices);
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
     hearsay(ix, &q_cues, &mut final_turn_indices);
-    // RSB v3: the retrieved turn is the symptom. Seat its structural cause
+    // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
-    // Never in front of the symptom, never from another episode.
+    // Never in front of the symptom. A full window does not grow.
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
@@ -5959,7 +5959,7 @@ fn rsb_antecedent(ix: &Index, ti: usize) -> Option<usize> {
     let pos = members.iter().position(|&m| m == ti)?;
     for &prev in members[..pos].iter().rev() {
         let p = &ix.turns[prev];
-        if p.field == 0 && !p.anaphoric && !p.is_backchannel {
+        if p.field == 0 && !p.anaphoric {
             return Some(prev);
         }
     }
@@ -5975,29 +5975,52 @@ fn rsb_cause(ix: &Index, ti: usize) -> Option<usize> {
     ix.turns[ti].policy_backlinks.last().copied()
 }
 
-/// Seat each cause immediately after the symptom that points at it. The symptom
-/// stays ahead. Causes already in the list are left where they are. The list
-/// stays length k.
+/// Seat each cause immediately after the symptom that points at it.
+///
+/// Version 4, fixed before the run. Version 3 inserted the cause and then
+/// truncated the list to k, which drops whoever already sat in the last slot.
+/// That drop is not a salience change. A cause that is not already in the
+/// window is inserted only while the window is shorter than k, so an empty
+/// slot is filled and nobody already inside is removed. A cause already in
+/// the window is moved to sit immediately after its symptom, and is never
+/// moved ahead of that symptom. A full window does not grow. k is the
+/// caller's top_k. The backchannel skip on the antecedent walk is removed
+/// so the walk matches the spec: nearest preceding field-0 turn that is
+/// not anaphoric.
 fn rsb_seat_behind(ix: &Index, list: &mut Vec<usize>, k: usize) {
     if list.is_empty() || k == 0 {
         return;
     }
     let snapshot = list.clone();
     let mut planned: Vec<(usize, usize)> = Vec::new();
-    let mut seen = snapshot.clone();
+    let mut reserved = snapshot.clone();
     for (i, &ti) in snapshot.iter().enumerate() {
         let Some(cause) = rsb_cause(ix, ti) else { continue };
-        if seen.contains(&cause) {
+        if planned.iter().any(|&(_, c)| c == cause) {
             continue;
         }
-        seen.push(cause);
+        let inside = snapshot.contains(&cause);
+        if !inside && reserved.len() >= k {
+            continue;
+        }
+        if !inside {
+            reserved.push(cause);
+        }
         planned.push((i, cause));
     }
     for (i, cause) in planned.into_iter().rev() {
-        let Some(at) = list.iter().position(|&t| t == snapshot[i]) else { continue };
-        list.insert(at + 1, cause);
+        let Some(sym_at) = list.iter().position(|&t| t == snapshot[i]) else { continue };
+        if let Some(cause_at) = list.iter().position(|&t| t == cause) {
+            if cause_at <= sym_at {
+                continue;
+            }
+            list.remove(cause_at);
+            let sym_at = list.iter().position(|&t| t == snapshot[i]).unwrap();
+            list.insert(sym_at + 1, cause);
+        } else if list.len() < k {
+            list.insert(sym_at + 1, cause);
+        }
     }
-    list.truncate(k);
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
