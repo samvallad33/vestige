@@ -231,6 +231,9 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// The min-cut island vote changed this query's tail. Slot 0 is not part of the comparison.
+    #[serde(default)]
+    pub mincut_fired: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1964,6 +1967,9 @@ struct Index {
     cue_vocab: HashMap<String, u32>,
     /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
     role_cues: HashSet<u32>,
+    /// Capitalized-name and handle ids whose session cardinality sits in the
+    /// guard's closed range. Exact identity, not a similarity weight.
+    turn_bridge_tokens: Vec<Vec<u32>>,
 }
 
 /// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
@@ -3780,6 +3786,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         });
     }
 
+    let turn_bridge_tokens = bridge_token_rows(&turns, &vocab);
     Index {
         vocab,
         session_ids,
@@ -3810,7 +3817,43 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         turn_cues,
         cue_vocab,
         role_cues,
+        turn_bridge_tokens,
     }
+}
+
+/// Exact capitalized-name and handle ids that bridge a handful of sessions.
+/// The speaker name on every session falls outside the guard range and adds
+/// no edge. A token inside one session adds no edge either.
+fn bridge_token_rows(turns: &[TurnIx], vocab: &Vocab) -> Vec<Vec<u32>> {
+    let mut sessions_of: HashMap<u32, HashSet<usize>> = HashMap::new();
+    for t in turns {
+        for &eid in &t.entities {
+            let Some(name) = vocab.names.get(eid as usize) else { continue };
+            if !(name.starts_with("\u{1}ent:") || name.starts_with("\u{1}h:")) {
+                continue;
+            }
+            sessions_of.entry(eid).or_default().insert(t.session);
+        }
+    }
+    let keep: HashSet<u32> = sessions_of
+        .into_iter()
+        .filter(|(_, sessions)| {
+            let n = sessions.len() as u32;
+            (crate::mincut_guard::MINCUT_TOKEN_SESSION_DF_MIN
+                ..=crate::mincut_guard::MINCUT_TOKEN_SESSION_DF_MAX)
+                .contains(&n)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    turns
+        .iter()
+        .map(|t| {
+            let mut ids: Vec<u32> = t.entities.iter().copied().filter(|id| keep.contains(id)).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        })
+        .collect()
 }
 
 // =========================================================================
@@ -5741,10 +5784,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
-    // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
-    // same Kemeny-Young order as PR 710, computed on that window with the head
-    // removed. No new constant: the frozen slot is position 0 of this window.
-    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Event sequences have no RSB head. The island vote is membership of that
+    // head, so it does not run here. The pre-existing tail gatekeeper still
+    // reorders the window it was given, which is what keeps one turn per date.
+    let mincut_fired = if it.is_event_sequence {
+        if final_turn_indices.len() >= 2 {
+            let head = final_turn_indices[0];
+            let mut tail = final_turn_indices[1..].to_vec();
+            rank1_gatekeeper(ix, &q.text, &mut tail, &t_scene);
+            final_turn_indices.clear();
+            final_turn_indices.push(head);
+            final_turn_indices.extend(tail);
+        }
+        false
+    } else {
+        rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene)
+    };
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5754,7 +5809,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult { intent: plan.intent, sessions, turns, standing_rules, mincut_fired }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
@@ -6449,9 +6504,250 @@ fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
     out
 }
 
-/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
-/// grow the window. The pool is that window, so its size is the caller's k.
+/// Stoer-Wagner global min-cut (JACM 1997). The start vertex is the lowest
+/// alive index. Tightness ties take the lowest index. The first phase that
+/// strictly improves the cut is kept, so a later equal cut cannot move the
+/// partition. A zero cut is a legal answer: NetworkX refuses a disconnected
+/// graph, and a dialogue pool is usually disconnected.
+fn stoer_wagner_min_cut(weight: &[Vec<i64>]) -> (i64, Vec<bool>) {
+    let n = weight.len();
+    if n < 2 {
+        return (0, vec![false; n]);
+    }
+    let mut w = weight.to_vec();
+    let mut alive: Vec<usize> = (0..n).collect();
+    let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    let mut best = i64::MAX;
+    let mut best_side: Vec<usize> = Vec::new();
+    while alive.len() > 1 {
+        let start = alive[0];
+        let mut in_a = vec![false; n];
+        let mut tight = vec![0i64; n];
+        in_a[start] = true;
+        let mut added = vec![start];
+        let mut cut_of_phase = 0i64;
+        for _ in 1..alive.len() {
+            let prev = *added.last().unwrap();
+            for &v in &alive {
+                if !in_a[v] {
+                    tight[v] += w[prev][v];
+                }
+            }
+            let mut pick = alive[0];
+            let mut best_tight = i64::MIN;
+            let mut found = false;
+            for &v in &alive {
+                if in_a[v] {
+                    continue;
+                }
+                if !found || tight[v] > best_tight || (tight[v] == best_tight && v < pick) {
+                    best_tight = tight[v];
+                    pick = v;
+                    found = true;
+                }
+            }
+            in_a[pick] = true;
+            added.push(pick);
+            cut_of_phase = best_tight;
+        }
+        let t = *added.last().unwrap();
+        let s = added[added.len() - 2];
+        if cut_of_phase < best {
+            best = cut_of_phase;
+            best_side = members[t].clone();
+        }
+        for &v in &alive {
+            if v == s || v == t {
+                continue;
+            }
+            let add = w[t][v];
+            w[s][v] += add;
+            w[v][s] += add;
+        }
+        for v in 0..n {
+            w[t][v] = 0;
+            w[v][t] = 0;
+        }
+        let taken = std::mem::take(&mut members[t]);
+        members[s].extend(taken);
+        alive.retain(|&v| v != t);
+    }
+    let mut side = vec![false; n];
+    for i in best_side {
+        if i < n {
+            side[i] = true;
+        }
+    }
+    if side.iter().all(|b| *b) || side.iter().all(|b| !*b) {
+        return (best, vec![false; n]);
+    }
+    (best, side)
+}
+
+/// Islands are the blocks whose Stoer-Wagner cut is at least the guard's
+/// connectivity. A cut of 0 is a disconnection (Ford-Fulkerson). A positive
+/// unit cut stays one island, so a single name bridge is not split.
+fn assign_islands(weight: &[Vec<i64>]) -> Vec<usize> {
+    fn rec(weight: &[Vec<i64>], nodes: &[usize], out: &mut [usize], next_id: &mut usize) {
+        if nodes.is_empty() {
+            return;
+        }
+        if nodes.len() == 1 {
+            out[nodes[0]] = *next_id;
+            *next_id += 1;
+            return;
+        }
+        let m = nodes.len();
+        let mut local = vec![vec![0i64; m]; m];
+        for i in 0..m {
+            for j in 0..m {
+                local[i][j] = weight[nodes[i]][nodes[j]];
+            }
+        }
+        let (cut, side) = stoer_wagner_min_cut(&local);
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        if cut < crate::mincut_guard::MINCUT_ISLAND_CONNECTIVITY {
+            for i in 0..m {
+                if side[i] {
+                    right.push(nodes[i]);
+                } else {
+                    left.push(nodes[i]);
+                }
+            }
+        }
+        if left.is_empty() || right.is_empty() {
+            let id = *next_id;
+            *next_id += 1;
+            for &node in nodes {
+                out[node] = id;
+            }
+            return;
+        }
+        rec(weight, &left, out, next_id);
+        rec(weight, &right, out, next_id);
+    }
+    let n = weight.len();
+    let mut out = vec![0usize; n];
+    let nodes: Vec<usize> = (0..n).collect();
+    let mut next_id = 0usize;
+    rec(weight, &nodes, &mut out, &mut next_id);
+    out
+}
+
+fn unit_link(weight: &mut [Vec<i64>], a: usize, b: usize) {
+    if a != b && weight[a][b] == 0 {
+        weight[a][b] = 1;
+        weight[b][a] = 1;
+    }
+}
+
+/// Unit-capacity structural graph on `pool`, then its episode islands.
+/// A second reason for the same pair does not raise the capacity.
+fn episode_islands(ix: &Index, pool: &[usize]) -> Vec<usize> {
+    let mut nodes = Vec::new();
+    let mut seen = HashSet::new();
+    for &ti in pool {
+        if ti < ix.turns.len() && seen.insert(ti) {
+            nodes.push(ti);
+        }
+    }
+    let n = nodes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut weight = vec![vec![0i64; n]; n];
+    let pos: HashMap<usize, usize> = nodes.iter().enumerate().map(|(i, &ti)| (ti, i)).collect();
+    for (i, &ti) in nodes.iter().enumerate() {
+        let t = &ix.turns[ti];
+        for &target in &t.policy_backlinks {
+            if let Some(&j) = pos.get(&target) {
+                unit_link(&mut weight, i, j);
+            }
+        }
+        for &target in &t.supersedes_turns {
+            if let Some(&j) = pos.get(&target) {
+                unit_link(&mut weight, i, j);
+            }
+        }
+        for &(_, target) in &t.exact_edges {
+            if let Some(&j) = pos.get(&target) {
+                unit_link(&mut weight, i, j);
+            }
+        }
+        if let Some(target) = rsb_antecedent(ix, ti) {
+            if let Some(&j) = pos.get(&target) {
+                unit_link(&mut weight, i, j);
+            }
+        }
+    }
+    let mut first_posting: HashMap<u32, usize> = HashMap::new();
+    for (i, &ti) in nodes.iter().enumerate() {
+        for &tok in &ix.turn_bridge_tokens[ti] {
+            if let Some(&hub) = first_posting.get(&tok) {
+                unit_link(&mut weight, hub, i);
+            } else {
+                first_posting.insert(tok, i);
+            }
+        }
+    }
+    for members in &ix.session_turns {
+        for pair in members.windows(2) {
+            if let (Some(&a), Some(&b)) = (pos.get(&pair[0]), pos.get(&pair[1])) {
+                unit_link(&mut weight, a, b);
+            }
+        }
+    }
+    for (si, prev) in ix.session_episode_prev.iter().enumerate() {
+        let Some(pj) = *prev else { continue };
+        let a = ix.session_turns.get(si).and_then(|members| members.iter().find_map(|ti| pos.get(ti).copied()));
+        let b = ix.session_turns.get(pj).and_then(|members| members.iter().find_map(|ti| pos.get(ti).copied()));
+        if let (Some(a), Some(b)) = (a, b) {
+            unit_link(&mut weight, a, b);
+        }
+    }
+    assign_islands(&weight)
+}
+
+/// The next scene-positive turns under the post-RSB window. Width is the
+/// guard. A turn already in the window is not taken again.
+fn mincut_deep_turns(ix: &Index, window: &[usize], t_scene: &[f32]) -> Vec<usize> {
+    if t_scene.len() != ix.turns.len() {
+        return Vec::new();
+    }
+    let in_window: HashSet<usize> = window.iter().copied().collect();
+    let ts: Vec<i64> = (0..ix.turns.len())
+        .map(|i| ix.session_ts.get(ix.turns[i].session).copied().unwrap_or(0))
+        .collect();
+    let mut out = Vec::new();
+    for ti in order(t_scene, &ts) {
+        if t_scene[ti] <= 0.0 || in_window.contains(&ti) {
+            continue;
+        }
+        out.push(ti);
+        if out.len() == crate::mincut_guard::MINCUT_DEEP_POOL {
+            break;
+        }
+    }
+    out
+}
+
+/// Rank-1 gatekeeper. The island slice is empty here, so this is the ballot
+/// set the tail had before the min-cut vote. Tests and the fire baseline use it.
 fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+    rank1_gatekeeper_ballots(ix, query, list, t_scene, &[]);
+}
+
+/// Same four ballots, plus one equal vote when `same_island` is the length of
+/// the list: a turn on the RSB head's island beats a turn that is not. Both
+/// on the island, or both off it, and the vote abstains.
+fn rank1_gatekeeper_ballots(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+    same_island: &[bool],
+) {
     let n = list.len();
     if n < 2 {
         return;
@@ -6459,6 +6755,7 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     let pool = list.clone();
     let slots = wh_slots(query);
     let degree = pool_structural_degree(ix, &pool);
+    let island = same_island.len() == n;
     let mut net = vec![vec![0i64; n]; n];
     for a in 0..n {
         for b in (a + 1)..n {
@@ -6492,6 +6789,13 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
                     margin -= 1;
                 }
             }
+            if island && same_island[a] != same_island[b] {
+                if same_island[a] {
+                    margin += 1;
+                } else {
+                    margin -= 1;
+                }
+            }
             net[a][b] = margin;
             net[b][a] = -margin;
         }
@@ -6511,19 +6815,41 @@ fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f
     *list = turned;
 }
 
-/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
-/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
-/// they do on a full window. The head is not a candidate for demotion.
-fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+/// Slot 0 is the RSB head and is not a Kemeny candidate. The tail pool is the
+/// tail plus the guard's deep turns. Kemeny runs once, with the island ballot,
+/// then the pool is cut back to the original tail length so a deep turn can
+/// replace a window turn. Returns whether that tail differs from the
+/// gatekeeper without the island vote and without the deep pool.
+fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) -> bool {
     if list.len() < 2 {
-        return;
+        return false;
     }
     let head = list[0];
-    let mut tail = list[1..].to_vec();
-    rank1_gatekeeper(ix, query, &mut tail, t_scene);
+    let tail = list[1..].to_vec();
+    let mut baseline = tail.clone();
+    rank1_gatekeeper(ix, query, &mut baseline, t_scene);
+    let mut pool = tail.clone();
+    for ti in mincut_deep_turns(ix, list, t_scene) {
+        if ti != head && !pool.contains(&ti) {
+            pool.push(ti);
+        }
+    }
+    let mut graph_nodes = Vec::with_capacity(pool.len() + 1);
+    graph_nodes.push(head);
+    graph_nodes.extend(pool.iter().copied());
+    let islands = episode_islands(ix, &graph_nodes);
+    let head_island = islands.first().copied().unwrap_or(0);
+    let same: Vec<bool> = islands.iter().skip(1).map(|&id| id == head_island).collect();
+    rank1_gatekeeper_ballots(ix, query, &mut pool, t_scene, &same);
+    pool.truncate(tail.len());
+    let fired = pool != baseline;
+    if fired {
+        crate::mincut_guard::record_fire();
+    }
     list.clear();
     list.push(head);
-    list.extend(tail);
+    list.extend(pool);
+    fired
 }
 
 pub fn rank(req: &RankRequest) -> RankResponse {
@@ -8379,5 +8705,130 @@ mod recall_cue_tests {
         let ta: Vec<String> = a.results[0].turns.iter().map(|x| x.id.clone()).collect();
         let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ta, tb);
+        assert_eq!(a.results[0].mincut_fired, b.results[0].mincut_fired);
+    }
+
+    fn nx_weight() -> Vec<Vec<i64>> {
+        // NetworkX stoer_wagner docs. Cut value is 4.
+        // x-a 3, x-b 1, a-c 3, b-c 5, b-d 4, d-e 2, c-y 2, e-y 3.
+        let mut w = vec![vec![0i64; 7]; 7];
+        let edge = |w: &mut Vec<Vec<i64>>, a: usize, b: usize, c: i64| {
+            w[a][b] = c;
+            w[b][a] = c;
+        };
+        edge(&mut w, 0, 1, 3);
+        edge(&mut w, 0, 2, 1);
+        edge(&mut w, 1, 3, 3);
+        edge(&mut w, 2, 3, 5);
+        edge(&mut w, 2, 4, 4);
+        edge(&mut w, 4, 5, 2);
+        edge(&mut w, 3, 6, 2);
+        edge(&mut w, 5, 6, 3);
+        w
+    }
+
+    #[test]
+    fn stoer_wagner_matches_the_networkx_cut_value() {
+        let (cut, side) = stoer_wagner_min_cut(&nx_weight());
+        assert_eq!(cut, 4);
+        assert!(side.iter().any(|s| *s) && side.iter().any(|s| !*s));
+    }
+
+    #[test]
+    fn a_unit_bridge_stays_one_island() {
+        let mut w = vec![vec![0i64; 6]; 6];
+        let link = |w: &mut Vec<Vec<i64>>, a: usize, b: usize| {
+            w[a][b] = 1;
+            w[b][a] = 1;
+        };
+        link(&mut w, 0, 1);
+        link(&mut w, 1, 2);
+        link(&mut w, 0, 2);
+        link(&mut w, 3, 4);
+        link(&mut w, 4, 5);
+        link(&mut w, 3, 5);
+        link(&mut w, 2, 3);
+        let (cut, _) = stoer_wagner_min_cut(&w);
+        assert_eq!(cut, 1);
+        let islands = assign_islands(&w);
+        assert!(islands.iter().all(|&id| id == islands[0]));
+    }
+
+    #[test]
+    fn a_zero_cut_splits_the_components() {
+        let mut w = vec![vec![0i64; 6]; 6];
+        let link = |w: &mut Vec<Vec<i64>>, a: usize, b: usize| {
+            w[a][b] = 1;
+            w[b][a] = 1;
+        };
+        link(&mut w, 0, 1);
+        link(&mut w, 1, 2);
+        link(&mut w, 0, 2);
+        link(&mut w, 3, 4);
+        link(&mut w, 4, 5);
+        link(&mut w, 3, 5);
+        let islands = assign_islands(&w);
+        assert_ne!(islands[0], islands[3]);
+        assert_eq!(islands[0], islands[1]);
+        assert_eq!(islands[3], islands[4]);
+    }
+
+    #[test]
+    fn mincut_promotes_a_below_window_turn_on_the_head_island() {
+        let sessions = vec![
+            s("a", vec![t("head", "user", "I left the spare key with Sam.")]),
+            s("b", vec![t("gold", "user", "The spare key was left with Sam in the blue drawer.")]),
+            s("c", vec![t("noise", "user", "The forecast called for rain tomorrow.")]),
+        ];
+        let ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let gold = idx(&ix, "gold");
+        let noise = idx(&ix, "noise");
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 5.0;
+        scene[noise] = 3.0;
+        scene[gold] = 3.0;
+        let graph = episode_islands(&ix, &[head, noise, gold]);
+        assert_eq!(graph[0], graph[2], "the shared name keeps head and gold one island");
+        assert_ne!(graph[0], graph[1], "the off-episode turn is a different island");
+        let mut list = vec![head, noise];
+        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
+        assert!(fired);
+        assert_eq!(list, vec![head, gold]);
+        let mut again = vec![head, noise];
+        let fired_again = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut again, &scene);
+        assert_eq!(list, again);
+        assert_eq!(fired, fired_again);
+        scene[gold] = 100.0;
+        let mut high = vec![head, noise];
+        rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut high, &scene);
+        assert_eq!(high[0], head, "slot 0 stays the RSB head");
+        assert_eq!(high[1], gold);
+    }
+
+    #[test]
+    fn a_name_in_seven_sessions_is_not_a_bridge() {
+        let mut sessions = Vec::new();
+        for i in 0..7 {
+            sessions.push(s(
+                &format!("s{i}"),
+                vec![t("t", "user", "I met Sam at the station.")],
+            ));
+        }
+        sessions.push(s("p", vec![t("p0", "user", "The note from Jordan is on the desk.")]));
+        sessions.push(s("q", vec![t("q0", "user", "I found the note from Jordan.")]));
+        let ix = ix_of(&sessions);
+        let mut sam_rows = 0usize;
+        for row in &ix.turn_bridge_tokens {
+            if !row.is_empty() {
+                sam_rows += 1;
+            }
+        }
+        assert!(sam_rows < 7, "a seven-session name is a hub and adds no identity edge");
+        let p0 = idx(&ix, "p0");
+        let q0 = idx(&ix, "q0");
+        assert!(!ix.turn_bridge_tokens[p0].is_empty());
+        let islands = episode_islands(&ix, &[p0, q0]);
+        assert_eq!(islands[0], islands[1]);
     }
 }
