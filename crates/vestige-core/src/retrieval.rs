@@ -6719,30 +6719,34 @@ fn episode_root(ix: &Index, mut session: usize) -> usize {
     session
 }
 
-/// One stored edge between the frozen head and `cand`, in either direction,
-/// or a standing policy in the head's episode. The kinds are one Boolean.
-/// They are not summed. The episode arm is the forward direction:
-/// `policy_backlinks` point from later turns at earlier policies, and the
-/// instruction in a batch sits after the turn the question retrieves.
+/// One stored edge between the frozen head and `cand`, or a standing policy
+/// that comes later in the head's episode. The kinds are one Boolean. They
+/// are not summed.
+///
+/// `policy_backlinks` point from a later turn at an earlier policy. Seating
+/// that earlier policy is the backward direction. On the v2 card it fired 86
+/// times and moved BEAM turn Any@5 from 59.15 to 58.87, because the inserted
+/// rule pushed the rank-5 gold out. The instruction the question is probing
+/// sits in a later sub of the same episode than the turn retrieval found, so
+/// the useful member is a standing policy with a higher turn index.
 fn head_edge_hit(ix: &Index, head: usize, cand: usize) -> bool {
     let head_turn = &ix.turns[head];
-    if head_turn.policy_backlinks.contains(&cand)
-        || head_turn.supersedes_turns.contains(&cand)
+    if head_turn.supersedes_turns.contains(&cand)
         || head_turn.exact_edges.iter().any(|&(_, p)| p == cand)
         || rsb_antecedent(ix, head) == Some(cand)
     {
         return true;
     }
     let cand_turn = &ix.turns[cand];
-    if cand_turn.policy_backlinks.contains(&head)
-        || cand_turn.supersedes_turns.contains(&head)
+    if cand_turn.supersedes_turns.contains(&head)
         || cand_turn.exact_edges.iter().any(|&(_, p)| p == head)
         || rsb_antecedent(ix, cand) == Some(head)
     {
         return true;
     }
-    cand_turn.is_standing_policy
-        && episode_root(ix, ix.turns[head].session) == episode_root(ix, cand_turn.session)
+    cand > head
+        && cand_turn.is_standing_policy
+        && episode_root(ix, head_turn.session) == episode_root(ix, cand_turn.session)
 }
 
 enum GroupFamily {
@@ -6774,12 +6778,13 @@ fn classify_family(mask: &[bool]) -> GroupFamily {
 ///
 /// Two families, tested separately. The edge family is every standing rule or
 /// preference below the window that the frozen head points at through
-/// `policy_backlinks`, `supersedes_turns`, `exact_edges`, or `rsb_antecedent`.
-/// The token family is every standing rule or preference below the window that
-/// shares an exact identical token with the query (capitalized name, technical
-/// handle, or digit run). Hwang's (1, n) search runs on each family alone. An
-/// impure family identifies nobody and does not veto the other family. Two
-/// pure families that name different turns are left unseated.
+/// `supersedes_turns`, `exact_edges`, or `rsb_antecedent`, plus a standing
+/// policy later in the head's episode. The token family is every standing
+/// rule or preference below the window that shares an exact identical token
+/// with the query (capitalized name, technical handle, or digit run). Hwang's
+/// (1, n) search runs on each family alone. An impure family identifies nobody
+/// and does not veto the other family. Two pure families that name different
+/// turns are left unseated.
 ///
 /// Session and time are not tested again here. SalienceJoin already wrote
 /// `policy_backlinks` from the session id and the episode key, and counting
@@ -8725,10 +8730,10 @@ mod recall_cue_tests {
     #[test]
     fn group_testing_seats_a_rule_behind_the_head_and_repeats() {
         let sessions = vec![s("s", vec![
-            t("rule", "user", "Always include Atlas in the weekly note."),
             t("fact", "user", "The migration checklist covers backups and rollback."),
             t("reply", "assistant", "The migration checklist covers backups and rollback today."),
             t("other", "user", "Packing cubes fit in the hallway closet."),
+            t("rule", "user", "Always include Atlas in the weekly note."),
         ])];
         let ix = ix_of(&sessions);
         let rule = idx(&ix, "rule");
@@ -8736,7 +8741,8 @@ mod recall_cue_tests {
         let reply = idx(&ix, "reply");
         let other = idx(&ix, "other");
         assert!(ix.turns[rule].is_standing_policy);
-        assert!(ix.turns[fact].policy_backlinks.contains(&rule));
+        assert!(rule > fact);
+        assert!(!ix.turns[fact].policy_backlinks.contains(&rule));
         let run = || {
             let mut list = vec![fact, reply, other];
             let gt = group_testing_rule_trigger(&ix, "What does the migration checklist cover?", &mut list, 3);
@@ -8757,10 +8763,10 @@ mod recall_cue_tests {
     #[test]
     fn group_testing_leaves_the_window_alone_when_two_rules_trigger() {
         let sessions = vec![s("s", vec![
-            t("rule_a", "user", "Always include Atlas in the weekly note."),
-            t("rule_b", "user", "Always include Nova in the weekly note."),
             t("fact", "user", "The migration checklist covers backups and rollback."),
             t("other", "user", "Packing cubes fit in the hallway closet."),
+            t("rule_a", "user", "Always include Atlas in the weekly note."),
+            t("rule_b", "user", "Always include Nova in the weekly note."),
         ])];
         let ix = ix_of(&sessions);
         let fact = idx(&ix, "fact");
@@ -8800,16 +8806,17 @@ mod recall_cue_tests {
     #[test]
     fn rank_seats_the_rule_behind_a_full_window_and_keeps_the_head() {
         let lexical = "The migration checklist covers backups and rollback.";
-        let sessions = vec![s(
-            "s",
-            vec![
-                t("rule", "user", "Always include Atlas in the weekly note."),
+        let sessions = vec![
+            s("conv1_b0_s0", vec![
                 t("a", "user", lexical),
                 t("b", "assistant", "The migration checklist covers backups and rollback today."),
                 t("c", "user", "The migration checklist covers backups and rollback tomorrow."),
                 t("d", "user", "The migration checklist covers backups and rollback next week."),
-            ],
-        )];
+            ]),
+            s("conv1_b0_s1", vec![
+                t("rule", "user", "Always include Atlas in the weekly note."),
+            ]),
+        ];
         let mk = || RankRequest {
             sessions: sessions.clone(),
             queries: vec![Query {
@@ -8837,12 +8844,12 @@ mod recall_cue_tests {
     fn group_testing_uses_the_head_episode_when_another_episode_also_has_a_rule() {
         let sessions = vec![
             s("ep_a", vec![
-                t("rule_a", "user", "Always include Atlas in the weekly note."),
                 t("fact_a", "user", "The migration checklist covers backups and rollback."),
+                t("rule_a", "user", "Always include Atlas in the weekly note."),
             ]),
             s("ep_b", vec![
-                t("rule_b", "user", "Always include Nova in the weekly note."),
                 t("fact_b", "user", "The migration checklist covers backups and rollback too."),
+                t("rule_b", "user", "Always include Nova in the weekly note."),
             ]),
         ];
         let ix = ix_of(&sessions);
@@ -8859,11 +8866,11 @@ mod recall_cue_tests {
     #[test]
     fn group_testing_does_not_let_an_impure_token_family_veto_the_head_rule() {
         let sessions = vec![s("s", vec![
-            t("rule", "user", "Always include Atlas in the weekly note."),
             t("pref_a", "user", "I love the paintings of Monet above everything else."),
             t("pref_b", "user", "I prefer the sketches of Monet to the late oils."),
             t("fact", "user", "The migration checklist covers backups and rollback."),
             t("other", "user", "Packing cubes fit in the hallway closet."),
+            t("rule", "user", "Always include Atlas in the weekly note."),
         ])];
         let ix = ix_of(&sessions);
         let fact = idx(&ix, "fact");

@@ -16,12 +16,13 @@
 //! did. Two pure families that name different turns are a (2, n) population,
 //! and nothing is seated.
 //!
-//! The episode member is the forward direction SalienceJoin does not write.
-//! `policy_backlinks` point from a later turn at an earlier policy. On BEAM
-//! the standing instruction is the last sub of the batch and the retrieved
-//! head is an earlier sub of that same batch, so the backward edge is absent.
-//! The episode key is the stored session id (`_s` digits) or the stored date.
-//! It is one Boolean with the other edge kinds, not a second vote.
+//! The episode member is a standing policy that comes later than the head.
+//! `policy_backlinks` point from a later turn at an earlier policy. Seating
+//! that earlier policy fired 86 times on the v2 card and moved BEAM turn
+//! Any@5 from 59.15 to 58.87. The probed instruction sits in a later sub than
+//! the retrieved head. The episode key is the stored session id (`_s` digits)
+//! or the stored date. A later policy is one Boolean with the other edge
+//! kinds, not a second vote.
 
 /// Defective count for Hwang's generalized binary splitting.
 ///
