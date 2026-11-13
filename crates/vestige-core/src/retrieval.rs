@@ -8538,6 +8538,30 @@ mod recall_cue_tests {
     }
 
     #[test]
+    fn steiner_bridge_ignores_a_same_session_mate_as_a_touch() {
+        let mut ix = ix_of(&[
+            s("s0", vec![
+                t("head", "user", "The battery died after the show."),
+                t("mate", "user", "A spare charger is in the drawer."),
+            ]),
+            s("s1", vec![t("other", "user", "Leave the spare next to the battery.")]),
+            s("s2", vec![t("bridge", "user", "The garden needs water tomorrow.")]),
+        ]);
+        let head = idx(&ix, "head");
+        let mate = idx(&ix, "mate");
+        let other = idx(&ix, "other");
+        let bridge = idx(&ix, "bridge");
+        ix.turns[mate].exact_edges.push((2, other));
+        ix.turns[bridge].exact_edges.push((2, head));
+        ix.turns[bridge].exact_edges.push((2, other));
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![head, other];
+        assert!(steiner_bridge::apply(&ix, &mut list, 3, &scene));
+        assert_eq!(list[0], head);
+        assert_eq!(list[1], bridge);
+    }
+
+    #[test]
     fn steiner_bridge_fires_inside_rank_and_keeps_slot_zero() {
         let mut bridge = t("bridge", "user", "A sprain was noted in the margin.");
         bridge.links = vec![

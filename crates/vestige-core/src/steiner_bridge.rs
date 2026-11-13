@@ -248,7 +248,10 @@ fn bridge_turns(ix: &super::Index, window: &[usize], t_scene: &[f32]) -> Vec<(us
         }
         let mut touch: Vec<usize> = Vec::new();
         for (i, &term) in terminals.iter().enumerate() {
-            if adjacent(ix, &stored, nb, term) {
+            // Session and time link terminals to each other. They do not
+            // make a co-session turn a bridge. A touch is a stored edge
+            // or an exact shared token.
+            if signal_adjacent(ix, &stored, nb, term) {
                 touch.push(i);
             }
         }
@@ -452,6 +455,16 @@ fn terminal_links(ix: &super::Index, terminals: &[usize], stored: &[Vec<usize>])
         }
     }
     link
+}
+
+fn signal_adjacent(ix: &super::Index, stored: &[Vec<usize>], a: usize, b: usize) -> bool {
+    if a == b {
+        return false;
+    }
+    if share(&ix.bridge_tokens[a], &ix.bridge_tokens[b]) {
+        return true;
+    }
+    stored.get(a).is_some_and(|row| row.binary_search(&b).is_ok())
 }
 
 fn adjacent(ix: &super::Index, stored: &[Vec<usize>], a: usize, b: usize) -> bool {
