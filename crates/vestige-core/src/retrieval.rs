@@ -6946,12 +6946,11 @@ fn rank1_gatekeeper_ballots(
 
 /// Slot 0 is the RSB head and is not a candidate. The seated tail is ordered
 /// by the gatekeeper without the island vote, the same order PR 715 returns.
-/// A deep turn passes a seated turn only when the five-ballot margin is
-/// strictly positive. Qualifiers beat the bottom of that tail, are ordered
-/// by Kemeny among themselves, and advance only past turns they beat.
-/// Truncation evicts from the bottom. Otherwise the tail stays the baseline
-/// order: the island vote does not reshuffle the window. Returns whether a
-/// deep turn took a seat.
+/// A deep turn takes a seat only when it beats every seated tail turn by a
+/// strict pairwise majority on the five ballots, island included. Qualifiers
+/// are ordered by Kemeny among themselves and evict from the bottom of that
+/// tail. Otherwise the tail stays the baseline order: the island vote does
+/// not reshuffle the window. Returns whether a deep turn took a seat.
 fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) -> bool {
     if list.len() < 2 {
         return false;
@@ -6998,13 +6997,10 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
         );
         votes.margin() > 0
     };
-    let at = |ti: usize| pool.iter().position(|&p| p == ti).unwrap_or(0);
-    let beats_turn = |a: usize, b: usize| beats(at(a), at(b));
-    let bottom = *baseline.last().unwrap();
     let deep_start = tail.len();
     let mut qualifiers: Vec<usize> = Vec::new();
     for a in deep_start..pool.len() {
-        if beats_turn(pool[a], bottom) {
+        if (0..deep_start).all(|b| beats(a, b)) {
             qualifiers.push(pool[a]);
         }
     }
@@ -7012,25 +7008,14 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
         write(list, &baseline);
         return false;
     }
-    let q_same: Vec<bool> = qualifiers.iter().map(|&ti| same[at(ti)]).collect();
+    let q_same: Vec<bool> = qualifiers
+        .iter()
+        .map(|ti| pool.iter().position(|p| p == ti).map(|i| same[i]).unwrap_or(false))
+        .collect();
     rank1_gatekeeper_ballots(ix, query, &mut qualifiers, t_scene, &q_same);
-    // A qualifier may lead a suffix only when it beats every turn in it.
-    // Beating the turn at the cursor is not enough: the later turns would
-    // sit below it after the insert.
-    let beats_suffix = |q: usize, from: usize| (from..baseline.len()).all(|k| beats_turn(q, baseline[k]));
-    let mut i = 0usize;
-    let mut j = 0usize;
-    let mut final_tail = Vec::with_capacity(tail.len());
-    while final_tail.len() < tail.len() && (i < qualifiers.len() || j < baseline.len()) {
-        let take_qualifier = i < qualifiers.len() && (j == baseline.len() || beats_suffix(qualifiers[i], j));
-        if take_qualifier {
-            final_tail.push(qualifiers[i]);
-            i += 1;
-        } else {
-            final_tail.push(baseline[j]);
-            j += 1;
-        }
-    }
+    let mut final_tail = qualifiers;
+    final_tail.extend(baseline.iter().copied());
+    final_tail.truncate(tail.len());
     let fired = final_tail != baseline;
     if fired {
         crate::mincut_guard::record_fire();
@@ -9027,7 +9012,7 @@ mod recall_cue_tests {
     }
 
     #[test]
-    fn a_deep_turn_passes_only_the_suffix_it_beats() {
+    fn a_deep_turn_that_loses_one_pair_does_not_reorder_the_window() {
         let sessions = vec![
             s("a", vec![
                 t("head", "user", "I left the spare key with Sam."),
@@ -9052,14 +9037,9 @@ mod recall_cue_tests {
         scene[deep] = 4.0;
         let mut list = vec![head, off, near];
         let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
-        assert!(fired);
-        assert_eq!(list, vec![head, off, deep], "the deep turn takes only the suffix it strictly beats");
+        assert!(!fired);
+        assert_eq!(list, vec![head, off, near], "island membership does not reshuffle the seated tail");
         assert_eq!(list[0], head);
-        scene[deep] = 0.0;
-        let mut blocked = vec![head, off, near];
-        let blocked_fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut blocked, &scene);
-        assert!(!blocked_fired);
-        assert_eq!(blocked, vec![head, off, near], "island membership does not reshuffle the seated tail");
     }
 
     #[test]
@@ -9098,35 +9078,6 @@ mod recall_cue_tests {
         let mut huge = vec![head, s0, s1, s2];
         rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut huge, &scene);
         assert_eq!(huge[0], head, "slot 0 stays the RSB head");
-    }
-
-    #[test]
-    fn a_deep_turn_does_not_pass_a_later_turn_it_loses() {
-        let sessions = vec![
-            s("a", vec![t("head", "user", "I left the spare key with Sam.")]),
-            s("b", vec![t("first", "user", "The bakery sold out of rye.")]),
-            s("c", vec![t("mid", "user", "The forecast called for rain tomorrow.")]),
-            s("d", vec![t("weak", "user", "Traffic was slow on the bridge.")]),
-            s("e", vec![t("deep", "user", "The spare key was left with Sam on the hook.")]),
-        ];
-        let mut ix = ix_of(&sessions);
-        let head = idx(&ix, "head");
-        let first = idx(&ix, "first");
-        let mid = idx(&ix, "mid");
-        let weak = idx(&ix, "weak");
-        let deep = idx(&ix, "deep");
-        ix.turns[first].stability = 10.0;
-        let mut scene = vec![0.0f32; ix.turns.len()];
-        scene[head] = 9.0;
-        scene[first] = 1.0;
-        scene[mid] = 8.0;
-        scene[weak] = 2.0;
-        scene[deep] = 3.0;
-        let mut list = vec![head, first, mid, weak];
-        let fired = rank1_gatekeeper_keep_rsb_head(&ix, "Tell me about the spare key.", &mut list, &scene);
-        assert!(fired);
-        assert_eq!(list[0], head);
-        assert_eq!(list, vec![head, first, mid, deep], "a win against the front turn does not jump the later turn it loses");
     }
 
     #[test]
