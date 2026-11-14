@@ -1847,6 +1847,7 @@ struct TurnIx {
     is_short_reply: bool,
     is_backchannel: bool,
     anaphoric: bool,
+    #[allow(dead_code)]
     pref_marker: bool,
     is_personal_constraint: bool,
     is_user_schema: bool,
@@ -4539,7 +4540,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 for &t in members {
                     let tr = &ix.turns[t];
                     if tr.field == 0 {
-                        if tr.pref_marker {
+                        if is_structural_personal_turn(ix, t) {
                             best_pref = best_pref.max(p.preference_boost);
                         } else if tr.is_user_schema
                             && tr.schema_domains.iter().any(|d| plan.focal_domains.contains(d))
@@ -4551,7 +4552,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     }
                 }
                 sc *= best_pref;
-            } else if persona_infer_on && members.iter().any(|&t| ix.turns[t].pref_marker || ix.turns[t].is_user_schema) {
+            } else if persona_infer_on && members.iter().any(|&t| is_structural_personal_turn(ix, t) || ix.turns[t].is_user_schema) {
                 sc *= 1.38;
             }
             if members.iter().any(|&t| ix.turns[t].is_standing_policy) {
@@ -4575,7 +4576,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let domain_hit = tr.schema_domains.iter().any(|d| plan.focal_domains.contains(d));
                 let focal_hit = tr.content.iter().any(|id| plan.focal_ids.contains(id))
                     || tr.feats.iter().any(|f| plan.focal_ids.contains(&f.id));
-                if tr.pref_marker && (focal_hit || domain_hit) {
+                if is_structural_personal_turn(ix, ti) && (focal_hit || domain_hit) {
                     best = best.max(p.preference_boost);
                 } else if tr.is_user_schema && domain_hit {
                     best = best.max(1.45);
@@ -4623,6 +4624,32 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let mut t_turn_raw = vec![0.0f32; ix.turns.len()];
     let mut t_mask = vec![0u64; nt];
     let mut t_exact_mask = vec![0u64; nt];
+
+    // Q2a: Contiguous query bigram bonus (exact ordered query content-group pairs in t.seq)
+    let mut g_idf_own = vec![0.0f32; plan.groups.len()];
+    for qt in &plan.terms {
+        if let Some(g) = qt.group {
+            if let Some(&df) = ix.t_own_stats.df.get(&qt.id) {
+                let df = df as f32;
+                let idf = ((ix.t_own_stats.n - df + 0.5) / (df + 0.5) + 1.0)
+                    .ln()
+                    .max(0.0)
+                    .powf(p.idf_power);
+                g_idf_own[g] = g_idf_own[g].max(idf * qt.weight);
+            }
+        }
+    }
+    let q_groups: Vec<usize> = raw_tokens(&q.text)
+        .into_iter()
+        .filter(|w| is_content(w))
+        .filter_map(|w| ix.vocab.get(&w).and_then(|id| plan.group_of.get(&id).copied()))
+        .collect();
+    let mut q_bigrams: HashSet<(usize, usize)> = HashSet::new();
+    for pair in q_groups.windows(2) {
+        if pair[0] != pair[1] {
+            q_bigrams.insert((pair[0], pair[1]));
+        }
+    }
     for ti in 0..nt {
         let t = &ix.turns[ti];
         let (mut sc_own, _, em_own) = bm25f(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, p, &fl);
@@ -4650,7 +4677,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 sc *= 1.45;
                 sc_own *= 1.45;
             }
-        } else if persona_infer_on && (t.pref_marker || t.is_user_schema) {
+        } else if persona_infer_on && (is_structural_personal_turn(ix, ti) || t.is_user_schema) {
             sc *= 1.40;
             sc_own *= 1.40;
         }
@@ -4666,6 +4693,26 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             t_turn_raw[ti] = sc.max(sc_own);
         } else {
             t_turn_raw[ti] = sc_own + 0.18 * (sc - sc_own).max(0.0);
+        }
+        if !q_bigrams.is_empty() && t.seq.len() >= 2 {
+            let mut bigram_bonus = 0.0f32;
+            let mut matched_bi: HashSet<(usize, usize)> = HashSet::new();
+            for win in t.seq.windows(2) {
+                let (ea, sa) = win[0];
+                let (eb, sb) = win[1];
+                if let (Some(&ga), Some(&gb)) = (
+                    plan.group_of.get(&ea).or_else(|| plan.group_of.get(&sa)),
+                    plan.group_of.get(&eb).or_else(|| plan.group_of.get(&sb)),
+                ) {
+                    if q_bigrams.contains(&(ga, gb)) && matched_bi.insert((ga, gb)) {
+                        bigram_bonus += 0.28 * fl.w[t.field.min(2)] * (g_idf_own[ga] + g_idf_own[gb]);
+                    }
+                }
+            }
+            if bigram_bonus > 0.0 {
+                t_own[ti] += bigram_bonus;
+                t_turn_raw[ti] += bigram_bonus;
+            }
         }
         t_mask[ti] = m;
         t_exact_mask[ti] = em_own;
@@ -5653,6 +5700,61 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             .collect()
     };
 
+    // Q4: Multi-session turn quota guarantee inside top-5 so Session #1 redundant
+    // turns cannot crowd out strong Sessions #2..#5 before exact-edge/RSB stages.
+    if !it.is_event_sequence
+        && !pref_on
+        && !it.task_under_rules
+        && final_turn_indices.len() >= 5
+        && smax > 0.0
+    {
+        let sess_limit = final_session_indices.len().min(5);
+        for &si in &final_session_indices[1..sess_limit] {
+            if s_score[si] + bridge_boost[si] < 0.45 * smax {
+                continue;
+            }
+            if final_turn_indices[..5].iter().any(|&t| ix.turns[t].session == si) {
+                continue;
+            }
+            let Some(best_ti) = ix.session_turns[si]
+                .iter()
+                .copied()
+                .filter(|&t| t_scene[t] > 0.0)
+                .max_by(|&a, &b| {
+                    t_scene[a]
+                        .partial_cmp(&t_scene[b])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(b.cmp(&a))
+                })
+            else {
+                continue;
+            };
+            let victim_slot = (1..5).rev().find(|&slot| {
+                let vti = final_turn_indices[slot];
+                if t_policy_floored[vti] || t_pref_floored[vti] {
+                    return false;
+                }
+                let vs = ix.turns[vti].session;
+                let cnt = final_turn_indices[..5]
+                    .iter()
+                    .filter(|&&t| ix.turns[t].session == vs)
+                    .count();
+                cnt >= 2 && t_scene[best_ti] >= 0.25 * t_scene[vti]
+            });
+            if let Some(slot) = victim_slot {
+                if let Some(existing) = final_turn_indices.iter().position(|&t| t == best_ti) {
+                    if existing >= 5 {
+                        final_turn_indices.remove(existing);
+                        final_turn_indices.insert(slot, best_ti);
+                    }
+                } else {
+                    final_turn_indices.insert(slot, best_ti);
+                    final_turn_indices.truncate(k);
+                }
+            }
+        }
+    }
+
     // Exact-token selection is finished. A recorded backward reply or exact edge
     // promotes its earlier target to the rank position earned by `credit`, including
     // when `target` was previously sitting in the tail (`5..k`) at a lower score.
@@ -5802,7 +5904,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                             }
                         } else {
                             final_turn_indices[0] = prev;
-                            final_turn_indices.insert(5.min(final_turn_indices.len()), top);
+                            if !it.is_event_sequence || final_turn_indices.len() >= 5 {
+                                final_turn_indices.insert(5.min(final_turn_indices.len()), top);
+                            }
                         }
                     }
                 }
@@ -5899,6 +6003,15 @@ fn covers_cues(sup: &[u32], sub: &[u32]) -> bool {
 /// Position of turn `ti` inside its own session.
 fn turn_pos(ix: &Index, ti: usize) -> Option<usize> {
     ix.session_turns[ix.turns[ti].session].iter().position(|&m| m == ti)
+}
+
+/// Structural user-preference / personal-constraint turn check (no PREF_MARKERS dictionary list).
+fn is_structural_personal_turn(ix: &Index, ti: usize) -> bool {
+    let tr = &ix.turns[ti];
+    tr.field == 0
+        && (tr.is_standing_policy
+            || tr.is_personal_constraint
+            || (tr.speaker == "user" && turn_pos(ix, ti).map_or(false, |pos| pos <= 4)))
 }
 
 /// BoundaryPrimacy (event-boundary primacy; Zheng 2022, Ezzyat & Davachi 2011). If rank 1 is not
