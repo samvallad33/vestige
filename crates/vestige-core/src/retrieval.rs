@@ -323,40 +323,11 @@ const HARD_CONSTRAINT_MARKERS: &[&str] = &[
     "never drink", "stay away from", "steer clear of", "leave out", "keep out",
 ];
 
-const PREF_QUERY_CUES: &[&str] = &[
-    "what kind of", "what type of", "what sort of", "recommend", "suggest", "suggestion",
-    "prefer", "preference", "favorite", "favourite", "would i like", "would i enjoy",
-    "should i get", "should i try", "should i buy", "should i choose", "should i pick",
-    "should i use", "should i watch", "should i read", "should i cook", "should i make",
-    " gift ", " gifts ", "present for", "suitable for me", "suited to", "tailored to",
-    "how do i like", "any ideas", "any tips", "ideas for", "tips for", "advice on",
-    "can you suggest", "what should i", "something i", "i might like", "i would like",
-    "what would be a good", "what are some good", "help me pick", "help me find",
-    "go-to", "best for me", "fit my", "match my", "based on my",
-    // Personal planning, not a favorite-word lookup.
-    "how should i", "help me plan", "walk me through", "help me decide", "help me choose",
-    "help me figure", "what should i do",
-];
-
 const CURRENT_STATE_CUES: &[&str] = &[
     "currently", "current ", "right now", " now ", "latest", "most recent",
     "most recently", "still ", "anymore", "any more", "end up", "ended up", "these days",
     "at the moment", "where is my", "what is my", "who is my", "where do i", "what do i",
     "do i still", "did i end", "nowadays", " updated ", " new ",
-];
-
-const ASSISTANT_ATTRIBUTION_CUES: &[&str] = &[
-    "you recommended", "you suggested", "you mentioned", "you told me", "you gave",
-    "did you", "your recommendation", "your suggestion", "you wrote", "you said",
-    "you provided", "you listed", "you recommend", "you shared", "you came up",
-    "you helped", "you explained", "you described", "you named", "you created",
-    "remind me", "earlier you",
-    "you were telling", "you advised", "you calculated", "you found", "you picked",
-];
-
-const COLLECTIVE_CHAT_CUES: &[&str] = &[
-    "our previous conversation", "our previous chat", "our conversation",
-    "we discussed", "we talked", "previous chat", "last time we",
 ];
 
 const USER_INITIATIVE_CUES: &[&str] = &[
@@ -367,11 +338,6 @@ const USER_INITIATIVE_CUES: &[&str] = &[
 
 const SUMMARY_REQUEST_CUES: &[&str] = &[
     "summary of", "summarize", "everything we",
-];
-
-const TIMELINE_CUES: &[&str] = &[
-    "order in which", "chronological", "timeline of", "first to last",
-    "earliest to latest", "i brought up",
 ];
 
 const USER_ATTRIBUTION_CUES: &[&str] = &[
@@ -385,11 +351,6 @@ const MULTI_HOP_CUES: &[&str] = &[
     " which of", " between ", " total", " combined", " altogether", " how many", " all the ",
     " each ", " how much", " across ", " compare", " versus", " vs ", " two different",
     " three different", " how many different", " in total",
-];
-
-const INFERENCE_CUES: &[&str] = &[
-    "likely", "would ", "might ", "probably", "could ", "considered", "personality",
-    "traits", "what might", "would be", "be interested", "is it possible", "kind of person",
 ];
 
 const WHEN_INTERROGATIVE_CUES: &[&str] = &[
@@ -2967,11 +2928,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         "i switched to ", "i stick to ", "i stick with ", "fan of ",
         "i'm into ", "im into ", "i love ", "i prefer ", "i enjoy ", "my favorite", "my favourite",
     ];
-    const STATE_REVISION_CUES: &[&str] = &[
-        "actually", "switched to", "moved to", "relocated to", "changed to", "now use",
-        "now live", "no longer", "instead of", "used to ", "anymore", "upgraded to", "replaced",
-    ];
-
     let nicks = SpeakerNickIndex::build(sessions);
     let mut vocab = Vocab::default();
     let mut turns: Vec<TurnIx> = Vec::new();
@@ -3371,8 +3327,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_entities.push(s_ents);
         session_content.push(s_cont);
     }
-    let _ = STATE_REVISION_CUES;
-
     // Mark DAMSL adjacency pairs before bag construction: question/answer pairs AND
     // short value/commitment replies to preceding statements ("Done.", "Last Tuesday.", "Me too!").
     for members in &session_turns {
@@ -3492,9 +3446,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             }
             let lat_prose = &turn_prose_cache[later];
             let prev_prose = &turn_prose_cache[prev];
-            let lat_low = lat_prose.to_lowercase();
-            let has_rev_cue = turns[later].is_personal_constraint
-                || STATE_REVISION_CUES.iter().any(|c| lat_low.contains(c));
+            let has_rev_cue = turns[later].is_personal_constraint;
             let contradicts = crate::advanced::contradiction::appears_contradictory(
                 prev_prose,
                 lat_prose,
@@ -3927,11 +3879,10 @@ fn interrogative_when(padded: &str) -> bool {
 pub fn classify(text: &str) -> QueryIntent {
     let lower = word_padded(text);
     let content_groups = raw_tokens(text).into_iter().filter(|w| is_content(w)).collect::<HashSet<_>>().len();
-    let user_initiative = has_any(&lower, USER_INITIATIVE_CUES);
-    let retrospective_user = user_initiative || has_any(&lower, TIMELINE_CUES);
-    let direct_assistant = has_any(&lower, ASSISTANT_ATTRIBUTION_CUES);
-    let collective_chat = has_any(&lower, COLLECTIVE_CHAT_CUES);
-    let assistant_attribution = direct_assistant || (collective_chat && !user_initiative);
+    // Preference, assistant-attribution, and inference are not inferred from
+    // question phrasing. Those cue lists rebuilt a benchmark question type.
+    // `plan_query` can still set `preference` from a constraint term that the
+    // haystack itself attested.
     let when_q = interrogative_when(&lower);
     let sniper_when = when_q || has_any(&lower, &[
         "what date", "what time", "what year", "what month", "what day",
@@ -3952,12 +3903,12 @@ pub fn classify(text: &str) -> QueryIntent {
         "chronological", "order the", "order these", "timeline of", "i brought up",
     ]);
     QueryIntent {
-        preference: has_any(&lower, PREF_QUERY_CUES) && !retrospective_user,
+        preference: false,
         current_state: has_any(&lower, CURRENT_STATE_CUES),
-        assistant_attribution,
-        user_attribution: !assistant_attribution && has_any(&lower, USER_ATTRIBUTION_CUES),
+        assistant_attribution: false,
+        user_attribution: has_any(&lower, USER_ATTRIBUTION_CUES),
         multi_hop: content_groups >= 3 && has_any(&lower, MULTI_HOP_CUES),
-        inference: has_any(&lower, INFERENCE_CUES),
+        inference: false,
         temporal: when_q || has_any(&lower, TEMPORAL_REST_CUES),
         sniper_when,
         sniper_how_many,
@@ -4343,11 +4294,10 @@ fn named_partner(a: &str, b: &str) -> bool {
 fn rank_standing_rules(
     ix: &Index,
     plan: &QueryPlan,
-    episodic_user_quote: bool,
     t_mask: &[u64],
     top_k: usize,
 ) -> Vec<RankedItem> {
-    if ix.standing_rules.is_empty() || episodic_user_quote {
+    if ix.standing_rules.is_empty() {
         return Vec::new();
     }
     let it = &plan.intent;
@@ -4472,27 +4422,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let it = &plan.intent;
     let pref_on = p.enable_preference && it.preference;
     let q_padded = word_padded(&q.text);
-    let persona_infer_on = it.inference
-        && !pref_on
-        && !it.assistant_attribution
-        && !it.temporal
-        && !it.sniper_how_many
-        && has_any(
-            &q_padded,
-            &["likely", "would ", "might ", "probably", "considered", "personality", "traits", "what might", "would be", "be interested", "is it possible", "kind of person"],
-        );
-    let episodic_user_quote = it.user_attribution
-        && !pref_on
-        && !it.task_under_rules
-        && !it.sniper_how_many
-        && has_any(
-            &q_padded,
-            &[
-                "did i ", "what did i ", "where did i ", "when did i ", "who did i ",
-                "i told you", "i brought up", "did i mention", "my instruction",
-                "what was my ", "where is my ", "what is my ",
-            ],
-        );
     let summary_hold = has_any(&q_padded, SUMMARY_REQUEST_CUES)
         && has_any(&q_padded, TASK_UNDER_RULES_CUES)
         && !has_any(&q_padded, USER_INITIATIVE_CUES);
@@ -4552,8 +4481,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     }
                 }
                 sc *= best_pref;
-            } else if persona_infer_on && members.iter().any(|&t| is_structural_personal_turn(ix, t) || ix.turns[t].is_user_schema) {
-                sc *= 1.38;
             }
             if members.iter().any(|&t| ix.turns[t].is_standing_policy) {
                 sc *= 1.8;
@@ -4677,9 +4604,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 sc *= 1.45;
                 sc_own *= 1.45;
             }
-        } else if persona_infer_on && (is_structural_personal_turn(ix, ti) || t.is_user_schema) {
-            sc *= 1.40;
-            sc_own *= 1.40;
         }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
@@ -4873,7 +4797,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         }
                     } else if has_named_dialogue
                         && has_declarative_peer
-                        && !episodic_user_quote
                         && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
                     {
                         t_scene[ti] *= 0.62;
@@ -5086,7 +5009,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // Compound/prepositional task wording (" and ", "first ", "before ") must not
     // drop the standing-policy floor. Only count-snipers and event sequences do.
     let policy_blocked = it.sniper_how_many || it.is_event_sequence;
-    let standing_rules = rank_standing_rules(ix, &plan, episodic_user_quote, &t_mask, k);
+    let standing_rules = rank_standing_rules(ix, &plan, &t_mask, k);
     // Winner floor stays inside task_under_rules, including multi-hop task rules.
     // v1 moved this seat outside that block and excluded multi-hop. Temporal queries
     // then received a global policy seat and displaced gold. v2 does not do that.
@@ -7252,11 +7175,13 @@ mod tests {
     }
 
     #[test]
-    fn assistant_attribution_routes_to_assistant_field() {
+    fn assistant_and_preference_phrasing_does_not_set_intent() {
         let i = classify("Can you remind me what hotel you recommended in Lisbon?");
-        assert!(i.assistant_attribution && !i.user_attribution);
+        assert!(!i.assistant_attribution && !i.preference && !i.inference);
+        // " me " is a closed-class pronoun, so user attribution still fires.
+        assert!(i.user_attribution);
         let pref = classify("Can you suggest some activities I might like this weekend?");
-        assert!(pref.preference);
+        assert!(!pref.preference && !pref.inference && !pref.assistant_attribution);
     }
 
     #[test]
@@ -7492,7 +7417,7 @@ mod tests {
             params: Params::default(),
         };
         let ranked = rank(&req);
-        assert!(ranked.results[0].intent.preference);
+        assert!(!ranked.results[0].intent.preference);
         assert_eq!(ranked.results[0].sessions[0].id, "exclusive");
     }
 
@@ -7632,7 +7557,7 @@ mod tests {
     #[test]
     fn planning_question_binds_an_implicit_constraint() {
         let intent = classify("How should I plan dinner for my guests?");
-        assert!(intent.preference && intent.task_under_rules);
+        assert!(!intent.preference && intent.task_under_rules);
         let req = RankRequest {
             sessions: vec![
                 Session {
@@ -7845,7 +7770,7 @@ mod tests {
             params: Params::default(),
         };
         let ranked = rank(&req);
-        assert!(ranked.results[0].intent.preference);
+        assert!(!ranked.results[0].intent.preference);
         assert_eq!(ranked.results[0].sessions[0].id, "gold");
     }
 
@@ -8283,11 +8208,11 @@ mod tests {
     }
 
     #[test]
-    fn beam_timeline_routes_to_user_and_ssa_collective_cues_stay_assistant() {
+    fn beam_timeline_routes_to_user_and_collective_phrasing_is_not_assistant() {
         let order = classify("Can you list the order in which I brought up different aspects of developing my personal budget tracker throughout our conversations?");
         assert!(order.is_event_sequence && order.user_attribution && !order.assistant_attribution && !order.task_under_rules, "{order:?}");
         let ssa = classify("I think we discussed work from home jobs for seniors earlier. Can you remind me what was the 7th job in the list you provided?");
-        assert!(ssa.assistant_attribution && !ssa.user_attribution, "{ssa:?}");
+        assert!(!ssa.assistant_attribution && ssa.user_attribution, "{ssa:?}");
     }
 
     #[test]
@@ -8340,7 +8265,7 @@ mod tests {
     }
 
     #[test]
-    fn engineering_choice_beats_progress_narrative_and_assistant_expansion() {
+    fn preference_phrasing_does_not_promote_the_prefer_turn() {
         let req = RankRequest {
             sessions: vec![
                 Session {
@@ -8364,9 +8289,11 @@ mod tests {
             params: Params::default(),
         };
         let ranked = rank(&req);
-        assert!(ranked.results[0].intent.preference);
-        assert_eq!(ranked.results[0].sessions[0].id, "choice");
-        assert_eq!(ranked.results[0].turns[0].session_id, "choice");
+        // "How should I" no longer turns preference on, so the longer narrative
+        // that shares the content words outranks the "I'd prefer" turn.
+        assert!(!ranked.results[0].intent.preference);
+        assert_eq!(ranked.results[0].sessions[0].id, "debug");
+        assert_eq!(ranked.results[0].turns[0].session_id, "debug");
     }
 }
 

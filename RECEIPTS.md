@@ -156,6 +156,61 @@ Kemeny never changes the session funnel. On turns it raises the @5 hit (LME 386 
 
 LME `e47becba`, "What degree did I graduate with?". Gold session `answer_280352e9` is in the session pool (36 sessions scored), in pre-Kemeny@5, in post-Kemeny@5, and at final@1. Gold turns (2) are in the turn pool of 50, in both @5 windows, and at final@1. Returned turns start `answer_280352e9#4`, `#5`, `#3`, `#2`, `d94b721b#8`. Same as both Phase 0 seeds.
 
+## R3 — drop intent cue lists
+
+Commit follows `4774d617`. Symbols in `crates/vestige-core/src/retrieval.rs`:
+
+- deleted `PREF_QUERY_CUES`, `ASSISTANT_ATTRIBUTION_CUES`, `COLLECTIVE_CHAT_CUES`, `INFERENCE_CUES`, `STATE_REVISION_CUES`
+- deleted `TIMELINE_CUES`, whose only caller was the preference suppressor. `is_event_sequence` still carries those phrases
+- `classify` (line 3879): `preference`, `assistant_attribution`, and `inference` are false. `user_attribution` is the closed-class pronoun list only. `plan_query` can still set `preference` from a constraint term the haystack attested
+- `rank_one` (line 4420): removed `persona_infer_on` and `episodic_user_quote` and both 1.38/1.40 branches. Question-echo demotion is no longer skipped for those queries
+- `rank_standing_rules` (line 4294): dropped the episodic-quote early return
+- supersession `has_rev_cue` (line 3449) is `is_personal_constraint` only
+- tests renamed to match: `assistant_and_preference_phrasing_does_not_set_intent`, `beam_timeline_routes_to_user_and_collective_phrasing_is_not_assistant`, `preference_phrasing_does_not_promote_the_prefer_turn`
+
+`cargo test -p vestige-core --lib retrieval`: 88 passed.
+
+Binary sha256 `0612286d6bcadcde3b0b271652f0605668d1b23797465116f77125488c3fc066`.
+
+### Board
+
+| slice | before | after | delta |
+|---|---|---|---|
+| LME session Any@1/5/10 | 428/463/467 | 426/464/466 | -2 / +1 / -1 |
+| LME session All@5 | 420 | 421 | +1 |
+| LME turn Any@1/5/10 | 300/396/417 | 269/396/419 | -31 / 0 / +2 |
+| LoCoMo tune Sess R@1/R@5 | 776/937 (77.83/93.98) | 785/940 (78.74/94.28) | +9 / +3 |
+| LoCoMo tune Exact R@1/R@5/R@10 | 510/754/816 | 512/751/815 | +2 / -3 / -1 |
+| LoCoMo tune Soft R@5 | 809 (81.14) | 812 (81.44) | +3 |
+| BEAM session Any@1/5/10 | 128/247/276 | 127/239/272 | -1 / -8 / -4 |
+| BEAM session All@5 | 143 | 136 | -7 |
+| BEAM turn Any@1/5/10 | 148/222/254 | 141/212/244 | -7 / -10 / -10 |
+
+LME single-session-assistant turn Any@1 went from 39/56 to 5/56. Session Any stayed 56/56/56. The gold session is still found; the assistant answer is no longer pulled to rank 1. LoCoMo tune Multi-Hop session R@1 72 to 75, turn Exact R@1 46 to 48, Exact R@5 77 to 76. Open-Domain session and exact rates did not move; Soft R@5 20 to 21.
+
+This removal stays. Restoring the lists would put the benchmark phrasing back. A later structural pass has to earn the assistant-turn hits without those cues.
+
+### Funnel delta (any-hit, after minus before)
+
+| slice | corpus | pool@50 | pre-Kemeny@5 | post-Kemeny@5 | final@1 |
+|---|---:|---:|---:|---:|---:|
+| LME session | 0 | 0 | +1 | +1 | -2 |
+| LME turn | 0 | 0 | -13 | 0 | -31 |
+| LoCoMo tune session | 0 | 0 | +3 | +3 | +9 |
+| LoCoMo tune turn | 0 | 0 | -3 | -3 | +2 |
+| Multi-Hop turn | 0 | 0 | 0 | -1 | +2 |
+| Open-Domain turn | 0 | 0 | 0 | 0 | 0 |
+| BEAM session | 0 | 0 | -8 | -8 | -1 |
+| BEAM turn | 0 | -5 | -6 | -10 | -7 |
+
+Pool@50 did not move on LME or LoCoMo. The LME turn loss is inside the selected window: post-Kemeny@5 is unchanged at 396, final@1 drops 31.
+
+### One question
+
+LME `6ae235be` (single-session-assistant): "I remember you told me about the refining processes at CITGO's three refineries earlier. Can you remind me what kind of processes are used at the Lake Charles Refinery?"
+
+Before: turn rank 1 is `answer_sharegpt_IUWQYGQ_0#1`, the assistant answer. After: turn rank 1 is `answer_sharegpt_IUWQYGQ_0#0`, the user question that asked for the refineries; the assistant answer sits at rank 2. Session rank 1 is `answer_sharegpt_IUWQYGQ_0` both times.
+
 ### One question
 
 LME `e47becba` (`single-session-user`): "What degree did I graduate with?"
