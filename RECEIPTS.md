@@ -419,3 +419,33 @@ Zero on every slice, including pool@50, pre-Kemeny@5, post-Kemeny@5, and final@1
 LME `c4ea545c` (`knowledge-update`): "Do I go to the gym more frequently than I did previously?"
 
 Gold sessions `answer_d3bf812b_1` and `answer_d3bf812b_2` stay ranks 1 and 2. Turn rank 1 stays `answer_d3bf812b_1#4`, the user turn that states the real gym days (Tuesday, Thursday, Saturday). Turn rank 2 moves from `answer_d3bf812b_1#3` (the assistant categorization that had the wrong days) to `answer_d3bf812b_1#5` (the assistant correction). Session rank 3 moves from `a1f43f8d_2` to `9f9b402a_5`.
+
+## R8 — hardwire carry, stop reading VESTIGE_CARRY_MODE
+
+Parent `2b190e0c`. `crates/vestige-core/src/retrieval.rs`:
+
+- deleted `carry_mode_is_parity` (it read `VESTIGE_CARRY_MODE`)
+- `rank_one` (line 4283) always uses the non-parity mix (line 4472): full carry `sc.max(sc_own)` for an assistant turn, a short reply, or a turn with at most 8 content tokens; otherwise `sc_own + 0.18 * (sc - sc_own).max(0)`
+- `VESTIGE_REPLAY_DUMP` remains. It fills dump fields and does not change ranking. No other `std::env::var` in this file changes a score. `VESTIGE_LABILE_WINDOW_SECS` is in `advanced/reconsolidation.rs`, not the ranker
+
+Every earlier board was run with `VESTIGE_CARRY_MODE` unset, which is the branch now compiled in.
+
+`cargo test -p vestige-core --lib retrieval`: 88 passed.
+
+Binary sha256 `bb278309431ec0e741dbf722f7046c561a72012434c4ce22068c4e93c5fc20ba`.
+
+Input check (`top_k=10`) matches R7. LME turns 10 / 10.04 / 11. Session gold corpus 470, pool@50 470, returned 468. Turn gold corpus 470, pool@50 459, returned 423. LoCoMo tune turns 6 / 10 / 10, turn gold pool@50 938, returned 829. BEAM turns 10 / 10.15 / 11, turn gold pool@50 313, returned 239.
+
+### Board (before is R7)
+
+Every reported cut is unchanged. Same integers as the R7 table: LME session 425/461/468, All@5 418, turn 253/396/423. LoCoMo tune session 772/938, Exact 511/757/829, Soft 811. BEAM session 128/230/262, All@5 133, turn 136/207/239. Open-Domain session 14/30, Exact 8/17/21. Multi-Hop session 71/123, Exact 42/72/93.
+
+### Funnel delta (after minus R7)
+
+Zero on every slice.
+
+### One question
+
+LME `c4ea545c` is byte-identical to R7: gold sessions stay ranks 1 and 2, turn rank 1 stays `answer_d3bf812b_1#4`.
+
+Three BEAM lists differ, and they are the same three hash-order ties R7 already moved (`1#1`, `1#8`, `2#15`). On `1#1`, session ranks 3 and 4 swap `conv1_b1_s23` and `conv1_b1_s24` back to the R6 order. Turns through rank 8 are unchanged on `1#1`. That swap is `HashMap` iteration, which E1 pins. It does not change a scored hit.

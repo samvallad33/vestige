@@ -4280,13 +4280,6 @@ fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &HashSet<u32>, names: &HashSet<S
     t.pre_question_ids.is_empty() || clause_hits_query(&t.question_clause_ids, g, ix, names)
 }
 
-fn carry_mode_is_parity() -> bool {
-    static PARITY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *PARITY.get_or_init(|| {
-        std::env::var("VESTIGE_CARRY_MODE").map(|v| v == "parity").unwrap_or(false)
-    })
-}
-
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
@@ -4476,9 +4469,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // (same field the s5 gate analysis used). This is NOT a UTF-8 char count.
         let content_tokens = t.content.len();
         let keep_full_carry = t.speaker == "assistant" || t.is_short_reply || content_tokens <= 8;
-        if carry_mode_is_parity() {
-            t_turn_raw[ti] = sc_own + 1.0 * (sc - sc_own);
-        } else if keep_full_carry {
+        // Carry is the non-parity mix. VESTIGE_CARRY_MODE is not read.
+        if keep_full_carry {
             t_turn_raw[ti] = sc.max(sc_own);
         } else {
             t_turn_raw[ti] = sc_own + 0.18 * (sc - sc_own).max(0.0);
