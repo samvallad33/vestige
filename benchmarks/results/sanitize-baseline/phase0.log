@@ -1,0 +1,15 @@
+START 18:14:56
+LME done {"session_any_at_1":91.06,"session_any_at_5":98.51,"session_any_at_10":99.36,"session_all_at_5":89.36,"turn_any_at_1":63.83,"turn_any_at_5":84.26,"turn_any_at_10":88.72} in 244.829
+LOCOMO tune {"session_r1":77.83,"session_r5":93.98,"turn_exact_r1":51.15,"turn_exact_r5":75.63,"turn_exact_r10":81.85,"turn_soft_r5":81.14} overall {"session_r1":75.93,"session_r5":93.09,"turn_exact_r1":48.64,"turn_exact_r5":73.81,"turn_exact_r10":80.52,"turn_soft_r5":79.52}
+BEAM {"session_any_at_1":36.06,"session_any_at_5":69.58,"session_any_at_10":77.75,"session_all_at_5":40.28,"turn_any_at_1":41.69,"turn_any_at_5":62.54,"turn_any_at_10":71.55} in 15.255
+SEED1_DONE 18:19:30
+LME done {"session_any_at_1":91.06,"session_any_at_5":98.51,"session_any_at_10":99.36,"session_all_at_5":89.36,"turn_any_at_1":63.83,"turn_any_at_5":84.26,"turn_any_at_10":88.72} in 246.522
+LOCOMO tune {"session_r1":77.83,"session_r5":93.98,"turn_exact_r1":51.15,"turn_exact_r5":75.63,"turn_exact_r10":81.85,"turn_soft_r5":81.14} overall {"session_r1":75.93,"session_r5":93.09,"turn_exact_r1":48.64,"turn_exact_r5":73.81,"turn_exact_r10":80.52,"turn_soft_r5":79.52}
+BEAM {"session_any_at_1":36.06,"session_any_at_5":69.58,"session_any_at_10":77.75,"session_all_at_5":40.28,"turn_any_at_1":41.69,"turn_any_at_5":62.54,"turn_any_at_10":71.55} in 15.142
+SEED2_DONE 18:24:06
+n 2841 2841
+identical 2839 differ 2 by {'beam': 2}
+example beam 1#9
+ s1 ['conv1_b2_s9', 'conv1_b2_s23', 'conv1_b2_s7', 'conv1_b2_s2', 'conv1_b2_s8'] ['148', '122', '146', '182', '145']
+ s2 ['conv1_b2_s9', 'conv1_b2_s23', 'conv1_b2_s7', 'conv1_b2_s2', 'conv1_b2_s8'] ['148', '122', '146', '182', '145']
+ALL_DONE
