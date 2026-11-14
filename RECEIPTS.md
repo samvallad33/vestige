@@ -270,7 +270,7 @@ Gold session `answer_280352e9`. Seed 1 and seed 2 both return it at session rank
 
 ## R5 — delete preference and constraint marker lists
 
-Parent `a2ef5832`. `crates/vestige-core/src/retrieval.rs`:
+Commit `369f63cb8523179b1595a7b1f37f419c5511add2`. `crates/vestige-core/src/retrieval.rs`:
 
 - deleted `PREF_MARKERS`, `HARD_CONSTRAINT_MARKERS`, `USER_SCHEMA_CUES`, `BLIP_STOPLIST`
 - `user_preference_speech_act` (line 2543) is `hedged_like_is_preference || commitment_manner`. Those two helpers were not in the removal list and stay
