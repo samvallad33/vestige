@@ -381,7 +381,7 @@ Turn rank 1 moves from `sharegpt_kjeGJvK_11#0` (an assistant list of coffee smoo
 
 ## R7 — drop the early-position preference boost
 
-Parent `e909c983`. `crates/vestige-core/src/retrieval.rs`:
+Commit `09dc59e9fbf3b7389f3a35420f85c591fe14d073`. `crates/vestige-core/src/retrieval.rs`:
 
 - `is_structural_personal_turn` (line 5823) no longer treats a user turn at `turn_pos <= 4` as structural. Standing policy and `is_personal_constraint` stay
 - the direct `preference_boost` (2.8) multiply on user turns at `turn_pos <= 4` is gone. The schema-domain 1.45 branch (line 4469) stays. `preference_boost` itself stays for standing-policy turns
