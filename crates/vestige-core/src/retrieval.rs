@@ -250,42 +250,37 @@ pub const ENGINE: &str = "stara-total-recall/2 (bm25f+idf^p+coverage+proximity+s
 // LEXICONS (fixed, deterministic, domain-general)
 // =========================================================================
 
+/// NLTK English stopwords, `nltk_data` corpora package `stopwords/english`
+/// (198 entries, the list shipped with NLTK). Apostrophe-split debris that
+/// NLTK lists only because its tokenizer breaks `don't` into `don` + `t`
+/// (`ain`, `aren`, `couldn`, `didn`, `doesn`, `don`, `hadn`, `hasn`, `haven`,
+/// `isn`, `mightn`, `mustn`, `needn`, `shan`, `shouldn`, `wasn`, `weren`,
+/// `won`, `wouldn`, plus the clitic shards `d`, `ll`, `m`, `o`, `re`, `s`,
+/// `t`, `ve`, `y`) is not copied: `raw_tokens` joins `n't` (`don't` → `dont`)
+/// and strips `'s/'ve/'re/'ll/'m/'d` to the stem, which is already here.
+/// The joined `n't` forms below are that tokenizer's image of the published
+/// contractions. No LongMemEval template word is in this list.
 const STOPWORDS: &[&str] = &[
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
-    "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
-    "by", "can", "cant", "could", "couldnt", "did", "didnt", "do", "does", "doesnt", "doing",
-    "dont", "down", "during", "each", "few", "for", "from", "further", "had", "hadnt", "has",
-    "hasnt", "have", "havent", "having", "he", "her", "here", "hers", "herself", "him",
-    "himself", "his", "how", "i", "id", "ill", "im", "if", "in", "into", "is", "isnt", "it",
-    "its", "itself", "ive", "just", "me", "more", "most", "my", "myself", "no", "nor", "not",
-    "now", "of", "off", "on", "once", "only", "or", "other", "our", "ours", "ourselves", "out",
-    "over", "own", "same", "she", "should", "shouldnt", "so", "some", "such", "than", "that",
-    "thats", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they",
-    "theyre", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was",
-    "wasnt", "we", "were", "werent", "what", "when", "where", "which", "while", "who", "whom",
-    "why", "will", "with", "wont", "would", "wouldnt", "you", "your", "youre", "yours",
-    "yourself", "yourselves", "also", "really", "yeah", "yes", "oh", "ok", "okay", "lets",
-    "got", "get", "gets", "getting", "go", "going", "gone", "much", "many",
-    "lot", "lots", "thing", "things", "something", "anything", "everything", "kind", "sort",
-    "well", "even", "still", "ever", "may", "might", "must", "shall", "us", "let",
-    "know", "think", "tell", "told", "say", "said", "remind", "remember",
-    "conversation", "mentioned", "mention", "talked", "talk", "discussed", "chat",
-    "actually", "sure", "great", "thanks", "thank", "hey", "hi", "hello", "wow", "like",
-    "want", "wanted", "need", "needed",
-    "help", "recently", "suggest", "recommend", "useful", "interesting",
-    "arent",
+    "arent", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both",
+    "but", "by", "can", "couldnt", "did", "didnt", "do", "does", "doesnt", "doing", "dont",
+    "down", "during", "each", "few", "for", "from", "further", "had", "hadnt", "has", "hasnt",
+    "have", "havent", "having", "he", "her", "here", "hers", "herself", "him", "himself", "his",
+    "how", "i", "if", "in", "into", "is", "isnt", "it", "its", "itself", "just", "ma", "me",
+    "mightnt", "more", "most", "mustnt", "my", "myself", "neednt", "no", "nor", "not", "now",
+    "of", "off", "on", "once", "only", "or", "other", "our", "ours", "ourselves", "out", "over",
+    "own", "same", "shant", "she", "should", "shouldnt", "so", "some", "such", "than", "that",
+    "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they", "this",
+    "those", "through", "to", "too", "under", "until", "up", "very", "was", "wasnt", "we",
+    "were", "werent", "what", "when", "where", "which", "while", "who", "whom", "why", "will",
+    "with", "wont", "wouldnt", "you", "your", "yours", "yourself", "yourselves",
 ];
 
-/// Query-framing / request-boilerplate tokens that should not crush domain matches via coverage^2
-/// when genuine content tokens exist in the query.
+/// Closed-class time and function words. Open-class request boilerplate
+/// (name, find, tips, summary, count, total, …) is not framing.
 const QUERY_FRAMING_WORDS: &[&str] = &[
-    "name", "find", "total", "number", "amount", "count", "order", "earliest", "latest", "list",
-    "items", "item", "steps", "step", "tips", "tip", "advice", "summary", "summarize",
-    "comprehensive", "overview", "details", "detail", "aspects", "aspect", "different",
-    "distinct", "various", "several", "ago", "days", "day", "weeks", "week", "months", "month",
-    "years", "year", "earlier", "later", "throughout", "across",
-    "new", "good", "use", "used", "using", "make", "made", "went", "try", "tried", "trying",
-    "way", "past", "times",
+    "ago", "across", "day", "days", "earlier", "earliest", "later", "latest", "month", "months",
+    "throughout", "week", "weeks", "year", "years",
 ];
 
 const CURRENT_STATE_CUES: &[&str] = &[
@@ -397,9 +392,10 @@ const SPATIAL_WORDS: &[&str] = &[
     "suburb", "neighborhood", "area", "country", "place",
 ];
 
+/// Closed-class causal connectives. Open-class verbs and nouns (wanted, decided,
+/// reason, purpose, aim) are not causal markers.
 const CAUSAL_WORDS: &[&str] = &[
-    " because ", " since ", " so that ", " due to ", " wanted ", " needed ", " decided ", " helped ",
-    " inspired ", " to help ", " reason ", " in order ", " purpose ", " aim ", " aims ", " aimed ",
+    " because ", " since ", " so that ", " due to ", " in order ",
 ];
 
 fn stopwords() -> &'static HashSet<&'static str> {
@@ -7822,12 +7818,14 @@ mod tests {
                 turns: vec![
                     turn("user", "They claimed victory"),
                     turn("user", "Their aim was victory"),
+                    turn("user", "They won because the plan held"),
                 ],
             }],
             &Params::default(),
         );
         assert!(!ix.turns[0].has_causal, "aim substring inside claimed set has_causal");
-        assert!(ix.turns[1].has_causal, "whole-word aim cue did not fire");
+        assert!(!ix.turns[1].has_causal, "open-class aim is not a causal connective");
+        assert!(ix.turns[2].has_causal, "whole-word because cue did not fire");
     }
 
     #[test]

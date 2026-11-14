@@ -325,3 +325,56 @@ Corpus unchanged. Pool@50 unchanged on every slice. The preference-marker remova
 LME `75832dbd` (`single-session-preference`): "Can you recommend some recent publications or conferences that I might find interesting?"
 
 Gold session `answer_d87a6ef8` (the medical-image-analysis session, user turn 0 `has_answer`). Before, that session is outside the top 5 (`sharegpt_xni9yYO_6`, `sharegpt_E0YL5SX_157`, `ultrachat_382018`, `c7270a1b_1`, `ultrachat_165893`). After, it is session rank 5 and `ultrachat_382018` leaves the top 5. Turn rank 1 stays `sharegpt_xni9yYO_6#0`. Rank-1 did not move on any LME question (13 rank-1 flips total: 12 LoCoMo, 1 BEAM).
+
+## R6 — NLTK stopwords, closed-class framing, closed-class causal cues
+
+Parent `7f037e62`. `crates/vestige-core/src/retrieval.rs`:
+
+- `STOPWORDS` (line 263) is the NLTK English list from `nltk_data` `stopwords/english` (198 entries). Apostrophe-split debris (`don`, `ll`, `re`, …) is not copied, because `raw_tokens` joins `n't` (`don't` → `dont`) and strips `'s/'ve/'re/'ll/'m/'d` to a stem already in the list. The joined forms (`dont`, `wont`, `isnt`, …) are that image. Template words (`conversation`, `mentioned`, `remind`, `recommend`, `suggest`, …) are gone
+- `QUERY_FRAMING_WORDS` (line 281) keeps closed-class time words only: ago, across, day/days, earlier/earliest, later/latest, month/months, throughout, week/weeks, year/years
+- `CAUSAL_WORDS` (line 397) keeps `because`, `since`, `so that`, `due to`, `in order`. `wanted`/`needed`/`decided`/`helped`/`inspired`/`reason`/`purpose`/`aim` are gone
+- `word_boundary_cues_never_misfire_on_substrings` (line 7794) now locks that open-class `aim` does not set `has_causal` and whole-word `because` does
+- `STARTER_STOP` is a different list and was not part of this removal
+
+`cargo test -p vestige-core --lib retrieval`: 88 passed.
+
+Binary sha256 `7ac999402c545704f32bf4059ab9a364ad30e599e789070462e83af03f17fa1e`.
+
+Input check (`top_k=10`). LME turns returned 10 / 10.04 / 11. Session gold in corpus 470, pool@50 470, returned window 468, absent from the window 2. Turn gold in corpus 470, pool@50 459, returned window 423, absent 47. LoCoMo tune turns 6 / 10 / 10. Turn gold in corpus 997 (all-of 996), pool@50 938, returned window 829. BEAM turns 10 / 10.15 / 11. Turn gold in corpus 355, pool@50 313, returned window 239. `stage_turn_pre_kemeny_ids` is the selected window immediately before `rank1_gatekeeper_keep_rsb_head`. `post_matches_returned` is 100% on every slice.
+
+### Board (before is R5)
+
+| slice | before | after | delta |
+|---|---|---|---|
+| LME session Any@1/5/10 | 426/464/467 | 425/461/468 | -1 / -3 / +1 |
+| LME session All@5 | 422 | 418 | -4 |
+| LME turn Any@1/5/10 | 266/398/423 | 253/396/423 | -13 / -2 / 0 |
+| LoCoMo tune Sess R@1/R@5 | 781/941 | 772/938 | -9 / -3 |
+| LoCoMo tune Exact R@1/R@5/R@10 | 504/750/824 | 511/757/829 | +7 / +7 / +5 |
+| LoCoMo tune Soft R@5 | 816 | 811 | -5 |
+| BEAM session Any@1/5/10 | 124/241/274 | 128/230/262 | +4 / -11 / -12 |
+| BEAM session All@5 | 136 | 133 | -3 |
+| BEAM turn Any@1/5/10 | 138/211/246 | 136/207/239 | -2 / -4 / -7 |
+
+LME turn @1 loss is inside the window: pool@50 stayed 459, pre-Kemeny@5 376 to 362. By type, temporal turn @1 84 to 78, multi-session turn @1 66 to 61, preference turn @1 10 to 8. Assistant turn @1 stays 5/56.
+
+Tune Multi-Hop session 74/126 to 71/123, Exact 45/76/95 to 42/72/93, soft 89 to 85. Open-Domain session 17/29 to 14/30, Exact 10/16/17 to 8/17/21, soft 21 to 19. Single-Hop Exact 224/326/362 to 230/336/365. The removal stays. Recovery is not a word list.
+
+### Funnel delta (after minus R5)
+
+| slice | pool@50 | pre-Kemeny@5 | post-Kemeny@5 | final@1 |
+|---|---:|---:|---:|---:|
+| LME session | 0 | -3 | -3 | -1 |
+| LME turn | 0 | -14 | -2 | -13 |
+| LoCoMo tune session | 0 | -3 | -3 | -9 |
+| LoCoMo tune turn | +4 | +16 | +7 | +7 |
+| Multi-Hop turn | +1 | -5 | -4 | -3 |
+| Open-Domain turn | +1 | +2 | +1 | -2 |
+| BEAM session | +1 | -11 | -11 | +4 |
+| BEAM turn | -7 | -7 | -4 | -2 |
+
+### One question
+
+LME `505af2f5` (`single-session-preference`): "I was thinking of trying a new coffee creamer recipe. Any recommendations?"
+
+Turn rank 1 moves from `sharegpt_kjeGJvK_11#0` (an assistant list of coffee smoothie recipes) to `4f2d6be4_2#6` (a user turn: "I'm thinking of trying some new coffee flavors, do you have any recommendations…"). `trying` and `new` were query-framing tokens and are now content, so that user turn covers them. Gold session `answer_f3164f2c` stays session rank 3. Its gold turn is the user turn about almond-milk creamer.

@@ -1,0 +1,789 @@
+{
+  "tag": "r6",
+  "seed": "1",
+  "freeze": false,
+  "sha": "57acdc468a352e9be12a7ae6e1e10901902798ac",
+  "field_notes": {
+    "turn_pool50": "top 50 by t_scene before submodular selection; not the harness top_k window",
+    "turn_pre_kemeny": "selected window immediately before rank1_gatekeeper_keep_rsb_head; not rank_pre",
+    "turn_post_kemeny": "selected window after the gatekeeper; equals the returned turns",
+    "session_pool50": "top 50 by s_score+bridge_boost before the session selector",
+    "session_pre_and_post": "identical: the gatekeeper reorders turns only",
+    "rank_pre": "index in a list that starts with the final seated turns; not a stage"
+  },
+  "lme": {
+    "n": 470,
+    "excluded": 30,
+    "session_any_at_1": 425,
+    "session_any_at_5": 461,
+    "session_any_at_10": 468,
+    "session_all_at_5": 418,
+    "turn_any_at_1": 253,
+    "turn_any_at_5": 396,
+    "turn_any_at_10": 423,
+    "rates": {
+      "session_any_at_1": 90.43,
+      "session_any_at_5": 98.09,
+      "session_any_at_10": 99.57,
+      "session_all_at_5": 88.94,
+      "turn_any_at_1": 53.83,
+      "turn_any_at_5": 84.26,
+      "turn_any_at_10": 90
+    },
+    "by_type": {
+      "single-session-user": {
+        "n": 64,
+        "s1": 62,
+        "s5": 64,
+        "s10": 64,
+        "all5": 64,
+        "t1": 49,
+        "t5": 60,
+        "t10": 61
+      },
+      "multi-session": {
+        "n": 121,
+        "s1": 110,
+        "s5": 119,
+        "s10": 121,
+        "all5": 97,
+        "t1": 61,
+        "t5": 97,
+        "t10": 105
+      },
+      "single-session-preference": {
+        "n": 30,
+        "s1": 15,
+        "s5": 27,
+        "s10": 30,
+        "all5": 27,
+        "t1": 8,
+        "t5": 18,
+        "t10": 21
+      },
+      "temporal-reasoning": {
+        "n": 127,
+        "s1": 110,
+        "s5": 123,
+        "s10": 125,
+        "all5": 103,
+        "t1": 78,
+        "t5": 104,
+        "t10": 112
+      },
+      "knowledge-update": {
+        "n": 72,
+        "s1": 72,
+        "s5": 72,
+        "s10": 72,
+        "all5": 71,
+        "t1": 52,
+        "t5": 68,
+        "t10": 70
+      },
+      "single-session-assistant": {
+        "n": 56,
+        "s1": 56,
+        "s5": 56,
+        "s10": 56,
+        "all5": 56,
+        "t1": 5,
+        "t5": 49,
+        "t10": 54
+      }
+    },
+    "seconds": 256.692,
+    "n_all": 500
+  },
+  "locomo": {
+    "seconds": 13.514,
+    "split": "tune-1-5",
+    "all": {
+      "n_scored": 997,
+      "no_evidence_excluded": 2,
+      "session_r1": 772,
+      "session_r5": 938,
+      "turn_exact_r1": 511,
+      "turn_exact_r5": 757,
+      "turn_exact_r10": 829,
+      "turn_soft_r5": 811,
+      "rates": {
+        "session_r1": 77.43,
+        "session_r5": 94.08,
+        "turn_exact_r1": 51.25,
+        "turn_exact_r5": 75.93,
+        "turn_exact_r10": 83.15,
+        "turn_soft_r5": 81.34
+      }
+    },
+    "core": {
+      "n_scored": 760,
+      "no_evidence_excluded": 2,
+      "session_r1": 569,
+      "session_r5": 708,
+      "turn_exact_r1": 386,
+      "turn_exact_r5": 554,
+      "turn_exact_r10": 616,
+      "turn_soft_r5": 599,
+      "rates": {
+        "session_r1": 74.87,
+        "session_r5": 93.16,
+        "turn_exact_r1": 50.79,
+        "turn_exact_r5": 72.89,
+        "turn_exact_r10": 81.05,
+        "turn_soft_r5": 78.82
+      }
+    },
+    "categories": {
+      "Multi-Hop": {
+        "n_scored": 142,
+        "no_evidence_excluded": 0,
+        "session_r1": 71,
+        "session_r5": 123,
+        "turn_exact_r1": 42,
+        "turn_exact_r5": 72,
+        "turn_exact_r10": 93,
+        "turn_soft_r5": 85,
+        "rates": {
+          "session_r1": 50,
+          "session_r5": 86.62,
+          "turn_exact_r1": 29.58,
+          "turn_exact_r5": 50.7,
+          "turn_exact_r10": 65.49,
+          "turn_soft_r5": 59.86
+        }
+      },
+      "Temporal": {
+        "n_scored": 156,
+        "no_evidence_excluded": 0,
+        "session_r1": 128,
+        "session_r5": 150,
+        "turn_exact_r1": 106,
+        "turn_exact_r5": 129,
+        "turn_exact_r10": 137,
+        "turn_soft_r5": 135,
+        "rates": {
+          "session_r1": 82.05,
+          "session_r5": 96.15,
+          "turn_exact_r1": 67.95,
+          "turn_exact_r5": 82.69,
+          "turn_exact_r10": 87.82,
+          "turn_soft_r5": 86.54
+        }
+      },
+      "Open-Domain": {
+        "n_scored": 44,
+        "no_evidence_excluded": 2,
+        "session_r1": 14,
+        "session_r5": 30,
+        "turn_exact_r1": 8,
+        "turn_exact_r5": 17,
+        "turn_exact_r10": 21,
+        "turn_soft_r5": 19,
+        "rates": {
+          "session_r1": 31.82,
+          "session_r5": 68.18,
+          "turn_exact_r1": 18.18,
+          "turn_exact_r5": 38.64,
+          "turn_exact_r10": 47.73,
+          "turn_soft_r5": 43.18
+        }
+      },
+      "Single-Hop": {
+        "n_scored": 418,
+        "no_evidence_excluded": 0,
+        "session_r1": 356,
+        "session_r5": 405,
+        "turn_exact_r1": 230,
+        "turn_exact_r5": 336,
+        "turn_exact_r10": 365,
+        "turn_soft_r5": 360,
+        "rates": {
+          "session_r1": 85.17,
+          "session_r5": 96.89,
+          "turn_exact_r1": 55.02,
+          "turn_exact_r5": 80.38,
+          "turn_exact_r10": 87.32,
+          "turn_soft_r5": 86.12
+        }
+      },
+      "Adversarial": {
+        "n_scored": 237,
+        "no_evidence_excluded": 0,
+        "session_r1": 203,
+        "session_r5": 230,
+        "turn_exact_r1": 125,
+        "turn_exact_r5": 203,
+        "turn_exact_r10": 213,
+        "turn_soft_r5": 212,
+        "rates": {
+          "session_r1": 85.65,
+          "session_r5": 97.05,
+          "turn_exact_r1": 52.74,
+          "turn_exact_r5": 85.65,
+          "turn_exact_r10": 89.87,
+          "turn_soft_r5": 89.45
+        }
+      }
+    }
+  },
+  "beam": {
+    "n": 355,
+    "excluded": 0,
+    "session_any_at_1": 128,
+    "session_any_at_5": 230,
+    "session_any_at_10": 262,
+    "session_all_at_5": 133,
+    "turn_any_at_1": 136,
+    "turn_any_at_5": 207,
+    "turn_any_at_10": 239,
+    "rates": {
+      "session_any_at_1": 36.06,
+      "session_any_at_5": 64.79,
+      "session_any_at_10": 73.8,
+      "session_all_at_5": 37.46,
+      "turn_any_at_1": 38.31,
+      "turn_any_at_5": 58.31,
+      "turn_any_at_10": 67.32
+    },
+    "conversations": 20,
+    "total_questions": 400,
+    "seconds": 20.84
+  },
+  "funnel": {
+    "lme-session": {
+      "slice": "lme-session",
+      "n": 470,
+      "top_k": 10,
+      "returned_len_min": 1,
+      "returned_len_mean": 9.92,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 470,
+        "corpus_all": 470,
+        "pool50": 470,
+        "pre5": 461,
+        "post5": 461,
+        "at1": 425,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 470
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 100,
+        "pre5": 98.09,
+        "post5": 98.09,
+        "at1": 90.43,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 470,
+        "gold_in_pool_at_50": 470,
+        "gold_at_pre_kemeny_at_5": 461,
+        "gold_at_post_kemeny_at_5": 461,
+        "gold_at_final_at_1": 425
+      }
+    },
+    "lme-turn": {
+      "slice": "lme-turn",
+      "n": 470,
+      "top_k": 10,
+      "returned_len_min": 10,
+      "returned_len_mean": 10.04,
+      "returned_len_max": 11,
+      "hits": {
+        "corpus_any": 470,
+        "corpus_all": 470,
+        "pool50": 459,
+        "pre5": 362,
+        "post5": 396,
+        "at1": 253,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 470
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 97.66,
+        "pre5": 77.02,
+        "post5": 84.26,
+        "at1": 53.83,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 470,
+        "gold_in_pool_at_50": 459,
+        "gold_at_pre_kemeny_at_5": 362,
+        "gold_at_post_kemeny_at_5": 396,
+        "gold_at_final_at_1": 253
+      }
+    },
+    "locomo-tune-session": {
+      "slice": "locomo-tune-session",
+      "n": 997,
+      "top_k": 10,
+      "returned_len_min": 3,
+      "returned_len_mean": 9.98,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 997,
+        "corpus_all": 997,
+        "pool50": 997,
+        "pre5": 938,
+        "post5": 938,
+        "at1": 772,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 997
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 100,
+        "pre5": 94.08,
+        "post5": 94.08,
+        "at1": 77.43,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 997,
+        "gold_in_pool_at_50": 997,
+        "gold_at_pre_kemeny_at_5": 938,
+        "gold_at_post_kemeny_at_5": 938,
+        "gold_at_final_at_1": 772
+      }
+    },
+    "locomo-tune-turn": {
+      "slice": "locomo-tune-turn",
+      "n": 997,
+      "top_k": 10,
+      "returned_len_min": 6,
+      "returned_len_mean": 10,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 997,
+        "corpus_all": 996,
+        "pool50": 938,
+        "pre5": 716,
+        "post5": 757,
+        "at1": 511,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 997
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 99.9,
+        "pool50": 94.08,
+        "pre5": 71.82,
+        "post5": 75.93,
+        "at1": 51.25,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 997,
+        "gold_in_pool_at_50": 938,
+        "gold_at_pre_kemeny_at_5": 716,
+        "gold_at_post_kemeny_at_5": 757,
+        "gold_at_final_at_1": 511
+      }
+    },
+    "locomo-tune-multihop-session": {
+      "slice": "locomo-tune-multihop-session",
+      "n": 142,
+      "top_k": 10,
+      "returned_len_min": 3,
+      "returned_len_mean": 9.95,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 142,
+        "corpus_all": 142,
+        "pool50": 142,
+        "pre5": 123,
+        "post5": 123,
+        "at1": 71,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 142
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 100,
+        "pre5": 86.62,
+        "post5": 86.62,
+        "at1": 50,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 142,
+        "gold_in_pool_at_50": 142,
+        "gold_at_pre_kemeny_at_5": 123,
+        "gold_at_post_kemeny_at_5": 123,
+        "gold_at_final_at_1": 71
+      }
+    },
+    "locomo-tune-multihop-turn": {
+      "slice": "locomo-tune-multihop-turn",
+      "n": 142,
+      "top_k": 10,
+      "returned_len_min": 6,
+      "returned_len_mean": 9.97,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 142,
+        "corpus_all": 141,
+        "pool50": 123,
+        "pre5": 70,
+        "post5": 72,
+        "at1": 42,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 142
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 99.3,
+        "pool50": 86.62,
+        "pre5": 49.3,
+        "post5": 50.7,
+        "at1": 29.58,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 142,
+        "gold_in_pool_at_50": 123,
+        "gold_at_pre_kemeny_at_5": 70,
+        "gold_at_post_kemeny_at_5": 72,
+        "gold_at_final_at_1": 42
+      }
+    },
+    "locomo-tune-opendomain-session": {
+      "slice": "locomo-tune-opendomain-session",
+      "n": 44,
+      "top_k": 10,
+      "returned_len_min": 10,
+      "returned_len_mean": 10,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 44,
+        "corpus_all": 44,
+        "pool50": 44,
+        "pre5": 30,
+        "post5": 30,
+        "at1": 14,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 44
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 100,
+        "pre5": 68.18,
+        "post5": 68.18,
+        "at1": 31.82,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 44,
+        "gold_in_pool_at_50": 44,
+        "gold_at_pre_kemeny_at_5": 30,
+        "gold_at_post_kemeny_at_5": 30,
+        "gold_at_final_at_1": 14
+      }
+    },
+    "locomo-tune-opendomain-turn": {
+      "slice": "locomo-tune-opendomain-turn",
+      "n": 44,
+      "top_k": 10,
+      "returned_len_min": 10,
+      "returned_len_mean": 10,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 44,
+        "corpus_all": 44,
+        "pool50": 28,
+        "pre5": 16,
+        "post5": 17,
+        "at1": 8,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 44
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 63.64,
+        "pre5": 36.36,
+        "post5": 38.64,
+        "at1": 18.18,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 44,
+        "gold_in_pool_at_50": 28,
+        "gold_at_pre_kemeny_at_5": 16,
+        "gold_at_post_kemeny_at_5": 17,
+        "gold_at_final_at_1": 8
+      }
+    },
+    "locomo-tune-temporal-turn": {
+      "slice": "locomo-tune-temporal-turn",
+      "n": 156,
+      "top_k": 10,
+      "returned_len_min": 10,
+      "returned_len_mean": 10,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 156,
+        "corpus_all": 156,
+        "pool50": 151,
+        "pre5": 126,
+        "post5": 129,
+        "at1": 106,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 156
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 96.79,
+        "pre5": 80.77,
+        "post5": 82.69,
+        "at1": 67.95,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 156,
+        "gold_in_pool_at_50": 151,
+        "gold_at_pre_kemeny_at_5": 126,
+        "gold_at_post_kemeny_at_5": 129,
+        "gold_at_final_at_1": 106
+      }
+    },
+    "locomo-tune-singlehop-turn": {
+      "slice": "locomo-tune-singlehop-turn",
+      "n": 418,
+      "top_k": 10,
+      "returned_len_min": 10,
+      "returned_len_mean": 10,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 418,
+        "corpus_all": 418,
+        "pool50": 404,
+        "pre5": 320,
+        "post5": 336,
+        "at1": 230,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 418
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 96.65,
+        "pre5": 76.56,
+        "post5": 80.38,
+        "at1": 55.02,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 418,
+        "gold_in_pool_at_50": 404,
+        "gold_at_pre_kemeny_at_5": 320,
+        "gold_at_post_kemeny_at_5": 336,
+        "gold_at_final_at_1": 230
+      }
+    },
+    "locomo-tune-adversarial-turn": {
+      "slice": "locomo-tune-adversarial-turn",
+      "n": 237,
+      "top_k": 10,
+      "returned_len_min": 10,
+      "returned_len_mean": 10,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 237,
+        "corpus_all": 237,
+        "pool50": 232,
+        "pre5": 184,
+        "post5": 203,
+        "at1": 125,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 237
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 97.89,
+        "pre5": 77.64,
+        "post5": 85.65,
+        "at1": 52.74,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 237,
+        "gold_in_pool_at_50": 232,
+        "gold_at_pre_kemeny_at_5": 184,
+        "gold_at_post_kemeny_at_5": 203,
+        "gold_at_final_at_1": 125
+      }
+    },
+    "beam-session": {
+      "slice": "beam-session",
+      "n": 355,
+      "top_k": 10,
+      "returned_len_min": 4,
+      "returned_len_mean": 9.98,
+      "returned_len_max": 10,
+      "hits": {
+        "corpus_any": 355,
+        "corpus_all": 355,
+        "pool50": 341,
+        "pre5": 230,
+        "post5": 230,
+        "at1": 128,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 355
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 96.06,
+        "pre5": 64.79,
+        "post5": 64.79,
+        "at1": 36.06,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 355,
+        "gold_in_pool_at_50": 341,
+        "gold_at_pre_kemeny_at_5": 230,
+        "gold_at_post_kemeny_at_5": 230,
+        "gold_at_final_at_1": 128
+      }
+    },
+    "beam-turn": {
+      "slice": "beam-turn",
+      "n": 355,
+      "top_k": 10,
+      "returned_len_min": 10,
+      "returned_len_mean": 10.15,
+      "returned_len_max": 11,
+      "hits": {
+        "corpus_any": 355,
+        "corpus_all": 355,
+        "pool50": 313,
+        "pre5": 202,
+        "post5": 207,
+        "at1": 136,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 355
+      },
+      "rates": {
+        "corpus_any": 100,
+        "corpus_all": 100,
+        "pool50": 88.17,
+        "pre5": 56.9,
+        "post5": 58.31,
+        "at1": 38.31,
+        "pre_outside_pool": 0,
+        "at1_outside_pool": 0,
+        "post_matches_returned": 100
+      },
+      "funnel": {
+        "gold_in_corpus": 355,
+        "gold_in_pool_at_50": 313,
+        "gold_at_pre_kemeny_at_5": 202,
+        "gold_at_post_kemeny_at_5": 207,
+        "gold_at_final_at_1": 136
+      }
+    }
+  },
+  "example_e47becba": [
+    {
+      "bench": "lme",
+      "id": "e47becba",
+      "type": "single-session-user",
+      "exclude": false,
+      "kind": "session",
+      "n_gold": 1,
+      "corpus_any": true,
+      "corpus_all": true,
+      "pool50": true,
+      "pre5": true,
+      "post5": true,
+      "at1": true,
+      "pool_len": 2,
+      "pre_len": 2,
+      "post_len": 2,
+      "returned_len": 2,
+      "post_matches_returned": true,
+      "pre_outside_pool": false,
+      "at1_outside_pool": false
+    },
+    {
+      "bench": "lme",
+      "id": "e47becba",
+      "type": "single-session-user",
+      "exclude": false,
+      "kind": "turn",
+      "n_gold": 2,
+      "corpus_any": true,
+      "corpus_all": true,
+      "pool50": true,
+      "pre5": true,
+      "post5": true,
+      "at1": true,
+      "pool_len": 50,
+      "pre_len": 10,
+      "post_len": 10,
+      "returned_len": 10,
+      "post_matches_returned": true,
+      "pre_outside_pool": false,
+      "at1_outside_pool": false
+    }
+  ],
+  "vs_seed1": {
+    "compared": 1854,
+    "differ": 1836,
+    "byBench": {
+      "lme": 496,
+      "locomo": 994,
+      "beam": 346
+    }
+  }
+}
