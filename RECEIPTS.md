@@ -105,6 +105,8 @@ On rustc 1.98.1, `HashMap::new()` draws a fresh thread-local seed on every map. 
 
 ## Stage snapshots (measurement only)
 
+Commit `7343012036d5ad337e07d5d69215f852e1c8c393`.
+
 Symbols in `crates/vestige-core/src/retrieval.rs`:
 
 - `rank_one`: `session_pool50` (line 5407, `s_score + bridge_boost`, top 50, score > 0), `turn_pool50` (line 5565, `t_scene`, top 50, score > 0), `pre_kemeny` (line 5948, clone of `final_turn_indices` immediately before `rank1_gatekeeper_keep_rsb_head`)
