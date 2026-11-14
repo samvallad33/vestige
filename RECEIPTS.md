@@ -158,7 +158,7 @@ LME `e47becba`, "What degree did I graduate with?". Gold session `answer_280352e
 
 ## R3 — drop intent cue lists
 
-Commit follows `4774d617`. Symbols in `crates/vestige-core/src/retrieval.rs`:
+Commit `6f10db31254665932129b0c62fa9e4a231c4e6d8`. Symbols in `crates/vestige-core/src/retrieval.rs`:
 
 - deleted `PREF_QUERY_CUES`, `ASSISTANT_ATTRIBUTION_CUES`, `COLLECTIVE_CHAT_CUES`, `INFERENCE_CUES`, `STATE_REVISION_CUES`
 - deleted `TIMELINE_CUES`, whose only caller was the preference suppressor. `is_event_sequence` still carries those phrases
