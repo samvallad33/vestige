@@ -378,3 +378,44 @@ Tune Multi-Hop session 74/126 to 71/123, Exact 45/76/95 to 42/72/93, soft 89 to 
 LME `505af2f5` (`single-session-preference`): "I was thinking of trying a new coffee creamer recipe. Any recommendations?"
 
 Turn rank 1 moves from `sharegpt_kjeGJvK_11#0` (an assistant list of coffee smoothie recipes) to `4f2d6be4_2#6` (a user turn: "I'm thinking of trying some new coffee flavors, do you have any recommendations…"). `trying` and `new` were query-framing tokens and are now content, so that user turn covers them. Gold session `answer_f3164f2c` stays session rank 3. Its gold turn is the user turn about almond-milk creamer.
+
+## R7 — drop the early-position preference boost
+
+Parent `e909c983`. `crates/vestige-core/src/retrieval.rs`:
+
+- `is_structural_personal_turn` (line 5823) no longer treats a user turn at `turn_pos <= 4` as structural. Standing policy and `is_personal_constraint` stay
+- the direct `preference_boost` (2.8) multiply on user turns at `turn_pos <= 4` is gone. The schema-domain 1.45 branch (line 4469) stays. `preference_boost` itself stays for standing-policy turns
+
+`cargo test -p vestige-core --lib retrieval`: 88 passed.
+
+Binary sha256 `6643d4e225c426e8a308d527476a265eeb04082cbac6f5401f45ad721c33fad5`.
+
+Input check (`top_k=10`) matches the R6 window counts, because the scored cuts did not move. LME turns 10 / 10.04 / 11. Session gold corpus 470, pool@50 470, returned 468. Turn gold corpus 470, pool@50 459, returned 423. LoCoMo tune turns 6 / 10 / 10, turn gold pool@50 938, returned 829. BEAM turns 10 / 10.15 / 11, turn gold pool@50 313, returned 239. `post_matches_returned` is 100% on every slice.
+
+### Board (before is R6)
+
+Every reported cut is unchanged.
+
+| slice | before | after | delta |
+|---|---|---|---|
+| LME session Any@1/5/10 | 425/461/468 | 425/461/468 | 0 / 0 / 0 |
+| LME session All@5 | 418 | 418 | 0 |
+| LME turn Any@1/5/10 | 253/396/423 | 253/396/423 | 0 / 0 / 0 |
+| LoCoMo tune Sess R@1/R@5 | 772/938 | 772/938 | 0 / 0 |
+| LoCoMo tune Exact R@1/R@5/R@10 | 511/757/829 | 511/757/829 | 0 / 0 / 0 |
+| LoCoMo tune Soft R@5 | 811 | 811 | 0 |
+| BEAM session Any@1/5/10 | 128/230/262 | 128/230/262 | 0 / 0 / 0 |
+| BEAM session All@5 | 133 | 133 | 0 |
+| BEAM turn Any@1/5/10 | 136/207/239 | 136/207/239 | 0 / 0 / 0 |
+
+Multi-Hop and Open-Domain tune cuts are unchanged (session 71/123 and 14/30, Exact 42/72/93 and 8/17/21). Four ranked lists moved and none of them changed a scored hit: LME `c4ea545c`, BEAM `1#1`, `1#8`, `2#15`.
+
+### Funnel delta (after minus R6)
+
+Zero on every slice, including pool@50, pre-Kemeny@5, post-Kemeny@5, and final@1.
+
+### One question
+
+LME `c4ea545c` (`knowledge-update`): "Do I go to the gym more frequently than I did previously?"
+
+Gold sessions `answer_d3bf812b_1` and `answer_d3bf812b_2` stay ranks 1 and 2. Turn rank 1 stays `answer_d3bf812b_1#4`, the user turn that states the real gym days (Tuesday, Thursday, Saturday). Turn rank 2 moves from `answer_d3bf812b_1#3` (the assistant categorization that had the wrong days) to `answer_d3bf812b_1#5` (the assistant correction). Session rank 3 moves from `a1f43f8d_2` to `9f9b402a_5`.

@@ -4466,14 +4466,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             sc *= 1.05;
             sc_own *= 1.05;
         }
-        if pref_on && t.field == 0 {
-            if t.speaker == "user" && turn_pos(ix, ti).map_or(false, |p| p <= 4) {
-                sc *= p.preference_boost;
-                sc_own *= p.preference_boost;
-            } else if t.is_user_schema && t.schema_domains.iter().any(|d| plan.focal_domains.contains(d)) {
-                sc *= 1.45;
-                sc_own *= 1.45;
-            }
+        if pref_on && t.field == 0 && t.is_user_schema && t.schema_domains.iter().any(|d| plan.focal_domains.contains(d)) {
+            sc *= 1.45;
+            sc_own *= 1.45;
         }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
@@ -5824,13 +5819,10 @@ fn turn_pos(ix: &Index, ti: usize) -> Option<usize> {
     ix.session_turns[ix.turns[ti].session].iter().position(|&m| m == ti)
 }
 
-/// Structural standing-policy / personal-constraint turn, plus the early-position arm.
+/// Standing-policy or personal-constraint turn. Early user-turn position is not a signal.
 fn is_structural_personal_turn(ix: &Index, ti: usize) -> bool {
     let tr = &ix.turns[ti];
-    tr.field == 0
-        && (tr.is_standing_policy
-            || tr.is_personal_constraint
-            || (tr.speaker == "user" && turn_pos(ix, ti).map_or(false, |pos| pos <= 4)))
+    tr.field == 0 && (tr.is_standing_policy || tr.is_personal_constraint)
 }
 
 /// BoundaryPrimacy (event-boundary primacy; Zheng 2022, Ezzyat & Davachi 2011). If rank 1 is not
