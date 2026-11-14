@@ -2980,18 +2980,23 @@ impl StrataStore {
         self.fsrs.cards.get(&handle_of(id)).cloned()
     }
 
-    /// Retrievability of a node at the admission clock — derived on read,
+    /// Retrievability of a node at the log head clock — derived on read,
     /// never stored, and reads append nothing (v1).
+    ///
+    /// The clock is [`Self::head_clock_ms`]: the greatest `created_at_ms` or
+    /// explicit review clock on this head. It is not the process wall clock,
+    /// so an unchanged store returns the same value on a later day.
     ///
     /// An explicit review with `reviewed_at_ms` measures elapsed whole days
     /// from that timestamp; a card still at its ingest review measures from
     /// the node's creation time. Otherwise sequence distance from `last_seq`
-    /// to the log head is used.
+    /// to the log head is used. A caller with its own frame passes that
+    /// frame to [`Self::retrievability_at`].
     pub fn retrievability(&self, id: &str) -> Result<Option<f64>, StoreError> {
-        self.retrievability_at(id, admission_now_ms())
+        self.retrievability_at(id, self.head_clock_ms())
     }
 
-    /// [`Self::retrievability`] evaluated at `as_of_ms` instead of now.
+    /// [`Self::retrievability`] evaluated at `as_of_ms` instead of the head clock.
     pub fn retrievability_at(&self, id: &str, as_of_ms: i64) -> Result<Option<f64>, StoreError> {
         let handle = handle_of(id);
         let Some(card) = self.fsrs.cards.get(&handle) else {
