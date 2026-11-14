@@ -211,6 +211,57 @@ LME `6ae235be` (single-session-assistant): "I remember you told me about the ref
 
 Before: turn rank 1 is `answer_sharegpt_IUWQYGQ_0#1`, the assistant answer. After: turn rank 1 is `answer_sharegpt_IUWQYGQ_0#0`, the user question that asked for the refineries; the assistant answer sits at rank 2. Session rank 1 is `answer_sharegpt_IUWQYGQ_0` both times.
 
+## R4 — delete the hypernym lattice
+
+Parent `afa00acd`. Symbols in `crates/vestige-core/src/retrieval.rs`:
+
+- deleted `HYPERNYM_LATTICE` (all 40 clusters, including VIDEO, IDENTITY, STORAGE, SECURITY, and the product words strata/precedent/salience)
+- `hypernyms` (line 452) returns an empty map. `enable_hypernyms` stays on `Params` so older payloads still parse
+- `common_speaker_tokens` no longer inserts lattice words
+- `non_hub_domains` (line 3614) is an empty set. `domain_session_df` is gone
+- test `sibling_words_do_not_bridge_through_a_domain_list` (line 7174): "sisters" does not match "siblings"
+
+`cargo test -p vestige-core --lib retrieval`: 88 passed.
+
+Binary sha256 `ca6b7edda71841e045fd712fa12b8cdf201c459fede8980afadb9a3d13ccbb50`.
+
+### Board (before is R3)
+
+| slice | before | after | delta |
+|---|---|---|---|
+| LME session Any@1/5/10 | 426/464/466 | 426/463/466 | 0 / -1 / 0 |
+| LME session All@5 | 421 | 420 | -1 |
+| LME turn Any@1/5/10 | 269/396/419 | 266/399/422 | -3 / +3 / +3 |
+| LoCoMo tune Sess R@1/R@5 | 785/940 | 780/941 | -5 / +1 |
+| LoCoMo tune Exact R@1/R@5/R@10 | 512/751/815 | 505/749/820 | -7 / -2 / +5 |
+| LoCoMo tune Soft R@5 | 812 | 815 | +3 |
+| BEAM session Any@1/5/10 | 127/239/272 | 124/241/274 | -3 / +2 / +2 |
+| BEAM session All@5 | 136 | 135 | -1 |
+| BEAM turn Any@1/5/10 | 141/212/244 | 138/210/244 | -3 / -2 / 0 |
+
+Tune Multi-Hop session R@1 stayed 75/142. Turn Exact R@1 48 to 46, R@5 stayed 76, R@10 92 to 94. Open-Domain session R@1 20 to 17, R@5 30 to 29, Exact R@1 stayed 10/44, Exact R@5 17 to 16, R@10 20 to 17. The lattice was carrying some Open-Domain session hits. It stays deleted.
+
+### Funnel delta (after minus R3)
+
+| slice | pool@50 | pre-Kemeny@5 | post-Kemeny@5 | final@1 |
+|---|---:|---:|---:|---:|
+| LME session | 0 | -1 | -1 | 0 |
+| LME turn | -3 | +3 | +3 | -3 |
+| LoCoMo tune session | 0 | +1 | +1 | -5 |
+| LoCoMo tune turn | -7 | +1 | -2 | -7 |
+| Multi-Hop turn | -1 | -1 | 0 | -2 |
+| Open-Domain turn | -4 | -1 | -1 | 0 |
+| BEAM session | -3 | +2 | +2 | -3 |
+| BEAM turn | +1 | 0 | -2 | -3 |
+
+Corpus unchanged on every slice. Open-Domain's Exact R@1 loss is zero; four gold turns left pool@50.
+
+### One question
+
+LME `f8c5f88b`: "Where did I buy my new tennis racket from?"
+
+Session rank 1 stays `answer_c3567066`. Turn rank 1 moves from `answer_c3567066#4` (the user turn that names the new racket and where it came from) to `answer_c3567066#6` (the user turn about buying tennis balls). The shared SPORTS domain no longer ties those turns together.
+
 ### One question
 
 LME `e47becba` (`single-session-user`): "What degree did I graduate with?"

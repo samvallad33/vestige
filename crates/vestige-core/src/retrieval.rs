@@ -2,8 +2,8 @@
 //!
 //! Every score is reproducible arithmetic over the text the caller supplied:
 //! BM25F with role-segmented fields, IDF power law, distinct-term coverage,
-//! ordered span proximity, deterministic suffix stemming, a fixed hypernym
-//! lattice, a preference polarity axis, centering carry-forward across turns,
+//! ordered span proximity, deterministic suffix stemming, a preference
+//! polarity axis, centering carry-forward across turns,
 //! deictic relative-date compilation, max-passage window pooling, a
 //! hierarchical session-to-turn funnel, question/answer dyad coupling,
 //! bounded Adamic-Adar bridge closure and causal recency supersession.
@@ -409,51 +409,6 @@ const CONTINUATIONS: &[&str] = &[
     "indeed", "agreed", "same",
 ];
 
-/// 40-cluster deterministic hypernym lattice (coarse life domains + software systems architecture).
-const HYPERNYM_LATTICE: &[(&str, &[&str])] = &[
-    ("CULINARY", &["sourdough", "croissant", "baking", "bake", "baker", "bread", "loaf", "recipe", "dinner", "lunch", "breakfast", "vegan", "vegetarian", "pescatarian", "roast", "chef", "cook", "cooking", "kitchen", "cuisine", "meal", "dining", "restaurant", "food", "foodie", "dish", "spice", "pasta", "cheese", "dessert", "chocolate", "pastry", "culinary", "pizza", "sushi", "taco", "burger", "salad", "soup", "grill", "bbq", "cake", "cookie", "appliance", "appliances", "smoker", "fryer", "blender", "microwave", "toaster", "fridge", "refrigerator", "oven", "stove", "ingredient", "ingredients", "produce", "homegrown", "harvest"]),
-    ("BEVERAGE", &["coffee", "espresso", "latte", "cappuccino", "roastery", "bean", "brew", "brewing", "tea", "matcha", "chai", "cafe", "barista", "aeropress", "pourover", "wine", "beer", "cocktail", "whiskey", "smoothie", "juice"]),
-    ("OUTDOORS", &["hike", "hiking", "trail", "kayak", "kayaking", "camping", "camp", "tent", "backpack", "backpacking", "outdoor", "outdoors", "gear", "park", "wilderness", "climb", "climbing", "mountain", "beach", "lake", "fishing", "nature", "roadtrip", "activity", "activities", "hobby", "hobbies"]),
-    ("FITNESS", &["gym", "weight", "workout", "running", "runner", "run", "jog", "jogging", "cycling", "bike", "bicycle", "swim", "swimming", "triathlon", "marathon", "5k", "10k", "exercise", "cardio", "fitness", "yoga", "pilates", "crossfit", "training", "race", "tournament", "competition", "athletic", "athletics", "activity", "activities", "hobby", "hobbies"]),
-    ("VISUAL_ART", &["painting", "paint", "acrylic", "watercolor", "watercolour", "oil", "sketch", "sketching", "draw", "drawing", "pottery", "ceramic", "clay", "studio", "sculpture", "gallery", "canvas", "portrait", "landscape", "art", "artistic", "artist", "medium", "easel", "craft", "knitting", "sewing", "exhibition", "activity", "activities", "hobby", "hobbies"]),
-    ("MUSIC", &["guitar", "piano", "vinyl", "concert", "festival", "album", "spotify", "band", "jazz", "rock", "classical", "instrument", "clarinet", "flute", "cello", "saxophone", "trumpet", "drum", "bass", "violin", "orchestra", "musician", "song", "singing", "vocalist", "music", "playlist", "podcast", "streaming", "dance", "ballet", "salsa", "hobby", "hobbies"]),
-    ("PETS", &["dog", "puppy", "cat", "kitten", "vet", "pet", "rescue", "adopt", "adoption", "animal", "retriever", "breed", "leash", "veterinary", "veterinarian", "fish", "bird", "hamster", "horse"]),
-    ("BOOKS", &["book", "reading", "read", "novel", "author", "fiction", "nonfiction", "memoir", "library", "bookstore", "kindle", "audiobook", "literature", "poetry", "poem", "writing", "writer", "publish", "publication", "publications", "conference", "conferences", "paper", "papers", "article", "articles", "proceedings", "journal", "journals"]),
-    ("GAMING", &["game", "gaming", "gamer", "playstation", "nintendo", "switch", "xbox", "steam", "rpg", "boardgame", "tabletop", "console", "chess", "puzzle", "videogame"]),
-    ("TRAVEL", &["travel", "traveling", "flight", "airline", "trip", "vacation", "hotel", "hostel", "explore", "exploring", "passport", "tourist", "destination", "luggage", "itinerary", "cruise", "resort", "abroad", "museum", "theater"]),
-    ("PHOTOGRAPHY", &["photo", "photography", "camera", "lens", "shoot", "canon", "nikon", "sony", "shutter", "aperture", "exposure", "darkroom", "instagram", "mirrorless", "tripod"]),
-    ("GARDENING", &["garden", "gardening", "plant", "indoor", "succulent", "flower", "flowers", "soil", "pruning", "seed", "greenhouse", "botany", "tomato", "herb", "herbs", "homegrown", "harvest", "harvested", "ingredient", "ingredients", "produce", "basil", "mint", "pepper"]),
-    ("TECH", &["python", "rust", "javascript", "typescript", "compiler", "react", "server", "bug", "repo", "code", "coding", "programmer", "programming", "software", "developer", "api", "database", "algorithm", "linux", "terminal", "github", "laptop", "computer", "phone", "app", "apps", "application", "applications", "gadget", "accessory", "accessories", "charger", "charging", "charge", "cable", "case", "protector", "earbuds", "headphones", "adapter", "dongle", "battery", "power", "bank", "wireless", "security", "auth", "authentication", "encryption", "token", "flask", "django", "fastapi", "gunicorn", "docker", "deployment", "deploy", "queue", "backoff", "ratelimit", "retry", "retries", "latency", "cache", "caching"]),
-    ("VEHICLES", &["car", "vehicle", "truck", "sedan", "ev", "electric", "drive", "driving", "engine", "mechanic", "commute", "commuting", "train", "subway", "transit", "highway", "roadtrip", "motorcycle"]),
-    ("FASHION", &["clothes", "clothing", "wear", "wearing", "dress", "jacket", "coat", "shoe", "boot", "sneaker", "style", "vintage", "wardrobe", "outfit", "sweater", "denim", "wool", "jewelry", "makeup", "skincare", "thrifting", "antique"]),
-    ("HEALTH", &["health", "doctor", "hospital", "clinic", "medication", "prescription", "medicine", "allergy", "allergic", "symptom", "surgery", "recover", "recovery", "therapy", "therapist", "mental", "headache", "flu", "dentist", "sleep", "diet", "counseling", "psychology", "medical", "clinical", "diagnosis", "healthcare", "imaging", "radiology"]),
-    ("AI_ML", &["ai", "artificial", "intelligence", "ml", "machine", "deep", "learning", "neural", "transformer", "llm", "model", "training", "inference", "vision", "nlp", "imaging"]),
-    ("FAMILY", &["kid", "child", "children", "son", "daughter", "brother", "sister", "mother", "father", "mom", "dad", "parent", "parenting", "family", "toddler", "baby", "pregnancy", "grandma", "grandpa", "cousin", "niece", "nephew", "sibling", "siblings", "relative", "relatives", "kin", "twin", "twins"]),
-    ("COMMUNITY", &["charity", "volunteer", "volunteering", "fundraiser", "fundraising", "donation", "donate", "shelter", "nonprofit", "cause", "awareness", "community", "activism", "protest", "rescue"]),
-    ("IDENTITY", &["lgbtq", "queer", "gay", "lesbian", "pride", "trans", "transgender", "gender", "identity", "support", "transition", "religion", "faith", "church", "spiritual", "mentor"]),
-    ("EDUCATION", &["school", "college", "university", "degree", "graduate", "graduation", "studying", "study", "exam", "class", "course", "professor", "campus", "student", "certification", "diploma", "lecture", "workshop", "major", "publication", "publications", "conference", "conferences", "paper", "papers", "journal"]),
-    ("CAREER", &["job", "career", "boss", "coworker", "interview", "offer", "resume", "promote", "promotion", "salary", "office", "remote", "work", "working", "firm", "client", "company", "manager", "project", "startup", "business", "profession", "occupation", "occupations", "vocation", "agency", "role", "roles", "milestone", "milestones", "contract", "specialist"]),
-    ("HOUSING", &["house", "apartment", "rent", "lease", "mortgage", "buy", "buying", "moving", "moved", "move", "neighborhood", "landlord", "bedroom", "renovate", "furniture", "decor", "home"]),
-    ("SCREEN", &["movie", "film", "cinema", "tv", "show", "series", "episode", "netflix", "actor", "director", "watch", "watching", "documentary", "anime", "comedy", "sitcom", "special", "specials"]),
-    ("FINANCE", &["budget", "money", "save", "saving", "invest", "investment", "stock", "crypto", "deposit", "loan", "debt", "retirement", "expense", "bank", "tax"]),
-    ("COMMERCE", &["buy", "bought", "sell", "sold", "purchase", "purchased", "order", "ordered", "price", "discount", "deal", "store", "shop", "shopping", "receipt", "refund", "warranty", "paid", "pay", "cost"]),
-    ("RELATIONSHIP", &["date", "dating", "partner", "boyfriend", "girlfriend", "husband", "wife", "marriage", "wedding", "anniversary", "breakup", "divorce", "couple", "friend", "friendship", "single", "unmarried", "spouse", "ceremony", "event", "events"]),
-    ("PERSONALITY", &["introvert", "extrovert", "adventurous", "creative", "organized", "outdoorsy", "compassionate", "empathetic", "patient", "energetic", "calm", "anxious", "stressed", "relaxed", "minimalist", "collector", "vintage", "antique", "thrifting", "personality", "trait"]),
-    ("WELLNESS", &["meditation", "mindfulness", "massage", "spa", "relaxation", "stress", "breathe", "journal", "journaling", "selfcare"]),
-    ("VIDEO", &["video", "editing", "premiere", "adobe", "lumetri", "davinci", "timeline", "render", "codec", "footage", "clip", "youtube", "vlog"]),
-    ("SPORTS", &["soccer", "football", "basketball", "baseball", "tennis", "golf", "hockey", "volleyball", "team", "league", "match", "score", "coach", "stadium", "sport", "sports", "event", "events", "tournament", "race", "triathlon", "marathon", "competition", "championship", "athletic"]),
-    ("SHOPPING", &["shop", "shopping", "store", "mall", "purchase", "bought", "order", "amazon", "deal", "sale", "discount", "coupon"]),
-    ("CELEBRATION", &["party", "birthday", "celebration", "celebrate", "holiday", "christmas", "thanksgiving", "halloween", "gift", "present", "festival", "fest", "event", "events", "milestone", "ceremony", "wedding", "anniversary", "funeral", "graduation"]),
-    ("SCIENCE", &["science", "physics", "chemistry", "biology", "astronomy", "space", "research", "experiment", "lab", "math", "publication", "publications", "conference", "conferences", "paper", "papers", "journal", "article", "articles"]),
-    ("MEANING", &["symbolize", "represent", "meaning", "signify", "symbol"]),
-    ("LANGUAGE", &["language", "spanish", "french", "german", "japanese", "chinese", "italian", "learn", "learning", "fluent", "duolingo", "translate"]),
-    ("CONCURRENCY", &["mutex", "lock", "rwlock", "deadlock", "atomic", "channel", "thread", "coroutine", "async", "sync"]),
-    ("STORAGE", &["disk", "nvme", "wal", "strata", "sqlite", "sled", "append", "fsync", "btree", "lsm", "database", "storage", "ledger"]),
-    ("SECURITY", &["ed25519", "blake3", "sha256", "cryptography", "signature", "signed", "sandbox", "operator", "receipt", "audit", "precedent", "gate", "permission"]),
-    ("IPC_NETWORK", &["socket", "pipe", "domain", "http", "tcp", "mcp", "rpc", "grpc", "endpoint", "protocol", "tls", "stream", "packet"]),
-    ("VERIFICATION", &["fuzz", "proptest", "invariant", "witness", "bisect", "salience", "causal", "trace", "audit", "proof", "benchmark"]),
-];
-
 const MONTHS: [&str; 12] = [
     "january", "february", "march", "april", "may", "june", "july", "august", "september",
     "october", "november", "december",
@@ -492,20 +447,11 @@ fn framing_words() -> &'static HashSet<&'static str> {
     F.get_or_init(|| QUERY_FRAMING_WORDS.iter().copied().collect())
 }
 
+/// Domain expansion is empty. The open-domain hypernym lattice is not part of
+/// the ranker. `enable_hypernyms` stays on the wire so older payloads still parse.
 fn hypernyms() -> &'static HashMap<String, Vec<&'static str>> {
     static H: OnceLock<HashMap<String, Vec<&'static str>>> = OnceLock::new();
-    H.get_or_init(|| {
-        let mut m: HashMap<String, Vec<&'static str>> = HashMap::new();
-        for (dom, words) in HYPERNYM_LATTICE {
-            for w in *words {
-                let e = m.entry(stem(w)).or_default();
-                if !e.contains(dom) {
-                    e.push(dom);
-                }
-            }
-        }
-        m
-    })
+    H.get_or_init(HashMap::new)
 }
 
 // =========================================================================
@@ -2726,11 +2672,6 @@ fn common_speaker_tokens() -> &'static HashSet<String> {
         {
             s.insert((*w).to_string());
         }
-        for (_, words) in HYPERNYM_LATTICE {
-            for w in *words {
-                s.insert((*w).to_string());
-            }
-        }
         for word in MONTHS.iter().chain(WEEKDAYS.iter()) {
             for len in 2..word.len() {
                 s.insert(word[..len].to_string());
@@ -2937,7 +2878,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut session_turns = Vec::new();
     let mut session_entities = Vec::with_capacity(sessions.len());
     let mut session_content = Vec::with_capacity(sessions.len());
-    let mut domain_session_df: HashMap<&'static str, u32> = HashMap::new();
     let mut raw_standing_rules: Vec<(String, usize, usize, i64, bool, Vec<String>)> = Vec::new();
     let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
     let mut turn_prose_cache: Vec<String> = Vec::new();
@@ -3320,9 +3260,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 },
             });
         }
-        for d in s_doms {
-            *domain_session_df.entry(d).or_insert(0) += 1;
-        }
         session_turns.push(members);
         session_entities.push(s_ents);
         session_content.push(s_cont);
@@ -3674,16 +3611,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         })
         .collect();
 
-    let dom_hub_cut = if ns_total >= 16 {
-        ((ns_total as f32 * 0.12).ceil() as u32).max(3)
-    } else {
-        u32::MAX
-    };
-    let non_hub_domains: HashSet<&'static str> = HYPERNYM_LATTICE
-        .iter()
-        .map(|(d, _)| *d)
-        .filter(|d| domain_session_df.get(d).copied().unwrap_or(0) <= dom_hub_cut)
-        .collect();
+    let non_hub_domains: HashSet<&'static str> = HashSet::new();
 
     let fan_cut = if ns_total >= 16 {
         ((s_stats.n * 0.12).max(4.0)) as u32
@@ -7243,7 +7171,7 @@ mod tests {
     }
 
     #[test]
-    fn framing_words_dont_crush_domain_facts() {
+    fn sibling_words_do_not_bridge_through_a_domain_list() {
         let req = RankRequest {
             sessions: vec![
                 Session { id: "gold".into(), date: String::new(), timestamp: 0, turns: vec![turn("user", "I grew up with 3 sisters in a loud house.")] },
@@ -7253,7 +7181,9 @@ mod tests {
             top_k: 2,
             params: Params::default(),
         };
-        assert_eq!(rank(&req).results[0].sessions[0].id, "gold");
+        // "sisters" and "siblings" no longer share a hypernym. The turn that
+        // actually contains the query words ranks first.
+        assert_eq!(rank(&req).results[0].sessions[0].id, "noise");
     }
 
     #[test]
