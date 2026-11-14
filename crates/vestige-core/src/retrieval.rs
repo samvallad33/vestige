@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::OnceLock;
@@ -5402,6 +5402,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
+    let session_blend: Vec<f32> = (0..ns).map(|i| s_score[i] + bridge_boost[i]).collect();
+    // Measurement only. The selector still reads `s_score` and `bridge_boost` itself.
+    let session_pool50: Vec<usize> = order(&session_blend, &ix.session_ts)
+        .into_iter()
+        .filter(|&si| session_blend[si] > 0.0)
+        .take(50)
+        .collect();
+
     let total_q_groups = plan.groups.len().min(64);
     let mask_limit = if total_q_groups == 64 { u64::MAX } else { (1u64 << total_q_groups) - 1 };
 
@@ -5553,6 +5561,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     };
 
     let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
+    // Top 50 by scene score before the top-k cut. `order` tie-breaks newer timestamp, then lower index.
+    let turn_pool50: Vec<usize> = order(&t_scene, &turn_ts)
+        .into_iter()
+        .filter(|&ti| t_scene[ti] > 0.0)
+        .take(50)
+        .collect();
     let mut final_turn_indices: Vec<usize> = if p.enable_submodular {
         let mut selected_turns: Vec<usize> = Vec::with_capacity(k);
         let mut covered_query_terms: u64 = 0;
@@ -5931,8 +5945,20 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
+    let pre_kemeny = final_turn_indices.clone();
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
-    maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
+    maybe_dump_replay(
+        ix,
+        q,
+        k,
+        &it,
+        &t_scene,
+        &final_turn_indices,
+        &final_session_indices,
+        &turn_pool50,
+        &pre_kemeny,
+        &session_pool50,
+    );
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6746,6 +6772,12 @@ struct ReplaySnap {
     seated: Vec<usize>,
     final_session_indices: Vec<usize>,
     t_scene: Vec<f32>,
+    /// Top 50 turns by `t_scene` before submodular selection. Not truncated by `top_k`.
+    turn_pool50: Vec<usize>,
+    /// Turn list immediately before `rank1_gatekeeper_keep_rsb_head`.
+    pre_kemeny: Vec<usize>,
+    /// Top 50 sessions by `s_score + bridge_boost` before the session selector.
+    session_pool50: Vec<usize>,
 }
 
 thread_local! {
@@ -6760,6 +6792,9 @@ fn maybe_dump_replay(
     t_scene: &[f32],
     seated: &[usize],
     final_session_indices: &[usize],
+    turn_pool50: &[usize],
+    pre_kemeny: &[usize],
+    session_pool50: &[usize],
 ) {
     if replay_dump_path().is_none() {
         return;
@@ -6774,6 +6809,9 @@ fn maybe_dump_replay(
             seated: seated.to_vec(),
             final_session_indices: final_session_indices.to_vec(),
             t_scene: t_scene.to_vec(),
+            turn_pool50: turn_pool50.to_vec(),
+            pre_kemeny: pre_kemeny.to_vec(),
+            session_pool50: session_pool50.to_vec(),
         });
     });
 }
@@ -6843,9 +6881,9 @@ fn dump_response_turn_of(ix: &Index, ti: usize) -> Option<usize> {
 /// `IC_novel(t \ Q)`: sum of dump_token_ic over the turn's distinct raw_tokens
 /// that are not in the query token set, using the engine tokenizer and
 /// `t_own_stats` df. Tokens the engine never interned are skipped. Dump-only.
-fn dump_turn_ic_novel(ix: &Index, ti: usize, qset: &HashSet<String>, n_docs: usize) -> f64 {
+fn dump_turn_ic_novel(ix: &Index, ti: usize, qset: &BTreeSet<String>, n_docs: usize) -> f64 {
     let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut sum = 0.0;
     for w in raw_tokens(body) {
         if !seen.insert(w.clone()) || qset.contains(&w) {
@@ -6919,26 +6957,29 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
             pool.push(ti);
         }
     }
-    let mut pre_rank: HashMap<usize, usize> = HashMap::with_capacity(pool.len());
+    // BTree, not Hash: on rustc 1.98 `HashMap::new` draws a fresh thread-local
+    // seed even when `RUST_HASH_SEED` is set, and this writer runs between
+    // queries. A RandomState map here would change the next query's ranking.
+    let mut pre_rank: BTreeMap<usize, usize> = BTreeMap::new();
     for (i, &ti) in pool.iter().enumerate() {
         pre_rank.insert(ti, i);
     }
-    let mut final_rank: HashMap<usize, usize> = HashMap::new();
+    let mut final_rank: BTreeMap<usize, usize> = BTreeMap::new();
     for (i, &ti) in snap.seated.iter().enumerate() {
         final_rank.insert(ti, i);
     }
     let deg_closed = dump_pool_structural_degree(ix, &pool, true);
     let deg_none = dump_pool_structural_degree(ix, &pool, false);
-    let mut degree_closed: HashMap<usize, i64> = HashMap::new();
-    let mut degree_none: HashMap<usize, i64> = HashMap::new();
+    let mut degree_closed: BTreeMap<usize, i64> = BTreeMap::new();
+    let mut degree_none: BTreeMap<usize, i64> = BTreeMap::new();
     for (i, &ti) in pool.iter().enumerate() {
         degree_closed.insert(ti, deg_closed[i]);
         degree_none.insert(ti, deg_none[i]);
     }
 
-    let qset: HashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
+    let qset: BTreeSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
     let mut qtoks: Vec<Value> = Vec::new();
-    let mut seen_tok: HashSet<String> = HashSet::new();
+    let mut seen_tok: BTreeSet<String> = BTreeSet::new();
     for tok in dump_query_tokens(&snap.query_text) {
         if !seen_tok.insert(tok.clone()) {
             continue;
@@ -6970,7 +7011,7 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
 
     let qtok_present = |ti: usize| -> Vec<bool> {
         let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
-        let body_toks: HashSet<String> = dump_query_tokens(body).into_iter().collect();
+        let body_toks: BTreeSet<String> = dump_query_tokens(body).into_iter().collect();
         let content = ix.turns.get(ti).map(|t| &t.content);
         let mut present: Vec<bool> = Vec::with_capacity(qtoks.len());
         for tok in qtoks.iter() {
@@ -7047,15 +7088,14 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
     }
 
     // Sessions in official turn top-10 or official session top-10: every turn.
-    let mut sess_keep: HashSet<usize> = HashSet::new();
+    let mut sess_keep: BTreeSet<usize> = BTreeSet::new();
     for &ti in snap.seated.iter().take(10) {
         sess_keep.insert(ix.turns[ti].session);
     }
     for &si in snap.final_session_indices.iter().take(10) {
         sess_keep.insert(si);
     }
-    let mut sess_keys: Vec<usize> = sess_keep.into_iter().collect();
-    sess_keys.sort_unstable();
+    let sess_keys: Vec<usize> = sess_keep.into_iter().collect();
     let mut session_turns: Vec<Value> = Vec::new();
     for sess in sess_keys {
         let members = match ix.session_turns.get(sess) {
@@ -7082,6 +7122,12 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         "is_event_sequence": snap.is_event_sequence,
         "temporal": snap.temporal,
         "pool_size": pool.len(),
+        "rank_pre_meaning": "candidates[] order: FINAL seated turns first, then other positive t_scene turns filled to 50. rank_pre is that index. It is not the pre-Kemeny rank. Use stage_turn_pre_kemeny_ids.",
+        "stage_turn_pool50_ids": snap.turn_pool50.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "stage_turn_pre_kemeny_ids": snap.pre_kemeny.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "stage_turn_post_kemeny_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "stage_session_pool50_ids": snap.session_pool50.iter().map(|&si| ix.session_ids[si].clone()).collect::<Vec<_>>(),
+        "stage_session_final_ids": snap.final_session_indices.iter().map(|&si| ix.session_ids[si].clone()).collect::<Vec<_>>(),
         "pre_ids": pool.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
         "seated_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
         "final_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
