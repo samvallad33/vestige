@@ -328,7 +328,7 @@ Gold session `answer_d87a6ef8` (the medical-image-analysis session, user turn 0 
 
 ## R6 — NLTK stopwords, closed-class framing, closed-class causal cues
 
-Parent `7f037e62`. `crates/vestige-core/src/retrieval.rs`:
+Commit `c14ca2a2221a043050dbdb31e104db6df14cd7f5`. `crates/vestige-core/src/retrieval.rs`:
 
 - `STOPWORDS` (line 263) is the NLTK English list from `nltk_data` `stopwords/english` (198 entries). Apostrophe-split debris (`don`, `ll`, `re`, …) is not copied, because `raw_tokens` joins `n't` (`don't` → `dont`) and strips `'s/'ve/'re/'ll/'m/'d` to a stem already in the list. The joined forms (`dont`, `wont`, `isnt`, …) are that image. Template words (`conversation`, `mentioned`, `remind`, `recommend`, `suggest`, …) are gone
 - `QUERY_FRAMING_WORDS` (line 281) keeps closed-class time words only: ago, across, day/days, earlier/earliest, later/latest, month/months, throughout, week/weeks, year/years
