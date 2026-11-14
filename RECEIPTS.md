@@ -213,7 +213,7 @@ Before: turn rank 1 is `answer_sharegpt_IUWQYGQ_0#1`, the assistant answer. Afte
 
 ## R4 — delete the hypernym lattice
 
-Parent `afa00acd`. Symbols in `crates/vestige-core/src/retrieval.rs`:
+Commit `8bf10d2ad91aa8abd36cb0bcb7e6d53123c869f2`. Symbols in `crates/vestige-core/src/retrieval.rs`:
 
 - deleted `HYPERNYM_LATTICE` (all 40 clusters, including VIDEO, IDENTITY, STORAGE, SECURITY, and the product words strata/precedent/salience)
 - `hypernyms` (line 452) returns an empty map. `enable_hypernyms` stays on `Params` so older payloads still parse
