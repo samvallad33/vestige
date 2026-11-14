@@ -422,7 +422,7 @@ Gold sessions `answer_d3bf812b_1` and `answer_d3bf812b_2` stay ranks 1 and 2. Tu
 
 ## R8 — hardwire carry, stop reading VESTIGE_CARRY_MODE
 
-Parent `2b190e0c`. `crates/vestige-core/src/retrieval.rs`:
+Commit `c593d557cf6d7ece9f9775967231406754776f6b`. `crates/vestige-core/src/retrieval.rs`:
 
 - deleted `carry_mode_is_parity` (it read `VESTIGE_CARRY_MODE`)
 - `rank_one` (line 4283) always uses the non-parity mix (line 4472): full carry `sc.max(sc_own)` for an assistant turn, a short reply, or a turn with at most 8 content tokens; otherwise `sc_own + 0.18 * (sc - sc_own).max(0)`
