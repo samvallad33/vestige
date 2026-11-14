@@ -267,3 +267,61 @@ Session rank 1 stays `answer_c3567066`. Turn rank 1 moves from `answer_c3567066#
 LME `e47becba` (`single-session-user`): "What degree did I graduate with?"
 
 Gold session `answer_280352e9`. Seed 1 and seed 2 both return it at session rank 1, turn `answer_280352e9#4` at turn rank 1.
+
+## R5 — delete preference and constraint marker lists
+
+Parent `a2ef5832`. `crates/vestige-core/src/retrieval.rs`:
+
+- deleted `PREF_MARKERS`, `HARD_CONSTRAINT_MARKERS`, `USER_SCHEMA_CUES`, `BLIP_STOPLIST`
+- `user_preference_speech_act` (line 2543) is `hedged_like_is_preference || commitment_manner`. Those two helpers were not in the removal list and stay
+- `build_index` (line 3051) hardwires `is_personal_constraint = false`. `is_user_schema` (line 3052) is field 0 and (`pref_marker` or `habitual_perfect`)
+- BLIP caption tokens (line 2996) are indexed when `is_content`, with no caption stoplist
+- `constraint_object_tokens` and the `plan_query` preference-from-constraint path stay. `is_structural_personal_turn` still has the `turn_pos <= 4` arm (R7)
+- `has_rev_cue` still reads `is_personal_constraint`, which is now always false, so that supersession edge does not fire
+
+`cargo test -p vestige-core --lib retrieval`: 88 passed. No test asserted the deleted lists.
+
+Binary sha256 `cbd3aa11dcf2d71283844638840e30861fbb5cde101286cb9631d13e70f1c98e`.
+
+Input check (`top_k=10`, gold = any-hit). LME turns returned length 10 / 10.02 / 11. Session gold in corpus 470, in pool@50 470, in the returned window 467, absent from the window 3. Turn gold in corpus 470, in pool@50 459, in the returned window 423, absent from the window 47. LoCoMo tune turns length 10. Turn gold in corpus 997 (all-of 996), in pool@50 934, in the returned window 824. BEAM turns length 1 / 10.14 / 11. Turn gold in corpus 355, in pool@50 320, in the returned window 246. `stage_turn_pre_kemeny_ids` is the selected window immediately before `rank1_gatekeeper_keep_rsb_head`, not a pre-rank list. `post_matches_returned` is 100% on every slice.
+
+### Board (before is R4)
+
+| slice | before | after | delta |
+|---|---|---|---|
+| LME session Any@1/5/10 | 426/463/466 | 426/464/467 | 0 / +1 / +1 |
+| LME session All@5 | 420 | 422 | +2 |
+| LME turn Any@1/5/10 | 266/399/422 | 266/398/423 | 0 / -1 / +1 |
+| LoCoMo tune Sess R@1/R@5 | 780/941 | 781/941 | +1 / 0 |
+| LoCoMo tune Exact R@1/R@5/R@10 | 505/749/820 | 504/750/824 | -1 / +1 / +4 |
+| LoCoMo tune Soft R@5 | 815 | 816 | +1 |
+| BEAM session Any@1/5/10 | 124/241/274 | 124/241/274 | 0 / 0 / 0 |
+| BEAM session All@5 | 135 | 136 | +1 |
+| BEAM turn Any@1/5/10 | 138/210/244 | 138/211/246 | 0 / +1 / +2 |
+
+LME by type, only the rows that moved. Preference (n=30) session @5/@10 27/28 to 28/29, All@5 27 to 28, turns stayed 10/15/19. Multi-session All@5 97 to 98, turn @10 106 to 107. Temporal turn @5 107 to 106. User, knowledge-update, and assistant rows are unchanged (assistant turn @1 stays 5/56).
+
+Tune Multi-Hop session R@1 75 to 74, R@5 127 to 126, Exact R@1 46 to 45, R@5 stayed 76, R@10 94 to 95, soft stayed 89. Open-Domain unchanged: session 17/29, Exact 10/16/17, soft 21. Single-Hop session 357/401 to 359/403, Exact 223/325/360 to 224/326/362, soft 356 to 357. Temporal session R@5 153 to 152, Exact R@1 105 to 104. Adversarial Exact R@10 210 to 211.
+
+### Funnel delta (after minus R4)
+
+| slice | pool@50 | pre-Kemeny@5 | post-Kemeny@5 | final@1 |
+|---|---:|---:|---:|---:|
+| LME session | 0 | +1 | +1 | 0 |
+| LME turn | 0 | 0 | -1 | 0 |
+| LoCoMo tune session | 0 | 0 | 0 | +1 |
+| LoCoMo tune turn | 0 | -3 | +1 | -1 |
+| Multi-Hop session | 0 | -1 | -1 | -1 |
+| Multi-Hop turn | 0 | 0 | 0 | -1 |
+| Open-Domain session | 0 | 0 | 0 | 0 |
+| Open-Domain turn | 0 | 0 | 0 | 0 |
+| BEAM session | 0 | 0 | 0 | 0 |
+| BEAM turn | 0 | 0 | +1 | 0 |
+
+Corpus unchanged. Pool@50 unchanged on every slice. The preference-marker removal did not drop gold out of the candidate pool.
+
+### One question
+
+LME `75832dbd` (`single-session-preference`): "Can you recommend some recent publications or conferences that I might find interesting?"
+
+Gold session `answer_d87a6ef8` (the medical-image-analysis session, user turn 0 `has_answer`). Before, that session is outside the top 5 (`sharegpt_xni9yYO_6`, `sharegpt_E0YL5SX_157`, `ultrachat_382018`, `c7270a1b_1`, `ultrachat_165893`). After, it is session rank 5 and `ultrachat_382018` leaves the top 5. Turn rank 1 stays `sharegpt_xni9yYO_6#0`. Rank-1 did not move on any LME question (13 rank-1 flips total: 12 LoCoMo, 1 BEAM).

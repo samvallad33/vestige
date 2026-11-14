@@ -288,41 +288,6 @@ const QUERY_FRAMING_WORDS: &[&str] = &[
     "way", "past", "times",
 ];
 
-const PREF_MARKERS: &[&str] = &[
-    "love", "loved", "loves", "loving", "favorite", "favourite", "favorites", "prefer",
-    "prefers", "preferred", "preference", "obsessed", "enjoy", "enjoys", "enjoyed", "enjoying",
-    "hobby", "hobbies", "passionate", "passion", "collect", "collecting", "hate", "hates",
-    "hated", "dislike", "dislikes", "avoid", "avoiding", "allergic", "allergy", "intolerant",
-    "lactose", "celiac", "pescatarian", "gluten-free", "gluten free", "dairy-free", "dairy free",
-    "diet", "vegan", "vegetarian", "big fan", "fan of", "fond", "crave", "addicted", "habit",
-    "routine", "can't stand", "cannot stand", "rather", "instead of",
-    "go-to", "my usual", "i usually", "i tend to", "i'm into", "im into", "i've been into",
-    // Exclusion and contrast. Bare "only" is a stopword and is not a unigram marker;
-    // exclusive preference is the constraint phrase, not every occurrence of the word.
-    "solely", "exclusively", "stick with", "stick to", "switched to", "too bitter", "i only",
-    "only ever", "only use", "only want", "only like", "only drink", "only eat", "only buy",
-    "only wear",
-    // Implicit personal constraints. Phrases, not the stopword "only".
-    "i don't want", "i do not want", "i won't", "i will not", "rather than", "no longer",
-    "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "can't drink",
-    "cannot drink", "don't eat", "do not eat", "don't drink", "do not drink", "never eat",
-    "never drink", "stay away from", "steer clear of", "leave out", "keep out",
-    "i'd prefer", "so i prefer", "trying to keep", "keep it simple", "keep it lightweight",
-    "without compromising", "avoid using",
-];
-
-const HARD_CONSTRAINT_MARKERS: &[&str] = &[
-    "allergic", "allergy", "intolerant", "lactose", "celiac", "vegan", "vegetarian",
-    "pescatarian", "gluten-free", "gluten free", "dairy-free", "dairy free", "kosher", "halal",
-    "avoid", "avoiding", "can't stand", "cannot stand", "solely", "exclusively", "stick with",
-    "stick to", "switched to", "too bitter", "i only", "only ever", "only use", "only want",
-    "only like", "only drink", "only eat", "only buy", "only wear", "i don't want",
-    "i do not want", "i won't", "i will not", "rather than", "instead of", "no longer",
-    "not for me", "can't eat", "cannot eat", "can't have", "cannot have", "can't drink",
-    "cannot drink", "don't eat", "do not eat", "don't drink", "do not drink", "never eat",
-    "never drink", "stay away from", "steer clear of", "leave out", "keep out",
-];
-
 const CURRENT_STATE_CUES: &[&str] = &[
     "currently", "current ", "right now", " now ", "latest", "most recent",
     "most recently", "still ", "anymore", "any more", "end up", "ended up", "these days",
@@ -2575,11 +2540,8 @@ fn commitment_manner(lower: &str) -> bool {
     })
 }
 
-fn user_preference_speech_act(lower: &str, raw: &[String], pref_set: &HashSet<&str>) -> bool {
-    raw.iter().any(|w| pref_set.contains(w.as_str()))
-        || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m))
-        || hedged_like_is_preference(lower)
-        || commitment_manner(lower)
+fn user_preference_speech_act(lower: &str) -> bool {
+    hedged_like_is_preference(lower) || commitment_manner(lower)
 }
 
 fn camel_case_parts(ident: &str) -> Vec<String> {
@@ -2859,16 +2821,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         "congrats", "congratulations", "yay", "sweet", "amazing", "wonderful", "fantastic",
         "thanks", "thank", "sorry", "glad", "ouch", "yikes",
     ];
-    const BLIP_STOPLIST: &[&str] = &[
-        "photo", "picture", "image", "man", "woman", "person", "people", "group", "standing",
-        "sitting", "holding", "wearing", "smiling", "table", "room", "background", "white",
-        "black", "young", "two", "close", "up", "front", "next", "looking", "camera",
-    ];
-    const USER_SCHEMA_CUES: &[&str] = &[
-        "i always ", "i usually ", "i tend to ", "my go-to", "my usual",
-        "i switched to ", "i stick to ", "i stick with ", "fan of ",
-        "i'm into ", "im into ", "i love ", "i prefer ", "i enjoy ", "my favorite", "my favourite",
-    ];
     let nicks = SpeakerNickIndex::build(sessions);
     let mut vocab = Vocab::default();
     let mut turns: Vec<TurnIx> = Vec::new();
@@ -2884,8 +2836,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut cue_vocab: HashMap<String, u32> = HashMap::new();
     let mut turn_cues: Vec<Vec<u32>> = Vec::new();
     let mut role_cues: HashSet<u32> = HashSet::new();
-    let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
-    let hard_constraint_set: HashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
     let mut constraint_terms: HashSet<u32> = HashSet::new();
     let mut header_dict: HashMap<u64, Vec<HeaderKey>> = HashMap::new();
     let mut header_max_words = 0usize;
@@ -3043,7 +2993,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             }
             // Stream 2: Auxiliary BLIP caption field (w=0.75, b_blip=0, counts_len:false, inheritable:false)
             if let Some(cap) = blip_opt {
-                for bw in raw_tokens(cap).into_iter().filter(|w| is_content(w) && !BLIP_STOPLIST.contains(&w.as_str())) {
+                for bw in raw_tokens(cap).into_iter().filter(|w| is_content(w)) {
                     let bid = vocab.intern(&bw);
                     blip_feats.push(Feat { id: bid, w: 1.0, counts_len: false, inheritable: false });
                     if p.enable_stemming {
@@ -3096,14 +3046,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 }
             }
             let lower = prose_body.to_lowercase();
-            let pref_marker = user_preference_speech_act(&lower, &raw, &pref_set);
-            let is_personal_constraint = field == 0
-                && (raw.iter().any(|w| hard_constraint_set.contains(w.as_str()))
-                    || HARD_CONSTRAINT_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m)));
-            let is_user_schema = field == 0
-                && (pref_marker
-                    || habitual_perfect(&lower)
-                    || USER_SCHEMA_CUES.iter().any(|c| lower.contains(c)));
+            let pref_marker = user_preference_speech_act(&lower);
+            // Marker lists no longer label a turn as a personal constraint.
+            let is_personal_constraint = false;
+            let is_user_schema = field == 0 && (pref_marker || habitual_perfect(&lower));
             if p.enable_preference && pref_marker && field == 0 {
                 feats.push(Feat { id: vocab.intern(PREF_AXIS), w: 1.0, counts_len: false, inheritable: false });
             }
@@ -5882,7 +5828,7 @@ fn turn_pos(ix: &Index, ti: usize) -> Option<usize> {
     ix.session_turns[ix.turns[ti].session].iter().position(|&m| m == ti)
 }
 
-/// Structural user-preference / personal-constraint turn check (no PREF_MARKERS dictionary list).
+/// Structural standing-policy / personal-constraint turn, plus the early-position arm.
 fn is_structural_personal_turn(ix: &Index, ti: usize) -> bool {
     let tr = &ix.turns[ti];
     tr.field == 0
