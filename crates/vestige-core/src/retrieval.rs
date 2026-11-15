@@ -6301,6 +6301,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // 1..4 when its own score beats the whole top 5. Slot 0 and the session
     // list stay. Does not touch rsb_seat_behind.
     apply_c2_anaphoric_tail(ix, &mut final_turn_indices, &t_own);
+    // Unseated session peak. After the anaphoric tail. The unique named-speaker
+    // declarative outside the returned list whose own score beats every
+    // returned turn takes the lowest-own question seat in slots 1..4, when its
+    // session is absent from the top 5. Slot 0 and the session list stay.
+    // Does not touch rsb_seat_behind.
+    apply_c2_unseated_session_peak(ix, &mut final_turn_indices, &t_own, k);
     maybe_dump_replay(
         ix,
         q,
