@@ -981,6 +981,71 @@ fn apply_c2_cross_opener_seat(
     false
 }
 
+
+/// Same-session opener seat. A mid-session declarative user turn at
+/// slot 1 is often a later aside that still mentions the fact; the same
+/// session's user opener already in the top 5, that keeps slot 1's
+/// digit form and holds >= 70% of its scene score, is the conversation
+/// start and takes slot 1. Top-5 membership never changes. Skipped on
+/// summary requests (existing `summary_hold` shape), preference and
+/// temporal questions, event sequences and assistant-attribution
+/// (caller), and named-speaker sessions. Sibling of the cross-session
+/// opener seat (#13), which requires a different session and allows a
+/// question head. This seat requires the opener to be in the same
+/// session and both the head and the opener to be declarative: a
+/// question head already asking the query should stay, and a
+/// question opener is still asking, not stating the fact. Reuses
+/// `C2_XWITNESS_RATIO`. Runs after
+/// the cross-session opener seat, before RSB. Slot 1 is then frozen by
+/// rank1_gatekeeper_keep_rsb_head.
+fn apply_c2_same_opener_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || plan.intent.preference || plan.intent.temporal || c2_summary_request(query)
+    {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker != "user"
+        || ix.turns[top].is_question
+        || c2_named_session(ix, top)
+        || c2_session_pos(ix, top) < 1
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user"
+            || t.is_question
+            || t.session != ix.turns[top].session
+            || c2_named_session(ix, cand)
+            || c2_session_pos(ix, cand) != 0
+        {
+            continue;
+        }
+        if ix.turns[top].form_digit && !t.form_digit {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) < C2_XWITNESS_RATIO * sc_top {
+            continue;
+        }
+        list.remove(i);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -1597,6 +1662,142 @@ mod algos_c2_tests {
         assert_eq!(list, vec![2, 0, 1, 3]);
     }
 
+    #[test]
+    fn same_opener_seat_promotes_same_session_opener() {
+        let ix = build_index(
+            &[
+                sess(
+                    "a",
+                    &[
+                        ("user", "Last Wednesday I took a taxi that cost $12, and the train fare was $5."),
+                        ("assistant", "That's a big difference for a daily commute."),
+                        ("user", "I'd rather not talk about the book I bought. Last Wednesday's taxi cost me $12, which was more than the train."),
+                    ],
+                ),
+                sess(
+                    "b",
+                    &[("user", "I spent $40 on a new novel at the bookstore.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "For my daily commute, how much more expensive was the taxi ride compared to the train fare?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.preference);
+        assert!(!plan.intent.temporal);
+        assert!(!c2_summary_request(&q.text));
+        assert!(!ix.turns[2].is_question);
+        assert!(ix.turns[0].form_digit && ix.turns[2].form_digit);
+        // a#2 is mid-session declarative; a#0 is the same-session opener already in the top 5.
+        let mut list = vec![2usize, 0, 1, 3];
+        let t_scene = vec![0.85f32, 0.5, 1.0, 0.7];
+        assert!(apply_c2_same_opener_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 1, 3]);
+        // Below the 70% share: no seat.
+        let mut list = vec![2usize, 0, 1, 3];
+        assert!(!apply_c2_same_opener_seat(
+            &ix,
+            &plan,
+            &q.text,
+            &mut list,
+            &[0.6, 0.5, 1.0, 0.7]
+        ));
+        assert_eq!(list, vec![2, 0, 1, 3]);
+        // Session opener at slot 1: no seat.
+        let mut list = vec![0usize, 2, 1];
+        assert!(!apply_c2_same_opener_seat(&ix, &plan, &q.text, &mut list, &[1.0, 0.5, 0.9]));
+        assert_eq!(list, vec![0, 2, 1]);
+        // Cross-session opener only: no seat.
+        let mut list = vec![2usize, 3, 1];
+        assert!(!apply_c2_same_opener_seat(&ix, &plan, &q.text, &mut list, &[0.7, 0.85, 1.0]));
+        assert_eq!(list, vec![2, 3, 1]);
+        // Question head: no seat.
+        let ixq = build_index(
+            &[sess(
+                "a",
+                &[
+                    ("user", "Last Wednesday I took a taxi that cost $12, and the train fare was $5."),
+                    ("assistant", "That's a big difference for a daily commute."),
+                    ("user", "How much did last Wednesday's $12 taxi cost compared to the train?"),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(ixq.turns[2].is_question);
+        let mut list = vec![2usize, 0, 1];
+        assert!(!apply_c2_same_opener_seat(&ixq, &plan, &q.text, &mut list, &[0.85, 0.5, 1.0]));
+        assert_eq!(list, vec![2, 0, 1]);
+        // Question opener: no seat. A later named declarative (WH-person shape)
+        // must not yield to an opening question.
+        let ixo = build_index(
+            &[sess(
+                "a",
+                &[
+                    ("user", "Did you say we could work on the design project at the studio tomorrow?"),
+                    ("assistant", "Yes, we can."),
+                    ("user", "I planned to work on the design project with Elena Morales at the studio."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(ixo.turns[0].is_question);
+        assert!(!ixo.turns[2].is_question);
+        let mut list = vec![2usize, 0, 1];
+        assert!(!apply_c2_same_opener_seat(&ixo, &plan, &q.text, &mut list, &[0.85, 0.5, 1.0]));
+        assert_eq!(list, vec![2, 0, 1]);
+        // Digit-bearing head, digit-free opener: keep form, no seat.
+        let ixd = build_index(
+            &[sess(
+                "a",
+                &[
+                    ("user", "Last Wednesday I took a taxi, and the train fare was cheaper."),
+                    ("assistant", "That's a big difference for a daily commute."),
+                    ("user", "I'd rather not talk about the book I bought. Last Wednesday's taxi cost me $12, which was more than the train."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(ixd.turns[2].form_digit);
+        assert!(!ixd.turns[0].form_digit);
+        let mut list = vec![2usize, 0, 1];
+        assert!(!apply_c2_same_opener_seat(&ixd, &plan, &q.text, &mut list, &[0.85, 0.5, 1.0]));
+        assert_eq!(list, vec![2, 0, 1]);
+        // Summary request: no seat.
+        let sq = Query {
+            text: "Can you summarize what I learned about my commute costs?".into(),
+            date: String::new(),
+        };
+        assert!(c2_summary_request(&sq.text));
+        let splan = plan_query(&ix, &sq, &Params::default());
+        let mut list = vec![2usize, 0, 1, 3];
+        assert!(!apply_c2_same_opener_seat(&ix, &splan, &sq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 1, 3]);
+        // Preference query: no seat.
+        let pq = Query { text: "Can you recommend a cheaper commute?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![2usize, 0, 1, 3];
+        assert!(!apply_c2_same_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 1, 3]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("Caroline", "Last Wednesday I took a taxi that cost $12, and the train fare was $5."),
+                    ("Melanie", "That's a big difference for a daily commute."),
+                    ("Caroline", "I'd rather not talk about the book I bought. Last Wednesday's taxi cost me $12, which was more than the train."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![2usize, 0, 1];
+        assert!(!apply_c2_same_opener_seat(&ixn, &plann, &q.text, &mut list, &[0.85, 0.5, 1.0]));
+        assert_eq!(list, vec![2, 0, 1]);
+    }
 
 }
-
