@@ -6284,6 +6284,19 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // top-5 card. Does not touch rsb_seat_behind and does not rewrite the
     // session list.
     apply_c2_step34_bertillonage(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Step 36 Antaranga-bahiranga. After Bertillonage. A question at slot 1
+    // whose scene score is mostly external yields to a top-5 declarative
+    // turn held by its own lexical score. Does not touch rsb_seat_behind
+    // and does not rewrite the session list.
+    apply_c2_step36_antaranga(
+        ix,
+        &q.text,
+        &mut final_turn_indices,
+        &t_own,
+        &t_scene,
+        &s_score,
+        &bridge_boost,
+    );
     maybe_dump_replay(
         ix,
         q,
