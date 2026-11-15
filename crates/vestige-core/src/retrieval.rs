@@ -6206,6 +6206,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // Does not touch rsb_seat_behind and adds no WH-slot ballot.
     if !it.is_event_sequence && !it.assistant_attribution && !it.preference {
         apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Same-session user T@5 entry: a user opener or later turn from
+        // a session already in the top 5, already in official k, swaps
+        // with the last assistant in the top 5. Post-gatekeeper so the
+        // entry survives. Skipped on preference.
+        apply_c2_same_session_user_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
