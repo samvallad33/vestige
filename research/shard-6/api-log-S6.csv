@@ -1,0 +1,237 @@
+endpoint,http_status,result_count,note
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=cartulary,200,210,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=chirograph%20charter,200,1,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=inspeximus,200,16,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=Decretum%20Gratiani,200,379,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=papal%20bull%20seal,200,26,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=feet%20of%20fines,200,65,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=pipe%20roll,200,103,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=necrology%20manuscript,200,40,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=liber%20vitae,200,701,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=monastic%20customary,200,2,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=notarial%20instrument,200,147,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=inquisition%20post%20mortem,200,5,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=mortuary%20roll,200,9,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=Domesday%20Book,200,136,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=letter%20patent%20medieval,200,12,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=vidimus,200,1700,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=concordance,200,1102,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=Grosseteste,200,203,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=glossa%20ordinaria,200,820,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=chapter%20book%20monastery,200,47,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=obituary,200,6194,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=compotus%20roll,200,0,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=charter%20roll,200,36,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=close%20roll,200,293,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=privy%20seal,200,298,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=safe-conduct,200,73,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=final%20concord,200,9,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=pecia%20manuscript,200,33,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=manicula,200,21,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=quire,200,495,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=Mabillon,200,812,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=cartulaire,200,1214,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=n%C3%A9crologe,200,122,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=bullarium,200,618,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=registrum,200,1068,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=liber%20ordinarius,200,100,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=titulus%20mortuary,200,0,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=confraternity%20letter,200,3,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=sigillography,200,242,"Europeana search, wskey=api2demo (published demo key)"
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=3&profile=standard&query=rota%20privilege,200,1,"Europeana search, wskey=api2demo (published demo key)"
+https://discovery.nationalarchives.gov.uk/API/search/records?sps.resultsPageSize=1&sps.searchQuery=%22E%20372%22%20pipe,200,1312,tna_e372; first id C2233648 ref E 352/177
+https://discovery.nationalarchives.gov.uk/API/search/records?sps.resultsPageSize=1&sps.searchQuery=reference%3A%22C%2054%22,200,535,tna_c54; first id cbb79b81-bf5e-4046-a6f2-1b5d526663cf ref 28048/C54
+https://discovery.nationalarchives.gov.uk/API/search/records?sps.resultsPageSize=1&sps.searchQuery=%22Charter%20Rolls%22%20series,200,35,tna_c53; first id C3613 ref C 53
+https://discovery.nationalarchives.gov.uk/API/search/records?sps.resultsPageSize=1&sps.searchQuery=%22Ancient%20Petitions%22%20SC%208,200,18296,tna_sc8; first id C13526 ref SC 8
+https://discovery.nationalarchives.gov.uk/API/search/records?sps.resultsPageSize=1&sps.searchQuery=inspeximus%20Huntyngfeld,200,1,tna_insp; first id 48f7d78c-b1de-43c7-b937-8df3ab3e81f2 ref 3ANC2/1
+https://discovery.nationalarchives.gov.uk/API/search/records?sps.resultsPageSize=1&sps.searchQuery=%22CP%2025%22%20feet,200,55316,tna_cp25; first id C5392 ref CP 25/2
+https://archive.org/advancedsearch.php?q=title%3A%28%22De%20re%20diplomatica%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&output=json&rows=3,200,9,ia_mabillon
+"https://openlibrary.org/search.json?q=de+re+diplomatica+mabillon&limit=2&fields=key,title,oclc,ia",200,14,ol_mabillon
+https://www.wikidata.org/wiki/Special:EntityData/Q17625612.json,200,1,wd_mabillon
+https://api.crossref.org/works?query.bibliographic=Mabillon%20De%20re%20diplomatica&rows=2,200,10692768,crossref_mab
+"https://api.semanticscholar.org/graph/v1/paper/search?query=medieval%20diplomatics%20inspeximus%20vidimus&limit=2&fields=title,year,url",429,,s2_dip
+https://data.bnf.fr/ark:/12148/cb11994078m,200,,databnf; parse JSONDecodeError
+https://www.fihrist.org.uk/catalog?q=grosseteste&search_field=all_fields,ERR,,fihrist
+https://digital.bodleian.ox.ac.uk/search/?q=cartulary,200,,bod_dig; parse JSONDecodeError
+https://www.e-codices.unifr.ch/en/list/one/csg/0452,200,,ecodices; parse JSONDecodeError
+http://monasterium.net/mom/AT-DOZA/Urkunden/4264/charter,403,,monasterium
+https://api.europeana.eu/record/v2/search.json?wskey=api2demo&rows=2&profile=standard&query=digital.bodleian%20cartulary,200,0,eu_bod_digital
+https://archive.org/advancedsearch.php?q=mabillon%20AND%20diplomatica&fl[]=identifier&fl[]=title&output=json&rows=5,200,4,ia_mab2
+"https://openlibrary.org/search.json?q=calendar+of+the+charter+rolls&limit=1&fields=title,oclc,ia,key",200,47,ol_charter
+https://catalog.hathitrust.org/api/volumes/brief/oclc/1917335.json,200,1,ht_1917335; record 100242010 Librorum de re diplomatica supplementum 1704
+https://catalog.hathitrust.org/api/volumes/brief/oclc/27212093.json,200,0,ht_27212093; empty records
+https://api.openalex.org/works?search=Mabillon%20De%20re%20diplomatica&per-page=1,200,709,"oa_mab; truncated body, count taken from meta.count"
+https://discovery.nationalarchives.gov.uk/details/r/C3613,202,,"tna_c53; AWS WAF challenge HTML, not a catalogue record"
+https://discovery.nationalarchives.gov.uk/details/r/C13526,202,,"tna_sc8; AWS WAF challenge HTML, not a catalogue record"
+https://discovery.nationalarchives.gov.uk/details/r/C5392,202,,"tna_cp25; AWS WAF challenge HTML, not a catalogue record"
+https://discovery.nationalarchives.gov.uk/details/r/C2233648,202,,"tna_e352; AWS WAF challenge HTML, not a catalogue record"
+https://discovery.nationalarchives.gov.uk/details/r/48f7d78c-b1de-43c7-b937-8df3ab3e81f2,202,,"tna_hunt; AWS WAF challenge HTML, not a catalogue record"
+https://www.wikidata.org/wiki/Q17625612,200,1,wd
+https://openlibrary.org/works/OL4165942W,200,1,olw
+https://data.bnf.fr/ark:/12148/cb11994078m,200,1,databnf
+https://www.e-codices.unifr.ch/en/list/one/csg/0452,200,1,ecod
+https://www.europeana.eu/item/2059209/data_sounds_ark__81055_vdc_100058674167_0x000001,403,,eu1; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/92093/BibliographicResource_1000086163571,403,,eu2; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/92093/BibliographicResource_1000086140951,403,,eu3; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/2022717/bnesearch_detalle_bdh0000168154,403,,eu4; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/9200519/ark__12148_btv1b10038420p,403,,eu5; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/782/object_SSG___COD_SANG_3702FDBRK9,403,,eu6; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/9200211/en_list_one_csg_0452,403,,eu7; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/1488/item_ME5CPJCRN6QNLLZCDL36ADBK36HYSO2M,403,,eu8; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/782/object_NMP___XVI_A_3_____0578AQ7,403,,eu9; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/9200211/en_list_one_ubb_F_I_0021,403,,eu10; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/9200519/ark__12148_btv1b104686515,403,,eu11; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/782/object_NKCR__III_D_18____1V6C020,403,,eu12; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/472/https___www_esbirky_cz_detail_77162,403,,eu13; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/2048079/7094,403,,eu14; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/92093/BibliographicResource_1000086150142,403,,eu15; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/9200143/BibliographicResource_2000069315639,403,,eu16; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/542/item_XKAX6CMG2PETI7OC3EL5VAI5NVQGMOJA,403,,eu17; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/782/object_HUL___UAH_RA_1308_2PFQ24E,403,,eu18; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/794/ark__12148_bpt6k324992t,403,,eu19; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/362/item_LZMS2WQJ3JSESNW6UOZJO7UINOJJTLNG,403,,eu20; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/181/share3d_2732,403,,eu21; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/887/_providedCHO_SE_RA_0201_SE_RA_0201_A_9,403,,eu22; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/03916/public_mistral_caran_fr_ACTION_CHERCHER_FIELD_1_REF_VALUE_1_03769,403,,eu23; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/185/tag_www_monasterium_net_2011__charter_AT_DOZA_Urkunden_4264,403,,eu24; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/2020708/PSAS_4275,403,,eu25; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/782/object_OBBB__MS_370______1B1WRY4,403,,eu26; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/782/object_CHSAL_KU_626______1QZW9TC,403,,eu27; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/9200519/ark__12148_btv1b52510852n,403,,eu28; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/9200143/BibliographicResource_2000069340030,403,,eu29; blocked from this environment; not used as a record_url
+https://www.europeana.eu/item/1488/item_MZHPK4WPC2GHDIGJKZ6LRC5IGQNQH5XM,403,,eu30; blocked from this environment; not used as a record_url
+http://bodley30.bodley.ox.ac.uk:8180/luna/servlet/detail/ODLodl~1~1~3673~103166,ERR,,luna
+https://doi.org/10.24206/lh.v7i3.53514,200,1,crossref_doi
+https://api.europeana.eu/record/v2/2022717/bnesearch_detalle_bdh0000168154.json?wskey=api2demo&profile=minimal,200,1,rec00; Europeana record JSON success
+https://api.europeana.eu/record/v2/2059209/data_sounds_ark__81055_vdc_100058674167_0x000001.json?wskey=api2demo&profile=minimal,200,1,rec01; Europeana record JSON success
+https://api.europeana.eu/record/v2/92093/BibliographicResource_1000086163571.json?wskey=api2demo&profile=minimal,200,1,rec02; Europeana record JSON success
+https://api.europeana.eu/record/v2/92093/BibliographicResource_1000086140951.json?wskey=api2demo&profile=minimal,200,1,rec03; Europeana record JSON success
+https://api.europeana.eu/record/v2/9200143/BibliographicResource_2000069340030.json?wskey=api2demo&profile=minimal,200,1,rec04; Europeana record JSON success
+https://api.europeana.eu/record/v2/782/object_NMP___XVI_A_3_____0578AQ7.json?wskey=api2demo&profile=minimal,200,1,rec05; Europeana record JSON success
+https://api.europeana.eu/record/v2/92093/BibliographicResource_1000086150142.json?wskey=api2demo&profile=minimal,200,1,rec06; Europeana record JSON success
+https://api.europeana.eu/record/v2/9200519/ark__12148_btv1b10038420p.json?wskey=api2demo&profile=minimal,200,1,rec07; Europeana record JSON success
+https://api.europeana.eu/record/v2/9200519/ark__12148_btv1b52510852n.json?wskey=api2demo&profile=minimal,200,1,rec08; Europeana record JSON success
+https://api.europeana.eu/record/v2/782/object_SSG___COD_SANG_3702FDBRK9.json?wskey=api2demo&profile=minimal,200,1,rec09; Europeana record JSON success
+https://api.europeana.eu/record/v2/782/object_CHSAL_KU_626______1QZW9TC.json?wskey=api2demo&profile=minimal,200,1,rec10; Europeana record JSON success
+https://api.europeana.eu/record/v2/472/https___www_esbirky_cz_detail_77162.json?wskey=api2demo&profile=minimal,200,1,rec11; Europeana record JSON success
+https://api.europeana.eu/record/v2/2048079/7094.json?wskey=api2demo&profile=minimal,200,1,rec12; Europeana record JSON success
+https://api.europeana.eu/record/v2/1488/item_ME5CPJCRN6QNLLZCDL36ADBK36HYSO2M.json?wskey=api2demo&profile=minimal,200,1,rec13; Europeana record JSON success
+https://api.europeana.eu/record/v2/782/object_CHUBB_F_I_21______0JUYZTC.json?wskey=api2demo&profile=minimal,200,1,rec14; Europeana record JSON success
+https://api.europeana.eu/record/v2/9200211/en_list_one_ubb_F_I_0021.json?wskey=api2demo&profile=minimal,200,1,rec15; Europeana record JSON success
+https://api.europeana.eu/record/v2/9200143/BibliographicResource_2000069315639.json?wskey=api2demo&profile=minimal,200,1,rec16; Europeana record JSON success
+https://api.europeana.eu/record/v2/887/_providedCHO_SE_RA_0201_SE_RA_0201_A_9.json?wskey=api2demo&profile=minimal,200,1,rec17; Europeana record JSON success
+https://api.europeana.eu/record/v2/794/ark__12148_bpt6k324992t.json?wskey=api2demo&profile=minimal,200,1,rec18; Europeana record JSON success
+https://api.europeana.eu/record/v2/782/object_NKCR__III_D_18____1V6C020.json?wskey=api2demo&profile=minimal,200,1,rec19; Europeana record JSON success
+https://api.europeana.eu/record/v2/9200110/BibliographicResource_1000126656643.json?wskey=api2demo&profile=minimal,200,1,rec20; Europeana record JSON success
+https://api.europeana.eu/record/v2/362/item_LZMS2WQJ3JSESNW6UOZJO7UINOJJTLNG.json?wskey=api2demo&profile=minimal,200,1,rec21; Europeana record JSON success
+https://api.europeana.eu/record/v2/9200211/en_list_one_csg_0452.json?wskey=api2demo&profile=minimal,200,1,rec22; Europeana record JSON success
+https://api.europeana.eu/record/v2/2021803/VUB01_000423263.json?wskey=api2demo&profile=minimal,200,1,rec23; Europeana record JSON success
+https://api.europeana.eu/record/v2/542/item_XKAX6CMG2PETI7OC3EL5VAI5NVQGMOJA.json?wskey=api2demo&profile=minimal,200,1,rec24; Europeana record JSON success
+https://api.europeana.eu/record/v2/782/object_HUL___UAH_RA_1308_2PFQ24E.json?wskey=api2demo&profile=minimal,200,1,rec25; Europeana record JSON success
+https://api.europeana.eu/record/v2/9200519/ark__12148_btv1b104686515.json?wskey=api2demo&profile=minimal,200,1,rec26; Europeana record JSON success
+https://api.europeana.eu/record/v2/181/share3d_2732.json?wskey=api2demo&profile=minimal,200,1,rec27; Europeana record JSON success
+https://api.europeana.eu/record/v2/2020708/PSAS_4275.json?wskey=api2demo&profile=minimal,200,1,rec28; Europeana record JSON success
+https://api.europeana.eu/record/v2/185/tag_www_monasterium_net_2011__charter_AT_DOZA_Urkunden_4264.json?wskey=api2demo&profile=minimal,200,1,rec29; Europeana record JSON success
+https://api.europeana.eu/record/v2/782/object_OBBB__MS_370______1B1WRY4.json?wskey=api2demo&profile=minimal,200,1,rec30; Europeana record JSON success
+https://api.europeana.eu/record/v2/1488/item_MZHPK4WPC2GHDIGJKZ6LRC5IGQNQH5XM.json?wskey=api2demo&profile=minimal,200,1,rec31; Europeana record JSON success
+https://api.europeana.eu/record/v2/2048437/item_CLJBBK6H6VJB4W4SSNS5MDZR5GODF4A7.json?wskey=api2demo&profile=minimal,200,1,rec32; Europeana record JSON success
+https://api.europeana.eu/record/v2/1493/item_37NBWNIWE247Z64FLIUOWM5TJPE7GSKD.json?wskey=api2demo&profile=minimal,200,1,rec33; Europeana record JSON success
+https://api.europeana.eu/record/v2/368/item_WRHTEFHYT5JWA3NFJXJCFLCQ2M5VUZDJ.json?wskey=api2demo&profile=minimal,200,1,rec34; Europeana record JSON success
+https://api.europeana.eu/record/v2/03916/public_mistral_caran_fr_ACTION_CHERCHER_FIELD_1_REF_VALUE_1_03769.json?wskey=api2demo&profile=minimal,200,1,rec35; Europeana record JSON success
+https://discovery.nationalarchives.gov.uk/API/records/v1/details/C3613,200,1,tna_det_c53; TNA record details JSON
+https://discovery.nationalarchives.gov.uk/API/records/v1/details/C13526,200,1,tna_det_sc8; TNA record details JSON
+https://discovery.nationalarchives.gov.uk/API/records/v1/details/C5392,200,1,tna_det_cp; TNA record details JSON
+https://discovery.nationalarchives.gov.uk/API/records/v1/details/C2233648,200,1,tna_det_e352; TNA record details JSON
+https://discovery.nationalarchives.gov.uk/API/records/v1/details/48f7d78c-b1de-43c7-b937-8df3ab3e81f2,200,1,tna_det_hunt; TNA record details JSON
+https://archive.org/metadata/gri_33125008690535,200,1,ia_meta_sup; Internet Archive metadata
+https://archive.org/metadata/calendarofcharte05greauoft,200,1,ia_meta_cal; Internet Archive metadata
+https://archive.org/metadata/bub_gb_jz0qsX_ZxvoC,200,1,ia_meta_heu; Internet Archive metadata
+https://catalog.hathitrust.org/Record/100242010,403,0,ht_rec; not used as a record_url
+https://openlibrary.org/works/OL933881W.json,200,1,ol_charter_w
+https://www.e-codices.unifr.ch/en/list/one/ubb/F-I-0021,200,1,ecod_pecia
+https://gallica.bnf.fr/iiif/ark:/12148/bpt6k1040119j/manifest.json,403,0,gallica_iiif; not used as a record_url
+https://gallica.bnf.fr/services/engine/search/sru?operation=searchRetrieve&version=1.2&query=dc.title%20all%20%22cartulaire%22&maximumRecords=1,403,0,gallica_sru; not used as a record_url
+https://api.europeana.eu/record/v2/search.json?query=cartulary&rows=1,401,0,eu_nokey; Europeana search without wskey
+https://iiif.bodleian.ox.ac.uk/iiif/manifest/e32a2776-6f8a-4e8c-9c0e-4b0a0c0e0000,404,0,bod_iiif; no such manifest
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=inscriptio%20address-line%20next-turn%20retrieval%20ranking",200,3,OpenAlex novelty S6-003: inscriptio address-line next-turn retrieval ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=enrolment%20margin%20hapax%20token%20donation%20ranking",200,0,OpenAlex novelty S6-013: enrolment margin hapax token donation ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=calendar%20entry%20digit%20entity%20donation%20index",200,190,OpenAlex novelty S6-014: calendar entry digit entity donation index
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=cartulary%20rubric%20heading%20inheritance%20zero-scene%20retrieval",200,0,OpenAlex novelty S6-016: cartulary rubric heading inheritance zero-scene retrieval
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=writ%20dorse%20endorsement%20return%20index%20ranking",200,5,OpenAlex novelty S6-022: writ dorse endorsement return index ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=signet%20warrant%20short%20instrument%20token%20copy%20retrieval",200,2,OpenAlex novelty S6-023: signet warrant short instrument token copy retrieval
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=monastic%20customary%20ordinal%20successor%20pool%20admission",200,3,OpenAlex novelty S6-034: monastic customary ordinal successor pool admission
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=obituary%20name-list%20charter%20bond%20scene%20ranking",200,108,OpenAlex novelty S6-035: obituary name-list charter bond scene ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=ordinal%20prefix%20quotation%20incipit-span%20retrieval",200,0,OpenAlex novelty S6-039: ordinal prefix quotation incipit-span retrieval
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=compotus%20charge%20discharge%20partition%20summary%20ranking",200,0,OpenAlex novelty S6-040: compotus charge discharge partition summary ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=interlinear%20gloss%20token%20set-difference%20donation%20ranking",200,5,OpenAlex novelty S6-043: interlinear gloss token set-difference donation ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=grosseteste%20tabula%20symbol%20length%20bind%20retrieval",200,0,OpenAlex novelty S6-051: grosseteste tabula symbol length bind retrieval
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=quire%20catchword%20punctuation%20boundary%20token%20copy",200,5,OpenAlex novelty S6-052: quire catchword punctuation boundary token copy
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=rubric%20colon%20heading%20next-turn%20credit%20ranking",200,33,OpenAlex novelty S6-057: rubric colon heading next-turn credit ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=concordance%20locator%20back-reference%20numbered%20turn%20index",200,4924,OpenAlex novelty S6-060: concordance locator back-reference numbered turn index
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=inspeximus%20frame%20datum%20tail%20coverage%20ranking",200,0,OpenAlex novelty S6-061: inspeximus frame datum tail coverage ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=chirograph%20triple%20indenture%20query%20digit%20seat",200,0,OpenAlex novelty S6-062: chirograph triple indenture query digit seat
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=gloss%20donation%20manicula%20marked%20line%20ranking",200,0,OpenAlex novelty S6-063: gloss donation manicula marked line ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=necrology%20day-bucket%20name-list%20yield%20prose%20seat",200,1,OpenAlex novelty S6-064: necrology day-bucket name-list yield prose seat
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=pancarte%20list%20calendar%20digit%20gate%20ranking",200,0,OpenAlex novelty S6-065: pancarte list calendar digit gate ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=catchword%20copy%20quire%20signature%20letter%20retrieval",200,4,OpenAlex novelty S6-066: catchword copy quire signature letter retrieval
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=letters%20patent%20warranty%20clause%20coverage%20drop",200,117,OpenAlex novelty S6-067: letters patent warranty clause coverage drop
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=privy%20seal%20warrant%20sealed%20short-to-long%20gate",200,934,OpenAlex novelty S6-068: privy seal warrant sealed short-to-long gate
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=pecia%20successor%20middle-band%20coverage%20ranking",200,0,OpenAlex novelty S6-069: pecia successor middle-band coverage ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=allegation%20locator%20palea%20subset%20yield",200,0,OpenAlex novelty S6-070: allegation locator palea subset yield
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=customary%20successor%20modal%20clause%20tail%20admission",200,15,OpenAlex novelty S6-071: customary successor modal clause tail admission
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=running%20title%20strip%20rubric%20colon%20pointer",200,4,OpenAlex novelty S6-072: running title strip rubric colon pointer
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=vidimus%20short%20copy%20shared%20digit%20entity%20seat",200,0,OpenAlex novelty S6-073: vidimus short copy shared digit entity seat
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=exceptio%20replica%20witness-run%20gate%20ranking",200,0,OpenAlex novelty S6-074: exceptio replica witness-run gate ranking
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=margin%20hapax%20dispositio%20datum%20exclusion",200,0,OpenAlex novelty S6-075: margin hapax dispositio datum exclusion
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=confraternity%20list%20first-entity%20slot%20seat",200,16,OpenAlex novelty S6-076: confraternity list first-entity slot seat
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=mortuary%20roll%20titulus%20recto%20tail%20admission",200,0,OpenAlex novelty S6-077: mortuary roll titulus recto tail admission
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=compotus%20discharge%20digit%20pair%20charge%20group%20split",200,0,OpenAlex novelty S6-078: compotus discharge digit pair charge group split
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=safe-conduct%20route%20address%20next-turn%20pointer",200,8392,OpenAlex novelty S6-079: safe-conduct route address next-turn pointer
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=symbol%20bind%20alphabet%20letter-section%20retrieval",200,504,OpenAlex novelty S6-080: symbol bind alphabet letter-section retrieval
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=concordance%20window%20query%20digit%20sense%20line",200,350,OpenAlex novelty S6-081: concordance window query digit sense line
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=res%20judicata%20modal%20cancelled%20clause%20seat",200,27,OpenAlex novelty S6-082: res judicata modal cancelled clause seat
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=dossier%20heading%20modal%20signature%20scene%20lift",200,25,OpenAlex novelty S6-083: dossier heading modal signature scene lift
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=inquisition%20post%20mortem%20juror%20list%20finding%20seat",200,34,OpenAlex novelty S6-084: inquisition post mortem juror list finding seat
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=pipe%20roll%20year-header%20coverage%20scope",200,280,OpenAlex novelty S6-085: pipe roll year-header coverage scope
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=feet%20of%20fines%20plica%20length%20foot%20seat",200,106,OpenAlex novelty S6-086: feet of fines plica length foot seat
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=ordinal%20quotation%20numbered%20step%20lift",200,709,OpenAlex novelty S6-087: ordinal quotation numbered step lift
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=martyrology%20name-line%20obit%20bond%20scene%20floor",200,4,OpenAlex novelty S6-088: martyrology name-line obit bond scene floor
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=date-head%20warrant%20universal%20quantifier%20seat",200,3782,OpenAlex novelty S6-089: date-head warrant universal quantifier seat
+"https://api.openalex.org/works?per-page=2&select=display_name,publication_year&search=index%20locator%20pecia%20mark%20back-reference%20copy",200,28,OpenAlex novelty S6-090: index locator pecia mark back-reference copy
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=interlinear%20gloss%20token%20set-difference%20donation%20ranking",200,5,OpenAlex novelty tighter S6-043: interlinear gloss token set-difference donation ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=rubric%20colon%20heading%20next-turn%20credit%20ranking",200,33,OpenAlex novelty tighter S6-057: rubric colon heading next-turn credit ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=medieval%20concordance%20locator%20back-reference%20pecia%20ranking",200,1,OpenAlex novelty tighter S6-060b: medieval concordance locator back-reference pecia ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=letters%20patent%20warranty%20clause%20coverage%20ranking",200,65,OpenAlex novelty tighter S6-067b: letters patent warranty clause coverage ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=privy%20seal%20warrant%20token%20copy%20sealed%20instrument%20retrieval",200,6,OpenAlex novelty tighter S6-068b: privy seal warrant token copy sealed instrument retrieval
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=customary%20successor%20modal%20clause%20tail%20admission",200,15,OpenAlex novelty tighter S6-071: customary successor modal clause tail admission
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=confraternity%20list%20first-entity%20slot%20seat",200,16,OpenAlex novelty tighter S6-076: confraternity list first-entity slot seat
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=safe-conduct%20address%20line%20next%20turn%20retrieval",200,47864,OpenAlex novelty tighter S6-079b: safe-conduct address line next turn retrieval
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=alphabet%20letter-section%20symbol%20bind%20manuscript%20retrieval",200,165,OpenAlex novelty tighter S6-080b: alphabet letter-section symbol bind manuscript retrieval
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=biblical%20concordance%20proximity%20window%20query%20digit%20ranking",200,3,OpenAlex novelty tighter S6-081b: biblical concordance proximity window query digit ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=res%20judicata%20modal%20cancelled%20clause%20seat",200,27,OpenAlex novelty tighter S6-082: res judicata modal cancelled clause seat
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=dossier%20heading%20modal%20signature%20scene%20lift",200,25,OpenAlex novelty tighter S6-083: dossier heading modal signature scene lift
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=inquisition%20post%20mortem%20juror%20list%20finding%20seat%20ranking",200,7,OpenAlex novelty tighter S6-084: inquisition post mortem juror list finding seat ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=pipe%20roll%20year-heading%20coverage%20scope%20ranking",200,180,OpenAlex novelty tighter S6-085b: pipe roll year-heading coverage scope ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=feet%20of%20fines%20plica%20fold%20length%20ranking",200,14,OpenAlex novelty tighter S6-086b: feet of fines plica fold length ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=ordinal%20quotation%20numbered%20step%20retrieval%20ranking",200,370,OpenAlex novelty tighter S6-087b: ordinal quotation numbered step retrieval ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=martyrology%20name-line%20obit%20bond%20scene",200,9,OpenAlex novelty tighter S6-088: martyrology name-line obit bond scene
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=date-clause%20warrant%20universal%20quantifier%20ranking",200,1211,OpenAlex novelty tighter S6-089b: date-clause warrant universal quantifier ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=index%20locator%20pecia%20mark%20back-reference",200,32,OpenAlex novelty tighter S6-090: index locator pecia mark back-reference
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=liturgical%20calendar%20digit%20entry%20entity%20copy%20index",200,10,OpenAlex novelty tighter S6-014b: liturgical calendar digit entry entity copy index
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=necrology%20name%20list%20charter%20entity%20bond%20retrieval",200,0,OpenAlex novelty tighter S6-035b: necrology name list charter entity bond retrieval
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=writ%20dorse%20endorsement%20return%20index%20ranking",200,5,OpenAlex novelty tighter S6-022: writ dorse endorsement return index ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=quire%20catchword%20punctuation%20boundary%20token%20copy",200,5,OpenAlex novelty tighter S6-052: quire catchword punctuation boundary token copy
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=catchword%20copy%20quire%20signature%20letter%20retrieval",200,4,OpenAlex novelty tighter S6-066: catchword copy quire signature letter retrieval
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=inscriptio%20address-line%20next-turn%20retrieval%20ranking",200,3,OpenAlex novelty tighter S6-003: inscriptio address-line next-turn retrieval ranking
+"https://api.openalex.org/works?per-page=3&select=display_name,publication_year&search=necrology%20day-bucket%20name-list%20yield%20prose%20seat",200,1,OpenAlex novelty tighter S6-064: necrology day-bucket name-list yield prose seat
+https://digital.bodleian.ox.ac.uk/developer/,ERR,,TLS handshake timeout; Digital Bodleian developer page
+https://digital.bodleian.ox.ac.uk/search.xml,200,1,"OpenSearch description; HTML template only, no records"
+https://digital.bodleian.ox.ac.uk/api/iiif/manifest,404,0,no manifest at this path
+https://iiif.bodleian.ox.ac.uk/iiif/manifest,404,0,host reachable; path is not a manifest
+https://digital.bodleian.ox.ac.uk/search/catalog?q=cartulary,404,0,no catalogue at this path
+https://digital.bodleian.ox.ac.uk/static/search/app.js,ERR,,TLS handshake timeout
+https://babel.hathitrust.org/cgi/pt?id=gri.ark:/13960/t14n1x94c,403,0,item page blocked; bibliographic API record was used instead
+https://archive.org/details/gri_33125008690535,200,1,Mabillon supplement item page
+https://archive.org/details/calendarofcharte05greauoft,200,1,Calendar of the Charter Rolls vol. 5 item page
+https://archive.org/details/bub_gb_jz0qsX_ZxvoC,200,1,Heumann Commentarii de re diplomatica item page
+https://www.bodleian.ox.ac.uk/collections-and-resources,200,,"collections HTML, not a manuscript record; fetched in the first probe pass"
