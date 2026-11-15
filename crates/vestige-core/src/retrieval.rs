@@ -1885,6 +1885,9 @@ struct TurnIx {
     slot_entities: u16,
     /// Clean mid-sentence slot entities excluding first-person pronouns ("I", "I'm", "I've", "I'll", "I'd").
     slot_entities_clean: u16,
+    /// Step 9 ingest-time prose shape (`--no-dump` safe): list-marker lines and first game move.
+    list_item_count: u8,
+    first_move_num: u16,
     raw_links: Vec<TurnLink>,
     /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
     /// Never read by ranking.
@@ -3364,6 +3367,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_midcap: has_mid_sentence_name(prose_body),
                 slot_entities: count_slot_entities_mode(prose_body, false),
                 slot_entities_clean: count_slot_entities_mode(prose_body, true),
+                list_item_count: step9_list_item_count(prose_body),
+                first_move_num: step9_first_move_num(prose_body),
                 raw_links: t.links.clone(),
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
@@ -4102,6 +4107,7 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                 focal_ids.insert(id);
             }
         }
+        step9_push_typo_fallback(ix, w, &st, nick_bind.get(w).is_some(), g, &mut terms, &mut group_of);
         if let Some(doms) = hypernyms().get(&st) {
             for &d in doms {
                 if ix.non_hub_domains.contains(d) {
@@ -4759,6 +4765,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     apply_panini_karaka_slot_shape(ix, &q.text, &it, pref_on, &mut t_turn_raw);
     apply_step8_kelal_u_ferat(ix, &plan, &mut t_turn_raw);
     apply_step8_homeric_ring(ix, &plan, &mut t_turn_raw);
+    apply_step9_method_of_loci(ix, &q.text, &mut t_turn_raw);
     if p.enable_deictic {
         apply_move3_heideltime_anchor(
             ix,
