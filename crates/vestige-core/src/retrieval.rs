@@ -1721,8 +1721,10 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
                         let target = WEEKDAYS.iter().position(|d| d == w).unwrap_or(0) as i64;
                         let is_future = matches!(prev, "next" | "coming" | "following");
                         let is_strict_past = matches!(prev, "last" | "past" | "previous");
-                        let back = ((today - target + 7) % 7).max(if is_strict_past { 1 } else { 0 });
-                        let fwd = ((target - today + 7) % 7).max(if is_future { 1 } else { 0 });
+                        let raw_back = (today - target + 7) % 7;
+                        let raw_fwd = (target - today + 7) % 7;
+                        let back = if is_strict_past && raw_back == 0 { 7 } else { raw_back };
+                        let fwd = if is_future && raw_fwd == 0 { 7 } else { raw_fwd };
                         let delta = if is_future { fwd } else { -back };
                         specs.push((delta * DAY, 1.0, false));
                     }
@@ -4003,19 +4005,42 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     } else {
         Vec::new()
     };
+    let rel_spec = if p.enable_deictic && q_ts != 0 {
+        parse_relative_time_specs_from_raw(&raw_q, q_ts)
+    } else {
+        RelTimeSpec {
+            points: Vec::new(),
+            windows: Vec::new(),
+            scaffold_positions: vec![false; raw_q.len()],
+        }
+    };
+    let rel_prior_active = !rel_spec.points.is_empty() || !rel_spec.windows.is_empty();
 
     let fw = framing_words();
     let domain_groups = raw_q
         .iter()
-        .filter(|w| is_content(w) && !fw.contains(w.as_str()))
+        .enumerate()
+        .filter(|&(idx, w)| {
+            is_content(w)
+                && !fw.contains(w.as_str())
+                && !(rel_prior_active && rel_spec.scaffold_positions.get(idx).copied().unwrap_or(false))
+        })
+        .map(|(_, w)| w)
         .collect::<HashSet<_>>()
         .len();
     let can_demote_framing = domain_groups >= 1;
+    let zero_rel_scaffolding = rel_prior_active && domain_groups >= 1;
 
     let nick_bind = ix.nicks.bindings_in(&q.text);
     let mut label_group: HashMap<String, usize> = HashMap::new();
     let mut seen_toks = HashSet::new();
-    for w in raw_q.iter().filter(|w| is_content(w)) {
+    for (idx, w) in raw_q.iter().enumerate() {
+        if !is_content(w) {
+            continue;
+        }
+        if zero_rel_scaffolding && rel_spec.scaffold_positions.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
         if !seen_toks.insert(w.clone()) {
             continue;
         }
@@ -4732,6 +4757,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &mut t_turn_raw,
     );
     apply_panini_karaka_slot_shape(ix, &q.text, &it, pref_on, &mut t_turn_raw);
+    if p.enable_deictic {
+        apply_move3_heideltime_anchor(
+            ix,
+            q,
+            it.multi_hop,
+            &mut s_score,
+            &mut t_turn_raw,
+            &mut t_raw,
+            &mut t_own,
+        );
+    }
 
     // Weapon 1: Bidirectional 3-Turn Scene Pooling.
     // - On named-speaker dialogues (`LoCoMo` / multi-person chats), pool over uncarried `t_own` +
@@ -7961,6 +7997,62 @@ mod tests {
         assert!((single_sess_factor - 1.0).abs() < 1e-6);
         let asst_query_factor = adj_partner_diversity_factor(&ix, 1, 0, &[0], true, false, 2);
         assert!((asst_query_factor - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn move3_weekday_modulo_zero_resolves_seven_days_and_demotes_scaffolding() {
+        // 2023/04/14 is a Friday -> "last Friday" must resolve to 2023/04/07 (-7 days), never yesterday (-1d).
+        let q_ts = parse_date("2023/04/14 (Fri) 12:00");
+        let raw = raw_tokens("What gym workout did I finish last Friday?");
+        let spec = parse_relative_time_specs_from_raw(&raw, q_ts);
+        let expected_ts = parse_date("2023/04/07 (Fri) 12:00");
+        assert!(
+            spec.points.iter().any(|&(ts, _)| (ts - expected_ts).abs() < 60),
+            "last Friday on Friday must resolve -7d: {:?}",
+            spec.points
+        );
+        // Zero-weighting relative-time scaffolding keeps off-date "few months" distractors below true temporal anchors.
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "distractor_wrong_date".into(),
+                    date: "2023/04/10 (Mon) 12:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn(
+                        "user",
+                        "For a few months I practiced meditation every morning in the past months.",
+                    )],
+                },
+                Session {
+                    id: "gold_target_date".into(),
+                    date: "2023/01/15 (Sun) 12:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I practiced guitar every morning.")],
+                },
+                Session {
+                    id: "filler_turn".into(),
+                    date: "2022/11/01 (Tue) 12:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I cooked pasta for dinner.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "What did I practice a few months ago?".into(),
+                date: "2023/04/14 (Fri) 12:00".into(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let out = rank(&req);
+        assert_eq!(out.results[0].sessions[0].id, "gold_target_date");
+    }
+
+    #[test]
+    fn move3_does_not_misparse_duration_in_two_weeks_as_lookback_anchor() {
+        let q_ts = parse_date("2023/05/30 (Tue) 23:16");
+        let raw = raw_tokens("What was the approximate increase in Instagram followers I experienced in two weeks?");
+        let spec = parse_relative_time_specs_from_raw(&raw, q_ts);
+        assert!(spec.windows.is_empty() && spec.points.is_empty(), "{:?}", spec.windows);
     }
 
     #[test]

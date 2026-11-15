@@ -323,3 +323,233 @@ fn apply_rung4_hub_damped_rm3(
         }
     }
 }
+
+/// Step 5 (Move 3): Continuous HeidelTime Relative-Time Anchor + Scaffolding Span Detector.
+struct RelTimeSpec {
+    /// Point anchors: `(target_ts, sigma_days)`
+    points: Vec<(i64, f32)>,
+    /// Bounded span windows: `(start_ts, end_ts)`
+    windows: Vec<(i64, i64)>,
+    /// Per-token positions in `raw_tokens(&q.text)` that belong strictly to parsed relative-time scaffolding
+    /// so BM25F can zero-weight pure temporal scaffolding words when domain words remain (`81507db6` guard).
+    scaffold_positions: Vec<bool>,
+}
+
+fn parse_relative_time_specs_from_raw(raw: &[String], query_ts: i64) -> RelTimeSpec {
+    let mut spec = RelTimeSpec {
+        points: Vec::new(),
+        windows: Vec::new(),
+        scaffold_positions: vec![false; raw.len()],
+    };
+    if query_ts == 0 {
+        return spec;
+    }
+    const DAY: i64 = 86_400;
+    for (i, w) in raw.iter().enumerate() {
+        let prev = if i > 0 { raw[i - 1].as_str() } else { "" };
+        let next = raw.get(i + 1).map(String::as_str).unwrap_or("");
+        match w.as_str() {
+            "yesterday" | "tonight" => {
+                if w == "yesterday" {
+                    spec.points.push((query_ts - DAY, 1.5));
+                    spec.scaffold_positions[i] = true;
+                }
+            }
+            "night" if prev == "last" => {
+                spec.points.push((query_ts - DAY, 1.5));
+                spec.scaffold_positions[i - 1] = true;
+                spec.scaffold_positions[i] = true;
+            }
+            "ago" | "earlier" => {
+                if matches!(prev, "days" | "weeks" | "months" | "years" | "day" | "week" | "month" | "year") {
+                    let has_of = i >= 3 && raw[i - 2] == "of";
+                    let q_pos = if has_of {
+                        Some(i - 3)
+                    } else if i >= 2 {
+                        Some(i - 2)
+                    } else {
+                        None
+                    };
+                    let q = q_pos.map(|p| raw[p].as_str()).unwrap_or("");
+                    let n = if q == "few" {
+                        3
+                    } else if q == "several" {
+                        4
+                    } else {
+                        parse_qty_word(q)
+                    };
+                    if n > 0 {
+                        let (unit_d, sigma) = match prev.trim_end_matches('s') {
+                            "day" => (1i64, (1.5f32).max(n as f32 * 0.25)),
+                            "week" => (7, (3.5f32).max(n as f32 * 1.5)),
+                            "month" => (30, (7.0f32).max(n as f32 * 3.0)),
+                            _ => (365, 25.0),
+                        };
+                        spec.points.push((query_ts - n * unit_d * DAY, sigma));
+                        spec.scaffold_positions[i] = true;
+                        spec.scaffold_positions[i - 1] = true;
+                        if let Some(qp) = q_pos {
+                            spec.scaffold_positions[qp] = true;
+                            if qp > 0 && raw[qp - 1] == "a" {
+                                spec.scaffold_positions[qp - 1] = true;
+                            }
+                        }
+                    }
+                }
+            }
+            "week" if matches!(prev, "last" | "past" | "previous") && !matches!(next, "ago" | "earlier" | "later") => {
+                spec.windows.push((query_ts - 11 * DAY, query_ts));
+                spec.scaffold_positions[i - 1] = true;
+                spec.scaffold_positions[i] = true;
+            }
+            "weekend" if matches!(prev, "last" | "past" | "previous") => {
+                spec.windows.push((query_ts - 10 * DAY, query_ts));
+                spec.scaffold_positions[i - 1] = true;
+            }
+            "month" if matches!(prev, "last" | "past" | "previous") && !matches!(next, "ago" | "earlier" | "later") => {
+                spec.windows.push((query_ts - 32 * DAY, query_ts));
+                spec.scaffold_positions[i - 1] = true;
+                spec.scaffold_positions[i] = true;
+            }
+            "year" if matches!(prev, "last" | "past" | "previous") && !matches!(next, "ago" | "earlier" | "later") => {
+                spec.windows.push((query_ts - 366 * DAY, query_ts));
+                spec.scaffold_positions[i - 1] = true;
+                spec.scaffold_positions[i] = true;
+            }
+            "days" | "weeks" | "months" | "years" if !matches!(next, "ago" | "earlier" | "later") => {
+                let has_of = i >= 3 && raw[i - 2] == "of";
+                let q_pos = if has_of { i - 3 } else if i >= 2 { i - 2 } else { 0 };
+                let prep_pos = if has_of { i.checked_sub(4) } else { i.checked_sub(2) };
+                // Strictly deictic lookbacks ("past"/"last"); never treat durations ("in two weeks") as anchored to query_ts.
+                let mut matched_prep = prep_pos.filter(|&pp| matches!(raw[pp].as_str(), "past" | "last"));
+                // Also support "in the past few weeks" / "past a few days"
+                if matched_prep.is_none() && !has_of && i >= 3 && matches!(raw[i - 3].as_str(), "past" | "last") && raw[i - 2] == "a" {
+                    matched_prep = Some(i - 3);
+                }
+                if let Some(pp) = matched_prep {
+                    let q_tok = if has_of { raw[q_pos].as_str() } else { prev };
+                    let n = if matches!(q_tok, "few" | "several") {
+                        6
+                    } else if q_tok == "couple" {
+                        3
+                    } else {
+                        parse_qty_word(q_tok)
+                    };
+                    if n > 0 && n <= 120 {
+                        let unit = match w.trim_end_matches('s') {
+                            "day" => 1i64,
+                            "week" => 7,
+                            "month" => 31,
+                            _ => 366,
+                        };
+                        spec.windows.push((query_ts - n * unit * DAY - DAY, query_ts));
+                        spec.scaffold_positions[i] = true;
+                        spec.scaffold_positions[pp] = true;
+                        if has_of {
+                            spec.scaffold_positions[q_pos] = true;
+                        } else if i > 0 {
+                            spec.scaffold_positions[i - 1] = true;
+                        }
+                    }
+                }
+            }
+            _ => {
+                if matches!(prev, "last" | "past" | "previous") && WEEKDAYS.contains(&w.as_str()) {
+                    use chrono::Datelike;
+                    if let Some(dt) = chrono::DateTime::from_timestamp(query_ts, 0) {
+                        let today = dt.weekday().num_days_from_monday() as i64;
+                        let target = WEEKDAYS.iter().position(|d| d == w).unwrap_or(0) as i64;
+                        let raw_back = (today - target + 7) % 7;
+                        // Modulo 0 -> 7 fix: "last Friday" on a Friday is 7 days ago, never yesterday.
+                        let back = if raw_back == 0 { 7 } else { raw_back };
+                        spec.points.push((query_ts - back * DAY, 2.0));
+                        spec.scaffold_positions[i - 1] = true;
+                    }
+                }
+            }
+        }
+    }
+    spec
+}
+
+fn apply_move3_heideltime_anchor(
+    ix: &Index,
+    q: &Query,
+    multi_hop: bool,
+    s_score: &mut [f32],
+    t_turn_raw: &mut [f32],
+    t_raw: &mut [f32],
+    t_own: &mut [f32],
+) {
+    let query_ts = parse_date(&q.date);
+    if query_ts == 0 {
+        return;
+    }
+    let raw = raw_tokens(&q.text);
+    let spec = parse_relative_time_specs_from_raw(&raw, query_ts);
+    if spec.points.is_empty() && spec.windows.is_empty() {
+        return;
+    }
+    let out_floor_s = if multi_hop { 0.96 } else { 0.88 };
+    let out_floor_t = if multi_hop { 0.98 } else { 0.92 };
+    let sess_mult = |ts: i64| -> (f32, f32, bool) {
+        if ts <= 0 {
+            return (1.0, 1.0, false);
+        }
+        let mut sm = 1.0f32;
+        let mut tm = 1.0f32;
+        let mut hit = false;
+        if !spec.windows.is_empty() {
+            let inside = spec
+                .windows
+                .iter()
+                .any(|&(a, b)| ts >= a - 43_200 && ts <= b + 43_200);
+            if inside {
+                sm *= 1.24;
+                tm *= 1.18;
+                hit = true;
+            } else {
+                sm *= out_floor_s;
+                tm *= out_floor_t;
+            }
+        }
+        if !spec.points.is_empty() {
+            let mut best_g = 0.0f32;
+            for &(target_ts, sigma) in &spec.points {
+                let dt_days = (ts - target_ts).abs() as f32 / 86_400.0;
+                let g = (-0.5 * (dt_days / sigma) * (dt_days / sigma)).exp();
+                if g > best_g {
+                    best_g = g;
+                }
+            }
+            if best_g >= 0.35 {
+                hit = true;
+            }
+            sm *= out_floor_s + (1.25 - out_floor_s) * best_g;
+            tm *= out_floor_t + (1.15 - out_floor_t) * best_g;
+        }
+        (sm, tm, hit)
+    };
+    let any_anchor_hit = s_score
+        .iter()
+        .enumerate()
+        .any(|(si, &sc)| sc > 0.0 && sess_mult(ix.session_ts[si]).2);
+    if !any_anchor_hit {
+        return;
+    }
+    for (si, sc) in s_score.iter_mut().enumerate() {
+        if *sc > 0.0 {
+            let (sm, _, _) = sess_mult(ix.session_ts[si]);
+            *sc *= sm;
+        }
+    }
+    for ti in 0..ix.turns.len() {
+        if t_turn_raw[ti] <= 0.0 && t_raw[ti] <= 0.0 && t_own[ti] <= 0.0 {
+            continue;
+        }
+        let (_, tm, _) = sess_mult(ix.session_ts[ix.turns[ti].session]);
+        t_turn_raw[ti] *= tm;
+        t_raw[ti] *= tm;
+        t_own[ti] *= tm;
+    }
+}
