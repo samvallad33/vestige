@@ -6374,6 +6374,15 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // incumbent. After #44. Does not touch rsb_seat_behind.
         apply_c2_step31_exchequer_split(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
+    // Step 32 trial balance. After every other C2 seat. A question at slot 1
+    // that misses the rarest surface lexeme yields to a top-5 opener from a
+    // session that is not later, when that opener posts the rare lexeme and
+    // every surface lexeme slot 1 already posts. Otherwise an echo at slot 1
+    // yields to the declarative turn it answers, when that turn posts the
+    // above-median surface lexemes and the pair posts every surface lexeme
+    // the echo's own pair does not. Does not touch rsb_seat_behind and does
+    // not rewrite the session list.
+    apply_c2_step32_trial_balance(ix, &plan, &mut final_turn_indices, &t_scene);
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
         .into_iter()

@@ -3313,6 +3313,170 @@ fn apply_c2_queried_speaker_first_t5_entry(
     true
 }
 
+/// Step 32 trial balance. Two postings of the same accounts.
+///
+/// Accounts are the plan's lexical content groups (anchor tokens). A group is
+/// posted only by its surface lexeme — the group label — in the turn's own
+/// content or features. A stem, hypernym, or typo fallback does not post it,
+/// multi-word entity phrases are not a second account, and `TurnIx.body` is
+/// never read.
+///
+/// Opener arm. The rarest surface lexeme (highest turn-own idf; the lowest
+/// group index wins an exact idf tie) is the account that must be posted.
+/// Slot 1 is unbalanced when it is a question that does not post that lexeme.
+/// A session opener already in the top 5, from a session that is not later
+/// than slot 1, takes slot 1 when it posts the rare lexeme and every surface
+/// lexeme slot 1 already posts. Among several such openers the most on-scene
+/// wins, and an exact scene tie goes to the earliest session.
+///
+/// Echo arm, only when the opener arm does not move. Slot 1 is the direct
+/// reply to a declarative turn already in the top 5 (the `answers` edge, and
+/// that turn is the immediately previous turn of the same session). The books
+/// balance on the pair: the answered turn together with this reply posts
+/// every surface lexeme, and slot 1 together with its own reply does not. The
+/// answered turn itself posts every surface lexeme rarer than the median
+/// surface idf, and slot 1 does not. That turn takes slot 1.
+///
+/// Top-5 membership does not change. A slot 1 that already posts the rare
+/// lexeme is left in place by the opener arm. Runs after every other C2 seat.
+/// Does not touch `rsb_seat_behind`.
+fn apply_c2_step32_trial_balance(
+    ix: &Index,
+    plan: &QueryPlan,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || plan.groups.is_empty() {
+        return false;
+    }
+    let top = list[0];
+    // Surface id of each lexical group. Entity phrases and derived terms
+    // (stems, hypernyms) are not accounts.
+    let surface: Vec<(usize, u32)> = plan
+        .groups
+        .iter()
+        .enumerate()
+        .filter(|(_, label)| !label.starts_with('\u{1}'))
+        .filter_map(|(g, label)| ix.vocab.get(label).map(|id| (g, id)))
+        .collect();
+    if surface.is_empty() {
+        return false;
+    }
+    let posts = |ti: usize, id: u32| {
+        let t = &ix.turns[ti];
+        t.content.contains(&id) || t.feats.iter().any(|f| f.id == id)
+    };
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let ts_of = |ti: usize| {
+        ix.session_ts
+            .get(ix.turns[ti].session)
+            .copied()
+            .unwrap_or(0)
+    };
+    let sc = |ti: usize| t_scene.get(ti).copied().unwrap_or(0.0);
+
+    if ix.turns[top].is_question {
+        let head_hit: Vec<bool> = surface.iter().map(|&(_, id)| posts(top, id)).collect();
+        let mut rare: Option<(usize, f32)> = None;
+        for (slot, &(_, id)) in surface.iter().enumerate() {
+            let idf = step7_idf(&ix.t_own_stats, id);
+            if rare.is_none_or(|(_, ri)| idf > ri) {
+                rare = Some((slot, idf));
+            }
+        }
+        if let Some((rare_slot, _)) = rare {
+            if !head_hit[rare_slot] {
+                let head_ts = ts_of(top);
+                let mut best: Option<usize> = None;
+                for i in 1..window {
+                    let cand = list[i];
+                    if c2_session_pos(ix, cand) != 0 || ts_of(cand) > head_ts {
+                        continue;
+                    }
+                    let (_, rare_id) = surface[rare_slot];
+                    if !posts(cand, rare_id) {
+                        continue;
+                    }
+                    if surface
+                        .iter()
+                        .enumerate()
+                        .any(|(slot, &(_, id))| head_hit[slot] && !posts(cand, id))
+                    {
+                        continue;
+                    }
+                    let take = match best {
+                        None => true,
+                        Some(b) => {
+                            let prev = list[b];
+                            sc(cand) > sc(prev)
+                                || (sc(cand) == sc(prev)
+                                    && (ts_of(cand) < ts_of(prev)
+                                        || (ts_of(cand) == ts_of(prev) && cand < prev)))
+                        }
+                    };
+                    if take {
+                        best = Some(i);
+                    }
+                }
+                if let Some(i) = best {
+                    let cand = list.remove(i);
+                    list.insert(0, cand);
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Echo arm. The reply at slot 1 yields to the turn it answers when the
+    // pair posts every surface lexeme and the reply's own pair does not.
+    if surface.len() < 2 {
+        return false;
+    }
+    let Some(parent) = ix.turns[top].answers else {
+        return false;
+    };
+    if ix.turns[parent].is_question
+        || ix.turns[parent].session != ix.turns[top].session
+        || c2_session_pos(ix, top) != c2_session_pos(ix, parent) + 1
+    {
+        return false;
+    }
+    let Some(i) = (1..window).find(|&i| list[i] == parent) else {
+        return false;
+    };
+    let idf_of = |slot: usize| step7_idf(&ix.t_own_stats, surface[slot].1);
+    let mut by_idf: Vec<usize> = (0..surface.len()).collect();
+    by_idf.sort_by(|&a, &b| {
+        idf_of(a)
+            .partial_cmp(&idf_of(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    let med = idf_of(by_idf[by_idf.len() / 2]);
+    let above: Vec<usize> = by_idf
+        .into_iter()
+        .filter(|&slot| idf_of(slot) > med)
+        .collect();
+    if above.is_empty()
+        || above.iter().any(|&slot| !posts(parent, surface[slot].1))
+        || above.iter().all(|&slot| posts(top, surface[slot].1))
+    {
+        return false;
+    }
+    let pair_posts = |ti: usize, slot: usize| {
+        posts(ti, surface[slot].1)
+            || dump_response_turn_of(ix, ti).is_some_and(|reply| posts(reply, surface[slot].1))
+    };
+    if !(0..surface.len()).all(|slot| pair_posts(parent, slot))
+        || (0..surface.len()).all(|slot| pair_posts(top, slot))
+    {
+        return false;
+    }
+    let cand = list.remove(i);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -6576,4 +6740,250 @@ mod algos_c2_tests {
     }
 
 
+
+    fn sess_at(id: &str, ts: i64, turns: &[(&str, &str)]) -> Session {
+        Session {
+            id: id.into(),
+            date: String::new(),
+            timestamp: ts,
+            turns: turns
+                .iter()
+                .enumerate()
+                .map(|(i, (r, c))| Turn {
+                    id: format!("{id}#{i}"),
+                    role: (*r).into(),
+                    content: (*c).into(),
+                    ..Turn::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn step32_trial_balance_seats_earlier_opener_that_posts_the_rare_group() {
+        let ix = build_index(
+            &[
+                sess_at(
+                    "early",
+                    100,
+                    &[
+                        ("user", "I stored the zynth widget in the drawer."),
+                        ("assistant", "The widget is noted."),
+                    ],
+                ),
+                sess_at(
+                    "late",
+                    200,
+                    &[
+                        ("user", "Did I leave the widget somewhere safe?"),
+                        ("assistant", "We can search for the widget."),
+                    ],
+                ),
+                sess_at("noise", 50, &[("user", "The widget on the shelf is blue.")]),
+            ],
+            &Params::default(),
+        );
+        // 0 early opener (zynth+widget), 1 early reply, 2 late question, 3 late reply, 4 noise widget.
+        let q = Query {
+            text: "Where is the zynth widget?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(ix.turns[2].is_question);
+        assert_eq!(c2_session_pos(&ix, 0), 0);
+        let mut list = vec![2usize, 0, 1, 3, 4];
+        let scene = vec![0.4f32, 0.2, 0.9, 0.3, 0.1];
+        assert!(apply_c2_step32_trial_balance(&ix, &plan, &mut list, &scene));
+        assert_eq!(list[0], 0);
+        assert_eq!(list.len(), 5);
+
+        // Slot 1 already posts the rare group: no move.
+        let q_bal = Query {
+            text: "Where is the zynth widget?".into(),
+            date: String::new(),
+        };
+        let ix_bal = build_index(
+            &[
+                sess_at(
+                    "early",
+                    100,
+                    &[("user", "I stored the zynth widget in the drawer.")],
+                ),
+                sess_at(
+                    "late",
+                    200,
+                    &[("user", "Did I leave the zynth widget somewhere safe?")],
+                ),
+                sess_at("noise", 50, &[("user", "The widget on the shelf is blue.")]),
+            ],
+            &Params::default(),
+        );
+        let plan_b = plan_query(&ix_bal, &q_bal, &Params::default());
+        let mut list = vec![1usize, 0, 2];
+        assert!(!apply_c2_step32_trial_balance(
+            &ix_bal,
+            &plan_b,
+            &mut list,
+            &[1.0, 0.9, 0.2]
+        ));
+        assert_eq!(list, vec![1, 0, 2]);
+
+        // Opener session is later than the question: no move.
+        let ix_later = build_index(
+            &[
+                sess_at(
+                    "earlyq",
+                    100,
+                    &[("user", "Did I leave the widget somewhere safe?")],
+                ),
+                sess_at(
+                    "later",
+                    300,
+                    &[("user", "I stored the zynth widget in the drawer.")],
+                ),
+                sess_at("noise", 50, &[("user", "The widget on the shelf is blue.")]),
+            ],
+            &Params::default(),
+        );
+        let plan_l = plan_query(&ix_later, &q, &Params::default());
+        let mut list = vec![0usize, 1, 2];
+        assert!(!apply_c2_step32_trial_balance(
+            &ix_later,
+            &plan_l,
+            &mut list,
+            &[1.0, 0.95, 0.2]
+        ));
+        assert_eq!(list, vec![0, 1, 2]);
+
+        // Head is not a question: no move.
+        let ix_decl = build_index(
+            &[
+                sess_at(
+                    "early",
+                    100,
+                    &[("user", "I stored the zynth widget in the drawer.")],
+                ),
+                sess_at(
+                    "late",
+                    200,
+                    &[("user", "I left the widget somewhere safe.")],
+                ),
+                sess_at("noise", 50, &[("user", "The widget on the shelf is blue.")]),
+            ],
+            &Params::default(),
+        );
+        let plan_d = plan_query(&ix_decl, &q, &Params::default());
+        let mut list = vec![1usize, 0, 2];
+        assert!(!apply_c2_step32_trial_balance(
+            &ix_decl,
+            &plan_d,
+            &mut list,
+            &[1.0, 0.9, 0.2]
+        ));
+        assert_eq!(list, vec![1, 0, 2]);
+
+        // Equal scene: the earlier session wins.
+        let ix_tie = build_index(
+            &[
+                sess_at(
+                    "mid",
+                    150,
+                    &[("user", "I stored the zynth widget in the drawer.")],
+                ),
+                sess_at(
+                    "early",
+                    80,
+                    &[("user", "I stored the zynth widget in the drawer.")],
+                ),
+                sess_at(
+                    "late",
+                    200,
+                    &[("user", "Did I leave the widget somewhere safe?")],
+                ),
+                sess_at("noise", 50, &[("user", "The widget on the shelf is blue.")]),
+            ],
+            &Params::default(),
+        );
+        let plan_t = plan_query(&ix_tie, &q, &Params::default());
+        // 0 mid opener, 1 early opener, 2 late question, 3 noise.
+        let mut list = vec![2usize, 0, 1, 3];
+        assert!(apply_c2_step32_trial_balance(
+            &ix_tie,
+            &plan_t,
+            &mut list,
+            &[0.4, 0.4, 0.5, 0.1]
+        ));
+        assert_eq!(list[0], 1);
+    }
+
+    #[test]
+    fn step32_surface_lexeme_does_not_accept_a_stem() {
+        // "recipe" sits next to "recipes" and must not post that account.
+        let ix = build_index(
+            &[
+                sess_at("early", 100, &[("user", "I wrote three cocktail recipes.")]),
+                sess_at("late", 200, &[("user", "Can you repeat that recipe?")]),
+                sess_at(
+                    "noise",
+                    50,
+                    &[("user", "The cocktail on the shelf is blue.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "Which cocktail recipes did I write?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(ix.turns[1].is_question);
+        let mut list = vec![1usize, 0, 2];
+        assert!(apply_c2_step32_trial_balance(
+            &ix,
+            &plan,
+            &mut list,
+            &[0.4, 0.9, 0.2]
+        ));
+        assert_eq!(list[0], 0);
+    }
+
+    #[test]
+    fn step32_echo_yields_to_the_turn_it_answers() {
+        let mut sessions = Vec::new();
+        for i in 0..6 {
+            sessions.push(sess_at(
+                &format!("filler{i}"),
+                10 + i,
+                &[
+                    ("user", "The kids learned values and the dog can teach."),
+                    (
+                        "assistant",
+                        "Values for the kids matter and the dog can teach.",
+                    ),
+                ],
+            ));
+        }
+        sessions.push(sess_at(
+            "real",
+            100,
+            &[
+                ("user", "We are adopting a rescue dog to teach the kids."),
+                ("assistant", "That teaches the kids important values."),
+            ],
+        ));
+        let ix = build_index(&sessions, &Params::default());
+        let parent = ix.turns.len() - 2;
+        let echo = ix.turns.len() - 1;
+        assert_eq!(ix.turns[echo].answers, Some(parent));
+        assert!(!ix.turns[echo].is_question);
+        let q = Query {
+            text: "What values does adopting a rescue dog teach the kids?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        let mut list = vec![echo, parent];
+        let scene = vec![0.2f32; ix.turns.len()];
+        assert!(apply_c2_step32_trial_balance(&ix, &plan, &mut list, &scene));
+        assert_eq!(list[0], parent);
+    }
 }
