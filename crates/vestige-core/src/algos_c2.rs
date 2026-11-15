@@ -4269,14 +4269,16 @@ fn apply_c2_step38_hermeneutic(
 /// Pool C session-key opener. The turn at session position 0 is the session
 /// key. An assistant elaboration already in the top 5 yields that seat to the
 /// user opener of the same session when the opener is not yet in the top 5,
-/// posts at least one query group, and itself attests every query group the
-/// elaboration attests. Coverage by some other top-5 turn is not enough: the
-/// key has to be the witness. A digit on the elaboration that the opener does
-/// not post keeps the elaboration. Slot 0 is frozen. Named-speaker corpora,
-/// text-level preference, summaries, event sequences, and assistant-attribution
-/// questions do not fire. Distinct from the cross-opener seat, which only
-/// reorders an opener already inside the top 5. Does not read `TurnIx.body`
-/// and does not touch `rsb_seat_behind`.
+/// posts at least one query group, and every query group the elaboration
+/// attests is attested by the opener or by another turn that stays in the top
+/// 5. The top 5 must already hold two sessions: a one-session list has no
+/// second key to admit, and the elaboration there is the answer rather than
+/// an echo. A digit on the elaboration that the opener does not post keeps
+/// the elaboration. Slot 0 is frozen. Named-speaker corpora, text-level
+/// preference, summaries, event sequences, and assistant-attribution questions
+/// do not fire. Distinct from the cross-opener seat, which only reorders an
+/// opener already inside the top 5. Does not read `TurnIx.body` and does not
+/// touch `rsb_seat_behind`.
 fn apply_c2_pool_c_session_opener_seat(
     ix: &Index,
     plan: &QueryPlan,
@@ -4302,6 +4304,15 @@ fn apply_c2_pool_c_session_opener_seat(
     }
     let ng = plan.groups.len();
     let scene = |t: usize| t_scene.get(t).copied().unwrap_or(0.0);
+    let window0 = list.len().min(C2_BULLAE_WINDOW);
+    let mut sessions: DetHashSet<usize> = DetHashSet::default();
+    for &t in &list[..window0] {
+        sessions.insert(ix.turns[t].session);
+    }
+    // One session in the window: the elaboration is not an echo of a second key.
+    if sessions.len() < 2 {
+        return false;
+    }
     let mut fired = false;
     for _ in 0..4 {
         let window = list.len().min(C2_BULLAE_WINDOW);
@@ -4328,14 +4339,23 @@ fn apply_c2_pool_c_session_opener_seat(
             if ix.turns[victim].form_digit && !ix.turns[opener].form_digit {
                 continue;
             }
-            let opener_groups = c2_turn_groups(ix, plan, ng, opener);
-            if !opener_groups.contains(&true) {
+            let mut cover = c2_turn_groups(ix, plan, ng, opener);
+            if !cover.contains(&true) {
                 continue;
             }
+            for (k, &other) in top.iter().enumerate() {
+                if k == i {
+                    continue;
+                }
+                let other_groups = c2_turn_groups(ix, plan, ng, other);
+                for (slot, hit) in other_groups.into_iter().enumerate() {
+                    if hit {
+                        cover[slot] = true;
+                    }
+                }
+            }
             let victim_groups = c2_turn_groups(ix, plan, ng, victim);
-            // The opener itself must cover the elaboration. A neighbour that
-            // happens to post the missing group is not the session key.
-            if victim_groups.iter().zip(&opener_groups).any(|(hit, kept)| *hit && !*kept) {
+            if victim_groups.iter().zip(&cover).any(|(hit, kept)| *hit && !*kept) {
                 continue;
             }
             let take = match best {
@@ -8664,8 +8684,8 @@ mod algos_c2_tests {
             &ix_n, &plan_n, &q.text, &mut listed, &scene_n
         ));
 
-        // The elaboration uniquely posts a query term the opener does not.
-        // Neighbours in the top 5 are not allowed to cover that term for it.
+        // One session in the window. A neighbour may post the term; the seat
+        // still does not fire. The elaboration is the only session's answer.
         let ix_u = build_index(
             &[sess(
                 "sun",
@@ -8691,6 +8711,82 @@ mod algos_c2_tests {
             &ix_u, &plan_u, &uq.text, &mut ulist, &uscene
         ));
         assert_eq!(ulist[1], 1);
+
+        // Two sessions, and a staying turn posts the term the opener lacks.
+        // The elaboration is an echo; the session key takes the seat.
+        let ix_m = build_index(
+            &[
+                sess(
+                    "sun",
+                    &[
+                        ("user", "I baked rye loaves for the picnic."),
+                        ("assistant", "The designation on the rye loaves was LIV."),
+                        ("user", "The designation was on the wrapper."),
+                    ],
+                ),
+                sess(
+                    "mon",
+                    &[
+                        ("user", "I baked rye loaves for the picnic on Monday."),
+                        ("assistant", "You baked rye loaves for the picnic on Monday."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let plan_m = plan_query(&ix_m, &uq, &Params::default());
+        // 0 sun opener, 1 sun assistant, 2 sun user (posts designation), 3 mon opener, 4 mon assistant
+        let mut mlist = vec![3usize, 1, 2, 4, 3];
+        let mut mscene = vec![1.0f32; ix_m.turns.len()];
+        mscene[0] = 2.0;
+        mscene[3] = 0.4;
+        assert!(apply_c2_pool_c_session_opener_seat(
+            &ix_m, &plan_m, &uq.text, &mut mlist, &mscene
+        ));
+        assert!(mlist[..5].contains(&0), "opener enters when a staying turn covers the term");
+        assert!(!mlist[..5].contains(&1), "echo assistant leaves");
+
+        // Two sessions, and nobody but the assistant posts the term. Keep it.
+        let ix_k = build_index(
+            &[
+                sess(
+                    "sun",
+                    &[
+                        ("user", "I baked rye loaves for the picnic."),
+                        ("assistant", "The designation on the rye loaves was LIV."),
+                        ("user", "The wrapper was plain."),
+                    ],
+                ),
+                sess(
+                    "mon",
+                    &[
+                        ("user", "I baked rye loaves for the picnic on Monday."),
+                        ("assistant", "You baked rye loaves for the picnic on Monday."),
+                    ],
+                ),
+                sess(
+                    "pad",
+                    &[
+                        ("user", "The weather was fine all weekend."),
+                        ("assistant", "Glad the weather was fine."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let plan_k = plan_query(&ix_k, &uq, &Params::default());
+        // 0 sun opener, 1 sun assistant (unique term), 2 sun user, 3 mon opener,
+        // 4 mon assistant, 5 pad user, 6 pad assistant.
+        let mut klist = vec![5usize, 1, 2, 4, 6];
+        let mut kscene = vec![1.0f32; ix_k.turns.len()];
+        kscene[0] = 0.2;
+        kscene[3] = 2.0;
+        assert!(apply_c2_pool_c_session_opener_seat(
+            &ix_k, &plan_k, &uq.text, &mut klist, &kscene
+        ));
+        assert!(klist[..5].contains(&1), "unique-term assistant stays");
+        assert!(klist[..5].contains(&3), "monday opener still enters");
+        assert!(!klist[..5].contains(&4), "monday echo leaves");
 
         let named = build_index(
             &[
