@@ -6435,6 +6435,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // top 5 already spans two sessions and the opener is outside it. Slot 1
     // stays. Does not touch rsb_seat_behind.
     apply_c2_pool_c_session_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    // Absent session key. After the same-session yield. A user opener whose
+    // session is not in the top 5 takes a redundant assistant from a
+    // non-dominant session. The dominant session stays. Slot 1 stays.
+    apply_c2_pool_c_absent_session_key(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    // Absent session key. After the same-session yield. A user opener whose
+    // session is not in the top 5 takes a redundant assistant from a
+    // non-dominant session. The dominant session stays. Slot 1 stays.
+    apply_c2_pool_c_absent_session_key(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     maybe_dump_replay(
         ix,
         q,

@@ -4386,6 +4386,144 @@ fn apply_c2_pool_c_session_opener_seat(
 }
 
 
+/// Pool C absent session key. A user opener at session position 0 whose
+/// session is outside the top 5 takes the seat of an assistant from a
+/// non-dominant session, when that assistant's session keeps another turn and
+/// that turn attests every query group the assistant attests. The dominant
+/// session — the one with the most turns in the window, ties broken by the
+/// earliest slot — is not a donor. The opener must post a query group and a
+/// positive scene score. A digit on the assistant that the opener lacks keeps
+/// the assistant. One-session windows do not fire. Does not read
+/// `TurnIx.body` and does not touch `rsb_seat_behind`.
+fn apply_c2_pool_c_absent_session_key(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < C2_BULLAE_WINDOW
+        || plan.groups.is_empty()
+        || c2_text_preference(query)
+        || plan.intent.assistant_attribution
+        || plan.intent.is_event_sequence
+        || c2_summary_request(query)
+    {
+        return false;
+    }
+    let named = ix.turns.iter().any(|t| {
+        let sp = t.speaker.as_str();
+        !sp.is_empty() && sp != "user" && sp != "assistant"
+    });
+    if named {
+        return false;
+    }
+    let ng = plan.groups.len();
+    let scene = |t: usize| t_scene.get(t).copied().unwrap_or(0.0);
+    let mut fired = false;
+    for _ in 0..4 {
+        let window = list.len().min(C2_BULLAE_WINDOW);
+        let top: Vec<usize> = list[..window].to_vec();
+        let mut counts: DetHashMap<usize, usize> = DetHashMap::default();
+        for &t in &top {
+            *counts.entry(ix.turns[t].session).or_insert(0) += 1;
+        }
+        if counts.len() < 2 {
+            break;
+        }
+        let mut mode = ix.turns[top[0]].session;
+        let mut mode_n = 0usize;
+        let mut mode_at = window;
+        for &t in &top {
+            let s = ix.turns[t].session;
+            let n = counts[&s];
+            let at = top.iter().position(|&u| ix.turns[u].session == s).unwrap_or(window);
+            if n > mode_n || (n == mode_n && at < mode_at) {
+                mode = s;
+                mode_n = n;
+                mode_at = at;
+            }
+        }
+        let mut best: Option<(usize, usize)> = None;
+        for i in 1..window {
+            let victim = list[i];
+            if ix.turns[victim].speaker != "assistant" {
+                continue;
+            }
+            let vs = ix.turns[victim].session;
+            if vs == mode {
+                continue;
+            }
+            let companions: Vec<usize> = top
+                .iter()
+                .copied()
+                .filter(|&t| t != victim && ix.turns[t].session == vs)
+                .collect();
+            if companions.is_empty() {
+                continue;
+            }
+            let mut cover = vec![false; ng];
+            for c in &companions {
+                for (slot, hit) in c2_turn_groups(ix, plan, ng, *c).into_iter().enumerate() {
+                    if hit {
+                        cover[slot] = true;
+                    }
+                }
+            }
+            let victim_groups = c2_turn_groups(ix, plan, ng, victim);
+            if victim_groups.iter().zip(&cover).any(|(hit, kept)| *hit && !*kept) {
+                continue;
+            }
+            for (sess, members) in ix.session_turns.iter().enumerate() {
+                if counts.contains_key(&sess) {
+                    continue;
+                }
+                let Some(&opener) = members.first() else {
+                    continue;
+                };
+                if top.contains(&opener) {
+                    continue;
+                }
+                if ix.turns[opener].speaker != "user" || c2_session_pos(ix, opener) != 0 {
+                    continue;
+                }
+                if scene(opener) <= 0.0 {
+                    continue;
+                }
+                if ix.turns[victim].form_digit && !ix.turns[opener].form_digit {
+                    continue;
+                }
+                let opener_groups = c2_turn_groups(ix, plan, ng, opener);
+                if !opener_groups.contains(&true) {
+                    continue;
+                }
+                let take = match best {
+                    None => true,
+                    Some((bi, bo)) => {
+                        scene(opener) > scene(bo)
+                            || (scene(opener) == scene(bo)
+                                && (opener < bo || (opener == bo && i < bi)))
+                    }
+                };
+                if take {
+                    best = Some((i, opener));
+                }
+            }
+        }
+        let Some((i, opener)) = best else {
+            break;
+        };
+        if let Some(j) = list.iter().position(|&t| t == opener) {
+            list.swap(i, j);
+        } else {
+            list[i] = opener;
+        }
+        fired = true;
+    }
+    fired
+}
+
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -8832,5 +8970,92 @@ mod algos_c2_tests {
         let mut pref = vec![2usize, 1, 5, 4, 6];
         assert!(!apply_c2_pool_c_session_opener_seat(&ix, &pplan, &pq.text, &mut pref, &scene));
         assert_eq!(pref, vec![2, 1, 5, 4, 6]);
+    }
+
+    #[test]
+    fn pool_c_absent_session_key_takes_a_redundant_minority_assistant() {
+        let ix = build_index(
+            &[
+                sess(
+                    "big",
+                    &[
+                        ("user", "I baked rye loaves for the picnic."),
+                        ("assistant", "You baked rye loaves for the picnic."),
+                        ("user", "The picnic rye loaves were a hit."),
+                        ("assistant", "Glad the rye loaves were a hit."),
+                    ],
+                ),
+                sess(
+                    "small",
+                    &[
+                        ("user", "I baked rye loaves for the picnic."),
+                        ("assistant", "You baked rye loaves for the picnic."),
+                    ],
+                ),
+                sess(
+                    "away",
+                    &[
+                        ("user", "I baked rye loaves for the picnic on Sunday."),
+                        ("assistant", "Noted about the rye loaves."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What did I bake for the picnic?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        // 0 big user, 1 big assistant, 2 big user, 3 big assistant,
+        // 4 small user, 5 small assistant, 6 away opener, 7 away assistant.
+        let mut list = vec![0usize, 5, 4, 1, 2];
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        for t in [0, 5, 4, 1, 2, 6] {
+            scene[t] = 1.0;
+        }
+        scene[6] = 1.4;
+        assert!(apply_c2_pool_c_absent_session_key(&ix, &plan, &q.text, &mut list, &scene));
+        assert_eq!(list[0], 0, "slot 0 stays");
+        assert!(list[..5].contains(&6), "absent opener enters");
+        assert!(!list[..5].contains(&5), "redundant minority assistant leaves");
+        assert!(list[..5].contains(&1), "dominant-session assistant stays");
+
+        let ix_d = build_index(
+            &[
+                sess(
+                    "big",
+                    &[
+                        ("user", "I baked rye loaves for the picnic."),
+                        ("assistant", "You baked rye loaves for the picnic."),
+                        ("user", "The picnic rye loaves were a hit."),
+                    ],
+                ),
+                sess(
+                    "small",
+                    &[
+                        ("user", "I baked rye loaves for the picnic."),
+                        ("assistant", "You baked 4 rye loaves for the picnic."),
+                    ],
+                ),
+                sess(
+                    "away",
+                    &[
+                        ("user", "I baked rye loaves for the picnic on Sunday."),
+                        ("assistant", "Noted."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let plan_d = plan_query(&ix_d, &q, &Params::default());
+        assert!(ix_d.turns[4].form_digit);
+        assert!(!ix_d.turns[5].form_digit);
+        let mut dlist = vec![0usize, 4, 3, 1, 2];
+        let dscene = vec![1.0f32; ix_d.turns.len()];
+        assert!(!apply_c2_pool_c_absent_session_key(
+            &ix_d, &plan_d, &q.text, &mut dlist, &dscene
+        ));
+        assert_eq!(dlist, vec![0, 4, 3, 1, 2]);
     }
 }
