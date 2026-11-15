@@ -2,7 +2,7 @@
 
 Branch `perf/c2-step39-capture-recapture`, cut from `d121d063` (`perf/step3a-panini-karaka`). Steps 7–10A, algos 1–44, Steps 31–38, Pool C, Pool B, Pool A, and the `#[test]` attribute fix applied with `git am -3` and zero conflicts. Hook order matches the pack: Step 32, 33, 34, 35, 36, 37, 38, Pool C opener, Pool C absent key, Pool B, buried lexical peak, anaphoric tail, unseated session peak, then `maybe_dump_replay`. Replayed tip before this step is `f8570b9a` (author Sam Valladares). Computer 2's tip `a2a7f2b9` is not in this clone; the tree is the clean replay of that series. Author on the Step 39 commit: Sam Valladares.
 
-Datasets: LoCoMo sha256 `79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4`. LongMemEval_S sha256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442` (`longmemeval_s_cleaned.json`, the Hugging Face `xiaowu0162/longmemeval-cleaned` file; the digest matches). BEAM-100K from `beam100k.tgz` (`BEAM/chats/100K`, 20 conversations, 355 questions).
+Datasets: LoCoMo sha256 `79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4`. LongMemEval_S sha256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`. The three uploaded zip parts each hold one `lme_s.json.xz.partN`; concatenating the xz pieces and decompressing yields `longmemeval_s_cleaned.json` with that digest, byte-identical to the file the benches scored. Concatenating the zip files themselves is not one archive (each zip's central directory sits at its own end, so `unzip` only sees part 3). BEAM-100K from `beam100k.tgz` (`BEAM/chats/100K`, 20 conversations, 355 questions).
 
 ## Baseline (Steps 31–38 + Pools C, B, A together, before any Step 39 edit)
 
