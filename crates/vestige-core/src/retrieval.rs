@@ -5834,6 +5834,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
+    if !it.is_event_sequence && !pref_on && !it.task_under_rules {
+        let gl = { let g = plan.groups.len().min(64); if g == 64 { u64::MAX } else { (1u64 << g) - 1 } };
+        let floored = |t: usize| t_policy_floored[t] || t_pref_floored[t];
+        apply_step10a_evidence_seat(ix, &final_session_indices, &t_scene, &t_exact_mask, gl, &floored, k, &mut final_turn_indices);
+    }
+
     // Exact-token selection is finished. A recorded backward reply or exact edge
     // promotes its earlier target to the rank position earned by `credit`, including
     // when `target` was previously sitting in the tail (`5..k`) at a lower score.
