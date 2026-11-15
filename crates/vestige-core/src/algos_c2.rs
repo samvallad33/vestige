@@ -1692,7 +1692,8 @@ fn apply_c2_queried_speaker_first_seat(
 /// not pulled. The same mention, conjunction, WH-person, preference,
 /// temporal, and summary cuts apply as #15–#19. Does not fire on
 /// user/assistant chats. Invoked after the gatekeeper and after
-/// #19–#22, as the last ranking change.
+/// #19–#22. A later #22 pass may still run after this entry, so a
+/// newly admitted first-in-session turn can take slot 1.
 fn apply_c2_queried_speaker_first_t5_entry(
     ix: &Index,
     plan: &QueryPlan,
@@ -3180,6 +3181,51 @@ mod algos_c2_tests {
         assert_eq!(list, vec![1]);
     }
 
+
+    #[test]
+    fn queried_speaker_first_seat_after_t5_entry_promotes_the_entered_turn() {
+        // #23 admits Audrey's first turn in D22 from slot 6 into the top 5;
+        // a second #22 pass then seats it at slot 1 over the unmentioned
+        // Andrew head. The official-k list has no earlier first-in-session
+        // Audrey, so the entered turn is the one that takes slot 1.
+        let ix = build_index(
+            &[
+                sess(
+                    "D8",
+                    &[
+                        ("andrew", "I walked in the park today."),
+                        ("andrew", "The paths were muddy."),
+                        ("andrew", "I stayed on the trail."),
+                        ("andrew", "It was still a good loop."),
+                        ("andrew", "I will go again tomorrow."),
+                    ],
+                ),
+                sess(
+                    "D22",
+                    &[
+                        ("audrey", "I couldn't walk the dogs because of my ankle."),
+                        ("andrew", "Sorry to hear that."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What was the reason Audrey couldn't walk her dogs?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        // Turns 0-4: Andrew in D8. Turn 5: Audrey's first in D22.
+        let mut list = vec![0usize, 1, 2, 3, 4, 5];
+        let t_scene = vec![1.0f32, 0.9, 0.8, 0.7, 0.6, 0.4];
+        assert_eq!(c2_first_same_speaker(&ix, 5), Some(5));
+        assert!(apply_c2_queried_speaker_first_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert!(list[..5].contains(&5), "t5 entry should admit turn 5 into the top 5: {list:?}");
+        assert_ne!(list[0], 5, "entry alone should not take slot 1");
+        assert!(apply_c2_queried_speaker_first_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list[0], 5);
+    }
 
     #[test]
     fn queried_speaker_first_t5_entry_swaps_first_in_session_mentioned_into_top5() {
