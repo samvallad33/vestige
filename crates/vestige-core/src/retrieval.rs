@@ -6128,6 +6128,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !it.is_event_sequence && !pref_on {
         apply_step11_kemeny_wh_slot_voter(ix, &q.text, &it, &t_scene, &mut final_turn_indices);
     }
+    // C2 algos lane: slot-1 seat rules, all before RSB (which then seats behind the head).
+    if !it.is_event_sequence {
+        apply_c2_bullae_numeral_seat(ix, &mut final_turn_indices, &t_scene);
+    }
     // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
     // Never in front of the symptom. A full window does not grow.
@@ -7464,6 +7468,7 @@ pub fn rank(req: &RankRequest) -> RankResponse {
 
 include!("rungs.rs");
 include!("steps7_10.rs");
+include!("algos_c2.rs");
 include!("steps11_20.rs");
 
 #[cfg(test)]
