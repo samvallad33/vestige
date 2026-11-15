@@ -6356,6 +6356,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // session). After #41, last ranking change.
         apply_c2_neighbor_pair_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
+    // Assistant-reply T@5 entry, for assistant-attribution questions only
+    // (outside the C2 skip above): the official-k assistant reply to a top-5
+    // user turn swaps with the least on-scene other top-5 user turn (at most
+    // as on-scene, never from an earlier session, S@5 kept). Last ranking
+    // change.
+    if !it.is_event_sequence && it.assistant_attribution {
+        apply_c2_assistant_reply_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
         .into_iter()
