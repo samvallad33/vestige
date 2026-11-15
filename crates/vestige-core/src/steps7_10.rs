@@ -433,6 +433,17 @@ fn step9_push_typo_fallback(
     }
 }
 
+/// Step 10 (#26 Florilegium multi-session top-5 seat guarantee): when multiple strong top-5
+/// sessions compete (`strong_top_sessions >= 2`), relax Q4 thresholds to `(0.38, 0.20)` and block
+/// single-session `bypass_cap` monopolies in top-5.
+fn step10_florilegium_floors(strong_top_sessions: usize) -> (f32, f32, bool) {
+    if strong_top_sessions >= 2 {
+        (0.38, 0.20, false)
+    } else {
+        (0.45, 0.25, true)
+    }
+}
+
 #[cfg(test)]
 mod steps7_10_tests {
     use super::*;
@@ -453,5 +464,11 @@ mod steps7_10_tests {
         assert_eq!(step9_list_item_count("Steps:\n1. a\n2) b\n- c\nend"), 3);
         assert_eq!(step9_first_move_num("Game so far:\n14. Nf3 e5\n15. Bb5"), 14);
         assert_eq!(step9_first_move_num("1. Buy milk"), 0);
+    }
+
+    #[test]
+    fn step10_florilegium_relaxes_floors_for_multi_session() {
+        assert_eq!(step10_florilegium_floors(2), (0.38, 0.20, false));
+        assert_eq!(step10_florilegium_floors(1), (0.45, 0.25, true));
     }
 }

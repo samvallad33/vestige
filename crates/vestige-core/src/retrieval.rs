@@ -3444,7 +3444,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     }
 
     // 1. Exact Technical Handle & Typed Slot RSB (`df <= 6`): later turn/session -> earlier turn/session.
-    let mut handle_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut handle_postings: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
     for (ti, hs) in turn_tech_handles.iter().enumerate() {
         for &h in hs {
             let list = handle_postings.entry(h).or_default();
@@ -3476,7 +3476,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     //    When two user turns share a rare proper entity (`2 <= df <= 8`) or constraint object
     //    and either `advanced::contradiction::appears_contradictory` fires or the later turn
     //    asserts an explicit revision/constraint, record a backward `supersedes` edge (`later -> earlier`).
-    let mut ent_user_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut ent_user_postings: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
     for (ti, t) in turns.iter().enumerate() {
         if t.field != 0 || t.is_question || t.is_backchannel {
             continue;
@@ -4174,7 +4174,7 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     }
 
     if p.enable_deictic {
-        let mut date_weights: HashMap<String, f32> = HashMap::new();
+        let mut date_weights: std::collections::BTreeMap<String, f32> = std::collections::BTreeMap::new();
         for d in inline_dates {
             let w = if d.starts_with("__DATE__") {
                 2.0
@@ -5650,6 +5650,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     } else {
         3
     };
+    let (q4_sess_floor, q4_turn_floor, allow_short_reply_bypass) =
+        step10_florilegium_floors(strong_top_sessions);
 
     let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
     let mut final_turn_indices: Vec<usize> = if p.enable_submodular {
@@ -5699,9 +5701,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     continue;
                 }
                 // One chat may not fill the top 5. A short reply beside a hit is the same evidence, not a new slot.
+                let bypass_cap = short_reply && !it.is_event_sequence && allow_short_reply_bypass;
                 let session_capped = selected_turns.len() < 5
                     && count >= max_per_session_top5
-                    && !(short_reply && !it.is_event_sequence);
+                    && !bypass_cap;
                 if session_capped {
                     continue;
                 }
@@ -5792,7 +5795,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     && selected_turns.iter().any(|&prev| {
                         ix.turns[prev].session == ix.turns[ti].session && (prev as isize - ti as isize).abs() == 1
                     });
-                if selected_turns.len() < 5 && count >= max_per_session_top5 && !(short_reply && !it.is_event_sequence) {
+                let bypass_cap = short_reply && !it.is_event_sequence && allow_short_reply_bypass;
+                if selected_turns.len() < 5 && count >= max_per_session_top5 && !bypass_cap {
                     continue;
                 }
                 selected_turns.push(ti);
@@ -5817,7 +5821,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     {
         let sess_limit = final_session_indices.len().min(5);
         for &si in &final_session_indices[1..sess_limit] {
-            if s_score[si] + bridge_boost[si] < 0.45 * smax {
+            if s_score[si] + bridge_boost[si] < q4_sess_floor * smax {
                 continue;
             }
             if final_turn_indices[..5].iter().any(|&t| ix.turns[t].session == si) {
@@ -5846,7 +5850,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     .iter()
                     .filter(|&&t| ix.turns[t].session == vs)
                     .count();
-                cnt >= 2 && t_scene[best_ti] >= 0.25 * t_scene[vti]
+                cnt >= 2 && t_scene[best_ti] >= q4_turn_floor * t_scene[vti]
             });
             if let Some(slot) = victim_slot {
                 if let Some(existing) = final_turn_indices.iter().position(|&t| t == best_ti) {
