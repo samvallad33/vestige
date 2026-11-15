@@ -1653,8 +1653,9 @@ fn apply_c2_head_session_opener_t5_entry(
 /// top 5), and from evicting the last top-5 user (sitting-gold losses).
 /// Skipped on summary requests, preference, temporal, and WH-person
 /// questions, event sequences and assistant-attribution (caller), and
-/// named-speaker sessions. Invoked after the gatekeeper, after #35, as
-/// the last ranking change.
+/// named-speaker sessions. Invoked after the gatekeeper, after #35, and
+/// again after #37 (#38) so a pool user that #37 seats into official k can
+/// still enter the top 5.
 fn apply_c2_session_substitution_t5_entry(
     ix: &Index,
     plan: &QueryPlan,
@@ -4847,6 +4848,11 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 2, 3, 4, 5];
         assert!(apply_c2_pool_session_substitution_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 2, 3, 4, 6]);
+        // #38: the session substitution T@5 entry, run again after #37,
+        // pulls the just-seated pool user into the top 5 over the weakest
+        // top-5 declarative user.
+        assert!(apply_c2_session_substitution_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 6, 4]);
         // Exact scene ties go to the earliest session: a later session
         // repeating the same turn does not take the seat.
         let mut s_dup = vec![
