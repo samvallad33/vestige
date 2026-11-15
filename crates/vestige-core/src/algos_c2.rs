@@ -1406,7 +1406,8 @@ fn apply_c2_pool_opener_t10_entry(
 /// assistant-attribution (caller), and named-speaker sessions. No new
 /// constant. Invoked after the gatekeeper, after #30, as the last
 /// ranking change, so it can see openers that the pool T@10 entry just
-/// seated into official k.
+/// seated into official k. A later post-gatekeeper C2 seat may still
+/// run after this pass.
 fn apply_c2_same_session_opener_t5_entry(
     ix: &Index,
     plan: &QueryPlan,
@@ -1473,6 +1474,102 @@ fn apply_c2_same_session_opener_t5_entry(
     }
     list.swap(vs, ci);
     true
+}
+
+
+/// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
+/// turn by a speaker the query names, in the scene-ranked pool but not
+/// already in the official k, takes the official-k seat of the last
+/// unmentioned named speaker in the official-k tail (slots 6..k), when
+/// that turn is at least as on-scene as the evicted turn. The top 5 is
+/// unchanged, so T@1 and T@5 cannot drop. The engine's session list is
+/// not rewritten by C2 turn seats, so official Session cannot drop.
+/// The replacement is also refused when it would push any session out
+/// of the first 5 unique-session slots. Distinct from #17 and #23
+/// (those candidates are already in official k and are pulled into the
+/// top 5) and from #30 (user/assistant openers). No new constant: the
+/// scene floor is "at least as on-scene," the same comparison #12 and
+/// #30 use. Skipped when the query conjoins the named speaker with
+/// someone else ("X and Y"), on summary requests (existing
+/// `summary_hold` shape), preference, temporal, and WH-person
+/// questions, and on event sequences and assistant-attribution
+/// (caller). Does not fire on user/assistant chats. Invoked after the
+/// gatekeeper, after #31, as the last ranking change.
+fn apply_c2_pool_mentioned_t10_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if head_sp.is_empty() || head_sp == "user" || head_sp == "assistant" {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    if list.len() <= window {
+        return false;
+    }
+    let k = list.len();
+    let mut vs = None;
+    for i in window..k {
+        let sp = ix.turns[list[i]].speaker.as_str();
+        if sp.is_empty() || sp == "user" || sp == "assistant" {
+            continue;
+        }
+        if c2_query_mentions_speaker(query, sp) {
+            continue;
+        }
+        vs = Some(i);
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    let sc_v = t_scene.get(list[vs]).copied().unwrap_or(0.0);
+    if sc_v <= 0.0 {
+        return false;
+    }
+    let turn_ts: Vec<i64> = ix
+        .turns
+        .iter()
+        .map(|t| ix.session_ts.get(t.session).copied().unwrap_or(0))
+        .collect();
+    for ti in order(t_scene, &turn_ts) {
+        if list.contains(&ti) || t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        let csp = ix.turns[ti].speaker.as_str();
+        if csp.is_empty()
+            || csp == "user"
+            || csp == "assistant"
+            || !c2_query_mentions_speaker(query, csp)
+            || c2_speaker_conjoined(query, csp)
+        {
+            continue;
+        }
+        if t_scene.get(ti).copied().unwrap_or(0.0) < sc_v {
+            continue;
+        }
+        if !c2_s5_replace_preserved(ix, list, vs, ti) {
+            continue;
+        }
+        list[vs] = ti;
+        return true;
+    }
+    false
 }
 
 
@@ -4151,6 +4248,104 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 4, 5, 3, 2];
         assert!(!apply_c2_same_session_opener_t5_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 4, 5, 3, 2]);
+    }
+
+    #[test]
+
+    fn pool_mentioned_t10_entry_replaces_unmentioned_tail_with_mentioned_pool_turn() {
+        // 6:81 / 9:113 shape: a mentioned-speaker turn already in the
+        // scene-ranked pool but outside official k takes the official-k
+        // seat of the last unmentioned named speaker in the tail. The
+        // top 5 is unchanged; the victim stays out of the top 5.
+        let ix = build_index(
+            &[
+                sess("D0", &[("melanie", "I started a new practice project this month."), ("caroline", "I noted that project in the log.")]),
+                sess("D1", &[("melanie", "I asked about typical REST API errors yesterday."), ("caroline", "Timeouts, 404s, and 500s are typical.")]),
+                sess(
+                    "D2",
+                    &[
+                        ("melanie", "A third note is already in the log."),
+                        ("caroline", "The third note is stored."),
+                        ("melanie", "I later asked about a leftover topic."),
+                    ],
+                ),
+                sess(
+                    "D3",
+                    &[("caroline", "Always confirm typical REST API errors when I build an application.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What typical errors should Caroline be prepared to handle with a REST API?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        assert!(c2_query_mentions_speaker(&q.text, "caroline"));
+        assert!(!c2_query_mentions_speaker(&q.text, "melanie"));
+        // Turns: 0-1 D0, 2-3 D1, 4-6 D2, 7 D3 (caroline leftover).
+        // Official k of 7; tail slot 7 (index 6) is unmentioned Melanie.
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        let t_scene = vec![1.0f32, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.55];
+        assert!(apply_c2_pool_mentioned_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 7]);
+        // Below the victim's scene: no entry.
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        let t_low = vec![1.0f32, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3];
+        assert!(!apply_c2_pool_mentioned_t10_entry(&ix, &plan, &q.text, &mut list, &t_low));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
+        // User/assistant chats are left alone.
+        let ixu = build_index(
+            &[
+                sess("s0", &[("user", "I started a new practice project this month."), ("assistant", "I noted that project in the log.")]),
+                sess("s1", &[("user", "I asked about typical REST API errors yesterday."), ("assistant", "Timeouts, 404s, and 500s are typical.")]),
+                sess(
+                    "s2",
+                    &[
+                        ("user", "A third note is already in the log."),
+                        ("assistant", "The third note is stored."),
+                        ("user", "I later asked about a leftover topic."),
+                    ],
+                ),
+                sess("s3", &[("user", "Always confirm typical REST API errors when I build an application.")]),
+            ],
+            &Params::default(),
+        );
+        let planu = plan_query(&ixu, &q, &Params::default());
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        assert!(!apply_c2_pool_mentioned_t10_entry(&ixu, &planu, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
+        // Preference questions are skipped.
+        let pq = Query { text: "What is Caroline's favorite way to handle REST API errors?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(c2_text_preference(&pq.text));
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        assert!(!apply_c2_pool_mentioned_t10_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
+        // Temporal questions keep the timeline path.
+        let tq = Query { text: "When does Caroline handle REST API errors?".into(), date: String::new() };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(tplan.intent.temporal);
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        assert!(!apply_c2_pool_mentioned_t10_entry(&ix, &tplan, &tq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
+        // WH-person questions are left to the existing midcap path.
+        let wq = Query { text: "Who handled the REST API errors?".into(), date: String::new() };
+        let wplan = plan_query(&ix, &wq, &Params::default());
+        assert_ne!(wh_slots(&wq.text) & WH_PERSON, 0);
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        assert!(!apply_c2_pool_mentioned_t10_entry(&ix, &wplan, &wq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
+        // Conjoined "X and Y" mentions are left alone.
+        let cq = Query { text: "What typical errors should Caroline and Melanie handle with a REST API?".into(), date: String::new() };
+        let cplan = plan_query(&ix, &cq, &Params::default());
+        assert!(c2_speaker_conjoined(&cq.text, "caroline"));
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        assert!(!apply_c2_pool_mentioned_t10_entry(&ix, &cplan, &cq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
     }
 
     #[test]
