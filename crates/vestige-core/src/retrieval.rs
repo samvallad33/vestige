@@ -19,6 +19,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+
+// Step 10B: fixed-key SipHash instead of per-process RandomState.
+type DetHasher = std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>;
+type DetHashMap<K, V> = HashMap<K, V, DetHasher>;
+type DetHashSet<K> = HashSet<K, DetHasher>;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::OnceLock;
@@ -521,20 +526,20 @@ const CAUSAL_WORDS: &[&str] = &[
     " inspired ", " to help ", " reason ", " in order ", " purpose ", " aim ", " aims ", " aimed ",
 ];
 
-fn stopwords() -> &'static HashSet<&'static str> {
-    static S: OnceLock<HashSet<&'static str>> = OnceLock::new();
+fn stopwords() -> &'static DetHashSet<&'static str> {
+    static S: OnceLock<DetHashSet<&'static str>> = OnceLock::new();
     S.get_or_init(|| STOPWORDS.iter().copied().collect())
 }
 
-fn framing_words() -> &'static HashSet<&'static str> {
-    static F: OnceLock<HashSet<&'static str>> = OnceLock::new();
+fn framing_words() -> &'static DetHashSet<&'static str> {
+    static F: OnceLock<DetHashSet<&'static str>> = OnceLock::new();
     F.get_or_init(|| QUERY_FRAMING_WORDS.iter().copied().collect())
 }
 
-fn hypernyms() -> &'static HashMap<String, Vec<&'static str>> {
-    static H: OnceLock<HashMap<String, Vec<&'static str>>> = OnceLock::new();
+fn hypernyms() -> &'static DetHashMap<String, Vec<&'static str>> {
+    static H: OnceLock<DetHashMap<String, Vec<&'static str>>> = OnceLock::new();
     H.get_or_init(|| {
-        let mut m: HashMap<String, Vec<&'static str>> = HashMap::new();
+        let mut m: DetHashMap<String, Vec<&'static str>> = DetHashMap::default();
         for (dom, words) in HYPERNYM_LATTICE {
             for w in *words {
                 let e = m.entry(stem(w)).or_default();
@@ -1721,8 +1726,10 @@ fn deictic_weighted_tokens(raw: &[String], ts: i64) -> Vec<(String, f32)> {
                         let target = WEEKDAYS.iter().position(|d| d == w).unwrap_or(0) as i64;
                         let is_future = matches!(prev, "next" | "coming" | "following");
                         let is_strict_past = matches!(prev, "last" | "past" | "previous");
-                        let back = ((today - target + 7) % 7).max(if is_strict_past { 1 } else { 0 });
-                        let fwd = ((target - today + 7) % 7).max(if is_future { 1 } else { 0 });
+                        let raw_back = (today - target + 7) % 7;
+                        let raw_fwd = (target - today + 7) % 7;
+                        let back = if is_strict_past && raw_back == 0 { 7 } else { raw_back };
+                        let fwd = if is_future && raw_fwd == 0 { 7 } else { raw_fwd };
                         let delta = if is_future { fwd } else { -back };
                         specs.push((delta * DAY, 1.0, false));
                     }
@@ -1764,7 +1771,7 @@ fn deictic_tokens(raw: &[String], ts: i64) -> Vec<String> {
 
 #[derive(Default)]
 struct Vocab {
-    map: HashMap<String, u32>,
+    map: DetHashMap<String, u32>,
     names: Vec<String>,
 }
 
@@ -1793,7 +1800,7 @@ struct Feat {
 
 #[derive(Default, Clone)]
 struct Bag {
-    tf: [HashMap<u32, f32>; 3],
+    tf: [DetHashMap<u32, f32>; 3],
     len: [f32; 3],
 }
 
@@ -1819,9 +1826,9 @@ struct StandingRule {
     session: usize,
     ts: i64,
     has_explicit_scope: bool,
-    scope: HashSet<u32>,
+    scope: DetHashSet<u32>,
     domains: Vec<&'static str>,
-    assistant_nouns: HashSet<u32>,
+    assistant_nouns: DetHashSet<u32>,
 }
 
 struct TurnIx {
@@ -1832,17 +1839,17 @@ struct TurnIx {
     blip_feats: Vec<Feat>,
     /// Exact/stem term ids of content tokens in order, for span proximity.
     seq: Vec<(u32, u32)>,
-    content: HashSet<u32>,
+    content: DetHashSet<u32>,
     /// Capitalized proper-entity term IDs inside this turn.
-    entities: HashSet<u32>,
+    entities: DetHashSet<u32>,
     /// Body text (header line removed) for lazy exact title-span linking on hot anchors.
     body_for_headers: String,
     span_ids_cache: OnceLock<Vec<u32>>,
     speaker: String,
     is_question: bool,
     is_pure_info_question: bool,
-    pre_question_ids: HashSet<u32>,
-    question_clause_ids: HashSet<u32>,
+    pre_question_ids: DetHashSet<u32>,
+    question_clause_ids: DetHashSet<u32>,
     answers_question: bool,
     is_short_reply: bool,
     is_backchannel: bool,
@@ -1881,6 +1888,13 @@ struct TurnIx {
     form_midcap: bool,
     /// Ingest-time count of mid-sentence capitalized tokens, digits, and quotes (Rung 1 `--no-dump` safe).
     slot_entities: u16,
+    /// Clean mid-sentence slot entities excluding first-person pronouns ("I", "I'm", "I've", "I'll", "I'd").
+    slot_entities_clean: u16,
+    /// Step 9 ingest-time prose shape (`--no-dump` safe): list-marker lines and first game move.
+    list_item_count: u8,
+    first_move_num: u16,
+    /// Step 14 ingest-time closed-class user preference/constraint role-object ids (`prose_body` only).
+    role_objs: Vec<u32>,
     raw_links: Vec<TurnLink>,
     /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
     /// Never read by ranking.
@@ -1889,16 +1903,16 @@ struct TurnIx {
 
 struct Stats {
     n: f32,
-    df: HashMap<u32, u32>,
+    df: DetHashMap<u32, u32>,
     avg: [f32; 3],
 }
 
 fn stats_of(bags: &[Bag]) -> Stats {
-    let mut df: HashMap<u32, u32> = HashMap::new();
+    let mut df: DetHashMap<u32, u32> = DetHashMap::default();
     let mut sum = [0.0f32; 3];
     let mut cnt = [0.0f32; 3];
     for b in bags {
-        let mut seen: HashSet<u32> = HashSet::new();
+        let mut seen: DetHashSet<u32> = DetHashSet::default();
         for f in 0..3 {
             for (&t, &v) in &b.tf[f] {
                 if v > 0.0 {
@@ -1935,8 +1949,8 @@ struct Index {
     session_ids: Vec<String>,
     session_ts: Vec<i64>,
     session_turns: Vec<Vec<usize>>,
-    session_entities: Vec<HashSet<u32>>,
-    session_content: Vec<HashSet<u32>>,
+    session_entities: Vec<DetHashSet<u32>>,
+    session_content: Vec<DetHashSet<u32>>,
     /// Rarest non-hub content token IDs per session (sorted, up to 32) for GhostLink Ochiai divergence.
     session_rare_nt: Vec<Vec<u32>>,
     /// Backward-only session RSB edges (`later_session -> (degree, earlier_session)`).
@@ -1957,22 +1971,22 @@ struct Index {
     t_stats: Stats,
     w_stats: Stats,
     /// Content-term ids that are the object of a personal constraint ("allergic to X").
-    constraint_terms: HashSet<u32>,
+    constraint_terms: DetHashSet<u32>,
     /// Compiled SOAR/Rete standing rules for the stratified governing channel (`RankResult.standing_rules`).
     standing_rules: Vec<StandingRule>,
     /// Non-hub hypernym domains (`session_df <= 0.12 * N` when `N >= 16`).
-    non_hub_domains: HashSet<&'static str>,
+    non_hub_domains: DetHashSet<&'static str>,
     /// Exact `{Header}\\n{Body}` titles, hashed, for the session bridge.
-    header_dict: HashMap<u64, Vec<HeaderKey>>,
+    header_dict: DetHashMap<u64, Vec<HeaderKey>>,
     header_max_words: usize,
     /// Unique title-case speaker nickname bindings (`Mel` -> `melanie`).
     nicks: SpeakerNickIndex,
     /// Recall cues: per turn, the sorted ids of the kernel tokens (`raw_tokens` + `stem`) of its
     /// full content, in a private id space (`cue_vocab`) so the ranker vocabulary is untouched.
     turn_cues: Vec<Vec<u32>>,
-    cue_vocab: HashMap<String, u32>,
+    cue_vocab: DetHashMap<String, u32>,
     /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
-    role_cues: HashSet<u32>,
+    role_cues: DetHashSet<u32>,
 }
 
 /// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
@@ -1980,7 +1994,7 @@ fn cue_tokens(text: &str) -> Vec<String> {
     raw_tokens(text).into_iter().map(|w| stem(&w)).collect()
 }
 
-fn intern_cues(text: &str, vocab: &mut HashMap<String, u32>) -> Vec<u32> {
+fn intern_cues(text: &str, vocab: &mut DetHashMap<String, u32>) -> Vec<u32> {
     let mut ids: Vec<u32> = cue_tokens(text)
         .into_iter()
         .map(|w| {
@@ -2234,7 +2248,7 @@ fn extract_rule_scope(text: &str) -> (bool, Vec<String>) {
 /// version tags (`v1.2.3`), and file paths (`dir/file.ext`). Zero word similarity.
 fn extract_exact_technical_handles(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = DetHashSet::default();
     for raw_tok in text.split_whitespace() {
         let tok = raw_tok.trim_matches(|c: char| matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '"' | '\'' | '`'));
         let tok_clean = tok.trim_end_matches('.');
@@ -2410,7 +2424,7 @@ fn skip_comma(text: &str) -> &str {
     s.strip_prefix(',').unwrap_or(s).trim_start()
 }
 
-fn is_speaker_alias(tok: &str, names: &HashSet<String>) -> bool {
+fn is_speaker_alias(tok: &str, names: &DetHashSet<String>) -> bool {
     if names.contains(tok) {
         return true;
     }
@@ -2424,7 +2438,7 @@ fn is_speaker_alias(tok: &str, names: &HashSet<String>) -> bool {
     names.iter().any(|n| n.len() >= tok.len() + 3 && n.starts_with(tok))
 }
 
-fn strip_one_question_lead<'a>(text: &'a str, names: &HashSet<String>) -> Option<&'a str> {
+fn strip_one_question_lead<'a>(text: &'a str, names: &DetHashSet<String>) -> Option<&'a str> {
     let s = text.trim_start();
     let (tok, rest) = take_word(s)?;
     let low = tok.to_ascii_lowercase();
@@ -2469,7 +2483,7 @@ fn info_question_start(clause: &str) -> bool {
     INFO_Q_WORDS.contains(&low.as_str())
 }
 
-fn stripped_question_clause<'a>(clause: &'a str, names: &HashSet<String>) -> &'a str {
+fn stripped_question_clause<'a>(clause: &'a str, names: &DetHashSet<String>) -> &'a str {
     let mut s = clause.trim();
     for _ in 0..8 {
         if info_question_start(s) {
@@ -2544,8 +2558,8 @@ fn pre_has_answer_payload(pre: &str) -> bool {
     raw_tokens(pre).iter().any(|w| NUMBER_WORDS.contains(&w.as_str()) || token_is_temporal_word(w))
 }
 
-fn content_term_ids(vocab: &mut Vocab, text: &str, stemming: bool) -> HashSet<u32> {
-    let mut ids = HashSet::new();
+fn content_term_ids(vocab: &mut Vocab, text: &str, stemming: bool) -> DetHashSet<u32> {
+    let mut ids = DetHashSet::default();
     for w in raw_tokens(text).into_iter().filter(|w| is_content(w)) {
         ids.insert(vocab.intern(&w));
         if stemming {
@@ -2556,8 +2570,8 @@ fn content_term_ids(vocab: &mut Vocab, text: &str, stemming: bool) -> HashSet<u3
 }
 
 struct QuestionShape {
-    pre_ids: HashSet<u32>,
-    clause_ids: HashSet<u32>,
+    pre_ids: DetHashSet<u32>,
+    clause_ids: DetHashSet<u32>,
     is_pure: bool,
 }
 
@@ -2566,7 +2580,7 @@ fn analyze_question(
     prose: &str,
     is_question: bool,
     stemming: bool,
-    names: &HashSet<String>,
+    names: &DetHashSet<String>,
 ) -> QuestionShape {
     let lower = prose.to_ascii_lowercase();
     let legacy = is_question && info_question_start(lower.trim_start());
@@ -2576,8 +2590,8 @@ fn analyze_question(
     };
     let Some((pre, clause)) = terminal_question_spans(prose) else {
         return QuestionShape {
-            pre_ids: HashSet::new(),
-            clause_ids: HashSet::new(),
+            pre_ids: DetHashSet::default(),
+            clause_ids: DetHashSet::default(),
             is_pure: is_question && legacy && !tag,
         };
     };
@@ -2670,7 +2684,7 @@ fn commitment_manner(lower: &str) -> bool {
     })
 }
 
-fn user_preference_speech_act(lower: &str, raw: &[String], pref_set: &HashSet<&str>) -> bool {
+fn user_preference_speech_act(lower: &str, raw: &[String], pref_set: &DetHashSet<&str>) -> bool {
     raw.iter().any(|w| pref_set.contains(w.as_str()))
         || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m))
         || hedged_like_is_preference(lower)
@@ -2749,15 +2763,15 @@ fn surface_aux_tokens(word: &str) -> Vec<(String, f32)> {
 const NICK_TAIL: usize = 3;
 
 struct SpeakerNickIndex {
-    prefix_of: HashMap<String, String>,
-    witnessed: HashMap<String, HashSet<String>>,
-    lower_attested: HashSet<String>,
+    prefix_of: DetHashMap<String, String>,
+    witnessed: DetHashMap<String, DetHashSet<String>>,
+    lower_attested: DetHashSet<String>,
 }
 
-fn common_speaker_tokens() -> &'static HashSet<String> {
-    static S: OnceLock<HashSet<String>> = OnceLock::new();
+fn common_speaker_tokens() -> &'static DetHashSet<String> {
+    static S: OnceLock<DetHashSet<String>> = OnceLock::new();
     S.get_or_init(|| {
-        let mut s = HashSet::new();
+        let mut s = DetHashSet::default();
         for w in STOPWORDS
             .iter()
             .chain(STARTER_STOP)
@@ -2852,9 +2866,9 @@ fn surface_tokens(text: &str) -> Vec<SurfaceTok> {
 
 impl SpeakerNickIndex {
     fn build(sessions: &[Session]) -> Self {
-        let mut exact_roles: HashSet<String> = HashSet::new();
-        let mut targets: HashSet<String> = HashSet::new();
-        let mut lower_attested: HashSet<String> = HashSet::new();
+        let mut exact_roles: DetHashSet<String> = DetHashSet::default();
+        let mut targets: DetHashSet<String> = DetHashSet::default();
+        let mut lower_attested: DetHashSet<String> = DetHashSet::default();
         let mut texts: Vec<&str> = Vec::new();
         for s in sessions {
             for t in &s.turns {
@@ -2884,7 +2898,7 @@ impl SpeakerNickIndex {
                 }
             }
         }
-        let mut hits: HashMap<String, Vec<String>> = HashMap::new();
+        let mut hits: DetHashMap<String, Vec<String>> = DetHashMap::default();
         let mut ordered: Vec<&String> = targets.iter().collect();
         ordered.sort();
         for name in ordered {
@@ -2899,7 +2913,7 @@ impl SpeakerNickIndex {
                 hits.entry(p.to_string()).or_default().push(name.clone());
             }
         }
-        let mut prefix_of: HashMap<String, String> = HashMap::new();
+        let mut prefix_of: DetHashMap<String, String> = DetHashMap::default();
         for (p, mut names) in hits {
             names.sort();
             names.dedup();
@@ -2907,7 +2921,7 @@ impl SpeakerNickIndex {
                 prefix_of.insert(p, names.pop().unwrap());
             }
         }
-        let mut witnessed: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut witnessed: DetHashMap<String, DetHashSet<String>> = DetHashMap::default();
         for text in &texts {
             for tok in surface_tokens(text) {
                 if !tok.title_case {
@@ -2942,8 +2956,8 @@ impl SpeakerNickIndex {
         Some(full.as_str())
     }
 
-    fn bindings_in(&self, text: &str) -> HashMap<String, String> {
-        let mut out = HashMap::new();
+    fn bindings_in(&self, text: &str) -> DetHashMap<String, String> {
+        let mut out = DetHashMap::default();
         for tok in surface_tokens(text) {
             if let Some(full) = self.bind_token(&tok, tok.sentence_initial) {
                 out.insert(tok.lower, full.to_string());
@@ -2983,17 +2997,17 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut session_turns = Vec::new();
     let mut session_entities = Vec::with_capacity(sessions.len());
     let mut session_content = Vec::with_capacity(sessions.len());
-    let mut domain_session_df: HashMap<&'static str, u32> = HashMap::new();
+    let mut domain_session_df: DetHashMap<&'static str, u32> = DetHashMap::default();
     let mut raw_standing_rules: Vec<(String, usize, usize, i64, bool, Vec<String>)> = Vec::new();
     let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
     let mut turn_prose_cache: Vec<String> = Vec::new();
-    let mut cue_vocab: HashMap<String, u32> = HashMap::new();
+    let mut cue_vocab: DetHashMap<String, u32> = DetHashMap::default();
     let mut turn_cues: Vec<Vec<u32>> = Vec::new();
-    let mut role_cues: HashSet<u32> = HashSet::new();
-    let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
-    let hard_constraint_set: HashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
-    let mut constraint_terms: HashSet<u32> = HashSet::new();
-    let mut header_dict: HashMap<u64, Vec<HeaderKey>> = HashMap::new();
+    let mut role_cues: DetHashSet<u32> = DetHashSet::default();
+    let pref_set: DetHashSet<&str> = PREF_MARKERS.iter().copied().collect();
+    let hard_constraint_set: DetHashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
+    let mut constraint_terms: DetHashSet<u32> = DetHashSet::default();
+    let mut header_dict: DetHashMap<u64, Vec<HeaderKey>> = DetHashMap::default();
     let mut header_max_words = 0usize;
     for (si, s) in sessions.iter().enumerate() {
         let Some(first) = s.turns.first() else { continue };
@@ -3025,7 +3039,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     // Pre-pass: collect exact single-token proper names evidenced by speakers, mid-clause
     // capitalization, multi-word entity parts, or document header titles so sentence-initial
     // occurrences of the same byte-equal name bind to the same identity node.
-    let mut known_proper: HashSet<String> = HashSet::new();
+    let mut known_proper: DetHashSet<String> = DetHashSet::default();
     for s in sessions {
         for t in &s.turns {
             let sp = t.role.trim().to_lowercase();
@@ -3053,10 +3067,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_ep_keys.push(session_episode_key(&s.id, &s.date));
         let date_toks = if p.enable_deictic && ts != 0 { calendar_tokens(ts) } else { Vec::new() };
         let mut members = Vec::new();
-        let mut s_ents = HashSet::new();
-        let mut s_cont = HashSet::new();
-        let mut s_doms: HashSet<&'static str> = HashSet::new();
-        let mut speaker_names: HashSet<String> = HashSet::new();
+        let mut s_ents = DetHashSet::default();
+        let mut s_cont = DetHashSet::default();
+        let mut s_doms: DetHashSet<&'static str> = DetHashSet::default();
+        let mut speaker_names: DetHashSet<String> = DetHashSet::default();
         for t in &s.turns {
             let sp = t.role.trim().to_lowercase();
             if !sp.is_empty() && sp != "user" && sp != "assistant" {
@@ -3067,10 +3081,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         }
         // Collect named speakers in this session so vocative address ("Thanks, Caroline!")
         // is capped at speaker identity parity (0.72) and never outranks Caroline speaking.
-        let mut sess_other_speakers: HashMap<usize, HashSet<String>> = HashMap::new();
+        let mut sess_other_speakers: DetHashMap<usize, DetHashSet<String>> = DetHashMap::default();
         for (idx_a, ta) in s.turns.iter().enumerate() {
             let spa = ta.role.trim().to_lowercase();
-            let mut others = HashSet::new();
+            let mut others = DetHashSet::default();
             for (idx_b, tb) in s.turns.iter().enumerate() {
                 if idx_a == idx_b {
                     continue;
@@ -3101,8 +3115,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let mut feats = Vec::new();
             let mut blip_feats = Vec::new();
             let mut seq = Vec::new();
-            let mut content = HashSet::new();
-            let mut entities = HashSet::new();
+            let mut content = DetHashSet::default();
+            let mut entities = DetHashSet::default();
             let mut t_doms: Vec<&'static str> = Vec::new();
             let mut tech_handles: Vec<u32> = Vec::new();
             for w in raw.iter().filter(|w| is_content(w)) {
@@ -3285,6 +3299,23 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 && !pref_marker
                 && !is_standing_policy
                 && raw.first().is_some_and(|w| BACKCHANNEL_LEADS.contains(&w.as_str()));
+            let mut role_objs: Vec<u32> = Vec::new();
+            if field == 0 && !is_backchannel {
+                let (r_objs, _r_attrs) = step14_extract_role_frames(prose_body);
+                for obj in r_objs {
+                    let pid = vocab.intern(&obj);
+                    if !role_objs.contains(&pid) {
+                        role_objs.push(pid);
+                    }
+                    if p.enable_stemming {
+                        let st = stem(&obj);
+                        let sid = vocab.intern(&stem_term(&st));
+                        if !role_objs.contains(&sid) {
+                            role_objs.push(sid);
+                        }
+                    }
+                }
+            }
             let is_initiative = field == 0
                 && !is_standing_policy
                 && !anaphoric
@@ -3358,7 +3389,11 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_digit: has_ascii_digit(prose_body),
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
-                slot_entities: count_slot_entities(prose_body),
+                slot_entities: count_slot_entities_mode(prose_body, false),
+                slot_entities_clean: count_slot_entities_mode(prose_body, true),
+                list_item_count: step9_list_item_count(prose_body),
+                first_move_num: step9_first_move_num(prose_body),
+                role_objs,
                 raw_links: t.links.clone(),
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
@@ -3401,7 +3436,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         }
     }
 
-    let mut id_at: HashMap<String, usize> = HashMap::new();
+    let mut id_at: DetHashMap<String, usize> = DetHashMap::default();
     for (i, t) in turns.iter().enumerate() {
         if !t.id.is_empty() {
             id_at.entry(t.id.clone()).or_insert(i);
@@ -3434,7 +3469,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     }
 
     // 1. Exact Technical Handle & Typed Slot RSB (`df <= 6`): later turn/session -> earlier turn/session.
-    let mut handle_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut handle_postings: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
     for (ti, hs) in turn_tech_handles.iter().enumerate() {
         for &h in hs {
             let list = handle_postings.entry(h).or_default();
@@ -3466,7 +3501,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     //    When two user turns share a rare proper entity (`2 <= df <= 8`) or constraint object
     //    and either `advanced::contradiction::appears_contradictory` fires or the later turn
     //    asserts an explicit revision/constraint, record a backward `supersedes` edge (`later -> earlier`).
-    let mut ent_user_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut ent_user_postings: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
     for (ti, t) in turns.iter().enumerate() {
         if t.field != 0 || t.is_question || t.is_backchannel {
             continue;
@@ -3730,7 +3765,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     } else {
         u32::MAX
     };
-    let non_hub_domains: HashSet<&'static str> = HYPERNYM_LATTICE
+    let non_hub_domains: DetHashSet<&'static str> = HYPERNYM_LATTICE
         .iter()
         .map(|(d, _)| *d)
         .filter(|d| domain_session_df.get(d).copied().unwrap_or(0) <= dom_hub_cut)
@@ -3744,7 +3779,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let fw_set = framing_words();
     let mut standing_rules = Vec::with_capacity(raw_standing_rules.len());
     for (policy_key, turn_idx, sess_idx, ts, has_explicit_scope, scope_words) in raw_standing_rules {
-        let mut scope = HashSet::new();
+        let mut scope = DetHashSet::default();
         let mut dom_vec: Vec<&'static str> = Vec::new();
         for w in &scope_words {
             if fw_set.contains(w.as_str()) {
@@ -3769,7 +3804,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 }
             }
         }
-        let mut assistant_nouns = HashSet::new();
+        let mut assistant_nouns = DetHashSet::default();
         let members = &session_turns[sess_idx];
         if let Some(pos) = members.iter().position(|&ti| ti == turn_idx) {
             if pos + 1 < members.len() {
@@ -3845,9 +3880,9 @@ struct QueryPlan {
     terms: Vec<QTerm>,
     groups: Vec<String>,
     /// term id -> group, for proximity scanning
-    group_of: HashMap<u32, usize>,
-    focal_ids: HashSet<u32>,
-    focal_domains: HashSet<&'static str>,
+    group_of: DetHashMap<u32, usize>,
+    focal_ids: DetHashSet<u32>,
+    focal_domains: DetHashSet<&'static str>,
 }
 
 /// Normalize punctuation (preserving internal apostrophes in contractions like `i'm` / `don't`)
@@ -3929,7 +3964,7 @@ fn interrogative_when(padded: &str) -> bool {
 
 pub fn classify(text: &str) -> QueryIntent {
     let lower = word_padded(text);
-    let content_groups = raw_tokens(text).into_iter().filter(|w| is_content(w)).collect::<HashSet<_>>().len();
+    let content_groups = raw_tokens(text).into_iter().filter(|w| is_content(w)).collect::<DetHashSet<_>>().len();
     let user_initiative = has_any(&lower, USER_INITIATIVE_CUES);
     let retrospective_user = user_initiative || has_any(&lower, TIMELINE_CUES);
     let direct_assistant = has_any(&lower, ASSISTANT_ATTRIBUTION_CUES);
@@ -3976,10 +4011,10 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let mut intent = classify(&q.text);
     let mut terms = Vec::new();
     let mut groups: Vec<String> = Vec::new();
-    let mut group_of = HashMap::new();
-    let mut hyp_added: HashSet<&str> = HashSet::new();
-    let mut focal_ids: HashSet<u32> = HashSet::new();
-    let mut focal_domains: HashSet<&'static str> = HashSet::new();
+    let mut group_of = DetHashMap::default();
+    let mut hyp_added: DetHashSet<&str> = DetHashSet::default();
+    let mut focal_ids: DetHashSet<u32> = DetHashSet::default();
+    let mut focal_domains: DetHashSet<&'static str> = DetHashSet::default();
     let use_hyp = p.enable_hypernyms;
 
     let raw_q = raw_tokens(&q.text);
@@ -4000,19 +4035,42 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     } else {
         Vec::new()
     };
+    let rel_spec = if p.enable_deictic && q_ts != 0 {
+        parse_relative_time_specs_from_raw(&raw_q, q_ts)
+    } else {
+        RelTimeSpec {
+            points: Vec::new(),
+            windows: Vec::new(),
+            scaffold_positions: vec![false; raw_q.len()],
+        }
+    };
+    let rel_prior_active = !rel_spec.points.is_empty() || !rel_spec.windows.is_empty();
 
     let fw = framing_words();
     let domain_groups = raw_q
         .iter()
-        .filter(|w| is_content(w) && !fw.contains(w.as_str()))
-        .collect::<HashSet<_>>()
+        .enumerate()
+        .filter(|&(idx, w)| {
+            is_content(w)
+                && !fw.contains(w.as_str())
+                && !(rel_prior_active && rel_spec.scaffold_positions.get(idx).copied().unwrap_or(false))
+        })
+        .map(|(_, w)| w)
+        .collect::<DetHashSet<_>>()
         .len();
     let can_demote_framing = domain_groups >= 1;
+    let zero_rel_scaffolding = rel_prior_active && domain_groups >= 1;
 
     let nick_bind = ix.nicks.bindings_in(&q.text);
-    let mut label_group: HashMap<String, usize> = HashMap::new();
-    let mut seen_toks = HashSet::new();
-    for w in raw_q.iter().filter(|w| is_content(w)) {
+    let mut label_group: DetHashMap<String, usize> = DetHashMap::default();
+    let mut seen_toks = DetHashSet::default();
+    for (idx, w) in raw_q.iter().enumerate() {
+        if !is_content(w) {
+            continue;
+        }
+        if zero_rel_scaffolding && rel_spec.scaffold_positions.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
         if !seen_toks.insert(w.clone()) {
             continue;
         }
@@ -4074,6 +4132,7 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                 focal_ids.insert(id);
             }
         }
+        step9_push_typo_fallback(ix, w, &st, nick_bind.get(w).is_some(), g, &mut terms, &mut group_of);
         if let Some(doms) = hypernyms().get(&st) {
             for &d in doms {
                 if ix.non_hub_domains.contains(d) {
@@ -4106,7 +4165,7 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     }
 
     // Capitalized proper-noun entity phrases present in index (e.g. "Local H", "For Against").
-    let mut seen_ents = HashSet::new();
+    let mut seen_ents = DetHashSet::default();
     for ent in proper_entity_tokens(&q.text) {
         if !seen_ents.insert(ent.clone()) {
             continue;
@@ -4140,7 +4199,7 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     }
 
     if p.enable_deictic {
-        let mut date_weights: HashMap<String, f32> = HashMap::new();
+        let mut date_weights: std::collections::BTreeMap<String, f32> = std::collections::BTreeMap::new();
         for d in inline_dates {
             let w = if d.starts_with("__DATE__") {
                 2.0
@@ -4251,7 +4310,7 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
 
 /// True when two distinct query words land within `span` content tokens of each other.
 fn proximity_hit<'a, I: Iterator<Item = &'a (u32, u32)>>(seq: I, plan: &QueryPlan, span: usize) -> bool {
-    let mut last: HashMap<usize, usize> = HashMap::new();
+    let mut last: DetHashMap<usize, usize> = DetHashMap::default();
     for (pos, (e, s)) in seq.enumerate() {
         let g = plan.group_of.get(e).or_else(|| plan.group_of.get(s));
         if let Some(&g) = g {
@@ -4285,7 +4344,7 @@ fn order(scores: &[f32], ts: &[i64]) -> Vec<usize> {
     idx
 }
 
-fn jaccard(a: &HashSet<u32>, b: &HashSet<u32>) -> f32 {
+fn jaccard(a: &DetHashSet<u32>, b: &DetHashSet<u32>) -> f32 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
@@ -4358,7 +4417,7 @@ fn rank_standing_rules(
     // including zero-overlap rules. The episodic floor stays off for these intents,
     // so the channel can fire without taking one of the five episodic slots.
     let multi_evidence = it.multi_hop || it.sniper_how_many || it.temporal || it.is_event_sequence;
-    let mut latest_by_key: HashMap<&str, (usize, i32, i32, i64)> = HashMap::new();
+    let mut latest_by_key: DetHashMap<&str, (usize, i32, i32, i64)> = DetHashMap::default();
     for (ri, r) in ix.standing_rules.iter().enumerate() {
         let scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         let dom_hits = r.domains.iter().filter(|d| plan.focal_domains.contains(*d)).count() as i32;
@@ -4415,7 +4474,7 @@ fn policy_spec_winner_floor(lexical_max: f32) -> f32 {
     }
 }
 
-fn exact_query_group_ids(plan: &QueryPlan) -> HashSet<u32> {
+fn exact_query_group_ids(plan: &QueryPlan) -> DetHashSet<u32> {
     plan.terms
         .iter()
         .filter(|t| t.exact_hit && t.group.is_some())
@@ -4423,8 +4482,8 @@ fn exact_query_group_ids(plan: &QueryPlan) -> HashSet<u32> {
         .collect()
 }
 
-fn session_speaker_names(ix: &Index, members: &[usize]) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn session_speaker_names(ix: &Index, members: &[usize]) -> DetHashSet<String> {
+    let mut names = DetHashSet::default();
     for &m in members {
         let sp = ix.turns[m].speaker.as_str();
         if sp.is_empty() || sp == "user" || sp == "assistant" {
@@ -4437,7 +4496,7 @@ fn session_speaker_names(ix: &Index, members: &[usize]) -> HashSet<String> {
     names
 }
 
-fn is_speaker_term(ix: &Index, id: u32, names: &HashSet<String>) -> bool {
+fn is_speaker_term(ix: &Index, id: u32, names: &DetHashSet<String>) -> bool {
     let Some(name) = ix.vocab.names.get(id as usize) else { return false };
     let bare = name
         .strip_prefix("\u{1}ent:")
@@ -4449,11 +4508,11 @@ fn is_speaker_term(ix: &Index, id: u32, names: &HashSet<String>) -> bool {
     is_speaker_alias(bare, names)
 }
 
-fn clause_hits_query(ids: &HashSet<u32>, g: &HashSet<u32>, ix: &Index, names: &HashSet<String>) -> bool {
+fn clause_hits_query(ids: &DetHashSet<u32>, g: &DetHashSet<u32>, ix: &Index, names: &DetHashSet<String>) -> bool {
     ids.iter().any(|id| g.contains(id) && !is_speaker_term(ix, *id, names))
 }
 
-fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &HashSet<u32>, names: &HashSet<String>) -> bool {
+fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &DetHashSet<u32>, names: &DetHashSet<String>) -> bool {
     if !t.is_pure_info_question {
         return false;
     }
@@ -4647,7 +4706,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         .filter(|w| is_content(w))
         .filter_map(|w| ix.vocab.get(&w).and_then(|id| plan.group_of.get(&id).copied()))
         .collect();
-    let mut q_bigrams: HashSet<(usize, usize)> = HashSet::new();
+    let mut q_bigrams: DetHashSet<(usize, usize)> = DetHashSet::default();
     for pair in q_groups.windows(2) {
         if pair[0] != pair[1] {
             q_bigrams.insert((pair[0], pair[1]));
@@ -4686,7 +4745,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
-        // Content-token count: TurnIx.content is HashSet<u32> of content term ids
+        // Content-token count: TurnIx.content is DetHashSet<u32> of content term ids
         // (same field the s5 gate analysis used). This is NOT a UTF-8 char count.
         let content_tokens = t.content.len();
         let keep_full_carry = t.speaker == "assistant" || t.is_short_reply || content_tokens <= 8;
@@ -4699,7 +4758,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
         if !q_bigrams.is_empty() && t.seq.len() >= 2 {
             let mut bigram_bonus = 0.0f32;
-            let mut matched_bi: HashSet<(usize, usize)> = HashSet::new();
+            let mut matched_bi: DetHashSet<(usize, usize)> = DetHashSet::default();
             for win in t.seq.windows(2) {
                 let (ea, sa) = win[0];
                 let (eb, sb) = win[1];
@@ -4728,6 +4787,21 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         it.is_event_sequence,
         &mut t_turn_raw,
     );
+    apply_panini_karaka_slot_shape(ix, &q.text, &it, pref_on, &mut t_turn_raw);
+    apply_step8_kelal_u_ferat(ix, &plan, &mut t_turn_raw);
+    apply_step8_homeric_ring(ix, &plan, &mut t_turn_raw);
+    apply_step9_method_of_loci(ix, &q.text, &mut t_turn_raw);
+    if p.enable_deictic {
+        apply_move3_heideltime_anchor(
+            ix,
+            q,
+            it.multi_hop,
+            &mut s_score,
+            &mut t_turn_raw,
+            &mut t_raw,
+            &mut t_own,
+        );
+    }
 
     // Weapon 1: Bidirectional 3-Turn Scene Pooling.
     // - On named-speaker dialogues (`LoCoMo` / multi-person chats), pool over uncarried `t_own` +
@@ -4802,16 +4876,28 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         0.15
                     };
                     let next_w = if next_adds { 0.55 } else { 0.18 };
+                    let user_q_before_asst = ix.turns[ti].speaker == "user"
+                        && ix.turns[ti].is_question
+                        && !it.assistant_attribution
+                        && pos + 1 < members.len()
+                        && ix.turns[members[pos + 1]].speaker == "assistant";
+                    let next_tr_w = if user_q_before_asst && ix.turns[ti].is_pure_info_question {
+                        0.12
+                    } else {
+                        next_w
+                    };
                     let prev_sess = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
                     let next_sess = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
                     t_scene_sess[ti] = 1.0 * t_raw[ti] + prev_w * prev_sess + next_w * next_sess;
                     let prev_tr = if pos > 0 { t_turn_raw[members[pos - 1]] } else { 0.0 };
                     let next_tr = if pos + 1 < members.len() { t_turn_raw[members[pos + 1]] } else { 0.0 };
-                    t_scene[ti] = 1.0 * t_turn_raw[ti] + prev_w * prev_tr + next_w * next_tr;
+                    t_scene[ti] = 1.0 * t_turn_raw[ti] + prev_w * prev_tr + next_tr_w * next_tr;
                     if pos > 0 && !ix.turns[ti].is_backchannel {
                         t_mask[ti] |= t_mask[members[pos - 1]];
                     }
-                    if pos + 1 < members.len() {
+                    if pos + 1 < members.len()
+                        && !(user_q_before_asst && ix.turns[ti].is_pure_info_question)
+                    {
                         t_mask[ti] |= t_mask[members[pos + 1]];
                     }
                 }
@@ -4865,6 +4951,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
 
         let exact_groups = exact_query_group_ids(&plan);
+        let q_ids: DetHashSet<u32> = plan.terms.iter().map(|qt| qt.id).collect();
 
         // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
         if p.enable_sniper {
@@ -4876,14 +4963,19 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let speaker_names = if has_named_dialogue {
                     session_speaker_names(ix, members)
                 } else {
-                    HashSet::new()
+                    DetHashSet::default()
                 };
                 let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
+                let has_declarative_user_peer = members.iter().any(|&m| {
+                    ix.turns[m].speaker == "user" && !ix.turns[m].is_question && !ix.turns[m].is_backchannel
+                });
                 for &ti in members {
                     if t_scene[ti] <= 0.0 {
                         continue;
                     }
                     let t = &ix.turns[ti];
+                    let novel_entities = t.entities.iter().filter(|&&eid| !q_ids.contains(&eid)).count();
+                    let lacks_novel_assertion = !t.has_numeric && !t.form_clock && novel_entities < 2;
                     if it.sniper_when {
                         if t.has_temporal {
                             t_scene[ti] *= 1.65;
@@ -4897,6 +4989,16 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
                     {
                         t_scene[ti] *= 0.62;
+                    } else if !has_named_dialogue
+                        && !it.assistant_attribution
+                        && has_declarative_user_peer
+                        && !episodic_user_quote
+                        && t.speaker == "user"
+                        && t.is_question
+                        && lacks_novel_assertion
+                        && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
+                    {
+                        t_scene[ti] *= 0.72;
                     }
                     if it.sniper_how_many && t.has_numeric {
                         t_scene[ti] *= 1.65;
@@ -4918,7 +5020,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
 
         // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
-        let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
+        let mut q_ents_and_vocatives: DetHashSet<u32> = DetHashSet::default();
         for ent in proper_entity_tokens(&q.text) {
             if let Some(id) = ix.vocab.get(&ent) {
                 q_ents_and_vocatives.insert(id);
@@ -4937,7 +5039,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 if speaker_names.is_empty() {
                     continue;
                 }
-                let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
+                let mut sess_speaker_ents: DetHashSet<u32> = DetHashSet::default();
                 for sw in &speaker_names {
                     if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
                         sess_speaker_ents.insert(id);
@@ -4986,7 +5088,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let t_max = t_scene[t0];
                 let t0_mask = t_mask[t0];
                 if t_max > 0.0 {
-                    let mut activation: HashMap<u32, f32> = HashMap::new();
+                    let mut activation: std::collections::BTreeMap<u32, f32> = std::collections::BTreeMap::new();
                     let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
 
                     // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities + Rare Exact Symbols
@@ -5088,6 +5190,38 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     t_mask.copy_from_slice(&t_mask_snap);
     t_exact_mask.copy_from_slice(&t_exact_snap);
     apply_scene_refinements(&mut t_scene, &mut t_mask, &mut t_exact_mask);
+    apply_step7_lex_specialis(ix, &q.text, &plan, pref_on, it, &t_own, &mut t_scene);
+    apply_c2_tap_form_precedence(ix, it, pref_on, &mut t_scene);
+    apply_step13_khipu_turn_bridge(
+        ix,
+        &q.text,
+        &plan,
+        pref_on,
+        it,
+        &t_own,
+        &t_exact_mask,
+        &mut t_scene,
+    );
+    apply_step17_isnad_multihop_chain(
+        ix,
+        &q.text,
+        &plan,
+        pref_on,
+        it,
+        &t_own,
+        &t_exact_mask,
+        &mut t_scene,
+    );
+    apply_step14_bipartite_pref_boost(ix, &q.text, &plan, pref_on, it, &t_own, &mut t_scene);
+    apply_step15_comparative_dual_slot_scores(
+        ix,
+        &q.text,
+        &plan,
+        it,
+        &t_own,
+        &t_exact_mask[..],
+        &mut t_scene,
+    );
 
     let k = top_k.max(1);
 
@@ -5167,9 +5301,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if pref_on && !multi_evidence_intent {
         let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.50, |ti| ix.turns[ti].is_personal_constraint);
     }
-    let initiative_content: Vec<HashSet<u32>> = if it.is_event_sequence {
+    let initiative_content: Vec<DetHashSet<u32>> = if it.is_event_sequence {
         ix.session_turns.iter().map(|members| {
-            let mut set = HashSet::new();
+            let mut set = DetHashSet::default();
             for &ti in members {
                 if ix.turns[ti].is_initiative {
                     set.extend(ix.turns[ti].content.iter().copied());
@@ -5303,7 +5437,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 4
             };
             let rare_sym_max_df = ((ix.s_stats.n * 0.05).clamp(3.0, 18.0)) as u32;
-            let mut s_act: HashMap<u32, f32> = HashMap::new();
+            let mut s_act: std::collections::BTreeMap<u32, f32> = std::collections::BTreeMap::new();
             for &anc in &anchors {
                 let anc_w = (s_score[anc] / smax).clamp(0.25, 1.0);
                 // Prefer highest-scoring matching turns inside anchor session so bridge entities come from hot passage.
@@ -5432,8 +5566,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             if s_score[top0] > 0.0 {
                 selected.push(top0);
                 let mut covered_mask = s_mask[top0];
-                let mut covered_ents: HashSet<u32> = ix.session_entities[top0].clone();
-                let mut mask_counts: HashMap<u64, usize> = HashMap::new();
+                let mut covered_ents: DetHashSet<u32> = ix.session_entities[top0].clone();
+                let mut mask_counts: std::collections::BTreeMap<u64, usize> = std::collections::BTreeMap::new();
                 *mask_counts.entry(s_mask[top0] & mask_limit).or_insert(0) += 1;
                 let mut remaining: Vec<usize> = (0..ns)
                     .filter(|&si| si != top0 && (s_score[si] > 0.0 || bridge_boost[si] > 0.0))
@@ -5572,12 +5706,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     } else {
         3
     };
+    let (q4_sess_floor, q4_turn_floor, allow_short_reply_bypass) =
+        step10_florilegium_floors(strong_top_sessions);
 
     let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
     let mut final_turn_indices: Vec<usize> = if p.enable_submodular {
         let mut selected_turns: Vec<usize> = Vec::with_capacity(k);
         let mut covered_query_terms: u64 = 0;
-        let mut session_counts: HashMap<usize, usize> = HashMap::new();
+        let mut session_counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
         // Ingest order. Equal gains keep the earlier turn, then the higher recorded stability.
         let mut remaining: Vec<usize> = (0..nt).filter(|&ti| t_scene[ti] > 0.0).collect();
 
@@ -5621,9 +5757,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     continue;
                 }
                 // One chat may not fill the top 5. A short reply beside a hit is the same evidence, not a new slot.
+                let bypass_cap = short_reply && !it.is_event_sequence && allow_short_reply_bypass;
                 let session_capped = selected_turns.len() < 5
                     && count >= max_per_session_top5
-                    && !(short_reply && !it.is_event_sequence);
+                    && !bypass_cap;
                 if session_capped {
                     continue;
                 }
@@ -5639,7 +5776,15 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     0.70
                 } else {
                     0.40
-                };
+                } * adj_partner_diversity_factor(
+                    ix,
+                    ti,
+                    t_sess,
+                    &selected_turns,
+                    it.assistant_attribution,
+                    short_reply,
+                    max_per_session_top5,
+                );
                 let uncovered_ratio = if total_query_groups > 0 {
                     uncovered_count / (total_query_groups as f32)
                 } else {
@@ -5706,7 +5851,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     && selected_turns.iter().any(|&prev| {
                         ix.turns[prev].session == ix.turns[ti].session && (prev as isize - ti as isize).abs() == 1
                     });
-                if selected_turns.len() < 5 && count >= max_per_session_top5 && !(short_reply && !it.is_event_sequence) {
+                let bypass_cap = short_reply && !it.is_event_sequence && allow_short_reply_bypass;
+                if selected_turns.len() < 5 && count >= max_per_session_top5 && !bypass_cap {
                     continue;
                 }
                 selected_turns.push(ti);
@@ -5731,7 +5877,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     {
         let sess_limit = final_session_indices.len().min(5);
         for &si in &final_session_indices[1..sess_limit] {
-            if s_score[si] + bridge_boost[si] < 0.45 * smax {
+            if s_score[si] + bridge_boost[si] < q4_sess_floor * smax {
                 continue;
             }
             if final_turn_indices[..5].iter().any(|&t| ix.turns[t].session == si) {
@@ -5760,7 +5906,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     .iter()
                     .filter(|&&t| ix.turns[t].session == vs)
                     .count();
-                cnt >= 2 && t_scene[best_ti] >= 0.25 * t_scene[vti]
+                cnt >= 2 && t_scene[best_ti] >= q4_turn_floor * t_scene[vti]
             });
             if let Some(slot) = victim_slot {
                 if let Some(existing) = final_turn_indices.iter().position(|&t| t == best_ti) {
@@ -5776,13 +5922,43 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
     }
 
+    if !it.is_event_sequence && !pref_on && !it.task_under_rules {
+        let gl = {
+            let g = plan.groups.len().min(64);
+            if g == 64 { u64::MAX } else { (1u64 << g) - 1 }
+        };
+        let floored = |t: usize| t_policy_floored[t] || t_pref_floored[t];
+        apply_step10a_evidence_seat(
+            ix,
+            &final_session_indices,
+            &t_scene,
+            &t_exact_mask,
+            gl,
+            &floored,
+            k,
+            &mut final_turn_indices,
+        );
+        apply_step15_comparative_dual_slot_seat(
+            ix,
+            &q.text,
+            &plan,
+            &it,
+            &t_own,
+            &t_exact_mask,
+            &floored,
+            k,
+            &mut t_scene,
+            &mut final_turn_indices,
+        );
+    }
+
     // Exact-token selection is finished. A recorded backward reply or exact edge
     // promotes its earlier target to the rank position earned by `credit`, including
     // when `target` was previously sitting in the tail (`5..k`) at a lower score.
     if !final_turn_indices.is_empty() {
         let pair = 1.0 / 3.0f32.log2();
         let mut slot_score: Vec<f32> = final_turn_indices.iter().map(|&i| t_scene[i]).collect();
-        let mut best_incoming: HashMap<usize, f32> = HashMap::new();
+        let mut best_incoming: std::collections::BTreeMap<usize, f32> = std::collections::BTreeMap::new();
         for &ti in &final_turn_indices {
             let src = t_scene[ti];
             if src <= 0.0 {
@@ -5936,13 +6112,86 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     }
     // BoundaryPrimacy: runs after ReplySource, on the final list, so it shares one path with live recall.
     let q_cues = query_cues(ix, &q.text);
-    boundary_primacy(ix, &q_cues, &mut final_turn_indices);
+    let cue_guard = RecallCueGuard {
+        plan: &plan,
+        it: &it,
+        t_scene: &t_scene,
+    };
+    boundary_primacy_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // GivenNew runs after BoundaryPrimacy on the same final list (one path for live and bench).
-    given_new(ix, &q_cues, &mut final_turn_indices);
+    given_new_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // SessionOpenerLift runs after GivenNew, on the same final list (one path for live and bench).
-    session_opener_lift_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&plan));
+    session_opener_lift_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
-    hearsay(ix, &q_cues, &mut final_turn_indices);
+    hearsay_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
+    // Step 11: Kemeny-Young Condorcet QA-Slot Agreement Voter runs before RSB so
+    // `rsb_seat_behind` and `rank1_gatekeeper_keep_rsb_head` stay 100% untouched.
+    if !it.is_event_sequence && !pref_on {
+        apply_step11_kemeny_wh_slot_voter(ix, &q.text, &it, &t_scene, &mut final_turn_indices);
+    }
+    // C2 algos lane: slot-1 seat rules, all before RSB (which then seats behind the head).
+    if !it.is_event_sequence {
+        apply_c2_bullae_numeral_seat(ix, &mut final_turn_indices, &t_scene);
+        apply_c2_coverage_margin_seat(ix, &plan, &mut final_turn_indices);
+        apply_c2_testimony_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+        apply_c2_cross_witness_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+        apply_c2_mimamsa_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+        apply_c2_dichotomous_key(ix, &plan, &mut final_turn_indices, &t_scene);
+        // Pool-fill reallocation: user source with a strict group superset takes a
+        // same-session assistant's top-5 seat. Skipped on assistant-attribution so
+        // the assistant's own words stay in place.
+        if !it.assistant_attribution {
+            apply_c2_source_superset_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
+            apply_c2_unique_group_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
+            apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+            // Next-user elaboration: mid-session declarative head yields to
+            // the next same-session declarative user already in the top 5
+            // when that follow-up is at least as on-scene. Skipped on
+            // preference so the rule stays independent of the
+            // preference-source seat.
+            // Text-level preference only (PREF_QUERY_CUES), not the
+            // constraint-object upgrade on plan.intent.preference, so
+            // #12–#18 stay independent of #11 without treating a factual
+            // question that mentions a constraint object as preference.
+            if !c2_text_preference(&q.text) {
+                apply_c2_elaboration_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Cross-session opener: mid-session user head yields to a
+                // user session-opener already in the top 5 from another
+                // session. Skipped on preference and on summary requests.
+                apply_c2_cross_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Same-session opener: mid-session declarative head yields
+                // to the same session's user opener already in the top 5.
+                // Skipped on preference and on summary requests.
+                apply_c2_same_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Queried-speaker reply: in a named-speaker dialogue, an
+                // unmentioned speaker's question yields to the next
+                // same-session turn by a speaker the query names, already
+                // in the top 5. Skipped on preference.
+                apply_c2_queried_speaker_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Queried-speaker previous: in a named-speaker dialogue, an
+                // unmentioned speaker's declarative comment yields to the
+                // previous same-session statement by a speaker the query
+                // names, already in the top 5. Skipped on preference.
+                apply_c2_queried_speaker_prev_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Queried-speaker question-head previous: in a
+                // named-speaker dialogue, an unmentioned speaker's
+                // question yields to the previous same-session turn
+                // by a speaker the query names, already in the top 5.
+                // Skipped on preference.
+                apply_c2_queried_speaker_qhead_prev_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Queried-speaker T@5 entry: a declarative turn by a
+                // speaker the query names, already in official k outside
+                // the top 5, swaps with the last unmentioned named
+                // speaker in the top 5. Membership-preserving. Skipped
+                // on preference.
+                apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+            }
+        }
+        // Preference source: ReplySource is skipped on assistant_attribution,
+        // but "can you recommend..." is tagged that way by a present-tense cue.
+        // Membership-preserving; runs even when assistant_attribution is set.
+        apply_c2_preference_source_seat(ix, &plan, &q.text, &mut final_turn_indices);
+    }
     // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
     // Never in front of the symptom. A full window does not grow.
@@ -5953,7 +6202,213 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
-    maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
+    // Queried-speaker T@5 entry, after the gatekeeper. The pre-RSB pass
+    // (#17) is often undone when the gatekeeper Kemeny-reorders the tail
+    // (slots 2..k). Re-applying the same membership-preserving swap here
+    // is a post-gatekeeper ranking change, so the entry survives the
+    // tail reorder by construction. Later post-gatekeeper C2 seats
+    // may still run after this pass.
+    // Same preference / event-sequence / assistant-attribution cuts.
+    // Does not touch rsb_seat_behind and adds no WH-slot ballot.
+    if !it.is_event_sequence && !it.assistant_attribution && !c2_text_preference(&q.text) {
+        apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Same-session user T@5 entry: a user opener or later turn from
+        // a session already in the top 5, already in official k, swaps
+        // with the last assistant in the top 5. Post-gatekeeper so the
+        // entry survives. Skipped on preference.
+        apply_c2_same_session_user_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Cross-session user-opener T@5 entry: a user opener from a
+        // session not yet in the top 5, already in official k, swaps
+        // with the last non-unique assistant that is not the head's
+        // next turn. Post-gatekeeper, after #20, so the entry survives.
+        // Skipped on preference.
+        apply_c2_cross_session_user_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Queried-speaker first-in-session seat: an unmentioned speaker
+        // at slot 1 yields to a named speaker's first utterance in its
+        // session, already in the top 5. Post-gatekeeper, after #21,
+        // so it sees the official post-gatekeeper list (a pre-RSB
+        // pass would reseat a tail occupant that the gatekeeper later
+        // leaves outside the top 5). Later post-gatekeeper C2 seats
+        // may still run after this pass. Skipped on preference.
+        apply_c2_queried_speaker_first_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Queried-speaker first-in-session T@5 entry: a named speaker's
+        // first utterance in its session, already in official k
+        // outside the top 5, swaps with the last unmentioned named
+        // speaker. Declaratives have no scene floor; questions reuse
+        // C2_XWITNESS_RATIO. Post-gatekeeper, after the first #22 pass.
+        // Skipped on preference.
+        apply_c2_queried_speaker_first_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Queried-speaker first-in-session seat, again, after #23. A
+        // first-in-session turn that #23 just admitted into the top 5
+        // can now take slot 1; the earlier #22 pass could not see it
+        // there yet. Later post-gatekeeper C2 seats may still run after
+        // this pass. Skipped on preference.
+        apply_c2_queried_speaker_first_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    }
+    // Subsequent-answer seat, again, after the gatekeeper. Pre-RSB #10
+    // refuses when the next user is still outside the top 5; RSB can
+    // then seat that user into the window, and a post-GK pass can take
+    // slot 1. Later post-gatekeeper C2 seats may still run after this
+    // pass. Same cuts as #10: event-sequence and assistant-attribution
+    // at the call site; the function still skips temporal and
+    // named-speaker sessions. Does not skip preference (same as #10).
+    // Does not run the gatekeeper again and adds no WH-slot ballot.
+    if !it.is_event_sequence && !it.assistant_attribution {
+        apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+    }
+    // Cross-session opener-pair seat: a user opener at slot 1 yields to
+    // another session's user opener already in the top 5 whose
+    // immediately following assistant reply is also already in the
+    // top 5, when that opener is at least as on-scene. Post-gatekeeper,
+    // after #26. Later post-gatekeeper C2 seats may still run after
+    // this pass. Skipped on preference. Does not run the gatekeeper
+    // again and adds no WH-slot ballot.
+    if !it.is_event_sequence && !it.assistant_attribution && !c2_text_preference(&q.text) {
+        apply_c2_cross_opener_pair_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Answered-opener declarative seat: a user question opener at
+        // slot 1 whose assistant reply is already in the top 5 yields
+        // to another session's declarative user opener already in the
+        // top 5, when that opener is at least as on-scene. After #27.
+        // Later post-gatekeeper C2 seats may still run after this pass.
+        // Skipped on preference.
+        apply_c2_answered_opener_decl_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Solo earlier-opener seat: a lone user opener at slot 1 (no
+        // other turn from that session in the top 5) yields to an
+        // earlier user opener from a different session already in the
+        // top 5, when that opener is at least as on-scene. After #28.
+        // Later post-gatekeeper C2 seats may still run after this pass.
+        // Skipped on preference.
+        apply_c2_solo_earlier_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Pool opener T@10 entry: a user opener in the scene-ranked
+        // pool, not already in the official k, takes the official-k
+        // seat of the last non-unique tail assistant whose session
+        // still has a user in the official k, when that opener is at
+        // least as on-scene. After #29. Later post-gatekeeper C2 seats
+        // may still run after this pass. The top 5 is unchanged.
+        // Skipped on preference.
+        apply_c2_pool_opener_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Same-session opener T@5 entry: a user opener already in
+        // official k, from a session already represented in the top 5
+        // by an assistant, swaps with the last same-session assistant
+        // in the top 5. After #30. Later post-gatekeeper C2 seats may
+        // still run after this pass. Skipped on preference.
+        apply_c2_same_session_opener_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Pool mentioned-speaker T@10 entry: a mentioned-speaker turn
+        // in the scene-ranked pool, not already in official k, takes
+        // the official-k seat of the last unmentioned named speaker in
+        // the tail, when that turn is at least as on-scene. After #31.
+        // Later post-gatekeeper C2 seats may still run after this pass.
+        // The top 5 is unchanged. Skipped on preference. Does not fire
+        // on user/assistant chats.
+        apply_c2_pool_mentioned_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Queried-speaker T@5 entry again after #32, so a mentioned
+        // declarative that the pool T@10 entry just seated into
+        // official k can still enter the top 5. After #32, last
+        // ranking change. Skipped on preference.
+        apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Late opener T@5 entry: a user opener already in official k,
+        // from a session already in the top 5, swaps with the last
+        // top-5 assistant of any session. After #33, last ranking
+        // change, so it sees openers the pool T@10 entry (#30) seated.
+        // Skipped on preference.
+        apply_c2_late_opener_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Head-session opener T@5 entry: the opener of slot 1's session,
+        // already in official k, swaps with the least on-scene top-5
+        // user from another session when at least as on-scene. After
+        // #34, last ranking change. Skipped on preference.
+        apply_c2_head_session_opener_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Session substitution T@5 entry: the most on-scene official-k
+        // user from a session outside the top 5 swaps with the weakest
+        // top-5 user when that user is a declarative at most
+        // C2_XWITNESS_RATIO of its scene. After #35, last ranking
+        // change. Skipped on preference.
+        apply_c2_session_substitution_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Pool session substitution T@10 entry: the most on-scene pool
+        // user from a session with no official-k seat replaces the
+        // weakest official-k tail turn when that turn is a declarative
+        // at most C2_XWITNESS_RATIO of its scene. The top 5 is
+        // unchanged. After #36, last ranking change. Skipped on
+        // preference.
+        apply_c2_pool_session_substitution_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Session substitution T@5 entry again after #37, so a pool user
+        // that #37 just seated into official k can still enter the top
+        // 5. After #37, last ranking change. Skipped on preference.
+        apply_c2_session_substitution_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Mentioned-declarative session-mate T@5 entry: in a named-speaker
+        // dialogue, a mentioned speaker's declarative from a top-5 session
+        // swaps with the weakest top-5 declarative (at most
+        // C2_XWITNESS_RATIO of its scene, never from an earlier session).
+        // After #38, last ranking change. Skipped on preference.
+        apply_c2_mentioned_session_mate_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Episode-run edge T@10 entry: the pool turn just before / after two
+        // back-to-back official-k turns of one session takes the tail seat of
+        // the least on-scene lone-session turn (at least as on-scene, never an
+        // earlier session). After #39, last ranking change.
+        apply_c2_episode_run_edge_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Episode-run edge T@5 entry: the edge of two back-to-back top-5 turns
+        // takes the slot of the least on-scene lone-session, non-opener top-5
+        // turn (at least as on-scene, never an earlier session). After #40,
+        // last ranking change.
+        apply_c2_episode_run_edge_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Neighbor-pair T@5 entry: in named dialogues, the official-k tail
+        // neighbor of a top-5 turn swaps with the least on-scene lone-session,
+        // non-opener top-5 turn (at least as on-scene, never an earlier
+        // session). After #41, last ranking change.
+        apply_c2_neighbor_pair_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    }
+    // Assistant-reply T@5 entry, for assistant-attribution questions only
+    // (outside the C2 skip above): the official-k assistant reply to a top-5
+    // user turn swaps with the least on-scene other top-5 user turn (at most
+    // as on-scene, never from an earlier session, S@5 kept). Last ranking
+    // change.
+    if !it.is_event_sequence && it.assistant_attribution {
+        apply_c2_assistant_reply_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Unseated-session opener T@10 entry (assistant-attribution only):
+        // the most on-scene declarative opener of a session with no official-k
+        // seat takes the tail seat of the least on-scene lone-session turn
+        // (at least as on-scene, never an earlier session). After #43.
+        apply_c2_attribution_unseated_opener_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Exchequer split tally: for assistant-attribution questions, an
+        // assistant turn whose own groups and the user turn it answers are
+        // complementary halves takes slot 1 when that pair covers the
+        // incumbent. After #44. Does not touch rsb_seat_behind.
+        apply_c2_step31_exchequer_split(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    }
+    // Step 32 trial balance. After every other C2 seat. A question at slot 1
+    // that misses the rarest surface lexeme yields to a top-5 opener from a
+    // session that is not later, when that opener posts the rare lexeme and
+    // every surface lexeme slot 1 already posts. Otherwise an echo at slot 1
+    // yields to the declarative turn it answers, when that turn posts the
+    // above-median surface lexemes and the pair posts every surface lexeme
+    // the echo's own pair does not. Does not touch rsb_seat_behind and does
+    // not rewrite the session list.
+    apply_c2_step32_trial_balance(ix, &plan, &mut final_turn_indices, &t_scene);
+    // Step 33 triangulation. A top-5 turn that is strictly best on its own
+    // lexical score and on its session score takes slot 1 when it also
+    // strictly covers the head's query terms. Named-speaker dialogues only.
+    // After the gatekeeper, Step 31 and Step 32. Does not touch rsb_seat_behind.
+    apply_c2_step33_triangulation(
+        ix,
+        &plan,
+        &mut final_turn_indices,
+        &t_own,
+        &s_score,
+        &bridge_boost,
+    );
+    maybe_dump_replay(
+        ix,
+        q,
+        k,
+        &it,
+        &t_scene,
+        &final_turn_indices,
+        &final_session_indices,
+        &t_own,
+        &t_turn_raw,
+        &t_scene_sess,
+        &s_score,
+        &bridge_boost,
+    );
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -6035,11 +6490,100 @@ fn is_structural_personal_turn(ix: &Index, ti: usize) -> bool {
             || (tr.speaker == "user" && turn_pos(ix, ti).map_or(false, |pos| pos <= 4)))
 }
 
+struct RecallCueGuard<'a> {
+    plan: &'a QueryPlan,
+    it: &'a QueryIntent,
+    t_scene: &'a [f32],
+}
+
+/// Score-dominance and state-polarity guard for `boundary_primacy`, `given_new`,
+/// and `session_opener_lift_with_plan`. When `guard` is `None` (direct unit tests),
+/// preserves baseline structural behavior.
+fn recall_cue_promotion_allowed(
+    ix: &Index,
+    guard: Option<&RecallCueGuard<'_>>,
+    top: usize,
+    cand: usize,
+) -> bool {
+    let Some(g) = guard else {
+        return true;
+    };
+    let t_top = &ix.turns[top];
+    let t_cand = &ix.turns[cand];
+    // Never demote a user turn to an assistant turn unless the query asks what the assistant said.
+    if !g.it.assistant_attribution && t_top.speaker == "user" && t_cand.speaker == "assistant" {
+        return false;
+    }
+    // Never promote a superseded turn over a non-superseded turn on non-sequence queries.
+    if !g.it.is_event_sequence && turn_is_superseded(ix, cand) && !turn_is_superseded(ix, top) {
+        return false;
+    }
+    let sc_top = g.t_scene.get(top).copied().unwrap_or(0.0);
+    let sc_cand = g.t_scene.get(cand).copied().unwrap_or(0.0);
+    // On assistant-attribution queries, never demote a clearly dominant assistant turn (>1.25x) to user.
+    if g.it.assistant_attribution
+        && t_top.speaker == "assistant"
+        && t_cand.speaker == "user"
+        && sc_top > 1.25 * sc_cand
+    {
+        return false;
+    }
+    let cand_is_opener = turn_pos(ix, cand) == Some(0);
+    // Never promote a mid-session interrogative user turn over a stronger declarative user turn.
+    if !cand_is_opener
+        && t_cand.speaker == "user"
+        && t_top.speaker == "user"
+        && t_cand.is_question
+        && !t_top.is_question
+        && sc_top > 1.05 * sc_cand
+    {
+        return false;
+    }
+    // On current-state queries, never demote a stronger same-session later turn to a non-opener earlier turn.
+    if g.it.current_state
+        && !cand_is_opener
+        && t_cand.session == t_top.session
+        && t_cand.speaker == "user"
+        && t_top.speaker == "user"
+        && sc_top > 1.05 * sc_cand
+    {
+        return false;
+    }
+    // Score-dominance guard (>1.45x): block overriding a clearly dominant `top` unless
+    // `cand` is a richer candidate against an interrogative `top` (`cand_ic > top_ic`) or
+    // a high-information session opener (`cand_ic >= 1.5 * top_ic` or `top_ic < 15.0`).
+    if sc_top > 1.45 * sc_cand {
+        if g.it.assistant_attribution && t_top.speaker == "assistant" {
+            return false;
+        }
+        let (cand_ic, _, _) = turn_novel_slot_profile(ix, g.plan, cand);
+        let (top_ic, _, _) = turn_novel_slot_profile(ix, g.plan, top);
+        if t_top.is_question {
+            if cand_ic <= top_ic {
+                return false;
+            }
+        } else if !cand_is_opener || (top_ic >= 15.0 && cand_ic < 1.5 * top_ic) {
+            return false;
+        }
+    }
+    true
+}
+
 /// BoundaryPrimacy (event-boundary primacy; Zheng 2022, Ezzyat & Davachi 2011). If rank 1 is not
 /// its session's opening turn, it matched at least one query cue, and that session's opener is
 /// already inside the top `PRIMACY_WINDOW` and carries every cue rank 1 matched, the opener takes
 /// slot 1 and the rest keep their order. Never crosses sessions; never changes the top-5 set.
+#[cfg(test)]
 fn boundary_primacy(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    boundary_primacy_with_plan(ix, q_cues, list, None)
+}
+
+fn boundary_primacy_with_plan(
+    ix: &Index,
+    q_cues: &[u32],
+    list: &mut Vec<usize>,
+    guard: Option<&RecallCueGuard<'_>>,
+) -> bool {
     if list.len() < 2 {
         return false;
     }
@@ -6058,6 +6602,9 @@ fn boundary_primacy(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
     if !covers_cues(&turn_query_cues(ix, q_cues, opener), &top_cues) {
         return false;
     }
+    if !recall_cue_promotion_allowed(ix, guard, top, opener) {
+        return false;
+    }
     list.remove(at);
     list.insert(0, opener);
     true
@@ -6074,7 +6621,17 @@ const GIVEN_NEW_CHAT_ROLES_ONLY: bool = true;
 /// matched at least one query cue, take the earliest turn of rank 1's own session whose cues cover
 /// every cue rank 1 matched. When that turn comes before rank 1 and is already inside the top
 /// `GIVEN_NEW_WINDOW`, it takes slot 1 and the rest keep their order. Never crosses sessions.
+#[cfg(test)]
 fn given_new(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    given_new_with_plan(ix, q_cues, list, None)
+}
+
+fn given_new_with_plan(
+    ix: &Index,
+    q_cues: &[u32],
+    list: &mut Vec<usize>,
+    guard: Option<&RecallCueGuard<'_>>,
+) -> bool {
     if list.len() < 2 {
         return false;
     }
@@ -6094,6 +6651,9 @@ fn given_new(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
             return false;
         }
         if covers_cues(&turn_query_cues(ix, q_cues, z), &top_cues) {
+            if !recall_cue_promotion_allowed(ix, guard, top, z) {
+                continue;
+            }
             let window = list.len().min(GIVEN_NEW_WINDOW);
             let Some(at) = list[1..window].iter().position(|&t| t == z).map(|i| i + 1) else { return false };
             list.remove(at);
@@ -6122,7 +6682,7 @@ fn session_opener_lift_with_plan(
     ix: &Index,
     q_cues: &[u32],
     list: &mut Vec<usize>,
-    rung2_plan: Option<&QueryPlan>,
+    guard: Option<&RecallCueGuard<'_>>,
 ) -> bool {
     if list.len() < 2 {
         return false;
@@ -6145,10 +6705,13 @@ fn session_opener_lift_with_plan(
         if turn_pos(ix, cand) != Some(0) {
             continue;
         }
-        if let Some(plan) = rung2_plan {
-            if !rung2_opener_lift_allowed(ix, plan, top, cand) {
+        if let Some(g) = guard {
+            if !rung2_opener_lift_allowed(ix, g.plan, top, cand) {
                 continue;
             }
+        }
+        if !recall_cue_promotion_allowed(ix, guard, top, cand) {
+            continue;
         }
         if !covers_cues(&turn_query_cues(ix, q_cues, cand), &top_cues) {
             continue;
@@ -6168,9 +6731,24 @@ const HEARSAY_WINDOW: usize = 5;
 /// least one query cue, take the first user turn at ranks 2 through `HEARSAY_WINDOW`,
 /// from any session, whose cues cover every cue rank 1 matched. That user turn takes
 /// slot 1 and the rest keep their order. Never changes the top-5 set.
+#[cfg(test)]
 fn hearsay(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    hearsay_with_plan(ix, q_cues, list, None)
+}
+
+fn hearsay_with_plan(
+    ix: &Index,
+    q_cues: &[u32],
+    list: &mut Vec<usize>,
+    guard: Option<&RecallCueGuard<'_>>,
+) -> bool {
     if list.len() < 2 {
         return false;
+    }
+    if let Some(g) = guard {
+        if g.it.assistant_attribution {
+            return false;
+        }
     }
     let top = list[0];
     if ix.turns[top].speaker.as_str() != "assistant" {
@@ -6185,6 +6763,16 @@ fn hearsay(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
         let cand = list[i];
         if ix.turns[cand].speaker.as_str() != "user" {
             continue;
+        }
+        if let Some(g) = guard {
+            let sc_top = g.t_scene.get(top).copied().unwrap_or(0.0);
+            let sc_cand = g.t_scene.get(cand).copied().unwrap_or(0.0);
+            if sc_top > 2.0 * sc_cand {
+                continue;
+            }
+            if !g.it.is_event_sequence && turn_is_superseded(ix, cand) && !turn_is_superseded(ix, top) {
+                continue;
+            }
         }
         if !covers_cues(&turn_query_cues(ix, q_cues, cand), &top_cues) {
             continue;
@@ -6771,7 +7359,7 @@ fn replay_dump_path() -> Option<String> {
     }
 }
 
-/// Snapshot only. No HashMap/HashSet: those would advance Rust's hasher
+/// Snapshot only. No DetHashMap/DetHashSet: those would advance Rust's hasher
 /// seed and change later queries in the same RankRequest.
 struct ReplaySnap {
     query_text: String,
@@ -6779,9 +7367,17 @@ struct ReplaySnap {
     k: usize,
     is_event_sequence: bool,
     temporal: bool,
+    preference: bool,
+    assistant_attribution: bool,
     seated: Vec<usize>,
     final_session_indices: Vec<usize>,
     t_scene: Vec<f32>,
+    // Dump-only copies of scores the seat already computed. Not read by ranking.
+    t_own: Vec<f32>,
+    t_turn_raw: Vec<f32>,
+    t_scene_sess: Vec<f32>,
+    s_score: Vec<f32>,
+    bridge_boost: Vec<f32>,
 }
 
 thread_local! {
@@ -6796,6 +7392,11 @@ fn maybe_dump_replay(
     t_scene: &[f32],
     seated: &[usize],
     final_session_indices: &[usize],
+    t_own: &[f32],
+    t_turn_raw: &[f32],
+    t_scene_sess: &[f32],
+    s_score: &[f32],
+    bridge_boost: &[f32],
 ) {
     if replay_dump_path().is_none() {
         return;
@@ -6807,9 +7408,16 @@ fn maybe_dump_replay(
             k,
             is_event_sequence: it.is_event_sequence,
             temporal: it.temporal,
+            preference: it.preference,
+            assistant_attribution: it.assistant_attribution,
             seated: seated.to_vec(),
             final_session_indices: final_session_indices.to_vec(),
             t_scene: t_scene.to_vec(),
+            t_own: t_own.to_vec(),
+            t_turn_raw: t_turn_raw.to_vec(),
+            t_scene_sess: t_scene_sess.to_vec(),
+            s_score: s_score.to_vec(),
+            bridge_boost: bridge_boost.to_vec(),
         });
     });
 }
@@ -6879,9 +7487,9 @@ fn dump_response_turn_of(ix: &Index, ti: usize) -> Option<usize> {
 /// `IC_novel(t \ Q)`: sum of dump_token_ic over the turn's distinct raw_tokens
 /// that are not in the query token set, using the engine tokenizer and
 /// `t_own_stats` df. Tokens the engine never interned are skipped. Dump-only.
-fn dump_turn_ic_novel(ix: &Index, ti: usize, qset: &HashSet<String>, n_docs: usize) -> f64 {
+fn dump_turn_ic_novel(ix: &Index, ti: usize, qset: &DetHashSet<String>, n_docs: usize) -> f64 {
     let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: DetHashSet<String> = DetHashSet::default();
     let mut sum = 0.0;
     for w in raw_tokens(body) {
         if !seen.insert(w.clone()) || qset.contains(&w) {
@@ -6955,26 +7563,26 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
             pool.push(ti);
         }
     }
-    let mut pre_rank: HashMap<usize, usize> = HashMap::with_capacity(pool.len());
+    let mut pre_rank: DetHashMap<usize, usize> = DetHashMap::with_capacity_and_hasher(pool.len(), Default::default());
     for (i, &ti) in pool.iter().enumerate() {
         pre_rank.insert(ti, i);
     }
-    let mut final_rank: HashMap<usize, usize> = HashMap::new();
+    let mut final_rank: DetHashMap<usize, usize> = DetHashMap::default();
     for (i, &ti) in snap.seated.iter().enumerate() {
         final_rank.insert(ti, i);
     }
     let deg_closed = dump_pool_structural_degree(ix, &pool, true);
     let deg_none = dump_pool_structural_degree(ix, &pool, false);
-    let mut degree_closed: HashMap<usize, i64> = HashMap::new();
-    let mut degree_none: HashMap<usize, i64> = HashMap::new();
+    let mut degree_closed: DetHashMap<usize, i64> = DetHashMap::default();
+    let mut degree_none: DetHashMap<usize, i64> = DetHashMap::default();
     for (i, &ti) in pool.iter().enumerate() {
         degree_closed.insert(ti, deg_closed[i]);
         degree_none.insert(ti, deg_none[i]);
     }
 
-    let qset: HashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
+    let qset: DetHashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
     let mut qtoks: Vec<Value> = Vec::new();
-    let mut seen_tok: HashSet<String> = HashSet::new();
+    let mut seen_tok: DetHashSet<String> = DetHashSet::default();
     for tok in dump_query_tokens(&snap.query_text) {
         if !seen_tok.insert(tok.clone()) {
             continue;
@@ -7006,7 +7614,7 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
 
     let qtok_present = |ti: usize| -> Vec<bool> {
         let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
-        let body_toks: HashSet<String> = dump_query_tokens(body).into_iter().collect();
+        let body_toks: DetHashSet<String> = dump_query_tokens(body).into_iter().collect();
         let content = ix.turns.get(ti).map(|t| &t.content);
         let mut present: Vec<bool> = Vec::with_capacity(qtoks.len());
         for tok in qtoks.iter() {
@@ -7052,6 +7660,11 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
             "rank": final_rank.get(&ti).copied(),
             "t_scene": snap.t_scene.get(ti).copied().unwrap_or(0.0),
             "t_scene_bits": snap.t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+            "t_own": snap.t_own.get(ti).copied().unwrap_or(0.0),
+            "t_turn_raw": snap.t_turn_raw.get(ti).copied().unwrap_or(0.0),
+            "t_scene_sess": snap.t_scene_sess.get(ti).copied().unwrap_or(0.0),
+            "s_score": snap.s_score.get(sess).copied().unwrap_or(0.0),
+            "bridge_boost": snap.bridge_boost.get(sess).copied().unwrap_or(0.0),
             "stability": t.stability,
             "stability_bits": t.stability.to_bits(),
             "session": sess,
@@ -7083,7 +7696,7 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
     }
 
     // Sessions in official turn top-10 or official session top-10: every turn.
-    let mut sess_keep: HashSet<usize> = HashSet::new();
+    let mut sess_keep: DetHashSet<usize> = DetHashSet::default();
     for &ti in snap.seated.iter().take(10) {
         sess_keep.insert(ix.turns[ti].session);
     }
@@ -7117,6 +7730,8 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         "wh_class": format!("WH_SLOTS_{slots}"),
         "is_event_sequence": snap.is_event_sequence,
         "temporal": snap.temporal,
+        "preference": snap.preference,
+        "assistant_attribution": snap.assistant_attribution,
         "pool_size": pool.len(),
         "pre_ids": pool.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
         "seated_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
@@ -7145,6 +7760,9 @@ pub fn rank(req: &RankRequest) -> RankResponse {
 }
 
 include!("rungs.rs");
+include!("steps7_10.rs");
+include!("algos_c2.rs");
+include!("steps11_20.rs");
 
 #[cfg(test)]
 mod tests {
@@ -7667,6 +8285,178 @@ mod tests {
         let ranked = rank(&req);
         let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
         assert!(ids.iter().any(|id| id.ends_with("#1")), "short reply missed the neighbor words: {ids:?}");
+    }
+
+    #[test]
+    fn harris_pure_info_question_does_not_leak_assistant_reply_while_factual_question_keeps_answer() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "trip".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn(
+                        "user",
+                        "I am planning another vacation soon. Can you give me tips on traveling in Asia?",
+                    ),
+                    turn(
+                        "assistant",
+                        "Sure! Many travelers spend fourteen days visiting ancient Kyoto temples in Japan.",
+                    ),
+                    turn(
+                        "user",
+                        "I actually visited Fushimi Inari Shrine in Kyoto and stayed two weeks in Japan during autumn.",
+                    ),
+                ],
+            }],
+            queries: vec![Query {
+                text: "How long was I in Kyoto Japan?".into(),
+                date: String::new(),
+            }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].turns[0].id, "trip#2");
+    }
+
+    #[test]
+    fn novel_assertion_protected_from_qecho_penalty_even_with_trailing_question() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "charity".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn(
+                        "user",
+                        "I need training tips for raising money for charity since I raised $500 for American Cancer Society last month. Any advice?",
+                    ),
+                    turn(
+                        "user",
+                        "I am thinking about raising money for charity this season and hoping to do well. Can you share advice on raising money for charity?",
+                    ),
+                    turn("user", "Earlier I stretched before going out on the track."),
+                ],
+            }],
+            queries: vec![Query {
+                text: "How much money did I raise for charity?".into(),
+                date: String::new(),
+            }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].turns[0].id, "charity#0");
+    }
+
+    #[test]
+    fn panini_karaka_wh_person_prefers_named_declarative_answer_ignoring_mid_turn_i() {
+        assert_eq!(count_slot_entities_mode("Can you check? I went to the clinic.", true), 0);
+        assert_eq!(count_slot_entities_mode("I visited Elena Alvarez at the clinic.", true), 2);
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "mentor".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("user", "Did you say we could work on the design project at the studio tomorrow?"),
+                    turn("user", "I planned to work on the design project with Elena Morales at the studio."),
+                ],
+            }],
+            queries: vec![Query {
+                text: "Who did I work with at the design studio?".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].turns[0].id, "mentor#1");
+    }
+
+    #[test]
+    fn adj_partner_diversity_factor_demotes_adjacent_assistant_mirror() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "s1".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("user", "My ceramic mug collection started in Kyoto last autumn."),
+                    turn("assistant", "Kyoto is known for hand-glazed ceramic mugs and pottery kilns."),
+                ],
+            }],
+            queries: vec![Query {
+                text: "Kyoto ceramic mug".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ix = build_index(&req.sessions, &req.params);
+        let factor = adj_partner_diversity_factor(&ix, 1, 0, &[0], false, false, 2);
+        assert!((factor - 0.25).abs() < 1e-6);
+        let single_sess_factor = adj_partner_diversity_factor(&ix, 1, 0, &[0], false, false, 3);
+        assert!((single_sess_factor - 1.0).abs() < 1e-6);
+        let asst_query_factor = adj_partner_diversity_factor(&ix, 1, 0, &[0], true, false, 2);
+        assert!((asst_query_factor - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn move3_weekday_modulo_zero_resolves_seven_days_and_demotes_scaffolding() {
+        // 2023/04/14 is a Friday -> "last Friday" must resolve to 2023/04/07 (-7 days), never yesterday (-1d).
+        let q_ts = parse_date("2023/04/14 (Fri) 12:00");
+        let raw = raw_tokens("What gym workout did I finish last Friday?");
+        let spec = parse_relative_time_specs_from_raw(&raw, q_ts);
+        let expected_ts = parse_date("2023/04/07 (Fri) 12:00");
+        assert!(
+            spec.points.iter().any(|&(ts, _)| (ts - expected_ts).abs() < 60),
+            "last Friday on Friday must resolve -7d: {:?}",
+            spec.points
+        );
+        // Zero-weighting relative-time scaffolding keeps off-date "few months" distractors below true temporal anchors.
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "distractor_wrong_date".into(),
+                    date: "2023/04/10 (Mon) 12:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn(
+                        "user",
+                        "For a few months I practiced meditation every morning in the past months.",
+                    )],
+                },
+                Session {
+                    id: "gold_target_date".into(),
+                    date: "2023/01/15 (Sun) 12:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I practiced guitar every morning.")],
+                },
+                Session {
+                    id: "filler_turn".into(),
+                    date: "2022/11/01 (Tue) 12:00".into(),
+                    timestamp: 0,
+                    turns: vec![turn("user", "I cooked pasta for dinner.")],
+                },
+            ],
+            queries: vec![Query {
+                text: "What did I practice a few months ago?".into(),
+                date: "2023/04/14 (Fri) 12:00".into(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let out = rank(&req);
+        assert_eq!(out.results[0].sessions[0].id, "gold_target_date");
+    }
+
+    #[test]
+    fn move3_does_not_misparse_duration_in_two_weeks_as_lookback_anchor() {
+        let q_ts = parse_date("2023/05/30 (Tue) 23:16");
+        let raw = raw_tokens("What was the approximate increase in Instagram followers I experienced in two weeks?");
+        let spec = parse_relative_time_specs_from_raw(&raw, q_ts);
+        assert!(spec.windows.is_empty() && spec.points.is_empty(), "{:?}", spec.windows);
     }
 
     #[test]
