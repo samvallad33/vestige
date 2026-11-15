@@ -6309,6 +6309,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // takes slot 1 when its content query cues strictly cover the head and
     // it already sits in the top 5. Does not touch rsb_seat_behind.
     apply_c2_step37_kalevala(ix, &q.text, &mut final_turn_indices);
+    // Step 38 Hermeneutic circle. After Antaranga. A question at slot 1 yields
+    // to the one top-5 declarative that posts the same content anchors, whose
+    // session covers the anchors that part does not, when the incumbent
+    // session does not and the declarative's own score is strictly stronger.
+    // Does not touch rsb_seat_behind and does not rewrite the session list.
+    apply_c2_step38_hermeneutic(ix, &q.text, &mut final_turn_indices, &t_own);
     maybe_dump_replay(
         ix,
         q,
