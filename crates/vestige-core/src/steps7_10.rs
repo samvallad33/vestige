@@ -12,8 +12,8 @@ fn step7_idf(stats: &Stats, term: u32) -> f32 {
 }
 
 /// Lowercased query words written capitalized somewhere other than sentence start.
-fn step7_query_proper_surfaces(q_text: &str) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn step7_query_proper_surfaces(q_text: &str) -> DetHashSet<String> {
+    let mut out = DetHashSet::default();
     let mut sentence_start = true;
     for raw_word in q_text.split_whitespace() {
         let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric());
@@ -65,7 +65,7 @@ fn apply_step7_lex_specialis(
     let Some((mod_g, _)) = top_mod else {
         return;
     };
-    let mod_term_ids: HashSet<u32> =
+    let mod_term_ids: DetHashSet<u32> =
         plan.terms.iter().filter(|qt| qt.group == Some(mod_g)).map(|qt| qt.id).collect();
     let turn_has_mod: Vec<bool> = ix
         .turns
@@ -99,8 +99,8 @@ fn apply_step7_lex_specialis(
 }
 
 /// Step 8 anchor set A(q): query terms with turn-own idf >= 1.5, plus focal ids.
-fn step8_anchor_set(ix: &Index, plan: &QueryPlan) -> HashSet<u32> {
-    let mut a: HashSet<u32> = plan
+fn step8_anchor_set(ix: &Index, plan: &QueryPlan) -> DetHashSet<u32> {
+    let mut a: DetHashSet<u32> = plan
         .terms
         .iter()
         .filter(|qt| step7_idf(&ix.t_own_stats, qt.id) >= 1.5)
@@ -111,7 +111,7 @@ fn step8_anchor_set(ix: &Index, plan: &QueryPlan) -> HashSet<u32> {
 }
 
 /// T(t) restricted to the anchor set: content ids and length-counted feature ids.
-fn step8_anchor_hits(t: &TurnIx, anchors: &HashSet<u32>) -> std::collections::BTreeSet<u32> {
+fn step8_anchor_hits(t: &TurnIx, anchors: &DetHashSet<u32>) -> std::collections::BTreeSet<u32> {
     let mut out: std::collections::BTreeSet<u32> = t.content.iter().copied().filter(|id| anchors.contains(id)).collect();
     out.extend(t.feats.iter().filter(|f| f.counts_len && anchors.contains(&f.id)).map(|f| f.id));
     out
@@ -415,7 +415,7 @@ fn step9_push_typo_fallback(
     has_nick: bool,
     g: usize,
     terms: &mut Vec<QTerm>,
-    group_of: &mut HashMap<u32, usize>,
+    group_of: &mut DetHashMap<u32, usize>,
 ) {
     if has_nick || ix.vocab.get(w).is_some() || ix.vocab.get(&stem_term(st)).is_some() {
         return;
