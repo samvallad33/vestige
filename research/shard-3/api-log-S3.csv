@@ -1,0 +1,317 @@
+endpoint,http_status,result_count,source,note
+https://www.sefaria.org/api/texts/Kiddushin.61a?context=0&commentary=0&pad=0,200,400,sefaria,Kiddushin 61a קידושין ס״א א
+https://www.sefaria.org/api/texts/Bava_Kamma.46b?context=0&commentary=0&pad=0,200,400,sefaria,Bava Kamma 46b בבא קמא מ״ו ב
+https://www.sefaria.org/api/texts/Chullin.11a?context=0&commentary=0&pad=0,200,400,sefaria,Chullin 11a חולין י״א א
+https://www.sefaria.org/api/texts/Ketubot.15b?context=0&commentary=0&pad=0,200,400,sefaria,Ketubot 15b כתובות ט״ו ב
+https://www.sefaria.org/api/texts/Niddah.2b?context=0&commentary=0&pad=0,200,400,sefaria,Niddah 2b נדה ב׳ ב
+https://www.sefaria.org/api/texts/Bava_Metzia.21b?context=0&commentary=0&pad=0,200,400,sefaria,Bava Metzia 21b בבא מציעא כ״א ב
+https://www.sefaria.org/api/texts/Eruvin.13b?context=0&commentary=0&pad=0,200,400,sefaria,Eruvin 13b עירובין י״ג ב
+https://www.sefaria.org/api/texts/Mishnah_Bava_Metzia.7.1?context=0&commentary=0&pad=0,200,400,sefaria,Mishnah Bava Metzia 7:1 משנה בבא מציעא ז׳:א׳
+https://www.sefaria.org/api/texts/Gittin.10b?context=0&commentary=0&pad=0,200,400,sefaria,Gittin 10b גיטין י׳ ב
+https://www.sefaria.org/api/texts/Makkot.5b?context=0&commentary=0&pad=0,200,400,sefaria,Makkot 5b מכות ה׳ ב
+https://www.sefaria.org/api/texts/Ketubot.18b?context=0&commentary=0&pad=0,200,400,sefaria,Ketubot 18b כתובות י״ח ב
+https://www.sefaria.org/api/texts/Yevamot.88a?context=0&commentary=0&pad=0,200,400,sefaria,Yevamot 88a יבמות פ״ח א
+https://www.sefaria.org/api/texts/Bava_Batra.130b?context=0&commentary=0&pad=0,200,400,sefaria,Bava Batra 130b בבא בתרא ק״ל ב
+https://www.sefaria.org/api/texts/Sanhedrin.6b?context=0&commentary=0&pad=0,200,400,sefaria,Sanhedrin 6b סנהדרין ו׳ ב
+https://www.sefaria.org/api/texts/Shabbat.115b?context=0&commentary=0&pad=0,200,400,sefaria,Shabbat 115b שבת קט״ו ב
+https://www.sefaria.org/api/texts/Menachot.29b?context=0&commentary=0&pad=0,200,400,sefaria,Menachot 29b מנחות כ״ט ב
+https://www.sefaria.org/api/texts/Mishnah_Kiddushin.1.1?context=0&commentary=0&pad=0,200,400,sefaria,Mishnah Kiddushin 1:1 משנה קידושין א׳:א׳
+https://www.sefaria.org/api/texts/Mishnah_Eduyot.1.5?context=0&commentary=0&pad=0,200,400,sefaria,Mishnah Eduyot 1:5 משנה עדיות א׳:ה׳
+https://www.sefaria.org/api/texts/Mishnah_Makkot.1.6?context=0&commentary=0&pad=0,200,400,sefaria,Mishnah Makkot 1:6 משנה מכות א׳:ו׳
+https://www.sefaria.org/api/texts/Soferim.1.15?context=0&commentary=0&pad=0,200,60,sefaria,
+https://www.sefaria.org/api/texts/Soferim.2.1?context=0&commentary=0&pad=0,200,59,sefaria,
+https://www.sefaria.org/api/texts/Megillah.3a?context=0&commentary=0&pad=0,200,400,sefaria,Megillah 3a מגילה ג׳ א
+https://www.sefaria.org/api/texts/Bava_Metzia.59b?context=0&commentary=0&pad=0,200,400,sefaria,Bava Metzia 59b בבא מציעא נ״ט ב
+https://www.sefaria.org/api/texts/Horayot.2b?context=0&commentary=0&pad=0,200,400,sefaria,Horayot 2b הוריות ב׳ ב
+https://www.sefaria.org/api/texts/Pesachim.10b?context=0&commentary=0&pad=0,200,400,sefaria,Pesachim 10b פסחים י׳ ב
+https://www.sefaria.org/api/texts/Ketubot.12b?context=0&commentary=0&pad=0,200,400,sefaria,Ketubot 12b כתובות י״ב ב
+https://www.sefaria.org/api/texts/Mishnah_Gittin.9.1?context=0&commentary=0&pad=0,200,400,sefaria,Mishnah Gittin 9:1 משנה גיטין ט׳:א׳
+https://www.sefaria.org/api/texts/Kiddushin.49a?context=0&commentary=0&pad=0,200,400,sefaria,Kiddushin 49a קידושין מ״ט א
+https://www.sefaria.org/api/texts/Bava_Kamma.46a?context=0&commentary=0&pad=0,200,400,sefaria,Bava Kamma 46a בבא קמא מ״ו א
+https://www.sefaria.org/api/texts/Chullin.95b?context=0&commentary=0&pad=0,200,400,sefaria,Chullin 95b חולין צ״ה ב
+https://www.sefaria.org/api/texts/Nedarim.27b?context=0&commentary=0&pad=0,200,400,sefaria,Nedarim 27b נדרים כ״ז ב
+https://www.sefaria.org/api/texts/Mishnah_Sanhedrin.4.1?context=0&commentary=0&pad=0,200,400,sefaria,Mishnah Sanhedrin 4:1 משנה סנהדרין ד׳:א׳
+https://www.sefaria.org/api/texts/Shevuot.30b?context=0&commentary=0&pad=0,200,400,sefaria,Shevuot 30b שבועות ל׳ ב
+https://www.sefaria.org/api/texts/Bava_Metzia.6b?context=0&commentary=0&pad=0,200,400,sefaria,Bava Metzia 6b בבא מציעא ו׳ ב
+https://www.sefaria.org/api/texts/Gittin.32a?context=0&commentary=0&pad=0,200,357,sefaria,Gittin 32a גיטין ל״ב א
+https://www.sefaria.org/api/texts/Mishnah_Bava_Batra.10.2?context=0&commentary=0&pad=0,200,400,sefaria,Mishnah Bava Batra 10:2 משנה בבא בתרא י׳:ב׳
+https://www.sefaria.org/api/texts/Rosh_Hashanah.25b?context=0&commentary=0&pad=0,200,400,sefaria,Rosh Hashanah 25b ראש השנה כ״ה ב
+https://www.sefaria.org/api/texts/Mishneh_Torah%2C_Sales.1.1?context=0&commentary=0&pad=0,200,400,sefaria,"Mishneh Torah, Sales 1:1 משנה תורה, הלכות מכירה א׳:א׳"
+https://www.sefaria.org/api/texts/Shulchan_Arukh%2C_Choshen_Mishpat.1.1?context=0&commentary=0&pad=0,200,400,sefaria,"Shulchan Arukh, Choshen Mishpat 1:1 שולחן ערוך, חושן משפט א׳:א׳"
+https://api.quran.com/api/v4/verses/by_key/2:106?language=en&translations=131,200,187,quran,
+https://api.quran.com/api/v4/verses/by_key/2:180?language=en&translations=131,200,188,quran,
+https://api.quran.com/api/v4/verses/by_key/2:234?language=en&translations=131,200,188,quran,
+https://api.quran.com/api/v4/verses/by_key/2:240?language=en&translations=131,200,188,quran,
+https://api.quran.com/api/v4/verses/by_key/2:282?language=en&translations=131,200,188,quran,
+https://api.quran.com/api/v4/verses/by_key/3:7?language=en&translations=131,200,184,quran,
+https://api.quran.com/api/v4/verses/by_key/4:11?language=en&translations=131,200,186,quran,
+https://api.quran.com/api/v4/verses/by_key/5:89?language=en&translations=131,200,188,quran,
+https://api.quran.com/api/v4/verses/by_key/8:65?language=en&translations=131,200,191,quran,
+https://api.quran.com/api/v4/verses/by_key/8:66?language=en&translations=131,200,191,quran,
+https://api.quran.com/api/v4/verses/by_key/15:9?language=en&translations=131,200,191,quran,
+https://api.quran.com/api/v4/verses/by_key/16:44?language=en&translations=131,200,193,quran,
+https://api.quran.com/api/v4/verses/by_key/16:101?language=en&translations=131,200,195,quran,
+https://api.quran.com/api/v4/verses/by_key/17:106?language=en&translations=131,200,195,quran,
+https://api.quran.com/api/v4/verses/by_key/49:6?language=en&translations=131,200,191,quran,
+https://api.quran.com/api/v4/verses/by_key/58:12?language=en&translations=131,200,193,quran,
+https://api.quran.com/api/v4/verses/by_key/58:13?language=en&translations=131,200,193,quran,
+https://api.quran.com/api/v4/verses/by_key/75:16?language=en&translations=131,200,193,quran,
+https://api.quran.com/api/v4/verses/by_key/75:17?language=en&translations=131,200,193,quran,
+https://api.quran.com/api/v4/verses/by_key/87:6?language=en&translations=131,200,191,quran,
+https://api.quran.com/api/v4/verses/by_key/96:1?language=en&translations=131,200,191,quran,
+https://api.quran.com/api/v4/verses/by_key/5:1?language=en&translations=131,200,186,quran,
+https://api.quran.com/api/v4/verses/by_key/2:275?language=en&translations=131,200,188,quran,
+https://api.quran.com/api/v4/verses/by_key/65:1?language=en&translations=131,200,191,quran,
+https://api.quran.com/api/v4/verses/by_key/65:2?language=en&translations=131,200,191,quran,
+https://api.quran.com/api/v4/verses/by_key/4:59?language=en&translations=131,200,186,quran,
+https://api.quran.com/api/v4/verses/by_key/39:18?language=en&translations=131,200,193,quran,
+https://api.quran.com/api/v4/verses/by_key/16:125?language=en&translations=131,200,195,quran,
+https://api.quran.com/api/v4/verses/by_key/2:185?language=en&translations=131,200,188,quran,
+https://api.quran.com/api/v4/verses/by_key/13:39?language=en&translations=131,200,193,quran,
+https://api.alquran.cloud/v1/ayah/2:106/en.sahih,200,672,alquran,
+https://api.alquran.cloud/v1/ayah/58:12/en.sahih,200,752,alquran,
+https://api.alquran.cloud/v1/ayah/58:13/en.sahih,200,753,alquran,
+https://api.alquran.cloud/v1/ayah/2:282/en.sahih,200,1830,alquran,
+https://api.alquran.cloud/v1/ayah/3:7/en.sahih,200,1046,alquran,
+https://api.alquran.cloud/v1/ayah/49:6/en.sahih,200,699,alquran,
+https://api.hadith.gading.dev/books,0,,gading,URLError: <urlopen error [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1000)>
+https://api.hadith.gading.dev/books/bukhari?range=1-2,0,,gading,URLError: <urlopen error [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1000)>
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions.json,200,30390,fawaz,
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/info.json,200,10319127,fawaz,
+https://www.thaqalayn-api.net/api/books,400,75,thaq,HTTP Error 400: Bad Request
+https://hadeethenc.com/api/v1/categories/list/?language=en,200,,hadeethenc,"categories list, 39978 bytes; a separate search in the same harvest returned HTTP 400 with an empty body and the query string was not retained, so that URL is not invented here"
+https://api.github.com/search/repositories?q=org:OpenITI+Shafici&per_page=5,200,0,github,parsed total_count 0; body 55 bytes; not cited
+https://api.github.com/search/repositories?q=org:OpenITI+usul&per_page=5,200,0,github,parsed total_count 0; body 55 bytes; not cited
+https://api.github.com/orgs/OpenITI/repos?per_page=5&sort=updated,200,24685,github,
+https://api.openalex.org/works?search=takhsis%20naskh%20usul%20al-fiqh&per-page=3,200,54399,openalex,
+https://www.wikidata.org/w/api.php?action=wbsearchentities&search=al-Shafi%27i%20al-Risala&language=en&format=json&limit=3,200,0,wikidata,72-byte search body; not the Risala book; not cited
+"https://archive.org/advancedsearch.php?q=subject%3A%28usul%20al-fiqh%29&fl[]=identifier,title&output=json&rows=3",200,627,ia,numFound 627 recorded at fetch; leading hits were not usul texts; not cited
+https://api.github.com/repos/OpenITI/0200AH/contents/data?ref=master,200,31,github,31 data directories; no Shafici directory in this century bucket
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions.json,200,10,fawaz,"edition keys include bukhari, muslim, tirmidhi, malik, nawawi"
+https://api.github.com/repos/OpenITI/0200AH/contents/data/0179MalikIbnAnas?ref=master,200,3,github,Muwatta and RisalaIlaHarun directories
+https://api.github.com/repos/OpenITI/0200AH/contents/data/0182AbuYusufYacqub?ref=master,200,5,github,includes Kharaj and IkhtilafAbiHanifa
+https://api.github.com/repos/OpenITI/0200AH/contents/data/0189MuhammadShaybani?ref=master,200,9,github,"includes Asl, Hujja, MakharijFiHiyal"
+https://api.github.com/repos/OpenITI/0200AH/contents/data/0191IbnQasimMisri?ref=master,200,2,github,MajalisIbnQasim
+https://api.github.com/repos/OpenITI/0200AH/contents/data/0197IbnWahbQurashi?ref=master,200,8,github,includes Qada
+https://api.github.com/repos/OpenITI/0200AH/contents/data/0180Sibawayhi?ref=master,200,2,github,Kitab directory listed; not used as a legal citation
+https://raw.githubusercontent.com/OpenITI/0200AH/master/data/0179MalikIbnAnas/0179MalikIbnAnas.Muwatta/0179MalikIbnAnas.Muwatta.ShamAY0033922-ara1,206,1,openiti,range 3501 bytes; header is Muwatta riwayat Ibn Ziyad
+https://raw.githubusercontent.com/OpenITI/0200AH/master/data/0179MalikIbnAnas/0179MalikIbnAnas.RisalaIlaHarun/0179MalikIbnAnas.RisalaIlaHarun.ShamAY0034816-ara1,206,1,openiti,range 3501 bytes; epistle of Malik to Harun
+https://raw.githubusercontent.com/OpenITI/0200AH/master/data/0191IbnQasimMisri/0191IbnQasimMisri.MajalisIbnQasim/0191IbnQasimMisri.MajalisIbnQasim.Shamela0096602-ara1,206,1,openiti,range 3501 bytes; BookURI MajalisIbnQasim; title majalis in which Ibn al-Qasim asked Malik
+https://raw.githubusercontent.com/OpenITI/0200AH/master/data/0182AbuYusufYacqub/0182AbuYusufYacqub.IkhtilafAbiHanifa/0182AbuYusufYacqub.IkhtilafAbiHanifa.Shamela0096606-ara1.mARkdown,206,1,openiti,"range 3501 bytes; author Abu Yusuf, Hanafi, book Ikhtilaf Abi Hanifa wa-Ibn Abi Layla"
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-nawawi/1.json,403,0,fawaz,jsDelivr package size exceeded; not cited
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-tirmidhi/1341.json,200,1,fawaz,"proof on the claimant, oath on the respondent"
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-tirmidhi/1342.json,200,1,fawaz,oath on the one claimed against
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-tirmidhi/1352.json,200,1,fawaz,reconciliation except what flips lawful and unlawful
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-tirmidhi/1264.json,200,1,fawaz,fulfill the trust; do not mirror a cheat
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-tirmidhi/2517.json,200,1,fawaz,tie it and rely
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-bukhari/1.json,200,1,fawaz,706 bytes; one hadith in the Revelation section; intentions
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-malik/1.json,200,1,fawaz,Times of Prayer; not used as a legal citation
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-malik/36.json,200,1,fawaz,hadith number 36 falls in Purity; not cited
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-malik/31.json,200,1,fawaz,not cited
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-malik/28.json,200,1,fawaz,not cited
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-bukhari/34.json,200,1,fawaz,Belief section; not cited
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-bukhari/54.json,200,1,fawaz,not cited
+https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-bukhari/67.json,200,1,fawaz,Knowledge section; not cited
+https://www.sefaria.org/api/texts/Sifra%2C_Baraita_DeRabbi_Yishmael.1.1?context=0&commentary=0,200,18,sefaria,"re-fetched this session; 18 text parts, thirteen principles through the third-verse rule"
+https://www.sefaria.org/api/texts/Tractate_Soferim.2.4?context=0&commentary=0,200,1,sefaria,two finger-breadths versus one thumb-breadth
+https://www.sefaria.org/api/texts/Numbers.10.35?context=0&commentary=0,200,1,sefaria,Hebrew contains the inverted nun; English is the ark paragraph
+https://api.quran.com/api/v4/verses/by_key/2:106?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/2:282?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/3:7?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/5:89?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/8:65?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/8:66?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/15:9?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/16:101?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/17:106?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/49:6?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/58:12?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/58:13?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/75:16?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/75:17?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/4:11?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/2:180?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/5:1?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/39:18?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/65:2?translations=20,200,1,quran,translation resource 20 text retained
+https://api.quran.com/api/v4/verses/by_key/2:185?translations=20,200,1,quran,translation resource 20 text retained
+"https://api.openalex.org/works?search=%22dayo%20cap%20a%20fortiori%20digit%22%20%22doubled%20condition%20both%20branches%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-046
+"https://api.semanticscholar.org/graph/v1/paper/search?query=dayo%20cap%20a%20fortiori%20digit%20doubled%20condition%20both%20branches&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-046; 429 is not evidence of absence
+"https://api.openalex.org/works?search=dayo%20cap%20a%20fortiori%20digit%20doubled%20condition%20both%20branches&per-page=3&select=id,display_name,publication_year",200,0,openalex,unquoted pair search for S3-046; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22dayo%20cap%20a%20fortiori%20digit%22%20%22doubled%20condition%20both%20branches%22&rows=2,200,449647,crossref,"pair search for S3-046; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22specific-then-general%20expansion%22%20%22graded%20blank-line%20column%20gap%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-047
+"https://api.semanticscholar.org/graph/v1/paper/search?query=specific-then-general%20expansion%20graded%20blank-line%20column%20gap&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-047; 429 is not evidence of absence
+"https://api.openalex.org/works?search=specific-then-general%20expansion%20graded%20blank-line%20column%20gap&per-page=3&select=id,display_name,publication_year",200,6767,openalex,unquoted pair search for S3-047; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22specific-then-general%20expansion%22%20%22graded%20blank-line%20column%20gap%22&rows=2,200,2651938,crossref,"pair search for S3-047; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22prototype%20rule%20from%20one%20verse%22%20%22digit-only%20instrument%20copy%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-048
+"https://api.semanticscholar.org/graph/v1/paper/search?query=prototype%20rule%20from%20one%20verse%20digit-only%20instrument%20copy&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-048; 429 is not evidence of absence
+"https://api.openalex.org/works?search=prototype%20rule%20from%20one%20verse%20digit-only%20instrument%20copy&per-page=3&select=id,display_name,publication_year",200,299,openalex,unquoted pair search for S3-048; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22prototype%20rule%20from%20one%20verse%22%20%22digit-only%20instrument%20copy%22&rows=2,200,10516061,crossref,"pair search for S3-048; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22prototype%20rule%20from%20two%20verses%22%20%22polarity-asymmetric%20attestation%20count%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-049
+"https://api.semanticscholar.org/graph/v1/paper/search?query=prototype%20rule%20from%20two%20verses%20polarity-asymmetric%20attestation%20count&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-049; 429 is not evidence of absence
+"https://api.openalex.org/works?search=prototype%20rule%20from%20two%20verses%20polarity-asymmetric%20attestation%20count&per-page=3&select=id,display_name,publication_year",200,10,openalex,unquoted pair search for S3-049; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22prototype%20rule%20from%20two%20verses%22%20%22polarity-asymmetric%20attestation%20count%22&rows=2,200,11056531,crossref,"pair search for S3-049; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22follow%20countable%20majority%22%20%22burden%20of%20proof%20suspends%20majority%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-050
+"https://api.semanticscholar.org/graph/v1/paper/search?query=follow%20countable%20majority%20burden%20of%20proof%20suspends%20majority&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-050; 429 is not evidence of absence
+"https://api.openalex.org/works?search=follow%20countable%20majority%20burden%20of%20proof%20suspends%20majority&per-page=3&select=id,display_name,publication_year",200,210,openalex,unquoted pair search for S3-050; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22follow%20countable%20majority%22%20%22burden%20of%20proof%20suspends%20majority%22&rows=2,200,434466,crossref,"pair search for S3-050; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22even%20split%20is%20not%20a%20majority%22%20%22presumptive%20status%20on%20uncertainty%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-051
+"https://api.semanticscholar.org/graph/v1/paper/search?query=even%20split%20is%20not%20a%20majority%20presumptive%20status%20on%20uncertainty&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-051; 429 is not evidence of absence
+"https://api.openalex.org/works?search=even%20split%20is%20not%20a%20majority%20presumptive%20status%20on%20uncertainty&per-page=3&select=id,display_name,publication_year",200,3746,openalex,unquoted pair search for S3-051; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22even%20split%20is%20not%20a%20majority%22%20%22presumptive%20status%20on%20uncertainty%22&rows=2,200,989596,crossref,"pair search for S3-051; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22unrepeated%20token%20is%20not%20abandonment%22%20%22restatement%20does%20not%20delete%20original%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-052
+"https://api.semanticscholar.org/graph/v1/paper/search?query=unrepeated%20token%20is%20not%20abandonment%20restatement%20does%20not%20delete%20original&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-052; 429 is not evidence of absence
+"https://api.openalex.org/works?search=unrepeated%20token%20is%20not%20abandonment%20restatement%20does%20not%20delete%20original&per-page=3&select=id,display_name,publication_year",200,0,openalex,unquoted pair search for S3-052; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22unrepeated%20token%20is%20not%20abandonment%22%20%22restatement%20does%20not%20delete%20original%22&rows=2,200,554825,crossref,"pair search for S3-052; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22one-sided%20conditional%20is%20not%20a%20gate%22%20%22hedged%20oath%20is%20not%20a%20commitment%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-053
+"https://api.semanticscholar.org/graph/v1/paper/search?query=one-sided%20conditional%20is%20not%20a%20gate%20hedged%20oath%20is%20not%20a%20commitment&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-053; 429 is not evidence of absence
+"https://api.openalex.org/works?search=one-sided%20conditional%20is%20not%20a%20gate%20hedged%20oath%20is%20not%20a%20commitment&per-page=3&select=id,display_name,publication_year",200,78,openalex,unquoted pair search for S3-053; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22one-sided%20conditional%20is%20not%20a%20gate%22%20%22hedged%20oath%20is%20not%20a%20commitment%22&rows=2,200,1331359,crossref,"pair search for S3-053; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22numbered%20heading%20statute%20field%22%20%22same-session%20local%20majority%20default%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-054
+"https://api.semanticscholar.org/graph/v1/paper/search?query=numbered%20heading%20statute%20field%20same-session%20local%20majority%20default&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-054; 429 is not evidence of absence
+"https://api.openalex.org/works?search=numbered%20heading%20statute%20field%20same-session%20local%20majority%20default&per-page=3&select=id,display_name,publication_year",200,1490,openalex,unquoted pair search for S3-054; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22numbered%20heading%20statute%20field%22%20%22same-session%20local%20majority%20default%22&rows=2,200,2218876,crossref,"pair search for S3-054; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22impeach%20the%20whole%20turn%20not%20one%20token%22%20%22single%20marked%20spectacle%20loses%20to%20plain%20majority%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-055
+"https://api.semanticscholar.org/graph/v1/paper/search?query=impeach%20the%20whole%20turn%20not%20one%20token%20single%20marked%20spectacle%20loses%20to%20plain%20majority&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-055; 429 is not evidence of absence
+"https://api.openalex.org/works?search=impeach%20the%20whole%20turn%20not%20one%20token%20single%20marked%20spectacle%20loses%20to%20plain%20majority&per-page=3&select=id,display_name,publication_year",200,44,openalex,unquoted pair search for S3-055; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22impeach%20the%20whole%20turn%20not%20one%20token%22%20%22single%20marked%20spectacle%20loses%20to%20plain%20majority%22&rows=2,200,24154,crossref,"pair search for S3-055; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22short%20undivided%20note%20cannot%20rule%22%20%22single-clause%20precise%20beats%20multi-or%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-056
+"https://api.semanticscholar.org/graph/v1/paper/search?query=short%20undivided%20note%20cannot%20rule%20single-clause%20precise%20beats%20multi-or&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-056; 429 is not evidence of absence
+"https://api.openalex.org/works?search=short%20undivided%20note%20cannot%20rule%20single-clause%20precise%20beats%20multi-or&per-page=3&select=id,display_name,publication_year",200,63,openalex,unquoted pair search for S3-056; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22short%20undivided%20note%20cannot%20rule%22%20%22single-clause%20precise%20beats%20multi-or%22&rows=2,200,48537,crossref,"pair search for S3-056; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22both-polarity%20compromise%20cannot%20sit%20first%22%20%22acquittal%20argument%20cannot%20switch%20to%20liability%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-057
+"https://api.semanticscholar.org/graph/v1/paper/search?query=both-polarity%20compromise%20cannot%20sit%20first%20acquittal%20argument%20cannot%20switch%20to%20liability&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-057; 429 is not evidence of absence
+"https://api.openalex.org/works?search=both-polarity%20compromise%20cannot%20sit%20first%20acquittal%20argument%20cannot%20switch%20to%20liability&per-page=3&select=id,display_name,publication_year",200,3,openalex,unquoted pair search for S3-057; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22both-polarity%20compromise%20cannot%20sit%20first%22%20%22acquittal%20argument%20cannot%20switch%20to%20liability%22&rows=2,200,22546,crossref,"pair search for S3-057; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22emphasis%20glyphs%20are%20not%20a%20new%20token%20id%22%20%22bracketed%20span%20cannot%20take%20slot%20one%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-058
+"https://api.semanticscholar.org/graph/v1/paper/search?query=emphasis%20glyphs%20are%20not%20a%20new%20token%20id%20bracketed%20span%20cannot%20take%20slot%20one&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-058; 429 is not evidence of absence
+"https://api.openalex.org/works?search=emphasis%20glyphs%20are%20not%20a%20new%20token%20id%20bracketed%20span%20cannot%20take%20slot%20one&per-page=3&select=id,display_name,publication_year",200,3,openalex,unquoted pair search for S3-058; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22emphasis%20glyphs%20are%20not%20a%20new%20token%20id%22%20%22bracketed%20span%20cannot%20take%20slot%20one%22&rows=2,200,46303,crossref,"pair search for S3-058; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22verbal%20offer%20does%20not%20transfer%22%20%22three%20completion%20media%20digit%20document%20assent%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-059
+"https://api.semanticscholar.org/graph/v1/paper/search?query=verbal%20offer%20does%20not%20transfer%20three%20completion%20media%20digit%20document%20assent&limit=3&fields=title,year",200,0,semanticscholar,pair search for S3-059; 429 is not evidence of absence
+"https://api.openalex.org/works?search=verbal%20offer%20does%20not%20transfer%20three%20completion%20media%20digit%20document%20assent&per-page=3&select=id,display_name,publication_year",200,166,openalex,unquoted pair search for S3-059; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22verbal%20offer%20does%20not%20transfer%22%20%22three%20completion%20media%20digit%20document%20assent%22&rows=2,200,34157,crossref,"pair search for S3-059; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22release%20matches%20negation%20only%22%20%22later%20turn%20may%20reopen%20acquittal%20not%20liability%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-060
+"https://api.semanticscholar.org/graph/v1/paper/search?query=release%20matches%20negation%20only%20later%20turn%20may%20reopen%20acquittal%20not%20liability&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-060; 429 is not evidence of absence
+"https://api.openalex.org/works?search=release%20matches%20negation%20only%20later%20turn%20may%20reopen%20acquittal%20not%20liability&per-page=3&select=id,display_name,publication_year",200,29,openalex,unquoted pair search for S3-060; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22release%20matches%20negation%20only%22%20%22later%20turn%20may%20reopen%20acquittal%20not%20liability%22&rows=2,200,4795,crossref,"pair search for S3-060; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22bracketed%20span%20stays%20in%20the%20pool%22%20%22partial%20later%20overlap%20does%20not%20delete%20earlier%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-061
+"https://api.semanticscholar.org/graph/v1/paper/search?query=bracketed%20span%20stays%20in%20the%20pool%20partial%20later%20overlap%20does%20not%20delete%20earlier&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-061; 429 is not evidence of absence
+"https://api.openalex.org/works?search=bracketed%20span%20stays%20in%20the%20pool%20partial%20later%20overlap%20does%20not%20delete%20earlier&per-page=3&select=id,display_name,publication_year",200,267,openalex,unquoted pair search for S3-061; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22bracketed%20span%20stays%20in%20the%20pool%22%20%22partial%20later%20overlap%20does%20not%20delete%20earlier%22&rows=2,200,3659,crossref,"pair search for S3-061; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22final%20clause%20restricts%20the%20turn%22%20%22restriction%20does%20not%20cross%20a%20double%20blank%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-062
+"https://api.semanticscholar.org/graph/v1/paper/search?query=final%20clause%20restricts%20the%20turn%20restriction%20does%20not%20cross%20a%20double%20blank&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-062; 429 is not evidence of absence
+"https://api.openalex.org/works?search=final%20clause%20restricts%20the%20turn%20restriction%20does%20not%20cross%20a%20double%20blank&per-page=3&select=id,display_name,publication_year",200,1797,openalex,unquoted pair search for S3-062; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22final%20clause%20restricts%20the%20turn%22%20%22restriction%20does%20not%20cross%20a%20double%20blank%22&rows=2,200,2188972,crossref,"pair search for S3-062; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22extra%20digit%20needs%20a%20second%20attestation%22%20%22short%20turn%20cannot%20be%20the%20proof%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-063
+"https://api.semanticscholar.org/graph/v1/paper/search?query=extra%20digit%20needs%20a%20second%20attestation%20short%20turn%20cannot%20be%20the%20proof&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-063; 429 is not evidence of absence
+"https://api.openalex.org/works?search=extra%20digit%20needs%20a%20second%20attestation%20short%20turn%20cannot%20be%20the%20proof&per-page=3&select=id,display_name,publication_year",200,170,openalex,unquoted pair search for S3-063; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22extra%20digit%20needs%20a%20second%20attestation%22%20%22short%20turn%20cannot%20be%20the%20proof%22&rows=2,200,1724092,crossref,"pair search for S3-063; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22claimant%20must%20add%20a%20token%22%20%22defendant%20short%20turn%20cannot%20displace%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-064
+"https://api.semanticscholar.org/graph/v1/paper/search?query=claimant%20must%20add%20a%20token%20defendant%20short%20turn%20cannot%20displace&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-064; 429 is not evidence of absence
+"https://api.openalex.org/works?search=claimant%20must%20add%20a%20token%20defendant%20short%20turn%20cannot%20displace&per-page=3&select=id,display_name,publication_year",200,323,openalex,unquoted pair search for S3-064; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22claimant%20must%20add%20a%20token%22%20%22defendant%20short%20turn%20cannot%20displace%22&rows=2,200,741739,crossref,"pair search for S3-064; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22polarity%20mirror%20is%20not%20a%20new%20status%22%20%22uncertain%20token%20keeps%20prior%20status%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-065
+"https://api.semanticscholar.org/graph/v1/paper/search?query=polarity%20mirror%20is%20not%20a%20new%20status%20uncertain%20token%20keeps%20prior%20status&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-065; 429 is not evidence of absence
+"https://api.openalex.org/works?search=polarity%20mirror%20is%20not%20a%20new%20status%20uncertain%20token%20keeps%20prior%20status&per-page=3&select=id,display_name,publication_year",200,236,openalex,unquoted pair search for S3-065; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22polarity%20mirror%20is%20not%20a%20new%20status%22%20%22uncertain%20token%20keeps%20prior%20status%22&rows=2,200,5630147,crossref,"pair search for S3-065; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22conjunction%20requires%20both%20sides%22%20%22general%20token%20matches%20only%20with%20its%20specific%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-066
+"https://api.semanticscholar.org/graph/v1/paper/search?query=conjunction%20requires%20both%20sides%20general%20token%20matches%20only%20with%20its%20specific&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-066; 429 is not evidence of absence
+"https://api.openalex.org/works?search=conjunction%20requires%20both%20sides%20general%20token%20matches%20only%20with%20its%20specific&per-page=3&select=id,display_name,publication_year",200,28267,openalex,unquoted pair search for S3-066; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22conjunction%20requires%20both%20sides%22%20%22general%20token%20matches%20only%20with%20its%20specific%22&rows=2,200,51756,crossref,"pair search for S3-066; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22purpose%20span%20after%20to%20for%20so%22%20%22only%20digits%20inside%20the%20purpose%20span%20copy%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-067
+"https://api.semanticscholar.org/graph/v1/paper/search?query=purpose%20span%20after%20to%20for%20so%20only%20digits%20inside%20the%20purpose%20span%20copy&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-067; 429 is not evidence of absence
+"https://api.openalex.org/works?search=purpose%20span%20after%20to%20for%20so%20only%20digits%20inside%20the%20purpose%20span%20copy&per-page=3&select=id,display_name,publication_year",200,10694,openalex,unquoted pair search for S3-067; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22purpose%20span%20after%20to%20for%20so%22%20%22only%20digits%20inside%20the%20purpose%20span%20copy%22&rows=2,200,129051,crossref,"pair search for S3-067; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22later%20partial%20overlap%20keeps%20the%20earlier%22%20%22query%20digit%20matches%20only%20an%20equal%20digit%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-068
+"https://api.semanticscholar.org/graph/v1/paper/search?query=later%20partial%20overlap%20keeps%20the%20earlier%20query%20digit%20matches%20only%20an%20equal%20digit&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-068; 429 is not evidence of absence
+"https://api.openalex.org/works?search=later%20partial%20overlap%20keeps%20the%20earlier%20query%20digit%20matches%20only%20an%20equal%20digit&per-page=3&select=id,display_name,publication_year",200,1154,openalex,unquoted pair search for S3-068; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22later%20partial%20overlap%20keeps%20the%20earlier%22%20%22query%20digit%20matches%20only%20an%20equal%20digit%22&rows=2,200,36724,crossref,"pair search for S3-068; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22one%20clause%20beats%20two%20or-alternatives%22%20%22comparative%20digit%20cannot%20exceed%20the%20source%20digit%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-069
+"https://api.semanticscholar.org/graph/v1/paper/search?query=one%20clause%20beats%20two%20or-alternatives%20comparative%20digit%20cannot%20exceed%20the%20source%20digit&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-069; 429 is not evidence of absence
+"https://api.openalex.org/works?search=one%20clause%20beats%20two%20or-alternatives%20comparative%20digit%20cannot%20exceed%20the%20source%20digit&per-page=3&select=id,display_name,publication_year",200,223,openalex,unquoted pair search for S3-069; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22one%20clause%20beats%20two%20or-alternatives%22%20%22comparative%20digit%20cannot%20exceed%20the%20source%20digit%22&rows=2,200,148670,crossref,"pair search for S3-069; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22hapax%20cannot%20sole-seat%20unless%20queried%22%20%22flag%20transfers%20only%20from%20two%20prototypes%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-070
+"https://api.semanticscholar.org/graph/v1/paper/search?query=hapax%20cannot%20sole-seat%20unless%20queried%20flag%20transfers%20only%20from%20two%20prototypes&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-070; 429 is not evidence of absence
+"https://api.openalex.org/works?search=hapax%20cannot%20sole-seat%20unless%20queried%20flag%20transfers%20only%20from%20two%20prototypes&per-page=3&select=id,display_name,publication_year",200,2,openalex,unquoted pair search for S3-070; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22hapax%20cannot%20sole-seat%20unless%20queried%22%20%22flag%20transfers%20only%20from%20two%20prototypes%22&rows=2,200,201338,crossref,"pair search for S3-070; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22digit%20copy%20onto%20the%20next%20turn%22%20%22copy%20only%20when%20the%20next%20turn%20is%20a%20completion%20medium%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-071
+"https://api.semanticscholar.org/graph/v1/paper/search?query=digit%20copy%20onto%20the%20next%20turn%20copy%20only%20when%20the%20next%20turn%20is%20a%20completion%20medium&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-071; 429 is not evidence of absence
+"https://api.openalex.org/works?search=digit%20copy%20onto%20the%20next%20turn%20copy%20only%20when%20the%20next%20turn%20is%20a%20completion%20medium&per-page=3&select=id,display_name,publication_year",200,3392,openalex,unquoted pair search for S3-071; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22digit%20copy%20onto%20the%20next%20turn%22%20%22copy%20only%20when%20the%20next%20turn%20is%20a%20completion%20medium%22&rows=2,200,339539,crossref,"pair search for S3-071; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22oath%20with%20if%20is%20not%20binding%22%20%22condition%20binds%20only%20with%20both%20branches%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-072
+"https://api.semanticscholar.org/graph/v1/paper/search?query=oath%20with%20if%20is%20not%20binding%20condition%20binds%20only%20with%20both%20branches&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-072; 429 is not evidence of absence
+"https://api.openalex.org/works?search=oath%20with%20if%20is%20not%20binding%20condition%20binds%20only%20with%20both%20branches&per-page=3&select=id,display_name,publication_year",200,2606,openalex,unquoted pair search for S3-072; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22oath%20with%20if%20is%20not%20binding%22%20%22condition%20binds%20only%20with%20both%20branches%22&rows=2,200,937154,crossref,"pair search for S3-072; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22no%20cross-digit%20match%20when%20both%20exist%22%20%22a%20fortiori%20result%20capped%20at%20source%20digit%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-073
+"https://api.semanticscholar.org/graph/v1/paper/search?query=no%20cross-digit%20match%20when%20both%20exist%20a%20fortiori%20result%20capped%20at%20source%20digit&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-073; 429 is not evidence of absence
+"https://api.openalex.org/works?search=no%20cross-digit%20match%20when%20both%20exist%20a%20fortiori%20result%20capped%20at%20source%20digit&per-page=3&select=id,display_name,publication_year",200,38,openalex,unquoted pair search for S3-073; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22no%20cross-digit%20match%20when%20both%20exist%22%20%22a%20fortiori%20result%20capped%20at%20source%20digit%22&rows=2,200,49615,crossref,"pair search for S3-073; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22near%20duplicate%20does%20not%20supersede%22%20%22non-adjacent%20same-session%20directives%20link%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-074
+"https://api.semanticscholar.org/graph/v1/paper/search?query=near%20duplicate%20does%20not%20supersede%20non-adjacent%20same-session%20directives%20link&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-074; 429 is not evidence of absence
+"https://api.openalex.org/works?search=near%20duplicate%20does%20not%20supersede%20non-adjacent%20same-session%20directives%20link&per-page=3&select=id,display_name,publication_year",200,152,openalex,unquoted pair search for S3-074; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22near%20duplicate%20does%20not%20supersede%22%20%22non-adjacent%20same-session%20directives%20link%22&rows=2,200,22972,crossref,"pair search for S3-074; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22exact%20token%20beats%20its%20prefix%22%20%22final%20clause%20tokens%20restrict%20earlier%20tokens%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-075
+"https://api.semanticscholar.org/graph/v1/paper/search?query=exact%20token%20beats%20its%20prefix%20final%20clause%20tokens%20restrict%20earlier%20tokens&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-075; 429 is not evidence of absence
+"https://api.openalex.org/works?search=exact%20token%20beats%20its%20prefix%20final%20clause%20tokens%20restrict%20earlier%20tokens&per-page=3&select=id,display_name,publication_year",200,275,openalex,unquoted pair search for S3-075; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22exact%20token%20beats%20its%20prefix%22%20%22final%20clause%20tokens%20restrict%20earlier%20tokens%22&rows=2,200,8321,crossref,"pair search for S3-075; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22tighter%20equal-coverage%20turn%20wins%22%20%22instruction%20form%20requires%20you%20or%20will%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-076
+"https://api.semanticscholar.org/graph/v1/paper/search?query=tighter%20equal-coverage%20turn%20wins%20instruction%20form%20requires%20you%20or%20will&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-076; 429 is not evidence of absence
+"https://api.openalex.org/works?search=tighter%20equal-coverage%20turn%20wins%20instruction%20form%20requires%20you%20or%20will&per-page=3&select=id,display_name,publication_year",200,6275,openalex,unquoted pair search for S3-076; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22tighter%20equal-coverage%20turn%20wins%22%20%22instruction%20form%20requires%20you%20or%20will%22&rows=2,200,1047009,crossref,"pair search for S3-076; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22class%20expands%20only%20to%20the%20specific%27s%20shape%22%20%22general%20adds%20to%20the%20specific%20list%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-077
+"https://api.semanticscholar.org/graph/v1/paper/search?query=class%20expands%20only%20to%20the%20specific%27s%20shape%20general%20adds%20to%20the%20specific%20list&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-077; 429 is not evidence of absence
+"https://api.openalex.org/works?search=class%20expands%20only%20to%20the%20specific%27s%20shape%20general%20adds%20to%20the%20specific%20list&per-page=3&select=id,display_name,publication_year",200,612268,openalex,unquoted pair search for S3-077; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22class%20expands%20only%20to%20the%20specific%27s%20shape%22%20%22general%20adds%20to%20the%20specific%20list%22&rows=2,200,2982113,crossref,"pair search for S3-077; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22exception%20teaches%20the%20whole%20class%22%20%22propagated%20lesson%20may%20relax%20not%20tighten%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-078
+"https://api.semanticscholar.org/graph/v1/paper/search?query=exception%20teaches%20the%20whole%20class%20propagated%20lesson%20may%20relax%20not%20tighten&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-078; 429 is not evidence of absence
+"https://api.openalex.org/works?search=exception%20teaches%20the%20whole%20class%20propagated%20lesson%20may%20relax%20not%20tighten&per-page=3&select=id,display_name,publication_year",200,204,openalex,unquoted pair search for S3-078; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22exception%20teaches%20the%20whole%20class%22%20%22propagated%20lesson%20may%20relax%20not%20tighten%22&rows=2,200,1169489,crossref,"pair search for S3-078; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22foreign%20specific%20may%20add%20and%20remove%22%20%22new-matter%20turn%20returns%20only%20if%20repeated%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-079
+"https://api.semanticscholar.org/graph/v1/paper/search?query=foreign%20specific%20may%20add%20and%20remove%20new-matter%20turn%20returns%20only%20if%20repeated&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-079; 429 is not evidence of absence
+"https://api.openalex.org/works?search=foreign%20specific%20may%20add%20and%20remove%20new-matter%20turn%20returns%20only%20if%20repeated&per-page=3&select=id,display_name,publication_year",200,43774,openalex,unquoted pair search for S3-079; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22foreign%20specific%20may%20add%20and%20remove%22%20%22new-matter%20turn%20returns%20only%20if%20repeated%22&rows=2,200,91143,crossref,"pair search for S3-079; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22end%20of%20the%20passage%20defines%20scope%22%20%22scope%20must%20resemble%20the%20listed%20specific%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-080
+"https://api.semanticscholar.org/graph/v1/paper/search?query=end%20of%20the%20passage%20defines%20scope%20scope%20must%20resemble%20the%20listed%20specific&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-080; 429 is not evidence of absence
+"https://api.openalex.org/works?search=end%20of%20the%20passage%20defines%20scope%20scope%20must%20resemble%20the%20listed%20specific&per-page=3&select=id,display_name,publication_year",200,73587,openalex,unquoted pair search for S3-080; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22end%20of%20the%20passage%20defines%20scope%22%20%22scope%20must%20resemble%20the%20listed%20specific%22&rows=2,200,1182390,crossref,"pair search for S3-080; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22severe%20query%20cannot%20open%20on%20the%20penalty%22%20%22lenient-first%20turn%20cannot%20become%20the%20penalty%20seat%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-081
+"https://api.semanticscholar.org/graph/v1/paper/search?query=severe%20query%20cannot%20open%20on%20the%20penalty%20lenient-first%20turn%20cannot%20become%20the%20penalty%20seat&limit=3&fields=title,year",200,0,semanticscholar,pair search for S3-081; 429 is not evidence of absence
+"https://api.openalex.org/works?search=severe%20query%20cannot%20open%20on%20the%20penalty%20lenient-first%20turn%20cannot%20become%20the%20penalty%20seat&per-page=3&select=id,display_name,publication_year",200,378,openalex,unquoted pair search for S3-081; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22severe%20query%20cannot%20open%20on%20the%20penalty%22%20%22lenient-first%20turn%20cannot%20become%20the%20penalty%20seat%22&rows=2,200,58381,crossref,"pair search for S3-081; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22liability%20conclusion%20is%20a%20later%20turn%22%20%22a%20question%20cannot%20conclude%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-082
+"https://api.semanticscholar.org/graph/v1/paper/search?query=liability%20conclusion%20is%20a%20later%20turn%20a%20question%20cannot%20conclude&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-082; 429 is not evidence of absence
+"https://api.openalex.org/works?search=liability%20conclusion%20is%20a%20later%20turn%20a%20question%20cannot%20conclude&per-page=3&select=id,display_name,publication_year",200,164523,openalex,unquoted pair search for S3-082; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22liability%20conclusion%20is%20a%20later%20turn%22%20%22a%20question%20cannot%20conclude%22&rows=2,200,543651,crossref,"pair search for S3-082; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22override%20needs%20two%20independent%20counts%22%20%22liability%20seat%20needs%20two%20attesting%20turns%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-083
+"https://api.semanticscholar.org/graph/v1/paper/search?query=override%20needs%20two%20independent%20counts%20liability%20seat%20needs%20two%20attesting%20turns&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-083; 429 is not evidence of absence
+"https://api.openalex.org/works?search=override%20needs%20two%20independent%20counts%20liability%20seat%20needs%20two%20attesting%20turns&per-page=3&select=id,display_name,publication_year",200,164,openalex,unquoted pair search for S3-083; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22override%20needs%20two%20independent%20counts%22%20%22liability%20seat%20needs%20two%20attesting%20turns%22&rows=2,200,1946084,crossref,"pair search for S3-083; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22turn%20that%20quotes%20the%20rival%20first%20wins%22%20%22rival%20turn%20stays%20in%20the%20pool%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-084
+"https://api.semanticscholar.org/graph/v1/paper/search?query=turn%20that%20quotes%20the%20rival%20first%20wins%20rival%20turn%20stays%20in%20the%20pool&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-084; 429 is not evidence of absence
+"https://api.openalex.org/works?search=turn%20that%20quotes%20the%20rival%20first%20wins%20rival%20turn%20stays%20in%20the%20pool&per-page=3&select=id,display_name,publication_year",200,1363,openalex,unquoted pair search for S3-084; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22turn%20that%20quotes%20the%20rival%20first%20wins%22%20%22rival%20turn%20stays%20in%20the%20pool%22&rows=2,200,1269889,crossref,"pair search for S3-084; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22conditional%20turn%20resists%20a%20later%20general%22%20%22condition%20counts%20only%20if%20doubled%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-085
+"https://api.semanticscholar.org/graph/v1/paper/search?query=conditional%20turn%20resists%20a%20later%20general%20condition%20counts%20only%20if%20doubled&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-085; 429 is not evidence of absence
+"https://api.openalex.org/works?search=conditional%20turn%20resists%20a%20later%20general%20condition%20counts%20only%20if%20doubled&per-page=3&select=id,display_name,publication_year",200,15870,openalex,unquoted pair search for S3-085; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22conditional%20turn%20resists%20a%20later%20general%22%20%22condition%20counts%20only%20if%20doubled%22&rows=2,200,1503439,crossref,"pair search for S3-085; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22commitment%20needs%20an%20auxiliary%20or%20you%22%20%22content-free%20oath%20is%20void%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-086
+"https://api.semanticscholar.org/graph/v1/paper/search?query=commitment%20needs%20an%20auxiliary%20or%20you%20content-free%20oath%20is%20void&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-086; 429 is not evidence of absence
+"https://api.openalex.org/works?search=commitment%20needs%20an%20auxiliary%20or%20you%20content-free%20oath%20is%20void&per-page=3&select=id,display_name,publication_year",200,222,openalex,unquoted pair search for S3-086; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22commitment%20needs%20an%20auxiliary%20or%20you%22%20%22content-free%20oath%20is%20void%22&rows=2,200,2021746,crossref,"pair search for S3-086; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22second%20declarative%20occurrence%20sanctifies%22%20%22question%20occurrence%20does%20not%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-087
+"https://api.semanticscholar.org/graph/v1/paper/search?query=second%20declarative%20occurrence%20sanctifies%20question%20occurrence%20does%20not&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-087; 429 is not evidence of absence
+"https://api.openalex.org/works?search=second%20declarative%20occurrence%20sanctifies%20question%20occurrence%20does%20not&per-page=3&select=id,display_name,publication_year",200,4518,openalex,unquoted pair search for S3-087; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22second%20declarative%20occurrence%20sanctifies%22%20%22question%20occurrence%20does%20not%22&rows=2,200,1414042,crossref,"pair search for S3-087; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22digit%20alibi%20impeaches%20the%20whole%20turn%22%20%22object%20mismatch%20does%20not%20impeach%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-088
+"https://api.semanticscholar.org/graph/v1/paper/search?query=digit%20alibi%20impeaches%20the%20whole%20turn%20object%20mismatch%20does%20not%20impeach&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-088; 429 is not evidence of absence
+"https://api.openalex.org/works?search=digit%20alibi%20impeaches%20the%20whole%20turn%20object%20mismatch%20does%20not%20impeach&per-page=3&select=id,display_name,publication_year",200,0,openalex,unquoted pair search for S3-088; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22digit%20alibi%20impeaches%20the%20whole%20turn%22%20%22object%20mismatch%20does%20not%20impeach%22&rows=2,200,1004950,crossref,"pair search for S3-088; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22unique%20marked%20turn%20loses%22%20%22turn%20that%20states%20both%20positions%20stays%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-089
+"https://api.semanticscholar.org/graph/v1/paper/search?query=unique%20marked%20turn%20loses%20turn%20that%20states%20both%20positions%20stays&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-089; 429 is not evidence of absence
+"https://api.openalex.org/works?search=unique%20marked%20turn%20loses%20turn%20that%20states%20both%20positions%20stays&per-page=3&select=id,display_name,publication_year",200,33678,openalex,unquoted pair search for S3-089; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22unique%20marked%20turn%20loses%22%20%22turn%20that%20states%20both%20positions%20stays%22&rows=2,200,1312238,crossref,"pair search for S3-089; top titles inspected, total is bag-of-words"
+"https://api.openalex.org/works?search=%22completion%20counts%20only%20inside%20the%20session%22%20%22short%20offer%20is%20not%20itself%20operative%22&per-page=3&select=id,display_name,publication_year",200,0,openalex,quoted pair search for S3-090
+"https://api.semanticscholar.org/graph/v1/paper/search?query=completion%20counts%20only%20inside%20the%20session%20short%20offer%20is%20not%20itself%20operative&limit=3&fields=title,year",429,0,semanticscholar,pair search for S3-090; 429 is not evidence of absence
+"https://api.openalex.org/works?search=completion%20counts%20only%20inside%20the%20session%20short%20offer%20is%20not%20itself%20operative&per-page=3&select=id,display_name,publication_year",200,3529,openalex,unquoted pair search for S3-090; top titles inspected
+https://api.crossref.org/works?query.bibliographic=%22completion%20counts%20only%20inside%20the%20session%22%20%22short%20offer%20is%20not%20itself%20operative%22&rows=2,200,1169982,crossref,"pair search for S3-090; top titles inspected, total is bag-of-words"
