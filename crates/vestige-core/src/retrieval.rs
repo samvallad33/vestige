@@ -6247,6 +6247,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // change.
     if !it.is_event_sequence && it.assistant_attribution {
         apply_c2_assistant_reply_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Unseated-session opener T@10 entry (assistant-attribution only):
+        // the most on-scene declarative opener of a session with no official-k
+        // seat takes the tail seat of the least on-scene lone-session turn
+        // (at least as on-scene, never an earlier session). After #43.
+        apply_c2_attribution_unseated_opener_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
