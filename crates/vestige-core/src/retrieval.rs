@@ -4757,6 +4757,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &mut t_turn_raw,
     );
     apply_panini_karaka_slot_shape(ix, &q.text, &it, pref_on, &mut t_turn_raw);
+    apply_step8_kelal_u_ferat(ix, &plan, &mut t_turn_raw);
+    apply_step8_homeric_ring(ix, &plan, &mut t_turn_raw);
     if p.enable_deictic {
         apply_move3_heideltime_anchor(
             ix,
