@@ -227,6 +227,61 @@ fn apply_c2_dichotomous_key(ix: &Index, plan: &QueryPlan, list: &mut [usize], t_
     false
 }
 
+/// Near-tie band for the Mimamsa precedence order (share of slot 1's scene score).
+const C2_MIMAMSA_BAND: f32 = 0.10;
+/// Mimamsa viniyoga precedence key, two strongest means: sruti (focal query terms the turn
+/// states) then linga (focal query terms it carries as named entities).
+fn c2_mimamsa_key(ix: &Index, plan: &QueryPlan, ti: usize) -> (u16, u16) {
+    let t = &ix.turns[ti];
+    let sruti = plan.focal_ids.iter().filter(|f| t.content.contains(f)).count() as u16;
+    let linga = plan.focal_ids.iter().filter(|f| t.entities.contains(f)).count() as u16;
+    (sruti, linga)
+}
+
+/// Mimamsa viniyoga hierarchy (Jaimini 3.3.14): direct statement beats indicatory mark, which
+/// beats syntactic connection, then position; a weaker means never overrules a stronger one.
+/// In named-speaker chats, among slot 1 and its same-session same-speaker top-5 rivals within
+/// 10% of its scene score, a strictly stronger (sruti, linga) key takes slot 1; weaker means
+/// (connection, position) are left to the scored order. Top-5 membership never changes.
+/// Runs before RSB.
+fn apply_c2_mimamsa_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<usize>, t_scene: &[f32]) -> bool {
+    if list.len() < 2 || plan.focal_ids.is_empty() {
+        return false;
+    }
+    let top = list[0];
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    // v3: named-speaker chats only; there a named referent is the sruti of the scene.
+    if !c2_named_session(ix, top) {
+        return false;
+    }
+    let (sess, speaker) = (ix.turns[top].session, ix.turns[top].speaker.as_str());
+    let mut best = (0usize, c2_mimamsa_key(ix, plan, top));
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.session != sess || t.speaker != speaker {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) < (1.0 - C2_MIMAMSA_BAND) * sc_top {
+            continue;
+        }
+        let k = c2_mimamsa_key(ix, plan, cand);
+        if k > best.1 {
+            best = (i, k);
+        }
+    }
+    if best.0 > 0 {
+        let cand = list.remove(best.0);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -321,5 +376,23 @@ mod algos_c2_tests {
         // Outside the 3% band: no change.
         let mut list = vec![0usize, 1];
         assert!(!apply_c2_dichotomous_key(&ix, &plan, &mut list, &[1.0, 0.9]));
+    }
+
+    #[test]
+    fn mimamsa_seats_stronger_sruti_in_named_session() {
+        let ix = build_index(
+            &[sess("D1", &[("Caroline", "We went hiking last week."), ("Caroline", "Yosemite hiking was the best trip.")])],
+            &Params::default(),
+        );
+        let q = Query { text: "What did Caroline say about Yosemite hiking?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        let k0 = c2_mimamsa_key(&ix, &plan, 0);
+        let k1 = c2_mimamsa_key(&ix, &plan, 1);
+        let mut list = vec![0usize, 1];
+        let moved = apply_c2_mimamsa_seat(&ix, &plan, &mut list, &[1.0, 0.95]);
+        assert_eq!(moved, k1 > k0);
+        // Outside the 10% band: never moved.
+        let mut list = vec![0usize, 1];
+        assert!(!apply_c2_mimamsa_seat(&ix, &plan, &mut list, &[1.0, 0.5]));
     }
 }
