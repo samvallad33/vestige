@@ -6012,6 +6012,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     session_opener_lift_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
     hearsay_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
+    // C2 algos lane: slot-1 seat rules, all before RSB (which then seats behind the head).
+    if !it.is_event_sequence {
+        apply_c2_bullae_numeral_seat(ix, &mut final_turn_indices, &t_scene);
+    }
     // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
     // Never in front of the symptom. A full window does not grow.
@@ -7348,6 +7352,7 @@ pub fn rank(req: &RankRequest) -> RankResponse {
 
 include!("rungs.rs");
 include!("steps7_10.rs");
+include!("algos_c2.rs");
 
 #[cfg(test)]
 mod tests {
