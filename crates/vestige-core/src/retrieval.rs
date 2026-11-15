@@ -6430,6 +6430,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // session does not and the declarative's own score is strictly stronger.
     // Does not touch rsb_seat_behind and does not rewrite the session list.
     apply_c2_step38_hermeneutic(ix, &q.text, &mut final_turn_indices, &t_own);
+    // Pool C session-key opener. After Bertillonage. A same-session assistant
+    // elaboration in slots 2–5 yields to that session's user opener when the
+    // opener is outside the top 5. Slot 1 stays. Does not touch rsb_seat_behind.
+    apply_c2_pool_c_session_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     maybe_dump_replay(
         ix,
         q,

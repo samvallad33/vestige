@@ -4269,6 +4269,103 @@ fn apply_c2_step38_hermeneutic(
 }
 
 
+/// Pool C session-key opener. The turn at session position 0 is the session
+/// key. An assistant elaboration already in the top 5 yields that seat to the
+/// user opener of the same session when the opener is not yet in the top 5,
+/// posts at least one query group, and itself attests every query group the
+/// elaboration attests. Coverage by some other top-5 turn is not enough: the
+/// key has to be the witness. A digit on the elaboration that the opener does
+/// not post keeps the elaboration. Slot 0 is frozen. Named-speaker corpora,
+/// text-level preference, summaries, event sequences, and assistant-attribution
+/// questions do not fire. Distinct from the cross-opener seat, which only
+/// reorders an opener already inside the top 5. Does not read `TurnIx.body`
+/// and does not touch `rsb_seat_behind`.
+fn apply_c2_pool_c_session_opener_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < C2_BULLAE_WINDOW
+        || plan.groups.is_empty()
+        || c2_text_preference(query)
+        || plan.intent.assistant_attribution
+        || plan.intent.is_event_sequence
+        || c2_summary_request(query)
+    {
+        return false;
+    }
+    let named = ix.turns.iter().any(|t| {
+        let sp = t.speaker.as_str();
+        !sp.is_empty() && sp != "user" && sp != "assistant"
+    });
+    if named {
+        return false;
+    }
+    let ng = plan.groups.len();
+    let scene = |t: usize| t_scene.get(t).copied().unwrap_or(0.0);
+    let mut fired = false;
+    for _ in 0..4 {
+        let window = list.len().min(C2_BULLAE_WINDOW);
+        let top: Vec<usize> = list[..window].to_vec();
+        let mut best: Option<(usize, usize)> = None;
+        for i in 1..window {
+            let victim = list[i];
+            if ix.turns[victim].speaker != "assistant" {
+                continue;
+            }
+            let sess = ix.turns[victim].session;
+            let Some(&opener) = ix.session_turns.get(sess).and_then(|m| m.first()) else {
+                continue;
+            };
+            if opener == victim || top.contains(&opener) {
+                continue;
+            }
+            if ix.turns[opener].speaker != "user" || c2_session_pos(ix, opener) != 0 {
+                continue;
+            }
+            if scene(opener) <= 0.0 {
+                continue;
+            }
+            if ix.turns[victim].form_digit && !ix.turns[opener].form_digit {
+                continue;
+            }
+            let opener_groups = c2_turn_groups(ix, plan, ng, opener);
+            if !opener_groups.contains(&true) {
+                continue;
+            }
+            let victim_groups = c2_turn_groups(ix, plan, ng, victim);
+            // The opener itself must cover the elaboration. A neighbour that
+            // happens to post the missing group is not the session key.
+            if victim_groups.iter().zip(&opener_groups).any(|(hit, kept)| *hit && !*kept) {
+                continue;
+            }
+            let take = match best {
+                None => true,
+                Some((bi, bo)) => {
+                    scene(opener) > scene(bo)
+                        || (scene(opener) == scene(bo) && (opener < bo || (opener == bo && i < bi)))
+                }
+            };
+            if take {
+                best = Some((i, opener));
+            }
+        }
+        let Some((i, opener)) = best else {
+            break;
+        };
+        if let Some(j) = list.iter().position(|&t| t == opener) {
+            list.swap(i, j);
+        } else {
+            list[i] = opener;
+        }
+        fired = true;
+    }
+    fired
+}
+
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -8496,5 +8593,148 @@ mod algos_c2_tests {
         let mut list = vec![3usize, 0, 2, 1];
         assert!(!apply_c2_step38_hermeneutic(&ix, q, &mut list, &[0.2, 0.1, 0.4, 4.0]));
         assert_eq!(list[0], 3);
+    }
+
+    #[test]
+    fn pool_c_session_opener_replaces_same_session_assistant_echo() {
+        let ix = build_index(
+            &[
+                sess(
+                    "sun",
+                    &[
+                        ("user", "I baked rye loaves for the picnic on Sunday."),
+                        ("assistant", "You baked rye loaves for the picnic on Sunday."),
+                        ("user", "The picnic rye loaves were a hit on Sunday."),
+                    ],
+                ),
+                sess(
+                    "mon",
+                    &[
+                        ("user", "I baked rye loaves for the picnic on Monday."),
+                        ("assistant", "You baked rye loaves for the picnic on Monday."),
+                    ],
+                ),
+                sess(
+                    "pad",
+                    &[
+                        ("user", "The weather was fine all weekend."),
+                        ("assistant", "Glad the weather was fine."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What did I bake for the picnic?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.groups.is_empty());
+        assert!(!plan.intent.assistant_attribution);
+        assert!(!plan.intent.preference);
+        // 0 sun opener, 1 sun assistant, 2 sun later, 3 mon opener, 4 mon assistant, 5 pad user, 6 pad assistant
+        let mut list = vec![2usize, 1, 5, 4, 6];
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[2] = 9.0;
+        scene[1] = 8.0;
+        scene[5] = 4.0;
+        scene[4] = 3.0;
+        scene[6] = 2.0;
+        scene[0] = 1.5;
+        scene[3] = 1.2;
+        assert!(apply_c2_pool_c_session_opener_seat(&ix, &plan, &q.text, &mut list, &scene));
+        assert_eq!(list[0], 2, "slot 0 stays");
+        assert!(list[..5].contains(&0), "sunday opener enters the top 5");
+        assert!(list[..5].contains(&3), "monday opener enters the top 5");
+        assert!(!list[..5].contains(&1));
+        assert!(!list[..5].contains(&4));
+
+        // Numeral only on the assistant: the elaboration keeps the seat.
+        let ix_n = build_index(
+            &[sess(
+                "sun",
+                &[
+                    ("user", "I baked rye loaves for the picnic."),
+                    ("assistant", "You baked 4 rye loaves for the picnic."),
+                    ("user", "Noted."),
+                    ("assistant", "Ok."),
+                    ("user", "Thanks."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let plan_n = plan_query(&ix_n, &q, &Params::default());
+        assert!(ix_n.turns[1].form_digit);
+        assert!(!ix_n.turns[0].form_digit);
+        let mut listed = vec![2usize, 1, 4, 2, 4];
+        let mut scene_n = vec![1.0f32; ix_n.turns.len()];
+        scene_n[0] = 0.4;
+        assert!(!apply_c2_pool_c_session_opener_seat(
+            &ix_n, &plan_n, &q.text, &mut listed, &scene_n
+        ));
+
+        // The elaboration uniquely posts a query term the opener does not.
+        // Neighbours in the top 5 are not allowed to cover that term for it.
+        let ix_u = build_index(
+            &[sess(
+                "sun",
+                &[
+                    ("user", "I baked rye loaves for the picnic."),
+                    ("assistant", "The designation on the rye loaves was LIV."),
+                    ("user", "The designation was on the wrapper."),
+                    ("assistant", "Noted."),
+                    ("user", "Thanks."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let uq = Query {
+            text: "What designation was on the rye loaves?".into(),
+            date: String::new(),
+        };
+        let plan_u = plan_query(&ix_u, &uq, &Params::default());
+        let mut ulist = vec![2usize, 1, 4, 2, 4];
+        let mut uscene = vec![1.0f32; ix_u.turns.len()];
+        uscene[0] = 0.5;
+        assert!(!apply_c2_pool_c_session_opener_seat(
+            &ix_u, &plan_u, &uq.text, &mut ulist, &uscene
+        ));
+        assert_eq!(ulist[1], 1);
+
+        let named = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("caroline", "I baked rye loaves for the picnic."),
+                        ("melanie", "You baked rye loaves for the picnic."),
+                    ],
+                ),
+                sess(
+                    "D2",
+                    &[
+                        ("caroline", "The weather was fine."),
+                        ("melanie", "Glad the weather was fine."),
+                        ("caroline", "See you at the picnic."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let mut nlist = vec![1usize, 0, 2, 3, 4];
+        let nscene = vec![1.0f32; named.turns.len()];
+        assert!(!apply_c2_pool_c_session_opener_seat(
+            &named, &plan, &q.text, &mut nlist, &nscene
+        ));
+
+        let pq = Query {
+            text: "Can you recommend a rye loaf for the picnic?".into(),
+            date: String::new(),
+        };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(c2_text_preference(&pq.text));
+        let mut pref = vec![2usize, 1, 5, 4, 6];
+        assert!(!apply_c2_pool_c_session_opener_seat(&ix, &pplan, &pq.text, &mut pref, &scene));
+        assert_eq!(pref, vec![2, 1, 5, 4, 6]);
     }
 }
