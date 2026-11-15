@@ -6218,6 +6218,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // that #37 just seated into official k can still enter the top
         // 5. After #37, last ranking change. Skipped on preference.
         apply_c2_session_substitution_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Mentioned-declarative session-mate T@5 entry: in a named-speaker
+        // dialogue, a mentioned speaker's declarative from a top-5 session
+        // swaps with the weakest top-5 declarative (at most
+        // C2_XWITNESS_RATIO of its scene, never from an earlier session).
+        // After #38, last ranking change. Skipped on preference.
+        apply_c2_mentioned_session_mate_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
