@@ -145,6 +145,45 @@ fn apply_c2_coverage_margin_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<us
     false
 }
 
+/// Transfer-appropriate processing (Morris, Bransford & Franks 1977), when/where arms only:
+/// retrieval succeeds when the test form matches the encoding form. For a when-query the
+/// answer form is a temporal turn (`has_temporal` / `form_clock`); for a where-query a
+/// spatial turn (`has_spatial`). Inside a session that holds a form-matching turn, a
+/// non-matching turn may not stay above 90% of the best matching one. Cap only, never a
+/// boost. HOOK B, after Lex specialis. (The how-many arm belongs to Steps 11-20.)
+fn apply_c2_tap_form_precedence(ix: &Index, it: &QueryIntent, pref_on: bool, t_scene: &mut [f32]) {
+    if pref_on || it.is_event_sequence || !(it.sniper_when || it.sniper_where) {
+        return;
+    }
+    let form_ok = |t: &TurnIx| -> bool {
+        (!it.sniper_when || t.has_temporal || t.form_clock) && (!it.sniper_where || t.has_spatial)
+    };
+    for turns in &ix.session_turns {
+        // v2: named-speaker chats only. User/assistant transcripts state dates in session
+        // metadata, not in the turn, so a temporal/spatial surface form is not the answer form.
+        let named = turns.iter().any(|&m| {
+            let sp = ix.turns[m].speaker.as_str();
+            !sp.is_empty() && sp != "user" && sp != "assistant"
+        });
+        if !named {
+            continue;
+        }
+        let best_ok = turns
+            .iter()
+            .filter(|&&ti| form_ok(&ix.turns[ti]))
+            .map(|&ti| t_scene[ti])
+            .fold(0.0f32, f32::max);
+        if best_ok <= 0.0 {
+            continue;
+        }
+        for &ti in turns {
+            if !form_ok(&ix.turns[ti]) && t_scene[ti] > 0.9 * best_ok {
+                t_scene[ti] = 0.9 * best_ok;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -203,5 +242,25 @@ mod algos_c2_tests {
         // Turn 2 lacks "hiking" that slot 1 holds: never seated over turn 0.
         let mut list = vec![0usize, 2];
         assert!(!apply_c2_coverage_margin_seat(&ix, &plan, &mut list));
+    }
+
+    #[test]
+    fn tap_caps_formless_turn_in_named_session_only() {
+        let ix = build_index(
+            &[
+                sess("D1", &[("Caroline", "We talked about the concert."), ("Caroline", "The concert was on 7 May 2023.")]),
+                sess("u", &[("user", "We talked about the concert."), ("user", "The concert was on 7 May 2023.")]),
+            ],
+            &Params::default(),
+        );
+        assert!(ix.turns[1].has_temporal && !ix.turns[0].has_temporal);
+        let it = QueryIntent { sniper_when: true, ..QueryIntent::default() };
+        let mut t_scene = vec![1.0f32, 0.5, 1.0, 0.5];
+        apply_c2_tap_form_precedence(&ix, &it, false, &mut t_scene);
+        assert!((t_scene[0] - 0.45).abs() < 1e-6);
+        assert_eq!(t_scene[2], 1.0);
+        let mut t_scene = vec![1.0f32, 0.5, 1.0, 0.5];
+        apply_c2_tap_form_precedence(&ix, &it, true, &mut t_scene);
+        assert_eq!(t_scene[0], 1.0);
     }
 }
