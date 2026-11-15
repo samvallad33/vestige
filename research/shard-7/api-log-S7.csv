@@ -1,0 +1,611 @@
+api,endpoint,http_status,result_count,note
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=wampum+belt+AND+unit_code%3ANMAI&rows=4,200,39,wampum belt AND unit_code:NMAI
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403887335-1,200,1,NMAI_28024 Wampum belt
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403823252-1,200,1,NMAI_38183 Wampum belt
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=wampum+string+AND+unit_code%3ANMNHANTHRO&rows=4,200,25,wampum string AND unit_code:NMNHANTHRO
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406825086-1643406854386-0,200,1,"nmnhanthropology_8422278 Wampum Strings, Miniature Set"
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406825086-1643406854253-0,200,1,nmnhanthropology_8422277 Wampum Strings
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22winter+count%22+AND+unit_code%3ANMAI&rows=4,200,9,"""winter count"" AND unit_code:NMAI"
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403869684-0,200,1,NMAI_233334 copy of the Lone Dog Winter count
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403788829-0,200,1,NMAI_280152 Winter count
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=quipu+AND+unit_code%3ANMNHANTHRO&rows=4,200,8,quipu AND unit_code:NMNHANTHRO
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643407100205-1643407145704-0,200,1,nmnhanthropology_8112325 Quipu
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643407023501-1643407054803-1,200,1,nmnhanthropology_8302718 Quipu
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=quipu+AND+unit_code%3ANMAI&rows=4,200,33,quipu AND unit_code:NMAI
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403802351-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403802351-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403802351-0,429,0,ld1-1643403783737-1643403802351-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403913824-0,200,1,NMAI_147910 Quipu/Counting record
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403868600-0,200,1,NMAI_147916 Quipu/Counting record
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22totem+pole%22+AND+unit_code%3ANMAI&rows=4,200,103,"""totem pole"" AND unit_code:NMAI"
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403842449-1,200,1,NMAI_165645 Totem pole model
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403849445-0,200,1,NMAI_269658 Totem pole model
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22ledger+drawing%22+AND+unit_code%3ANMAI&rows=4,200,28,"""ledger drawing"" AND unit_code:NMAI"
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403799995-0,200,1,NMAI_211596 Book of ledger drawings
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403852393-0,200,1,NMAI_416573 Ledger drawing with cover
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=birchbark+AND+unit_code%3ANMAI&rows=4,200,1338,birchbark AND unit_code:NMAI
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403817397-0,200,1,NMAI_176721 Pattern used for marking designs on birchbark containers
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403822243-0,200,1,NMAI_174416 Pattern used for marking designs on birchbark containers
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=calumet+AND+unit_code%3ANMAI&rows=4,200,95,calumet AND unit_code:NMAI
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403869657-1?api_key=REDACTED,429,0,ld1-1643403783737-1643403869657-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403869657-1,429,0,ld1-1643403783737-1643403869657-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403807852-1?api_key=REDACTED,429,0,ld1-1643403783737-1643403807852-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403807852-1,429,0,ld1-1643403783737-1643403807852-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403894651-0,200,1,NMAI_21809 Calumet pipestem feathers (Image withheld)
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403799680-0,200,1,NMAI_209917 Pipe bowl and calumet pipestem (Image withheld)
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=parfleche+AND+unit_code%3ANMAI&rows=4,200,369,parfleche AND unit_code:NMAI
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403842815-0,200,1,NMAI_131943 Parfleche bag
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403854614-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403854614-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403854614-0,429,0,ld1-1643403783737-1643403854614-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403859211-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403859211-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403859211-0,429,0,ld1-1643403783737-1643403859211-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403803836-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403803836-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403803836-0,429,0,ld1-1643403783737-1643403803836-0
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=Chilkat+AND+unit_code%3ANMAI&rows=4,200,253,Chilkat AND unit_code:NMAI
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403835898-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403835898-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403835898-0,429,0,ld1-1643403783737-1643403835898-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403879557-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403879557-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403879557-0,429,0,ld1-1643403783737-1643403879557-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403911143-1?api_key=REDACTED,429,0,ld1-1643403783737-1643403911143-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403911143-1,429,0,ld1-1643403783737-1643403911143-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403847760-0,200,1,NMAI_44249 Pipe bowl
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22button+blanket%22+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,"""button blanket"" AND unit_code:NMAI"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22button+blanket%22+AND+unit_code%3ANMAI&rows=4,429,0,"""button blanket"" AND unit_code:NMAI"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=pictograph+AND+unit_code%3ANMAI&rows=4,200,188,pictograph AND unit_code:NMAI
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1727512279494-1727512328639-1?api_key=REDACTED,429,0,ld1-1727512279494-1727512328639-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1727512279494-1727512328639-1,429,0,ld1-1727512279494-1727512328639-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1727512279494-1727512302337-1?api_key=REDACTED,429,0,ld1-1727512279494-1727512302337-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1727512279494-1727512302337-1,429,0,ld1-1727512279494-1727512302337-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1727512279494-1727512406660-0?api_key=REDACTED,429,0,ld1-1727512279494-1727512406660-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1727512279494-1727512406660-0,429,0,ld1-1727512279494-1727512406660-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403884279-1?api_key=REDACTED,429,0,ld1-1643403783737-1643403884279-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403884279-1,429,0,ld1-1643403783737-1643403884279-1
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22story+knife%22+AND+online_media_type%3AImages&rows=4,200,26,"""story knife"" AND online_media_type:Images"
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406825086-1643406848110-0?api_key=REDACTED,429,0,ld1-1643406825086-1643406848110-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406825086-1643406848110-0,429,0,ld1-1643406825086-1643406848110-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403906698-0,200,1,NMAI_206732 Story knife
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643407023501-1643407068477-0?api_key=REDACTED,429,0,ld1-1643407023501-1643407068477-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643407023501-1643407068477-0,429,0,ld1-1643407023501-1643407068477-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403901250-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403901250-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403901250-0,429,0,ld1-1643403783737-1643403901250-0
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22stick+chart%22+AND+online_media_type%3AImages&rows=4,200,5,"""stick chart"" AND online_media_type:Images"
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406825086-1643406855692-1?api_key=REDACTED,429,0,ld1-1643406825086-1643406855692-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406825086-1643406855692-1,429,0,ld1-1643406825086-1643406855692-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406967081-1643406973206-1?api_key=REDACTED,429,0,ld1-1643406967081-1643406973206-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406967081-1643406973206-1,429,0,ld1-1643406967081-1643406973206-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406967081-1643406973390-0?api_key=REDACTED,429,0,ld1-1643406967081-1643406973390-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406967081-1643406973390-0,429,0,ld1-1643406967081-1643406973390-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406967081-1643406978748-1?api_key=REDACTED,429,0,ld1-1643406967081-1643406978748-1
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406967081-1643406978748-1,429,0,ld1-1643406967081-1643406978748-1
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=inuksuk+AND+online_media_type%3AImages&rows=4,200,4,inuksuk AND online_media_type:Images
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406967081-1643407006104-0?api_key=REDACTED,429,0,ld1-1643406967081-1643407006104-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643406967081-1643407006104-0,429,0,ld1-1643406967081-1643407006104-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403878757-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403878757-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403878757-0,429,0,ld1-1643403783737-1643403878757-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403811228-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403811228-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403811228-0,429,0,ld1-1643403783737-1643403811228-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403872136-0?api_key=REDACTED,429,0,ld1-1643403783737-1643403872136-0
+smithsonian-content,https://api.si.edu/openaccess/api/v1.0/content/ld1-1643403783737-1643403872136-0,429,0,ld1-1643403783737-1643403872136-0
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22message+stick%22+AND+online_media_type%3AImages&rows=4&api_key=REDACTED,429,0,"""message stick"" AND online_media_type:Images"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22message+stick%22+AND+online_media_type%3AImages&rows=4,429,0,"""message stick"" AND online_media_type:Images"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=rongorongo+AND+online_media_type%3AImages&rows=4&api_key=REDACTED,429,0,rongorongo AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=rongorongo+AND+online_media_type%3AImages&rows=4,429,0,rongorongo AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=lukasa+AND+online_media_type%3AImages&rows=4&api_key=REDACTED,429,0,lukasa AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=lukasa+AND+online_media_type%3AImages&rows=4,429,0,lukasa AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=adinkra+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,adinkra AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=adinkra+AND+unit_code%3ANMAfA&rows=4,429,0,adinkra AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22gold+weight%22+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,"""gold weight"" AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22gold+weight%22+AND+unit_code%3ANMAfA&rows=4,429,0,"""gold weight"" AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=goldweight+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,goldweight AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=goldweight+AND+unit_code%3ANMAfA&rows=4,429,0,goldweight AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ifa+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,ifa AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ifa+AND+unit_code%3ANMAfA&rows=4,429,0,ifa AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kente+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,kente AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kente+AND+unit_code%3ANMAfA&rows=4,429,0,kente AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=nsibidi&rows=4&api_key=REDACTED,429,0,nsibidi
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=nsibidi&rows=4,429,0,nsibidi
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=nkisi+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,nkisi AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=nkisi+AND+unit_code%3ANMAfA&rows=4,429,0,nkisi AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ndop+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,ndop AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ndop+AND+unit_code%3ANMAfA&rows=4,429,0,ndop AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=bogolan+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,bogolan AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=bogolan+AND+unit_code%3ANMAfA&rows=4,429,0,bogolan AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22talking+drum%22+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,"""talking drum"" AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22talking+drum%22+AND+unit_code%3ANMAfA&rows=4,429,0,"""talking drum"" AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kora+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,kora AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kora+AND+unit_code%3ANMAfA&rows=4,429,0,kora AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22benin+plaque%22+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,"""benin plaque"" AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22benin+plaque%22+AND+unit_code%3ANMAfA&rows=4,429,0,"""benin plaque"" AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=chokwe+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,chokwe AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=chokwe+AND+unit_code%3ANMAfA&rows=4,429,0,chokwe AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=luba+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,luba AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=luba+AND+unit_code%3ANMAfA&rows=4,429,0,luba AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22healing+scroll%22+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,"""healing scroll"" AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22healing+scroll%22+AND+unit_code%3ANMAfA&rows=4,429,0,"""healing scroll"" AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=tapa+AND+unit_code%3ANMNHANTHRO&rows=4&api_key=REDACTED,429,0,tapa AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=tapa+AND+unit_code%3ANMNHANTHRO&rows=4,429,0,tapa AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kapa+AND+online_media_type%3AImages&rows=4&api_key=REDACTED,429,0,kapa AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kapa+AND+online_media_type%3AImages&rows=4,429,0,kapa AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=siapo+AND+online_media_type%3AImages&rows=4&api_key=REDACTED,429,0,siapo AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=siapo+AND+online_media_type%3AImages&rows=4,429,0,siapo AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=maori+AND+unit_code%3ANMNHANTHRO&rows=4&api_key=REDACTED,429,0,maori AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=maori+AND+unit_code%3ANMNHANTHRO&rows=4,429,0,maori AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=yupik+AND+unit_code%3ANMNHANTHRO&rows=4&api_key=REDACTED,429,0,yupik AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=yupik+AND+unit_code%3ANMNHANTHRO&rows=4,429,0,yupik AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22string+figure%22+AND+online_media_type%3AImages&rows=4&api_key=REDACTED,429,0,"""string figure"" AND online_media_type:Images"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22string+figure%22+AND+online_media_type%3AImages&rows=4,429,0,"""string figure"" AND online_media_type:Images"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=palau+AND+storyboard&rows=4&api_key=REDACTED,429,0,palau AND storyboard
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=palau+AND+storyboard&rows=4,429,0,palau AND storyboard
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22wooden+map%22+AND+online_media_type%3AImages&rows=4&api_key=REDACTED,429,0,"""wooden map"" AND online_media_type:Images"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22wooden+map%22+AND+online_media_type%3AImages&rows=4,429,0,"""wooden map"" AND online_media_type:Images"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ammassalik&rows=4&api_key=REDACTED,429,0,ammassalik
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ammassalik&rows=4,429,0,ammassalik
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=sequoyah+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,sequoyah AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=sequoyah+AND+unit_code%3ANMAI&rows=4,429,0,sequoyah AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22midewiwin%22+OR+%22mide+scroll%22&rows=4&api_key=REDACTED,429,0,"""midewiwin"" OR ""mide scroll"""
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22midewiwin%22+OR+%22mide+scroll%22&rows=4,429,0,"""midewiwin"" OR ""mide scroll"""
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=walam&rows=4&api_key=REDACTED,429,0,walam
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=walam&rows=4,429,0,walam
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=codex+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,codex AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=codex+AND+unit_code%3ANMAI&rows=4,429,0,codex AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=aztec+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,aztec AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=aztec+AND+unit_code%3ANMAI&rows=4,429,0,aztec AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=maya+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,maya AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=maya+AND+unit_code%3ANMAI&rows=4,429,0,maya AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22coup+stick%22+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,"""coup stick"" AND unit_code:NMAI"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22coup+stick%22+AND+unit_code%3ANMAI&rows=4,429,0,"""coup stick"" AND unit_code:NMAI"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=dentalium+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,dentalium AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=dentalium+AND+unit_code%3ANMAI&rows=4,429,0,dentalium AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22pipe+stem%22+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,"""pipe stem"" AND unit_code:NMAI"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22pipe+stem%22+AND+unit_code%3ANMAI&rows=4,429,0,"""pipe stem"" AND unit_code:NMAI"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kiowa+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,kiowa AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kiowa+AND+unit_code%3ANMAI&rows=4,429,0,kiowa AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=lakota+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,lakota AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=lakota+AND+unit_code%3ANMAI&rows=4,429,0,lakota AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=inuit+AND+map+AND+unit_code%3ANMNHANTHRO&rows=4&api_key=REDACTED,429,0,inuit AND map AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=inuit+AND+map+AND+unit_code%3ANMNHANTHRO&rows=4,429,0,inuit AND map AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=greenland+AND+map+AND+unit_code%3ANMNHANTHRO&rows=4&api_key=REDACTED,429,0,greenland AND map AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=greenland+AND+map+AND+unit_code%3ANMNHANTHRO&rows=4,429,0,greenland AND map AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=tattoo+AND+unit_code%3ANMNHANTHRO&rows=4&api_key=REDACTED,429,0,tattoo AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=tattoo+AND+unit_code%3ANMNHANTHRO&rows=4,429,0,tattoo AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=sami+OR+saami+drum&rows=4&api_key=REDACTED,429,0,sami OR saami drum
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=sami+OR+saami+drum&rows=4,429,0,sami OR saami drum
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ngatu+OR+masi+AND+unit_code%3ANMNHANTHRO&rows=4&api_key=REDACTED,429,0,ngatu OR masi AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ngatu+OR+masi+AND+unit_code%3ANMNHANTHRO&rows=4,429,0,ngatu OR masi AND unit_code:NMNHANTHRO
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=tabua+AND+online_media_type%3AImages&rows=4&api_key=REDACTED,429,0,tabua AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=tabua+AND+online_media_type%3AImages&rows=4,429,0,tabua AND online_media_type:Images
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=hei+AND+tiki&rows=4&api_key=REDACTED,429,0,hei AND tiki
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=hei+AND+tiki&rows=4,429,0,hei AND tiki
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=tukutuku&rows=4&api_key=REDACTED,429,0,tukutuku
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=tukutuku&rows=4,429,0,tukutuku
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=whakapapa&rows=4&api_key=REDACTED,429,0,whakapapa
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=whakapapa&rows=4,429,0,whakapapa
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ibeji+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,ibeji AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ibeji+AND+unit_code%3ANMAfA&rows=4,429,0,ibeji AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=gelede+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,gelede AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=gelede+AND+unit_code%3ANMAfA&rows=4,429,0,gelede AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=uli+AND+igbo+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,uli AND igbo AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=uli+AND+igbo+AND+unit_code%3ANMAfA&rows=4,429,0,uli AND igbo AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kanga+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,kanga AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kanga+AND+unit_code%3ANMAfA&rows=4,429,0,kanga AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22zulu%22+AND+bead+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,"""zulu"" AND bead AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=%22zulu%22+AND+bead+AND+unit_code%3ANMAfA&rows=4,429,0,"""zulu"" AND bead AND unit_code:NMAfA"
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=dogon+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,dogon AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=dogon+AND+unit_code%3ANMAfA&rows=4,429,0,dogon AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=bamana+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,bamana AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=bamana+AND+unit_code%3ANMAfA&rows=4,429,0,bamana AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=yoruba+AND+tray+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,yoruba AND tray AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=yoruba+AND+tray+AND+unit_code%3ANMAfA&rows=4,429,0,yoruba AND tray AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=akan+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,akan AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=akan+AND+unit_code%3ANMAfA&rows=4,429,0,akan AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kongo+AND+cosmogram&rows=4&api_key=REDACTED,429,0,kongo AND cosmogram
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=kongo+AND+cosmogram&rows=4,429,0,kongo AND cosmogram
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=minkisi+AND+unit_code%3ANMAfA&rows=4&api_key=REDACTED,429,0,minkisi AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=minkisi+AND+unit_code%3ANMAfA&rows=4,429,0,minkisi AND unit_code:NMAfA
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ethiopian+AND+scroll&rows=4&api_key=REDACTED,429,0,ethiopian AND scroll
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=ethiopian+AND+scroll&rows=4,429,0,ethiopian AND scroll
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=sorabe&rows=4&api_key=REDACTED,429,0,sorabe
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=sorabe&rows=4,429,0,sorabe
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=vai+AND+syllabary&rows=4&api_key=REDACTED,429,0,vai AND syllabary
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=vai+AND+syllabary&rows=4,429,0,vai AND syllabary
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=bamum&rows=4&api_key=REDACTED,429,0,bamum
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=bamum&rows=4,429,0,bamum
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=dundun&rows=4&api_key=REDACTED,429,0,dundun
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=dundun&rows=4,429,0,dundun
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=aroko&rows=4&api_key=REDACTED,429,0,aroko
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=aroko&rows=4,429,0,aroko
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=potlatch+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,potlatch AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=potlatch+AND+unit_code%3ANMAI&rows=4,429,0,potlatch AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=copper+AND+unit_code%3ANMAI+AND+northwest&rows=4&api_key=REDACTED,429,0,copper AND unit_code:NMAI AND northwest
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=copper+AND+unit_code%3ANMAI+AND+northwest&rows=4,429,0,copper AND unit_code:NMAI AND northwest
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=cradleboard+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,cradleboard AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=cradleboard+AND+unit_code%3ANMAI&rows=4,429,0,cradleboard AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=robe+AND+winter+AND+unit_code%3ANMAI&rows=4&api_key=REDACTED,429,0,robe AND winter AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=robe+AND+winter+AND+unit_code%3ANMAI&rows=4,429,0,robe AND winter AND unit_code:NMAI
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=quipu+AND+pendant&rows=4&api_key=REDACTED,429,0,quipu AND pendant
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=quipu+AND+pendant&rows=4,429,0,quipu AND pendant
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=wampum+AND+guswenta&rows=4&api_key=REDACTED,429,0,wampum AND guswenta
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=wampum+AND+guswenta&rows=4,429,0,wampum AND guswenta
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=two+row+AND+wampum&rows=4&api_key=REDACTED,429,0,two row AND wampum
+smithsonian-search,https://api.si.edu/openaccess/api/v1.0/search?q=two+row+AND+wampum&rows=4,429,0,two row AND wampum
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=quipu&language=en&format=json&limit=2&type=item,200,2,quipu
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=khipu&language=en&format=json&limit=2&type=item,200,2,khipu
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=lukasa&language=en&format=json&limit=2&type=item,200,2,lukasa
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=adinkra&language=en&format=json&limit=2&type=item,200,2,adinkra
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=nsibidi&language=en&format=json&limit=2&type=item,200,2,nsibidi
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=inuksuk&language=en&format=json&limit=2&type=item,200,2,inuksuk
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=rongorongo&language=en&format=json&limit=2&type=item,200,2,rongorongo
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=wampum&language=en&format=json&limit=2&type=item,200,2,wampum
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=winter+count&language=en&format=json&limit=2&type=item,200,2,winter count
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=If%C3%A1&language=en&format=json&limit=2&type=item,200,2,Ifá
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=talking+drum&language=en&format=json&limit=2&type=item,200,2,talking drum
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Marshall+Islands+stick+chart&language=en&format=json&limit=2&type=item,200,1,Marshall Islands stick chart
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=story+knife&language=en&format=json&limit=2&type=item,200,0,story knife
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=whakapapa&language=en&format=json&limit=2&type=item,200,2,whakapapa
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=kente+cloth&language=en&format=json&limit=2&type=item,200,2,kente cloth
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=nkisi&language=en&format=json&limit=2&type=item,200,2,nkisi
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=goldweight&language=en&format=json&limit=2&type=item,200,2,goldweight
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=bogolanfini&language=en&format=json&limit=2&type=item,200,2,bogolanfini
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ammassalik+wooden+maps&language=en&format=json&limit=2&type=item,200,1,Ammassalik wooden maps
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yup%27ik+mask&language=en&format=json&limit=2&type=item,200,2,Yup'ik mask
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=string+figure&language=en&format=json&limit=2&type=item,200,2,string figure
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=kanga+cloth&language=en&format=json&limit=2&type=item,200,1,kanga cloth
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=dikenga&language=en&format=json&limit=2&type=item,200,0,dikenga
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=sona&language=en&format=json&limit=2&type=item,200,2,sona
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=message+stick&language=en&format=json&limit=2&type=item,200,2,message stick
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Midewiwin&language=en&format=json&limit=2&type=item,200,1,Midewiwin
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Chilkat+weaving&language=en&format=json&limit=2&type=item,200,1,Chilkat weaving
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=parfleche&language=en&format=json&limit=2&type=item,200,2,parfleche
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=ledger+art&language=en&format=json&limit=2&type=item,200,1,ledger art
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=calumet&language=en&format=json&limit=2&type=item,200,2,calumet
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=totem+pole&language=en&format=json&limit=2&type=item,200,2,totem pole
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=tapa+cloth&language=en&format=json&limit=2&type=item,200,2,tapa cloth
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=siapo&language=en&format=json&limit=2&type=item,200,2,siapo
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=ngatu&language=en&format=json&limit=2&type=item,200,2,ngatu
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=tabua&language=en&format=json&limit=2&type=item,200,2,tabua
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=hei+tiki&language=en&format=json&limit=2&type=item,200,2,hei tiki
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=healing+scroll&language=en&format=json&limit=2&type=item,200,0,healing scroll
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ge%27ez&language=en&format=json&limit=2&type=item,200,2,Ge'ez
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Vai+syllabary&language=en&format=json&limit=2&type=item,200,1,Vai syllabary
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Bamum+script&language=en&format=json&limit=2&type=item,200,2,Bamum script
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=aroko&language=en&format=json&limit=2&type=item,200,2,aroko
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=d%C3%B9nd%C3%BAn&language=en&format=json&limit=2&type=item,200,2,dùndún
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=opon+Ifa&language=en&format=json&limit=2&type=item,200,2,opon Ifa
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Lone+Dog&language=en&format=json&limit=2&type=item,200,1,Lone Dog
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Guswenta&language=en&format=json&limit=2&type=item,200,1,Guswenta
+wikidata-sparql,https://query.wikidata.org/sparql,200,0,quipu_instances
+wikidata-sparql,https://query.wikidata.org/sparql,200,0,inuksuk_instances
+wikidata-sparql,https://query.wikidata.org/sparql,200,3,stickchart_instances
+wikidata-sparql,https://query.wikidata.org/sparql,200,0,rongo_instances
+wikidata-sparql,https://query.wikidata.org/sparql,200,0,winter_instances
+wikidata-sparql,https://query.wikidata.org/sparql,200,0,ammassalik
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q37979698.json,200,1,Q37979698
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q37979948.json,200,1,Q37979948
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q38093209.json,200,1,Q38093209
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q185292.json,200,1,Q185292
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q4747201.json,200,1,Q4747201
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q2325507.json,200,1,Q2325507
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q7859204.json,200,1,Q7859204
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q8026382.json,200,1,Q8026382
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q16147674.json,200,1,Q16147674
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q1707730.json,200,1,Q1707730
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q357360.json,200,1,Q357360
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q1048711.json,200,1,Q1048711
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q209764.json,200,1,Q209764
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q1321104.json,200,1,Q1321104
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q1428368.json,200,1,Q1428368
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q1460155.json,200,1,Q1460155
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q890628.json,200,1,Q890628
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q972724.json,200,1,Q972724
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q138577.json,200,1,Q138577
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q523078.json,200,1,Q523078
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q806024.json,200,1,Q806024
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q83809.json,200,1,Q83809
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q1811620.json,200,1,Q1811620
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q5098980.json,200,1,Q5098980
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q538136.json,200,1,Q538136
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=lukasa+memory+board&language=en&format=json&limit=1&type=item,200,0,lukasa memory board
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=wampum+beads&language=en&format=json&limit=1&type=item,200,0,wampum beads
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=lusona&language=en&format=json&limit=1&type=item,200,1,lusona
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=tabua+whale&language=en&format=json&limit=1&type=item,200,0,tabua whale
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=calumet+pipe&language=en&format=json&limit=1&type=item,200,0,calumet pipe
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ifa+divination&language=en&format=json&limit=1&type=item,200,1,Ifa divination
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=aroko+yoruba&language=en&format=json&limit=1&type=item,200,0,aroko yoruba
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=ngatu+cloth&language=en&format=json&limit=1&type=item,200,0,ngatu cloth
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=siapo+cloth&language=en&format=json&limit=1&type=item,200,0,siapo cloth
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=yaaruin&language=en&format=json&limit=1&type=item,200,0,yaaruin
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=dikenga+cosmogram&language=en&format=json&limit=1&type=item,200,0,dikenga cosmogram
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=kanga+textile&language=en&format=json&limit=1&type=item,200,0,kanga textile
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Mamari+tablet&language=en&format=json&limit=1&type=item,200,0,Mamari tablet
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Santiago+Staff&language=en&format=json&limit=1&type=item,200,1,Santiago Staff
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Lone+Dog+winter+count&language=en&format=json&limit=1&type=item,200,0,Lone Dog winter count
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Guswenta&language=en&format=json&limit=1&type=item,200,1,Guswenta
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Two+Row+Wampum&language=en&format=json&limit=1&type=item,200,1,Two Row Wampum
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=story+knife+yaaruin&language=en&format=json&limit=1&type=item,200,0,story knife yaaruin
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Greenland+wooden+map&language=en&format=json&limit=1&type=item,200,0,Greenland wooden map
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Adinkra+cloth&language=en&format=json&limit=1&type=item,200,1,Adinkra cloth
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=wampum&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,wampum
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=quipu&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,quipu
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=khipu&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,khipu
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=lukasa&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,lukasa
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=adinkra&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,adinkra
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=winter+count&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,winter count
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=inuksuk&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,inuksuk
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=rongorongo&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,rongorongo
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=goldweight&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,goldweight
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=kente&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,kente
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=nkisi&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,nkisi
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=story+knife&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,story knife
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=stick+chart&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,stick chart
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=tapa&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,tapa
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=totem&limit=2&fields=id%2Ctitle%2Cdate_display%2Cartist_display%2Cmedium_display%2Cplace_of_origin%2Capi_link%2Cimage_id,200,133287,totem
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=wampum&page_size=1,200,0,wampum
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=quipu&page_size=1,200,0,quipu
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=adinkra&page_size=1,200,13,adinkra
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=kente&page_size=1,200,4148,kente
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=lukasa&page_size=1,200,0,lukasa
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=inuksuk&page_size=1,200,0,inuksuk
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=tapa&page_size=1,200,26,tapa
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=gold+weight&page_size=1,200,364,gold weight
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=ifa&page_size=1,200,22,ifa
+artic,https://api.artic.edu/api/v1/artworks/search?q=adinkra&limit=5&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,1,adinkra-recheck
+artic-object,https://api.artic.edu/api/v1/artworks/193191?fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display%2Cartist_display%2Cdepartment_title%2Ccredit_line%2Capi_link,200,1,193191
+artic-object,https://api.artic.edu/api/v1/artworks/7989?fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display%2Cartist_display%2Cdepartment_title%2Ccredit_line%2Capi_link,200,1,7989
+artic-object,https://api.artic.edu/api/v1/artworks/151358?fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display%2Cartist_display%2Cdepartment_title%2Ccredit_line%2Capi_link,200,1,151358
+artic-object,https://api.artic.edu/api/v1/artworks/16249?fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display%2Cartist_display%2Cdepartment_title%2Ccredit_line%2Capi_link,200,1,16249
+vam-object,https://api.vam.ac.uk/v2/objects/O12651,404,0,O12651
+vam-object,https://api.vam.ac.uk/v2/object/O12651,200,1,O12651
+vam-object,https://api.vam.ac.uk/v2/objects/O1100054,404,0,O1100054
+vam-object,https://api.vam.ac.uk/v2/object/O1100054,200,1,O1100054
+vam-object,https://api.vam.ac.uk/v2/objects/O133186,404,0,O133186
+vam-object,https://api.vam.ac.uk/v2/object/O133186,200,1,O133186
+vam-object,https://api.vam.ac.uk/v2/objects/O1356191,404,0,O1356191
+vam-object,https://api.vam.ac.uk/v2/object/O1356191,200,1,O1356191
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=adinkra&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,adinkra
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=goldweight&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,goldweight
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=kente+cloth&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,kente cloth
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=lukasa&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,lukasa
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=quipu&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,quipu
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=khipu&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,khipu
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=wampum+belt&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,wampum belt
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=ifa+divination&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,ifa divination
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=gelede&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,gelede
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=ibeji&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,ibeji
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=bogolan&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,bogolan
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=nsibidi&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,nsibidi
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=chilkat&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,chilkat
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=parfleche&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,parfleche
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=winter+count&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,winter count
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=totem+pole&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,totem pole
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=hei+tiki&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,hei tiki
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=siapo&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,siapo
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=ngatu&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,ngatu
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=nkisi&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,nkisi
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=calumet&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,calumet
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=ledger+drawing&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,ledger drawing
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=birchbark&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,birchbark
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=button+blanket&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,button blanket
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=tapa+cloth&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,tapa cloth
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=story+knife&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,story knife
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=rongorongo&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,rongorongo
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=inuksuk&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,inuksuk
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=yupik+mask&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,yupik mask
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=string+figure&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,string figure
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=coptic+scroll&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,coptic scroll
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=ethiopian+scroll&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,ethiopian scroll
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=vai&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,vai
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=bamum&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,bamum
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=dundun&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,dundun
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=kora&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,kora
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=minkisi&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,minkisi
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=chokwe&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,chokwe
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=luba+memory&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,luba memory
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=op%C3%B3n&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,opón
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=divination+tray&limit=4&fields=id%2Ctitle%2Cplace_of_origin%2Cmedium_display%2Cdate_display,200,4,divination tray
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=goldweight&page_size=3&images_exist=1,200,32,goldweight
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=kente&page_size=3&images_exist=1,200,2838,kente
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=lukasa&page_size=3&images_exist=1,200,0,lukasa
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=quipu&page_size=3&images_exist=1,200,0,quipu
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=khipu&page_size=3&images_exist=1,200,0,khipu
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=adinkra+cloth&page_size=3&images_exist=1,200,13,adinkra cloth
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=ifa+tray&page_size=3&images_exist=1,200,0,ifa tray
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=nkisi&page_size=3&images_exist=1,200,0,nkisi
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=tapa&page_size=3&images_exist=1,200,23,tapa
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=wampum&page_size=3&images_exist=1,200,0,wampum
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=inuksuk&page_size=3&images_exist=1,200,0,inuksuk
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=rongorongo&page_size=3&images_exist=1,200,0,rongorongo
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=hei+tiki&page_size=3&images_exist=1,200,4,hei tiki
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=siapo&page_size=3&images_exist=1,200,0,siapo
+vam-search,https://api.vam.ac.uk/v2/objects/search?q=bogolan&page_size=3&images_exist=1,200,0,bogolan
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Opon+Ifa&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Opon Ifa
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Ndop+cloth&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Ndop cloth
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Goldweight&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Goldweight
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Kente+Wrapper&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Kente Wrapper
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Button+Blanket&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Button Blanket
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Adinkra+stamp&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Adinkra stamp
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Iroke&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Iroke
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Gelede&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Gelede
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Ibeji&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Ibeji
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Chilkat+blanket&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Chilkat blanket
+artic-search,https://api.artic.edu/api/v1/artworks/search?q=Tapa&limit=3&fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display,200,1,Tapa
+vam-object,https://api.vam.ac.uk/v2/object/O122798,200,1,O122798
+internetarchive,https://archive.org/advancedsearch.php?q=title%3A%22picture-writing+of+the+American+Indians%22+AND+mediatype%3Atexts&rows=2&page=1&output=json&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=year,200,1,"title:""picture-writing of the American I"
+internetarchive,https://archive.org/advancedsearch.php?q=title%3A%22ancient+quipu%22+AND+mediatype%3Atexts&rows=2&page=1&output=json&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=year,200,1,"title:""ancient quipu"" AND mediatype:text"
+internetarchive,https://archive.org/advancedsearch.php?q=title%3A%22wampum+belts%22+AND+mediatype%3Atexts&rows=2&page=1&output=json&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=year,200,1,"title:""wampum belts"" AND mediatype:texts"
+internetarchive,https://archive.org/advancedsearch.php?q=title%3A%22code+of+the+quipu%22+AND+mediatype%3Atexts&rows=2&page=1&output=json&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=year,200,1,"title:""code of the quipu"" AND mediatype:"
+openlibrary,https://openlibrary.org/search.json?q=Lukasa+memory+Luba&limit=1,200,1,Lukasa memory Luba
+openlibrary,https://openlibrary.org/search.json?q=Wampum+Belts+of+the+Iroquois&limit=1,200,1,Wampum Belts of the Iroquois
+openlibrary,https://openlibrary.org/search.json?q=Code+of+the+Quipu+Ascher&limit=1,200,1,Code of the Quipu Ascher
+openlibrary,https://openlibrary.org/search.json?q=Picture-Writing+of+the+American+Indians+Mallery&limit=1,200,1,Picture-Writing of the American Indians 
+artic-object,https://api.artic.edu/api/v1/artworks/193191?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,193191
+artic-object,https://api.artic.edu/api/v1/artworks/193471?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,193471
+artic-object,https://api.artic.edu/api/v1/artworks/193452?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,193452
+artic-object,https://api.artic.edu/api/v1/artworks/7989?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,7989
+artic-object,https://api.artic.edu/api/v1/artworks/5860?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,5860
+artic-object,https://api.artic.edu/api/v1/artworks/93816?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,93816
+artic-object,https://api.artic.edu/api/v1/artworks/65187?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,65187
+artic-object,https://api.artic.edu/api/v1/artworks/181746?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,181746
+artic-object,https://api.artic.edu/api/v1/artworks/149828?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,149828
+artic-object,https://api.artic.edu/api/v1/artworks/155958?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,155958
+artic-object,https://api.artic.edu/api/v1/artworks/155959?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,155959
+artic-object,https://api.artic.edu/api/v1/artworks/152014?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,152014
+artic-object,https://api.artic.edu/api/v1/artworks/135534?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,135534
+artic-object,https://api.artic.edu/api/v1/artworks/155957?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,155957
+artic-object,https://api.artic.edu/api/v1/artworks/120818?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,120818
+artic-object,https://api.artic.edu/api/v1/artworks/189596?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,189596
+artic-object,https://api.artic.edu/api/v1/artworks/149074?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,149074
+artic-object,https://api.artic.edu/api/v1/artworks/86812?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,86812
+artic-object,https://api.artic.edu/api/v1/artworks/151358?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,151358
+artic-object,https://api.artic.edu/api/v1/artworks/185441?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,185441
+artic-object,https://api.artic.edu/api/v1/artworks/191856?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,191856
+artic-object,https://api.artic.edu/api/v1/artworks/16249?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,16249
+artic-object,https://api.artic.edu/api/v1/artworks/202877?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,202877
+artic-object,https://api.artic.edu/api/v1/artworks/273350?fields=id%2Ctitle%2Cplace_of_origin%2Cartist_display%2Cmedium_display%2Cdate_display%2Ccredit_line,200,1,273350
+vam,https://api.vam.ac.uk/v2/object/O122798,200,1,vam-gold
+vam,https://api.vam.ac.uk/v2/object/O133186,200,1,vam-tapa
+ol,https://openlibrary.org/works/OL8900373W.json,200,1,ol-wampum
+ol,https://openlibrary.org/works/OL3349760W.json,200,1,ol-quipu
+ia,https://archive.org/metadata/picturewritingof0002mall,200,1,ia-mallery
+ia,https://archive.org/metadata/jstor-659935,200,1,ia-locke
+ia,https://archive.org/metadata/isbn_0472063251,200,1,ia-ascher
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q7365647.json,200,1,Q7365647
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q60742901.json,200,1,Q60742901
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q2355473.json,200,1,Q2355473
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q26208349.json,200,1,Q26208349
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q584764.json,200,1,Q584764
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=lukasa+memory+board&language=en&format=json&limit=1&type=item,200,1,lukasa memory board
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Luba+lukasa&language=en&format=json&limit=1&type=item,200,1,Luba lukasa
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=parfleche&language=en&format=json&limit=1&type=item,200,1,parfleche
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=wampum+beads&language=en&format=json&limit=1&type=item,200,1,wampum beads
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yup%27ik+mask&language=en&format=json&limit=1&type=item,200,1,Yup'ik mask
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=yaaruin&language=en&format=json&limit=1&type=item,200,1,yaaruin
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=story+knife&language=en&format=json&limit=1&type=item,200,1,story knife
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=kanga+cloth+textile&language=en&format=json&limit=1&type=item,200,1,kanga cloth textile
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=dikenga&language=en&format=json&limit=1&type=item,200,1,dikenga
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Wampum,200,1,Wampum
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Winter_count,200,1,Winter_count
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Quipu,200,1,Quipu
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Story_knife,404,0,Story_knife
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Parfleche,200,1,Parfleche
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Lukasa,200,1,Lukasa
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Inuksuk,200,1,Inuksuk
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Adinkra_symbols,200,1,Adinkra_symbols
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=lukasa&language=en&format=json&limit=3&type=item,200,1,lukasa
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=memory+board&language=en&format=json&limit=3&type=item,200,1,memory board
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Lukasa&language=en&format=json&limit=3&type=item,200,1,Lukasa
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=yaaruin+story&language=en&format=json&limit=3&type=item,200,1,yaaruin story
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=storyknife&language=en&format=json&limit=3&type=item,200,1,storyknife
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q4113845.json,200,1,Q4113845
+wikidata-entity,https://www.wikidata.org/wiki/Special:EntityData/Q6105640.json,200,1,Q6105640
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Storyknife,404,0,Storyknife
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Yupik_story_knife,404,0,Yupik_story_knife
+wikipedia-summary,https://en.wikipedia.org/api/rest_v1/page/summary/Yaaruin,404,0,Yaaruin
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Ceremonial_pipe,200,1,Ceremonial pipe
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Calumet_(pipe),200,1,Ceremonial pipe
+probe,https://www.wikidata.org/wiki/Special:EntityData/Q17149319.json,200,1,lukasa
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Hei_tiki,200,1,Hei-tiki
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Kente_cloth,200,1,Kente cloth
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Nsibidi,200,1,Nsibidi
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Rongorongo,200,1,Rongorongo
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Whakapapa,200,1,Whakapapa
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Ammassalik_wooden_maps,200,1,Ammassalik wooden maps
+probe,https://en.wikipedia.org/api/rest_v1/page/summary/Lukasa,200,1,Lukasa
+probe,https://archive.org/advancedsearch.php?q=story+knife+inupiaq&fl%5B%5D=identifier%2Ctitle&rows=3&page=1&output=json,200,0,None
+wikipedia-opensearch,https://en.wikipedia.org/w/api.php?action=opensearch&search=story+knife&limit=5&namespace=0&format=json,200,5,"['Story universe', 'Stock knife', 'Star knife', 'Nigel E. Stork', 'Sword-knife']"
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=yaaruin&language=en&format=json&limit=2,200,0,
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=storyknife&language=en&format=json&limit=2,200,0,
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=snow+knife&language=en&format=json&limit=2,200,1,
+wikidata-search,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Inupiaq+story&language=en&format=json&limit=2,200,0,
+dpla,https://api.dp.la/v2/items?q=wampum+belt&page_size=1,403,0,HTTP Error 403: Forbidden
+dpla,https://api.dp.la/v2/items?q=quipu&page_size=1,403,0,HTTP Error 403: Forbidden
+met,https://collectionapi.metmuseum.org/public/collection/v1/search?q=wampum,410,0,HTTP Error 410: Gone
+smithsonian,https://api.si.edu/openaccess/api/v1.0/search?q=wampum+OR+quipu+OR+%22winter+count%22+OR+lukasa+OR+adinkra+OR+inuksuk+OR+%22stick+chart%22&rows=20&api_key=REDACTED,200,0,probe
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q7859204.json,200,1,record_url
+record-confirm,https://openlibrary.org/works/OL8900373W.json,200,1,record_url
+record-confirm,https://archive.org/metadata/picturewritingof0002mall,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q806024.json,200,1,record_url
+record-confirm,https://archive.org/metadata/jstor-659935,200,1,record_url
+record-confirm,https://openlibrary.org/works/OL3349760W.json,200,1,record_url
+record-confirm,https://archive.org/metadata/isbn_0472063251,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q185292.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q83809.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q1811620.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q538136.json,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/202877,200,1,record_url
+record-confirm,https://en.wikipedia.org/api/rest_v1/page/summary/Ceremonial_pipe,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q4113845.json,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/86812,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/191856,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q37979698.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q37979948.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q38093209.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q7365647.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q2355473.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q4747201.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q1048711.json,200,1,record_url
+record-confirm,https://api.vam.ac.uk/v2/object/O133186,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q6105640.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q584764.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q17149319.json,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/193191,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/193471,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/7989,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/152014,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/155958,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q1707730.json,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/151358,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/65187,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/155957,200,1,record_url
+record-confirm,https://api.artic.edu/api/v1/artworks/189596,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q1321104.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q60742901.json,200,1,record_url
+record-confirm,https://www.wikidata.org/wiki/Special:EntityData/Q890628.json,200,1,record_url
+record-confirm,https://api.vam.ac.uk/v2/object/O122798,200,1,record_url
+dpla,https://api.dp.la/v2/items?q=wampum&page_size=1,403,0,no key
+europeana,https://api.europeana.eu/record/v2/search.json?query=wampum&rows=1,401,0,no key
+met,https://collectionapi.metmuseum.org/public/collection/v1/search?q=wampum,410,0,search
+smithsonian-ark,http://n2t.net/ark:/65665/ws61f27ef0a-a6ae-445c-a26b-c157e889ee93,403,0,NMAI_28024 ARK direct
+openalex,https://api.openalex.org/works?search=wampum+row+parity+quipu+decimal+place+retrieval&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,wampum row parity quipu decimal place retrieval | 
+openalex,https://api.openalex.org/works?search=wampum+keeper+winter+count+glyph+inheritance&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,wampum keeper winter count glyph inheritance | 
+openalex,https://api.openalex.org/works?search=wampum+two+row+ibeji+twin+figures+ranking&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,wampum two row ibeji twin figures ranking | 
+openalex,https://api.openalex.org/works?search=winter+count+birchbark+Midewiwin+template+glyph&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,winter count birchbark Midewiwin template glyph | 
+openalex,https://api.openalex.org/works?search=quipu+place+value+digit+order+knot+zones&per-page=5&mailto=vestige-research-shard7%40example.com,200,28,quipu place value digit order knot zones | Knot Anomalies on Inka Khipus: Revising Locke’s Knot Typology || Tawa Pukllay Proof: New Method for Solving Arithmetic Operations with The Inca Yupana Using Pattern Recognition and Parallelism || On Explaining Non-dynamically the Quantum Correlations Via Quantum Information Theory: What It Takes
+openalex,https://api.openalex.org/works?search=quipu+subsidiary+cord+ifa+odu+pair&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,quipu subsidiary cord ifa odu pair | 
+openalex,https://api.openalex.org/works?search=quipu+counter+goldweight+proverb+figure+digit&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,quipu counter goldweight proverb figure digit | 
+openalex,https://api.openalex.org/works?search=totem+pole+kente+strip+last+figure&per-page=5&mailto=vestige-research-shard7%40example.com,200,5,totem pole kente strip last figure | The “Competent Literary” Teacher: The New Perspectives of Initial Teacher Training || The Independence/Freedom and Justice Arch in Ghana: An Uncontested Embodiment of Disparate Sentiments–National Identity” and “Freedom” || A Limited Review on the Condition of Multicultural Art Education over the Past Decade
+openalex,https://api.openalex.org/works?search=whakapapa+genealogy+totem+pole+bottom-up+order&per-page=5&mailto=vestige-research-shard7%40example.com,200,10,"whakapapa genealogy totem pole bottom-up order | Te Awaroa - Voice of the River || Protest and the Power of Cultural Practice : Storytelling, Art, Language and Education Across Three First Nations || A comparative study of Japanese and Polynesian mythology with particular reference to selected cosmogony and trickster myths"
+openalex,https://api.openalex.org/works?search=ledger+art+winter+count+page+glyph&per-page=5&mailto=vestige-research-shard7%40example.com,200,24,"ledger art winter count page glyph | Composite Indigenous Genres: Cheyenne Ledger Art as Literature || Wife, Mother, Provider, Defender, God: Women in Lakota Winter Counts || Crow Dog’s Trial and Ledger Drawing: Cultural Production and Tribal Nation in the Maw of the American Empire"
+openalex,https://api.openalex.org/works?search=bogolan+mud+dye+ledger+clause+negation&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,bogolan mud dye ledger clause negation | 
+openalex,https://api.openalex.org/works?search=gelede+mask+birchbark+stencil+inheritance&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,gelede mask birchbark stencil inheritance | 
+openalex,https://api.openalex.org/works?search=ndop+cloth+tapa+barkcloth+seam+name&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,ndop cloth tapa barkcloth seam name | 
+openalex,https://api.openalex.org/works?search=calumet+button+blanket+crest+bowl&per-page=5&mailto=vestige-research-shard7%40example.com,200,1,calumet button blanket crest bowl | If Clouds Are Full of Water: Stories
+openalex,https://api.openalex.org/works?search=calumet+pipe+stick+chart+between+islands&per-page=5&mailto=vestige-research-shard7%40example.com,200,27,"calumet pipe stick chart between islands | St Nicotine of the peace pipe / by Edward Vincent Heward. || Reconnaissance Survey of Lewis and Clark on the Missouri National Recreational River, Nebraska and South Dakota || Magical Realism and the Space Between Spaces"
+openalex,https://api.openalex.org/works?search=parfleche+nkisi+nkondi+coverage+nails&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,parfleche nkisi nkondi coverage nails | 
+openalex,https://api.openalex.org/works?search=Chilkat+formline+adinkra+reduplication+stamp&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,Chilkat formline adinkra reduplication stamp | 
+openalex,https://api.openalex.org/works?search=stick+chart+Ammassalik+wooden+map+sequence&per-page=5&mailto=vestige-research-shard7%40example.com,200,2,stick chart Ammassalik wooden map sequence | Open passage ethno-archaeology of skin boats and indigeneous maritime mobility of North-American Arctic || The Northernmost Ruins of the Globe (Vol. 329):Eigil Knuth's Archaeological Investigations in Peary Land and Adjacent Areas of High Arctic Greenland
+openalex,https://api.openalex.org/works?search=stick+chart+lusona+closed+path+intersection&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,stick chart lusona closed path intersection | 
+openalex,https://api.openalex.org/works?search=rongorongo+boustrophedon+Bamum+compound+sign&per-page=5&mailto=vestige-research-shard7%40example.com,200,1,rongorongo boustrophedon Bamum compound sign | Writing from Invention to Decipherment
+openalex,https://api.openalex.org/works?search=inuksuk+wampum+keeper+pointer+inheritance&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,inuksuk wampum keeper pointer inheritance | 
+openalex,https://api.openalex.org/works?search=Yup%27ik+mask+talking+drum+contour&per-page=5&mailto=vestige-research-shard7%40example.com,200,7,"Yup'ik mask talking drum contour | Innovation and Healing in Contemporary Yup’ik Mask Making || Nunalleq, Stories from the Village of Our Ancestors: Co-designing a Multi-vocal Educational Resource Based on an Archaeological Excavation || The Anguish of Snails: Native American Folklore in the West"
+openalex,https://api.openalex.org/works?search=string+figure+nsibidi+ligature+skeleton&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,string figure nsibidi ligature skeleton | 
+openalex,https://api.openalex.org/works?search=wampum+keeper+ifa+odu+first+person&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,wampum keeper ifa odu first person | 
+openalex,https://api.openalex.org/works?search=adinkra+ibeji+set+overlap+twins&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,adinkra ibeji set overlap twins | 
+openalex,https://api.openalex.org/works?search=goldweight+quipu+place+value+figure&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,goldweight quipu place value figure | 
+openalex,https://api.openalex.org/works?search=kente+strip+adinkra+set+intersection&per-page=5&mailto=vestige-research-shard7%40example.com,200,21,"kente strip adinkra set intersection | Stamping History: Stories of Social Change in Ghana's Adinkra Cloth || Woven, Inscribed, Enfolded, Encased: Adinkra from Kumase to the British Museum || Carrying Home Across Oceans: Embodied Adinkra Memory, Decolonial Resistance, and Diasporic Life of Sankɔfa and Gye Nyame"
+openalex,https://api.openalex.org/works?search=nkisi+nail+winter+count+hapax+glyph&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,nkisi nail winter count hapax glyph | 
+openalex,https://api.openalex.org/works?search=gelede+whakapapa+name+order+inheritance&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,gelede whakapapa name order inheritance | 
+openalex,https://api.openalex.org/works?search=bogolan+quipu+subsidiary+negation+parent&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,bogolan quipu subsidiary negation parent | 
+openalex,https://api.openalex.org/works?search=winter+count+totem+pole+bottom+glyph&per-page=5&mailto=vestige-research-shard7%40example.com,200,19,winter count totem pole bottom glyph | Graphic Mechanisms of Communication in Native North America || Talking Images: The Interface between Drawing and Writing || Archaeological Discussions
+openalex,https://api.openalex.org/works?search=quipu+counter+wampum+first+person+preference&per-page=5&mailto=vestige-research-shard7%40example.com,200,4,"quipu counter wampum first person preference | ""Civilized"" Manners and Bloody Splashing: Recovering Conduct Rhetoric in the Thai Rhetorical Tradition || Materiality Matters: Constructing a Rhetorical Biography of Plains Indian Pictography || Disputed Archival Heritage"
+openalex,https://api.openalex.org/works?search=stick+chart+quipu+digit+order+between&per-page=5&mailto=vestige-research-shard7%40example.com,200,8,"stick chart quipu digit order between | Using Abacus and Bundles of Stick to Help Basic Two (2) Pupils to Add Two and Three-Digit Numbers: An Action Research of Ghana National College Basic School, Cape Coast, Central Re || Multiple Forms of Knowing in Mathematics: A Scoping Literature Study || Culturally Responsive Vocabulary Curriculum: Third Grade Culturally Responsive Vocabulary Guide"
+openalex,https://api.openalex.org/works?search=mattang+wampum+two+row+zero+names&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,mattang wampum two row zero names | 
+openalex,https://api.openalex.org/works?search=rongorongo+reverse+line+totem+bottom-up&per-page=5&mailto=vestige-research-shard7%40example.com,200,1,rongorongo reverse line totem bottom-up | Review of An ethnographic grammar of the Eipolanguage [Review of: V. Heeschen (2000) An ethnographic grammar of the Eipo language]
+openalex,https://api.openalex.org/works?search=lusona+ndop+closed+path+king+name&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,lusona ndop closed path king name | 
+openalex,https://api.openalex.org/works?search=talking+drum+string+figure+contour+skeleton&per-page=5&mailto=vestige-research-shard7%40example.com,200,295,talking drum string figure contour skeleton | Meaning Beyond Words: A Musical Analysis of Afro-Cuban Batá Drumming || Stringing it all together: A study in harmony and counterpoint for solo jazz guitar || Largo for Strings: An Original Composition
+openalex,https://api.openalex.org/works?search=Bamum+script+nsibidi+compound+ligature&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,Bamum script nsibidi compound ligature | 
+openalex,https://api.openalex.org/works?search=calumet+ibeji+both+names+carried&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,calumet ibeji both names carried | 
+openalex,https://api.openalex.org/works?search=parfleche+calumet+bowl+coverage&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,parfleche calumet bowl coverage | 
+openalex,https://api.openalex.org/works?search=Chilkat+button+blanket+crest+line+formline&per-page=5&mailto=vestige-research-shard7%40example.com,200,9,"Chilkat button blanket crest line formline | ""Why shouldn’t we live in technicolor like everybody else...""¹ evolving traditions : Professional Northwest coast First Nations women artists || Local Fabric: Mid-Century Modernisms, Textile and Fashion Design, and the Northwest Coast, 1940–1967 || Christian Motifs in Pacific Northwest Coast Native American Art"
+openalex,https://api.openalex.org/works?search=tapa+cloth+kente+strip+same+line&per-page=5&mailto=vestige-research-shard7%40example.com,200,2,tapa cloth kente strip same line | Biennial Symposium Proceedings: Abstracts & Biographies || Memorias del 10° Festival Internacional de Matemática
+openalex,https://api.openalex.org/works?search=Ammassalik+whakapapa+vowel+sequence+genealogy&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,Ammassalik whakapapa vowel sequence genealogy | 
+openalex,https://api.openalex.org/works?search=goldweight+button+blanket+single+crest+digit&per-page=5&mailto=vestige-research-shard7%40example.com,200,0,goldweight button blanket single crest digit | 
+openalex,https://api.openalex.org/works?search=wampum+two+row+stick+chart+between+shells&per-page=5&mailto=vestige-research-shard7%40example.com,200,30,wampum two row stick chart between shells | Turning relatives into resources (and back again?): towards a decolonial marxism || Fishing for ivory worms : a review of ethnographic and historically recorded Dentalium source locations || Religion and ceremonies of the Lenape
