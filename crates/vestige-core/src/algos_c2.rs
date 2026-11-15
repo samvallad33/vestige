@@ -715,6 +715,76 @@ fn apply_c2_unique_group_realloc(
     true
 }
 
+
+/// Share of slot 1's scene score a subsequent-answer challenger must keep.
+const C2_SUBSEQUENT_RATIO: f32 = 0.5;
+
+/// First later user turn in the same session, if any.
+fn c2_next_user(ix: &Index, ti: usize) -> Option<usize> {
+    let members = ix.session_turns.get(ix.turns[ti].session)?;
+    let pos = members.iter().position(|&m| m == ti)?;
+    members[pos + 1..]
+        .iter()
+        .copied()
+        .find(|&m| ix.turns[m].speaker == "user")
+}
+
+/// Subsequent-answer seat. A mid-session user question at slot 1 often holds
+/// the scene-setting inquiry ("by the way, …?"); the next user turn already
+/// in the top 5 is the already-retrieved answer. When that follow-up is
+/// declarative, keeps >= 50% of slot 1's scene score, and the head is not
+/// the session opener, it takes slot 1. Top-5 membership never changes.
+/// Session openers stay put (their follow-up is often more planning).
+/// Skipped on temporal questions (those keep the existing timeline path),
+/// event sequences and assistant-attribution (caller), and named-speaker
+/// sessions. Distinct from primacy testimony (which promotes an earlier
+/// first-half account) and from ReplySource (assistant at slot 1, previous
+/// user). Runs after unique-group realloc, before RSB. Slot 1 is then
+/// frozen by rank1_gatekeeper_keep_rsb_head, so this reseat sticks; it is
+/// not a Kemeny ballot (a tail vote cannot move T@1).
+fn apply_c2_subsequent_answer_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || plan.intent.temporal {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker != "user"
+        || !ix.turns[top].is_question
+        || c2_named_session(ix, top)
+        || c2_session_pos(ix, top) < 1
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let Some(cand) = c2_next_user(ix, top) else {
+        return false;
+    };
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let Some(slot) = list[..window].iter().position(|&t| t == cand) else {
+        return false;
+    };
+    if slot == 0 {
+        return false;
+    }
+    let t = &ix.turns[cand];
+    if t.speaker != "user" || t.is_question {
+        return false;
+    }
+    if t_scene.get(cand).copied().unwrap_or(0.0) < C2_SUBSEQUENT_RATIO * sc_top {
+        return false;
+    }
+    list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -992,4 +1062,78 @@ mod algos_c2_tests {
         assert!(!apply_c2_unique_group_realloc(&ix, &plan, &mut list, &[1.0, 1.0, 0.7]));
     }
 
+    #[test]
+    fn subsequent_answer_seat_promotes_next_user_over_mid_session_question() {
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "I'm planning a hike this weekend."),
+                    ("assistant", "Nice."),
+                    ("user", "By the way, do you know any good yoga apps?"),
+                    ("assistant", "There are several good ones."),
+                    ("user", "I've been using Down Dog, especially when I can't make it to Serenity Yoga."),
+                    ("user", "Unrelated note about cooking dinner."),
+                    ("assistant", "Sounds good."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query { text: "Where do I take yoga classes?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.temporal);
+        assert!(ix.turns[2].is_question);
+        assert!(!ix.turns[4].is_question);
+        // Slot 1 is the mid-session question (turn 2, session pos 2). The next
+        // user turn (turn 4) is already in the top 5 and is declarative.
+        let mut list = vec![2usize, 3, 4, 5, 6];
+        let t_scene = vec![0.5f32, 0.4, 1.0, 0.8, 0.64, 0.3, 0.2];
+        assert!(apply_c2_subsequent_answer_seat(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![4, 2, 3, 5, 6]);
+        // Below the 50% scene share: no swap.
+        let mut list = vec![2usize, 3, 4, 5, 6];
+        assert!(!apply_c2_subsequent_answer_seat(
+            &ix,
+            &plan,
+            &mut list,
+            &[0.5, 0.4, 1.0, 0.8, 0.4, 0.3, 0.2]
+        ));
+        assert_eq!(list, vec![2, 3, 4, 5, 6]);
+        // Session opener at slot 1: no swap.
+        let mut list = vec![0usize, 1, 4, 5, 6];
+        assert!(!apply_c2_subsequent_answer_seat(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 5, 6]);
+        // Next user not already in the top 5: membership must not change.
+        let mut list = vec![2usize, 3, 5, 6, 1];
+        assert!(!apply_c2_subsequent_answer_seat(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 3, 5, 6, 1]);
+        // Temporal questions keep the timeline path.
+        let tq = Query { text: "When do I take yoga classes?".into(), date: String::new() };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(tplan.intent.temporal);
+        let mut list = vec![2usize, 3, 4, 5, 6];
+        assert!(!apply_c2_subsequent_answer_seat(&ix, &tplan, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 3, 4, 5, 6]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("Caroline", "I'm planning a hike this weekend."),
+                    ("Melanie", "Nice."),
+                    ("Caroline", "By the way, do you know any good yoga apps?"),
+                    ("Melanie", "There are several good ones."),
+                    ("Caroline", "I've been using Down Dog at Serenity Yoga."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![2usize, 3, 4];
+        assert!(!apply_c2_subsequent_answer_seat(&ixn, &plann, &mut list, &[0.5, 0.4, 1.0, 0.8, 0.64]));
+        assert_eq!(list, vec![2, 3, 4]);
+    }
+
+
 }
+
