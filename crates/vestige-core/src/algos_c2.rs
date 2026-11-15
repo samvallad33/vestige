@@ -4081,6 +4081,319 @@ fn apply_c2_step36_antaranga(
     true
 }
 
+/// Month ids the existing calendar compiler emitted for `text` (`__MONTH__MM`).
+/// No word list of our own: `inline_date_tokens` already decides which orthographic
+/// month is a calendar month, including the ambiguous "may" / "march" guard.
+fn w2001_query_months(text: &str) -> Vec<String> {
+    let mut months: Vec<String> = Vec::new();
+    for tok in inline_date_tokens(text) {
+        if let Some(mm) = tok.strip_prefix("__MONTH__") {
+            if !months.iter().any(|m| m == mm) {
+                months.push(mm.to_string());
+            }
+        }
+    }
+    months
+}
+
+fn w2001_session_month(ix: &Index, si: usize) -> Option<String> {
+    let ts = ix.session_ts.get(si).copied().unwrap_or(0);
+    if ts == 0 {
+        return None;
+    }
+    calendar_tokens(ts)
+        .into_iter()
+        .find_map(|tok| tok.strip_prefix("__MONTH__").map(|mm| mm.to_string()))
+}
+
+fn w2001_gt(a: f32, b: f32) -> bool {
+    a.total_cmp(&b) == std::cmp::Ordering::Greater
+}
+
+fn w2001_ge(a: f32, b: f32) -> bool {
+    a.total_cmp(&b) != std::cmp::Ordering::Less
+}
+
+/// Best `(score, turn)` inside one session. Equal scores keep the earlier turn.
+fn w2001_best_turn(ix: &Index, si: usize, t_scene: &[f32]) -> Option<(f32, usize)> {
+    let members = ix.session_turns.get(si)?;
+    let mut best: Option<(f32, usize)> = None;
+    for &ti in members {
+        let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+        match best {
+            None => best = Some((sc, ti)),
+            Some((bs, bt)) => {
+                if w2001_gt(sc, bs) || (sc.to_bits() == bs.to_bits() && ti < bt) {
+                    best = Some((sc, ti));
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Session that holds the strictly best turn whose session date carries `month`.
+/// A tie across two sessions is an ambiguous date match: no winner.
+fn w2001_calendar_session(ix: &Index, month: &str, t_scene: &[f32]) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    let mut tied = false;
+    for si in 0..ix.session_ts.len() {
+        if w2001_session_month(ix, si).as_deref() != Some(month) {
+            continue;
+        }
+        let Some((sc, _)) = w2001_best_turn(ix, si, t_scene) else {
+            continue;
+        };
+        if !w2001_gt(sc, 0.0) {
+            continue;
+        }
+        match best {
+            None => best = Some((si, sc)),
+            Some((bsi, bsc)) => {
+                if w2001_gt(sc, bsc) {
+                    best = Some((si, sc));
+                    tied = false;
+                } else if sc.to_bits() == bsc.to_bits() && si != bsi {
+                    tied = true;
+                }
+            }
+        }
+    }
+    if tied {
+        None
+    } else {
+        best.map(|(si, _)| si)
+    }
+}
+
+/// Session of the unique highest-`t_scene` turn. Equal tops in two sessions are
+/// not one envelope.
+fn w2001_scene_leader_session(ix: &Index, t_scene: &[f32]) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    let mut tied = false;
+    for (ti, turn) in ix.turns.iter().enumerate() {
+        let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+        if !w2001_gt(sc, 0.0) {
+            continue;
+        }
+        match best {
+            None => best = Some((turn.session, sc)),
+            Some((bs, bv)) => {
+                if w2001_gt(sc, bv) {
+                    best = Some((turn.session, sc));
+                    tied = false;
+                } else if sc.to_bits() == bv.to_bits() && turn.session != bs {
+                    tied = true;
+                }
+            }
+        }
+    }
+    if tied {
+        None
+    } else {
+        best.map(|(si, _)| si)
+    }
+}
+
+/// Move `si` to session #1 only when it already sits inside the top 5.
+/// Returns the old position. A session already at #1, or outside the top 5,
+/// is not moved: the top-5 set stays intact.
+fn w2001_take(list: &mut Vec<usize>, si: usize) -> Option<usize> {
+    let pos = list.iter().position(|&s| s == si)?;
+    if pos == 0 || pos >= 5 {
+        return None;
+    }
+    let moved = list.remove(pos);
+    list.insert(0, moved);
+    Some(pos)
+}
+
+/// Where `si` sits, when the calendar or envelope rule owns the decision.
+/// `Some(None)` means the rule applied and the list must stay (already #1, or
+/// the session is outside the top 5 so promoting it would demote someone out
+/// of the top 5). `None` means the rule did not apply.
+fn w2001_owned(list: &[usize], si: usize) -> Option<Option<usize>> {
+    match list.iter().position(|&s| s == si) {
+        Some(0) => Some(None),
+        Some(p) if p < 5 => Some(Some(p)),
+        _ => None,
+    }
+}
+
+/// Envelope-seal-calendar session head (W2-001).
+///
+/// The three rules only nominate a session. A nomination is seated at #1 only
+/// when four witnesses agree, and only by moving a session that is already
+/// inside the top 5:
+/// - the nominee already holds strictly more top-5 turns than the incumbent;
+/// - its session sightline (`s_score + bridge_boost`) strictly exceeds the
+///   incumbent;
+/// - the incumbent does not already attest every query cue on the rank-1 turn;
+/// - the rank-1 turn's own lexical score strictly exceeds the incumbent's best
+///   turn's own lexical score.
+///
+/// Nomination order:
+/// 1. Calendar. One calendar month, and one session holds the strictly best
+///    date-matched turn. Two months, or a tie, do not nominate.
+/// 2. Envelope. The rank-1 turn and the unique highest-`t_scene` turn share a
+///    session.
+/// 3. Seal. The rank-1 turn scores at least as high as every turn of the
+///    current #1 session and lives in another session.
+///
+/// A failed witness does not fall through to a later rule: that nomination
+/// owned the decision. Does not read turn bodies and does not touch
+/// `rsb_seat_behind`.
+fn w2001_sight(s_score: &[f32], bridge: &[f32], si: usize) -> f32 {
+    s_score.get(si).copied().unwrap_or(0.0) + bridge.get(si).copied().unwrap_or(0.0)
+}
+
+fn w2001_cue_union(ix: &Index, q_cues: &[u32], si: usize) -> Vec<u32> {
+    let mut union: Vec<u32> = Vec::new();
+    if let Some(members) = ix.session_turns.get(si) {
+        for &ti in members {
+            for c in turn_query_cues(ix, q_cues, ti) {
+                if !union.contains(&c) {
+                    union.push(c);
+                }
+            }
+        }
+    }
+    union.sort_unstable();
+    union
+}
+
+/// Four witnesses. False means the nomination is refused and no later rule runs.
+fn w2001_admit(
+    ix: &Index,
+    query: &str,
+    incumbent: usize,
+    si: usize,
+    turns: &[usize],
+    t_scene: &[f32],
+    t_own: &[f32],
+    s_score: &[f32],
+    bridge: &[f32],
+) -> bool {
+    let Some(&head) = turns.first() else {
+        return false;
+    };
+    if si == incumbent {
+        return false;
+    }
+    let in_session = |ti: usize, sess: usize| ix.turns.get(ti).is_some_and(|t| t.session == sess);
+    let inc_n = turns.iter().take(5).filter(|&&ti| in_session(ti, incumbent)).count();
+    let prom_n = turns.iter().take(5).filter(|&&ti| in_session(ti, si)).count();
+    if prom_n <= inc_n {
+        return false;
+    }
+    if !w2001_gt(w2001_sight(s_score, bridge, si), w2001_sight(s_score, bridge, incumbent)) {
+        return false;
+    }
+    let q_cues = query_cues(ix, query);
+    let head_c = turn_query_cues(ix, &q_cues, head);
+    if head_c.is_empty() || covers_cues(&w2001_cue_union(ix, &q_cues, incumbent), &head_c) {
+        return false;
+    }
+    let head_own = t_own.get(head).copied().unwrap_or(0.0);
+    let inc_own = w2001_best_turn(ix, incumbent, t_scene)
+        .and_then(|(_, ti)| t_own.get(ti).copied())
+        .unwrap_or(0.0);
+    w2001_gt(head_own, inc_own)
+}
+
+fn w2001_commit(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    si: usize,
+    turns: &[usize],
+    t_scene: &[f32],
+    t_own: &[f32],
+    s_score: &[f32],
+    bridge: &[f32],
+) -> Option<usize> {
+    let incumbent = *list.first()?;
+    if !w2001_admit(ix, query, incumbent, si, turns, t_scene, t_own, s_score, bridge) {
+        return None;
+    }
+    w2001_take(list, si)
+}
+
+fn apply_c2_w2001_session_head(
+    ix: &Index,
+    query: &Query,
+    turns: &[usize],
+    session_list: &mut Vec<usize>,
+    t_scene: &[f32],
+    t_own: &[f32],
+    s_score: &[f32],
+    bridge_boost: &[f32],
+) -> Option<usize> {
+    if session_list.len() < 2 || turns.is_empty() {
+        return None;
+    }
+    let head = turns[0];
+    let head_sess = ix.turns.get(head)?.session;
+    let months = w2001_query_months(&query.text);
+    if months.len() == 1 {
+        if let Some(si) = w2001_calendar_session(ix, &months[0], t_scene) {
+            if let Some(owned) = w2001_owned(session_list, si) {
+                return match owned {
+                    Some(_) => w2001_commit(
+                        ix, &query.text, session_list, si, turns, t_scene, t_own, s_score, bridge_boost,
+                    ),
+                    None => None,
+                };
+            }
+        }
+    }
+    if let Some(leader) = w2001_scene_leader_session(ix, t_scene) {
+        if leader == head_sess {
+            if let Some(owned) = w2001_owned(session_list, leader) {
+                return match owned {
+                    Some(_) => w2001_commit(
+                        ix,
+                        &query.text,
+                        session_list,
+                        leader,
+                        turns,
+                        t_scene,
+                        t_own,
+                        s_score,
+                        bridge_boost,
+                    ),
+                    None => None,
+                };
+            }
+        }
+    }
+    let incumbent = session_list[0];
+    if head_sess == incumbent {
+        return None;
+    }
+    let head_score = t_scene.get(head).copied().unwrap_or(0.0);
+    if !w2001_gt(head_score, 0.0) {
+        return None;
+    }
+    let inc_best = w2001_best_turn(ix, incumbent, t_scene)
+        .map(|(sc, _)| sc)
+        .unwrap_or(0.0);
+    if w2001_ge(head_score, inc_best) {
+        return w2001_commit(
+            ix,
+            &query.text,
+            session_list,
+            head_sess,
+            turns,
+            t_scene,
+            t_own,
+            s_score,
+            bridge_boost,
+        );
+    }
+    None
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -8096,5 +8409,139 @@ mod algos_c2_tests {
             &ix, q, &mut list, &t_own, &t_scene, &s_score, &bridge
         ));
         assert_eq!(list, vec![1, 0, 2]);
+    }
+
+    fn sess_dated(id: &str, date: &str, turns: &[(&str, &str)]) -> Session {
+        let mut s = sess(id, turns);
+        s.date = date.into();
+        s
+    }
+
+    fn witnesses() -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
+        // t_scene, t_own, s_score, bridge. Turn 1 is the lexical head in session b.
+        (
+            vec![0.4f32, 0.9, 0.5, 0.2],
+            vec![0.2f32, 0.8, 0.3, 0.1],
+            vec![0.2f32, 0.9, 0.1],
+            vec![0.0f32, 0.0, 0.0],
+        )
+    }
+
+    #[test]
+    fn w2001_seats_session_when_four_witnesses_agree() {
+        let ix = build_index(
+            &[
+                sess("a", &[("user", "I like hiking.")]),
+                sess("b", &[
+                    ("user", "I bought hiking boots in Denver."),
+                    ("user", "The boots were from Denver."),
+                ]),
+                sess("c", &[("user", "The weather was fine.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query { text: "Where did I buy hiking boots?".into(), date: String::new() };
+        let turns = vec![1usize, 2, 0];
+        let (t_scene, t_own, s_score, bridge) = witnesses();
+        let mut sessions = vec![0usize, 1, 2];
+        assert_eq!(
+            apply_c2_w2001_session_head(&ix, &q, &turns, &mut sessions, &t_scene, &t_own, &s_score, &bridge),
+            Some(1)
+        );
+        assert_eq!(sessions, vec![1, 0, 2]);
+        assert_eq!(turns, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn w2001_refuses_when_a_witness_fails_and_does_not_fall_through() {
+        let ix = build_index(
+            &[
+                sess("a", &[("user", "I like hiking.")]),
+                sess("b", &[
+                    ("user", "I bought hiking boots in Denver."),
+                    ("user", "The boots were from Denver."),
+                ]),
+                sess("c", &[("user", "The workshop was cancelled.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query { text: "Where did I buy hiking boots?".into(), date: String::new() };
+        let turns = vec![1usize, 2, 0];
+        let (t_scene, t_own, _, bridge) = witnesses();
+        // Sightline of b does not beat a. Envelope still nominates b (it is the
+        // scene leader and the rank-1 turn). Seal would also nominate b, because
+        // 0.9 >= a's best scene 0.4. The failed sightline owns the decision.
+        let s_score = vec![0.9f32, 0.2, 0.1];
+        let mut sessions = vec![0usize, 1, 2];
+        assert_eq!(
+            apply_c2_w2001_session_head(&ix, &q, &turns, &mut sessions, &t_scene, &t_own, &s_score, &bridge),
+            None
+        );
+        assert_eq!(sessions, vec![0, 1, 2]);
+
+        // Own lexical score of the head does not beat the incumbent's best turn.
+        let (t_scene, _, s_score, bridge) = witnesses();
+        let t_own = vec![0.95f32, 0.2, 0.1, 0.1];
+        let mut sessions = vec![0usize, 1, 2];
+        assert_eq!(
+            apply_c2_w2001_session_head(&ix, &q, &turns, &mut sessions, &t_scene, &t_own, &s_score, &bridge),
+            None
+        );
+
+        // The nominee does not hold strictly more top-5 turns.
+        let (t_scene, t_own, s_score, bridge) = witnesses();
+        let mut sessions = vec![0usize, 1, 2];
+        assert_eq!(
+            apply_c2_w2001_session_head(&ix, &q, &[1usize, 0], &mut sessions, &t_scene, &t_own, &s_score, &bridge),
+            None
+        );
+        assert_eq!(sessions, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn w2001_calendar_tie_and_outside_top5_stay_put() {
+        let ix = build_index(
+            &[
+                sess_dated("june", "2023-06-02", &[("user", "We met in the park.")]),
+                sess_dated("may-a", "2023-05-08", &[("user", "We met in the park once.")]),
+                sess_dated("may-b", "2023-05-20", &[("user", "We met in the park twice.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query { text: "What changed in May?".into(), date: String::new() };
+        assert_eq!(w2001_query_months(&q.text), vec!["05".to_string()]);
+        let mut sessions = vec![0usize, 1, 2];
+        let t_scene = vec![0.9f32, 0.4, 0.4];
+        let t_own = vec![0.9f32, 0.4, 0.4];
+        let scores = vec![0.5f32, 0.4, 0.4];
+        let bridge = vec![0.0f32, 0.0, 0.0];
+        assert_eq!(
+            apply_c2_w2001_session_head(&ix, &q, &[0usize], &mut sessions, &t_scene, &t_own, &scores, &bridge),
+            None
+        );
+        assert_eq!(sessions, vec![0, 1, 2]);
+
+        let ix = build_index(
+            &[
+                sess_dated("s0", "2023-06-01", &[("user", "alpha park day.")]),
+                sess_dated("s1", "2023-06-02", &[("user", "beta park day.")]),
+                sess_dated("s2", "2023-06-03", &[("user", "gamma park day.")]),
+                sess_dated("s3", "2023-06-04", &[("user", "delta park day.")]),
+                sess_dated("s4", "2023-06-05", &[("user", "epsilon park day.")]),
+                sess_dated("may", "2023-05-08", &[("user", "the may park day with boots.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query { text: "What happened during May 2023?".into(), date: String::new() };
+        let mut sessions = vec![0usize, 1, 2, 3, 4, 5];
+        let t_scene = vec![0.4f32, 0.2, 0.2, 0.2, 0.2, 0.9];
+        let t_own = t_scene.clone();
+        let scores = vec![0.2f32, 0.1, 0.1, 0.1, 0.1, 0.9];
+        let bridge = vec![0.0; 6];
+        assert_eq!(
+            apply_c2_w2001_session_head(&ix, &q, &[0usize, 5], &mut sessions, &t_scene, &t_own, &scores, &bridge),
+            None
+        );
+        assert_eq!(sessions, vec![0, 1, 2, 3, 4, 5]);
     }
 }

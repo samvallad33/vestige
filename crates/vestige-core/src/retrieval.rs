@@ -5477,7 +5477,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let total_q_groups = plan.groups.len().min(64);
     let mask_limit = if total_q_groups == 64 { u64::MAX } else { (1u64 << total_q_groups) - 1 };
 
-    let final_session_indices: Vec<usize> = if p.enable_submodular && ns > 1 {
+    let mut final_session_indices: Vec<usize> = if p.enable_submodular && ns > 1 {
         let mut selected: Vec<usize> = Vec::with_capacity(k);
         if let Some(&top0) = s_ord_base.first() {
             if s_score[top0] > 0.0 {
@@ -5604,7 +5604,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         .take(5)
         .filter(|&&si| smax > 0.0 && !s_policy_floored[si] && !s_pref_floored[si] && (s_score[si] + bridge_boost[si]) >= 0.62 * smax)
         .count();
-    let sessions = final_session_indices
+    let mut sessions: Vec<RankedItem> = final_session_indices
         .iter()
         .copied()
         .map(|i| RankedItem {
@@ -6304,6 +6304,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &s_score,
         &bridge_boost,
     );
+    // W2-001 envelope-seal-calendar. The session list was already read by
+    // turn selection. This reorders only the final session list so session #1
+    // agrees with the rank-1 turn. Turn indices stay as they are.
+    if let Some(pos) = apply_c2_w2001_session_head(
+        ix,
+        q,
+        &final_turn_indices,
+        &mut final_session_indices,
+        &t_scene,
+        &t_own,
+        &s_score,
+        &bridge_boost,
+    ) {
+        let item = sessions.remove(pos);
+        sessions.insert(0, item);
+    }
     maybe_dump_replay(
         ix,
         q,
