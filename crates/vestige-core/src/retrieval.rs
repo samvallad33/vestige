@@ -6039,6 +6039,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 // user session-opener already in the top 5 from another
                 // session. Skipped on preference and on summary requests.
                 apply_c2_cross_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Same-session opener: mid-session declarative head yields
+                // to the same session's user opener already in the top 5.
+                // Skipped on preference and on summary requests.
+                apply_c2_same_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
             }
         }
         // Preference source: ReplySource is skipped on assistant_attribution,
