@@ -19,6 +19,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+
+// Step 10B: fixed-key SipHash (std DefaultHasher with zero keys) instead of per-process
+// RandomState, so any residual hash-container iteration (and the f32 sums it feeds) is
+// identical across processes. rungs.rs (included below, owned by Computer 1) keeps the std
+// RandomState `HashMap`/`HashSet` names; its maps are only probed or sorted before use.
+type DetHasher = std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>;
+type DetHashMap<K, V> = HashMap<K, V, DetHasher>;
+type DetHashSet<K> = HashSet<K, DetHasher>;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::OnceLock;
@@ -521,20 +529,20 @@ const CAUSAL_WORDS: &[&str] = &[
     " inspired ", " to help ", " reason ", " in order ", " purpose ", " aim ", " aims ", " aimed ",
 ];
 
-fn stopwords() -> &'static HashSet<&'static str> {
-    static S: OnceLock<HashSet<&'static str>> = OnceLock::new();
+fn stopwords() -> &'static DetHashSet<&'static str> {
+    static S: OnceLock<DetHashSet<&'static str>> = OnceLock::new();
     S.get_or_init(|| STOPWORDS.iter().copied().collect())
 }
 
-fn framing_words() -> &'static HashSet<&'static str> {
-    static F: OnceLock<HashSet<&'static str>> = OnceLock::new();
+fn framing_words() -> &'static DetHashSet<&'static str> {
+    static F: OnceLock<DetHashSet<&'static str>> = OnceLock::new();
     F.get_or_init(|| QUERY_FRAMING_WORDS.iter().copied().collect())
 }
 
-fn hypernyms() -> &'static HashMap<String, Vec<&'static str>> {
-    static H: OnceLock<HashMap<String, Vec<&'static str>>> = OnceLock::new();
+fn hypernyms() -> &'static DetHashMap<String, Vec<&'static str>> {
+    static H: OnceLock<DetHashMap<String, Vec<&'static str>>> = OnceLock::new();
     H.get_or_init(|| {
-        let mut m: HashMap<String, Vec<&'static str>> = HashMap::new();
+        let mut m: DetHashMap<String, Vec<&'static str>> = DetHashMap::default();
         for (dom, words) in HYPERNYM_LATTICE {
             for w in *words {
                 let e = m.entry(stem(w)).or_default();
@@ -1764,7 +1772,7 @@ fn deictic_tokens(raw: &[String], ts: i64) -> Vec<String> {
 
 #[derive(Default)]
 struct Vocab {
-    map: HashMap<String, u32>,
+    map: DetHashMap<String, u32>,
     names: Vec<String>,
 }
 
@@ -1793,7 +1801,7 @@ struct Feat {
 
 #[derive(Default, Clone)]
 struct Bag {
-    tf: [HashMap<u32, f32>; 3],
+    tf: [DetHashMap<u32, f32>; 3],
     len: [f32; 3],
 }
 
@@ -1819,9 +1827,9 @@ struct StandingRule {
     session: usize,
     ts: i64,
     has_explicit_scope: bool,
-    scope: HashSet<u32>,
+    scope: DetHashSet<u32>,
     domains: Vec<&'static str>,
-    assistant_nouns: HashSet<u32>,
+    assistant_nouns: DetHashSet<u32>,
 }
 
 struct TurnIx {
@@ -1832,17 +1840,17 @@ struct TurnIx {
     blip_feats: Vec<Feat>,
     /// Exact/stem term ids of content tokens in order, for span proximity.
     seq: Vec<(u32, u32)>,
-    content: HashSet<u32>,
+    content: DetHashSet<u32>,
     /// Capitalized proper-entity term IDs inside this turn.
-    entities: HashSet<u32>,
+    entities: DetHashSet<u32>,
     /// Body text (header line removed) for lazy exact title-span linking on hot anchors.
     body_for_headers: String,
     span_ids_cache: OnceLock<Vec<u32>>,
     speaker: String,
     is_question: bool,
     is_pure_info_question: bool,
-    pre_question_ids: HashSet<u32>,
-    question_clause_ids: HashSet<u32>,
+    pre_question_ids: DetHashSet<u32>,
+    question_clause_ids: DetHashSet<u32>,
     answers_question: bool,
     is_short_reply: bool,
     is_backchannel: bool,
@@ -1894,16 +1902,16 @@ struct TurnIx {
 
 struct Stats {
     n: f32,
-    df: HashMap<u32, u32>,
+    df: DetHashMap<u32, u32>,
     avg: [f32; 3],
 }
 
 fn stats_of(bags: &[Bag]) -> Stats {
-    let mut df: HashMap<u32, u32> = HashMap::new();
+    let mut df: DetHashMap<u32, u32> = DetHashMap::default();
     let mut sum = [0.0f32; 3];
     let mut cnt = [0.0f32; 3];
     for b in bags {
-        let mut seen: HashSet<u32> = HashSet::new();
+        let mut seen: DetHashSet<u32> = DetHashSet::default();
         for f in 0..3 {
             for (&t, &v) in &b.tf[f] {
                 if v > 0.0 {
@@ -1940,8 +1948,8 @@ struct Index {
     session_ids: Vec<String>,
     session_ts: Vec<i64>,
     session_turns: Vec<Vec<usize>>,
-    session_entities: Vec<HashSet<u32>>,
-    session_content: Vec<HashSet<u32>>,
+    session_entities: Vec<DetHashSet<u32>>,
+    session_content: Vec<DetHashSet<u32>>,
     /// Rarest non-hub content token IDs per session (sorted, up to 32) for GhostLink Ochiai divergence.
     session_rare_nt: Vec<Vec<u32>>,
     /// Backward-only session RSB edges (`later_session -> (degree, earlier_session)`).
@@ -1962,22 +1970,22 @@ struct Index {
     t_stats: Stats,
     w_stats: Stats,
     /// Content-term ids that are the object of a personal constraint ("allergic to X").
-    constraint_terms: HashSet<u32>,
+    constraint_terms: DetHashSet<u32>,
     /// Compiled SOAR/Rete standing rules for the stratified governing channel (`RankResult.standing_rules`).
     standing_rules: Vec<StandingRule>,
     /// Non-hub hypernym domains (`session_df <= 0.12 * N` when `N >= 16`).
-    non_hub_domains: HashSet<&'static str>,
+    non_hub_domains: DetHashSet<&'static str>,
     /// Exact `{Header}\\n{Body}` titles, hashed, for the session bridge.
-    header_dict: HashMap<u64, Vec<HeaderKey>>,
+    header_dict: DetHashMap<u64, Vec<HeaderKey>>,
     header_max_words: usize,
     /// Unique title-case speaker nickname bindings (`Mel` -> `melanie`).
     nicks: SpeakerNickIndex,
     /// Recall cues: per turn, the sorted ids of the kernel tokens (`raw_tokens` + `stem`) of its
     /// full content, in a private id space (`cue_vocab`) so the ranker vocabulary is untouched.
     turn_cues: Vec<Vec<u32>>,
-    cue_vocab: HashMap<String, u32>,
+    cue_vocab: DetHashMap<String, u32>,
     /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
-    role_cues: HashSet<u32>,
+    role_cues: DetHashSet<u32>,
 }
 
 /// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
@@ -1985,7 +1993,7 @@ fn cue_tokens(text: &str) -> Vec<String> {
     raw_tokens(text).into_iter().map(|w| stem(&w)).collect()
 }
 
-fn intern_cues(text: &str, vocab: &mut HashMap<String, u32>) -> Vec<u32> {
+fn intern_cues(text: &str, vocab: &mut DetHashMap<String, u32>) -> Vec<u32> {
     let mut ids: Vec<u32> = cue_tokens(text)
         .into_iter()
         .map(|w| {
@@ -2239,7 +2247,7 @@ fn extract_rule_scope(text: &str) -> (bool, Vec<String>) {
 /// version tags (`v1.2.3`), and file paths (`dir/file.ext`). Zero word similarity.
 fn extract_exact_technical_handles(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = DetHashSet::default();
     for raw_tok in text.split_whitespace() {
         let tok = raw_tok.trim_matches(|c: char| matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '"' | '\'' | '`'));
         let tok_clean = tok.trim_end_matches('.');
@@ -2415,7 +2423,7 @@ fn skip_comma(text: &str) -> &str {
     s.strip_prefix(',').unwrap_or(s).trim_start()
 }
 
-fn is_speaker_alias(tok: &str, names: &HashSet<String>) -> bool {
+fn is_speaker_alias(tok: &str, names: &DetHashSet<String>) -> bool {
     if names.contains(tok) {
         return true;
     }
@@ -2429,7 +2437,7 @@ fn is_speaker_alias(tok: &str, names: &HashSet<String>) -> bool {
     names.iter().any(|n| n.len() >= tok.len() + 3 && n.starts_with(tok))
 }
 
-fn strip_one_question_lead<'a>(text: &'a str, names: &HashSet<String>) -> Option<&'a str> {
+fn strip_one_question_lead<'a>(text: &'a str, names: &DetHashSet<String>) -> Option<&'a str> {
     let s = text.trim_start();
     let (tok, rest) = take_word(s)?;
     let low = tok.to_ascii_lowercase();
@@ -2474,7 +2482,7 @@ fn info_question_start(clause: &str) -> bool {
     INFO_Q_WORDS.contains(&low.as_str())
 }
 
-fn stripped_question_clause<'a>(clause: &'a str, names: &HashSet<String>) -> &'a str {
+fn stripped_question_clause<'a>(clause: &'a str, names: &DetHashSet<String>) -> &'a str {
     let mut s = clause.trim();
     for _ in 0..8 {
         if info_question_start(s) {
@@ -2549,8 +2557,8 @@ fn pre_has_answer_payload(pre: &str) -> bool {
     raw_tokens(pre).iter().any(|w| NUMBER_WORDS.contains(&w.as_str()) || token_is_temporal_word(w))
 }
 
-fn content_term_ids(vocab: &mut Vocab, text: &str, stemming: bool) -> HashSet<u32> {
-    let mut ids = HashSet::new();
+fn content_term_ids(vocab: &mut Vocab, text: &str, stemming: bool) -> DetHashSet<u32> {
+    let mut ids = DetHashSet::default();
     for w in raw_tokens(text).into_iter().filter(|w| is_content(w)) {
         ids.insert(vocab.intern(&w));
         if stemming {
@@ -2561,8 +2569,8 @@ fn content_term_ids(vocab: &mut Vocab, text: &str, stemming: bool) -> HashSet<u3
 }
 
 struct QuestionShape {
-    pre_ids: HashSet<u32>,
-    clause_ids: HashSet<u32>,
+    pre_ids: DetHashSet<u32>,
+    clause_ids: DetHashSet<u32>,
     is_pure: bool,
 }
 
@@ -2571,7 +2579,7 @@ fn analyze_question(
     prose: &str,
     is_question: bool,
     stemming: bool,
-    names: &HashSet<String>,
+    names: &DetHashSet<String>,
 ) -> QuestionShape {
     let lower = prose.to_ascii_lowercase();
     let legacy = is_question && info_question_start(lower.trim_start());
@@ -2581,8 +2589,8 @@ fn analyze_question(
     };
     let Some((pre, clause)) = terminal_question_spans(prose) else {
         return QuestionShape {
-            pre_ids: HashSet::new(),
-            clause_ids: HashSet::new(),
+            pre_ids: DetHashSet::default(),
+            clause_ids: DetHashSet::default(),
             is_pure: is_question && legacy && !tag,
         };
     };
@@ -2675,7 +2683,7 @@ fn commitment_manner(lower: &str) -> bool {
     })
 }
 
-fn user_preference_speech_act(lower: &str, raw: &[String], pref_set: &HashSet<&str>) -> bool {
+fn user_preference_speech_act(lower: &str, raw: &[String], pref_set: &DetHashSet<&str>) -> bool {
     raw.iter().any(|w| pref_set.contains(w.as_str()))
         || PREF_MARKERS.iter().any(|m| m.contains(' ') && lower.contains(m))
         || hedged_like_is_preference(lower)
@@ -2754,15 +2762,15 @@ fn surface_aux_tokens(word: &str) -> Vec<(String, f32)> {
 const NICK_TAIL: usize = 3;
 
 struct SpeakerNickIndex {
-    prefix_of: HashMap<String, String>,
-    witnessed: HashMap<String, HashSet<String>>,
-    lower_attested: HashSet<String>,
+    prefix_of: DetHashMap<String, String>,
+    witnessed: DetHashMap<String, DetHashSet<String>>,
+    lower_attested: DetHashSet<String>,
 }
 
-fn common_speaker_tokens() -> &'static HashSet<String> {
-    static S: OnceLock<HashSet<String>> = OnceLock::new();
+fn common_speaker_tokens() -> &'static DetHashSet<String> {
+    static S: OnceLock<DetHashSet<String>> = OnceLock::new();
     S.get_or_init(|| {
-        let mut s = HashSet::new();
+        let mut s = DetHashSet::default();
         for w in STOPWORDS
             .iter()
             .chain(STARTER_STOP)
@@ -2857,9 +2865,9 @@ fn surface_tokens(text: &str) -> Vec<SurfaceTok> {
 
 impl SpeakerNickIndex {
     fn build(sessions: &[Session]) -> Self {
-        let mut exact_roles: HashSet<String> = HashSet::new();
-        let mut targets: HashSet<String> = HashSet::new();
-        let mut lower_attested: HashSet<String> = HashSet::new();
+        let mut exact_roles: DetHashSet<String> = DetHashSet::default();
+        let mut targets: DetHashSet<String> = DetHashSet::default();
+        let mut lower_attested: DetHashSet<String> = DetHashSet::default();
         let mut texts: Vec<&str> = Vec::new();
         for s in sessions {
             for t in &s.turns {
@@ -2889,7 +2897,7 @@ impl SpeakerNickIndex {
                 }
             }
         }
-        let mut hits: HashMap<String, Vec<String>> = HashMap::new();
+        let mut hits: DetHashMap<String, Vec<String>> = DetHashMap::default();
         let mut ordered: Vec<&String> = targets.iter().collect();
         ordered.sort();
         for name in ordered {
@@ -2904,7 +2912,7 @@ impl SpeakerNickIndex {
                 hits.entry(p.to_string()).or_default().push(name.clone());
             }
         }
-        let mut prefix_of: HashMap<String, String> = HashMap::new();
+        let mut prefix_of: DetHashMap<String, String> = DetHashMap::default();
         for (p, mut names) in hits {
             names.sort();
             names.dedup();
@@ -2912,7 +2920,7 @@ impl SpeakerNickIndex {
                 prefix_of.insert(p, names.pop().unwrap());
             }
         }
-        let mut witnessed: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut witnessed: DetHashMap<String, DetHashSet<String>> = DetHashMap::default();
         for text in &texts {
             for tok in surface_tokens(text) {
                 if !tok.title_case {
@@ -2947,8 +2955,8 @@ impl SpeakerNickIndex {
         Some(full.as_str())
     }
 
-    fn bindings_in(&self, text: &str) -> HashMap<String, String> {
-        let mut out = HashMap::new();
+    fn bindings_in(&self, text: &str) -> DetHashMap<String, String> {
+        let mut out = DetHashMap::default();
         for tok in surface_tokens(text) {
             if let Some(full) = self.bind_token(&tok, tok.sentence_initial) {
                 out.insert(tok.lower, full.to_string());
@@ -2988,17 +2996,17 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut session_turns = Vec::new();
     let mut session_entities = Vec::with_capacity(sessions.len());
     let mut session_content = Vec::with_capacity(sessions.len());
-    let mut domain_session_df: HashMap<&'static str, u32> = HashMap::new();
+    let mut domain_session_df: DetHashMap<&'static str, u32> = DetHashMap::default();
     let mut raw_standing_rules: Vec<(String, usize, usize, i64, bool, Vec<String>)> = Vec::new();
     let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
     let mut turn_prose_cache: Vec<String> = Vec::new();
-    let mut cue_vocab: HashMap<String, u32> = HashMap::new();
+    let mut cue_vocab: DetHashMap<String, u32> = DetHashMap::default();
     let mut turn_cues: Vec<Vec<u32>> = Vec::new();
-    let mut role_cues: HashSet<u32> = HashSet::new();
-    let pref_set: HashSet<&str> = PREF_MARKERS.iter().copied().collect();
-    let hard_constraint_set: HashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
-    let mut constraint_terms: HashSet<u32> = HashSet::new();
-    let mut header_dict: HashMap<u64, Vec<HeaderKey>> = HashMap::new();
+    let mut role_cues: DetHashSet<u32> = DetHashSet::default();
+    let pref_set: DetHashSet<&str> = PREF_MARKERS.iter().copied().collect();
+    let hard_constraint_set: DetHashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
+    let mut constraint_terms: DetHashSet<u32> = DetHashSet::default();
+    let mut header_dict: DetHashMap<u64, Vec<HeaderKey>> = DetHashMap::default();
     let mut header_max_words = 0usize;
     for (si, s) in sessions.iter().enumerate() {
         let Some(first) = s.turns.first() else { continue };
@@ -3030,7 +3038,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     // Pre-pass: collect exact single-token proper names evidenced by speakers, mid-clause
     // capitalization, multi-word entity parts, or document header titles so sentence-initial
     // occurrences of the same byte-equal name bind to the same identity node.
-    let mut known_proper: HashSet<String> = HashSet::new();
+    let mut known_proper: DetHashSet<String> = DetHashSet::default();
     for s in sessions {
         for t in &s.turns {
             let sp = t.role.trim().to_lowercase();
@@ -3058,10 +3066,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_ep_keys.push(session_episode_key(&s.id, &s.date));
         let date_toks = if p.enable_deictic && ts != 0 { calendar_tokens(ts) } else { Vec::new() };
         let mut members = Vec::new();
-        let mut s_ents = HashSet::new();
-        let mut s_cont = HashSet::new();
-        let mut s_doms: HashSet<&'static str> = HashSet::new();
-        let mut speaker_names: HashSet<String> = HashSet::new();
+        let mut s_ents = DetHashSet::default();
+        let mut s_cont = DetHashSet::default();
+        let mut s_doms: DetHashSet<&'static str> = DetHashSet::default();
+        let mut speaker_names: DetHashSet<String> = DetHashSet::default();
         for t in &s.turns {
             let sp = t.role.trim().to_lowercase();
             if !sp.is_empty() && sp != "user" && sp != "assistant" {
@@ -3072,10 +3080,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         }
         // Collect named speakers in this session so vocative address ("Thanks, Caroline!")
         // is capped at speaker identity parity (0.72) and never outranks Caroline speaking.
-        let mut sess_other_speakers: HashMap<usize, HashSet<String>> = HashMap::new();
+        let mut sess_other_speakers: DetHashMap<usize, DetHashSet<String>> = DetHashMap::default();
         for (idx_a, ta) in s.turns.iter().enumerate() {
             let spa = ta.role.trim().to_lowercase();
-            let mut others = HashSet::new();
+            let mut others = DetHashSet::default();
             for (idx_b, tb) in s.turns.iter().enumerate() {
                 if idx_a == idx_b {
                     continue;
@@ -3106,8 +3114,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             let mut feats = Vec::new();
             let mut blip_feats = Vec::new();
             let mut seq = Vec::new();
-            let mut content = HashSet::new();
-            let mut entities = HashSet::new();
+            let mut content = DetHashSet::default();
+            let mut entities = DetHashSet::default();
             let mut t_doms: Vec<&'static str> = Vec::new();
             let mut tech_handles: Vec<u32> = Vec::new();
             for w in raw.iter().filter(|w| is_content(w)) {
@@ -3409,7 +3417,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         }
     }
 
-    let mut id_at: HashMap<String, usize> = HashMap::new();
+    let mut id_at: DetHashMap<String, usize> = DetHashMap::default();
     for (i, t) in turns.iter().enumerate() {
         if !t.id.is_empty() {
             id_at.entry(t.id.clone()).or_insert(i);
@@ -3442,7 +3450,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     }
 
     // 1. Exact Technical Handle & Typed Slot RSB (`df <= 6`): later turn/session -> earlier turn/session.
-    let mut handle_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut handle_postings: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
     for (ti, hs) in turn_tech_handles.iter().enumerate() {
         for &h in hs {
             let list = handle_postings.entry(h).or_default();
@@ -3474,7 +3482,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     //    When two user turns share a rare proper entity (`2 <= df <= 8`) or constraint object
     //    and either `advanced::contradiction::appears_contradictory` fires or the later turn
     //    asserts an explicit revision/constraint, record a backward `supersedes` edge (`later -> earlier`).
-    let mut ent_user_postings: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut ent_user_postings: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
     for (ti, t) in turns.iter().enumerate() {
         if t.field != 0 || t.is_question || t.is_backchannel {
             continue;
@@ -3738,7 +3746,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     } else {
         u32::MAX
     };
-    let non_hub_domains: HashSet<&'static str> = HYPERNYM_LATTICE
+    let non_hub_domains: DetHashSet<&'static str> = HYPERNYM_LATTICE
         .iter()
         .map(|(d, _)| *d)
         .filter(|d| domain_session_df.get(d).copied().unwrap_or(0) <= dom_hub_cut)
@@ -3752,7 +3760,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let fw_set = framing_words();
     let mut standing_rules = Vec::with_capacity(raw_standing_rules.len());
     for (policy_key, turn_idx, sess_idx, ts, has_explicit_scope, scope_words) in raw_standing_rules {
-        let mut scope = HashSet::new();
+        let mut scope = DetHashSet::default();
         let mut dom_vec: Vec<&'static str> = Vec::new();
         for w in &scope_words {
             if fw_set.contains(w.as_str()) {
@@ -3777,7 +3785,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 }
             }
         }
-        let mut assistant_nouns = HashSet::new();
+        let mut assistant_nouns = DetHashSet::default();
         let members = &session_turns[sess_idx];
         if let Some(pos) = members.iter().position(|&ti| ti == turn_idx) {
             if pos + 1 < members.len() {
@@ -3853,9 +3861,9 @@ struct QueryPlan {
     terms: Vec<QTerm>,
     groups: Vec<String>,
     /// term id -> group, for proximity scanning
-    group_of: HashMap<u32, usize>,
-    focal_ids: HashSet<u32>,
-    focal_domains: HashSet<&'static str>,
+    group_of: DetHashMap<u32, usize>,
+    focal_ids: DetHashSet<u32>,
+    focal_domains: DetHashSet<&'static str>,
 }
 
 /// Normalize punctuation (preserving internal apostrophes in contractions like `i'm` / `don't`)
@@ -3937,7 +3945,7 @@ fn interrogative_when(padded: &str) -> bool {
 
 pub fn classify(text: &str) -> QueryIntent {
     let lower = word_padded(text);
-    let content_groups = raw_tokens(text).into_iter().filter(|w| is_content(w)).collect::<HashSet<_>>().len();
+    let content_groups = raw_tokens(text).into_iter().filter(|w| is_content(w)).collect::<DetHashSet<_>>().len();
     let user_initiative = has_any(&lower, USER_INITIATIVE_CUES);
     let retrospective_user = user_initiative || has_any(&lower, TIMELINE_CUES);
     let direct_assistant = has_any(&lower, ASSISTANT_ATTRIBUTION_CUES);
@@ -3984,10 +3992,10 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let mut intent = classify(&q.text);
     let mut terms = Vec::new();
     let mut groups: Vec<String> = Vec::new();
-    let mut group_of = HashMap::new();
-    let mut hyp_added: HashSet<&str> = HashSet::new();
-    let mut focal_ids: HashSet<u32> = HashSet::new();
-    let mut focal_domains: HashSet<&'static str> = HashSet::new();
+    let mut group_of = DetHashMap::default();
+    let mut hyp_added: DetHashSet<&str> = DetHashSet::default();
+    let mut focal_ids: DetHashSet<u32> = DetHashSet::default();
+    let mut focal_domains: DetHashSet<&'static str> = DetHashSet::default();
     let use_hyp = p.enable_hypernyms;
 
     let raw_q = raw_tokens(&q.text);
@@ -4013,13 +4021,13 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let domain_groups = raw_q
         .iter()
         .filter(|w| is_content(w) && !fw.contains(w.as_str()))
-        .collect::<HashSet<_>>()
+        .collect::<DetHashSet<_>>()
         .len();
     let can_demote_framing = domain_groups >= 1;
 
     let nick_bind = ix.nicks.bindings_in(&q.text);
-    let mut label_group: HashMap<String, usize> = HashMap::new();
-    let mut seen_toks = HashSet::new();
+    let mut label_group: DetHashMap<String, usize> = DetHashMap::default();
+    let mut seen_toks = DetHashSet::default();
     for w in raw_q.iter().filter(|w| is_content(w)) {
         if !seen_toks.insert(w.clone()) {
             continue;
@@ -4115,7 +4123,7 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     }
 
     // Capitalized proper-noun entity phrases present in index (e.g. "Local H", "For Against").
-    let mut seen_ents = HashSet::new();
+    let mut seen_ents = DetHashSet::default();
     for ent in proper_entity_tokens(&q.text) {
         if !seen_ents.insert(ent.clone()) {
             continue;
@@ -4149,7 +4157,7 @@ fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     }
 
     if p.enable_deictic {
-        let mut date_weights: HashMap<String, f32> = HashMap::new();
+        let mut date_weights: std::collections::BTreeMap<String, f32> = std::collections::BTreeMap::new();
         for d in inline_dates {
             let w = if d.starts_with("__DATE__") {
                 2.0
@@ -4260,7 +4268,7 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
 
 /// True when two distinct query words land within `span` content tokens of each other.
 fn proximity_hit<'a, I: Iterator<Item = &'a (u32, u32)>>(seq: I, plan: &QueryPlan, span: usize) -> bool {
-    let mut last: HashMap<usize, usize> = HashMap::new();
+    let mut last: DetHashMap<usize, usize> = DetHashMap::default();
     for (pos, (e, s)) in seq.enumerate() {
         let g = plan.group_of.get(e).or_else(|| plan.group_of.get(s));
         if let Some(&g) = g {
@@ -4294,7 +4302,7 @@ fn order(scores: &[f32], ts: &[i64]) -> Vec<usize> {
     idx
 }
 
-fn jaccard(a: &HashSet<u32>, b: &HashSet<u32>) -> f32 {
+fn jaccard(a: &DetHashSet<u32>, b: &DetHashSet<u32>) -> f32 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
@@ -4367,7 +4375,7 @@ fn rank_standing_rules(
     // including zero-overlap rules. The episodic floor stays off for these intents,
     // so the channel can fire without taking one of the five episodic slots.
     let multi_evidence = it.multi_hop || it.sniper_how_many || it.temporal || it.is_event_sequence;
-    let mut latest_by_key: HashMap<&str, (usize, i32, i32, i64)> = HashMap::new();
+    let mut latest_by_key: DetHashMap<&str, (usize, i32, i32, i64)> = DetHashMap::default();
     for (ri, r) in ix.standing_rules.iter().enumerate() {
         let scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         let dom_hits = r.domains.iter().filter(|d| plan.focal_domains.contains(*d)).count() as i32;
@@ -4424,7 +4432,7 @@ fn policy_spec_winner_floor(lexical_max: f32) -> f32 {
     }
 }
 
-fn exact_query_group_ids(plan: &QueryPlan) -> HashSet<u32> {
+fn exact_query_group_ids(plan: &QueryPlan) -> DetHashSet<u32> {
     plan.terms
         .iter()
         .filter(|t| t.exact_hit && t.group.is_some())
@@ -4432,8 +4440,8 @@ fn exact_query_group_ids(plan: &QueryPlan) -> HashSet<u32> {
         .collect()
 }
 
-fn session_speaker_names(ix: &Index, members: &[usize]) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn session_speaker_names(ix: &Index, members: &[usize]) -> DetHashSet<String> {
+    let mut names = DetHashSet::default();
     for &m in members {
         let sp = ix.turns[m].speaker.as_str();
         if sp.is_empty() || sp == "user" || sp == "assistant" {
@@ -4446,7 +4454,7 @@ fn session_speaker_names(ix: &Index, members: &[usize]) -> HashSet<String> {
     names
 }
 
-fn is_speaker_term(ix: &Index, id: u32, names: &HashSet<String>) -> bool {
+fn is_speaker_term(ix: &Index, id: u32, names: &DetHashSet<String>) -> bool {
     let Some(name) = ix.vocab.names.get(id as usize) else { return false };
     let bare = name
         .strip_prefix("\u{1}ent:")
@@ -4458,11 +4466,11 @@ fn is_speaker_term(ix: &Index, id: u32, names: &HashSet<String>) -> bool {
     is_speaker_alias(bare, names)
 }
 
-fn clause_hits_query(ids: &HashSet<u32>, g: &HashSet<u32>, ix: &Index, names: &HashSet<String>) -> bool {
+fn clause_hits_query(ids: &DetHashSet<u32>, g: &DetHashSet<u32>, ix: &Index, names: &DetHashSet<String>) -> bool {
     ids.iter().any(|id| g.contains(id) && !is_speaker_term(ix, *id, names))
 }
 
-fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &HashSet<u32>, names: &HashSet<String>) -> bool {
+fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &DetHashSet<u32>, names: &DetHashSet<String>) -> bool {
     if !t.is_pure_info_question {
         return false;
     }
@@ -4656,7 +4664,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         .filter(|w| is_content(w))
         .filter_map(|w| ix.vocab.get(&w).and_then(|id| plan.group_of.get(&id).copied()))
         .collect();
-    let mut q_bigrams: HashSet<(usize, usize)> = HashSet::new();
+    let mut q_bigrams: DetHashSet<(usize, usize)> = DetHashSet::default();
     for pair in q_groups.windows(2) {
         if pair[0] != pair[1] {
             q_bigrams.insert((pair[0], pair[1]));
@@ -4695,7 +4703,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
-        // Content-token count: TurnIx.content is HashSet<u32> of content term ids
+        // Content-token count: TurnIx.content is DetHashSet<u32> of content term ids
         // (same field the s5 gate analysis used). This is NOT a UTF-8 char count.
         let content_tokens = t.content.len();
         let keep_full_carry = t.speaker == "assistant" || t.is_short_reply || content_tokens <= 8;
@@ -4708,7 +4716,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
         if !q_bigrams.is_empty() && t.seq.len() >= 2 {
             let mut bigram_bonus = 0.0f32;
-            let mut matched_bi: HashSet<(usize, usize)> = HashSet::new();
+            let mut matched_bi: DetHashSet<(usize, usize)> = DetHashSet::default();
             for win in t.seq.windows(2) {
                 let (ea, sa) = win[0];
                 let (eb, sb) = win[1];
@@ -4890,7 +4898,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
 
         let exact_groups = exact_query_group_ids(&plan);
-        let q_ids: HashSet<u32> = plan.terms.iter().map(|qt| qt.id).collect();
+        let q_ids: DetHashSet<u32> = plan.terms.iter().map(|qt| qt.id).collect();
 
         // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
         if p.enable_sniper {
@@ -4902,7 +4910,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let speaker_names = if has_named_dialogue {
                     session_speaker_names(ix, members)
                 } else {
-                    HashSet::new()
+                    DetHashSet::default()
                 };
                 let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
                 let has_declarative_user_peer = members.iter().any(|&m| {
@@ -4959,7 +4967,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
 
         // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
-        let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
+        let mut q_ents_and_vocatives: DetHashSet<u32> = DetHashSet::default();
         for ent in proper_entity_tokens(&q.text) {
             if let Some(id) = ix.vocab.get(&ent) {
                 q_ents_and_vocatives.insert(id);
@@ -4978,7 +4986,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 if speaker_names.is_empty() {
                     continue;
                 }
-                let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
+                let mut sess_speaker_ents: DetHashSet<u32> = DetHashSet::default();
                 for sw in &speaker_names {
                     if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
                         sess_speaker_ents.insert(id);
@@ -5027,7 +5035,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let t_max = t_scene[t0];
                 let t0_mask = t_mask[t0];
                 if t_max > 0.0 {
-                    let mut activation: HashMap<u32, f32> = HashMap::new();
+                    let mut activation: std::collections::BTreeMap<u32, f32> = std::collections::BTreeMap::new();
                     let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
 
                     // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities + Rare Exact Symbols
@@ -5209,9 +5217,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if pref_on && !multi_evidence_intent {
         let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.50, |ti| ix.turns[ti].is_personal_constraint);
     }
-    let initiative_content: Vec<HashSet<u32>> = if it.is_event_sequence {
+    let initiative_content: Vec<DetHashSet<u32>> = if it.is_event_sequence {
         ix.session_turns.iter().map(|members| {
-            let mut set = HashSet::new();
+            let mut set = DetHashSet::default();
             for &ti in members {
                 if ix.turns[ti].is_initiative {
                     set.extend(ix.turns[ti].content.iter().copied());
@@ -5345,7 +5353,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 4
             };
             let rare_sym_max_df = ((ix.s_stats.n * 0.05).clamp(3.0, 18.0)) as u32;
-            let mut s_act: HashMap<u32, f32> = HashMap::new();
+            let mut s_act: std::collections::BTreeMap<u32, f32> = std::collections::BTreeMap::new();
             for &anc in &anchors {
                 let anc_w = (s_score[anc] / smax).clamp(0.25, 1.0);
                 // Prefer highest-scoring matching turns inside anchor session so bridge entities come from hot passage.
@@ -5474,8 +5482,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             if s_score[top0] > 0.0 {
                 selected.push(top0);
                 let mut covered_mask = s_mask[top0];
-                let mut covered_ents: HashSet<u32> = ix.session_entities[top0].clone();
-                let mut mask_counts: HashMap<u64, usize> = HashMap::new();
+                let mut covered_ents: DetHashSet<u32> = ix.session_entities[top0].clone();
+                let mut mask_counts: std::collections::BTreeMap<u64, usize> = std::collections::BTreeMap::new();
                 *mask_counts.entry(s_mask[top0] & mask_limit).or_insert(0) += 1;
                 let mut remaining: Vec<usize> = (0..ns)
                     .filter(|&si| si != top0 && (s_score[si] > 0.0 || bridge_boost[si] > 0.0))
@@ -5619,7 +5627,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let mut final_turn_indices: Vec<usize> = if p.enable_submodular {
         let mut selected_turns: Vec<usize> = Vec::with_capacity(k);
         let mut covered_query_terms: u64 = 0;
-        let mut session_counts: HashMap<usize, usize> = HashMap::new();
+        let mut session_counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
         // Ingest order. Equal gains keep the earlier turn, then the higher recorded stability.
         let mut remaining: Vec<usize> = (0..nt).filter(|&ti| t_scene[ti] > 0.0).collect();
 
@@ -5832,7 +5840,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !final_turn_indices.is_empty() {
         let pair = 1.0 / 3.0f32.log2();
         let mut slot_score: Vec<f32> = final_turn_indices.iter().map(|&i| t_scene[i]).collect();
-        let mut best_incoming: HashMap<usize, f32> = HashMap::new();
+        let mut best_incoming: std::collections::BTreeMap<usize, f32> = std::collections::BTreeMap::new();
         for &ti in &final_turn_indices {
             let src = t_scene[ti];
             if src <= 0.0 {
@@ -6959,7 +6967,7 @@ fn replay_dump_path() -> Option<String> {
     }
 }
 
-/// Snapshot only. No HashMap/HashSet: those would advance Rust's hasher
+/// Snapshot only. No DetHashMap/DetHashSet: those would advance Rust's hasher
 /// seed and change later queries in the same RankRequest.
 struct ReplaySnap {
     query_text: String,
@@ -7067,9 +7075,9 @@ fn dump_response_turn_of(ix: &Index, ti: usize) -> Option<usize> {
 /// `IC_novel(t \ Q)`: sum of dump_token_ic over the turn's distinct raw_tokens
 /// that are not in the query token set, using the engine tokenizer and
 /// `t_own_stats` df. Tokens the engine never interned are skipped. Dump-only.
-fn dump_turn_ic_novel(ix: &Index, ti: usize, qset: &HashSet<String>, n_docs: usize) -> f64 {
+fn dump_turn_ic_novel(ix: &Index, ti: usize, qset: &DetHashSet<String>, n_docs: usize) -> f64 {
     let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: DetHashSet<String> = DetHashSet::default();
     let mut sum = 0.0;
     for w in raw_tokens(body) {
         if !seen.insert(w.clone()) || qset.contains(&w) {
@@ -7143,26 +7151,26 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
             pool.push(ti);
         }
     }
-    let mut pre_rank: HashMap<usize, usize> = HashMap::with_capacity(pool.len());
+    let mut pre_rank: DetHashMap<usize, usize> = DetHashMap::with_capacity_and_hasher(pool.len(), Default::default());
     for (i, &ti) in pool.iter().enumerate() {
         pre_rank.insert(ti, i);
     }
-    let mut final_rank: HashMap<usize, usize> = HashMap::new();
+    let mut final_rank: DetHashMap<usize, usize> = DetHashMap::default();
     for (i, &ti) in snap.seated.iter().enumerate() {
         final_rank.insert(ti, i);
     }
     let deg_closed = dump_pool_structural_degree(ix, &pool, true);
     let deg_none = dump_pool_structural_degree(ix, &pool, false);
-    let mut degree_closed: HashMap<usize, i64> = HashMap::new();
-    let mut degree_none: HashMap<usize, i64> = HashMap::new();
+    let mut degree_closed: DetHashMap<usize, i64> = DetHashMap::default();
+    let mut degree_none: DetHashMap<usize, i64> = DetHashMap::default();
     for (i, &ti) in pool.iter().enumerate() {
         degree_closed.insert(ti, deg_closed[i]);
         degree_none.insert(ti, deg_none[i]);
     }
 
-    let qset: HashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
+    let qset: DetHashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
     let mut qtoks: Vec<Value> = Vec::new();
-    let mut seen_tok: HashSet<String> = HashSet::new();
+    let mut seen_tok: DetHashSet<String> = DetHashSet::default();
     for tok in dump_query_tokens(&snap.query_text) {
         if !seen_tok.insert(tok.clone()) {
             continue;
@@ -7194,7 +7202,7 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
 
     let qtok_present = |ti: usize| -> Vec<bool> {
         let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
-        let body_toks: HashSet<String> = dump_query_tokens(body).into_iter().collect();
+        let body_toks: DetHashSet<String> = dump_query_tokens(body).into_iter().collect();
         let content = ix.turns.get(ti).map(|t| &t.content);
         let mut present: Vec<bool> = Vec::with_capacity(qtoks.len());
         for tok in qtoks.iter() {
@@ -7271,7 +7279,7 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
     }
 
     // Sessions in official turn top-10 or official session top-10: every turn.
-    let mut sess_keep: HashSet<usize> = HashSet::new();
+    let mut sess_keep: DetHashSet<usize> = DetHashSet::default();
     for &ti in snap.seated.iter().take(10) {
         sess_keep.insert(ix.turns[ti].session);
     }
