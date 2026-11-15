@@ -1494,7 +1494,8 @@ fn apply_c2_same_session_opener_t5_entry(
 /// `summary_hold` shape), preference, temporal, and WH-person
 /// questions, and on event sequences and assistant-attribution
 /// (caller). Does not fire on user/assistant chats. Invoked after the
-/// gatekeeper, after #31, as the last ranking change.
+/// gatekeeper, after #31. A later post-gatekeeper C2 seat may still
+/// run after this pass.
 fn apply_c2_pool_mentioned_t10_entry(
     ix: &Index,
     plan: &QueryPlan,
@@ -1788,8 +1789,11 @@ fn c2_s5_replace_preserved(ix: &Index, list: &[usize], vs: usize, cand: usize) -
 /// fire on user/assistant chats. Invoked twice: after the queried-speaker
 /// previous / question-head-previous seats and before RSB (#17), and
 /// again after `rank1_gatekeeper_keep_rsb_head` so a tail reorder cannot
-/// undo the entry (#19). The post-gatekeeper call is the last ranking
-/// change; it does not touch `rsb_seat_behind` and adds no WH-slot ballot.
+/// undo the entry (#19), and a third time after the pool
+/// mentioned-speaker T@10 entry (#32) so a mentioned declarative that
+/// pass just seated into official k can still enter the top 5 (#33).
+/// The post-#32 call is the last ranking change; it does not touch
+/// `rsb_seat_behind` and adds no WH-slot ballot.
 fn apply_c2_queried_speaker_t5_entry(
     ix: &Index,
     plan: &QueryPlan,
@@ -4346,6 +4350,55 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
         assert!(!apply_c2_pool_mentioned_t10_entry(&ix, &cplan, &cq.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+
+    fn queried_speaker_t5_entry_after_pool_mentioned_seats_new_official_k_turn() {
+        // 2:66 / 5:54 shape: after the pool mentioned-speaker T@10
+        // entry seats a mentioned declarative into official k, the
+        // queried-speaker T@5 entry (the same #17 structure) swaps it
+        // into the top 5 in place of the last unmentioned named speaker.
+        let ix = build_index(
+            &[
+                sess("D0", &[("melanie", "I started a new practice project this month."), ("caroline", "I noted that project in the log.")]),
+                sess("D1", &[("melanie", "I asked about typical REST API errors yesterday."), ("caroline", "Timeouts, 404s, and 500s are typical.")]),
+                sess(
+                    "D2",
+                    &[
+                        ("melanie", "A third note is already in the log."),
+                        ("caroline", "The third note is stored."),
+                        ("melanie", "I later asked about a leftover topic."),
+                    ],
+                ),
+                sess(
+                    "D3",
+                    &[("caroline", "Always confirm typical REST API errors when I build an application.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What typical errors should Caroline be prepared to handle with a REST API?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        // Turns: 0-1 D0, 2-3 D1, 4-6 D2, 7 D3 (caroline leftover).
+        // Official k of 7; tail slot 7 is unmentioned Melanie.
+        // Cand scene 0.80 is below the mid-k caroline at 0.50 so #17
+        // first-matches the just-seated leftover, and is at least 0.7
+        // of the head's scene.
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        let t_scene = vec![1.0f32, 0.9, 0.8, 0.75, 0.6, 0.50, 0.4, 0.80];
+        assert!(apply_c2_pool_mentioned_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 7]);
+        assert!(apply_c2_queried_speaker_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        // Last unmentioned in the top 5 is slot 5 (turn 4, Melanie);
+        // the just-seated Caroline leftover takes that seat.
+        assert_eq!(list, vec![0, 1, 2, 3, 7, 5, 4]);
     }
 
     #[test]

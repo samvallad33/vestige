@@ -6296,10 +6296,16 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // Pool mentioned-speaker T@10 entry: a mentioned-speaker turn
         // in the scene-ranked pool, not already in official k, takes
         // the official-k seat of the last unmentioned named speaker in
-        // the tail, when that turn is at least as on-scene. After #31,
-        // last ranking change. The top 5 is unchanged. Skipped on
-        // preference. Does not fire on user/assistant chats.
+        // the tail, when that turn is at least as on-scene. After #31.
+        // Later post-gatekeeper C2 seats may still run after this pass.
+        // The top 5 is unchanged. Skipped on preference. Does not fire
+        // on user/assistant chats.
         apply_c2_pool_mentioned_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Queried-speaker T@5 entry again after #32, so a mentioned
+        // declarative that the pool T@10 entry just seated into
+        // official k can still enter the top 5. After #32, last
+        // ranking change. Skipped on preference.
+        apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
