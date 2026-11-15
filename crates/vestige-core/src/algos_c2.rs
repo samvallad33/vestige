@@ -4176,6 +4176,96 @@ fn step37_short_restatement(a: &DetHashSet<u32>, b: &DetHashSet<u32>) -> bool {
     inter * 2 > short
 }
 
+/// Hermeneutic circle (Step 38). A part is read by the whole it sits in.
+///
+/// Surface anchors are the query's content tokens (`step36_anchors`): closed
+/// class is already excluded, and a token the index never interned is not an
+/// anchor. A turn posts an anchor from its own content or features
+/// (`TurnIx.body` is never read). The session posts an anchor when any turn
+/// in it does. The part is the set of anchors the turn itself posts. The rest
+/// is the anchors it does not post.
+///
+/// Slot 1 yields only when it is a question, its part is a nonempty proper
+/// subset of the anchors, and exactly one other top-5 turn is the same part:
+/// not a question, a different session, a strictly stronger own lexical score,
+/// and a session that posts every rest anchor while slot 1's session misses
+/// at least one. Two such turns are not one reading, so the seat stays.
+/// Top-5 membership does not change. No new constant: the window is the
+/// existing top-5. Does not touch `rsb_seat_behind` and does not rewrite the
+/// session list. Speaker is not consulted.
+fn apply_c2_step38_hermeneutic(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_own: &[f32],
+) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let anchors = step36_anchors(ix, query);
+    if anchors.len() < 2 {
+        return false;
+    }
+    let head = list[0];
+    if !ix.turns[head].is_question {
+        return false;
+    }
+    let posts = |ti: usize, ids: &[u32]| step36_posts(&ix.turns[ti], ids);
+    let session_posts = |session: usize, ids: &[u32]| {
+        ix.session_turns
+            .get(session)
+            .is_some_and(|members| members.iter().any(|&ti| posts(ti, ids)))
+    };
+    let head_hit: Vec<bool> = anchors.iter().map(|ids| posts(head, ids)).collect();
+    if !head_hit.iter().any(|h| *h) || head_hit.iter().all(|h| *h) {
+        return false;
+    }
+    let head_sess = ix.turns[head].session;
+    let head_own = t_own.get(head).copied().unwrap_or(0.0);
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut slot: Option<usize> = None;
+    for i in 1..window {
+        let cand = list[i];
+        let turn = &ix.turns[cand];
+        if turn.is_question || turn.session == head_sess {
+            continue;
+        }
+        let same_part = anchors
+            .iter()
+            .enumerate()
+            .all(|(a, ids)| posts(cand, ids) == head_hit[a]);
+        if !same_part {
+            continue;
+        }
+        let rest_ok = anchors.iter().enumerate().all(|(a, ids)| {
+            head_hit[a] || session_posts(turn.session, ids)
+        });
+        if !rest_ok {
+            continue;
+        }
+        let head_whole = anchors.iter().enumerate().all(|(a, ids)| {
+            head_hit[a] || session_posts(head_sess, ids)
+        });
+        if head_whole {
+            continue;
+        }
+        let own = t_own.get(cand).copied().unwrap_or(0.0);
+        if own <= head_own {
+            continue;
+        }
+        if slot.is_some() {
+            return false;
+        }
+        slot = Some(i);
+    }
+    let Some(slot) = slot else {
+        return false;
+    };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -8293,5 +8383,114 @@ mod algos_c2_tests {
         ));
         assert_eq!(closed, vec![0, 1, 2]);
     }
+    fn hermeneutic_circle_seats_the_part_its_session_completes() {
+        let ix = build_index(
+            &[
+                sess(
+                    "D26",
+                    &[
+                        ("james", "Have you heard about Cyberpunk 2077? Do you think this game is worthy?"),
+                        ("john", "James already played it yesterday."),
+                    ],
+                ),
+                sess(
+                    "D28",
+                    &[
+                        ("john", "James should try the setup before buying."),
+                        ("james", "Yesterday I tried Cyberpunk 2077. Great game, so addictive."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = "When did James try Cyberpunk 2077 game?";
+        assert!(ix.turns[0].is_question);
+        assert!(!ix.turns[3].is_question);
+        let anchors = step36_anchors(&ix, q);
+        let posts = |ti: usize, ids: &[u32]| step36_posts(&ix.turns[ti], ids);
+        let hit = |ti: usize| -> Vec<bool> { anchors.iter().map(|ids| posts(ti, ids)).collect() };
+        assert_eq!(hit(0), hit(3), "the two parts post the same anchors");
+        assert!(hit(0).iter().any(|h| *h) && hit(0).iter().any(|h| !*h));
+        // "try" is in the completing session and absent from the question's session.
+        let try_ids = anchors.iter().find(|ids| {
+            !posts(0, ids) && !posts(1, ids) && posts(2, ids)
+        });
+        assert!(try_ids.is_some(), "the rest anchor lives only in the other session");
+        let t_own = vec![1.0f32, 0.2, 0.4, 2.0];
+        let mut list = vec![0usize, 1, 3, 2];
+        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert!(apply_c2_step38_hermeneutic(&ix, q, &mut list, &t_own));
+        assert_eq!(list[0], 3);
+        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert_eq!(before, after);
+
+        // A weaker own score is not the part the whole confirms.
+        let mut list = vec![0usize, 1, 3, 2];
+        assert!(!apply_c2_step38_hermeneutic(&ix, q, &mut list, &[1.0, 0.2, 0.4, 0.5]));
+        assert_eq!(list, vec![0, 1, 3, 2]);
+
+        // The question's own session already covers every rest anchor.
+        let covered = build_index(
+            &[
+                sess(
+                    "D26",
+                    &[
+                        ("james", "Have you heard about Cyberpunk 2077? Do you think this game is worthy?"),
+                        ("john", "James should try it."),
+                    ],
+                ),
+                sess(
+                    "D28",
+                    &[
+                        ("john", "James should try the setup before buying."),
+                        ("james", "Yesterday I tried Cyberpunk 2077. Great game, so addictive."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let mut list = vec![0usize, 1, 3, 2];
+        assert!(!apply_c2_step38_hermeneutic(&covered, q, &mut list, &t_own));
+        assert_eq!(list[0], 0);
+
+        // A different part (the turn itself posts the rest) is not a near-tie.
+        let mut list = vec![0usize, 2];
+        assert!(!apply_c2_step38_hermeneutic(&ix, q, &mut list, &[1.0, 0.2, 3.0, 2.0]));
+        assert_eq!(list, vec![0, 2]);
+
+        // Two completing sessions are not one reading.
+        let tied = build_index(
+            &[
+                sess(
+                    "D26",
+                    &[("james", "Have you heard about Cyberpunk 2077? Do you think this game is worthy?")],
+                ),
+                sess(
+                    "D28",
+                    &[
+                        ("john", "James should try the setup."),
+                        ("james", "Yesterday I tried Cyberpunk 2077. Great game."),
+                    ],
+                ),
+                sess(
+                    "D30",
+                    &[
+                        ("john", "James should try the other copy."),
+                        ("james", "I tried Cyberpunk 2077. Great game."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let mut list = vec![0usize, 2, 4];
+        assert!(!apply_c2_step38_hermeneutic(&tied, q, &mut list, &[1.0, 0.1, 2.0, 0.1, 3.0]));
+        assert_eq!(list, vec![0, 2, 4]);
+
+        // A declarative incumbent is already a statement. It does not yield.
+        let mut list = vec![3usize, 0, 2, 1];
+        assert!(!apply_c2_step38_hermeneutic(&ix, q, &mut list, &[0.2, 0.1, 0.4, 4.0]));
+        assert_eq!(list[0], 3);
+    }
+
 
 }
