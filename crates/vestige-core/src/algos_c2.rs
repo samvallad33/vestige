@@ -1245,8 +1245,11 @@ fn c2_s5_membership_preserved(ix: &Index, list: &[usize], vs: usize, ci: usize) 
 /// the first 5 unique-session slots, so S@5 cannot drop by construction.
 /// Reuses `C2_XWITNESS_RATIO`. The same mention, conjunction, WH-person,
 /// preference, temporal, and summary cuts apply as #15/#16. Does not
-/// fire on user/assistant chats. Runs after the queried-speaker previous
-/// seat, before RSB.
+/// fire on user/assistant chats. Invoked twice: after the queried-speaker
+/// previous / question-head-previous seats and before RSB (#17), and
+/// again after `rank1_gatekeeper_keep_rsb_head` so a tail reorder cannot
+/// undo the entry (#19). The post-gatekeeper call is the last ranking
+/// change; it does not touch `rsb_seat_behind` and adds no WH-slot ballot.
 fn apply_c2_queried_speaker_t5_entry(
     ix: &Index,
     plan: &QueryPlan,
