@@ -233,6 +233,206 @@ fn apply_step8_homeric_ring(ix: &Index, plan: &QueryPlan, t_turn_raw: &mut [f32]
     }
 }
 
+/// Step 9A: byte-level Damerau-Levenshtein distance exactly 1 (one edit or one adjacent swap).
+pub(crate) fn damerau_lev_1(a: &[u8], b: &[u8]) -> bool {
+    let la = a.len();
+    let lb = b.len();
+    if la.abs_diff(lb) > 1 {
+        return false;
+    }
+    if la == lb {
+        let mut diffs = Vec::with_capacity(3);
+        for i in 0..la {
+            if a[i] != b[i] {
+                diffs.push(i);
+                if diffs.len() > 2 {
+                    return false;
+                }
+            }
+        }
+        return match diffs.len() {
+            1 => true,
+            2 => {
+                let (i, j) = (diffs[0], diffs[1]);
+                j == i + 1 && a[i] == b[j] && a[j] == b[i]
+            }
+            _ => false,
+        };
+    }
+    let (short, long) = if la < lb { (a, b) } else { (b, a) };
+    let mut i = 0;
+    let mut j = 0;
+    let mut skipped = false;
+    while i < short.len() && j < long.len() {
+        if short[i] == long[j] {
+            i += 1;
+            j += 1;
+        } else if !skipped {
+            skipped = true;
+            j += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Step 9A: the unique lowercase vocab word within Damerau-Levenshtein 1 of a zero-DF query
+/// word (len >= 6, same first byte). Ambiguous (2+ candidates) returns None.
+pub(crate) fn find_unique_typo_fallback(vocab_names: &[String], w: &str) -> Option<u32> {
+    let wb = w.as_bytes();
+    if wb.len() < 6 || !wb.iter().all(|b| b.is_ascii_lowercase()) {
+        return None;
+    }
+    let first = wb[0];
+    let mut found: Option<u32> = None;
+    for (id, cand) in vocab_names.iter().enumerate() {
+        let cb = cand.as_bytes();
+        if cb.is_empty() || cb[0] != first || cb.starts_with(b"\x01") {
+            continue;
+        }
+        if !cb.iter().all(|b| b.is_ascii_lowercase()) {
+            continue;
+        }
+        // v2: only the Damerau adjacent-swap edit. Single substitutions/insertions between
+        // real words collide constantly ("brought"/"bought", "likely"/"lively").
+        if cb.len() == wb.len() && damerau_lev_1(wb, cb) && wb.iter().zip(cb).filter(|(x, y)| x != y).count() == 2 {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(id as u32);
+        }
+    }
+    found
+}
+
+/// Step 9B ingest: number of lines that open with a list marker (`1.` `2)` `- ` `* ` `•`).
+fn step9_list_item_count(prose_body: &str) -> u8 {
+    let mut n: u32 = 0;
+    for line in prose_body.lines() {
+        let l = line.trim_start();
+        let digits = l.bytes().take_while(|b| b.is_ascii_digit()).count();
+        let numbered = digits > 0 && digits <= 3 && matches!(l.as_bytes().get(digits), Some(b'.') | Some(b')'));
+        if numbered || l.starts_with("- ") || l.starts_with("* ") || l.starts_with('•') {
+            n += 1;
+        }
+    }
+    n.min(u8::MAX as u32) as u8
+}
+
+/// Step 9B ingest: the first game move number at a line start ("14. Nf3", "14... e5", "3. O-O").
+fn step9_first_move_num(prose_body: &str) -> u16 {
+    for line in prose_body.lines() {
+        let l = line.trim_start();
+        let digits = l.bytes().take_while(|b| b.is_ascii_digit()).count();
+        if digits == 0 || digits > 3 {
+            continue;
+        }
+        let rest = &l[digits..];
+        let Some(rest) = rest.strip_prefix("...").or_else(|| rest.strip_prefix('.')) else {
+            continue;
+        };
+        let mv = rest.trim_start().as_bytes();
+        let is_move = match mv {
+            [b'O', b'-', b'O', ..] => true,
+            [p, f, r, ..] if b"KQRBN".contains(p) => {
+                (f.is_ascii_lowercase() && (b'a'..=b'h').contains(f)) || *f == b'x' || (b'1'..=b'8').contains(r)
+            }
+            [f, r, ..] => (b'a'..=b'h').contains(f) && ((b'1'..=b'8').contains(r) || *r == b'x'),
+            _ => false,
+        };
+        if is_move {
+            if let Ok(n) = l[..digits].parse::<u16>() {
+                return n;
+            }
+        }
+    }
+    0
+}
+
+/// Closed-class ordinals 1..10 for Step 9B.
+fn step9_ordinal(w: &str) -> Option<u8> {
+    let k = match w {
+        "first" | "1st" => 1,
+        "second" | "2nd" => 2,
+        "third" | "3rd" => 3,
+        "fourth" | "4th" => 4,
+        "fifth" | "5th" => 5,
+        "6th" => 6,
+        "7th" => 7,
+        "8th" => 8,
+        "9th" => 9,
+        "10th" => 10,
+        _ => return None,
+    };
+    Some(k)
+}
+
+/// Step 9B (Method of loci) at HOOK A: "the <ordinal>" item queries lift list turns long
+/// enough to hold that slot; "after/on move N" lifts the turn that opens move N+1 (or N).
+fn apply_step9_method_of_loci(ix: &Index, q_text: &str, t_turn_raw: &mut [f32]) {
+    let toks = raw_tokens(q_text);
+    let mut ord_k: Option<u8> = None;
+    let mut move_n: Option<u16> = None;
+    for (i, w) in toks.iter().enumerate() {
+        if i > 0 && toks[i - 1] == "the" {
+            if let Some(k) = step9_ordinal(w) {
+                let next = toks.get(i + 1).map(String::as_str);
+                let temporal = matches!(next, Some("time" | "day" | "week" | "month" | "year" | "session"));
+                if !temporal && ord_k.is_none() {
+                    ord_k = Some(k);
+                }
+            }
+        }
+        if (w == "after" || w == "on") && toks.get(i + 1).is_some_and(|m| m == "move") {
+            if let Some(n) = toks.get(i + 2).and_then(|n| n.parse::<u16>().ok()) {
+                move_n = Some(n);
+            }
+        }
+    }
+    if let Some(k) = ord_k {
+        for (ti, t) in ix.turns.iter().enumerate() {
+            if !t.is_question && t_turn_raw[ti] > 0.0 && t.list_item_count >= k {
+                t_turn_raw[ti] *= 1.15;
+            }
+        }
+    }
+    if let Some(n) = move_n {
+        for (ti, t) in ix.turns.iter().enumerate() {
+            if t_turn_raw[ti] > 0.0 && t.first_move_num > 0 && (t.first_move_num == n + 1 || t.first_move_num == n) {
+                t_turn_raw[ti] *= 1.35;
+            }
+        }
+    }
+}
+
+/// Step 9A wiring in plan_query: a zero-DF query word (no exact, stem, or nick hit) maps to
+/// its unique Damerau-Levenshtein-1 vocab neighbour (0.75) and that neighbour's stem (0.65).
+fn step9_push_typo_fallback(
+    ix: &Index,
+    w: &str,
+    st: &str,
+    has_nick: bool,
+    g: usize,
+    terms: &mut Vec<QTerm>,
+    group_of: &mut HashMap<u32, usize>,
+) {
+    if has_nick || ix.vocab.get(w).is_some() || ix.vocab.get(&stem_term(st)).is_some() {
+        return;
+    }
+    let Some(typo_id) = find_unique_typo_fallback(&ix.vocab.names, w) else {
+        return;
+    };
+    terms.push(QTerm { id: typo_id, weight: 0.75, group: Some(g), exact_hit: false });
+    group_of.insert(typo_id, g);
+    if let Some(cand_str) = ix.vocab.names.get(typo_id as usize) {
+        if let Some(cs_id) = ix.vocab.get(&stem_term(&stem(cand_str))) {
+            terms.push(QTerm { id: cs_id, weight: 0.65, group: Some(g), exact_hit: false });
+            group_of.insert(cs_id, g);
+        }
+    }
+}
+
 #[cfg(test)]
 mod steps7_10_tests {
     use super::*;
@@ -243,5 +443,15 @@ mod steps7_10_tests {
         assert!(p.contains("melanie") && p.contains("jon"));
         assert!(!p.contains("where") && p.contains("rome"));
         assert!(!p.contains("what"));
+    }
+
+    #[test]
+    fn step9_typo_and_ingest_shapes() {
+        assert!(damerau_lev_1(b"recieve", b"receive"));
+        assert!(damerau_lev_1(b"colour", b"color"));
+        assert!(!damerau_lev_1(b"same", b"same"));
+        assert_eq!(step9_list_item_count("Steps:\n1. a\n2) b\n- c\nend"), 3);
+        assert_eq!(step9_first_move_num("Game so far:\n14. Nf3 e5\n15. Bb5"), 14);
+        assert_eq!(step9_first_move_num("1. Buy milk"), 0);
     }
 }
