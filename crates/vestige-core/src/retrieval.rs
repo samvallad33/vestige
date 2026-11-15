@@ -6234,6 +6234,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // turn (at least as on-scene, never an earlier session). After #40,
         // last ranking change.
         apply_c2_episode_run_edge_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Neighbor-pair T@5 entry: in named dialogues, the official-k tail
+        // neighbor of a top-5 turn swaps with the least on-scene lone-session,
+        // non-opener top-5 turn (at least as on-scene, never an earlier
+        // session). After #41, last ranking change.
+        apply_c2_neighbor_pair_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
