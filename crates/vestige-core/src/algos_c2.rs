@@ -2018,6 +2018,123 @@ fn apply_c2_episode_run_edge_t10_entry(
 }
 
 
+/// Episode-run edge T@5 entry. The top-5 analogue of #40: two or more
+/// top-5 turns back to back in one session form an episode; the turn just
+/// before or just after that run (same session, t_scene > 0, outside the
+/// top 5, a declarative, and, in a named-speaker dialogue, by a speaker
+/// the query names and does not conjoin) is its unread edge. The most
+/// on-scene edge takes the slot (2..5) of the least on-scene top-5 turn
+/// that is the only top-5 turn of its session and is not a session
+/// opener, when the edge is at least as on-scene as that turn and the
+/// turn's session is not earlier than the edge's (primacy cut, as #39 /
+/// #40). An official-k edge swaps places with the victim (the victim stays
+/// in the official k); a pool edge takes the victim's seat. The opener cut
+/// keeps the opener seats' work (#13 / #21 / #29; without it LoCoMo 8:1
+/// loses a seated gold opener). No new constant: "at least as on-scene"
+/// is the existing floor. Skipped on summary requests, preference,
+/// temporal, and WH-person questions; event sequences and
+/// assistant-attribution are skipped by the caller. Invoked after the
+/// gatekeeper, after #40, as the last ranking change.
+fn apply_c2_episode_run_edge_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let sc = |t: usize| t_scene.get(t).copied().unwrap_or(0.0);
+    let top: Vec<usize> = list[..window].to_vec();
+    let mut by_sess: Vec<(usize, Vec<usize>)> = Vec::new();
+    for &t in top.iter() {
+        let s = ix.turns[t].session;
+        let p = c2_session_pos(ix, t);
+        match by_sess.iter_mut().find(|(bs, _)| *bs == s) {
+            Some((_, ps)) => ps.push(p),
+            None => by_sess.push((s, vec![p])),
+        }
+    }
+    let eligible = |t: usize| -> bool {
+        if top.contains(&t) || sc(t) <= 0.0 || ix.turns[t].is_question {
+            return false;
+        }
+        let sp = ix.turns[t].speaker.as_str();
+        if !sp.is_empty() && sp != "user" && sp != "assistant" {
+            return c2_query_mentions_speaker(query, sp) && !c2_speaker_conjoined(query, sp);
+        }
+        true
+    };
+    let mut cand: Option<usize> = None;
+    for (s, ps) in by_sess.iter_mut() {
+        ps.sort_unstable();
+        let turns = &ix.session_turns[*s];
+        let mut start = 0;
+        while start < ps.len() {
+            let mut end = start;
+            while end + 1 < ps.len() && ps[end + 1] == ps[end] + 1 {
+                end += 1;
+            }
+            if end > start {
+                let mut edges: Vec<usize> = Vec::new();
+                if ps[start] > 0 {
+                    edges.push(turns[ps[start] - 1]);
+                }
+                if ps[end] + 1 < turns.len() {
+                    edges.push(turns[ps[end] + 1]);
+                }
+                for t in edges {
+                    if !eligible(t) {
+                        continue;
+                    }
+                    if cand.is_none_or(|c| sc(t) > sc(c) || (sc(t) == sc(c) && t < c)) {
+                        cand = Some(t);
+                    }
+                }
+            }
+            start = end + 1;
+        }
+    }
+    let Some(cand) = cand else {
+        return false;
+    };
+    let sc_c = sc(cand);
+    let mut vs: Option<usize> = None;
+    for i in 1..window {
+        let v = list[i];
+        let vsess = ix.turns[v].session;
+        if sc(v) > sc_c
+            || c2_session_pos(ix, v) == 0
+            || top.iter().filter(|&&t| ix.turns[t].session == vsess).count() != 1
+        {
+            continue;
+        }
+        if vs.is_none_or(|b| sc(v) <= sc(list[b])) {
+            vs = Some(i);
+        }
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    let ts_of = |ti: usize| ix.session_ts.get(ix.turns[ti].session).copied().unwrap_or(0);
+    if ts_of(list[vs]) < ts_of(cand) {
+        return false;
+    }
+    match list.iter().position(|&t| t == cand) {
+        Some(ci) => list.swap(vs, ci),
+        None => list[vs] = cand,
+    }
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -5253,6 +5370,59 @@ mod algos_c2_tests {
             let mut list = vec![0usize, 1, 2, 3, 4, 6, 7, 9];
             assert!(!apply_c2_episode_run_edge_t10_entry(&ix, &splan, &sq.text, &mut list, &t_scene));
         }
+    }
+
+    #[test]
+    fn episode_run_edge_t5_entry_seats_top5_run_edge_over_lone_top5_turn() {
+        // LoCoMo 6:81 shape: two back-to-back top-5 turns of D3, the
+        // mentioned speaker's declarative just after them sits in the
+        // official-k tail, and a weaker top-5 turn is the only top-5 turn of
+        // a later session (not its opener).
+        let mut ss = vec![
+            sess("D1", &[("john", "I bought a new guitar."), ("tim", "Cool.")]),
+            sess("D2", &[("john", "I went hiking."), ("tim", "Where?")]),
+            sess("D3", &[("tim", "Hi."), ("john", "I designed a game character."), ("tim", "Why?"), ("john", "A novel I loved inspired the character.")]),
+            sess("D4", &[("john", "I watched a movie."), ("tim", "Which one?")]),
+        ];
+        for (i, se) in ss.iter_mut().enumerate() {
+            se.timestamp = 1_000 + i as i64;
+        }
+        let ix = build_index(&ss, &Params::default());
+        let q = Query { text: "What inspired John to create the game character?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        assert!(!c2_summary_request(&q.text));
+        // Turns: D1 0-1, D2 2-3, D3 4-7, D4 8-9. Top-5 run = D3 turns 5, 6;
+        // its edge is turn 7 (john, declarative) in the tail. Turn 9 is D4's
+        // only top-5 turn and not its opener.
+        let t_scene = vec![1.0f32, 0.5, 2.8, 0.4, 0.3, 3.0, 2.9, 2.0, 0.2, 1.5];
+        let mut list = vec![5usize, 6, 2, 9, 0, 7, 1, 3];
+        assert!(apply_c2_episode_run_edge_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![5, 6, 2, 7, 0, 9, 1, 3]);
+        // Session openers are not evicted: with 9 replaced by opener 8, the
+        // only other lone candidates are 2 (D2 position 0) and 0 (D1 opener).
+        let mut list = vec![5usize, 6, 2, 8, 0, 7, 1, 3];
+        assert!(!apply_c2_episode_run_edge_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        // Primacy: an earlier-session lone turn is not evicted. Turn 1 is D1's
+        // only top-5 turn (position 1), earlier than D3.
+        let mut list = vec![5usize, 6, 2, 1, 0, 7, 9, 3];
+        let t2 = vec![1.0f32, 0.5, 2.8, 0.4, 0.3, 3.0, 2.9, 2.0, 0.2, 2.5];
+        assert!(!apply_c2_episode_run_edge_t5_entry(&ix, &plan, &q.text, &mut list, &t2));
+        // A pool edge takes the victim's seat.
+        let mut list = vec![5usize, 6, 2, 9, 0, 1, 3, 8];
+        assert!(apply_c2_episode_run_edge_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![5, 6, 2, 7, 0, 1, 3, 8]);
+        // An edge less on-scene than every lone non-opener top-5 turn does not enter.
+        let t3 = vec![1.0f32, 0.5, 2.8, 0.4, 0.3, 3.0, 2.9, 1.0, 0.2, 1.5];
+        let mut list = vec![5usize, 6, 2, 9, 0, 7, 1, 3];
+        assert!(!apply_c2_episode_run_edge_t5_entry(&ix, &plan, &q.text, &mut list, &t3));
+        // The edge's speaker is not the one the query names: no entry.
+        let qn = Query { text: "What inspired Mike to create the game character?".into(), date: String::new() };
+        let plann = plan_query(&ix, &qn, &Params::default());
+        let mut list = vec![5usize, 6, 2, 9, 0, 7, 1, 3];
+        assert!(!apply_c2_episode_run_edge_t5_entry(&ix, &plann, &qn.text, &mut list, &t_scene));
     }
 
     #[test]
