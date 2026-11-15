@@ -2234,6 +2234,87 @@ fn apply_c2_neighbor_pair_t5_entry(
 }
 
 
+/// Assistant-reply T@5 entry, for assistant-attribution questions only
+/// (the question asks what the assistant said), which every other C2 seat
+/// skips. The signal is the transcript's own role labels: an assistant turn
+/// already in the official k but outside the top 5 (t_scene > 0) that sits
+/// directly next to a top-5 user turn of the same session is that user
+/// turn's reply. The most on-scene such reply swaps places with the least
+/// on-scene top-5 user turn (slots 2..5) that (a) is not the reply's own
+/// neighbor (the anchor: evicting it would only trade the exchange's halves;
+/// without this cut LME 32260d93 loses its gold user turn), (b) is at most
+/// as on-scene as the reply, and (c) comes from a session no earlier than
+/// the reply's (primacy, as #39-#42). The victim stays in the official k,
+/// so T@10 cannot drop; the swap is refused when it would push any session
+/// out of the first 5 unique-session slots, so S@5 cannot drop; C2 turn
+/// seats do not rewrite the session list. No new constant. Skipped on
+/// temporal questions (Gemini Step 17 owns them), summary requests,
+/// WH-person questions, named-speaker dialogues, and event sequences
+/// (caller). Runs after the gatekeeper, outside the C2 assistant-attribution
+/// / preference skip, as the last ranking change.
+fn apply_c2_assistant_reply_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let sc = |t: usize| t_scene.get(t).copied().unwrap_or(0.0);
+    let adjacent = |a: usize, b: usize| {
+        ix.turns[a].session == ix.turns[b].session && c2_session_pos(ix, a).abs_diff(c2_session_pos(ix, b)) == 1
+    };
+    let mut cand: Option<usize> = None;
+    for i in window..list.len() {
+        let c = list[i];
+        if ix.turns[c].speaker != "assistant" || sc(c) <= 0.0 {
+            continue;
+        }
+        if !list[..window].iter().any(|&u| ix.turns[u].speaker == "user" && adjacent(u, c)) {
+            continue;
+        }
+        if cand.is_none_or(|b| sc(c) > sc(list[b])) {
+            cand = Some(i);
+        }
+    }
+    let Some(ci) = cand else {
+        return false;
+    };
+    let c = list[ci];
+    let ts_of = |ti: usize| ix.session_ts.get(ix.turns[ti].session).copied().unwrap_or(0);
+    let mut vs: Option<usize> = None;
+    for i in 1..window {
+        let v = list[i];
+        if ix.turns[v].speaker != "user" || sc(v) > sc(c) || adjacent(v, c) || ts_of(v) < ts_of(c) {
+            continue;
+        }
+        if vs.is_none_or(|b| sc(v) <= sc(list[b])) {
+            vs = Some(i);
+        }
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    if !c2_s5_membership_preserved(ix, list, vs, ci) {
+        return false;
+    }
+    list.swap(vs, ci);
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -5573,6 +5654,49 @@ mod algos_c2_tests {
         let planu = plan_query(&ixu, &q, &Params::default());
         let mut list = vec![6usize, 2, 9, 0, 3, 7, 1, 5];
         assert!(!apply_c2_neighbor_pair_t5_entry(&ixu, &planu, &q.text, &mut list, &t_scene));
+    }
+
+    #[test]
+    fn assistant_reply_t5_entry_swaps_reply_for_weakest_later_user() {
+        // LME 3249768e shape: the assistant reply to a top-5 user turn sits
+        // in the official-k tail; the weakest top-5 user turn from an
+        // earlier session is protected, the next weakest (later) is evicted.
+        let mut ss = vec![
+            sess("s1", &[("user", "I am setting up a garden shed."), ("assistant", "Sounds fun.")]),
+            sess("s2", &[("user", "I am building a cocktail bar at home."), ("assistant", "Buy gin, rum, tequila, vodka and bourbon.")]),
+            sess("s3", &[("user", "Which glasses do I need?"), ("assistant", "Highball and rocks glasses.")]),
+        ];
+        for (i, se) in ss.iter_mut().enumerate() {
+            se.timestamp = 1_000 + i as i64;
+        }
+        let ix = build_index(&ss, &Params::default());
+        let q = Query {
+            text: "Looking back at our previous conversation, which bottles did you recommend for my cocktail bar?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        assert!(!c2_summary_request(&q.text));
+        // Turns: s1 0-1, s2 2-3, s3 4-5. Top 5: 2 (s2 user), 4 (s3 user),
+        // 0 (s1 user, earlier, weakest), 5, 1; tail: 3 (reply to 2).
+        let t_scene = vec![0.5f32, 0.4, 3.0, 2.5, 0.8, 0.9, 0.0];
+        let mut list = vec![2usize, 4, 0, 5, 1, 3];
+        assert!(apply_c2_assistant_reply_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 3, 0, 5, 1, 4]);
+        // The reply's own user neighbor (the anchor) is never the victim.
+        let mut list = vec![4usize, 2, 5, 0, 1, 3];
+        let t2 = vec![2.6f32, 0.4, 0.3, 2.5, 3.0, 0.9];
+        assert!(!apply_c2_assistant_reply_t5_entry(&ix, &plan, &q.text, &mut list, &t2));
+        // A reply less on-scene than every eligible user does not enter.
+        let t3 = vec![0.5f32, 0.4, 3.0, 0.6, 0.8, 0.9];
+        let mut list = vec![2usize, 4, 0, 5, 1, 3];
+        assert!(!apply_c2_assistant_reply_t5_entry(&ix, &plan, &q.text, &mut list, &t3));
+        // Temporal questions are left alone.
+        let qt = Query { text: "When did you recommend bottles for my cocktail bar?".into(), date: String::new() };
+        let plant = plan_query(&ix, &qt, &Params::default());
+        let mut list = vec![2usize, 4, 0, 5, 1, 3];
+        assert!(!apply_c2_assistant_reply_t5_entry(&ix, &plant, &qt.text, &mut list, &t_scene));
     }
 
     #[test]
