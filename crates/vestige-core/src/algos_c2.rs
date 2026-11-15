@@ -3956,6 +3956,101 @@ fn apply_c2_step35_mill_agreement(
     true
 }
 
+/// Kalevala parallelism (Step 37).
+///
+/// Adjacent lines of one singer restate one another and count as a single
+/// line. Two turns are that line when they are successive utterances of the
+/// same speaker, at most one other turn sits between them, the shared content
+/// outnumbers half of the shorter line, and they agree on numeral shape
+/// (`form_digit`). The following line takes slot 1 when its content query
+/// cues strictly cover the head's. Closed-class query tokens are not cues
+/// here: a following line that only adds "which" or "the" is the same line,
+/// not a richer variant. An earlier line never takes the seat. Exactly one
+/// following variant may qualify, and it must already sit in the top 5.
+/// Top-5 membership does not change. `TurnIx.body` is never read. Does not
+/// touch `rsb_seat_behind`.
+fn apply_c2_step37_kalevala(ix: &Index, query: &str, list: &mut Vec<usize>) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let head = list[0];
+    let q_cues = step37_content_query_cues(ix, query);
+    let head_cues = turn_query_cues(ix, &q_cues, head);
+    let head_pos = c2_session_pos(ix, head);
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut slot: Option<usize> = None;
+    for i in 1..window {
+        let cand = list[i];
+        if c2_session_pos(ix, cand) <= head_pos || !step37_one_line(ix, head, cand) {
+            continue;
+        }
+        let cand_cues = turn_query_cues(ix, &q_cues, cand);
+        if !covers_cues(&cand_cues, &head_cues) || cand_cues.len() <= head_cues.len() {
+            continue;
+        }
+        if slot.is_some() {
+            return false;
+        }
+        slot = Some(i);
+    }
+    let Some(slot) = slot else {
+        return false;
+    };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
+/// Query cues that are content words. Closed-class tokens stay in
+/// `query_cues` for the other seats; a parallel line is not richer for
+/// adding one of them.
+fn step37_content_query_cues(ix: &Index, query: &str) -> Vec<u32> {
+    let q_cues = query_cues(ix, query);
+    let mut keep: Vec<u32> = ix
+        .cue_vocab
+        .iter()
+        .filter(|(word, id)| q_cues.binary_search(id).is_ok() && is_content(word))
+        .map(|(_, id)| *id)
+        .collect();
+    keep.sort_unstable();
+    keep.dedup();
+    keep
+}
+
+/// One Kalevala line: successive same-speaker turns, at most one turn between
+/// them, shared numeral shape, and a short-line restatement.
+fn step37_one_line(ix: &Index, a: usize, b: usize) -> bool {
+    let ta = &ix.turns[a];
+    let tb = &ix.turns[b];
+    if ta.session != tb.session || ta.speaker != tb.speaker || ta.form_digit != tb.form_digit {
+        return false;
+    }
+    let pa = c2_session_pos(ix, a);
+    let pb = c2_session_pos(ix, b);
+    let (lo, hi) = if pa < pb { (pa, pb) } else { (pb, pa) };
+    if hi == lo || hi - lo > 2 {
+        return false;
+    }
+    let members = &ix.session_turns[ta.session];
+    for &m in &members[lo + 1..hi] {
+        if ix.turns[m].speaker == ta.speaker {
+            return false;
+        }
+    }
+    step37_short_restatement(&ta.content, &tb.content)
+}
+
+/// The shorter line is mostly the words the two lines share. Equal content
+/// is the same line twice, not a variant.
+fn step37_short_restatement(a: &DetHashSet<u32>, b: &DetHashSet<u32>) -> bool {
+    if a.is_empty() || b.is_empty() || a == b {
+        return false;
+    }
+    let inter = a.intersection(b).count();
+    let short = a.len().min(b.len());
+    inter * 2 > short
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -7902,5 +7997,108 @@ mod algos_c2_tests {
         let mut echo = vec![1usize, 0, 2];
         assert!(!apply_c2_step35_mill_agreement(&ixe, &plane, &mut echo, &[0.9, 1.0, 0.5]));
         assert_eq!(echo, vec![1, 0, 2]);
+    }
+
+    #[test]
+    fn step37_kalevala_seats_the_richer_parallel_line() {
+        let q = "What artist did I start to listen to?";
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "I am also thinking of exploring more genres and discovering new artists."),
+                    ("assistant", "Try a different style."),
+                    ("user", "I am also interested in exploring different genres and discovering new artists. I started a bluegrass band today."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut list = vec![0usize, 1, 2];
+        assert!(apply_c2_step37_kalevala(&ix, q, &mut list));
+        assert_eq!(list, vec![2, 0, 1]);
+        // The richer line is past the top 5: the seat stays, even though the
+        // two user turns are still one line in the session.
+        let ix2 = build_index(
+            &[
+                sess(
+                    "s",
+                    &[
+                        ("user", "I am also thinking of exploring more genres and discovering new artists."),
+                        ("assistant", "Try a different style."),
+                        ("user", "I am also interested in exploring different genres and discovering new artists. I started a bluegrass band today."),
+                    ],
+                ),
+                sess(
+                    "o",
+                    &[
+                        ("user", "Cedar ledger."),
+                        ("user", "Quartz violin."),
+                        ("user", "Maple desk."),
+                        ("user", "Birch shelf."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let mut far = vec![0usize, 3, 4, 5, 6, 2];
+        assert!(!apply_c2_step37_kalevala(&ix2, q, &mut far));
+        assert_eq!(far, vec![0, 3, 4, 5, 6, 2]);
+
+        // Numeral shape disagrees, so the lines are not one line.
+        let ixd = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "I am also thinking of exploring 3 genres and discovering new artists."),
+                    ("assistant", "Try a different style."),
+                    ("user", "I am also interested in exploring different genres and discovering new artists. I started a bluegrass band today."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut digit = vec![0usize, 1, 2];
+        assert!(!apply_c2_step37_kalevala(&ixd, q, &mut digit));
+        assert_eq!(digit, vec![0, 1, 2]);
+
+        // No shared restatement: nothing moves.
+        let ixu = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "The ledger key is cedar."),
+                    ("assistant", "Noted."),
+                    ("user", "I started a bluegrass band today."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut apart = vec![0usize, 1, 2];
+        assert!(!apply_c2_step37_kalevala(&ixu, q, &mut apart));
+        assert_eq!(apart, vec![0, 1, 2]);
+
+        // The earlier line can carry more content cues and still not take the seat.
+        let mut earlier = vec![2usize, 1, 0];
+        assert!(!apply_c2_step37_kalevala(&ix, q, &mut earlier));
+        assert_eq!(earlier, vec![2, 1, 0]);
+
+        // A following line that only adds a closed-class cue is not richer.
+        let ixw = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "I flew with Southwest in March."),
+                    ("assistant", "Noted."),
+                    ("user", "Which flight with Southwest in March was direct?"),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut closed = vec![0usize, 1, 2];
+        assert!(!apply_c2_step37_kalevala(
+            &ixw,
+            "Which airline did I fly in March?",
+            &mut closed,
+        ));
+        assert_eq!(closed, vec![0, 1, 2]);
     }
 }

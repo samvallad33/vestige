@@ -6291,6 +6291,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // only some. A head already inside that session stays. Does not touch
     // rsb_seat_behind.
     apply_c2_step35_mill_agreement(ix, &plan, &mut final_turn_indices, &t_scene);
+    // Step 37 Kalevala parallelism. After the gatekeeper and Steps 31–35.
+    // Adjacent same-speaker restatements are one line. The following line
+    // takes slot 1 when its content query cues strictly cover the head and
+    // it already sits in the top 5. Does not touch rsb_seat_behind.
+    apply_c2_step37_kalevala(ix, &q.text, &mut final_turn_indices);
     maybe_dump_replay(
         ix,
         q,
