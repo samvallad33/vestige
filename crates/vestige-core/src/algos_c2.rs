@@ -868,10 +868,11 @@ fn apply_c2_preference_source_seat(
 fn apply_c2_elaboration_seat(
     ix: &Index,
     plan: &QueryPlan,
+    query: &str,
     list: &mut Vec<usize>,
     t_scene: &[f32],
 ) -> bool {
-    if list.len() < 2 || plan.intent.temporal || plan.intent.preference {
+    if list.len() < 2 || plan.intent.temporal || c2_text_preference(query) {
         return false;
     }
     let top = list[0];
@@ -921,6 +922,23 @@ fn c2_summary_request(query: &str) -> bool {
         && !has_any(&padded, USER_INITIATIVE_CUES)
 }
 
+/// Text-level preference question, the same test `classify` uses
+/// (`PREF_QUERY_CUES` and not a retrospective user-initiative / timeline
+/// cue). This is the preference #11 is built for. `plan.intent.preference`
+/// can also be set later in `plan_query` when a query token is a
+/// constraint object from the conversation; that upgrade is for the
+/// preference scoring path, not a preference *question*. C2 seats from
+/// #12 onward skip only this text-level test, so they stay independent
+/// of #11 without treating a factual question that happens to mention a
+/// constraint object ("dogs" from "I don't want to hurt any of my dogs")
+/// as a preference query.
+fn c2_text_preference(query: &str) -> bool {
+    let padded = word_padded(query);
+    let user_initiative = has_any(&padded, USER_INITIATIVE_CUES);
+    let retrospective_user = user_initiative || has_any(&padded, TIMELINE_CUES);
+    has_any(&padded, PREF_QUERY_CUES) && !retrospective_user
+}
+
 /// Cross-session opener seat. When slot 1 is a mid-session user turn, a
 /// user session-opener from a different user/assistant session already in
 /// the top 5, that keeps slot 1's digit form and holds >= 70% of slot 1's
@@ -942,7 +960,7 @@ fn apply_c2_cross_opener_seat(
     list: &mut Vec<usize>,
     t_scene: &[f32],
 ) -> bool {
-    if list.len() < 2 || plan.intent.preference || plan.intent.temporal || c2_summary_request(query)
+    if list.len() < 2 || c2_text_preference(query) || plan.intent.temporal || c2_summary_request(query)
     {
         return false;
     }
@@ -1005,7 +1023,7 @@ fn apply_c2_same_opener_seat(
     list: &mut Vec<usize>,
     t_scene: &[f32],
 ) -> bool {
-    if list.len() < 2 || plan.intent.preference || plan.intent.temporal || c2_summary_request(query)
+    if list.len() < 2 || c2_text_preference(query) || plan.intent.temporal || c2_summary_request(query)
     {
         return false;
     }
@@ -1093,7 +1111,7 @@ fn apply_c2_queried_speaker_seat(
     t_scene: &[f32],
 ) -> bool {
     if list.len() < 2
-        || plan.intent.preference
+        || c2_text_preference(query)
         || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
@@ -1159,7 +1177,7 @@ fn apply_c2_queried_speaker_prev_seat(
     t_scene: &[f32],
 ) -> bool {
     if list.len() < 2
-        || plan.intent.preference
+        || c2_text_preference(query)
         || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
@@ -1258,7 +1276,7 @@ fn apply_c2_queried_speaker_t5_entry(
     t_scene: &[f32],
 ) -> bool {
     if list.len() < 6
-        || plan.intent.preference
+        || c2_text_preference(query)
         || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
@@ -1339,7 +1357,7 @@ fn apply_c2_queried_speaker_qhead_prev_seat(
     t_scene: &[f32],
 ) -> bool {
     if list.len() < 2
-        || plan.intent.preference
+        || c2_text_preference(query)
         || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
@@ -1409,7 +1427,7 @@ fn apply_c2_same_session_user_t5_entry(
     t_scene: &[f32],
 ) -> bool {
     if list.len() < 6
-        || plan.intent.preference
+        || c2_text_preference(query)
         || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
@@ -1502,7 +1520,7 @@ fn apply_c2_cross_session_user_t5_entry(
     t_scene: &[f32],
 ) -> bool {
     if list.len() < 6
-        || plan.intent.preference
+        || c2_text_preference(query)
         || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
@@ -1606,7 +1624,7 @@ fn apply_c2_queried_speaker_first_seat(
     t_scene: &[f32],
 ) -> bool {
     if list.len() < 2
-        || plan.intent.preference
+        || c2_text_preference(query)
         || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
@@ -1683,7 +1701,7 @@ fn apply_c2_queried_speaker_first_t5_entry(
     t_scene: &[f32],
 ) -> bool {
     if list.len() < 6
-        || plan.intent.preference
+        || c2_text_preference(query)
         || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
@@ -2185,42 +2203,43 @@ mod algos_c2_tests {
         // is already in the top 5, declarative, and at least as on-scene.
         let mut list = vec![2usize, 3, 4, 5, 6];
         let t_scene = vec![0.5f32, 0.4, 1.0, 0.8, 1.05, 0.9, 0.2];
-        assert!(apply_c2_elaboration_seat(&ix, &plan, &mut list, &t_scene));
+        assert!(apply_c2_elaboration_seat(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![4, 2, 3, 5, 6]);
         // Equal scene is enough (at least as on-scene as the head).
         let mut list = vec![2usize, 3, 4, 5, 6];
-        assert!(apply_c2_elaboration_seat(&ix, &plan, &mut list, &[0.5, 0.4, 1.0, 0.8, 1.0, 0.9, 0.2]));
+        assert!(apply_c2_elaboration_seat(&ix, &plan, &q.text, &mut list, &[0.5, 0.4, 1.0, 0.8, 1.0, 0.9, 0.2]));
         assert_eq!(list, vec![4, 2, 3, 5, 6]);
         // Below the head's scene score: no swap.
         let mut list = vec![2usize, 3, 4, 5, 6];
         assert!(!apply_c2_elaboration_seat(
             &ix,
             &plan,
+            &q.text,
             &mut list,
             &[0.5, 0.4, 1.0, 0.8, 0.99, 0.9, 0.2]
         ));
         assert_eq!(list, vec![2, 3, 4, 5, 6]);
         // Session opener at slot 1: no swap.
         let mut list = vec![0usize, 1, 4, 5, 6];
-        assert!(!apply_c2_elaboration_seat(&ix, &plan, &mut list, &t_scene));
+        assert!(!apply_c2_elaboration_seat(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 4, 5, 6]);
         // Next user not already in the top 5: membership must not change.
         let mut list = vec![2usize, 3, 5, 6, 1];
-        assert!(!apply_c2_elaboration_seat(&ix, &plan, &mut list, &t_scene));
+        assert!(!apply_c2_elaboration_seat(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![2, 3, 5, 6, 1]);
         // Preference query: no swap.
         let pq = Query { text: "Can you recommend a birthday gift for my sister?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
         assert!(pplan.intent.preference);
         let mut list = vec![2usize, 3, 4, 5, 6];
-        assert!(!apply_c2_elaboration_seat(&ix, &pplan, &mut list, &t_scene));
+        assert!(!apply_c2_elaboration_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         assert_eq!(list, vec![2, 3, 4, 5, 6]);
         // Temporal questions keep the timeline path.
         let tq = Query { text: "When did I buy my sister's birthday gift?".into(), date: String::new() };
         let tplan = plan_query(&ix, &tq, &Params::default());
         assert!(tplan.intent.temporal);
         let mut list = vec![2usize, 3, 4, 5, 6];
-        assert!(!apply_c2_elaboration_seat(&ix, &tplan, &mut list, &t_scene));
+        assert!(!apply_c2_elaboration_seat(&ix, &tplan, &tq.text, &mut list, &t_scene));
         assert_eq!(list, vec![2, 3, 4, 5, 6]);
         // Named-speaker sessions are left alone.
         let ixn = build_index(
@@ -2238,7 +2257,7 @@ mod algos_c2_tests {
         );
         let plann = plan_query(&ixn, &q, &Params::default());
         let mut list = vec![2usize, 3, 4];
-        assert!(!apply_c2_elaboration_seat(&ixn, &plann, &mut list, &[0.5, 0.4, 1.0, 0.8, 1.05]));
+        assert!(!apply_c2_elaboration_seat(&ixn, &plann, &q.text, &mut list, &[0.5, 0.4, 1.0, 0.8, 1.05]));
         assert_eq!(list, vec![2, 3, 4]);
     }
 
@@ -2979,6 +2998,45 @@ mod algos_c2_tests {
         let mut list = vec![1usize, 2];
         assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![1, 2]);
+    }
+
+    #[test]
+    fn c2_text_preference_matches_classify_not_constraint_upgrade() {
+        assert!(!c2_text_preference(
+            "What was the reason Audrey couldn't walk her dogs for a period of time?",
+        ));
+        assert!(!c2_text_preference(
+            "What are the classes that Audrey took for her dogs to?",
+        ));
+        assert!(!c2_text_preference("Where do I take yoga classes?"));
+        assert!(c2_text_preference(
+            "Can you recommend a birthday gift for my sister?",
+        ));
+    }
+
+    #[test]
+    fn queried_speaker_first_seat_still_fires_when_only_constraint_upgrade_sets_preference() {
+        // plan.intent.preference is forced the way plan_query would after a
+        // constraint-object upgrade; the query itself is not a PREF_QUERY.
+        let ix = build_index(
+            &[
+                sess("D8", &[("andrew", "I walked the dogs today."), ("andrew", "The park was muddy.")]),
+                sess("D22", &[("audrey", "I couldn't walk the dogs because of my ankle."), ("andrew", "Sorry to hear that.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What was the reason Audrey couldn't walk her dogs for a period of time?".into(),
+            date: String::new(),
+        };
+        let mut plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        plan.intent.preference = true;
+        // D8: unmentioned andrew at slot 1. D22's first Audrey turn is already in the top 5.
+        let mut list = vec![0usize, 1, 2, 3];
+        let t_scene = vec![1.0f32, 0.8, 0.7, 0.5];
+        assert!(apply_c2_queried_speaker_first_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 1, 3]);
     }
 
     #[test]
