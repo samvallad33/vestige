@@ -5156,6 +5156,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     t_mask.copy_from_slice(&t_mask_snap);
     t_exact_mask.copy_from_slice(&t_exact_snap);
     apply_scene_refinements(&mut t_scene, &mut t_mask, &mut t_exact_mask);
+    apply_step7_lex_specialis(ix, &q.text, &plan, pref_on, it, &t_own, &mut t_scene);
 
     let k = top_k.max(1);
 
@@ -7359,6 +7360,7 @@ pub fn rank(req: &RankRequest) -> RankResponse {
 }
 
 include!("rungs.rs");
+include!("steps7_10.rs");
 
 #[cfg(test)]
 mod tests {
