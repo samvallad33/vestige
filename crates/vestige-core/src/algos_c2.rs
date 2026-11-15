@@ -3806,6 +3806,95 @@ fn apply_c2_step34_bertillonage(
     true
 }
 
+/// Buried lexical peak. The scene pool is the same 50 the replay dump calls
+/// pool@50: the seated list, then turns with `t_scene > 0` in scene order.
+/// A declarative in a named-speaker session whose own lexical score strictly
+/// exceeds every turn in that pool, when it is the only such turn, was cut
+/// by scene penalties rather than by a missing posting. It takes the seat of
+/// the lowest-own question in slots 1..4. Slot 0 stays. The displaced question
+/// is kept: appended while the list is short of `k`, otherwise written over
+/// the tail. The session list is not rewritten. Does not touch `rsb_seat_behind`.
+fn apply_c2_buried_lexical_peak(
+    ix: &Index,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+    t_own: &[f32],
+    turn_ts: &[i64],
+    k: usize,
+) -> bool {
+    if list.len() < 5 || k == 0 {
+        return false;
+    }
+    let mut pool: Vec<usize> = list.clone();
+    for ti in order(t_scene, turn_ts) {
+        if pool.len() >= 50 {
+            break;
+        }
+        if t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        if !pool.contains(&ti) {
+            pool.push(ti);
+        }
+    }
+    if pool.is_empty() {
+        return false;
+    }
+    let mut pool_max = f32::MIN;
+    for &ti in &pool {
+        let own = t_own.get(ti).copied().unwrap_or(0.0);
+        if own > pool_max {
+            pool_max = own;
+        }
+    }
+    let mut peak: Option<usize> = None;
+    for ti in 0..ix.turns.len() {
+        if pool.contains(&ti) || ix.turns[ti].is_question || !c2_named_session(ix, ti) {
+            continue;
+        }
+        let own = t_own.get(ti).copied().unwrap_or(0.0);
+        if own <= pool_max || own <= 0.0 {
+            continue;
+        }
+        if peak.is_some() {
+            return false;
+        }
+        peak = Some(ti);
+    }
+    let Some(best) = peak else {
+        return false;
+    };
+    let mut victim: Option<(f32, usize)> = None;
+    for slot in 1..5.min(list.len()) {
+        let ti = list[slot];
+        if !ix.turns[ti].is_question {
+            continue;
+        }
+        let own = t_own.get(ti).copied().unwrap_or(0.0);
+        let take = match victim {
+            None => true,
+            Some((bow, bslot)) => own < bow || (own == bow && slot < bslot),
+        };
+        if take {
+            victim = Some((own, slot));
+        }
+    }
+    let Some((_, slot)) = victim else {
+        return false;
+    };
+    let displaced = list[slot];
+    list[slot] = best;
+    if !list.contains(&displaced) {
+        if list.len() < k {
+            list.push(displaced);
+        } else if !list.is_empty() {
+            let last = list.len() - 1;
+            list[last] = displaced;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -7550,5 +7639,91 @@ mod algos_c2_tests {
         scene[2] = 4.0;
         assert!(!apply_c2_step34_bertillonage(&ix, q, &mut list, &scene));
         assert_eq!(list, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn buried_lexical_peak_seats_the_unique_unpooled_declarative() {
+        let ix = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("mel", "When did the shop open?"),
+                    ("jon", "Where is the shop now?"),
+                    ("mel", "The counter faces the window."),
+                    ("jon", "The awning is green."),
+                    ("mel", "The bell is on the door."),
+                    ("jon", "The shop opened beside the river."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(ix.turns[0].is_question);
+        assert!(ix.turns[1].is_question);
+        assert!(!ix.turns[5].is_question);
+        assert!(c2_named_session(&ix, 5));
+        let mut list = vec![0usize, 1, 2, 3, 4];
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[5] = 0.0;
+        let mut own = vec![0.5f32; ix.turns.len()];
+        own[0] = 1.0;
+        own[1] = 0.2;
+        own[5] = 5.0;
+        let ts = vec![0i64; ix.turns.len()];
+        assert!(apply_c2_buried_lexical_peak(&ix, &mut list, &scene, &own, &ts, 10));
+        assert_eq!(list, vec![0, 5, 2, 3, 4, 1]);
+
+        // Two unpooled declaratives above the pool max: not unique, no move.
+        let ix = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("mel", "When did the shop open?"),
+                    ("jon", "Where is the shop now?"),
+                    ("mel", "The counter faces the window."),
+                    ("jon", "The awning is green."),
+                    ("mel", "The bell is on the door."),
+                    ("jon", "The shop opened beside the river."),
+                    ("mel", "The shop opened after the flood."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut list = vec![0usize, 1, 2, 3, 4];
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[5] = 0.0;
+        scene[6] = 0.0;
+        let mut own = vec![0.5f32; ix.turns.len()];
+        own[0] = 1.0;
+        own[1] = 0.2;
+        own[5] = 5.0;
+        own[6] = 4.0;
+        let ts = vec![0i64; ix.turns.len()];
+        assert!(!apply_c2_buried_lexical_peak(&ix, &mut list, &scene, &own, &ts, 10));
+        assert_eq!(list, vec![0, 1, 2, 3, 4]);
+
+        // User/assistant transcripts are not named-speaker sessions.
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "When did the shop open?"),
+                    ("assistant", "Where is the shop now?"),
+                    ("user", "The counter faces the window."),
+                    ("assistant", "The awning is green."),
+                    ("user", "The bell is on the door."),
+                    ("assistant", "The shop opened beside the river."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut list = vec![0usize, 1, 2, 3, 4];
+        let mut scene = vec![1.0f32; ix.turns.len()];
+        scene[5] = 0.0;
+        let mut own = vec![0.5f32; ix.turns.len()];
+        own[1] = 0.2;
+        own[5] = 9.0;
+        let ts = vec![0i64; ix.turns.len()];
+        assert!(!apply_c2_buried_lexical_peak(&ix, &mut list, &scene, &own, &ts, 10));
+        assert_eq!(list, vec![0, 1, 2, 3, 4]);
     }
 }
