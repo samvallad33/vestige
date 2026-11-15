@@ -6267,7 +6267,32 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // the echo's own pair does not. Does not touch rsb_seat_behind and does
     // not rewrite the session list.
     apply_c2_step32_trial_balance(ix, &plan, &mut final_turn_indices, &t_scene);
-    maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
+    // Step 33 triangulation. A top-5 turn that is strictly best on its own
+    // lexical score and on its session score takes slot 1 when it also
+    // strictly covers the head's query terms. Named-speaker dialogues only.
+    // After the gatekeeper, Step 31 and Step 32. Does not touch rsb_seat_behind.
+    apply_c2_step33_triangulation(
+        ix,
+        &plan,
+        &mut final_turn_indices,
+        &t_own,
+        &s_score,
+        &bridge_boost,
+    );
+    maybe_dump_replay(
+        ix,
+        q,
+        k,
+        &it,
+        &t_scene,
+        &final_turn_indices,
+        &final_session_indices,
+        &t_own,
+        &t_turn_raw,
+        &t_scene_sess,
+        &s_score,
+        &bridge_boost,
+    );
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -7231,6 +7256,12 @@ struct ReplaySnap {
     seated: Vec<usize>,
     final_session_indices: Vec<usize>,
     t_scene: Vec<f32>,
+    // Dump-only copies of scores the seat already computed. Not read by ranking.
+    t_own: Vec<f32>,
+    t_turn_raw: Vec<f32>,
+    t_scene_sess: Vec<f32>,
+    s_score: Vec<f32>,
+    bridge_boost: Vec<f32>,
 }
 
 thread_local! {
@@ -7245,6 +7276,11 @@ fn maybe_dump_replay(
     t_scene: &[f32],
     seated: &[usize],
     final_session_indices: &[usize],
+    t_own: &[f32],
+    t_turn_raw: &[f32],
+    t_scene_sess: &[f32],
+    s_score: &[f32],
+    bridge_boost: &[f32],
 ) {
     if replay_dump_path().is_none() {
         return;
@@ -7261,6 +7297,11 @@ fn maybe_dump_replay(
             seated: seated.to_vec(),
             final_session_indices: final_session_indices.to_vec(),
             t_scene: t_scene.to_vec(),
+            t_own: t_own.to_vec(),
+            t_turn_raw: t_turn_raw.to_vec(),
+            t_scene_sess: t_scene_sess.to_vec(),
+            s_score: s_score.to_vec(),
+            bridge_boost: bridge_boost.to_vec(),
         });
     });
 }
@@ -7503,6 +7544,11 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
             "rank": final_rank.get(&ti).copied(),
             "t_scene": snap.t_scene.get(ti).copied().unwrap_or(0.0),
             "t_scene_bits": snap.t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+            "t_own": snap.t_own.get(ti).copied().unwrap_or(0.0),
+            "t_turn_raw": snap.t_turn_raw.get(ti).copied().unwrap_or(0.0),
+            "t_scene_sess": snap.t_scene_sess.get(ti).copied().unwrap_or(0.0),
+            "s_score": snap.s_score.get(sess).copied().unwrap_or(0.0),
+            "bridge_boost": snap.bridge_boost.get(sess).copied().unwrap_or(0.0),
             "stability": t.stability,
             "stability_bits": t.stability.to_bits(),
             "session": sess,
