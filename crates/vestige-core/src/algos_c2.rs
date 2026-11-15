@@ -1477,6 +1477,82 @@ fn apply_c2_same_session_opener_t5_entry(
 }
 
 
+/// Late opener T@5 entry. A user session opener already in the official k
+/// but outside the top 5, from a session already represented in the top 5
+/// (by any turn), swaps into the top 5 in place of the last assistant in
+/// the top 5, of any session. Distinct from #31, whose victim must be a
+/// same-session assistant (it refuses when the opener's session sits in
+/// the top 5 only through a user turn), and from #20, which also seats a
+/// later non-opener user and runs before #30 seats pool openers into
+/// official k. The opener-only cut is what makes the #20 later-user loss
+/// shape (a mid-session user evicting a seated gold assistant)
+/// impossible. The victim stays in the official k, so T@10 cannot drop.
+/// The swap is refused when it would push any session out of the first 5
+/// unique-session slots, so S@5 cannot drop. Skipped on summary requests,
+/// preference, temporal, and WH-person questions, event sequences and
+/// assistant-attribution (caller), and named-speaker sessions. No new
+/// constant. Invoked after the gatekeeper, after #33, as the last ranking
+/// change, so it sees openers that the pool T@10 entry (#30) seated.
+fn apply_c2_late_opener_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    if t_scene.get(top).copied().unwrap_or(0.0) <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let top5_sessions: Vec<usize> = list[..window].iter().map(|&t| ix.turns[t].session).collect();
+    let mut cand_slot = None;
+    for i in window..list.len() {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user"
+            || c2_named_session(ix, cand)
+            || c2_session_pos(ix, cand) != 0
+            || !top5_sessions.contains(&t.session)
+            || t_scene.get(cand).copied().unwrap_or(0.0) <= 0.0
+        {
+            continue;
+        }
+        cand_slot = Some(i);
+        break;
+    }
+    let Some(ci) = cand_slot else {
+        return false;
+    };
+    let mut vs = None;
+    for (i, &tid) in list[..window].iter().enumerate() {
+        if ix.turns[tid].speaker == "assistant" {
+            vs = Some(i);
+        }
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    if !c2_s5_membership_preserved(ix, list, vs, ci) {
+        return false;
+    }
+    list.swap(vs, ci);
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -4252,6 +4328,87 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 4, 5, 3, 2];
         assert!(!apply_c2_same_session_opener_t5_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 4, 5, 3, 2]);
+    }
+
+    #[test]
+    fn late_opener_t5_entry_swaps_opener_for_any_session_top5_assistant() {
+        // gpt4_ec93e27f shape: the opener's session sits in the top 5 only
+        // through a later user turn, so #31 (same-session assistant victim)
+        // refuses. The opener swaps with the last top-5 assistant of
+        // another session that keeps a top-5 seat.
+        let ix = build_index(
+            &[
+                sess(
+                    "s0",
+                    &[
+                        ("user", "I took a train to the city last spring."),
+                        ("assistant", "Noted, the train trip is logged."),
+                        ("user", "I also logged the train fare."),
+                    ],
+                ),
+                sess(
+                    "s1",
+                    &[
+                        ("user", "I rode the bus to work this morning."),
+                        ("assistant", "The bus ride is stored."),
+                        ("user", "The bus was late again today."),
+                    ],
+                ),
+                sess("s2", &[("user", "A third note is already in the log."), ("assistant", "The third note is stored.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query { text: "Which mode of transport did I use, a bus or a train?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        // Turns: 0-2 s0 (opener 0, asst 1, user 2), 3-5 s1 (opener 3, asst 4, user 5), 6-7 s2.
+        // Top 5: s1 later user 5, s0 asst 1, s0 user 2, s2 user 6, s2 asst 7; s1 opener 3 at slot 6.
+        let mut list = vec![5usize, 1, 2, 6, 7, 3];
+        let t_scene = vec![0.5f32, 0.9, 0.6, 0.4, 0.3, 1.0, 0.7, 0.2];
+        // #31 refuses: no s1 assistant in the top 5.
+        let mut l31 = list.clone();
+        assert!(!apply_c2_same_session_opener_t5_entry(&ix, &plan, &q.text, &mut l31, &t_scene));
+        assert!(apply_c2_late_opener_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![5, 1, 2, 6, 3, 7]);
+        // A later (non-opener) user in the tail is not seated.
+        let mut list = vec![0usize, 1, 6, 7, 3, 2];
+        assert!(!apply_c2_late_opener_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 6, 7, 3, 2]);
+        // An opener from a session outside the top 5 is not seated.
+        let mut list = vec![5usize, 4, 2, 1, 0, 6];
+        assert!(!apply_c2_late_opener_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![5, 4, 2, 1, 0, 6]);
+        // The victim is the last top-5 assistant, of any session.
+        let mut list = vec![5usize, 2, 4, 6, 7, 3, 0];
+        assert!(apply_c2_late_opener_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![5, 2, 4, 6, 3, 7, 0]);
+        // Preference, temporal, and WH-person questions are skipped.
+        for text in [
+            "What is my favorite mode of transport, a bus or a train?",
+            "When did I use a bus or a train?",
+            "Who drove the bus or the train?",
+        ] {
+            let tq = Query { text: text.into(), date: String::new() };
+            let tplan = plan_query(&ix, &tq, &Params::default());
+            let mut list = vec![5usize, 1, 2, 6, 7, 3];
+            assert!(!apply_c2_late_opener_t5_entry(&ix, &tplan, &tq.text, &mut list, &t_scene));
+            assert_eq!(list, vec![5, 1, 2, 6, 7, 3]);
+        }
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[
+                sess("D0", &[("caroline", "I took a train to the city."), ("melanie", "Train noted."), ("caroline", "Fare logged.")]),
+                sess("D1", &[("caroline", "I rode the bus to work."), ("melanie", "Bus noted."), ("caroline", "The bus was late.")]),
+                sess("D2", &[("caroline", "A third note."), ("melanie", "Stored.")]),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![5usize, 1, 2, 6, 7, 3];
+        assert!(!apply_c2_late_opener_t5_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![5, 1, 2, 6, 7, 3]);
     }
 
     #[test]
