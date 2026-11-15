@@ -6151,6 +6151,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             // preference-source seat.
             if !it.preference {
                 apply_c2_elaboration_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+                // Cross-session opener: mid-session user head yields to a
+                // user session-opener already in the top 5 from another
+                // session. Skipped on preference and on summary requests.
+                apply_c2_cross_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
             }
         }
         // Preference source: ReplySource is skipped on assistant_attribution,
