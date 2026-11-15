@@ -6,7 +6,7 @@ LME bits: S@1, S@5, S@10, T@1, T@5, T@10, Turn All@5.
 LoCoMo bits: S@1, S@5, T@1, T@5, T@10.
 BEAM bits: T@1, T@5, T@10, All@5, S@1, S@5, Session All@5.
 
-470 + 1,536 + 355 questions compared. Eleven gains. LoCoMo: no question moved.
+470 + 1,536 + 355 questions compared. Twelve gains. LoCoMo: no question moved. Losses versus attempt 3 (`ca63ca03`): 0.
 
 | Bench | Question | Type | Before | After | Delta |
 |---|---|---|---|---|---|
@@ -19,9 +19,10 @@ BEAM bits: T@1, T@5, T@10, All@5, S@1, S@5, Session All@5.
 | BEAM | `6:temporal_reasoning:0` | temporal_reasoning | `[0,1,1,0,0,1,1]` | `[0,1,1,1,0,1,1]` | All@5 |
 | BEAM | `11:knowledge_update:0` | knowledge_update | `[1,1,1,0,1,1,1]` | `[1,1,1,1,1,1,1]` | All@5 |
 | BEAM | `15:multi_session_reasoning:0` | multi_session_reasoning | `[0,0,0,0,0,0,0]` | `[0,1,1,0,0,0,0]` | Turn@5, Turn@10 |
+| BEAM | `19:multi_session_reasoning:0` | multi_session_reasoning | `[1,1,1,0,0,1,1]` | `[1,1,1,1,0,1,1]` | All@5 |
 | BEAM | `15:temporal_reasoning:1` | temporal_reasoning | `[0,0,0,0,0,0,0]` | `[0,1,1,0,0,0,0]` | Turn@5, Turn@10 |
 | BEAM | `20:knowledge_update:1` | knowledge_update | `[1,1,1,0,1,1,1]` | `[1,1,1,1,1,1,1]` | All@5 |
 
 `ac031881` (single-session-assistant) stays `[1,1,1,0,1,1,1]`.
 
-BEAM Turn All@10 is not in the per-question vector. The aggregate moved 138 → 141 with `6:temporal_reasoning:0`, `11:knowledge_update:0`, and `20:knowledge_update:1`.
+BEAM Turn All@10 is not in the per-question vector. The aggregate moved 138 → 142. `6:temporal_reasoning:0`, `11:knowledge_update:0`, and `20:knowledge_update:1` account for three. `19:multi_session_reasoning:0` is the fourth: its stored All@5 bit is the one that flipped, and All@10 moved with it (7 → 8 on multi_session_reasoning).

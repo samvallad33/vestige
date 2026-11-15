@@ -154,6 +154,36 @@ BEAM cells that moved: knowledge_update All@5 24 → 26, All@10 27 → 29. multi
 
 Gains, 11, losses 0, including against attempt 2. `ac031881` stays a hit. Detail in `SCOREBOARD_POOL_C.md` and `POOL_C_PERQ_DIFF.md`.
 
-### What is still open
+### What attempt 3 still left open
 
-The two-session gate is what made the union legal. It also means a gold opener whose session is the only session in the top 5 never enters. 31 of the 61 multi-session openers in pool@50 and outside the top 5 have no same-session turn in the top 5 at all, so this seat cannot see them: there is no same-session assistant to yield. Those need a different admission, not a wider cover on this one.
+The two-session gate is what made the union legal. It also means a gold opener whose session is the only session in the top 5 never enters. 31 of the 61 multi-session openers in pool@50 and outside the top 5 have no same-session turn in the top 5 at all, so the same-session seat cannot see them.
+
+## Attempt 4 — shipped. Absent session key
+
+A user opener whose session is outside the top 5 takes an assistant from a non-dominant session. The assistant's own session must keep another turn, and that turn must attest every query group the assistant attests. The dominant session (most turns in the window, earliest slot on a tie) is not a donor. The opener must post a query group and have `t_scene > 0`. A digit on the assistant that the opener lacks keeps the assistant. One-session windows do not fire. Same named-speaker, preference, summary, event, and assistant-attribution skips as the other seat.
+
+On the baseline census, 49 of the 52 LME gold assistants already in the top 5 are single-session-assistant. 47 of those sit in the dominant session, which this seat does not touch. The two that do not (`1903aded`, `b759caee`) did not lose a bit.
+
+Parent `ca63ca034a620b85628f0f5068b3bbc0a40823a7`. Binary sha256 `97880b59ffa49ffeb9b9c06b51a6ae98db81add9c82e947bcb77d4cfa87411a4`.
+
+### Files
+
+- `crates/vestige-core/src/algos_c2.rs` 3925–4060 (`apply_c2_pool_c_absent_session_key`), test 8028–8113
+- `crates/vestige-core/src/retrieval.rs` 6292–6295, after the same-session seat
+
+### Scoreboard versus attempt 3
+
+LME is question-identical (Turn 353/429/438, All@5 320, session 430/463/468). LoCoMo is question-identical. BEAM adds one gain and no losses.
+
+| | Attempt 3 | Attempt 4 | Delta |
+|---|---:|---:|---:|
+| BEAM All@5 / All@10 | 121 / 141 | 122 / 142 | +1 / +1 |
+| BEAM multi_session_reasoning All@5 / All@10 | 4 / 7 | 5 / 8 | +1 / +1 |
+| BEAM Turn @1/@5/@10 | 160/240/269 | same | 0 |
+| LME and LoCoMo | attempt 3 | same | 0 |
+
+The new question is BEAM `19:multi_session_reasoning:0`, All@5 0 → 1. Versus the Step 31–34 tip that is the sixth BEAM gain, and the LME six are unchanged. Losses versus the tip and versus attempt 3: 0.
+
+### Still open
+
+LME multi-session All@5 is 56/121. Temporal-reasoning All@5 is 77/127. This seat did not move either. The openers it could have seated on LME were either not redundant with a staying companion, or the donor assistant was in the dominant session and was left there.
