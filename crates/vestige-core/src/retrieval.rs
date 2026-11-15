@@ -6131,6 +6131,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // C2 algos lane: slot-1 seat rules, all before RSB (which then seats behind the head).
     if !it.is_event_sequence {
         apply_c2_bullae_numeral_seat(ix, &mut final_turn_indices, &t_scene);
+        apply_c2_coverage_margin_seat(ix, &plan, &mut final_turn_indices);
     }
     // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
