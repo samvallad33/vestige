@@ -1574,6 +1574,88 @@ fn apply_c2_cross_session_user_t5_entry(
     true
 }
 
+
+/// Queried-speaker first-in-session seat. In a named-speaker dialogue,
+/// an unmentioned speaker at slot 1 yields to a turn already in the
+/// top 5 by a speaker the query names, when that turn is that
+/// speaker's first utterance in its session. Top-5 membership never
+/// changes. Distinct from the adjacent seats (#15 next, #16 previous
+/// statement, #18 question-head previous): the cut is first-in-session,
+/// not adjacency, so a named speaker's opening turn already retrieved
+/// in the top 5 can take slot 1 even when it is not the previous or
+/// next turn. A later turn by the same speaker does not fire. No new
+/// ratio; first-in-session is the cut. The same mention, conjunction,
+/// WH-person, preference, temporal, and summary cuts apply as #15–#18.
+/// Does not fire on user/assistant chats. Invoked after the
+/// gatekeeper and after #19–#21, as the last ranking change, so it
+/// sees the official post-gatekeeper top 5. A pre-RSB pass would
+/// reseat a first-in-session turn that the gatekeeper later leaves
+/// outside the top 5.
+fn c2_first_same_speaker(ix: &Index, ti: usize) -> Option<usize> {
+    let members = ix.session_turns.get(ix.turns[ti].session)?;
+    let sp = ix.turns[ti].speaker.as_str();
+    members.iter().copied().find(|&m| ix.turns[m].speaker == sp)
+}
+
+fn apply_c2_queried_speaker_first_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2
+        || plan.intent.preference
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if head_sp.is_empty()
+        || head_sp == "user"
+        || head_sp == "assistant"
+        || c2_query_mentions_speaker(query, head_sp)
+        || c2_speaker_conjoined(query, head_sp)
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut cand_slot = None;
+    for i in 1..window {
+        let cand = list[i];
+        let csp = ix.turns[cand].speaker.as_str();
+        if csp.is_empty()
+            || csp == "user"
+            || csp == "assistant"
+            || !c2_query_mentions_speaker(query, csp)
+            || c2_speaker_conjoined(query, csp)
+        {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        if c2_first_same_speaker(ix, cand) != Some(cand) {
+            continue;
+        }
+        cand_slot = Some(i);
+        break;
+    }
+    let Some(slot) = cand_slot else {
+        return false;
+    };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -2803,6 +2885,147 @@ mod algos_c2_tests {
         let mut list = vec![1usize, 2];
         assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![1, 2]);
+    }
+
+    #[test]
+    fn queried_speaker_first_seat_promotes_named_speakers_first_in_session_turn() {
+        // Adjacent previous question that is also the speaker's first
+        // utterance (6:78 shape).
+        let ix = build_index(
+            &[sess(
+                "D5",
+                &[
+                    ("james", "How should I go about adopting a rescue?"),
+                    ("john", "That is a great plan for the spring."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query { text: "What did James adopt?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.preference);
+        assert!(!plan.intent.temporal);
+        assert!(ix.turns[0].is_question);
+        assert!(!ix.turns[1].is_question);
+        assert!(c2_query_mentions_speaker(&q.text, "james"));
+        assert!(!c2_query_mentions_speaker(&q.text, "john"));
+        let mut list = vec![1usize, 0];
+        let t_scene = vec![0.9f32, 1.0];
+        assert!(apply_c2_queried_speaker_first_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1]);
+
+        // Non-adjacent first-in-session turn already in the top 5 (5:100 shape).
+        let ix2 = build_index(
+            &[
+                sess(
+                    "D8",
+                    &[
+                        ("audrey", "The weather has been terrible for walking."),
+                        ("andrew", "The trail has been muddy all week."),
+                        ("audrey", "Has the rain kept you off the usual loop?"),
+                        ("andrew", "Yes, I have been staying in."),
+                        ("audrey", "I have been staying in too."),
+                    ],
+                ),
+                sess(
+                    "D22",
+                    &[
+                        ("audrey", "A sprain kept me from walking the dogs."),
+                        ("andrew", "Sorry to hear you had to pause the walks."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q2 = Query {
+            text: "What was the reason Audrey couldn't walk her dogs?".into(),
+            date: String::new(),
+        };
+        let p2 = plan_query(&ix2, &q2, &Params::default());
+        assert!(!p2.intent.preference);
+        assert!(!p2.intent.temporal);
+        assert!(c2_query_mentions_speaker(&q2.text, "audrey"));
+        assert!(!c2_query_mentions_speaker(&q2.text, "andrew"));
+        // Index order: D8 turns 0..4, D22 turns 5..6. First Audrey in D8 is 0
+        // (held out of the top 5). First Audrey in D22 is 5.
+        assert_eq!(c2_first_same_speaker(&ix2, 2), Some(0));
+        assert_eq!(c2_first_same_speaker(&ix2, 5), Some(5));
+        // Head = D8 andrew (3); later Audrey in D8 (2) is in the top 5 but
+        // is not first-in-session; D22 Audrey first (5) is in the top 5.
+        let mut list = vec![3usize, 2, 1, 5, 4];
+        let sc = vec![0.5f32, 1.0, 0.9, 1.1, 0.8, 0.4, 0.3];
+        assert!(apply_c2_queried_speaker_first_seat(&ix2, &p2, &q2.text, &mut list, &sc));
+        assert_eq!(list, vec![5, 3, 2, 1, 4]);
+
+        // A later turn by the mentioned speaker, even if previous, does not seat.
+        let ixl = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("james", "I have been thinking about a rescue."),
+                    ("john", "Have you looked at the local shelter?"),
+                    ("james", "What breed would suit an apartment?"),
+                    ("john", "A small dog might work."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut list = vec![3usize, 2];
+        assert!(!apply_c2_queried_speaker_first_seat(&ixl, &plan, &q.text, &mut list, &[1.0, 0.9, 0.8, 0.7]));
+        assert_eq!(list, vec![3, 2]);
+
+        // Head speaker is already named in the query: no seat.
+        let hq = Query { text: "What did John say James should adopt?".into(), date: String::new() };
+        let hplan = plan_query(&ix, &hq, &Params::default());
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_queried_speaker_first_seat(&ix, &hplan, &hq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 0]);
+
+        // Conjoined speaker ("X and Y"): no seat.
+        let cq = Query { text: "What did James and John adopt?".into(), date: String::new() };
+        assert!(c2_speaker_conjoined(&cq.text, "james"));
+        let cplan = plan_query(&ix, &cq, &Params::default());
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_queried_speaker_first_seat(&ix, &cplan, &cq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 0]);
+
+        // Preference query: no seat.
+        let pq = Query { text: "What is James's favorite rescue breed to adopt?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_queried_speaker_first_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 0]);
+
+        // WH-person: no seat.
+        let wq = Query { text: "Who did James adopt?".into(), date: String::new() };
+        assert!(wh_slots(&wq.text) & WH_PERSON != 0);
+        let wplan = plan_query(&ix, &wq, &Params::default());
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_queried_speaker_first_seat(&ix, &wplan, &wq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 0]);
+
+        // user/assistant chats are left alone.
+        let ixu = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "How should I go about adopting a rescue?"),
+                    ("assistant", "That is a great plan for the spring."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let uq = Query { text: "What did James adopt?".into(), date: String::new() };
+        let uplan = plan_query(&ixu, &uq, &Params::default());
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_queried_speaker_first_seat(&ixu, &uplan, &uq.text, &mut list, &[0.9, 1.0]));
+        assert_eq!(list, vec![1, 0]);
+
+        // First-in-session turn not in the top 5: no seat.
+        let mut list = vec![1usize];
+        assert!(!apply_c2_queried_speaker_first_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1]);
     }
 
     #[test]

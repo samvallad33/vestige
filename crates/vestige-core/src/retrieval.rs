@@ -6085,7 +6085,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // Queried-speaker T@5 entry, after the gatekeeper. The pre-RSB pass
     // (#17) is often undone when the gatekeeper Kemeny-reorders the tail
     // (slots 2..k). Re-applying the same membership-preserving swap here
-    // is the last ranking change, so the entry survives by construction.
+    // is a post-gatekeeper ranking change, so the entry survives the
+    // tail reorder by construction. Later post-gatekeeper C2 seats
+    // may still run after this pass.
     // Same preference / event-sequence / assistant-attribution cuts.
     // Does not touch rsb_seat_behind and adds no WH-slot ballot.
     if !it.is_event_sequence && !it.assistant_attribution && !it.preference {
@@ -6101,6 +6103,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // next turn. Post-gatekeeper, after #20, so the entry survives.
         // Skipped on preference.
         apply_c2_cross_session_user_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Queried-speaker first-in-session seat: an unmentioned speaker
+        // at slot 1 yields to a named speaker's first utterance in its
+        // session, already in the top 5. Post-gatekeeper, after #21,
+        // so the seat is the last ranking change and sees the official
+        // post-gatekeeper list (a pre-RSB pass would reseat a tail
+        // occupant that the gatekeeper later leaves outside the top 5).
+        // Skipped on preference.
+        apply_c2_queried_speaker_first_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
