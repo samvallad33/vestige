@@ -1159,7 +1159,8 @@ fn apply_c2_cross_opener_pair_seat(
 /// questions, event sequences and assistant-attribution (caller), and
 /// named-speaker sessions. No new constant: the scene floor is "at
 /// least as on-scene," the same comparison #12 and #27 use. Invoked
-/// after the gatekeeper, after #27, as the last ranking change.
+/// after the gatekeeper, after #27. A later post-gatekeeper C2 seat
+/// may still run after this pass.
 fn apply_c2_answered_opener_decl_seat(
     ix: &Index,
     plan: &QueryPlan,
@@ -1205,6 +1206,79 @@ fn apply_c2_answered_opener_decl_seat(
             continue;
         }
         if t_scene.get(cand).copied().unwrap_or(0.0) < sc_top {
+            continue;
+        }
+        list.remove(i);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
+
+/// Solo earlier-opener seat. A lone user opener at slot 1 — no other
+/// turn from that session is already in the top 5 — yields to an
+/// earlier user opener from a different user/assistant session already
+/// in the top 5, when that earlier opener is at least as on-scene and
+/// both sessions have a known timestamp. Top-5 membership never changes.
+/// The solo + earlier cut is the structure: a sitting gold opener that
+/// arrived with another turn from its session is left alone, and a
+/// same-date or later challenger is not promoted, which is what would
+/// otherwise unseat a sitting gold opener. Distinct from #27 (candidate
+/// reply already in the top 5; no solo or earlier requirement), from
+/// #28 (answered question head and a declarative candidate), from #13
+/// (mid-session head), and from #14 (same session). Skipped on summary
+/// requests (existing `summary_hold` shape), preference and temporal
+/// questions, event sequences and assistant-attribution (caller), and
+/// named-speaker sessions. No new constant: the scene floor is "at
+/// least as on-scene," the same comparison #12, #27, and #28 use.
+/// Invoked after the gatekeeper, after #28, as the last ranking change.
+fn apply_c2_solo_earlier_opener_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || c2_text_preference(query) || plan.intent.temporal || c2_summary_request(query)
+    {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker != "user"
+        || c2_named_session(ix, top)
+        || c2_session_pos(ix, top) != 0
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let ts_top = ix.session_ts.get(ix.turns[top].session).copied().unwrap_or(0);
+    if ts_top <= 0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let top_sess = ix.turns[top].session;
+    if list[1..window].iter().any(|&t| ix.turns[t].session == top_sess) {
+        return false;
+    }
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user"
+            || t.session == top_sess
+            || c2_named_session(ix, cand)
+            || c2_session_pos(ix, cand) != 0
+        {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) < sc_top {
+            continue;
+        }
+        let ts_cand = ix.session_ts.get(t.session).copied().unwrap_or(0);
+        if ts_cand <= 0 || ts_cand >= ts_top {
             continue;
         }
         list.remove(i);
@@ -3571,6 +3645,116 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 2, 1, 3];
         assert!(!apply_c2_answered_opener_decl_seat(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 2, 1, 3]);
+    }
+
+    #[test]
+
+    fn solo_earlier_opener_seat_promotes_earlier_opener_over_lone_head() {
+        // 5:knowledge_update:0 shape: a lone user opener at slot 1 (no
+        // other turn from that session in the top 5) yields to an earlier
+        // user opener from a different session already in the top 5, when
+        // that opener is at least as on-scene.
+        let mut later = sess(
+            "s2",
+            &[
+                ("user", "I just started a new practice schedule this month."),
+                ("assistant", "Noted, I will keep that in mind."),
+            ],
+        );
+        later.timestamp = 2_000;
+        let mut earlier = sess(
+            "s1",
+            &[
+                ("user", "I've been studying probability basics, including dice roll problems, for hours."),
+                ("assistant", "Keep a running total of those hours."),
+            ],
+        );
+        earlier.timestamp = 1_000;
+        let ix = build_index(&[later, earlier], &Params::default());
+        let q = Query {
+            text: "How many hours have I spent studying probability basics?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        // Turns: 0-1 later session s2, 2-3 earlier session s1. Head 0 is solo.
+        let mut list = vec![0usize, 2, 3];
+        let t_scene = vec![0.9f32, 0.5, 1.05, 0.7];
+        assert!(apply_c2_solo_earlier_opener_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 3]);
+        // Head is not solo (its assistant reply is already in the top 5): no seat.
+        let mut list = vec![0usize, 2, 1, 3];
+        assert!(!apply_c2_solo_earlier_opener_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 1, 3]);
+        // Candidate is later, not earlier: no seat.
+        let mut later_cand = sess(
+            "s3",
+            &[
+                ("user", "I logged more probability study hours last week."),
+                ("assistant", "I recorded that total."),
+            ],
+        );
+        later_cand.timestamp = 3_000;
+        let mut later = sess(
+            "s2",
+            &[
+                ("user", "I just started a new practice schedule this month."),
+                ("assistant", "Noted, I will keep that in mind."),
+            ],
+        );
+        later.timestamp = 2_000;
+        let ixl = build_index(&[later, later_cand], &Params::default());
+        let planl = plan_query(&ixl, &q, &Params::default());
+        let mut list = vec![0usize, 2, 3];
+        assert!(!apply_c2_solo_earlier_opener_seat(&ixl, &planl, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 3]);
+        // Candidate below the head's scene score: no seat.
+        let mut list = vec![0usize, 2, 3];
+        assert!(!apply_c2_solo_earlier_opener_seat(
+            &ix,
+            &plan,
+            &q.text,
+            &mut list,
+            &[1.0, 0.5, 0.9, 0.7]
+        ));
+        assert_eq!(list, vec![0, 2, 3]);
+        // Preference questions are skipped.
+        let pq = Query { text: "What is my favorite probability study schedule?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(c2_text_preference(&pq.text));
+        let mut list = vec![0usize, 2, 3];
+        assert!(!apply_c2_solo_earlier_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 3]);
+        // Temporal questions keep the timeline path.
+        let tq = Query { text: "When do I study probability basics?".into(), date: String::new() };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(tplan.intent.temporal);
+        let mut list = vec![0usize, 2, 3];
+        assert!(!apply_c2_solo_earlier_opener_seat(&ix, &tplan, &tq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 3]);
+        // Named-speaker sessions are left alone.
+        let mut later_n = sess(
+            "D2",
+            &[
+                ("caroline", "I just started a new practice schedule this month."),
+                ("melanie", "Noted, I will keep that in mind."),
+            ],
+        );
+        later_n.timestamp = 2_000;
+        let mut earlier_n = sess(
+            "D1",
+            &[
+                ("caroline", "I've been studying probability basics, including dice roll problems, for hours."),
+                ("melanie", "Keep a running total of those hours."),
+            ],
+        );
+        earlier_n.timestamp = 1_000;
+        let ixn = build_index(&[later_n, earlier_n], &Params::default());
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![0usize, 2, 3];
+        assert!(!apply_c2_solo_earlier_opener_seat(&ixn, &plann, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 3]);
     }
 
     #[test]
