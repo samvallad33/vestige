@@ -2135,6 +2135,105 @@ fn apply_c2_episode_run_edge_t5_entry(
 }
 
 
+/// Neighbor-pair T@5 entry. In a named-speaker dialogue, an official-k
+/// tail turn (slots 6..k) that sits directly next to a top-5 turn of the
+/// same session completes a two-turn exchange the top 5 holds only half of.
+/// The most on-scene such neighbor (declarative, t_scene > 0, by a speaker
+/// the query names and does not conjoin) swaps places with the least
+/// on-scene top-5 turn (slots 2..5) that is the only top-5 turn of its
+/// session and not a session opener, when the neighbor is at least as
+/// on-scene and that turn's session is not earlier than the neighbor's
+/// (the #41 victim and primacy cuts). The victim stays in the official k,
+/// so T@10 cannot drop; C2 turn seats do not rewrite the session list.
+/// Official-k neighbors only: a pool neighbor (taking the seat outright)
+/// loses LoCoMo 7:179. Named dialogues only: on user/assistant chats the
+/// same move loses LME All@5 (4bc144e2). Distinct from #41 (the edge of a
+/// back-to-back top-5 run, official k or pool) and from the slot-1
+/// adjacency seats (#2 / #10 / #12 / #15 / #16). No new constant. Skipped
+/// on summary requests, preference, temporal, and WH-person questions;
+/// event sequences and assistant-attribution are skipped by the caller.
+/// Invoked after the gatekeeper, after #41, as the last ranking change.
+fn apply_c2_neighbor_pair_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let head_sp = ix.turns[list[0]].speaker.as_str();
+    if head_sp.is_empty() || head_sp == "user" || head_sp == "assistant" {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let sc = |t: usize| t_scene.get(t).copied().unwrap_or(0.0);
+    let top: Vec<usize> = list[..window].to_vec();
+    let mut cand: Option<usize> = None;
+    for &x in top.iter() {
+        let turns = &ix.session_turns[ix.turns[x].session];
+        let p = c2_session_pos(ix, x);
+        let mut nbs: Vec<usize> = Vec::new();
+        if p > 0 {
+            nbs.push(turns[p - 1]);
+        }
+        if p + 1 < turns.len() {
+            nbs.push(turns[p + 1]);
+        }
+        for t in nbs {
+            if top.contains(&t) || !list[window..].contains(&t) || sc(t) <= 0.0 || ix.turns[t].is_question {
+                continue;
+            }
+            let sp = ix.turns[t].speaker.as_str();
+            if !sp.is_empty() && sp != "user" && sp != "assistant" {
+                if !c2_query_mentions_speaker(query, sp) || c2_speaker_conjoined(query, sp) {
+                    continue;
+                }
+            }
+            if cand.is_none_or(|c| sc(t) > sc(c) || (sc(t) == sc(c) && t < c)) {
+                cand = Some(t);
+            }
+        }
+    }
+    let Some(cand) = cand else {
+        return false;
+    };
+    let sc_c = sc(cand);
+    let mut vs: Option<usize> = None;
+    for i in 1..window {
+        let v = list[i];
+        let vsess = ix.turns[v].session;
+        if sc(v) > sc_c
+            || c2_session_pos(ix, v) == 0
+            || top.iter().filter(|&&t| ix.turns[t].session == vsess).count() != 1
+        {
+            continue;
+        }
+        if vs.is_none_or(|b| sc(v) <= sc(list[b])) {
+            vs = Some(i);
+        }
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    let ts_of = |ti: usize| ix.session_ts.get(ix.turns[ti].session).copied().unwrap_or(0);
+    if ts_of(list[vs]) < ts_of(cand) {
+        return false;
+    }
+    let Some(ci) = list.iter().position(|&t| t == cand) else {
+        return false;
+    };
+    list.swap(vs, ci);
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -5423,6 +5522,57 @@ mod algos_c2_tests {
         let plann = plan_query(&ix, &qn, &Params::default());
         let mut list = vec![5usize, 6, 2, 9, 0, 7, 1, 3];
         assert!(!apply_c2_episode_run_edge_t5_entry(&ix, &plann, &qn.text, &mut list, &t_scene));
+    }
+
+    #[test]
+    fn neighbor_pair_t5_entry_swaps_tail_neighbor_for_lone_top5_turn() {
+        let mut ss = vec![
+            sess("D1", &[("john", "I bought a new guitar."), ("tim", "Cool.")]),
+            sess("D2", &[("john", "I went hiking."), ("tim", "Where?")]),
+            sess("D3", &[("tim", "Hi."), ("john", "I designed a game character."), ("tim", "Why?"), ("john", "A novel I loved inspired the character.")]),
+            sess("D4", &[("john", "I watched a movie."), ("tim", "Which one?")]),
+        ];
+        for (i, se) in ss.iter_mut().enumerate() {
+            se.timestamp = 1_000 + i as i64;
+        }
+        let ix = build_index(&ss, &Params::default());
+        let q = Query { text: "What inspired John to create the game character?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        // Turns: D1 0-1, D2 2-3, D3 4-7, D4 8-9. Top-5 turn 6 (D3, alone in
+        // the top 5) has tail neighbor 7 (john, declarative). Turn 9 is D4's
+        // only top-5 turn and not its opener.
+        let t_scene = vec![1.0f32, 0.5, 2.8, 0.4, 0.3, 0.2, 2.9, 2.0, 0.2, 1.5];
+        let mut list = vec![6usize, 2, 9, 0, 3, 7, 1, 5];
+        assert!(apply_c2_neighbor_pair_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![6, 2, 7, 0, 3, 9, 1, 5]);
+        // A pool neighbor (not in the official k) does not enter.
+        let mut list = vec![6usize, 2, 9, 0, 3, 1, 5, 8];
+        assert!(!apply_c2_neighbor_pair_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        // Primacy: the only lone non-opener victim, turn 1 (D1), is earlier than D3.
+        let mut list = vec![6usize, 2, 1, 0, 8, 7, 9, 3];
+        let t2 = vec![1.0f32, 0.5, 2.8, 0.4, 0.3, 0.2, 2.9, 2.0, 2.5, 1.5];
+        assert!(!apply_c2_neighbor_pair_t5_entry(&ix, &plan, &q.text, &mut list, &t2));
+        // The neighbor's speaker is not the one the query names: no entry.
+        let qn = Query { text: "What inspired Mike to create the game character?".into(), date: String::new() };
+        let plann = plan_query(&ix, &qn, &Params::default());
+        let mut list = vec![6usize, 2, 9, 0, 3, 7, 1, 5];
+        assert!(!apply_c2_neighbor_pair_t5_entry(&ix, &plann, &qn.text, &mut list, &t_scene));
+        // User/assistant chats are left alone.
+        let ixu = build_index(
+            &[
+                sess("s1", &[("user", "I bought a new guitar."), ("assistant", "Cool.")]),
+                sess("s2", &[("user", "I went hiking."), ("assistant", "Where?")]),
+                sess("s3", &[("user", "Hi."), ("assistant", "I designed a game character."), ("user", "Why?"), ("assistant", "A novel inspired the character.")]),
+                sess("s4", &[("user", "I watched a movie."), ("assistant", "Which one?")]),
+            ],
+            &Params::default(),
+        );
+        let planu = plan_query(&ixu, &q, &Params::default());
+        let mut list = vec![6usize, 2, 9, 0, 3, 7, 1, 5];
+        assert!(!apply_c2_neighbor_pair_t5_entry(&ixu, &planu, &q.text, &mut list, &t_scene));
     }
 
     #[test]
