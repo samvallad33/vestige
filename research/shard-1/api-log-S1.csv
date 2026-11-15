@@ -1,0 +1,258 @@
+api,endpoint,http_status,result_count,note
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=sza3-bi-ta&limit=4,200,4,page body 19893 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=la2-ia3&limit=4,200,4,page body 22360 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=nig2-kas7-ak&limit=4,200,0,page body 2 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=giri3&limit=4,200,4,page body 170445 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=masz2-kim&limit=4,200,0,page body 2 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=kiszib3&limit=4,200,4,page body 14040 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=pisan-dub-ba&limit=4,200,4,page body 15534 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=szu-nigin&limit=4,200,4,page body 19602 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=iti+dirig&limit=4,200,0,page body 2 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=he2-pi&limit=4,200,1,page body 19627 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=mu+lugal&limit=4,200,4,page body 19694 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=nam-erim2&limit=4,200,4,page body 24464 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=di-til-la&limit=4,200,4,page body 280953 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=lu2-inim-ma&limit=4,200,4,page body 24701 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=gaba-ri&limit=4,200,4,page body 14978 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=im-gid2-da&limit=4,200,4,page body 219874 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=mu-szid-bi&limit=4,200,2,page body 11067 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=dub-3-kam&limit=4,200,0,page body 2 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=igi-3-gal2&limit=4,200,0,page body 2 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=sam2&limit=4,200,4,page body 124082 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=zi-ga&limit=4,200,4,page body 17550 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=bala&limit=4,200,4,page body 90987 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=szuku&limit=4,200,4,page body 111612 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=AN.MI&limit=4,200,2,page body 55694 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=USAN&limit=4,200,4,page body 20816 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=GENNA&limit=4,200,4,page body 33265 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=su-su&limit=4,200,4,page body 31874 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=ku3-bi&limit=4,200,4,page body 17983 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=mu+us2-sa&limit=4,200,4,page body 30749 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=libir-ra&limit=4,200,4,page body 52102 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=nis-hu&limit=4,200,4,page body 41123 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=gu2-un&limit=4,200,4,page body 34461 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=si-i3-tum&limit=4,200,4,page body 297316 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=gurum2&limit=4,200,4,page body 24017 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=nig2-ba&limit=4,200,4,page body 15711 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=a-ra2&limit=4,200,4,page body 17089 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=u4+1-kam&limit=4,200,1,page body 2967 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=iti+bara2&limit=4,200,4,page body 46701 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=na-su&limit=4,200,4,page body 26105 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=transliteration&simple-value%5B%5D=GE6&limit=4,200,4,page body 81913 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=keyword&simple-value%5B%5D=case+tablet&limit=4,200,4,page body 21783 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=keyword&simple-value%5B%5D=astronomical+diary&limit=4,200,4,page body 12864 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=keyword&simple-value%5B%5D=kudurru&limit=4,200,4,page body 38087 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=keyword&simple-value%5B%5D=year+name&limit=4,200,4,page body 19280 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=keyword&simple-value%5B%5D=school+exercise&limit=4,200,4,page body 11117 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=publication&simple-value%5B%5D=NSGU&limit=4,200,0,page body 2 bytes; Link present
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=publication&simple-value%5B%5D=LBAT&limit=4,200,4,page body 14570 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=publication&simple-value%5B%5D=BPO&limit=4,200,0,page body 1800000 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=publication&simple-value%5B%5D=HSS&limit=4,200,4,page body 41951 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=publication&simple-value%5B%5D=BE+6&limit=4,200,4,page body 228135 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=publication&simple-value%5B%5D=YOS+08&limit=4,200,4,page body 34225 bytes; Link rel=next
+CDLI,https://cdli.earth/search.json?simple-field%5B%5D=id&simple-value%5B%5D=P238993&limit=4,200,1,page body 4801 bytes; Link present
+PeriodO,https://data.perio.do/dataset/,200,1,bytes=1362524
+Pleiades,https://pleiades.stoa.org/places.json?Title=Nippur,404,1,bytes=19157; HTTPError: HTTP Error 404: Not Found
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Nippur&portal_type=Place,200,1,bytes=7454
+CDLI,https://cdli.earth/dl/atf/P238993.atf,404,1,bytes=153; HTTPError: HTTP Error 404: Not Found
+CDLI,https://cdli.earth/artifacts/238993.atf,500,0,bytes=0; HTTPError: HTTP Error 500: Internal Server Error
+CDLI,https://cdli.earth/download/P238993,404,0,bytes=0; HTTPError: HTTP Error 404: Not Found
+CDLI,https://cdli.earth/artifacts.json?id=238993,200,100,bytes=1146539
+CDLI,https://cdli.earth/artifacts/238993.json?contain=Inscription,200,1,bytes=5517
+ORACC,https://oracc.museum.upenn.edu/saao/saa04/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/saao/saa06/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/saao/saa07/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/saao/saa10/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/saao/saa11/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/saao/saa14/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/adsd/adart1/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/dccmt/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/dcclt/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/dcclt/signlists/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/obta/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/obmc/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/ccpo/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/etcsri/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/aemw/amarna/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/balt/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/cams/barutu/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/blms/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/glass/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/ckst/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/atae/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/tcma/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/ribo/catalogue.json,200,0,bytes=0; empty body
+ORACC,https://oracc.museum.upenn.edu/hbtin/catalogue.json,200,0,bytes=0; empty body
+CDLI,https://cdli.earth/artifacts/100001.json,200,1,bytes=8683
+CDLI,https://cdli.earth/artifacts/100053.json,200,1,bytes=3780
+CDLI,https://cdli.earth/artifacts/100090.json,200,1,bytes=3241
+CDLI,https://cdli.earth/artifacts/100212.json,200,1,bytes=5352
+CDLI,https://cdli.earth/artifacts/100298.json,200,1,bytes=4985
+CDLI,https://cdli.earth/artifacts/100333.json,200,1,bytes=4431
+CDLI,https://cdli.earth/artifacts/101851.json,200,1,bytes=6534
+CDLI,https://cdli.earth/artifacts/128569.json,200,1,bytes=7826
+CDLI,https://cdli.earth/artifacts/127648.json,200,1,bytes=8826
+CDLI,https://cdli.earth/artifacts/20565.json,200,1,bytes=4234
+CDLI,https://cdli.earth/artifacts/217459.json,200,1,bytes=7330
+CDLI,https://cdli.earth/artifacts/226628.json,200,1,bytes=4625
+CDLI,https://cdli.earth/artifacts/236901.json,200,1,bytes=279643
+CDLI,https://cdli.earth/artifacts/247781.json,200,1,bytes=4747
+CDLI,https://cdli.earth/artifacts/249253.json,200,1,bytes=97903
+CDLI,https://cdli.earth/artifacts/250483.json,200,1,bytes=3340
+CDLI,https://cdli.earth/artifacts/254518.json,200,1,bytes=4135
+CDLI,https://cdli.earth/artifacts/258601.json,200,1,bytes=3430
+CDLI,https://cdli.earth/artifacts/262151.json,200,1,bytes=9590
+CDLI,https://cdli.earth/artifacts/290103.json,200,1,bytes=9473
+CDLI,https://cdli.earth/artifacts/368691.json,200,1,bytes=3496
+CDLI,https://cdli.earth/artifacts/388630.json,200,1,bytes=11065
+CDLI,https://cdli.earth/artifacts/411619.json,200,1,bytes=5088
+CDLI,https://cdli.earth/artifacts/10012.json,200,1,bytes=5937
+CDLI,https://cdli.earth/artifacts/20287.json,200,1,bytes=4232
+CDLI,https://cdli.earth/artifacts/10009.json,200,1,bytes=5119
+CDLI,https://cdli.earth/artifacts/211416.json,200,1,bytes=13997
+CDLI,https://cdli.earth/artifacts/306421.json,200,1,bytes=9143
+CDLI,https://cdli.earth/artifacts/218121.json,200,1,bytes=3714
+CDLI,https://cdli.earth/artifacts/239110.json,200,1,bytes=4731
+CDLI,https://cdli.earth/artifacts/498688.json,200,1,bytes=2248
+CDLI,https://cdli.earth/artifacts/551464.json,200,1,bytes=2180
+CDLI,https://cdli.earth/artifacts/412248.json,200,1,bytes=3422
+CDLI,https://cdli.earth/artifacts/10101.json,200,1,bytes=36668
+CDLI,https://cdli.earth/artifacts/10566.json,200,1,bytes=17580
+CDLI,https://cdli.earth/artifacts/8105.json,200,1,bytes=10581
+CDLI,https://cdli.earth/artifacts/111382.json,200,1,bytes=6578
+ORACC,https://oracc.museum.upenn.edu/saao/saa04/P238993/html,200,1,bytes=48450
+ORACC,https://oracc.museum.upenn.edu/saao/saa04/P238993,200,1,bytes=57652
+ORACC,https://oracc.museum.upenn.edu/pager?oid=P238993,500,0,bytes=619; HTTPError: HTTP Error 500: Internal Server Error
+Met,https://collectionapi.metmuseum.org/public/collection/v1.1/search?q=cuneiform%20mathematical,200,1,bytes=33
+Met,https://collectionapi.metmuseum.org/public/collection/v1/objects/321985,200,1,bytes=1649
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Umma&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Girsu&portal_type=Place,200,1,bytes=7456
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Nippur&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Sippar&portal_type=Place,500,0,bytes=2303; HTTPError: HTTP Error 500: Internal Server Error
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Babylon&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Nineveh&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Uruk&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Drehem&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Shuruppak&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Larsa&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Susa&portal_type=Place,200,1,bytes=7454
+Pleiades,https://pleiades.stoa.org/search.json?SearchableText=Ebla&portal_type=Place,200,1,bytes=7456
+PeriodO,https://data.perio.do/.well-known/void,200,1,bytes=7641
+Wikidata,https://www.wikidata.org/wiki/Special:EntityData/Q93304.json,200,1,bytes=70853
+OpenAlex,https://api.openalex.org/works?search=goal-year%20texts%20Babylonian&per-page=1,200,1,bytes=9165
+Crossref,https://api.crossref.org/works?query.bibliographic=Astronomical%20Diaries%20and%20Related%20Texts%20goal-year&rows=2,200,1,bytes=4367
+archive.org,"https://archive.org/advancedsearch.php?q=title%3A%28Astronomical%20Diaries%20and%20Related%20Texts%29&fl[]=identifier,title&rows=5&output=json",200,1,bytes=364
+CDLI,https://cdli.earth/artifacts/100212.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/100001.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/100053.json,200,1,cited-record recheck; application/json
+CDLI,https://cdli.earth/artifacts/100010.json,200,1,cited-record recheck; application/json
+CDLI,https://cdli.earth/artifacts/388630.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/250483.json,200,1,cited-record recheck; application/json
+CDLI,https://cdli.earth/artifacts/100090.json,200,1,cited-record recheck; application/json
+CDLI,https://cdli.earth/artifacts/100298.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/217459.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/10012.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/111382.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/101851.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/306421.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/262151.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/290103.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/211416.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/10009.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/20565.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/100333.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/100116.json,200,1,cited-record recheck; application/json
+CDLI,https://cdli.earth/artifacts/247781.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/127648.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/254518.json,200,1,cited-record recheck; application/json bytes>=4000
+Met,https://collectionapi.metmuseum.org/public/collection/v1/objects/322022,200,1,cited-record recheck; application/json
+CDLI,https://cdli.earth/artifacts/411619.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/8105.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/10101.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/10566.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/226628.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/236901.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/249253.json,200,1,cited-record recheck; application/json bytes>=4000
+CDLI,https://cdli.earth/artifacts/368691.json,200,1,cited-record recheck; application/json
+CDLI,https://cdli.earth/artifacts/258601.json,200,1,cited-record recheck; application/json
+Pleiades,https://pleiades.stoa.org/places/894089,200,1,cited-record recheck; text/html bytes>=4000
+CDLI,https://cdli.earth/artifacts/100145.json,200,1,cited-record recheck; application/json
+Pleiades,https://pleiades.stoa.org/places/44626252,200,1,cited-record recheck; text/html bytes>=4000
+ORACC,https://oracc.museum.upenn.edu/saao/saa04/P238993,200,1,cited-record recheck; text/html bytes>=4000
+CDLI,https://cdli.earth/artifacts/218121.json,200,1,cited-record recheck; application/json
+CDLI,https://cdli.earth/artifacts/551464.json,200,1,cited-record recheck; application/json
+Crossref,https://api.crossref.org/works/10.31826/9781463232405-019,200,1,cited-record recheck; application/json
+OpenAlex,https://api.openalex.org/works?search=cuneiform+balanced+account+multiple+dated+entries+same+document+retrieval&per-page=5,200,17,"novelty; titles: Contesting the indigenous development of “Chinese double-entry bookkeeping” and its significance in China’s economic institutions and business organization before c.1850 | Reframing imperial China’s indigenous accounting history: further discoveries in archival materials from the three centuries before 1850 | CyberResearch on the Ancient Near East and Neighboring Regions: Case Studies on Archaeological Data, Objects, Texts, and Digital Archiving | Evaluating Generative AI in Historical Research: A Comparative Study on Identifying Primary Source Evidence in Ancient History | The value of osteology in an historical context: a comparison of osteological and historical evidence for trauma in the late 18th- to early 19th century British Royal Navy"
+Crossref,https://api.crossref.org/works?query.bibliographic=cuneiform+balanced+account+multiple+dated+entries+same+document+retrieval&rows=3,200,1335510,novelty; titles: Character retrieval of vectorized cuneiform script | SUBJECT INDEXES AND AUTOMATIC DOCUMENT RETRIEVAL | Workflow map showing a word document dated 2006-06-07 leading to a word document dated 2006-06-07 leading to a folder named my compiled dissertation
+OpenAlex,https://api.openalex.org/works?search=Ur+III+%C5%A1a3-bi-ta+deficit+balanced+account+accounting&per-page=5,200,1,"novelty; titles: Ur III Economy and Bureaucracy: The Neo-Sumerian Cuneiform Tablets in the Hood Museum of Art, Dartmouth College (I)"
+Crossref,https://api.crossref.org/works?query.bibliographic=Ur+III+%C5%A1a3-bi-ta+deficit+balanced+account+accounting&rows=3,200,1894209,"novelty; titles: Constitutional Balanced Budget Rules and Current Account Deficit | A Simplified Balanced ‘Balanced Scorecard’ | Equated Accounting (Eq. Acc. Math Iii, Balanced Matrix Value System)"
+OpenAlex,https://api.openalex.org/works?search=Ur+III+silver+price+ku3-bi+fraction+shekel+metrology&per-page=5,200,0,novelty; titles: 
+Crossref,https://api.crossref.org/works?query.bibliographic=Ur+III+silver+price+ku3-bi+fraction+shekel+metrology&rows=3,429,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=Ur+III+labor+account+mu+us2-sa+worker+days+year+name&per-page=5,200,4,"novelty; titles: Ur III Economy and Bureaucracy: The Neo-Sumerian Cuneiform Tablets in the Hood Museum of Art, Dartmouth College (I) | Muškēnum in Third-Millennium BC Mesopotamia | Nonnuclear Uses for Depleted Uranium | State planning for winter energy emergencies: workshop materials"
+Crossref,https://api.crossref.org/works?query.bibliographic=Ur+III+labor+account+mu+us2-sa+worker+days+year+name&rows=3,200,14263,"novelty; titles: Research in Labor Economics | Appendix. Transliterations of Long Texts from Chapter 8: Worker Inventories | JobS, Training and Worker Well-being"
+OpenAlex,https://api.openalex.org/works?search=cuneiform+gaba-ri+copy+seal+impression+duplicate+tablet&per-page=5,200,19,"novelty; titles: Ur III Economy and Bureaucracy: The Neo-Sumerian Cuneiform Tablets in the Hood Museum of Art, Dartmouth College (I) | Sargonic Susa: the acropolis and its archive | An Old Babylonian manuscript of the Weidner god-list from Tell Taban | Wooden Wax-Covered Writing Boards asVorlageforkudurruInscriptions in the Middle Babylonian Period | Garšana Notes"
+Crossref,https://api.crossref.org/works?query.bibliographic=cuneiform+gaba-ri+copy+seal+impression+duplicate+tablet&rows=3,200,182936,novelty; titles: A Note on the Seal Impression IM 52599 from Tell Harmal | Making an Impression: How to Seal an Ur III Period Administrative Tablet in Nippur | Making an Impression:
+OpenAlex,https://api.openalex.org/works?search=cuneiform+witness+list+year+name+contract+dating&per-page=5,200,662,"novelty; titles: Computational Dating for the Nuzi Cuneiform Archive: The Least Squares Constrained by Family Trees and Synchronisms | Xerxes and Babylonia: The Cuneiform Evidence | Sources at the end of the cuneiform era | Xerxes and Babylonia : The Cuneiform Evidence | New Date Formula from the Reign of ""Enlil.Bani"" In the Light of Unpublished Cuneiform Distribution Text"
+Crossref,https://api.crossref.org/works?query.bibliographic=cuneiform+witness+list+year+name+contract+dating&rows=3,200,1321776,novelty; titles: A New Sargonic Year Name | Early Nippur Year Dates and the Sumerian King List | A New Old Babylonian Date List with Year Names of Hammurabi
+OpenAlex,https://api.openalex.org/works?search=cuneiform+oath+clause+irrevocability+nu-gi4-gi4+contract&per-page=5,200,0,novelty; titles: 
+Crossref,https://api.crossref.org/works?query.bibliographic=cuneiform+oath+clause+irrevocability+nu-gi4-gi4+contract&rows=3,429,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=Old+Babylonian+orchard+sale+neighbors+price+sa10&per-page=5,200,0,novelty; titles: 
+Crossref,https://api.crossref.org/works?query.bibliographic=Old+Babylonian+orchard+sale+neighbors+price+sa10&rows=3,200,775359,novelty; titles: Old Babylonian Law | 10. Conclusions: Epistemic Modality in Old Babylonian | Old Orchard Farm
+OpenAlex,https://api.openalex.org/works?search=Old+Babylonian+naditu+annuity+ration+heirs+division&per-page=5,200,0,novelty; titles: 
+Crossref,https://api.crossref.org/works?query.bibliographic=Old+Babylonian+naditu+annuity+ration+heirs+division&rows=3,200,600026,novelty; titles: The Social Role of the Naditu Women in Old Babylonian Nippur | The Social Role of the Naditu Women in Old Babylonian Nippur | Old Babylonian Law
+OpenAlex,https://api.openalex.org/works?search=Old+Babylonian+partnership+loan+interest+half+nam-tab-ba&per-page=5,200,5,"novelty; titles: Sumerian Model Contracts from the Old Babylonian Period in the Rosen Collection | Hired labour in the Neo-Assyrian Empire | Merchants, Measures and Money. Understanding Technologies of Early Trade in a Comparative Perspective | Chroniques bibliographiques 24. “Kültepe Texts” 1990-2010-2020 – Part 2 | Minor Archives from First-Millennium BCE Babylonia, Part II: The Balīḫû Archive"
+Crossref,https://api.crossref.org/works?query.bibliographic=Old+Babylonian+partnership+loan+interest+half+nam-tab-ba&rows=3,200,971762,"novelty; titles: Tab 4.110. Loan guarantees, 2001-2012 | Loan Contracts from City of Lagaba from Old Babylonian period | An Early Old Babylonian Loan Document"
+OpenAlex,https://api.openalex.org/works?search=Fara+field+sale+nig2-diri+surplus+gift+fraction&per-page=5,200,0,novelty; titles: 
+Crossref,https://api.crossref.org/works?query.bibliographic=Fara+field+sale+nig2-diri+surplus+gift+fraction&rows=3,200,1409627,"novelty; titles: Pengaruh Lingkungan Bisnis, Motivasi dan Efikasi Diri terhadap Keputusan Berwirausaha | Blood products: Surplus sale | Schreiner's surplus iris sale : season 1931 /"
+OpenAlex,https://api.openalex.org/works?search=Ur+III+seal+impression+weight+ki-la2+consignment&per-page=5,200,0,novelty; titles: 
+Crossref,https://api.crossref.org/works?query.bibliographic=Ur+III+seal+impression+weight+ki-la2+consignment&rows=3,200,1486187,novelty; titles: Making an Impression: How to Seal an Ur III Period Administrative Tablet in Nippur | Making an Impression: | An Akkadian-style Seal Impression from Ur
+OpenAlex,https://api.openalex.org/works?search=Ur+III+si-i3-tum+balance+carried+forward+next+account&per-page=5,200,33,novelty; titles: A Collector’s Edition of the Past: Personal Collections of Mesopotamian Royal Inscriptions from the Old Babylonian Period | Studies of the crystallization and morphology of poly(dimethylsiloxane) | A Strategic Model for Investment in Korean Shipping Under the New Liberalisation Treaty | The old Babylonian mesarum-edict and the Old Testament | Testing for speculative bubbles in foreign exchange markets
+Crossref,https://api.crossref.org/works?query.bibliographic=Ur+III+si-i3-tum+balance+carried+forward+next+account&rows=3,200,10391,novelty; titles: Balance Carried Forward | Iodine networks in polyiodides of M(III) urea complexes: Crystal structures of [V(Ur)6][I3]3 and [Dy(Ur)8][I5][I3]2[I2] | Supplemental Information 41: Raw forward sequence data of I3-2.
+OpenAlex,https://api.openalex.org/works?search=Ur+III+year+name+mu+us-sa+chronological+order+accounts&per-page=5,200,560,novelty; titles: The Cult of the Deified King in Ur III Mesopotamia | Court Officials at Umma in Ur III Times | Another Cuneiform Tablet from Drehem in the Ur III Period | Some considerations on u 4 -da-tuš (bear tamer ? ) and jugglery in Ur III | New Proposed Chronological Sequence and Dates of Composition of Esarhaddon's Babylon Inscriptions
+Crossref,https://api.crossref.org/works?query.bibliographic=Ur+III+year+name+mu+us-sa+chronological+order+accounts&rows=3,200,19413,novelty; titles: 4. Accounts | ACCOUNTS | Articles by author’s name in alphabetical/chronological order
+OpenAlex,https://api.openalex.org/works?search=Ur+III+pisan-dub-ba+basket+tag+deficit+tablets+archive&per-page=5,200,0,novelty; titles: 
+Crossref,https://api.crossref.org/works?query.bibliographic=Ur+III+pisan-dub-ba+basket+tag+deficit+tablets+archive&rows=3,200,2597,novelty; titles: نصوص سلال الالواح pisan-dub-ba من مدينة ايري_ساكريك Texts of Tablets Baskets pisan-dub-ba  from  Iri-sagrig City | DUB-aš-a and še-ba za3-mu in Ur III Umma Texts | Tablets from Yale
+OpenAlex,https://api.openalex.org/works?search=Ur+III+tablet+basket+label+year+name+archival+filing&per-page=5,200,28,"novelty; titles: The New “pisan-dub-ba” Tablet from the Time of the Ur III Dynasty, in the Collection of the National Museum in Wrocław (Poland) | Incoming Mail, Outgoing Mail and Copies of Letters in the Ur-Utu Archive | Reflections on Paratextual Markers and Graphic Devices in Ur III Administrative Documents | Archives and archival documents in ancient societies | Binding Cuneiform Tablets in One Unit"
+OpenAlex,https://api.openalex.org/works?search=cuneiform+storehouse+disbursement+recipient+sealed+magazine&per-page=5,200,1,novelty; titles: The Administration of Storage in Early Babylonia
+OpenAlex,https://api.openalex.org/works?search=Ur+III+ditilla+maszkim+judge+verdict+court&per-page=5,200,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=cuneiform+a-ra2+successive+courses+mathematical+check+line&per-page=5,200,2,"novelty; titles: Floating calculation in Mesopotamia | Climate and Constructions : International Conference 24 and 25 October 2011, Karlsruhe, Germany / Competence Area ""Earth and Environment"" (KIT Scientific Reports ; 7618)"
+OpenAlex,https://api.openalex.org/works?search=proto-cuneiform+numerical+tablet+subcolumn+administrative+account&per-page=5,200,1,"novelty; titles: WRITING IN EARLY MESOPOTAMIA: The Historical Interplay of Technology, Cognition, and Environment"
+OpenAlex,https://api.openalex.org/works?search=cuneiform+lexical+list+witness+names+not+chronological&per-page=5,200,323,"novelty; titles: Adapting to New Contexts: Cuneiform in Anatolia | Sources at the end of the cuneiform era | THE ADAPTATION PROCESS OF CUNEIFORM IN THE OLD BABYLONIAN PERIOD | The early development of the cuneiform writing system, and its regional adaptation | Hittite Anatolia and the Cuneiform Koiné"
+OpenAlex,https://api.openalex.org/works?search=Hammurabi+law+protasis+apodosis+broken+tablet+retrieval&per-page=5,200,1,novelty; titles: Umman-manda and its Significance in the First Millennium BC
+OpenAlex,https://api.openalex.org/works?search=omen+protasis+law+casuistic+score+max+not+sum&per-page=5,200,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=Mesopotamian+year+name+formula+list+dating+administrative+tablet&per-page=5,200,406,novelty; titles: What's in a Vessel's Name? A Relational Text-Object Approach to the Uses of Mesopotamian Pottery | Isin year names | Mesopotamian Synchronistic Chronography and the Book of Kings | Mesopotamian man : his world | Nazi-Maruttash in Later Mesopotamian Tradition
+OpenAlex,https://api.openalex.org/works?search=Hammurabi+andurarum+fourth+year+debt+release+chronology&per-page=5,200,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=Old+Babylonian+date+formula+year+month+day+case+tablet&per-page=5,200,688,novelty; titles: A Case for Babylonian Moses | The old Babylonian mesarum-edict and the Old Testament | A Study of Babylonian Goal-Year Planetary Astronomy | The works and the days… on scribal activity in old babylonian Sippar-Amnānum | Unpublished Old Babylonian Letters in the Slemani Museum
+OpenAlex,https://api.openalex.org/works?search=Ur+III+labor+account+remainder+worker+days+balance&per-page=5,200,997,"novelty; titles: Archives and Bookkeeping in Southern Mesopotamia during the Ur III period | The Impact of Economic Shocks on Workers' Labor Market Outcomes | The Cleveland, Ohio United Labor Agency Dislocated Worker Project | Ur III Economy and Bureaucracy: The Neo-Sumerian Cuneiform Tablets in the Hood Museum of Art, Dartmouth College (I) | The Death of Labor Law and the Rebirth of the Labor Movement"
+OpenAlex,https://api.openalex.org/works?search=Ur+III+balanced+account+sza3-bi-ta+silver+price+lines&per-page=5,200,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=Old+Babylonian+sale+neighbors+buyer+verdict+field&per-page=5,200,26,"novelty; titles: Amorites in the Early Old Babylonian Period | Lay People's Advocacy and Resistance in Talmudic Adjudication Narratives | Archives and archival documents in ancient societies | Morality in the Marketplace: Consumer Protection, Regulatory Policy, and Jewish Law | The Covenant of Deuteronomy and the Study of the Ancient Israelite Jurisprudence"
+OpenAlex,https://api.openalex.org/works?search=Ur+III+interest+half+barley+weight+not+count&per-page=5,200,1658,novelty; titles: The Cult of the Deified King in Ur III Mesopotamia | Wheat Barley and Triticale Newsletter - RACHIS - No. 4(2) | A study of Endo-β-mannanase in barley (Hordeum vulgare) | Genetic dissection of endosperm hydration in malting barley ( Hordeum vulgare ) | Transcriptomic identification of potential antioxidative enzyme regulators of the gametophytic-to-embryogenic switch in barley microspores
+OpenAlex,https://api.openalex.org/works?search=cuneiform+duplicate+list+gaba-ri+copy+lexical+order&per-page=5,200,33,novelty; titles: The exact transmission of texts in the first millennium BCE - an examination of the cuneiform evidence from Mesopotamia and the Torah scrolls from the western shore of the Dead Sea | An Old Babylonian manuscript of the Weidner god-list from Tell Taban | Loose Threads of Tradition: Two Late Hemerological Compilations | Secrets in the Library: Protected Knowledge and Professional Identity in Late Babylonian Uruk | The Reception of Sumerian Literature in the Western Periphery
+OpenAlex,https://api.openalex.org/works?search=Ur+III+inspection+gurum+basket+label+remainder+si-i3-tum&per-page=5,200,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=one+cuneiform+tablet+multiple+dated+transactions+retrieval+ranking&per-page=5,200,9,novelty; titles: Decoding the Past: Explainable Machine Learning Models for Dating Historical Texts | Fragments of Languages | Chapter 6: Political Rule and Administration | Urban Squares in Late Bronze Age Ugarit: a Street View on Ancient Near Eastern Governance | Oracles as Artefacts : The Material Aspect of Prophecy
+OpenAlex,https://api.openalex.org/works?search=Ur+III+labor+deficit+la2-ia3+worker+days+balanced+account&per-page=5,200,1,"novelty; titles: Ur III Economy and Bureaucracy: The Neo-Sumerian Cuneiform Tablets in the Hood Museum of Art, Dartmouth College (I)"
+OpenAlex,https://api.openalex.org/works?search=Ur+III+basket+tag+official+ki-ta+responsible+deficits&per-page=5,200,8,"novelty; titles: Old Babylonian Account Texts in the Horn Archaeological Museum | 1986 November | The theory of optimal foreign exchange reserves in a developing country : with empirical application to the economy of Jamaica | Grass and Grain, v. 15, no. 13 (May 27, 1969) | Grass and Grain, v. 17, no. 34 (Oct. 19, 1971)"
+OpenAlex,https://api.openalex.org/works?search=Old+Babylonian+date+year+month+day+andurarum+release+term&per-page=5,200,7,novelty; titles: The old Babylonian mesarum-edict and the Old Testament | The year of Jubilee and Old Testament ethics : a test case in methodology | Debt and its solutions : a comparative study of the biblical jubilee year and the edict of Ammisaduqa | ‘Proclaim liberty throughout all the land unto all the inhabitants thereof!’ Reading Leviticus 25:10 through the centuries | ‘Proclaim liberty throughout all the land unto all the inhabitants thereof!’ Reading Leviticus 25:10 through the centuries
+OpenAlex,https://api.openalex.org/works?search=cuneiform+tabular+account+fraction+same+entry+metrology&per-page=5,200,6,"novelty; titles: Neither Sherlock Holmes nor Babylon: A Reassessment of Plimpton 322 | Calculation | Mathematics, Administrative and Economic Activities in Ancient Worlds edited by Cécile Michel and Karine Chemla | 8 The Astronomical Resources for Ancient Astral Prognostications | Managing Risk for the Gods: The Middle Assyrian Ginau Agency"
+OpenAlex,https://api.openalex.org/works?search=Sumerian+mu-bi-im+inscription+name+formula+wall&per-page=5,200,110,"novelty; titles: Notes on Sumerian Expression of ""Humility"" in Royal Inscriptions, and on the Calculations of Days in Administrative Texts | A Sumerian Royal Inscription Describing the (Re)Building of a Chapel for Annunītum by King Enlil-Bāni of Isin | The God Enki in Sumerian Royal Ideology and Mythology | Native-speaker Intuitions about Genitive Constructions in Sumerian | Personal Names in the Aramaic Inscriptions of Hatra"
+OpenAlex,https://api.openalex.org/works?search=Ur+III+Umma+archive+year+name+dossier+retrieval&per-page=5,200,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=cuneiform+sale+price+versus+gift+surplus+nig2-ba&per-page=5,200,2,"novelty; titles: Ur III Economy and Bureaucracy: The Neo-Sumerian Cuneiform Tablets in the Hood Museum of Art, Dartmouth College (I) | Slavery in Early Mesopotamia from Late Uruk until the Fall of Babylon in the Longue Durée"
+OpenAlex,https://api.openalex.org/works?search=annuity+yearly+ration+distinct+years+not+duplicate&per-page=5,200,34,"novelty; titles: Administration of social pensions and grants for Indians in the Phoenix regional area. | Labour Records of the Hudson's Bay Company, 1821–1870 | Small Firms, Politics, and Credit in the Netherlands: 1900-1980 | Management of the corporate gift-giving function : an empirical study in the life insurance industry. | Do Ordeals Work for Selection Markets? Evidence from Health Insurance Auto-Enrollment"
+OpenAlex,https://api.openalex.org/works?search=partnership+loan+controller+maszkim+not+party+share&per-page=5,200,0,novelty; titles: 
+OpenAlex,https://api.openalex.org/works?search=cuneiform+successive+work+courses+a-ra2+labor+account&per-page=5,200,2,novelty; titles: The Administration of Storage in Early Babylonia | The Economic Origins of Government
+OpenAlex,https://api.openalex.org/works?search=omen+text+colophon+witnesses+after+cases&per-page=5,200,431,"novelty; titles: Babylonian texts from the folios of Sidney Smith, Part Two: prognostic and diagnostic omens | The Afterlife of Avestan Manuscripts: Colophons and Marginal notes | Three Versions of Crow Omens | Mesopotamian and Indian Bird Omens | Plants, Animals, and Bodies of Water : The significance of color terminology in the nature omens of the omen series umma ālu ina mēlê akin"
+OpenAlex,https://api.openalex.org/works?search=cuneiform+field+location+neighbors+storehouse+identification&per-page=5,200,36,novelty; titles: Crossing Invisible Boundaries. An Erased Letter to the Chief of the Storehouse Ḥwy | The Names of All Wild Things: Field Guides and Environmental Thinking | Sign and Image: Representations of Plants on the Warka Vase of Early Mesopotamia | Negotiating Exchange: Ebla and the International System of the Early Bronze Age | The Religion of Idumea and Its Relationship to Early Judaism
+OpenAlex,https://api.openalex.org/works?search=Ur+III+seal+caption+patronymic+dumu+not+transaction+party&per-page=5,200,2,novelty; titles: Bronze Age Bureaucracy: Writing and the Practice of Government in Assyria | Neo-Babylonian Onomastics: The system behind verbal logograms in Neo-Babylonian names
+OpenAlex,https://api.openalex.org/works?search=balanced+account+deficit+same+year+not+previous+year&per-page=5,200,135529,"novelty; titles: A Year in Hypoxia: Epibenthic Community Responses to Severe Oxygen Deficit at a Subsea Observatory in a Coastal Inlet | Current Account Deficits in the Euro Area. The End of the Feldstein Horioka Puzzle? | Current Account Deficits in Industrial Countries: The Bigger They are, the Harder They Fall? | Fiscal Year 2002 | Is the U.S. Current Account Deficit Sustainable? And If Not, How Costly is Adjustment Likely To Be?"
+OpenAlex,https://api.openalex.org/works?search=price+rate+versus+labor+product+disambiguation+account&per-page=5,200,883,"novelty; titles: Name disambiguation in MIT collaboration browser | Disambiguation of Researcher Careers: Shifting the Perspective from Documents to Authors | English Word Sense Disambiguation in 2026: When the Labels Become the Bottleneck | Word representation for text analysis and search : Document retrieval, sentiment analysis, and cross lingual word sense disambiguation | Patents to Products: Product Innovation and Firm Dynamics"
+OpenAlex,https://api.openalex.org/works?search=Ur+III+balance+brought+forward+previous+year+order&per-page=5,200,9382,"novelty; titles: The Cult of the Deified King in Ur III Mesopotamia | Ur III Economy and Bureaucracy: The Neo-Sumerian Cuneiform Tablets in the Hood Museum of Art, Dartmouth College (I) | Parenting UR Teens - a randomised trial of a parenting programme for parents of teenagers | Osteoarthritis year in review 2021: epidemiology & therapy | The Root of the Recycled: A Comparative Analysis of Shakespeare's ""Hamlet"" and the Mythological ""Ur-Hamlet"""
+OpenAlex,https://api.openalex.org/works?search=Babylonian+goal-year+texts+period+integer+astronomical+diaries&per-page=5,200,29,novelty; titles: 4 Cyclicity in Babylonian astronomical diaries and related texts (ca. 750 BCE – 75 CE) | A Study of Babylonian Goal-Year Planetary Astronomy | A study of Babylonian planetary theory I. The outer planets | Exploring the Mysteries of Babylonian Astronomy with Maple | Conceptions of Cyclicity in Babylonian and Greco-Roman Scholarship
+SemanticScholar,https://api.semanticscholar.org/graph/v1/paper/search?query=Ur%20III%20balanced%20account&limit=1,429,0,"{""message"": ""Too Many Requests. Please wait and try again or apply for a key for higher rate limits. https://www.semanti"
+GitHub,https://api.github.com/search/repositories?q=cuneiform+retrieval+ranking&per_page=5,200,0,"{""total_count"":0,""incomplete_results"":false,""items"":[]}"
+PeriodO,https://n2t.net/ark:/99152/p047fhmj72p.json,200,1,era-anchor recheck body
+PeriodO,https://n2t.net/ark:/99152/p047fhmk34f.json,200,1,era-anchor recheck body
+PeriodO,https://n2t.net/ark:/99152/p047fhmn3c9.json,200,1,era-anchor recheck body
+PeriodO,https://n2t.net/ark:/99152/p0njrb45vw3.json,200,1,era-anchor recheck body
+PeriodO,https://n2t.net/ark:/99152/p0njrb4w994.json,200,1,era-anchor recheck body
+PeriodO,https://client.perio.do/,200,1,era-anchor recheck body
+PeriodO,https://data.perio.do/search?q=Ur+III,404,0,era-anchor recheck
