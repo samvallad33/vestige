@@ -3806,6 +3806,156 @@ fn apply_c2_step34_bertillonage(
     true
 }
 
+
+/// Surface anchors: lexical content-group labels. Stems, hypernyms, and
+/// entity-phrase ids are not anchors. The label's own vocab id is the mark.
+fn c2_surface_anchor_ids(ix: &Index, plan: &QueryPlan) -> Vec<u32> {
+    let mut ids = Vec::new();
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    for label in &plan.groups {
+        if label.starts_with('\u{1}') {
+            continue;
+        }
+        let Some(id) = ix.vocab.get(label) else {
+            continue;
+        };
+        if seen.insert(id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// Pool the replay dump writes: seated turns first, then scene-descending
+/// turns with a positive scene score, capped at 50.
+fn c2_dump_pool(ix: &Index, list: &[usize], t_scene: &[f32]) -> Vec<usize> {
+    let mut pool: Vec<usize> = list.to_vec();
+    let mut seen: DetHashSet<usize> = pool.iter().copied().collect();
+    let turn_ts: Vec<i64> = ix
+        .turns
+        .iter()
+        .map(|t| ix.session_ts.get(t.session).copied().unwrap_or(0))
+        .collect();
+    for ti in order(t_scene, &turn_ts) {
+        if pool.len() >= 50 {
+            break;
+        }
+        if t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        if seen.insert(ti) {
+            pool.push(ti);
+        }
+    }
+    pool
+}
+
+/// Mill's method of agreement (Step 35).
+///
+/// If every instance of a phenomenon shares exactly one circumstance, that
+/// circumstance is its cause. Each surface query anchor is an instance. Its
+/// hit set is the pool turns that post the anchor from their own content or
+/// features (`TurnIx.body` is never read). The circumstance is a session.
+/// The sessions common to every hit set are the agreement. Exactly one such
+/// session is a cause. An empty hit set, a tie, or several common sessions
+/// fix nothing.
+///
+/// A head already inside the agreement session is never displaced. A head
+/// outside it yields slot 1 in exactly one of two shapes:
+///
+/// - Non-instance. The head posts no surface anchor, so it is not an instance
+///   of the phenomenon. The unique top-5 turn of the agreement session that
+///   posts at least one anchor (an instance) takes slot 1.
+/// - Complete instance. The head posts some anchors and misses others. The
+///   unique top-5 turn of the agreement session that posts every anchor, and
+///   that is the same speaker as the head, takes slot 1. A different speaker
+///   is the other role's echo of the same circumstance, not a second witness.
+///
+/// Two qualifying turns are a tie. Top-5 membership is unchanged. No new
+/// constant: the pool cap is the dump's 50 and the window is the existing
+/// top-5. Does not touch `rsb_seat_behind`.
+fn apply_c2_step35_mill_agreement(
+    ix: &Index,
+    plan: &QueryPlan,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let anchors = c2_surface_anchor_ids(ix, plan);
+    if anchors.is_empty() {
+        return false;
+    }
+    let pool = c2_dump_pool(ix, list, t_scene);
+    let posts = |ti: usize, id: u32| {
+        let t = &ix.turns[ti];
+        t.content.contains(&id) || t.feats.iter().any(|f| f.id == id)
+    };
+    let mut common: DetHashSet<usize> = DetHashSet::default();
+    let mut started = false;
+    for &id in &anchors {
+        let mut sessions: DetHashSet<usize> = DetHashSet::default();
+        for &ti in &pool {
+            if posts(ti, id) {
+                sessions.insert(ix.turns[ti].session);
+            }
+        }
+        if sessions.is_empty() {
+            return false;
+        }
+        if !started {
+            common = sessions;
+            started = true;
+        } else {
+            common.retain(|s| sessions.contains(s));
+        }
+        if common.is_empty() {
+            return false;
+        }
+    }
+    if common.len() != 1 {
+        return false;
+    }
+    let agree = match common.iter().next() {
+        Some(&s) => s,
+        None => return false,
+    };
+    let head = list[0];
+    if ix.turns[head].session == agree {
+        return false;
+    }
+    let head_has: Vec<bool> = anchors.iter().map(|&id| posts(head, id)).collect();
+    let head_any = head_has.iter().copied().any(|h| h);
+    let head_speaker = ix.turns[head].speaker.clone();
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut slot: Option<usize> = None;
+    for i in 1..window {
+        let cand = list[i];
+        if ix.turns[cand].session != agree {
+            continue;
+        }
+        let qualifies = if head_any {
+            ix.turns[cand].speaker == head_speaker && anchors.iter().all(|&id| posts(cand, id))
+        } else {
+            anchors.iter().any(|&id| posts(cand, id))
+        };
+        if !qualifies {
+            continue;
+        }
+        if slot.is_some() {
+            return false;
+        }
+        slot = Some(i);
+    }
+    let Some(slot) = slot else {
+        return false;
+    };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -7550,5 +7700,207 @@ mod algos_c2_tests {
         scene[2] = 4.0;
         assert!(!apply_c2_step34_bertillonage(&ix, q, &mut list, &scene));
         assert_eq!(list, vec![0, 1, 2]);
+    }
+
+
+    #[test]
+    fn step35_mill_agreement_seats_the_unique_common_session() {
+        // ag posts both anchors (split across two turns). hd posts only widget.
+        // ot posts only zynth. The pool intersection is ag alone. The head is
+        // outside it. The one top-5 ag turn that posts widget takes slot 1.
+        let ix = build_index(
+            &[
+                sess_at(
+                    "ag",
+                    10,
+                    &[
+                        ("user", "The zynth widget sits in the cedar drawer."),
+                        ("assistant", "Noted for later."),
+                    ],
+                ),
+                sess_at(
+                    "hd",
+                    20,
+                    &[("user", "The widget is blue and heavy."), ("assistant", "Blue widget.")],
+                ),
+                sess_at(
+                    "ot",
+                    30,
+                    &[("user", "The zynth is shiny."), ("assistant", "Shiny.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "Where is the zynth widget?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(plan.groups.iter().any(|g| g == "zynth"));
+        assert!(plan.groups.iter().any(|g| g == "widget"));
+        // 0 ag both, 1 ag widget-only, 2 hd widget, 3 hd widget, 4 ot zynth, 5 ot none.
+        let scene = vec![0.9f32, 0.4, 1.0, 0.3, 0.5, 0.2];
+        let mut list = vec![2usize, 0, 4, 3, 1];
+        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert!(apply_c2_step35_mill_agreement(&ix, &plan, &mut list, &scene));
+        assert_eq!(list[0], 0);
+        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert_eq!(before, after);
+
+        // Head already inside the agreement session: do not move it.
+        let mut inside = vec![0usize, 2, 4, 3, 1];
+        assert!(!apply_c2_step35_mill_agreement(&ix, &plan, &mut inside, &scene));
+        assert_eq!(inside, vec![0, 2, 4, 3, 1]);
+
+        // Two top-5 turns of the agreement session both cover the head: tie.
+        let ixt = build_index(
+            &[
+                sess_at(
+                    "ag",
+                    10,
+                    &[
+                        ("user", "The zynth widget sits in the cedar drawer."),
+                        ("user", "A second zynth widget note."),
+                    ],
+                ),
+                sess_at("hd", 20, &[("user", "The widget is blue and heavy.")]),
+                sess_at("ot", 30, &[("user", "The zynth is shiny.")]),
+            ],
+            &Params::default(),
+        );
+        let plant = plan_query(&ixt, &q, &Params::default());
+        let scenet = vec![0.9f32, 0.8, 1.0, 0.5];
+        let mut tie = vec![2usize, 0, 1, 3];
+        assert!(!apply_c2_step35_mill_agreement(&ixt, &plant, &mut tie, &scenet));
+        assert_eq!(tie, vec![2, 0, 1, 3]);
+
+        // A second session that also posts both anchors: several common sessions.
+        let ix2 = build_index(
+            &[
+                sess_at("ag", 10, &[("user", "The zynth widget sits in the cedar drawer.")]),
+                sess_at("hd", 20, &[("user", "The widget is blue and heavy.")]),
+                sess_at("ot", 30, &[("user", "The zynth is shiny.")]),
+                sess_at("also", 40, &[("user", "Another zynth widget is on the shelf.")]),
+            ],
+            &Params::default(),
+        );
+        let plan2 = plan_query(&ix2, &q, &Params::default());
+        let scene2 = vec![0.9f32, 1.0, 0.5, 0.8];
+        let mut many = vec![1usize, 0, 2, 3];
+        assert!(!apply_c2_step35_mill_agreement(&ix2, &plan2, &mut many, &scene2));
+        assert_eq!(many, vec![1, 0, 2, 3]);
+
+        // The only top-5 agreement turn misses an anchor the head posts.
+        let ix3 = build_index(
+            &[
+                sess_at(
+                    "ag",
+                    10,
+                    &[
+                        ("user", "The zynth is here."),
+                        ("assistant", "The widget is in the cedar drawer."),
+                    ],
+                ),
+                sess_at("hd", 20, &[("user", "The widget is cedar colored.")]),
+                sess_at("ot", 30, &[("user", "The zynth is shiny.")]),
+            ],
+            &Params::default(),
+        );
+        let q3 = Query {
+            text: "Where is the cedar zynth widget?".into(),
+            date: String::new(),
+        };
+        let plan3 = plan_query(&ix3, &q3, &Params::default());
+        // 0 ag zynth (top 5), 1 ag widget+cedar (pool only, not top 5), 2 hd widget+cedar, 3 ot zynth.
+        let scene3 = vec![0.4f32, 0.2, 1.0, 0.5];
+        let mut thin = vec![2usize, 0, 3];
+        assert!(!apply_c2_step35_mill_agreement(&ix3, &plan3, &mut thin, &scene3));
+        assert_eq!(thin, vec![2, 0, 3]);
+
+        // A stem does not post the surface anchor, so "widgets" is not "widget".
+        let ix4 = build_index(
+            &[
+                sess_at("ag", 10, &[("user", "The zynth widgets sit in the drawer.")]),
+                sess_at("hd", 20, &[("user", "The widget is blue.")]),
+                sess_at("ot", 30, &[("user", "The zynth is shiny.")]),
+            ],
+            &Params::default(),
+        );
+        let plan4 = plan_query(&ix4, &q, &Params::default());
+        let scene4 = vec![0.9f32, 1.0, 0.5];
+        let mut stemmed = vec![1usize, 0, 2];
+        assert!(!apply_c2_step35_mill_agreement(&ix4, &plan4, &mut stemmed, &scene4));
+        assert_eq!(stemmed, vec![1, 0, 2]);
+
+        // A complete instance by the other speaker does not displace the head.
+        let ixn = build_index(
+            &[
+                sess_at(
+                    "ag",
+                    10,
+                    &[("caroline", "The zynth widget sits in the cedar drawer.")],
+                ),
+                sess_at("hd", 20, &[("melanie", "The widget is blue and heavy.")]),
+                sess_at("ot", 30, &[("caroline", "The zynth is shiny.")]),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let scenen = vec![0.9f32, 1.0, 0.5];
+        let mut named = vec![1usize, 0, 2];
+        assert!(!apply_c2_step35_mill_agreement(&ixn, &plann, &mut named, &scenen));
+        assert_eq!(named, vec![1, 0, 2]);
+
+        // Same speaker: the complete instance takes slot 1.
+        let ixs = build_index(
+            &[
+                sess_at(
+                    "ag",
+                    10,
+                    &[("caroline", "The zynth widget sits in the cedar drawer.")],
+                ),
+                sess_at("hd", 20, &[("caroline", "The widget is blue and heavy.")]),
+                sess_at("ot", 30, &[("melanie", "The zynth is shiny.")]),
+            ],
+            &Params::default(),
+        );
+        let plans = plan_query(&ixs, &q, &Params::default());
+        let mut same = vec![1usize, 0, 2];
+        assert!(apply_c2_step35_mill_agreement(&ixs, &plans, &mut same, &scenen));
+        assert_eq!(same[0], 0);
+
+        // Non-instance head: it posts no anchor. The unique top-5 instance of
+        // the agreement session takes slot 1. An other-role echo is not required
+        // to match, because the head is not a witness.
+        let ix0 = build_index(
+            &[
+                sess_at("ag", 10, &[("user", "The zynth widget sits in the cedar drawer.")]),
+                sess_at("hd", 20, &[("user", "The drawer is blue and heavy.")]),
+                sess_at("ot", 30, &[("user", "The zynth is shiny.")]),
+            ],
+            &Params::default(),
+        );
+        let plan0 = plan_query(&ix0, &q, &Params::default());
+        let mut none = vec![1usize, 0, 2];
+        assert!(apply_c2_step35_mill_agreement(&ix0, &plan0, &mut none, &[0.9, 1.0, 0.5]));
+        assert_eq!(none[0], 0);
+
+        // Other-role echo that posts every anchor does not displace a partial user head.
+        let ixe = build_index(
+            &[
+                sess_at(
+                    "ag",
+                    10,
+                    &[("assistant", "The zynth widget sits in the cedar drawer.")],
+                ),
+                sess_at("hd", 20, &[("user", "The widget is blue and heavy.")]),
+                sess_at("ot", 30, &[("user", "The zynth is shiny.")]),
+            ],
+            &Params::default(),
+        );
+        let plane = plan_query(&ixe, &q, &Params::default());
+        let mut echo = vec![1usize, 0, 2];
+        assert!(!apply_c2_step35_mill_agreement(&ixe, &plane, &mut echo, &[0.9, 1.0, 0.5]));
+        assert_eq!(echo, vec![1, 0, 2]);
     }
 }

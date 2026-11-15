@@ -6284,6 +6284,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // top-5 card. Does not touch rsb_seat_behind and does not rewrite the
     // session list.
     apply_c2_step34_bertillonage(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Step 35 Mill's method of agreement. After the gatekeeper and Steps 31–34.
+    // The unique session common to every surface-anchor hit set lends slot 1
+    // to its unique top-5 instance when the head posts no anchor, or to its
+    // unique same-speaker turn that posts every anchor when the head posts
+    // only some. A head already inside that session stays. Does not touch
+    // rsb_seat_behind.
+    apply_c2_step35_mill_agreement(ix, &plan, &mut final_turn_indices, &t_scene);
     maybe_dump_replay(
         ix,
         q,
