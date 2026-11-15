@@ -1636,6 +1636,91 @@ fn apply_c2_head_session_opener_t5_entry(
 }
 
 
+/// Session substitution T@5 entry. The most on-scene user turn already in
+/// the official k, outside the top 5, from a session not represented in the
+/// top 5, swaps with the least on-scene user turn in slots 2..5 when that
+/// turn is a declarative and holds at most `C2_XWITNESS_RATIO` of the
+/// candidate's scene (the cross-witness dominance ratio, reused, not
+/// re-tuned). The swap trades the weakest top-5 session for a clearly
+/// stronger session the window left out, so the number of distinct
+/// sessions in the top 5 does not fall when the victim was its session's
+/// only seat. The declarative cut is load-bearing: a weakest user
+/// question in the top 5 is often the sitting gold (the user asked about
+/// the thing), as on BEAM 9:contradiction_resolution:0. Assistants are
+/// never the victim. The victim stays in the official k, so T@10 cannot
+/// drop, and C2 turn seats do not rewrite the session list. Distinct from
+/// #21 (opener entry, assistant victim), #34/#35 (session already in the
+/// top 5), and from evicting the last top-5 user (sitting-gold losses).
+/// Skipped on summary requests, preference, temporal, and WH-person
+/// questions, event sequences and assistant-attribution (caller), and
+/// named-speaker sessions. Invoked after the gatekeeper, after #35, as
+/// the last ranking change.
+fn apply_c2_session_substitution_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    if t_scene.get(top).copied().unwrap_or(0.0) <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let top5_sessions: Vec<usize> = list[..window].iter().map(|&t| ix.turns[t].session).collect();
+    let mut cand: Option<(usize, f32)> = None;
+    for (i, &tid) in list.iter().enumerate().skip(window) {
+        let t = &ix.turns[tid];
+        if t.speaker != "user" || c2_named_session(ix, tid) || top5_sessions.contains(&t.session) {
+            continue;
+        }
+        let sc = t_scene.get(tid).copied().unwrap_or(0.0);
+        if sc <= 0.0 {
+            continue;
+        }
+        if cand.is_none_or(|(_, best)| sc > best) {
+            cand = Some((i, sc));
+        }
+    }
+    let Some((ci, sc_c)) = cand else {
+        return false;
+    };
+    let mut vs: Option<(usize, f32)> = None;
+    for (i, &tid) in list[..window].iter().enumerate().skip(1) {
+        if ix.turns[tid].speaker != "user" {
+            continue;
+        }
+        let sc = t_scene.get(tid).copied().unwrap_or(0.0);
+        if sc > C2_XWITNESS_RATIO * sc_c {
+            continue;
+        }
+        if vs.is_none_or(|(_, best)| sc < best) {
+            vs = Some((i, sc));
+        }
+    }
+    let Some((vs, _)) = vs else {
+        return false;
+    };
+    if ix.turns[list[vs]].is_question {
+        return false;
+    }
+    list.swap(vs, ci);
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -4567,6 +4652,89 @@ mod algos_c2_tests {
         let mut list = vec![2usize, 4, 6, 8, 3, 0];
         assert!(!apply_c2_head_session_opener_t5_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![2, 4, 6, 8, 3, 0]);
+    }
+
+    #[test]
+    fn session_substitution_t5_entry_swaps_strong_outside_session_for_weakest_declarative() {
+        // 11:contradiction_resolution:1 shape: the top 5 is all users from
+        // distinct sessions; a clearly stronger user turn from a session
+        // the top 5 left out sits at slot 7.
+        let ix = build_index(
+            &[
+                sess("s0", &[("user", "I set up two-factor authentication for the admin console."), ("assistant", "Good.")]),
+                sess("s1", &[("user", "Did I ever enable login alerts?"), ("assistant", "Yes.")]),
+                sess("s2", &[("user", "I moved the platform to a new region."), ("assistant", "Noted.")]),
+                sess("s3", &[("user", "I rotated the access keys this week."), ("assistant", "Noted.")]),
+                sess("s4", &[("user", "Can you review my access policy?"), ("assistant", "Sure.")]),
+                sess("s5", &[("user", "I implemented two-factor authentication for platform access."), ("assistant", "Logged.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query { text: "Have I ever implemented two-factor authentication for platform access?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        // Users are even indices: s0=0, s1=2, s2=4, s3=6, s4=8, s5=10.
+        // Top 5: 0, 2, 4, 6, 8; official-k tail: 1, 10.
+        let mut t_scene = vec![0.0f32; 12];
+        t_scene[0] = 2.4;
+        t_scene[2] = 2.5;
+        t_scene[4] = 0.8;
+        t_scene[6] = 1.8;
+        t_scene[8] = 1.5;
+        t_scene[1] = 0.5;
+        t_scene[10] = 1.3;
+        let mut list = vec![0usize, 2, 4, 6, 8, 1, 10];
+        assert!(apply_c2_session_substitution_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 10, 6, 8, 1, 4]);
+        // The weakest top-5 user is a question: no swap.
+        let mut tq = t_scene.clone();
+        tq[4] = 1.9;
+        tq[8] = 0.8;
+        let mut list = vec![0usize, 2, 4, 6, 8, 1, 10];
+        assert!(!apply_c2_session_substitution_t5_entry(&ix, &plan, &q.text, &mut list, &tq));
+        assert_eq!(list, vec![0, 2, 4, 6, 8, 1, 10]);
+        // The candidate does not dominate the weakest user by the ratio.
+        let mut tr = t_scene.clone();
+        tr[10] = 1.0;
+        let mut list = vec![0usize, 2, 4, 6, 8, 1, 10];
+        assert!(!apply_c2_session_substitution_t5_entry(&ix, &plan, &q.text, &mut list, &tr));
+        assert_eq!(list, vec![0, 2, 4, 6, 8, 1, 10]);
+        // Only users enter: an assistant tail turn is not a candidate.
+        let mut list = vec![0usize, 2, 4, 6, 8, 11];
+        let mut ta = t_scene.clone();
+        ta[11] = 2.0;
+        assert!(!apply_c2_session_substitution_t5_entry(&ix, &plan, &q.text, &mut list, &ta));
+        assert_eq!(list, vec![0, 2, 4, 6, 8, 11]);
+        // Preference, temporal, and WH-person questions are skipped.
+        for text in [
+            "What is my favorite two-factor authentication app?",
+            "When did I implement two-factor authentication?",
+            "Who implemented two-factor authentication for platform access?",
+        ] {
+            let sq = Query { text: text.into(), date: String::new() };
+            let splan = plan_query(&ix, &sq, &Params::default());
+            let mut list = vec![0usize, 2, 4, 6, 8, 1, 10];
+            assert!(!apply_c2_session_substitution_t5_entry(&ix, &splan, &sq.text, &mut list, &t_scene));
+            assert_eq!(list, vec![0, 2, 4, 6, 8, 1, 10]);
+        }
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[
+                sess("D0", &[("caroline", "Two-factor for admin."), ("melanie", "Good.")]),
+                sess("D1", &[("caroline", "Login alerts?"), ("melanie", "Yes.")]),
+                sess("D2", &[("caroline", "New region."), ("melanie", "Noted.")]),
+                sess("D3", &[("caroline", "Rotated keys."), ("melanie", "Noted.")]),
+                sess("D4", &[("caroline", "Review my policy?"), ("melanie", "Sure.")]),
+                sess("D5", &[("caroline", "Implemented two-factor authentication."), ("melanie", "Logged.")]),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![0usize, 2, 4, 6, 8, 1, 10];
+        assert!(!apply_c2_session_substitution_t5_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 4, 6, 8, 1, 10]);
     }
 
     #[test]
