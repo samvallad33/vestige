@@ -3956,6 +3956,131 @@ fn apply_c2_step35_mill_agreement(
     true
 }
 
+/// Content-token anchors of the query. Each anchor is the vocab ids of the
+/// surface token and, when it differs, its stem. Closed-class tokens are not
+/// anchors. A token the index never interned is not an anchor. No turn body
+/// is read.
+fn step36_anchors(ix: &Index, query: &str) -> Vec<Vec<u32>> {
+    let mut seen: DetHashSet<String> = DetHashSet::default();
+    let mut anchors = Vec::new();
+    for w in raw_tokens(query) {
+        if !is_content(&w) || !seen.insert(w.clone()) {
+            continue;
+        }
+        let mut ids = Vec::new();
+        if let Some(id) = ix.vocab.get(&w) {
+            ids.push(id);
+        }
+        let stemmed = stem(&w);
+        if stemmed != w {
+            if let Some(id) = ix.vocab.get(&stemmed) {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        if !ids.is_empty() {
+            anchors.push(ids);
+        }
+    }
+    anchors
+}
+
+fn step36_posts(turn: &TurnIx, ids: &[u32]) -> bool {
+    ids.iter()
+        .any(|id| turn.content.contains(id) || turn.feats.iter().any(|f| f.id == *id))
+}
+
+/// Antaranga-bahiranga (Step 36). The internal operation precedes the external
+/// one. Internal evidence is `t_own`, the turn's uncarried lexical score.
+/// External evidence on the turn is everything in `t_scene` above `t_own`
+/// (neighbour carry and later scene operations). `bridge_boost` is not part of
+/// `t_scene`; it is added only to the session rank score, and that sum is the
+/// session sightline.
+///
+/// Slot 1 yields only when it is a question and its external residual strictly
+/// exceeds its own score. The witness is a top-5 turn that is not a question,
+/// whose own score strictly exceeds slot 1's own score and is a strict majority
+/// of its own scene score, that attests every query anchor slot 1 attests, and
+/// whose session score (`s_score + bridge_boost`) strictly exceeds slot 1's.
+/// Two witnesses with the same own score are not a unique internal reading, so
+/// the seat stays. Top-5 membership does not change. Does not read turn bodies
+/// and does not touch `rsb_seat_behind`.
+fn apply_c2_step36_antaranga(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_own: &[f32],
+    t_scene: &[f32],
+    s_score: &[f32],
+    bridge_boost: &[f32],
+) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let head = list[0];
+    if !ix.turns[head].is_question {
+        return false;
+    }
+    let own = |ti: usize| t_own.get(ti).copied().unwrap_or(0.0);
+    let scene = |ti: usize| t_scene.get(ti).copied().unwrap_or(0.0);
+    let sess = |ti: usize| {
+        let s = ix.turns[ti].session;
+        s_score.get(s).copied().unwrap_or(0.0) + bridge_boost.get(s).copied().unwrap_or(0.0)
+    };
+    let ho = own(head);
+    let hs = scene(head);
+    // Mostly external: the scene residual above own lexical exceeds own lexical.
+    if hs - ho <= ho {
+        return false;
+    }
+    let anchors = step36_anchors(ix, query);
+    let head_turn = &ix.turns[head];
+    let head_sess = sess(head);
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut best: Option<(f32, usize)> = None;
+    let mut tied = false;
+    for slot in 1..window {
+        let cand = list[slot];
+        let turn = &ix.turns[cand];
+        if turn.is_question {
+            continue;
+        }
+        let to = own(cand);
+        let ts = scene(cand);
+        if to <= ho || to <= ts - to {
+            continue;
+        }
+        if sess(cand) <= head_sess {
+            continue;
+        }
+        let covers = anchors
+            .iter()
+            .all(|ids| !step36_posts(head_turn, ids) || step36_posts(turn, ids));
+        if !covers {
+            continue;
+        }
+        match best {
+            None => best = Some((to, slot)),
+            Some((bo, _)) if to > bo => {
+                best = Some((to, slot));
+                tied = false;
+            }
+            Some((bo, _)) if to == bo => tied = true,
+            _ => {}
+        }
+    }
+    if tied {
+        return false;
+    }
+    let Some((_, slot)) = best else {
+        return false;
+    };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -7902,5 +8027,74 @@ mod algos_c2_tests {
         let mut echo = vec![1usize, 0, 2];
         assert!(!apply_c2_step35_mill_agreement(&ixe, &plane, &mut echo, &[0.9, 1.0, 0.5]));
         assert_eq!(echo, vec![1, 0, 2]);
+    }
+
+    #[test]
+    fn step36_antaranga_seats_own_majority_over_an_external_question() {
+        let ix = build_index(
+            &[
+                sess("ask", &[("user", "Where was the workshop?")]),
+                sess("fact", &[("user", "I attended the workshop on Friday.")]),
+                sess("echo", &[("user", "I attended the workshop downtown too.")]),
+            ],
+            &Params::default(),
+        );
+        let q = "Where was the workshop?";
+        assert!(ix.turns[0].is_question);
+        assert!(!ix.turns[1].is_question);
+        assert!(!ix.turns[2].is_question);
+        let anchors = step36_anchors(&ix, q);
+        assert!(anchors.iter().any(|ids| step36_posts(&ix.turns[0], ids)));
+        assert!(
+            anchors
+                .iter()
+                .all(|ids| !step36_posts(&ix.turns[0], ids) || step36_posts(&ix.turns[1], ids))
+        );
+        // Question at slot 1: own 0.2, scene 5.0 (external residual 4.8 > 0.2).
+        // Fact turn: own 3.0 is a majority of scene 4.0, higher session score.
+        // Echo has a higher own score but the same session score as the question.
+        let t_own = vec![0.2f32, 3.0, 4.0];
+        let t_scene = vec![5.0f32, 4.0, 5.0];
+        let s_score = vec![0.4f32, 0.9, 0.4];
+        let bridge = vec![0.0f32, 0.0, 0.0];
+        let mut list = vec![0usize, 2, 1];
+        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert!(apply_c2_step36_antaranga(
+            &ix, q, &mut list, &t_own, &t_scene, &s_score, &bridge
+        ));
+        assert_eq!(list[0], 1);
+        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert_eq!(before, after);
+
+        // Own score is not a majority of the fact turn's scene: the question stays.
+        let mut list = vec![0usize, 2, 1];
+        let thin = vec![5.0f32, 9.0, 5.0];
+        assert!(!apply_c2_step36_antaranga(
+            &ix, q, &mut list, &t_own, &thin, &s_score, &bridge
+        ));
+        assert_eq!(list, vec![0, 2, 1]);
+
+        // Two stronger sessions with the same own score are not one reading.
+        let mut list = vec![0usize, 1, 2];
+        let tied_own = vec![0.2f32, 3.0, 3.0];
+        let tied_scene = vec![5.0f32, 4.0, 4.0];
+        let both = vec![0.4f32, 0.9, 0.95];
+        assert!(!apply_c2_step36_antaranga(
+            &ix,
+            q,
+            &mut list,
+            &tied_own,
+            &tied_scene,
+            &both,
+            &bridge
+        ));
+        assert_eq!(list, vec![0, 1, 2]);
+
+        // A declarative head is already internal. It does not yield.
+        let mut list = vec![1usize, 0, 2];
+        assert!(!apply_c2_step36_antaranga(
+            &ix, q, &mut list, &t_own, &t_scene, &s_score, &bridge
+        ));
+        assert_eq!(list, vec![1, 0, 2]);
     }
 }
