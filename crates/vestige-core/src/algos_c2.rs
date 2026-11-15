@@ -1807,6 +1807,102 @@ fn apply_c2_pool_session_substitution_t10_entry(
 }
 
 
+/// Mentioned-declarative session-mate T@5 entry. In a named-speaker
+/// dialogue, the most on-scene declarative turn by a speaker the query
+/// names (not conjoined with another name), already in the official k but
+/// outside the top 5, from a session already represented in the top 5,
+/// swaps with the least on-scene turn in slots 2..5 when that turn is a
+/// declarative, holds at most `C2_XWITNESS_RATIO` of the candidate's scene
+/// (reused, not re-tuned), and comes from a session no earlier than the
+/// candidate's. The session cut is primacy: an earlier witness is never
+/// evicted for a later or same-weight restatement (without it, LoCoMo
+/// 4:57 loses a sitting earlier-session gold; unofficial All@5). The
+/// declarative cuts follow #17 (a mentioned question is often a prompt)
+/// and #36 (a weakest question is often a sitting gold). Distinct from
+/// #17/#19/#33 (victim is the last unmentioned named speaker; any
+/// mentioned declarative), #23 (first-in-session), and #36 (user/assistant
+/// chats, session outside the top 5). The victim stays in the official k,
+/// so T@10 cannot drop; C2 turn seats do not rewrite the session list.
+/// Skipped on summary requests, preference, temporal, and WH-person
+/// questions, event sequences and assistant-attribution (caller). Does not
+/// fire on user/assistant chats. Invoked after the gatekeeper, after #38,
+/// as the last ranking change.
+fn apply_c2_mentioned_session_mate_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if head_sp.is_empty() || head_sp == "user" || head_sp == "assistant" {
+        return false;
+    }
+    if t_scene.get(top).copied().unwrap_or(0.0) <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let top5_sessions: Vec<usize> = list[..window].iter().map(|&t| ix.turns[t].session).collect();
+    let mut cand: Option<(usize, f32)> = None;
+    for (i, &tid) in list.iter().enumerate().skip(window) {
+        let t = &ix.turns[tid];
+        let sp = t.speaker.as_str();
+        if t.is_question
+            || sp.is_empty()
+            || sp == "user"
+            || sp == "assistant"
+            || !c2_query_mentions_speaker(query, sp)
+            || c2_speaker_conjoined(query, sp)
+            || !top5_sessions.contains(&t.session)
+        {
+            continue;
+        }
+        let sc = t_scene.get(tid).copied().unwrap_or(0.0);
+        if sc <= 0.0 {
+            continue;
+        }
+        if cand.is_none_or(|(_, best)| sc > best) {
+            cand = Some((i, sc));
+        }
+    }
+    let Some((ci, sc_c)) = cand else {
+        return false;
+    };
+    let mut vs: Option<(usize, f32)> = None;
+    for (i, &tid) in list[..window].iter().enumerate().skip(1) {
+        let sc = t_scene.get(tid).copied().unwrap_or(0.0);
+        if sc > C2_XWITNESS_RATIO * sc_c {
+            continue;
+        }
+        if vs.is_none_or(|(_, best)| sc < best) {
+            vs = Some((i, sc));
+        }
+    }
+    let Some((vs, _)) = vs else {
+        return false;
+    };
+    let victim = list[vs];
+    if ix.turns[victim].is_question {
+        return false;
+    }
+    let ts_of = |ti: usize| ix.session_ts.get(ix.turns[ti].session).copied().unwrap_or(0);
+    if ts_of(victim) < ts_of(list[ci]) {
+        return false;
+    }
+    list.swap(vs, ci);
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -4910,6 +5006,82 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 2, 3, 4, 5];
         assert!(!apply_c2_pool_session_substitution_t10_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn mentioned_session_mate_t5_entry_evicts_weakest_later_declarative() {
+        // LoCoMo 4:92 / 4:122 shape: a mentioned speaker's declarative from
+        // a top-5 session sits in the official-k tail; the weakest top-5
+        // turn is a later-session declarative well below it.
+        let mut ss = vec![
+            sess("D1", &[("john", "My teammates gave me a signed jersey when we met."), ("tim", "That is a great gift.")]),
+            sess("D2", &[("john", "I practiced free throws today."), ("tim", "Nice work.")]),
+            sess("D3", &[("john", "We met the team again on Aug 15th."), ("tim", "Fun.")]),
+            sess("D4", &[("john", "I watched a game on TV."), ("tim", "Which one?")]),
+        ];
+        for (i, se) in ss.iter_mut().enumerate() {
+            se.timestamp = 1_000 + i as i64;
+        }
+        let ix = build_index(&ss, &Params::default());
+        let q = Query { text: "What did John's teammates give him when they met?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        assert!(!c2_summary_request(&q.text));
+        // Turns: D1 0-1, D2 2-3, D3 4-5, D4 6-7.
+        // Top 5: 4 (head, D3), 1 (D1 tim), 2 (D2), 5 (D3 tim), 6 (D4 john, weakest); tail: 0 (D1 john), 3.
+        let t_scene = vec![1.0f32, 0.9, 0.8, 0.2, 2.0, 0.7, 0.5, 0.3];
+        let mut list = vec![4usize, 1, 2, 5, 6, 0, 3];
+        assert!(apply_c2_mentioned_session_mate_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![4, 1, 2, 5, 0, 6, 3]);
+        // An earlier-session weakest turn is never evicted for a later candidate.
+        // Candidate 6 (D4 john) in the tail, weakest top-5 turn 0 (D1 john).
+        let t2 = vec![0.3f32, 0.9, 0.8, 0.2, 2.0, 0.7, 1.0, 0.1];
+        let mut list = vec![4usize, 1, 2, 7, 0, 6, 3];
+        assert!(!apply_c2_mentioned_session_mate_t5_entry(&ix, &plan, &q.text, &mut list, &t2));
+        assert_eq!(list, vec![4, 1, 2, 7, 0, 6, 3]);
+        // The weakest top-5 turn is a question: no swap.
+        let t3 = vec![1.0f32, 0.9, 0.8, 0.2, 2.0, 0.7, 0.6, 0.3];
+        let mut list = vec![4usize, 1, 2, 5, 7, 0, 3];
+        assert!(!apply_c2_mentioned_session_mate_t5_entry(&ix, &plan, &q.text, &mut list, &t3));
+        assert_eq!(list, vec![4, 1, 2, 5, 7, 0, 3]);
+        // A candidate not dominating by the ratio does not enter.
+        let t4 = vec![0.6f32, 0.9, 0.8, 0.2, 2.0, 0.7, 0.5, 0.3];
+        let mut list = vec![4usize, 1, 2, 5, 6, 0, 3];
+        assert!(!apply_c2_mentioned_session_mate_t5_entry(&ix, &plan, &q.text, &mut list, &t4));
+        // Unmentioned-speaker candidates do not enter.
+        let t5 = vec![0.1f32, 0.9, 0.8, 0.2, 2.0, 0.7, 0.5, 0.3];
+        let mut list = vec![4usize, 0, 2, 5, 6, 1, 3];
+        let mut t5b = t5.clone();
+        t5b[1] = 1.0;
+        assert!(!apply_c2_mentioned_session_mate_t5_entry(&ix, &plan, &q.text, &mut list, &t5b));
+        // Preference, temporal, and WH-person questions are skipped.
+        for text in [
+            "What is John's favorite gift from his teammates?",
+            "When did John's teammates give him a gift?",
+            "Who gave John a gift when they met?",
+        ] {
+            let sq = Query { text: text.into(), date: String::new() };
+            let splan = plan_query(&ix, &sq, &Params::default());
+            let mut list = vec![4usize, 1, 2, 5, 6, 0, 3];
+            assert!(!apply_c2_mentioned_session_mate_t5_entry(&ix, &splan, &sq.text, &mut list, &t_scene));
+            assert_eq!(list, vec![4, 1, 2, 5, 6, 0, 3]);
+        }
+        // User/assistant chats are left alone.
+        let ixu = build_index(
+            &[
+                sess("s1", &[("user", "My teammates gave me a signed jersey."), ("assistant", "Great gift.")]),
+                sess("s2", &[("user", "I practiced free throws."), ("assistant", "Nice.")]),
+                sess("s3", &[("user", "We met the team on Aug 15th."), ("assistant", "Fun.")]),
+                sess("s4", &[("user", "I watched a game."), ("assistant", "Which one?")]),
+            ],
+            &Params::default(),
+        );
+        let planu = plan_query(&ixu, &q, &Params::default());
+        let mut list = vec![4usize, 1, 2, 5, 6, 0, 3];
+        assert!(!apply_c2_mentioned_session_mate_t5_entry(&ixu, &planu, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![4, 1, 2, 5, 6, 0, 3]);
     }
 
     #[test]
