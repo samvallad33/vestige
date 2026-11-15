@@ -282,6 +282,86 @@ fn apply_c2_mimamsa_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<usize>, t_
     false
 }
 
+/// Share of slot 1's scene score a primacy-testimony challenger must keep.
+const C2_TESTIMONY_RATIO: f32 = 0.5;
+
+/// Query groups a turn attests in declarative position: before its terminal question when it
+/// has one, anywhere when it has none. Groups named only inside the question are inquiry.
+fn c2_declarative_groups(ix: &Index, plan: &QueryPlan, n_groups: usize, ti: usize) -> Vec<bool> {
+    let t = &ix.turns[ti];
+    let asks = !t.pre_question_ids.is_empty() || !t.question_clause_ids.is_empty();
+    let mut hit = vec![false; n_groups];
+    for qt in &plan.terms {
+        let Some(g) = qt.group else { continue };
+        if g >= hit.len() || hit[g] {
+            continue;
+        }
+        hit[g] = if asks {
+            t.pre_question_ids.contains(&qt.id)
+        } else if t.is_question {
+            false
+        } else {
+            t.content.contains(&qt.id) || t.feats.iter().any(|f| f.id == qt.id)
+        };
+    }
+    hit
+}
+
+/// Position of a turn inside its own session.
+fn c2_session_pos(ix: &Index, ti: usize) -> usize {
+    ix.session_turns[ix.turns[ti].session].iter().position(|&m| m == ti).unwrap_or(0)
+}
+
+/// Primacy testimony seat (first testimony: the account a witness gives first, before the
+/// conversation drifts, is the one entered in the record). A same-role top-5 turn, from any
+/// user/assistant session, that sits in the first half of slot 1's own session depth (its
+/// session position x2 < slot 1's position), states in declarative position at least the query
+/// IC slot 1 states, and keeps >= 50% of slot 1's scene score, takes slot 1 (first in list
+/// order wins). Top-5 membership never changes. Runs before RSB. Skipped in named sessions.
+fn apply_c2_testimony_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<usize>, t_scene: &[f32]) -> bool {
+    if list.len() < 2 || plan.groups.is_empty() {
+        return false;
+    }
+    let top = list[0];
+    // v3: testimony is the user's own account; assistant replies are not first accounts.
+    if ix.turns[top].speaker != "user" || c2_named_session(ix, top) {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let g_ic = c2_group_ic(ix, plan);
+    let ng = g_ic.len();
+    let d_top = c2_coverage(&g_ic, &c2_declarative_groups(ix, plan, ng, top));
+    let pos_top = c2_session_pos(ix, top);
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != ix.turns[top].speaker || c2_named_session(ix, cand) {
+            continue;
+        }
+        // v2: the first account must hold every surface form slot 1 holds (a counted digit).
+        if ix.turns[top].form_digit && !t.form_digit {
+            continue;
+        }
+        if c2_session_pos(ix, cand) * 2 >= pos_top {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) < C2_TESTIMONY_RATIO * sc_top {
+            continue;
+        }
+        let d = c2_coverage(&g_ic, &c2_declarative_groups(ix, plan, ng, cand));
+        if d > 0.0 && d >= d_top {
+            list.remove(i);
+            list.insert(0, cand);
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -394,5 +474,34 @@ mod algos_c2_tests {
         // Outside the 10% band: never moved.
         let mut list = vec![0usize, 1];
         assert!(!apply_c2_mimamsa_seat(&ix, &plan, &mut list, &[1.0, 0.5]));
+    }
+
+    #[test]
+    fn primacy_testimony_seats_early_user_statement() {
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "My cat Luna loves the window seat."),
+                    ("assistant", "Cats love sun."),
+                    ("user", "Unrelated note."),
+                    ("assistant", "Sure."),
+                    ("user", "Do you know cat names for a cat?"),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query { text: "What is the name of my cat?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        // Slot 1 = turn 4 (position 4), challenger turn 0 (position 0 x2 < 4), scene share 0.6.
+        let mut list = vec![4usize, 0, 1];
+        assert!(apply_c2_testimony_seat(&ix, &plan, &mut list, &[0.6, 0.1, 0.0, 0.0, 1.0]));
+        assert_eq!(list[0], 0);
+        // Below the 50% share: no seat.
+        let mut list = vec![4usize, 0, 1];
+        assert!(!apply_c2_testimony_seat(&ix, &plan, &mut list, &[0.4, 0.1, 0.0, 0.0, 1.0]));
+        // Assistant heads are never displaced.
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_testimony_seat(&ix, &plan, &mut list, &[0.9, 1.0, 0.0, 0.0, 0.0]));
     }
 }
