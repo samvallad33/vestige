@@ -6359,6 +6359,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // session is absent from the top 5. Slot 0 and the session list stay.
     // Does not touch rsb_seat_behind.
     apply_c2_unseated_session_peak(ix, &mut final_turn_indices, &t_own, k);
+    // Step 40 cue validity. After every pool seat. A top-5 scene-score tie
+    // yields slot 1 to the unique turn whose perfectly separating query cues
+    // (posted in exactly one session) strictly outnumber slot 1's. Does not
+    // touch rsb_seat_behind and does not rewrite the session list.
+    apply_c2_step40_cue_validity(ix, &q.text, &mut final_turn_indices, &t_scene);
     maybe_dump_replay(
         ix,
         q,
@@ -7544,6 +7549,14 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         degree_none.insert(ti, deg_none[i]);
     }
 
+    // Dump-only cue-validity facts. Same anchors and session counts Step 40
+    // reads. Not consulted by ranking.
+    let cue_anchors = step36_anchors(ix, &snap.query_text);
+    let cue_anchor_sdf: Vec<u32> = cue_anchors
+        .iter()
+        .map(|ids| step40_anchor_sdf(ix, ids))
+        .collect();
+
     let qset: DetHashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
     let mut qtoks: Vec<Value> = Vec::new();
     let mut seen_tok: DetHashSet<String> = DetHashSet::default();
@@ -7651,6 +7664,10 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
             "degree_closed": degree_closed.get(&ti).copied().unwrap_or(0),
             "degree_none": degree_none.get(&ti).copied().unwrap_or(0),
             "qtok_present": qtok_present(ti),
+            "anchor_posts": cue_anchors
+                .iter()
+                .map(|ids| step36_posts(t, ids))
+                .collect::<Vec<_>>(),
         })
     };
 
@@ -7762,6 +7779,7 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         "final_session_ids": snap.final_session_indices.iter().map(|&si| ix.session_ids[si].clone()).collect::<Vec<_>>(),
         "head_id": snap.seated.first().map(|&ti| ix.turns[ti].id.clone()),
         "query_tokens": qtoks,
+        "anchor_sdf": cue_anchor_sdf,
         "candidates": cands,
         "session_turns": session_turns,
         // Dump-only. Every indexed turn and session, so a gold absent from
