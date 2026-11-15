@@ -184,6 +184,49 @@ fn apply_c2_tap_form_precedence(ix: &Index, it: &QueryIntent, pref_on: bool, t_s
     }
 }
 
+/// Near-tie band (share of slot 1's scene score) inside which the identification key decides.
+const C2_KEY_TIE: f32 = 0.03;
+
+/// Dichotomous identification key (Lamarck 1778): split the remaining candidates on the single
+/// most decisive character. When slots 1 and 2 are within 3% on scene score, the query term
+/// with the highest turn-own IDF that exactly one of them attests decides: its holder takes
+/// slot 1. Deterministic (IDF desc, term id asc). Runs before RSB.
+fn apply_c2_dichotomous_key(ix: &Index, plan: &QueryPlan, list: &mut [usize], t_scene: &[f32]) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let (a, b) = (list[0], list[1]);
+    let (sa, sb) = (t_scene.get(a).copied().unwrap_or(0.0), t_scene.get(b).copied().unwrap_or(0.0));
+    if sa <= 0.0 || (sa - sb).abs() >= C2_KEY_TIE * sa {
+        return false;
+    }
+    // v2: named-speaker chats only (user/assistant near-ties are settled by the seats above).
+    if !c2_named_session(ix, a) || !c2_named_session(ix, b) {
+        return false;
+    }
+    let has = |ti: usize, id: u32| {
+        let t = &ix.turns[ti];
+        t.content.contains(&id) || t.feats.iter().any(|f| f.id == id)
+    };
+    let mut terms: Vec<(f32, u32)> = plan
+        .terms
+        .iter()
+        .filter(|q| q.group.is_some() && has(a, q.id) != has(b, q.id))
+        .map(|q| {
+            let df = ix.t_own_stats.df.get(&q.id).copied().unwrap_or(0) as f32;
+            (((ix.t_own_stats.n - df + 0.5) / (df + 0.5) + 1.0).ln().max(0.0) * q.weight, q.id)
+        })
+        .collect();
+    terms.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+    if let Some(&(_, w)) = terms.first() {
+        if has(b, w) {
+            list.swap(0, 1);
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -262,5 +305,21 @@ mod algos_c2_tests {
         let mut t_scene = vec![1.0f32, 0.5, 1.0, 0.5];
         apply_c2_tap_form_precedence(&ix, &it, true, &mut t_scene);
         assert_eq!(t_scene[0], 1.0);
+    }
+
+    #[test]
+    fn dichotomous_key_breaks_named_near_tie_on_rarest_split_term() {
+        let ix = build_index(
+            &[sess("D1", &[("Caroline", "I went hiking yesterday."), ("Melanie", "I went hiking in Yosemite yesterday.")])],
+            &Params::default(),
+        );
+        let q = Query { text: "When did Melanie go hiking in Yosemite?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        let mut list = vec![0usize, 1];
+        assert!(apply_c2_dichotomous_key(&ix, &plan, &mut list, &[1.0, 0.99]));
+        assert_eq!(list, vec![1, 0]);
+        // Outside the 3% band: no change.
+        let mut list = vec![0usize, 1];
+        assert!(!apply_c2_dichotomous_key(&ix, &plan, &mut list, &[1.0, 0.9]));
     }
 }
