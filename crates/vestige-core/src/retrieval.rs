@@ -6283,9 +6283,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // pool, not already in the official k, takes the official-k
         // seat of the last non-unique tail assistant whose session
         // still has a user in the official k, when that opener is at
-        // least as on-scene. After #29, last ranking change. The top 5
-        // is unchanged. Skipped on preference.
+        // least as on-scene. After #29. Later post-gatekeeper C2 seats
+        // may still run after this pass. The top 5 is unchanged.
+        // Skipped on preference.
         apply_c2_pool_opener_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Same-session opener T@5 entry: a user opener already in
+        // official k, from a session already represented in the top 5
+        // by an assistant, swaps with the last same-session assistant
+        // in the top 5. After #30, last ranking change, so it can see
+        // openers the pool T@10 entry just seated. Skipped on
+        // preference.
+        apply_c2_same_session_opener_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
