@@ -1084,8 +1084,8 @@ fn apply_c2_same_opener_seat(
 /// preference and temporal questions, event sequences and
 /// assistant-attribution (caller), and named-speaker sessions. No new
 /// constant: the scene floor is "at least as on-scene," the same
-/// comparison #12 uses. Invoked after the gatekeeper, after #26, as
-/// the last ranking change.
+/// comparison #12 uses. Invoked after the gatekeeper, after #26. A
+/// later post-gatekeeper C2 seat may still run after this pass.
 fn apply_c2_cross_opener_pair_seat(
     ix: &Index,
     plan: &QueryPlan,
@@ -1132,6 +1132,79 @@ fn apply_c2_cross_opener_pair_seat(
             continue;
         }
         if !list[..window].contains(&reply) {
+            continue;
+        }
+        list.remove(i);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
+
+/// Answered-opener declarative seat. A user question opener at slot 1
+/// whose immediately following assistant reply is already in the top 5
+/// is a retrieved Q-A pair; a declarative user opener from a different
+/// user/assistant session already in the top 5, that is at least as
+/// on-scene, is a conversation start that states a fact and takes slot 1.
+/// Top-5 membership never changes. The answered-head + declarative-cand
+/// cut is the structure: a sitting gold question opener whose reply is
+/// not in the top 5 is left alone, and a question challenger is not
+/// promoted, which is what would otherwise unseat a sitting gold opener.
+/// Distinct from the cross-session opener-pair seat (#27), which
+/// requires the *candidate's* reply to be in the top 5 and does not
+/// require a question head or a declarative candidate, from #13
+/// (mid-session head), and from #14 (same session). Skipped on summary
+/// requests (existing `summary_hold` shape), preference and temporal
+/// questions, event sequences and assistant-attribution (caller), and
+/// named-speaker sessions. No new constant: the scene floor is "at
+/// least as on-scene," the same comparison #12 and #27 use. Invoked
+/// after the gatekeeper, after #27, as the last ranking change.
+fn apply_c2_answered_opener_decl_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || c2_text_preference(query) || plan.intent.temporal || c2_summary_request(query)
+    {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker != "user"
+        || !ix.turns[top].is_question
+        || c2_named_session(ix, top)
+        || c2_session_pos(ix, top) != 0
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let Some(members) = ix.session_turns.get(ix.turns[top].session) else {
+        return false;
+    };
+    let Some(&reply) = members.get(1) else {
+        return false;
+    };
+    if ix.turns[reply].speaker != "assistant" || !list[..window].contains(&reply) {
+        return false;
+    }
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user"
+            || t.is_question
+            || t.session == ix.turns[top].session
+            || c2_named_session(ix, cand)
+            || c2_session_pos(ix, cand) != 0
+        {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) < sc_top {
             continue;
         }
         list.remove(i);
@@ -3400,6 +3473,104 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 3, 2, 1];
         assert!(!apply_c2_cross_opener_pair_seat(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 3, 2, 1]);
+    }
+
+    #[test]
+
+    fn answered_opener_decl_seat_promotes_declarative_opener_over_answered_question() {
+        // 16:instruction_following:0 shape: a user question opener at
+        // slot 1 whose assistant reply is already in the top 5 yields to
+        // another session's declarative user opener already in the top 5,
+        // when that opener is at least as on-scene.
+        let ix = build_index(
+            &[
+                sess(
+                    "s1",
+                    &[
+                        ("user", "I've never approved any holiday medical supply budgets, can you explain why?"),
+                        ("assistant", "It may be relevant to current financial planning."),
+                    ],
+                ),
+                sess(
+                    "s2",
+                    &[
+                        ("user", "Always confirm budget caps when I ask about holiday spending."),
+                        ("assistant", "The holiday spending cap is four hundred dollars."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "How much am I allowed to spend on my holiday plans?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert!(ix.turns[0].is_question);
+        assert!(!ix.turns[2].is_question);
+        // Turns: 0-1 session s1, 2-3 session s2. Head 0, reply 1, cand 2.
+        let mut list = vec![0usize, 2, 1, 3];
+        let t_scene = vec![0.9f32, 1.0, 1.05, 0.7];
+        assert!(apply_c2_answered_opener_decl_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 1, 3]);
+        // Head reply not already in the top 5: no seat.
+        let mut list = vec![0usize, 2, 3];
+        assert!(!apply_c2_answered_opener_decl_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 3]);
+        // Candidate below the head's scene score: no seat.
+        let mut list = vec![0usize, 2, 1, 3];
+        assert!(!apply_c2_answered_opener_decl_seat(
+            &ix,
+            &plan,
+            &q.text,
+            &mut list,
+            &[1.0, 0.8, 0.9, 0.7]
+        ));
+        assert_eq!(list, vec![0, 2, 1, 3]);
+        // Declarative head: no seat (this rule needs an answered question).
+        let mut list = vec![2usize, 0, 1, 3];
+        assert!(!apply_c2_answered_opener_decl_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 1, 3]);
+        // Preference questions are skipped.
+        let pq = Query { text: "What is my favorite holiday spending cap?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(c2_text_preference(&pq.text));
+        let mut list = vec![0usize, 2, 1, 3];
+        assert!(!apply_c2_answered_opener_decl_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 1, 3]);
+        // Temporal questions keep the timeline path.
+        let tq = Query { text: "When do I spend on my holiday plans?".into(), date: String::new() };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(tplan.intent.temporal);
+        let mut list = vec![0usize, 2, 1, 3];
+        assert!(!apply_c2_answered_opener_decl_seat(&ix, &tplan, &tq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 1, 3]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("caroline", "I've never approved any holiday medical supply budgets, can you explain why?"),
+                        ("melanie", "It may be relevant to current financial planning."),
+                    ],
+                ),
+                sess(
+                    "D2",
+                    &[
+                        ("caroline", "Always confirm budget caps when I ask about holiday spending."),
+                        ("melanie", "The holiday spending cap is four hundred dollars."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![0usize, 2, 1, 3];
+        assert!(!apply_c2_answered_opener_decl_seat(&ixn, &plann, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 1, 3]);
     }
 
     #[test]
