@@ -908,6 +908,79 @@ fn apply_c2_elaboration_seat(
     true
 }
 
+
+/// True when the query is a summary request of the form already used by
+/// `summary_hold` in `rank_one`: a summary cue plus a task-under-rules cue,
+/// and not a user-initiative recall cue. Reuses those existing cue lists
+/// (no new word list). Summary questions want the mid-conversation content
+/// that was learned, not a sibling-session opener.
+fn c2_summary_request(query: &str) -> bool {
+    let padded = word_padded(query);
+    has_any(&padded, SUMMARY_REQUEST_CUES)
+        && has_any(&padded, TASK_UNDER_RULES_CUES)
+        && !has_any(&padded, USER_INITIATIVE_CUES)
+}
+
+/// Cross-session opener seat. When slot 1 is a mid-session user turn, a
+/// user session-opener from a different user/assistant session already in
+/// the top 5, that keeps slot 1's digit form and holds >= 70% of slot 1's
+/// scene score, takes slot 1. The conversation start is the lead when the
+/// sitting head has already drifted mid-topic. Top-5 membership never
+/// changes. Skipped on summary requests (existing `summary_hold` shape:
+/// those questions want the mid-conversation content, not an opener),
+/// preference and temporal questions, event sequences and
+/// assistant-attribution (caller), and named-speaker sessions. Distinct
+/// from cross-witness (any earlier session position, requires a query
+/// group) and from SessionOpenerLift (requires the opener to cover every
+/// query cue the head matched). Reuses `C2_XWITNESS_RATIO`. Runs after
+/// the elaboration seat, before RSB. Slot 1 is then frozen by
+/// rank1_gatekeeper_keep_rsb_head.
+fn apply_c2_cross_opener_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || plan.intent.preference || plan.intent.temporal || c2_summary_request(query)
+    {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker != "user"
+        || c2_named_session(ix, top)
+        || c2_session_pos(ix, top) < 1
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user"
+            || t.session == ix.turns[top].session
+            || c2_named_session(ix, cand)
+            || c2_session_pos(ix, cand) != 0
+        {
+            continue;
+        }
+        if ix.turns[top].form_digit && !t.form_digit {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) < C2_XWITNESS_RATIO * sc_top {
+            continue;
+        }
+        list.remove(i);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -1398,6 +1471,130 @@ mod algos_c2_tests {
         let mut list = vec![2usize, 3, 4];
         assert!(!apply_c2_elaboration_seat(&ixn, &plann, &mut list, &[0.5, 0.4, 1.0, 0.8, 1.05]));
         assert_eq!(list, vec![2, 3, 4]);
+    }
+
+
+    #[test]
+    fn cross_opener_seat_promotes_sibling_session_opener() {
+        let ix = build_index(
+            &[
+                sess(
+                    "a",
+                    &[
+                        ("user", "I'm looking for cocktail ideas."),
+                        ("assistant", "A gimlet is a classic."),
+                        ("user", "I like the sound of the whiskey sour. Can you tell me more about honey syrup?"),
+                    ],
+                ),
+                sess(
+                    "b",
+                    &[
+                        ("user", "I'm looking for a refreshing summer cocktail that pairs well with paella. I recently made a cucumber gimlet."),
+                        ("assistant", "A cucumber gimlet is a great start."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "How many different types of citrus fruits have I used in my cocktail recipes?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.preference);
+        assert!(!plan.intent.temporal);
+        assert!(!c2_summary_request(&q.text));
+        // a#2 is mid-session; b#0 is a user opener already in the top 5.
+        let mut list = vec![2usize, 0, 1, 3, 4];
+        let t_scene = vec![0.8f32, 0.7, 1.0, 0.75, 0.6];
+        assert!(apply_c2_cross_opener_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![3, 2, 0, 1, 4]);
+        // Below the 70% share: no seat.
+        let mut list = vec![2usize, 0, 1, 3, 4];
+        assert!(!apply_c2_cross_opener_seat(
+            &ix,
+            &plan,
+            &q.text,
+            &mut list,
+            &[0.8, 0.7, 1.0, 0.6, 0.6]
+        ));
+        assert_eq!(list, vec![2, 0, 1, 3, 4]);
+        // Session opener at slot 1: no seat.
+        let mut list = vec![0usize, 2, 3];
+        assert!(!apply_c2_cross_opener_seat(&ix, &plan, &q.text, &mut list, &[1.0, 0.9, 0.9]));
+        assert_eq!(list, vec![0, 2, 3]);
+        // Same-session only: no seat.
+        let mut list = vec![2usize, 0, 1];
+        assert!(!apply_c2_cross_opener_seat(&ix, &plan, &q.text, &mut list, &[0.8, 0.7, 1.0]));
+        assert_eq!(list, vec![2, 0, 1]);
+        // Digit-bearing head, digit-free opener: keep form, no seat.
+        let ixd = build_index(
+            &[
+                sess(
+                    "a",
+                    &[
+                        ("user", "I'm looking for cocktail ideas."),
+                        ("assistant", "A gimlet is a classic."),
+                        ("user", "I spent 45 dollars on citrus for the whiskey sour. Can you tell me more about honey syrup?"),
+                    ],
+                ),
+                sess(
+                    "b",
+                    &[("user", "I'm looking for a refreshing summer cocktail that pairs well with paella.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        assert!(ixd.turns[2].form_digit);
+        assert!(!ixd.turns[3].form_digit);
+        let mut list = vec![2usize, 0, 1, 3];
+        assert!(!apply_c2_cross_opener_seat(
+            &ixd,
+            &plan,
+            &q.text,
+            &mut list,
+            &[0.8, 0.7, 1.0, 0.75]
+        ));
+        assert_eq!(list, vec![2, 0, 1, 3]);
+        // Summary request: no seat (BEAM summarization shape).
+        let sq = Query {
+            text: "Can you summarize what I learned about cocktail recipes?".into(),
+            date: String::new(),
+        };
+        assert!(c2_summary_request(&sq.text));
+        let splan = plan_query(&ix, &sq, &Params::default());
+        let mut list = vec![2usize, 0, 1, 3, 4];
+        assert!(!apply_c2_cross_opener_seat(&ix, &splan, &sq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 1, 3, 4]);
+        // Preference query: no seat.
+        let pq = Query { text: "Can you recommend a cocktail recipe?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![2usize, 0, 1, 3, 4];
+        assert!(!apply_c2_cross_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 1, 3, 4]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("Caroline", "I'm looking for cocktail ideas."),
+                        ("Melanie", "A gimlet is a classic."),
+                        ("Caroline", "I like the sound of the whiskey sour. Can you tell me more about honey syrup?"),
+                    ],
+                ),
+                sess(
+                    "D2",
+                    &[("Caroline", "I'm looking for a refreshing summer cocktail that pairs well with paella.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![2usize, 0, 1, 3];
+        assert!(!apply_c2_cross_opener_seat(&ixn, &plann, &q.text, &mut list, &[0.8, 0.7, 1.0, 0.75]));
+        assert_eq!(list, vec![2, 0, 1, 3]);
     }
 
 
