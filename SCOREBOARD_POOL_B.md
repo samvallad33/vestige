@@ -1,6 +1,6 @@
 # Pool-B scoreboard
 
-Standing-rule seat on `perf/c2-pool-beam`, measured with `retrieval_bench` and `c2_bench.py` against the combined Step 31+32+33+34 tip `95ef2f228de94e6b4ab8d8c3566bac3847b5c3ca`.
+Standing-rule seat `bf0ce533d616c686b09e9dfc11ba6ff9bce24411` on `perf/c2-pool-beam`, measured with `retrieval_bench` and `c2_bench.py` against the combined Step 31+32+33+34 tip `95ef2f228de94e6b4ab8d8c3566bac3847b5c3ca`.
 
 Datasets:
 

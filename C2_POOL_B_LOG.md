@@ -19,7 +19,7 @@ LoCoMo and LME were not run. A loss on BEAM is enough to drop the predicate.
 
 ## Attempt 2 — explicit conditional plus an inflection of a stored content term
 
-This commit. `apply_c2_pool_b_standing_seat` in `crates/vestige-core/src/algos_c2.rs` (function at 3827, inflection helper `c2_policy_inflects_query` at 3916, unit test `pool_b_standing_seat_promotes_zero_own_opener_on_task_question` at 7703). Call site `crates/vestige-core/src/retrieval.rs` 6287–6298, after Step 34 and before `maybe_dump_replay`.
+Win commit `bf0ce533d616c686b09e9dfc11ba6ff9bce24411`. `apply_c2_pool_b_standing_seat` in `crates/vestige-core/src/algos_c2.rs` (function at 3827, inflection helper `c2_policy_inflects_query` at 3916, unit test `pool_b_standing_seat_promotes_zero_own_opener_on_task_question` at 7703). Call site `crates/vestige-core/src/retrieval.rs` 6287–6298, after Step 34 and before `maybe_dump_replay`.
 
 Same gates as attempt 1, plus: the winner has an explicit conditional scope, and one of its stored content terms (`TurnIx.seq`, not the fan-cut scope set and not the turn body) differs from a query focal term by only a closed inflectional suffix. `implement` meets `implementation`. `date` does not meet `deadline`. Top-5 membership does not change. `rsb_seat_behind` is not touched. The session list is not rewritten.
 
