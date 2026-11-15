@@ -6359,6 +6359,21 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // session is absent from the top 5. Slot 0 and the session list stay.
     // Does not touch rsb_seat_behind.
     apply_c2_unseated_session_peak(ix, &mut final_turn_indices, &t_own, k);
+    // Step 39 capture-recapture. After the pool seats. Two rankings — uncarried
+    // lexical score and the session sightline — each mark their first three
+    // sessions. The Petersen estimate n1*n2/m is the gold-turn count. When that
+    // count is 2, 3, or 4 and the rankings disagree, the second session is
+    // filled up to min(estimate, 2) seats in the top 5, one seat, from its
+    // unique non-question already in the top 10. Slot 0 stays. The session
+    // list is not rewritten. Does not touch rsb_seat_behind.
+    apply_c2_step39_capture_recapture(
+        ix,
+        &mut final_turn_indices,
+        &t_own,
+        &t_scene,
+        &s_score,
+        &bridge_boost,
+    );
     maybe_dump_replay(
         ix,
         q,
