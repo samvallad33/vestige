@@ -407,6 +407,134 @@ fn apply_c2_cross_witness_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<usiz
     false
 }
 
+
+/// Challenger must hold at least this share of the evicted assistant's scene score.
+const C2_REALLOC_RATIO: f32 = 0.5;
+
+/// Same-session pool-fill reallocation: a user source that attests a strict superset
+/// of an assistant restatement's query groups takes that assistant's top-5 seat.
+/// Mined from the 51 LME Turn@5 misses at 877804cf, where gold often sat in the
+/// already-chosen session but lost its seat to a same-session assistant (session
+/// cap / greedy scene order). Distinct from ReplySource (slot-1 only, previous
+/// user already in the top 5) and from C2 coverage-margin (slot-1, top-5 membership
+/// unchanged, same speaker). Top-5 membership may change; the evicted assistant
+/// is pushed behind the top 5. One swap. Skips named-speaker sessions. Runs
+/// before RSB. Not used on assistant-attribution or event-sequence queries
+/// (caller).
+fn apply_c2_source_superset_realloc(
+    ix: &Index,
+    plan: &QueryPlan,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || plan.groups.is_empty() {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    if window < 2 {
+        return false;
+    }
+    let top = list[0];
+    if c2_named_session(ix, top) {
+        return false;
+    }
+    let ng = plan.groups.len();
+    let g_ic = c2_group_ic(ix, plan);
+    let top5 = &list[..window];
+    let mut sess_ok: DetHashSet<usize> = DetHashSet::default();
+    for &ti in top5 {
+        sess_ok.insert(ix.turns[ti].session);
+    }
+    // Best leftover user in a top-5 session: coverage desc, scene desc, index asc.
+    let mut best_c: Option<(f32, f32, usize)> = None;
+    let mut best_hit: Vec<bool> = Vec::new();
+    for &si in &sess_ok {
+        let Some(members) = ix.session_turns.get(si) else {
+            continue;
+        };
+        for &ti in members {
+            if top5.contains(&ti) {
+                continue;
+            }
+            let t = &ix.turns[ti];
+            if t.speaker != "user" {
+                continue;
+            }
+            let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+            if sc <= 0.0 {
+                continue;
+            }
+            let hit = c2_turn_groups(ix, plan, ng, ti);
+            if !hit.iter().any(|h| *h) {
+                continue;
+            }
+            let cov = c2_coverage(&g_ic, &hit);
+            let take = match best_c {
+                None => true,
+                Some((bc, bsc, bi)) => cov > bc || (cov == bc && (sc > bsc || (sc == bsc && ti < bi))),
+            };
+            if take {
+                best_c = Some((cov, sc, ti));
+                best_hit = hit;
+            }
+        }
+    }
+    let Some((_, c_sc, cand)) = best_c else {
+        return false;
+    };
+    let csess = ix.turns[cand].session;
+    // Weakest same-session assistant in the top 5 that the user strictly supersets.
+    let mut best_w: Option<(f32, f32, usize, usize)> = None; // cov, scene, slot, ti
+    for (slot, &wi) in top5.iter().enumerate() {
+        let t = &ix.turns[wi];
+        if t.session != csess || t.speaker != "assistant" {
+            continue;
+        }
+        let w_hit = c2_turn_groups(ix, plan, ng, wi);
+        // Strict superset: every group W holds, plus at least one more.
+        if w_hit.iter().zip(&best_hit).any(|(w, c)| *w && !*c) {
+            continue;
+        }
+        if !best_hit.iter().zip(&w_hit).any(|(c, w)| *c && !*w) {
+            continue;
+        }
+        let w_sc = t_scene.get(wi).copied().unwrap_or(0.0);
+        if c_sc < C2_REALLOC_RATIO * w_sc {
+            continue;
+        }
+        let w_cov = c2_coverage(&g_ic, &w_hit);
+        let take = match best_w {
+            None => true,
+            Some((bc, bsc, bslot, _)) => {
+                w_cov < bc || (w_cov == bc && (w_sc < bsc || (w_sc == bsc && slot < bslot)))
+            }
+        };
+        if take {
+            best_w = Some((w_cov, w_sc, slot, wi));
+        }
+    }
+    let Some((_, _, slot, victim)) = best_w else {
+        return false;
+    };
+    let k = list.len();
+    if let Some(pos) = list.iter().position(|&t| t == cand) {
+        list.remove(pos);
+        let slot = if pos < slot { slot - 1 } else { slot };
+        let vpos = list.iter().position(|&t| t == victim).unwrap_or(slot);
+        list.remove(vpos);
+        list.insert(vpos, cand);
+        list.push(victim);
+    } else {
+        list.remove(slot);
+        list.insert(slot, cand);
+        list.push(victim);
+    }
+    if list.len() > k {
+        list.truncate(k);
+    }
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -569,4 +697,39 @@ mod algos_c2_tests {
         let mut list = vec![4usize, 0];
         assert!(!apply_c2_cross_witness_seat(&ix, &plan, &mut list, &[0.6, 0.0, 0.0, 0.0, 1.0]));
     }
+
+    #[test]
+    fn source_superset_realloc_seats_user_over_assistant() {
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "I went to Hawaii with my family."),
+                    ("assistant", "Family time is wonderful and has unique benefits."),
+                    ("user", "Unrelated note about cooking."),
+                    ("assistant", "Nice."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query { text: "Where did I go with my family to Hawaii?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        // Assistant at slot 2 (turn 1) attests "family"; leftover user (turn 0) is a strict superset (family+hawaii).
+        let mut list = vec![2usize, 1];
+        let t_scene = vec![0.7f32, 1.0, 0.4, 0.3];
+        assert!(apply_c2_source_superset_realloc(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0]);
+        // Below the 50% scene share: no swap.
+        let mut list = vec![2usize, 1];
+        assert!(!apply_c2_source_superset_realloc(&ix, &plan, &mut list, &[0.4, 1.0, 0.4, 0.3]));
+        // Named-speaker sessions are left alone.
+        let ix = build_index(
+            &[sess("D1", &[("Caroline", "I went to Hawaii with my family."), ("Melanie", "Family time is wonderful.")])],
+            &Params::default(),
+        );
+        let plan = plan_query(&ix, &q, &Params::default());
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_source_superset_realloc(&ix, &plan, &mut list, &[0.8, 1.0]));
+    }
+
 }

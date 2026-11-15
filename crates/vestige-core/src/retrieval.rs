@@ -6021,6 +6021,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         apply_c2_cross_witness_seat(ix, &plan, &mut final_turn_indices, &t_scene);
         apply_c2_mimamsa_seat(ix, &plan, &mut final_turn_indices, &t_scene);
         apply_c2_dichotomous_key(ix, &plan, &mut final_turn_indices, &t_scene);
+        // Pool-fill reallocation: user source with a strict group superset takes a
+        // same-session assistant's top-5 seat. Skipped on assistant-attribution so
+        // the assistant's own words stay in place.
+        if !it.assistant_attribution {
+            apply_c2_source_superset_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
+        }
     }
     // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
