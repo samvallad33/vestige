@@ -106,6 +106,54 @@ Question-level any-gold top 5 and rank 0 are unchanged on all three benches (LME
 
 Gains: LME `gpt4_fe651585` Turn All@5; BEAM `20:knowledge_update:1` All@5. Losses: 0. Temporal-reasoning All@5 74 → 75. Multi-session All@5 stays 53. Detail in `SCOREBOARD_POOL_C.md` and `POOL_C_PERQ_DIFF.md`.
 
-### Why the rest of the census is still open
+### Why attempt 2 left the census open
 
-61 multi-session user openers and 49 temporal user openers are in pool@50 and not in the top 5. Attempt 1 could see many of them and lost `ac031881` doing it. Attempt 2 keeps that assistant and therefore also keeps the assistants that mention a query word the opener never posted. Those openers stay outside the top 5. The next structure has to tell a hapax answer (the "LIV" token, df 1, not on the opener) from an elaboration that only adds words the rest of the haystack already uses. That is not a re-tune of this cover.
+61 multi-session user openers and 49 temporal user openers are in pool@50 and not in the top 5. The opener-itself cover refuses an assistant that posts any query group the opener does not. Most of those assistants do. The rejected union would have seated the opener, and it also removed `ac031881`.
+
+## Attempt 3 — shipped. Union cover, two sessions already in the window
+
+Same seat as attempt 2. Two changes, both structural.
+
+The opener or any other turn that stays in the top 5 may attest a query group the assistant attests. The opener still has to post at least one group of its own. A digit on the assistant that the opener lacks still keeps the assistant.
+
+The window must already contain two sessions. `ac031881` is one session end to end (top 5 is `answer_sharegpt_GYqnAhC_190` only). The seat returns before the loop. Every attempt-1 gain already had two or more sessions in the baseline top 5 (LME 2, 3, or 4; every BEAM gain 5). The gate deletes fires. It does not add any.
+
+Parent commit `82c45088c489cc72399c3031fa39896bb266964b`. Binary sha256 `4c764e0ed91d1ba6a37a48c50d366f0723c26d7eb23412767ca52d8758df9b05`.
+
+### Files
+
+- `crates/vestige-core/src/algos_c2.rs` 3809–3923, test 7672–7888
+- `crates/vestige-core/src/retrieval.rs` 6287–6291
+
+### Funnel
+
+`t_scene` is unchanged. Final ranks moved on 11 questions, all gains.
+
+`2b8f3739` (multi-session, three gold openers). Baseline top 5 already held two of them and the session-3 assistant `answer_23759615_3#7`. Attempt 3 puts session-3 opener `answer_23759615_3#0` in that seat. All three golds are in the top 5. Slot 1 stays.
+
+`gpt4_1e4a8aec` (temporal). Baseline top 5 held no gold. The gold opener `answer_16bd5ea6_2#0` takes the seat of assistant `answer_16bd5ea6_2#5`. Turn@5, Turn@10, and All@5 flip. Two sessions were already in the window.
+
+`ac031881` top 5 is byte-identical to the baseline, gold assistant `answer_sharegpt_GYqnAhC_190#5` included.
+
+### Scoreboard versus the Step 31–34 tip
+
+| | Tip | Attempt 3 | Delta |
+|---|---:|---:|---:|
+| LME Turn @1/@5/@10 | 353/428/437 | 353/429/438 | 0 / +1 / +1 |
+| LME Turn All@5 | 314 | 320 | +6 |
+| LME Session @1/@5/@10, All@5 | 430/463/468, 424 | same | 0 |
+| LoCoMo Turn @1/@5/@10 | 808/1127/1226 | same | 0 |
+| LoCoMo Session @1/@5 | 1133/1416 | same | 0 |
+| BEAM Turn @1/@5/@10 | 160/238/267 | 160/240/269 | 0 / +2 / +2 |
+| BEAM All@5 / All@10 | 118 / 138 | 121 / 141 | +3 / +3 |
+| BEAM Session @1/@5/@10 | 133/249/275 | same | 0 |
+
+LME by category, cells that moved: multi-session All@5 53 → 56. Temporal-reasoning Turn@5 111 → 112, Turn@10 116 → 117, All@5 74 → 77. Single-session-assistant Turn@5 stays 52.
+
+BEAM cells that moved: knowledge_update All@5 24 → 26, All@10 27 → 29. multi_session_reasoning Turn@5 34 → 35, Turn@10 36 → 37. temporal_reasoning Turn@5 37 → 38, Turn@10 39 → 40, All@5 24 → 25, All@10 27 → 28.
+
+Gains, 11, losses 0, including against attempt 2. `ac031881` stays a hit. Detail in `SCOREBOARD_POOL_C.md` and `POOL_C_PERQ_DIFF.md`.
+
+### What is still open
+
+The two-session gate is what made the union legal. It also means a gold opener whose session is the only session in the top 5 never enters. 31 of the 61 multi-session openers in pool@50 and outside the top 5 have no same-session turn in the top 5 at all, so this seat cannot see them: there is no same-session assistant to yield. Those need a different admission, not a wider cover on this one.
