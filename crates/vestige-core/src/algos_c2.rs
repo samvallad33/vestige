@@ -1046,6 +1046,99 @@ fn apply_c2_same_opener_seat(
     false
 }
 
+
+/// True when the padded query contains the speaker's name as a whole token.
+/// Speakers are the conversation's own role labels (no name list). User and
+/// assistant roles never count.
+fn c2_query_mentions_speaker(query: &str, speaker: &str) -> bool {
+    if speaker.is_empty() || speaker == "user" || speaker == "assistant" {
+        return false;
+    }
+    let padded = word_padded(query);
+    let sp = speaker.to_ascii_lowercase();
+    // word_padded keeps a possessive apostrophe ("Melanie's" -> " melanie's ").
+    padded.contains(&format!(" {sp} "))
+        || padded.contains(&format!(" {sp}'s "))
+        || padded.contains(&format!(" {sp}’s "))
+}
+
+/// True when a mentioned speaker is conjoined with someone else ("X and Y").
+/// Those questions are often answered by a third-party report, not by X's
+/// next reply.
+fn c2_speaker_conjoined(query: &str, speaker: &str) -> bool {
+    if speaker.is_empty() {
+        return false;
+    }
+    let padded = word_padded(query);
+    let sp = speaker.to_ascii_lowercase();
+    padded.contains(&format!(" {sp} and ")) || padded.contains(&format!(" and {sp} "))
+}
+
+/// Queried-speaker reply seat. In a named-speaker dialogue, an unmentioned
+/// speaker's question at slot 1 is often the prompt; the immediately
+/// following same-session turn, by a speaker the query names, already in
+/// the top 5, is that speaker's reply and takes slot 1. Top-5 membership
+/// never changes. Skipped when the query conjoins the named speaker with
+/// someone else ("X and Y": the answer is often a third-party report),
+/// on WH-person questions (existing `wh_slots`, so this does not compete
+/// with Gemini Step 11), preference and temporal questions, summary
+/// requests, event sequences and assistant-attribution (caller). Does
+/// not fire on user/assistant chats. Runs after the same-session opener
+/// seat, before RSB. Slot 1 is then frozen by rank1_gatekeeper_keep_rsb_head.
+fn apply_c2_queried_speaker_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2
+        || plan.intent.preference
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if head_sp.is_empty()
+        || head_sp == "user"
+        || head_sp == "assistant"
+        || !ix.turns[top].is_question
+        || c2_query_mentions_speaker(query, head_sp)
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let Some(members) = ix.session_turns.get(ix.turns[top].session) else {
+        return false;
+    };
+    let Some(pos) = members.iter().position(|&m| m == top) else {
+        return false;
+    };
+    let Some(&cand) = members.get(pos + 1) else {
+        return false;
+    };
+    let csp = ix.turns[cand].speaker.as_str();
+    if !c2_query_mentions_speaker(query, csp) || c2_speaker_conjoined(query, csp) {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let Some(slot) = list[..window].iter().position(|&t| t == cand) else {
+        return false;
+    };
+    if slot == 0 {
+        return false;
+    }
+    list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -1798,6 +1891,98 @@ mod algos_c2_tests {
         let mut list = vec![2usize, 0, 1];
         assert!(!apply_c2_same_opener_seat(&ixn, &plann, &q.text, &mut list, &[0.85, 0.5, 1.0]));
         assert_eq!(list, vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn queried_speaker_seat_promotes_named_speakers_next_reply() {
+        let ix = build_index(
+            &[sess(
+                "D7",
+                &[
+                    ("caroline", "Do you have any pets? What are their names?"),
+                    ("melanie", "I have Oliver, Luna, and Bailey."),
+                    ("caroline", "Those are lovely names."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query { text: "What are Melanie's pets' names?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.preference);
+        assert!(!plan.intent.temporal);
+        assert!(ix.turns[0].is_question);
+        assert!(!c2_query_mentions_speaker(&q.text, "caroline"));
+        assert!(c2_query_mentions_speaker(&q.text, "melanie"));
+        assert!(q.text.contains("Melanie's"));
+        let mut list = vec![0usize, 1, 2];
+        let t_scene = vec![1.0f32, 0.8, 0.5];
+        assert!(apply_c2_queried_speaker_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 0, 2]);
+        // Declarative head: no seat.
+        let ixd = build_index(
+            &[sess(
+                "D7",
+                &[
+                    ("caroline", "I was just asking about pets earlier."),
+                    ("melanie", "I have Oliver, Luna, and Bailey."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(!ixd.turns[0].is_question);
+        let mut list = vec![0usize, 1];
+        assert!(!apply_c2_queried_speaker_seat(&ixd, &plan, &q.text, &mut list, &[1.0, 0.8]));
+        assert_eq!(list, vec![0, 1]);
+        // Head speaker is already named in the query: no seat.
+        let hq = Query { text: "What did Caroline ask about Melanie's pets?".into(), date: String::new() };
+        let hplan = plan_query(&ix, &hq, &Params::default());
+        let mut list = vec![0usize, 1, 2];
+        assert!(!apply_c2_queried_speaker_seat(&ix, &hplan, &hq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2]);
+        // Conjoined speaker ("X and Y"): no seat.
+        let aq = Query {
+            text: "What did Melanie and Anna discuss while watching the sunset?".into(),
+            date: String::new(),
+        };
+        assert!(c2_speaker_conjoined(&aq.text, "melanie"));
+        let aplan = plan_query(&ix, &aq, &Params::default());
+        let mut list = vec![0usize, 1, 2];
+        assert!(!apply_c2_queried_speaker_seat(&ix, &aplan, &aq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2]);
+        // Preference query: no seat.
+        let pq = Query { text: "What is Melanie's favorite pet?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![0usize, 1, 2];
+        assert!(!apply_c2_queried_speaker_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2]);
+        // WH-person: no seat.
+        let wq = Query { text: "Who told Melanie about the pets?".into(), date: String::new() };
+        assert!(wh_slots(&wq.text) & WH_PERSON != 0);
+        let wplan = plan_query(&ix, &wq, &Params::default());
+        let mut list = vec![0usize, 1, 2];
+        assert!(!apply_c2_queried_speaker_seat(&ix, &wplan, &wq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2]);
+        // user/assistant chats are left alone.
+        let ixu = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "Do you have any pets? What are their names?"),
+                    ("assistant", "I have Oliver, Luna, and Bailey."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let uq = Query { text: "What are Melanie's pets' names?".into(), date: String::new() };
+        let uplan = plan_query(&ixu, &uq, &Params::default());
+        let mut list = vec![0usize, 1];
+        assert!(!apply_c2_queried_speaker_seat(&ixu, &uplan, &uq.text, &mut list, &[1.0, 0.8]));
+        assert_eq!(list, vec![0, 1]);
+        // Next turn not in the top 5: no seat.
+        let mut list = vec![0usize, 2];
+        assert!(!apply_c2_queried_speaker_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2]);
     }
 
 }
