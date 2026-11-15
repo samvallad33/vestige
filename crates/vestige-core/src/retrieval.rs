@@ -6144,10 +6144,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // another session's user opener already in the top 5 whose
     // immediately following assistant reply is also already in the
     // top 5, when that opener is at least as on-scene. Post-gatekeeper,
-    // after #26, last ranking change. Skipped on preference. Does not
-    // run the gatekeeper again and adds no WH-slot ballot.
+    // after #26. Later post-gatekeeper C2 seats may still run after
+    // this pass. Skipped on preference. Does not run the gatekeeper
+    // again and adds no WH-slot ballot.
     if !it.is_event_sequence && !it.assistant_attribution && !c2_text_preference(&q.text) {
         apply_c2_cross_opener_pair_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Answered-opener declarative seat: a user question opener at
+        // slot 1 whose assistant reply is already in the top 5 yields
+        // to another session's declarative user opener already in the
+        // top 5, when that opener is at least as on-scene. After #27,
+        // last ranking change. Skipped on preference.
+        apply_c2_answered_opener_decl_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
