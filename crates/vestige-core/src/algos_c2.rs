@@ -1313,6 +1313,76 @@ fn apply_c2_queried_speaker_t5_entry(
     true
 }
 
+
+/// Queried-speaker question-head previous seat. In a named-speaker
+/// dialogue, an unmentioned speaker's question at slot 1 is often a
+/// follow-up prompt; the immediately preceding same-session turn, by a
+/// speaker the query names, already in the top 5, is that speaker's
+/// prior statement (or their own earlier question) and takes slot 1.
+/// Top-5 membership never changes. Literal backward twin of the
+/// queried-speaker reply seat (#15), which requires a question head
+/// and the next turn. This seat keeps the question head and looks
+/// backward; the previous turn may be a question or a statement
+/// (both shapes are live golds). The same mention, conjunction,
+/// WH-person, preference, temporal, and summary cuts apply. Does not
+/// fire on user/assistant chats. Runs after the queried-speaker
+/// previous seat, before the T@5 entry and RSB. Slot 1 is then frozen
+/// by rank1_gatekeeper_keep_rsb_head.
+fn apply_c2_queried_speaker_qhead_prev_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2
+        || plan.intent.preference
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if head_sp.is_empty()
+        || head_sp == "user"
+        || head_sp == "assistant"
+        || !ix.turns[top].is_question
+        || c2_query_mentions_speaker(query, head_sp)
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let Some(members) = ix.session_turns.get(ix.turns[top].session) else {
+        return false;
+    };
+    let Some(pos) = members.iter().position(|&m| m == top) else {
+        return false;
+    };
+    if pos == 0 {
+        return false;
+    }
+    let cand = members[pos - 1];
+    let csp = ix.turns[cand].speaker.as_str();
+    if !c2_query_mentions_speaker(query, csp) || c2_speaker_conjoined(query, csp) {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let Some(slot) = list[..window].iter().position(|&t| t == cand) else {
+        return false;
+    };
+    if slot == 0 {
+        return false;
+    }
+    list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -2417,6 +2487,131 @@ mod algos_c2_tests {
         let ssc = vec![1.0f32, 0.9, 0.9, 0.9, 0.8, 0.85];
         assert!(!apply_c2_queried_speaker_t5_entry(&ixs, &plan, &q.text, &mut list, &ssc));
         assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn queried_speaker_qhead_prev_seat_promotes_named_speakers_previous_turn() {
+        // Declarative previous turn (7:1 shape).
+        let ix = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("deborah", "My mother, my father, and my friend Karlie have passed away."),
+                    ("jolene", "Which of your family and friends have passed away?"),
+                    ("deborah", "It has been a hard season for the family."),
+                ],
+            )],
+            &Params::default(),
+        );
+        // Backtick possessive, as in the live LoCoMo query: word_padded
+        // splits it, and the bare speaker token still matches.
+        let q = Query {
+            text: "Which of Deborah`s family and friends have passed away?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.preference);
+        assert!(!plan.intent.temporal);
+        assert!(ix.turns[1].is_question);
+        assert!(!ix.turns[0].is_question);
+        assert!(c2_query_mentions_speaker(&q.text, "deborah"));
+        assert!(!c2_query_mentions_speaker(&q.text, "jolene"));
+        let mut list = vec![1usize, 2, 0];
+        let t_scene = vec![0.7f32, 1.0, 0.5];
+        assert!(apply_c2_queried_speaker_qhead_prev_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2]);
+
+        // Question previous turn (5:27 shape) also seats.
+        let ixq = build_index(
+            &[sess(
+                "D18",
+                &[
+                    ("andrew", "How do I feel about my current work these days?"),
+                    ("audrey", "How do you feel about your current work?"),
+                    ("andrew", "It has been stressful at my current job."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(ixq.turns[0].is_question);
+        assert!(ixq.turns[1].is_question);
+        let aqry = Query { text: "How does Andrew feel about his current work?".into(), date: String::new() };
+        let aplan = plan_query(&ixq, &aqry, &Params::default());
+        let mut list = vec![1usize, 2, 0];
+        assert!(apply_c2_queried_speaker_qhead_prev_seat(&ixq, &aplan, &aqry.text, &mut list, &[0.7, 1.0, 0.5]));
+        assert_eq!(list, vec![0, 1, 2]);
+
+        // Declarative head: no seat (that's #16's both-declarative shape).
+        let ixd = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("deborah", "My mother, my father, and my friend Karlie have passed away."),
+                    ("jolene", "That is a hard season for any family."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(!ixd.turns[1].is_question);
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ixd, &plan, &q.text, &mut list, &[0.7, 1.0]));
+        assert_eq!(list, vec![1, 0]);
+
+        // Head speaker is already named in the query: no seat.
+        let hq = Query { text: "Which of Jolene's questions about family came before Deborah spoke?".into(), date: String::new() };
+        let hplan = plan_query(&ix, &hq, &Params::default());
+        let mut list = vec![1usize, 2, 0];
+        assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &hplan, &hq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 2, 0]);
+
+        // Conjoined speaker ("X and Y"): no seat.
+        let cq = Query {
+            text: "Which of Deborah and Anna's family and friends have passed away?".into(),
+            date: String::new(),
+        };
+        assert!(c2_speaker_conjoined(&cq.text, "deborah"));
+        let cplan = plan_query(&ix, &cq, &Params::default());
+        let mut list = vec![1usize, 2, 0];
+        assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &cplan, &cq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 2, 0]);
+
+        // Preference query: no seat.
+        let pq = Query { text: "What is Deborah's favorite memory of her family and friends?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![1usize, 2, 0];
+        assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 2, 0]);
+
+        // WH-person: no seat.
+        let wq = Query { text: "Who in Deborah's family and friends have passed away?".into(), date: String::new() };
+        assert!(wh_slots(&wq.text) & WH_PERSON != 0);
+        let wplan = plan_query(&ix, &wq, &Params::default());
+        let mut list = vec![1usize, 2, 0];
+        assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &wplan, &wq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 2, 0]);
+
+        // user/assistant chats are left alone.
+        let ixu = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "My mother, my father, and my friend Karlie have passed away."),
+                    ("assistant", "Which of your family and friends have passed away?"),
+                ],
+            )],
+            &Params::default(),
+        );
+        let uq = Query { text: "Which of Deborah`s family and friends have passed away?".into(), date: String::new() };
+        let uplan = plan_query(&ixu, &uq, &Params::default());
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ixu, &uplan, &uq.text, &mut list, &[0.7, 1.0]));
+        assert_eq!(list, vec![1, 0]);
+
+        // Previous turn not in the top 5: no seat.
+        let mut list = vec![1usize, 2];
+        assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![1, 2]);
     }
 
 }
