@@ -6229,6 +6229,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // the least on-scene lone-session turn (at least as on-scene, never an
         // earlier session). After #39, last ranking change.
         apply_c2_episode_run_edge_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Episode-run edge T@5 entry: the edge of two back-to-back top-5 turns
+        // takes the slot of the least on-scene lone-session, non-opener top-5
+        // turn (at least as on-scene, never an earlier session). After #40,
+        // last ranking change.
+        apply_c2_episode_run_edge_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
