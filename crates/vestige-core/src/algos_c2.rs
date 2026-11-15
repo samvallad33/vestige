@@ -410,6 +410,8 @@ fn apply_c2_cross_witness_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<usiz
 
 /// Challenger must hold at least this share of the evicted assistant's scene score.
 const C2_REALLOC_RATIO: f32 = 0.5;
+/// Challenger must hold at least this share of the victim assistant's scene score.
+const C2_UNIQUE_GROUP_RATIO: f32 = 0.5;
 
 /// Same-session pool-fill reallocation: a user source that attests a strict superset
 /// of an assistant restatement's query groups takes that assistant's top-5 seat.
@@ -516,6 +518,184 @@ fn apply_c2_source_superset_realloc(
     let Some((_, _, slot, victim)) = best_w else {
         return false;
     };
+    let k = list.len();
+    if let Some(pos) = list.iter().position(|&t| t == cand) {
+        list.remove(pos);
+        let slot = if pos < slot { slot - 1 } else { slot };
+        let vpos = list.iter().position(|&t| t == victim).unwrap_or(slot);
+        list.remove(vpos);
+        list.insert(vpos, cand);
+        list.push(victim);
+    } else {
+        list.remove(slot);
+        list.insert(slot, cand);
+        list.push(victim);
+    }
+    if list.len() > k {
+        list.truncate(k);
+    }
+    true
+}
+
+
+/// Same-session unique-group realloc. A user turn already in the retrieved
+/// window that attests a query group none of the already-seated same-session
+/// top-5 turns attest takes a same-session assistant's top-5 seat, provided it
+/// holds >= 50% of that assistant's scene score and the swap does not drop a
+/// query group the remaining top 5 (plus the challenger) would otherwise lose.
+/// The evicted assistant stays in the window (pushed behind top 5). Challengers
+/// outside the current k-list are ignored, so top-k membership does not change.
+/// Complementary to source-superset realloc: the challenger need not be a
+/// superset of the assistant, only uniquely attest something the session's
+/// current representatives missed. Named-speaker sessions are skipped. One swap.
+/// Runs after source-superset realloc, before RSB.
+fn apply_c2_unique_group_realloc(
+    ix: &Index,
+    plan: &QueryPlan,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || plan.groups.is_empty() {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    if window < 2 {
+        return false;
+    }
+    let top = list[0];
+    if c2_named_session(ix, top) {
+        return false;
+    }
+    let ng = plan.groups.len();
+    let g_ic = c2_group_ic(ix, plan);
+    let top5 = &list[..window];
+    let mut sess_ok: DetHashSet<usize> = DetHashSet::default();
+    for &ti in top5 {
+        sess_ok.insert(ix.turns[ti].session);
+    }
+    struct Pair {
+        n_unique: usize,
+        cov: f32,
+        sc: f32,
+        cand: usize,
+        w_cov: f32,
+        w_sc: f32,
+        slot: usize,
+        victim: usize,
+    }
+    let mut best: Option<Pair> = None;
+    for &si in &sess_ok {
+        let Some(members) = ix.session_turns.get(si) else {
+            continue;
+        };
+        let sibs: Vec<usize> = top5
+            .iter()
+            .copied()
+            .filter(|&ti| ix.turns[ti].session == si)
+            .collect();
+        if sibs.is_empty() {
+            continue;
+        }
+        let mut union = vec![false; ng];
+        for &ti in &sibs {
+            let hit = c2_turn_groups(ix, plan, ng, ti);
+            for (u, h) in union.iter_mut().zip(&hit) {
+                *u |= *h;
+            }
+        }
+        for &ti in members {
+            if top5.contains(&ti) {
+                continue;
+            }
+            // Already in the retrieved window (slots 6..k). Outside-list turns
+            // would grow the window or drop the evicted assistant from top-k.
+            if !list.contains(&ti) {
+                continue;
+            }
+            let t = &ix.turns[ti];
+            if t.speaker != "user" {
+                continue;
+            }
+            let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+            if sc <= 0.0 {
+                continue;
+            }
+            let hit = c2_turn_groups(ix, plan, ng, ti);
+            if !hit.iter().any(|h| *h) {
+                continue;
+            }
+            let n_unique = hit.iter().zip(&union).filter(|(c, u)| **c && !**u).count();
+            if n_unique == 0 {
+                continue;
+            }
+            let cov = c2_coverage(&g_ic, &hit);
+            for (slot, &wi) in top5.iter().enumerate() {
+                let w = &ix.turns[wi];
+                if w.session != si || w.speaker != "assistant" {
+                    continue;
+                }
+                let w_sc = t_scene.get(wi).copied().unwrap_or(0.0);
+                if sc < C2_UNIQUE_GROUP_RATIO * w_sc {
+                    continue;
+                }
+                let w_hit = c2_turn_groups(ix, plan, ng, wi);
+                // Do not evict an assistant that uniquely attests a group the
+                // remaining top 5 plus the challenger would lose.
+                let mut remain = hit.clone();
+                for &oi in top5 {
+                    if oi == wi {
+                        continue;
+                    }
+                    let oh = c2_turn_groups(ix, plan, ng, oi);
+                    for (r, h) in remain.iter_mut().zip(&oh) {
+                        *r |= *h;
+                    }
+                }
+                if w_hit.iter().zip(&remain).any(|(w_h, r)| *w_h && !*r) {
+                    continue;
+                }
+                let w_cov = c2_coverage(&g_ic, &w_hit);
+                let take = match &best {
+                    None => true,
+                    Some(b) => {
+                        if n_unique != b.n_unique {
+                            n_unique > b.n_unique
+                        } else if cov != b.cov {
+                            cov > b.cov
+                        } else if sc != b.sc {
+                            sc > b.sc
+                        } else if ti != b.cand {
+                            ti < b.cand
+                        } else if w_cov != b.w_cov {
+                            w_cov < b.w_cov
+                        } else if w_sc != b.w_sc {
+                            w_sc < b.w_sc
+                        } else {
+                            slot < b.slot
+                        }
+                    }
+                };
+                if take {
+                    best = Some(Pair {
+                        n_unique,
+                        cov,
+                        sc,
+                        cand: ti,
+                        w_cov,
+                        w_sc,
+                        slot,
+                        victim: wi,
+                    });
+                }
+            }
+        }
+    }
+    let Some(pair) = best else {
+        return false;
+    };
+    let cand = pair.cand;
+    let victim = pair.victim;
+    let slot = pair.slot;
     let k = list.len();
     if let Some(pos) = list.iter().position(|&t| t == cand) {
         list.remove(pos);
@@ -730,6 +910,86 @@ mod algos_c2_tests {
         let plan = plan_query(&ix, &q, &Params::default());
         let mut list = vec![1usize, 0];
         assert!(!apply_c2_source_superset_realloc(&ix, &plan, &mut list, &[0.8, 1.0]));
+    }
+
+    #[test]
+    fn unique_group_realloc_seats_user_over_assistant() {
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "Are there movie festivals this year?"),
+                    ("assistant", "There are plenty of film festivals around."),
+                    ("user", "I attended two last year on my own."),
+                    ("assistant", "Nice."),
+                    ("user", "Unrelated note about cooking dinner."),
+                    ("assistant", "Sounds good."),
+                    ("user", "I also bought groceries today."),
+                    ("user", "The weather is mild."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query { text: "How many movie festivals that I attended?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        // Assistant at slot 2 (turn 1) attests "festival"; user turn 2 is already
+        // in the window (slot 6) and uniquely attests "attended" (not a superset).
+        // Top-5 fillers are users so source-superset realloc does not fire on an
+        // empty-group assistant.
+        let mut list = vec![0usize, 1, 4, 6, 7, 2];
+        let t_scene = vec![1.0f32, 1.0, 0.7, 0.3, 0.2, 0.2, 0.2, 0.2];
+        assert!(!apply_c2_source_superset_realloc(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 6, 7, 2]);
+        assert!(apply_c2_unique_group_realloc(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 4, 6, 7, 1]);
+        // Below the 50% scene share: no swap.
+        let mut list = vec![0usize, 1, 4, 6, 7, 2];
+        assert!(!apply_c2_unique_group_realloc(
+            &ix,
+            &plan,
+            &mut list,
+            &[1.0, 1.0, 0.4, 0.3, 0.2, 0.2, 0.2, 0.2]
+        ));
+        // Outside the retrieved window: no swap (membership must stay the same).
+        let mut list = vec![0usize, 1, 4, 6, 7];
+        assert!(!apply_c2_unique_group_realloc(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 6, 7]);
+        // No unique group: leftover only restates "festival".
+        let ix2 = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "Are there movie festivals this year?"),
+                    ("assistant", "There are plenty of film festivals around."),
+                    ("user", "Festivals are fun to watch."),
+                    ("assistant", "Nice."),
+                    ("user", "Unrelated note about cooking dinner."),
+                    ("assistant", "Sounds good."),
+                    ("user", "I also bought groceries today."),
+                    ("user", "The weather is mild."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let plan2 = plan_query(&ix2, &q, &Params::default());
+        let mut list = vec![0usize, 1, 4, 6, 7, 2];
+        assert!(!apply_c2_unique_group_realloc(&ix2, &plan2, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 6, 7, 2]);
+        // Named-speaker sessions are left alone.
+        let ix = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("Caroline", "Are there movie festivals this year?"),
+                    ("Melanie", "There are plenty of film festivals around."),
+                    ("Caroline", "I attended two last year on my own."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let plan = plan_query(&ix, &q, &Params::default());
+        let mut list = vec![0usize, 1, 2];
+        assert!(!apply_c2_unique_group_realloc(&ix, &plan, &mut list, &[1.0, 1.0, 0.7]));
     }
 
 }
