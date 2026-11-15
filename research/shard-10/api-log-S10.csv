@@ -1,0 +1,249 @@
+name,endpoint,http_status,result_count,note
+aic_handscroll,"https://api.artic.edu/api/v1/artworks/search?q=handscroll&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_colophon,"https://api.artic.edu/api/v1/artworks/search?q=colophon&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_album_leaf,"https://api.artic.edu/api/v1/artworks/search?q=album%20leaf&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_seal,"https://api.artic.edu/api/v1/artworks/search?q=seal&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_diptych,"https://api.artic.edu/api/v1/artworks/search?q=diptych&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_triptych,"https://api.artic.edu/api/v1/artworks/search?q=triptych&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_papyrus,"https://api.artic.edu/api/v1/artworks/search?q=papyrus&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_cuneiform,"https://api.artic.edu/api/v1/artworks/search?q=cuneiform&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_fragment,"https://api.artic.edu/api/v1/artworks/search?q=fragment&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_woodblock,"https://api.artic.edu/api/v1/artworks/search?q=woodblock&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_hanging_scroll,"https://api.artic.edu/api/v1/artworks/search?q=hanging%20scroll&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_book_of_the_dead,"https://api.artic.edu/api/v1/artworks/search?q=book%20of%20the%20dead&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_inscription,"https://api.artic.edu/api/v1/artworks/search?q=inscription&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_reliquary,"https://api.artic.edu/api/v1/artworks/search?q=reliquary&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_print_states,"https://api.artic.edu/api/v1/artworks/search?q=print%20states&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_pair_of_screens,"https://api.artic.edu/api/v1/artworks/search?q=pair%20of%20screens&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_tomb_figure,"https://api.artic.edu/api/v1/artworks/search?q=tomb%20figure&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_oracle,"https://api.artic.edu/api/v1/artworks/search?q=oracle&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_sutra,"https://api.artic.edu/api/v1/artworks/search?q=sutra&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+aic_illuminated_manuscript,"https://api.artic.edu/api/v1/artworks/search?q=illuminated%20manuscript&limit=5&fields=id,title,date_display,artist_display,medium_display,place_of_origin,classification_title,is_public_domain,api_link,credit_line",200,5,HTTP 200. pagination.total is 133287 on every q= search (collection size). data length was 5.
+clev_handscroll,https://openaccess-api.clevelandart.org/api/artworks/?q=handscroll&limit=4&has_image=1,200,121,
+clev_colophon,https://openaccess-api.clevelandart.org/api/artworks/?q=colophon&limit=4&has_image=1,200,416,
+clev_album,https://openaccess-api.clevelandart.org/api/artworks/?q=album&limit=4&has_image=1,200,1115,
+clev_seal,https://openaccess-api.clevelandart.org/api/artworks/?q=seal&limit=4&has_image=1,200,824,
+clev_triptych,https://openaccess-api.clevelandart.org/api/artworks/?q=triptych&limit=4&has_image=1,200,134,
+clev_papyrus,https://openaccess-api.clevelandart.org/api/artworks/?q=papyrus&limit=4&has_image=1,200,15,
+clev_cuneiform,https://openaccess-api.clevelandart.org/api/artworks/?q=cuneiform&limit=4&has_image=1,200,0,
+clev_fragment,https://openaccess-api.clevelandart.org/api/artworks/?q=fragment&limit=4&has_image=1,200,1911,
+clev_screen,https://openaccess-api.clevelandart.org/api/artworks/?q=screen&limit=4&has_image=1,200,315,
+clev_reliquary,https://openaccess-api.clevelandart.org/api/artworks/?q=reliquary&limit=4&has_image=1,200,72,
+clev_sutra,https://openaccess-api.clevelandart.org/api/artworks/?q=sutra&limit=4&has_image=1,200,616,
+clev_inscription,https://openaccess-api.clevelandart.org/api/artworks/?q=inscription&limit=4&has_image=1,200,1233,
+clev_woodblock,https://openaccess-api.clevelandart.org/api/artworks/?q=woodblock&limit=4&has_image=1,200,1159,
+clev_diptych,https://openaccess-api.clevelandart.org/api/artworks/?q=diptych&limit=4&has_image=1,200,19,
+metsearch_handscroll,https://collectionapi.metmuseum.org/public/collection/v1/search?q=handscroll&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_colophon,https://collectionapi.metmuseum.org/public/collection/v1/search?q=colophon&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_oracle_bone,https://collectionapi.metmuseum.org/public/collection/v1/search?q=oracle%20bone&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_cuneiform_tablet,https://collectionapi.metmuseum.org/public/collection/v1/search?q=cuneiform%20tablet&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_book_of_the_dead,https://collectionapi.metmuseum.org/public/collection/v1/search?q=book%20of%20the%20dead&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_triptych,https://collectionapi.metmuseum.org/public/collection/v1/search?q=triptych&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_album_leaf,https://collectionapi.metmuseum.org/public/collection/v1/search?q=album%20leaf&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_reliquary,https://collectionapi.metmuseum.org/public/collection/v1/search?q=reliquary&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_woodblock_print,https://collectionapi.metmuseum.org/public/collection/v1/search?q=woodblock%20print&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_hanging_scroll,https://collectionapi.metmuseum.org/public/collection/v1/search?q=hanging%20scroll&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_papyrus,https://collectionapi.metmuseum.org/public/collection/v1/search?q=papyrus&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_inscription_cast,https://collectionapi.metmuseum.org/public/collection/v1/search?q=inscription%20cast&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+metsearch_pair_screens,https://collectionapi.metmuseum.org/public/collection/v1/search?q=pair%20screens&hasImages=true,410,,v1 search retired 2026-10-01. Replacement is /public/collection/v1.1/search.
+rijks_nokey,https://www.rijksmuseum.nl/api/en/collection?format=json&q=brief&ps=1,410,,HTTPError
+rijks_emptykey,https://www.rijksmuseum.nl/api/en/collection?key=&format=json&q=brief&ps=1,410,,HTTPError
+rijks_data,https://data.rijksmuseum.nl/search/collection?q=rembrandt&format=json,400,,HTTPError
+rijks_odata,https://data.rijksmuseum.nl/object/collection,404,,HTTPError
+si_nokey,https://api.si.edu/openaccess/api/v1.1/search?q=handscroll&rows=1,404,,HTTPError
+si_demo,https://api.si.edu/openaccess/api/v1.1/search?q=handscroll&rows=1&api_key=(none),404,,HTTPError
+va_handscroll,https://api.vam.ac.uk/v2/objects/search?q=handscroll&page_size=3&images_exist=1,200,17,info.record_count 17.
+va_colophon,https://api.vam.ac.uk/v2/objects/search?q=colophon&page_size=3&images_exist=1,200,,
+va_album,https://api.vam.ac.uk/v2/objects/search?q=album&page_size=3&images_exist=1,200,,
+va_cuneiform,https://api.vam.ac.uk/v2/objects/search?q=cuneiform&page_size=3&images_exist=1,200,,
+va_triptych,https://api.vam.ac.uk/v2/objects/search?q=triptych&page_size=3&images_exist=1,200,,
+va_reliquary,https://api.vam.ac.uk/v2/objects/search?q=reliquary&page_size=3&images_exist=1,200,,
+va_seal,https://api.vam.ac.uk/v2/objects/search?q=seal&page_size=3&images_exist=1,200,,
+va_sutra,https://api.vam.ac.uk/v2/objects/search?q=sutra&page_size=3&images_exist=1,200,,
+va_screen,https://api.vam.ac.uk/v2/objects/search?q=screen&page_size=3&images_exist=1,200,,
+va_papyrus,https://api.vam.ac.uk/v2/objects/search?q=papyrus&page_size=3&images_exist=1,200,,
+eu_handscroll,https://api.europeana.eu/record/v2/search.json?wskey=(published-demo)&query=handscroll&rows=2&profile=rich,200,64,items returned on the page were logged as result_count in the raw file; eu_handscroll totalResults is 64.
+eu_cuneiform,https://api.europeana.eu/record/v2/search.json?wskey=(published-demo)&query=cuneiform&rows=2&profile=rich,200,2,items returned on the page were logged as result_count in the raw file; eu_handscroll totalResults is 64.
+eu_colophon,https://api.europeana.eu/record/v2/search.json?wskey=(published-demo)&query=colophon&rows=2&profile=rich,200,2,items returned on the page were logged as result_count in the raw file; eu_handscroll totalResults is 64.
+eu_triptych,https://api.europeana.eu/record/v2/search.json?wskey=(published-demo)&query=triptych&rows=2&profile=rich,200,2,items returned on the page were logged as result_count in the raw file; eu_handscroll totalResults is 64.
+gh_mcp_museum,https://api.github.com/search/repositories?q=mcp+museum+collection&sort=stars&per_page=5,200,14,total_count 14; page returned 5.
+gh_mcp_registry,https://api.github.com/search/repositories?q=modelcontextprotocol+registry&sort=stars&per_page=5,200,5,
+gh_mcp_servers,https://api.github.com/repos/modelcontextprotocol/servers/contents/src,200,,
+mcp_reg_root,https://registry.modelcontextprotocol.io/,200,,
+mcp_reg_v0,https://registry.modelcontextprotocol.io/v0/servers?limit=5,200,5,
+mcp_reg_v01,https://registry.modelcontextprotocol.io/v0.1/servers?search=museum&limit=5,200,5,
+mcp_reg_docs,https://raw.githubusercontent.com/modelcontextprotocol/registry/main/README.md,200,,
+wd_met_oracle,https://query.wikidata.org/sparql?format=json&query=SELECT%20%3Fitem%20%3FitemLabel%20%3Finv%20WHERE%20%7B%20%3Fitem%20wdt%3AP195%20wd%3AQ160236%3B%20wdt%3AP217%20%3Finv.%20%3Fitem%20rdfs%3Alabel%20%3FitemLabel.%20FILTER%28LANG%28%3FitemLabel%29%3D%22en%22%29%20FILTER%28CONTAINS%28LCASE%28%3FitemLabel%29%2C%22oracle%22%29%29%20%7D%20LIMIT%205,429,,Wikidata SPARQL 429 on this attempt.
+wd_aic,https://query.wikidata.org/sparql?format=json&query=SELECT%20%3Fitem%20%3FitemLabel%20%3Faic%20WHERE%20%7B%20%3Fitem%20wdt%3AP195%20wd%3AQ239303%3B%20wdt%3AP217%20%3Faic.%20%3Fitem%20rdfs%3Alabel%20%3FitemLabel.%20FILTER%28LANG%28%3FitemLabel%29%3D%22en%22%29%20%7D%20LIMIT%205,429,,Wikidata SPARQL 429 on this attempt.
+openalex_accession,https://api.openalex.org/works?search=museum%20accession%20number%20concordance%20catalog&per-page=3,200,3,meta.count 425. Top title is not a concordance ranker (Beardsley Collection museum ethnography).
+crossref_accession,https://api.crossref.org/works?query=museum%20accession%20concordance%20registrar&rows=3,200,221595,"total-results is a relevance pool. Top item DOI 10.2307/jj.8692990.24 title Concordance, subtitle Museum Accession and Catalog Numbers."
+ia_catalog,https://archive.org/advancedsearch.php?q=subject%3A%22museum%20catalog%22&fl[]=identifier&fl[]=title&rows=5&page=1&output=json,200,4,
+ol_catalog,https://openlibrary.org/search.json?q=museum%20cataloguing%20accession&limit=3,200,22,
+s2_catalog,https://api.semanticscholar.org/graph/v1/paper/search?query=museum%20catalog%20accession%20number%20concordance&limit=3,429,,Semantic Scholar 429.
+met v1.1 search handscroll,https://collectionapi.metmuseum.org/public/collection/v1.1/search?q=handscroll&hasImages=true,200,504,"total 504; objectIDs include 44709, 44710, 852552, 888663, 897175"
+met objects batch,https://collectionapi.metmuseum.org/public/collection/v1/objects/{id},200,78,78 of 80 ids HTTP 200. 255736 and 726793 returned 404 and were dropped.
+aic artwork 79505,https://api.artic.edu/api/v1/artworks/79505,200,1,public /artworks/79505 redirect-loops; API record used
+aic public 75361,https://www.artic.edu/artworks/75361,200,1,
+aic public 68041,https://www.artic.edu/artworks/68041,200,1,
+cleveland artwork 145953,https://openaccess-api.clevelandart.org/api/artworks/145953,200,1,"accession 1971.16, creation 1591-1626, accession_date 1971-02-23"
+cleveland cuneiform,https://openaccess-api.clevelandart.org/api/artworks/?q=cuneiform&limit=4&has_image=1,200,0,honest empty
+rijks legacy,https://www.rijksmuseum.nl/api/en/collection?format=json&q=brief&ps=1,410,0,legacy API gone
+rijks search bad param,https://data.rijksmuseum.nl/search/collection?q=rembrandt,400,0,unsupported parameter q
+rijks search objectNumber SK-C-5,https://data.rijksmuseum.nl/search/collection?objectNumber=SK-C-5,200,1,resolved to id 200107928
+rijks linked art 200107928,https://id.rijksmuseum.nl/200107928,200,1,identifier SK-C-5; quoted short name Nachtwacht
+va search ignored id,https://api.vam.ac.uk/v2/objects/search?id_object=O125746,200,1316729,filter ignored; record_count is the whole collection. Not an object fetch.
+va object O125746,https://api.vam.ac.uk/v2/object/O125746,200,1,"accession E.2601:2-1910, accessionYear 1910, production 1558-1635, partNumbers also E.2601:1-1910, gallery 002"
+smithsonian v1.1,https://api.si.edu/openaccess/api/v1.1/search?q=handscroll&rows=1,404,0,
+smithsonian v1.0 no key,https://api.si.edu/openaccess/api/v1.0/search?q=handscroll&rows=1,403,0,API_KEY_MISSING. No key was used.
+mcp registry v0,https://registry.modelcontextprotocol.io/v0/servers?limit=5,200,5,
+mcp registry museum,https://registry.modelcontextprotocol.io/v0.1/servers?search=museum&limit=20,200,5,"page of 5. cyanheads versions 0.1.1, 0.1.2, 0.1.3, 0.10.0 all isLatest false. agentfieldtrip/museum 1.0.0 isLatest true."
+github mcp museum,https://api.github.com/search/repositories?q=mcp+museum+collection,200,14,"top mikechao/metmuseum-mcp, cyanheads/met-museum-mcp-server"
+europeana handscroll,https://api.europeana.eu/record/v2/search.json?wskey=(published-demo)&query=handscroll&rows=2,200,64,"Europeana published demo credential, redacted. totalResults 64."
+wikidata sparql retry,https://query.wikidata.org/sparql,200,0,a later retry returned 200 with empty bindings. Not used as evidence.
+wikidata wbsearchentities handscroll,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=handscroll&language=en&format=json,200,1,
+open library,https://openlibrary.org/search.json?q=museum%20cataloguing%20accession&limit=3,200,22,
+archive.org,https://archive.org/advancedsearch.php?q=subject:%22museum%20catalog%22,200,4,
+semantic scholar,https://api.semanticscholar.org/graph/v1/paper/search?query=museum%20catalog%20accession,429,0,
+met public html,https://www.metmuseum.org/art/collection/search/44709,429,0,rate limited. API object URLs are the citations.
+S10-041 novelty,https://api.crossref.org/works?query=accession+number+colophon+leaf+inheritance+retrieval+ranking&rows=3,429,,
+S10-042 novelty,https://api.crossref.org/works?query=quoted+title+alias+multilingual+script+retrieval+ranking&rows=3,429,,
+S10-043 novelty,https://api.crossref.org/works?query=container+preposition+inventory+passage+retrieval+ranking&rows=3,429,,
+S10-044 novelty,https://api.crossref.org/works?query=imperative+sentence+length+instruction+retrieval+ranking&rows=3,429,,
+S10-045 novelty,https://api.crossref.org/works?query=title+date+versus+accession+year+catalog+retrieval&rows=3,429,,
+S10-046 novelty,https://api.crossref.org/works?query=museum+acquisition+year+creation+date+retrieval+ranking&rows=3,429,,
+S10-047 novelty,https://api.crossref.org/works?query=spurious+signature+date+bracket+retrieval+ranking&rows=3,429,,
+S10-048 novelty,https://api.crossref.org/works?query=numeric+range+cardinality+digit+retrieval+ranking&rows=3,200,548177,The Cardinality-Based Ranking of Opportunity Sets in an Interactive Setting: A Simple Characterization
+S10-049 novelty,https://api.crossref.org/works?query=earlier+dated+version+catalog+record+retrieval+ranking&rows=3,200,839119,Transforming Catalog Displays: Record Clustering for Works of Fiction
+S10-050 novelty,https://api.crossref.org/works?query=exact+identifier+set+expansion+quantifier+retrieval&rows=3,429,,
+S10-051 novelty,https://api.crossref.org/works?query=series+title+rare+token+catalog+number+retrieval&rows=3,429,,
+S10-052 novelty,https://api.crossref.org/works?query=catalog+number+identity+title+similarity+join+retrieval&rows=3,200,1412728,&lt;title&gt;Using the triangle inequality to reduce the number of comparisons required for similarity-based retrieval&lt;/title&gt;
+S10-053 novelty,https://api.crossref.org/works?query=running+header+accession+number+indexing+retrieval&rows=3,200,658158,Fast image indexing based on JPEG2000 packet header
+S10-054 novelty,https://api.crossref.org/works?query=parenthetical+plate+number+versus+year+catalog+retrieval&rows=3,429,,
+S10-055 novelty,https://api.crossref.org/works?query=short+record+long+record+numeric+feature+ranking+retrieval&rows=3,429,,
+S10-056 novelty,https://api.crossref.org/works?query=lot+prefix+exact+catalog+number+retrieval+ranking&rows=3,200,760300,Highlighting exact matching via marking strategies for ad hoc document ranking with pretrained contextualized language models
+S10-057 novelty,https://api.crossref.org/works?query=paired+object+part+exclusion+retrieval+ranking&rows=3,200,2116875,Scalable object-class retrieval with approximate and top-k ranking
+S10-058 novelty,https://api.crossref.org/works?query=ordered+catalog+suffix+set+retrieval+ranking&rows=3,200,550881,Suffix Trees for Document Retrieval
+S10-059 novelty,https://api.crossref.org/works?query=alphabetic+part+span+cardinality+retrieval&rows=3,429,,
+S10-060 novelty,https://api.crossref.org/works?query=dual+calendar+slash+date+single+event+retrieval&rows=3,200,2184638,MAPseq and BARseq Dual Sectioning Event for a Single Mouse Brain v1
+S10-061 novelty,https://api.crossref.org/works?query=genitive+owner+quoted+alias+retrieval+ranking&rows=3,429,,
+S10-062 novelty,https://api.crossref.org/works?query=letter+sender+date+joint+retrieval+ranking&rows=3,429,,
+S10-063 novelty,https://api.crossref.org/works?query=decimal+measurement+versus+integer+catalog+retrieval&rows=3,429,,
+S10-064 novelty,https://api.crossref.org/works?query=catchword+manuscript+join+accession+retrieval&rows=3,429,,
+S10-065 novelty,https://api.crossref.org/works?query=parenthetical+dynasty+date+versus+inscribed+year+retrieval&rows=3,429,,
+S10-066 novelty,https://api.crossref.org/works?query=museum+part+number+exact+match+retrieval+ranking&rows=3,429,,
+S10-067 novelty,https://api.crossref.org/works?query=museum+object+identifier+quoted+title+retrieval&rows=3,429,,
+S10-068 novelty,https://api.crossref.org/works?query=inscription+date+body+year+event+detection+retrieval&rows=3,200,3261387,"Sparta. Vase inscription, date?"
+S10-069 novelty,https://api.crossref.org/works?query=set+cardinality+quantifier+catalog+range+retrieval&rows=3,200,769508,Correction to the B. Chakraborty's article ``On the cardinality of a reduced unique range set''
+S10-070 novelty,https://api.crossref.org/works?query=dated+sibling+object+day+month+year+retrieval&rows=3,200,1407968,Month-Day-Year
+S10-071 novelty,https://api.crossref.org/works?query=parenthetical+original+title+multilingual+retrieval&rows=3,200,503359,&lt;title&gt;Multilingual information retrieval system&lt;/title&gt;
+S10-072 novelty,https://api.crossref.org/works?query=credit+line+accession+date+versus+object+date+retrieval&rows=3,200,1881394,The Accession Date of Hatshepsut
+S10-073 novelty,https://api.crossref.org/works?query=fragment+join+short+text+accession+retrieval&rows=3,200,1134993,Hash join algorithms used in text-based information retrieval: Guidelines for users
+S10-074 novelty,https://api.crossref.org/works?query=instruction+command+versus+list+retrieval+ranking&rows=3,200,1466124,"Table 11: Paraphrase test sets versus CAsT baselines performance after reformulation, retrieval, and re-ranking."
+S10-075 novelty,https://api.crossref.org/works?query=plate+number+lot+prefix+catalog+retrieval&rows=3,429,,
+S10-076 novelty,https://api.crossref.org/works?query=alphanumeric+accession+versus+dotted+catalog+number+retrieval&rows=3,200,1248566,Figure 2—figure supplement 4. Relationship between sequencing depth and number of TE variants discovered in each accession.
+S10-077 novelty,https://api.crossref.org/works?query=container+date+versus+letter+date+retrieval&rows=3,200,1370849,Spot Date 2466
+S10-078 novelty,https://api.crossref.org/works?query=gallery+location+code+header+indexing+retrieval&rows=3,429,,
+S10-079 novelty,https://api.crossref.org/works?query=spurious+signature+multilingual+title+retrieval&rows=3,429,,
+S10-080 novelty,https://api.crossref.org/works?query=set+size+catalog+suffix+count+retrieval+ranking&rows=3,429,,
+S10-081 novelty,https://api.crossref.org/works?query=model+date+versus+object+date+duplicate+retrieval&rows=3,429,,
+S10-082 novelty,https://api.crossref.org/works?query=duplicate+catalog+number+same+date+retrieval+ranking&rows=3,429,,
+S10-083 novelty,https://api.crossref.org/works?query=single+dated+letter+versus+list+of+dates+retrieval&rows=3,429,,
+S10-084 novelty,https://api.crossref.org/works?query=pair+accession+both+parts+retrieval+ranking&rows=3,429,,
+S10-085 novelty,https://api.crossref.org/works?query=exact+member+ordered+set+retrieval+ranking&rows=3,429,,
+S10-086 novelty,https://api.crossref.org/works?query=software+version+pin+exact+match+versus+latest+retrieval&rows=3,200,1752120,"Augmented Individual Income Tax Model Exact Match File, 1972"
+S10-087 novelty,https://api.crossref.org/works?query=dimension+field+date+field+catalog+retrieval&rows=3,429,,
+S10-088 novelty,https://api.crossref.org/works?query=metadata+inheritance+exact+identifier+retrieval+ranking&rows=3,429,,
+S10-089 novelty,https://api.crossref.org/works?query=isLatest+software+version+registry+retrieval+ranking&rows=3,429,,
+S10-090 novelty,https://api.crossref.org/works?query=acquisition+year+sibling+object+date+retrieval+ranking&rows=3,429,,
+record verify,https://openaccess-api.clevelandart.org/api/artworks/145953,200,25787,final https://openaccess-api.clevelandart.org/api/artworks/145953
+record verify,https://www.clevelandart.org/art/1971.127.b,200,79743,final https://www.clevelandart.org/art/1971.127.b
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/76113,200,2263,final https://collectionapi.metmuseum.org/public/collection/v1/objects/76113
+record verify,https://www.clevelandart.org/art/1971.16,200,183918,final https://www.clevelandart.org/art/1971.16
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/44709,200,2449,final https://collectionapi.metmuseum.org/public/collection/v1/objects/44709
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/204540,200,2173,final https://collectionapi.metmuseum.org/public/collection/v1/objects/204540
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/471950,200,2078,final https://collectionapi.metmuseum.org/public/collection/v1/objects/471950
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/463192,200,2822,final https://collectionapi.metmuseum.org/public/collection/v1/objects/463192
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/553673,200,2467,final https://collectionapi.metmuseum.org/public/collection/v1/objects/553673
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/247733,200,1557,final https://collectionapi.metmuseum.org/public/collection/v1/objects/247733
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/432480,200,2293,final https://collectionapi.metmuseum.org/public/collection/v1/objects/432480
+record verify,https://www.clevelandart.org/art/1975.22.11,200,86088,final https://www.clevelandart.org/art/1975.22.11
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/74462,200,4409,final https://collectionapi.metmuseum.org/public/collection/v1/objects/74462
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/204834,200,2360,final https://collectionapi.metmuseum.org/public/collection/v1/objects/204834
+record verify,https://id.rijksmuseum.nl/200107928,200,173384,final https://id.rijksmuseum.nl/200107928
+record verify,https://id.rijksmuseum.nl/200380645,200,24511,final https://id.rijksmuseum.nl/200380645
+record verify,https://id.rijksmuseum.nl/200436215,200,24423,final https://id.rijksmuseum.nl/200436215
+record verify,https://id.rijksmuseum.nl/200424265,200,22603,final https://id.rijksmuseum.nl/200424265
+record verify,https://id.rijksmuseum.nl/200378217,200,30258,final https://id.rijksmuseum.nl/200378217
+record verify,https://api.vam.ac.uk/v2/object/O125746,200,4642,final https://api.vam.ac.uk/v2/object/O125746
+record verify,https://api.artic.edu/api/v1/artworks/79505,200,4526,final https://api.artic.edu/api/v1/artworks/79505
+record verify,https://www.artic.edu/artworks/75361,200,200000,final https://www.artic.edu/artworks/75361/the-peach-blossom-spring-%E6%A1%83%E8%8A%B1%E6%BA%90%E5%9C%96
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/51088,200,2401,final https://collectionapi.metmuseum.org/public/collection/v1/objects/51088
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/55196,200,2339,final https://collectionapi.metmuseum.org/public/collection/v1/objects/55196
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/50538,200,1469,final https://collectionapi.metmuseum.org/public/collection/v1/objects/50538
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/44338,200,1840,final https://collectionapi.metmuseum.org/public/collection/v1/objects/44338
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/252473,200,1492,final https://collectionapi.metmuseum.org/public/collection/v1/objects/252473
+record verify,https://collections.vam.ac.uk/item/O125746/,200,47541,final https://collections.vam.ac.uk/item/O125746/
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/325849,200,1760,final https://collectionapi.metmuseum.org/public/collection/v1/objects/325849
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/60695,200,1593,final https://collectionapi.metmuseum.org/public/collection/v1/objects/60695
+record verify,https://www.artic.edu/artworks/68041,200,200000,final https://www.artic.edu/artworks/68041/bamboo-covered-stream-in-spring-rain
+record verify,https://id.rijksmuseum.nl/200317464,200,24164,final https://id.rijksmuseum.nl/200317464
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/39619,200,1883,final https://collectionapi.metmuseum.org/public/collection/v1/objects/39619
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/716307,200,2055,final https://collectionapi.metmuseum.org/public/collection/v1/objects/716307
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/62953,200,2449,final https://collectionapi.metmuseum.org/public/collection/v1/objects/62953
+record verify,https://www.clevelandart.org/art/1971.126.a,200,83004,final https://www.clevelandart.org/art/1971.126.a
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/44710,200,1679,final https://collectionapi.metmuseum.org/public/collection/v1/objects/44710
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/50539,200,1469,final https://collectionapi.metmuseum.org/public/collection/v1/objects/50539
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/463958,200,2083,final https://collectionapi.metmuseum.org/public/collection/v1/objects/463958
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/471951,200,2208,final https://collectionapi.metmuseum.org/public/collection/v1/objects/471951
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/716315,200,1928,final https://collectionapi.metmuseum.org/public/collection/v1/objects/716315
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/471952,200,2208,final https://collectionapi.metmuseum.org/public/collection/v1/objects/471952
+record verify,https://collectionapi.metmuseum.org/public/collection/v1/objects/762162,200,1927,final https://collectionapi.metmuseum.org/public/collection/v1/objects/762162
+record verify,https://registry.modelcontextprotocol.io/v0.1/servers?search=museum&limit=20,200,43074,final https://registry.modelcontextprotocol.io/v0.1/servers?search=museum&limit=20
+record verify,https://www.clevelandart.org/art/1975.22.2,200,94593,final https://www.clevelandart.org/art/1975.22.2
+record verify,https://github.com/cyanheads/met-museum-mcp-server,200,200000,final https://github.com/cyanheads/met-museum-mcp-server
+S10-041 crossref spaced retry,https://api.crossref.org/works?query=accession+number+colophon+leaf+inheritance+retrieval+ranking&rows=3,200,846564,Volume II Accession Number Index
+S10-042 crossref spaced retry,https://api.crossref.org/works?query=quoted+title+alias+multilingual+script+retrieval+ranking&rows=3,429,,
+S10-043 crossref spaced retry,https://api.crossref.org/works?query=container+preposition+inventory+passage+retrieval+ranking&rows=3,200,344084,Question Answering Passage Retrieval and Re-ranking Using N-grams and SVM
+S10-044 crossref spaced retry,https://api.crossref.org/works?query=imperative+sentence+length+instruction+retrieval+ranking&rows=3,200,539479,Top-k Document Ranking and Sentence Similarity Retrieval System for Covid-19 Research Papers
+S10-045 crossref spaced retry,https://api.crossref.org/works?query=title+date+versus+accession+year+catalog+retrieval&rows=3,200,1761518,"Table of Chinese Rulers, Dates of Accession, The Year Names (Nien Hao) with Date of Adoption"
+S10-046 crossref spaced retry,https://api.crossref.org/works?query=museum+acquisition+year+creation+date+retrieval+ranking&rows=3,200,1388621,Documents Ranking Based on a Hybrid Language Model for Chinese Information Retrieval
+S10-047 crossref spaced retry,https://api.crossref.org/works?query=spurious+signature+date+bracket+retrieval+ranking&rows=3,429,,
+S10-050 crossref spaced retry,https://api.crossref.org/works?query=exact+identifier+set+expansion+quantifier+retrieval&rows=3,429,,
+S10-051 crossref spaced retry,https://api.crossref.org/works?query=series+title+rare+token+catalog+number+retrieval&rows=3,429,,
+S10-054 crossref spaced retry,https://api.crossref.org/works?query=parenthetical+plate+number+versus+year+catalog+retrieval&rows=3,200,2033139,"Willamette University Bulletin Catalog Number for the ninety-ninth year March, 1940"
+S10-055 crossref spaced retry,https://api.crossref.org/works?query=short+record+long+record+numeric+feature+ranking+retrieval&rows=3,200,2753631,The long and short of slipped discs
+S10-059 crossref spaced retry,https://api.crossref.org/works?query=alphabetic+part+span+cardinality+retrieval&rows=3,200,1834268,Lexical retrieval in alphabetic and non-alphabetic scripts: Evidence from brain imaging
+S10-061 crossref spaced retry,https://api.crossref.org/works?query=genitive+owner+quoted+alias+retrieval+ranking&rows=3,200,212621,Web Retrieval and Ranking
+S10-062 crossref spaced retry,https://api.crossref.org/works?query=letter+sender+date+joint+retrieval+ranking&rows=3,200,1450477,Beyond Retrieval: Joint Supervision and Multimodal Document Ranking for Textbook Question Answering
+S10-063 crossref spaced retry,https://api.crossref.org/works?query=decimal+measurement+versus+integer+catalog+retrieval&rows=3,200,1743673,Integer representation of decimal numbers for exact computations
+S10-064 crossref spaced retry,https://api.crossref.org/works?query=catchword+manuscript+join+accession+retrieval&rows=3,200,227422,Design and Implementation of New Media Manuscript Retrieval System
+S10-065 crossref spaced retry,https://api.crossref.org/works?query=parenthetical+dynasty+date+versus+inscribed+year+retrieval&rows=3,200,1490386,"Sparta. Inscribed tile, date?"
+S10-066 crossref spaced retry,https://api.crossref.org/works?query=museum+part+number+exact+match+retrieval+ranking&rows=3,200,2491352,
+S10-067 crossref spaced retry,https://api.crossref.org/works?query=museum+object+identifier+quoted+title+retrieval&rows=3,429,,
+S10-075 crossref spaced retry,https://api.crossref.org/works?query=plate+number+lot+prefix+catalog+retrieval&rows=3,200,840635,Definitional Prefix Lifts Contextual Retrieval on Long Legal Documents
+S10-078 crossref spaced retry,https://api.crossref.org/works?query=gallery+location+code+header+indexing+retrieval&rows=3,200,577572,Fast image indexing based on JPEG2000 packet header
+S10-079 crossref spaced retry,https://api.crossref.org/works?query=spurious+signature+multilingual+title+retrieval&rows=3,200,506265,Multilingual information retrieval system
+S10-080 crossref spaced retry,https://api.crossref.org/works?query=set+size+catalog+suffix+count+retrieval+ranking&rows=3,200,994768,Suffix Trees for Document Retrieval
+S10-081 crossref spaced retry,https://api.crossref.org/works?query=model+date+versus+object+date+duplicate+retrieval&rows=3,200,4245012,Table 3: The Ka/Ks ratios and date of duplication for duplicate <i>CqBBX</i> genes
+S10-082 crossref spaced retry,https://api.crossref.org/works?query=duplicate+catalog+number+same+date+retrieval+ranking&rows=3,429,,
+S10-083 crossref spaced retry,https://api.crossref.org/works?query=single+dated+letter+versus+list+of+dates+retrieval&rows=3,429,,
+S10-084 crossref spaced retry,https://api.crossref.org/works?query=pair+accession+both+parts+retrieval+ranking&rows=3,429,,
+S10-085 crossref spaced retry,https://api.crossref.org/works?query=exact+member+ordered+set+retrieval+ranking&rows=3,429,,
+S10-087 crossref spaced retry,https://api.crossref.org/works?query=dimension+field+date+field+catalog+retrieval&rows=3,429,,
+S10-088 crossref spaced retry,https://api.crossref.org/works?query=metadata+inheritance+exact+identifier+retrieval+ranking&rows=3,200,333380,Request for feedback on grant identifier metadata
+S10-089 crossref spaced retry,https://api.crossref.org/works?query=isLatest+software+version+registry+retrieval+ranking&rows=3,429,,
+S10-090 crossref spaced retry,https://api.crossref.org/works?query=acquisition+year+sibling+object+date+retrieval+ranking&rows=3,200,1311065,Scalable object-class retrieval with approximate and top-k ranking
+S10-042 crossref second retry,https://api.crossref.org/works?query=quoted%20title%20alias%20multilingual%20script%20retrieval%20ranking&rows=1,200,494573,Language-Preference-Based Re-ranking for Multilingual Swahili Information Retrieval
+S10-047 crossref second retry,https://api.crossref.org/works?query=spurious%20signature%20date%20bracket%20retrieval%20ranking&rows=1,200,362440,A backend text retrieval machine for signature-based document ranking
+S10-050 crossref second retry,https://api.crossref.org/works?query=exact%20identifier%20set%20expansion%20quantifier%20retrieval&rows=1,200,664128,"Mise au point d'une imagerie corrélative MET/NanoSIMS pour identifier, localiser et quantifier des nanoparticules dans les tissus biologiques"
+S10-051 crossref second retry,https://api.crossref.org/works?query=series%20title%20rare%20token%20catalog%20number%20retrieval&rows=1,200,3302043,Rare Copy Number Variants
+S10-066 crossref second retry,https://api.crossref.org/works?query=museum%20part%20number%20exact%20match%20retrieval%20ranking&rows=1,200,2491352,
+S10-067 crossref second retry,https://api.crossref.org/works?query=museum%20object%20identifier%20quoted%20title%20retrieval&rows=1,200,796410,Digital Object Identifier (DOI®) System
+S10-082 crossref second retry,https://api.crossref.org/works?query=duplicate%20catalog%20number%20same%20date%20retrieval%20ranking&rows=1,200,856890,Near-Duplicate Video Retrieval
+S10-083 crossref second retry,https://api.crossref.org/works?query=single%20dated%20letter%20versus%20list%20of%20dates%20retrieval&rows=1,200,2962250,Data list
+S10-084 crossref second retry,https://api.crossref.org/works?query=pair%20accession%20both%20parts%20retrieval%20ranking&rows=1,200,575306,Automated retrieval and ranking of similar parts in agile manufacturing
+S10-085 crossref second retry,https://api.crossref.org/works?query=exact%20member%20ordered%20set%20retrieval%20ranking&rows=1,200,644082,Highlighting exact matching via marking strategies for ad hoc document ranking with pretrained contextualized language models
+S10-087 crossref second retry,https://api.crossref.org/works?query=dimension%20field%20date%20field%20catalog%20retrieval&rows=1,429,,
+S10-089 crossref second retry,https://api.crossref.org/works?query=isLatest%20software%20version%20registry%20retrieval%20ranking&rows=1,200,1046642,Ranking application software retrieval results using application attributes and context
+S10-066 openalex,https://api.openalex.org/works?search=museum%20part%20number%20exact%20match%20retrieval%20ranking&per-page=1,200,1759,Relevance and Ranking in Geographic Information Retrieval
+S10-087 openalex,https://api.openalex.org/works?search=dimension%20field%20date%20field%20catalog%20retrieval&per-page=1,200,12567,Introduction to Formal Concept Analysis and Its Applications in Information Retrieval and Related Fields
