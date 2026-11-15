@@ -6395,6 +6395,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &s_score,
         &bridge_boost,
     );
+    // Step 34 Bertillonage. After trial balance and triangulation. Slot 1 below
+    // the query's kind-count yields to one admissible same-session top-5 card.
+    // Does not touch rsb_seat_behind and does not rewrite the session list.
+    apply_c2_step34_bertillonage(ix, &q.text, &mut final_turn_indices, &t_scene);
     maybe_dump_replay(
         ix,
         q,
