@@ -433,6 +433,66 @@ fn step9_push_typo_fallback(
     }
 }
 
+// Step 10A Florilegium, evidence seat. A later top-5 session that holds no top-5 seat earns
+// seat 5 (index 4) only if its best turn covers a query group that no seated turn covers, and
+// seat 5 is occupied by a redundant turn: its session already holds >= 2 top-5 seats and it
+// adds no group the other four seats lack. The displaced turn moves to rank 6; seats 1-4 never move.
+#[allow(clippy::too_many_arguments)]
+fn apply_step10a_evidence_seat(
+    ix: &Index,
+    final_session_indices: &[usize],
+    t_scene: &[f32],
+    t_exact_mask: &[u64],
+    group_limit: u64,
+    t_floored: &dyn Fn(usize) -> bool,
+    k: usize,
+    final_turn_indices: &mut Vec<usize>,
+) {
+    if final_turn_indices.len() < 5 || group_limit == 0 {
+        return;
+    }
+    let seats: Vec<usize> = final_turn_indices[..5].to_vec();
+    let v = seats[4];
+    if t_floored(v) {
+        return;
+    }
+    let v_sess = ix.turns[v].session;
+    if seats.iter().filter(|&&t| ix.turns[t].session == v_sess).count() < 2 {
+        return;
+    }
+    let others: u64 = seats[..4].iter().fold(0, |m, &t| m | t_exact_mask[t]) & group_limit;
+    if t_exact_mask[v] & group_limit & !others != 0 {
+        return;
+    }
+    let covered = others | (t_exact_mask[v] & group_limit);
+    for &si in final_session_indices.iter().take(5).skip(1) {
+        if !step10a_role_session(ix, si) {
+            continue;
+        }
+        if seats.iter().any(|&t| ix.turns[t].session == si) {
+            continue;
+        }
+        let best = ix.session_turns[si]
+            .iter()
+            .copied()
+            .filter(|&t| t_scene[t] > 0.0 && !t_floored(t) && (t_exact_mask[t] & group_limit & !covered) != 0)
+            .max_by(|&a, &b| t_scene[a].partial_cmp(&t_scene[b]).unwrap_or(std::cmp::Ordering::Equal).then(b.cmp(&a)));
+        if let Some(bt) = best {
+            if let Some(pos) = final_turn_indices.iter().position(|&t| t == bt) {
+                final_turn_indices.remove(pos);
+            }
+            final_turn_indices.insert(4, bt);
+            final_turn_indices.truncate(k);
+            return;
+        }
+    }
+}
+
+// A role-structured session (it carries an assistant-role turn), as opposed to a named-speaker transcript.
+fn step10a_role_session(ix: &Index, si: usize) -> bool {
+    ix.session_turns[si].iter().any(|&t| ix.turns[t].field == 1)
+}
+
 #[cfg(test)]
 mod steps7_10_tests {
     use super::*;
