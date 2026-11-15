@@ -6028,6 +6028,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             apply_c2_source_superset_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
             apply_c2_unique_group_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
             apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+            // Next-user elaboration: mid-session declarative head yields to
+            // the next same-session declarative user already in the top 5
+            // when that follow-up is at least as on-scene. Skipped on
+            // preference so the rule stays independent of the
+            // preference-source seat.
+            if !it.preference {
+                apply_c2_elaboration_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+            }
         }
         // Preference source: ReplySource is skipped on assistant_attribution,
         // but "can you recommend..." is tagged that way by a present-tense cue.
