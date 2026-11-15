@@ -140,3 +140,245 @@ The post-triangulation call at 6265-6272 only reorders inside the top 5. Its cei
 Filled by the generator at write time.
 
 ORDERING 39. RECALL/INDEX 51. Combined mechanisms 47 of 90.
+
+## Target: 90% of every metric
+
+Sam's target of 2026-11-15 replaces the six-slice bar. Floor: Step 34 `62041ef5` for the three bench Turn@1 cells (LME 353, LoCoMo 805, BEAM 160), and bd2693e2 for every other cell. Step 34's Turn@1 gains are +3 / +9 / +4 and are not split by category, so category Turn@1 below is the bd2693e2 count. Turn@5 and Turn@10 in the target match the JSON, so those did not move. `need = ceil(0.9 * n)`. A hook ceiling is the most that class of rule can reach. It is not a promise that the rule attains it.
+
+LoCoMo has no All@5, All@10, or Session@10 field in the attached aggregate. LME has no Turn All@10 field. Those metrics cannot be given a number.
+
+### Bench hook ceilings
+
+| Bench metric | Now | Need | Gap | Hook ceiling |
+|---|---:|---:|---:|---|
+| LME Session@1 | 430 | 423 | 0 | met |
+| LME Session@5 | 463 | 423 | 0 | met |
+| LME Session@10 | 468 | 423 | 0 | met |
+| LME Session All@5 | 424 | 423 | 0 | met |
+| LME Session All@10 | 447 | 423 | 0 | met |
+| LME Turn@1 | 353 | 423 | 70 | turn top 5 (t5, unchanged by Step 34) ceiling 428 clears 423 |
+| LME Turn@5 | 428 | 423 | 0 | met |
+| LME Turn@10 | 437 | 423 | 0 | met |
+| LME Turn All@5 | 314 | 423 | 109 | Turn All@10 is not in the JSON, so no all-gold bound above 314 |
+| LoCoMo Turn@1 | 805 | 1383 | 578 | pool@50 (wide pool 1492 is higher) ceiling 1415 clears 1383 |
+| LoCoMo Turn@5 | 1127 | 1383 | 256 | pool@50 ceiling 1415 clears 1383 |
+| LoCoMo Turn@10 | 1226 | 1383 | 157 | pool@50 ceiling 1415 clears 1383 |
+| LoCoMo Session@1 | 1133 | 1383 | 250 | session top 5 ceiling 1416 clears 1383 |
+| LoCoMo Session@5 | 1416 | 1383 | 0 | met |
+| BEAM Turn@1 | 160 | 320 | 160 | wide scored pool (header pool=329) ceiling 329 clears 320 |
+| BEAM Turn@5 | 238 | 320 | 82 | wide scored pool ceiling 329 clears 320 |
+| BEAM Turn@10 | 267 | 320 | 53 | wide scored pool ceiling 329 clears 320 |
+| BEAM Turn All@5 | 118 | 320 | 202 | All@10, and only for questions with at most 5 golds ceiling 138 short of 320 by 182 |
+| BEAM Turn All@10 | 138 | 320 | 182 | full gold set inside the wide pool is not measured |
+| BEAM Session@1 | 133 | 320 | 187 | session top 10 ceiling 275 short of 320 by 45 |
+| BEAM Session@5 | 249 | 320 | 71 | session top 10 ceiling 275 short of 320 by 45 |
+| BEAM Session@10 | 275 | 320 | 45 | gold sessions outside the top 10 are not counted |
+| BEAM Session All@5 | 137 | 320 | 183 | Session All@10, if the gold-session count is at most 5 ceiling 178 short of 320 by 142 |
+| BEAM Session All@10 | 178 | 320 | 142 | gold sessions outside the top 10 are not counted |
+
+Reading the gaps that miss a measured ceiling: LoCoMo Turn@1/+5/+10 clear from pool@50 (1415 >= 1383) without new postings, at bench grain. LME Turn@1 clears from the current top 5 (428 >= 423). LoCoMo Session@1 clears from the current session top 5 (1416 >= 1383). BEAM Turn@1/@5/@10 clear from the wide pool (329 >= 320) at bench grain. BEAM Session@1 does not: session top 10 is 275, short of 320 by 45, and the attachment does not count gold sessions outside that 10. BEAM All@5 does not: the best measured bound is All@10 = 138, short of 320 by 182, and only when each of those questions has at most 5 golds. LME Turn All@5 has no All@10 to bound it. Event ordering and summarization All@5 and All@10 are 0, so no question in those categories currently holds every gold inside the top 10.
+
+Category bars still force recall where the bench surplus is not the category bar. Open-Domain wide pool 78 < 83. BEAM instruction following 35 < 36, preference following 30 < 36, information extraction 32 < 36. LoCoMo Multi-Hop session top 5 is 246 < 254 and Open-Domain session top 5 is 65 < 83.
+
+### Category ceilings
+
+Wide pool = n minus miss-map `no_pool` where that stage is present. `pool@50` is not per category. Session top 10 exists for LME and BEAM only.
+
+| Category | n | Metric | Now | Need | Gap | Ceiling |
+|---|---:|---|---:|---:|---:|---|
+| LME single-session-user | 64 | Session@1 | 62 | 58 | 0 | met |
+| LME single-session-user | 64 | Turn@1 | 54 | 58 | 4 | t5 62 clears 58 |
+| LME single-session-user | 64 | Turn All@5 | 62 | 58 | 0 | met |
+| LME multi-session | 121 | Session@1 | 110 | 109 | 0 | met |
+| LME multi-session | 121 | Turn@1 | 88 | 109 | 21 | t5 113 clears 109 |
+| LME multi-session | 121 | Turn All@5 | 53 | 109 | 56 | Turn All@10 absent; ta5 53 vs need 109 |
+| LME single-session-preference | 30 | Session@1 | 17 | 27 | 10 | s5 26 short by 1; s10 30 clears 27 |
+| LME single-session-preference | 30 | Session@5 | 26 | 27 | 1 | s10 30 clears 27 |
+| LME single-session-preference | 30 | Turn@1 | 12 | 27 | 15 | wide pool (no_pool 0, t10 19) 30 clears 27 |
+| LME single-session-preference | 30 | Turn@5 | 19 | 27 | 8 | wide pool 30 clears 27 |
+| LME single-session-preference | 30 | Turn@10 | 19 | 27 | 8 | wide pool 30 clears 27 |
+| LME single-session-preference | 30 | Turn All@5 | 14 | 27 | 13 | Turn All@10 absent |
+| LME temporal-reasoning | 127 | Session@1 | 114 | 115 | 1 | s5 124 clears 115 |
+| LME temporal-reasoning | 127 | Turn@1 | 93 | 115 | 22 | t10 116 clears 115 |
+| LME temporal-reasoning | 127 | Turn@5 | 111 | 115 | 4 | t10 116 clears 115 |
+| LME temporal-reasoning | 127 | Turn All@5 | 74 | 115 | 41 | Turn All@10 absent; wide pool 125 is any-gold, not all-gold |
+| LME knowledge-update | 72 | Session@1 | 71 | 65 | 0 | met |
+| LME knowledge-update | 72 | Turn@1 | 62 | 65 | 3 | t5 71 clears 65 |
+| LME knowledge-update | 72 | Turn All@5 | 59 | 65 | 6 | Turn All@10 absent; t10 72 is any-gold |
+| LME single-session-assistant | 56 | Session@1 | 56 | 51 | 0 | met |
+| LME single-session-assistant | 56 | Turn@1 | 41 | 51 | 10 | t5 52 clears 51 |
+| LME single-session-assistant | 56 | Turn All@5 | 52 | 51 | 0 | met |
+| LoCoMo Single-Hop | 841 | Turn@1 | 494 | 757 | 263 | wide pool (no_pool 9); t10 737 is short 832 clears 757 |
+| LoCoMo Single-Hop | 841 | Turn@5 | 686 | 757 | 71 | wide pool; t10 737 is short 832 clears 757 |
+| LoCoMo Single-Hop | 841 | Turn@10 | 737 | 757 | 20 | wide pool 832 clears 757 |
+| LoCoMo Single-Hop | 841 | Session@1 | 699 | 757 | 58 | s5 806 clears 757 |
+| LoCoMo Multi-Hop | 282 | Turn@1 | 97 | 254 | 157 | wide pool 269 clears 254 |
+| LoCoMo Multi-Hop | 282 | Turn@5 | 158 | 254 | 96 | wide pool; t10 186 is short 269 clears 254 |
+| LoCoMo Multi-Hop | 282 | Turn@10 | 186 | 254 | 68 | wide pool 269 clears 254 |
+| LoCoMo Multi-Hop | 282 | Session@1 | 156 | 254 | 98 | s5 246 short by 8 |
+| LoCoMo Temporal | 321 | Turn@1 | 187 | 289 | 102 | wide pool; t10 260 is short 313 clears 289 |
+| LoCoMo Temporal | 321 | Turn@5 | 248 | 289 | 41 | wide pool 313 clears 289 |
+| LoCoMo Temporal | 321 | Turn@10 | 260 | 289 | 29 | wide pool 313 clears 289 |
+| LoCoMo Temporal | 321 | Session@1 | 242 | 289 | 47 | s5 299 clears 289 |
+| LoCoMo Open-Domain | 92 | Turn@1 | 18 | 83 | 65 | wide pool 78 short by 5 |
+| LoCoMo Open-Domain | 92 | Turn@5 | 35 | 83 | 48 | wide pool 78 short by 5 |
+| LoCoMo Open-Domain | 92 | Turn@10 | 43 | 83 | 40 | wide pool 78 short by 5 |
+| LoCoMo Open-Domain | 92 | Session@1 | 36 | 83 | 47 | s5 65 short by 18 |
+| BEAM contradiction_resolution | 40 | Turn@1 | 32 | 36 | 4 | t5 40 clears 36 |
+| BEAM contradiction_resolution | 40 | Turn All@5 | 22 | 36 | 14 | all10, if at most 5 golds 27 short by 9 |
+| BEAM contradiction_resolution | 40 | Turn All@10 | 27 | 36 | 9 | full gold set in the wide pool is not measured |
+| BEAM contradiction_resolution | 40 | Session@1 | 29 | 36 | 7 | s5 40 clears 36 |
+| BEAM contradiction_resolution | 40 | Session All@5 | 20 | 36 | 16 | sall10, if at most 5 gold sessions 30 short by 6 |
+| BEAM event_ordering | 40 | Turn@1 | 7 | 36 | 29 | wide pool (no_pool 1) 39 clears 36 |
+| BEAM event_ordering | 40 | Turn All@5 | 0 | 36 | 36 | all10 0 short by 36 |
+| BEAM event_ordering | 40 | Turn All@10 | 0 | 36 | 36 | full gold set in the wide pool is not measured |
+| BEAM event_ordering | 40 | Session@1 | 7 | 36 | 29 | s10 27 short by 9 |
+| BEAM event_ordering | 40 | Session All@5 | 0 | 36 | 36 | sall10 0 short by 36 |
+| BEAM event_ordering | 40 | Session All@10 | 0 | 36 | 36 | gold sessions outside the top 10 are not counted |
+| BEAM information_extraction | 40 | Turn@1 | 20 | 36 | 16 | wide pool (no_pool 8) 32 short by 4 |
+| BEAM information_extraction | 40 | Turn All@5 | 20 | 36 | 16 | all10 21 short by 15 |
+| BEAM information_extraction | 40 | Session@1 | 15 | 36 | 21 | s10 27 short by 9 |
+| BEAM information_extraction | 40 | Session All@5 | 25 | 36 | 11 | sall10 27 short by 9 |
+| BEAM instruction_following | 40 | Turn@1 | 6 | 36 | 30 | wide pool (no_pool 5); JSON t10 21 35 short by 1 |
+| BEAM instruction_following | 40 | Turn All@5 | 13 | 36 | 23 | all10 16 short by 20 |
+| BEAM instruction_following | 40 | Session@1 | 4 | 36 | 32 | s10 17 short by 19 |
+| BEAM instruction_following | 40 | Session All@5 | 15 | 36 | 21 | sall10 17 short by 19 |
+| BEAM knowledge_update | 40 | Turn@1 | 30 | 36 | 6 | t5 37 clears 36 |
+| BEAM knowledge_update | 40 | Turn All@5 | 24 | 36 | 12 | all10 27 short by 9 |
+| BEAM knowledge_update | 40 | Session@1 | 24 | 36 | 12 | s5 37 clears 36 |
+| BEAM knowledge_update | 40 | Session All@5 | 29 | 36 | 7 | sall10 31 short by 5 |
+| BEAM multi_session_reasoning | 40 | Turn@1 | 21 | 36 | 15 | wide pool 40 clears 36; t5 34 is short; t10 36 meets |
+| BEAM multi_session_reasoning | 40 | Turn All@5 | 4 | 36 | 32 | all10 7 short by 29 |
+| BEAM multi_session_reasoning | 40 | Session@1 | 20 | 36 | 16 | s10 36 clears 36 |
+| BEAM multi_session_reasoning | 40 | Session All@5 | 8 | 36 | 28 | sall10 15 short by 21 |
+| BEAM preference_following | 39 | Turn@1 | 7 | 36 | 29 | wide pool (no_pool 9) 30 short by 6 |
+| BEAM preference_following | 39 | Turn All@5 | 11 | 36 | 25 | all10 13 short by 23 |
+| BEAM preference_following | 39 | Session@1 | 4 | 36 | 32 | s10 24 short by 12 |
+| BEAM preference_following | 39 | Session All@5 | 14 | 36 | 22 | sall10 24 short by 12 |
+| BEAM summarization | 36 | Turn@1 | 6 | 33 | 27 | wide pool (no_pool 2) 34 clears 33 |
+| BEAM summarization | 36 | Turn All@5 | 0 | 33 | 33 | all10 0 short by 33 |
+| BEAM summarization | 36 | Turn All@10 | 0 | 33 | 33 | full gold set in the wide pool is not measured |
+| BEAM summarization | 36 | Session@1 | 6 | 33 | 27 | s10 26 short by 7 |
+| BEAM summarization | 36 | Session All@10 | 1 | 33 | 32 | gold sessions outside the top 10 are not counted |
+| BEAM temporal_reasoning | 40 | Turn@1 | 27 | 36 | 9 | t5 37 clears 36 |
+| BEAM temporal_reasoning | 40 | Turn All@5 | 24 | 36 | 12 | all10 27 short by 9 |
+| BEAM temporal_reasoning | 40 | Session@1 | 24 | 36 | 12 | s5 38 clears 36 |
+| BEAM temporal_reasoning | 40 | Session All@5 | 26 | 36 | 10 | sall10 33 short by 3 |
+
+Contradiction resolution has no miss-map stage line. Its Turn@5 is 40 of 40, so the wide pool is the whole category and Turn@1 is a top-5 reorder.
+
+Single-session-preference Turn@1: miss-map stages are pool_not_k 11 and t5_not1 7, so no_pool is 0 and the wide pool is all 30. The top 10 holds 19. The bar of 27 needs turns that are scored and outside k.
+
+A question with more than 5 gold turns cannot reach Turn All@5 under any ranking, and one with more than 10 cannot reach Turn All@10. Gold cardinality is not in the attachment, so the All@5 bar of 320 on BEAM and 423 on LME may be partly structural. Event ordering and summarization, both at All@10 = 0, are where that risk is concentrated.
+
+### Per-row hook ceiling
+
+Each design keeps its mechanism. The ceiling is the ceiling of its hook. Turn ordering is `retrieval.rs` 5628-5638 (`t_scene > 0`). Turn recall is 3125-3274. The session twin of a list reorder is the session candidate set at 5489-5491 (`s_score > 0` or `bridge_boost > 0`). A new length-free turn feat can lift a session from score 0 into that set, which is the only route past BEAM session@10 = 275.
+
+| id | tag | Turn@1 hook ceiling | All@5 hook ceiling | Session@1 hook ceiling | Big gaps this row can move |
+|---|---|---|---|---|---|
+| S9-001 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, All@5 unscored gold |
+| S9-002 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, MH/OD Session@1, All@5 unscored gold |
+| S9-003 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-004 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, All@5 unscored gold |
+| S9-005 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | coverage loop over scored turns. Measured bound BEAM All@10=138, LME Turn All@10 absent. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1, BEAM All@5/All@10, LME All@5 |
+| S9-006 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | coverage loop over scored turns. Measured bound BEAM All@10=138, LME Turn All@10 absent. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1, BEAM All@5/All@10, LME All@5 |
+| S9-007 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | session top 5: LoCoMo 1416, BEAM 249, LME 463 (met). Twin hook 5480-5491. | LoCoMo T@1, LME T@1, BEAM T@1, LoCoMo Session@1 |
+| S9-008 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-009 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, All@5 unscored gold |
+| S9-010 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-011 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-012 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-013 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-014 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-015 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-016 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | session top 5: LoCoMo 1416, BEAM 249, LME 463 (met). Twin hook 5480-5491. | LoCoMo T@1, LME T@1, BEAM T@1, LoCoMo Session@1 |
+| S9-017 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-018 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-019 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-020 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-021 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-022 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-023 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-024 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-025 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-026 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-027 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-028 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-029 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-030 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-031 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-032 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-033 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-034 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-035 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-036 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-037 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-038 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-039 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-040 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-041 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-042 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-043 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-044 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-045 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, All@5 unscored gold |
+| S9-046 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-047 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-048 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-049 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-050 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-051 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-052 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-053 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-054 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-055 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-056 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-057 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-058 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-059 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-060 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, All@5 unscored gold |
+| S9-061 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-062 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-063 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, All@5 unscored gold |
+| S9-064 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, MH/OD Session@1 |
+| S9-065 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-066 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-067 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-068 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-069 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-070 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-071 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-072 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-073 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-074 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-075 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-076 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | session top 5: LoCoMo 1416, BEAM 249, LME 463 (met). Twin hook 5480-5491. | LoCoMo T@1, LME T@1, BEAM T@1, LoCoMo Session@1 |
+| S9-077 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275, MH/OD Session@1 |
+| S9-078 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-079 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-080 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-081 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-082 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-083 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-084 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-085 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-086 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-087 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-088 | ORDERING | wide pool: LME 468, LoCoMo 1492 (pool@50 1415), BEAM 329. Also LME top5 428. | single-seat ordering. All@5 stays at the current count for this rule alone. | turn list only. Session@1 unchanged. | LoCoMo T@1, LME T@1, BEAM T@1 |
+| S9-089 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+| S9-090 | RECALL/INDEX | new postings. Required where wide pool is short: OD 78, IF 35, PF 30, IE 32. | can bring an unscored gold into the pool. Does not by itself place every gold inside 5 slots. | can lift s_score 0 into the set at 5490. Needed past BEAM s10=275 and for LoCoMo MH s5=246, OD s5=65. | OD/IF/PF/IE no_pool, BEAM Session@1 past 275 |
+
+### Which rows carry the big gaps
+
+- **LoCoMo Turn@1, +578 (805 to 1383).** Bench ceiling is pool@50 = 1415. Every ORDERING row, hooked at 5628-5638, sits under that ceiling. The category residuals that 1415 does not cover are Open-Domain, wide pool 78 against a bar of 83. Those five questions are the RECALL rows aimed at Open-Domain, led by S9-001, S9-063, S9-064, S9-002, S9-060.
+
+- **LoCoMo Session@1, +250 (1133 to 1383).** Session top 5 is already 1416. S9-007, S9-016, and S9-076 are the list reorders whose math (inversion count, rank sum, fixed point of the two ranks) applies to the session candidate list at 5480-5491 without a new constant. Multi-Hop still needs 8 sessions outside that top 5 (246 vs 254) and Open-Domain needs 18 (65 vs 83). Those are S9-002, S9-064, and S9-077, which post a session key.
+
+- **BEAM All@5, +202 (118 to 320), All@10, +182 (138 to 320).** S9-005 and S9-006 change the gain inside the loop that fills all k seats, so a scored gold outside the current top 5 can enter. The measured ceiling of that loop, if it may only reshuffle the current top 10, is All@10 = 138. Everything above 138 requires golds that are scored and outside the top 10, which the same loop can take when `t_scene > 0`, or golds with `t_scene = 0`, which only a RECALL row can add. Event ordering and summarization are at All@10 = 0. Gold counts per question are not in the attachment; a question with more than 5 golds cannot reach All@5.
+
+- **BEAM Session@1, +187 (133 to 320), and Session@5/+71, Session@10/+45.** Reordering the current session top 10 stops at 275. The remaining 45 questions need a session that is outside that 10, which means `s_score = 0` and `bridge_boost = 0` or a session the selector never reached. Every RECALL row can raise a session score by a new length-free feat and thereby enter the set at line 5490. S9-002, S9-064, and S9-077 are the ones that post the session itself.
+
+- **LME Turn@1, +70 (353 to 423).** Top 5 already holds 428. Any ORDERING row can promote a gold that is sitting in slots 2 through 5. The category that top 5 cannot clear is single-session-preference (t5 = 19, bar 27, wide pool 30): that one needs the pool hook, not a new posting.
+
+- **LME Turn All@5, +109 (314 to 423).** The hole is multi-session (53 vs 109) and temporal-reasoning (74 vs 115). S9-005 and S9-006 are the coverage loop. There is no Turn All@10 in the JSON, so the ceiling above 314 is unmeasured. Single-session-user and single-session-assistant All@5 are already at the bar.
+

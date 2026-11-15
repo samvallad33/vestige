@@ -26,6 +26,18 @@ Slot-1 reorder inside the current top 5 cannot reach 90% on any of the six slice
 
 10. **S9-007 Cauchy inversion seat** (ORDERING, event_ordering;Multi-Hop). Event ordering. Fewest inversions of query content order against the stored token order, over the scored pool. Wide-pool ceiling 39 clears the bar of 36.
 
+
+## Bench gaps under the full 90% target
+
+The six slices stay. The same ninety rules also sit under the bench gaps in `funnel-S9.md`. Hook ceilings, not promised scores:
+
+- LoCoMo Turn@1 needs +578. Pool@50 already holds 1415 of 1536, and the bar is 1383. The ORDERING rows at `retrieval.rs` 5628-5638 are the bench path. Open-Domain's wide pool is 78 against a bar of 83, so S9-001, S9-063, S9-064, S9-002, and S9-060 still have to post the missing five.
+- LoCoMo Session@1 needs +250. Session top 5 is 1416. S9-007, S9-016, and S9-076 apply their integer reorder to the session candidate list at `retrieval.rs` 5480-5491. Multi-Hop (246 vs 254) and Open-Domain (65 vs 83) need a session that is outside that top 5: S9-002, S9-064, S9-077.
+- BEAM All@5 needs +202 and All@10 needs +182. S9-005 and S9-006 fill every seat in the k-loop by uncovered classes. Reshuffling the current top 10 cannot pass All@10 = 138. Unscored golds are a RECALL problem. Event ordering and summarization are at All@10 = 0. A question with more than 5 golds cannot reach All@5; gold counts are not in the attachment.
+- BEAM Session@1 needs +187. Session top 10 stops at 275. Every RECALL row can lift a zero session score into the set at line 5490. S9-002, S9-064, and S9-077 post the session key directly.
+- LME Turn@1 needs +70. Top 5 already holds 428 against a bar of 423. Single-session-preference is the category the top 5 cannot clear (19 vs 27) and its wide pool is 30, so it is ordering, not a new posting.
+- LME Turn All@5 needs +109, almost all of it multi-session (53 vs 109) and temporal-reasoning (74 vs 115). S9-005 and S9-006 are the coverage loop. Turn All@10 is not in the JSON.
+
 ## Algorithms
 
 ### S9-001 Leibniz characteristic divisibility
