@@ -6235,9 +6235,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // first utterance in its session, already in official k
         // outside the top 5, swaps with the last unmentioned named
         // speaker. Declaratives have no scene floor; questions reuse
-        // C2_XWITNESS_RATIO. Post-gatekeeper, after #22, last ranking
-        // change. Skipped on preference.
+        // C2_XWITNESS_RATIO. Post-gatekeeper, after the first #22 pass.
+        // Skipped on preference.
         apply_c2_queried_speaker_first_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Queried-speaker first-in-session seat, again, after #23. A
+        // first-in-session turn that #23 just admitted into the top 5
+        // can now take slot 1; the earlier #22 pass could not see it
+        // there yet. Last ranking change. Skipped on preference.
+        apply_c2_queried_speaker_first_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
