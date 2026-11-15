@@ -3991,6 +3991,20 @@ fn step36_posts(turn: &TurnIx, ids: &[u32]) -> bool {
         .any(|id| turn.content.contains(id) || turn.feats.iter().any(|f| f.id == *id))
 }
 
+/// Sessions in which any turn posts this anchor from its own content or
+/// features. Dump-only consumers and Step 40 share this count so a cue's
+/// session separation is the same number the seat reads. `TurnIx.body` is
+/// never read.
+fn step40_anchor_sdf(ix: &Index, ids: &[u32]) -> u32 {
+    let mut n = 0u32;
+    for members in &ix.session_turns {
+        if members.iter().any(|&ti| step36_posts(&ix.turns[ti], ids)) {
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Antaranga-bahiranga (Step 36). The internal operation precedes the external
 /// one. Internal evidence is `t_own`, the turn's uncarried lexical score.
 /// External evidence on the turn is everything in `t_scene` above `t_own`
@@ -5370,6 +5384,81 @@ fn apply_c2_w2001_session_head(
         );
     }
     None
+}
+
+/// Cue validity (Step 40). A cue's validity is how well it separates sessions.
+///
+/// Content anchors are `step36_anchors` (closed class already dropped; a token
+/// the index never interned is not an anchor). A turn posts an anchor from its
+/// own content or features. `TurnIx.body` is never read. A cue that is posted
+/// in exactly one session has validity 1: it names that session. Every other
+/// cue has validity 0. That is the cue-validity maximum, not a tuned cutoff.
+///
+/// The near-tie is bit-identical `t_scene` inside the top 5. Slot 1 yields to
+/// the unique other member of that tie whose validity sum is strictly higher.
+/// Two winners are not one reading, so the seat stays. Top-5 membership does
+/// not change. Speaker is not consulted. Does not touch `rsb_seat_behind` and
+/// does not rewrite the session list.
+fn apply_c2_step40_cue_validity(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let anchors = step36_anchors(ix, query);
+    if anchors.is_empty() {
+        return false;
+    }
+    let sdf: Vec<u32> = anchors.iter().map(|ids| step40_anchor_sdf(ix, ids)).collect();
+    if !sdf.iter().any(|&s| s == 1) {
+        return false;
+    }
+    let validity = |ti: usize| -> u32 {
+        let turn = &ix.turns[ti];
+        anchors
+            .iter()
+            .zip(&sdf)
+            .filter(|(ids, s)| **s == 1 && step36_posts(turn, ids))
+            .count() as u32
+    };
+    let head = list[0];
+    let head_bits = t_scene.get(head).copied().unwrap_or(0.0).to_bits();
+    let head_v = validity(head);
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut best: Option<(u32, usize)> = None;
+    let mut tied = false;
+    for slot in 1..window {
+        let cand = list[slot];
+        let bits = t_scene.get(cand).copied().unwrap_or(0.0).to_bits();
+        if bits != head_bits {
+            continue;
+        }
+        let v = validity(cand);
+        if v <= head_v {
+            continue;
+        }
+        match best {
+            None => best = Some((v, slot)),
+            Some((bv, _)) if v > bv => {
+                best = Some((v, slot));
+                tied = false;
+            }
+            Some((bv, _)) if v == bv => tied = true,
+            _ => {}
+        }
+    }
+    if tied {
+        return false;
+    }
+    let Some((_, slot)) = best else {
+        return false;
+    };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
 }
 
 #[cfg(test)]
@@ -10468,5 +10557,79 @@ mod algos_c2_tests {
             None
         );
         assert_eq!(sessions, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn step40_cue_validity_breaks_a_scene_tie_toward_the_separating_cue() {
+        let ix = build_index(
+            &[
+                sess(
+                    "s",
+                    &[
+                        ("user", "The ledger sits on the desk."),
+                        ("assistant", "The zynth ledger sits in the cedar drawer."),
+                    ],
+                ),
+                sess("t", &[("user", "The ledger sits on the desk today.")]),
+                sess("u", &[("user", "The ledger sits on the desk again.")]),
+            ],
+            &Params::default(),
+        );
+        let q = "Where is the zynth ledger?";
+        let anchors = step36_anchors(&ix, q);
+        let sdf: Vec<u32> = anchors.iter().map(|ids| step40_anchor_sdf(&ix, ids)).collect();
+        assert!(
+            sdf.iter().any(|&s| s == 1),
+            "a perfectly separating cue must exist"
+        );
+        assert!(
+            step36_posts(&ix.turns[1], &anchors[sdf.iter().position(|&s| s == 1).unwrap()])
+        );
+        assert!(!anchors.iter().zip(&sdf).any(|(ids, s)| {
+            *s == 1 && step36_posts(&ix.turns[0], ids)
+        }));
+
+        // Bit-identical scene. The turn that posts the separating cue takes slot 1.
+        let scene = vec![5.0f32, 5.0, 1.0, 1.0];
+        let mut list = vec![0usize, 1, 2, 3];
+        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert!(apply_c2_step40_cue_validity(&ix, q, &mut list, &scene));
+        assert_eq!(list[0], 1);
+        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert_eq!(before, after);
+
+        // A different scene score is not a near-tie.
+        let mut list = vec![0usize, 1, 2, 3];
+        assert!(!apply_c2_step40_cue_validity(
+            &ix,
+            q,
+            &mut list,
+            &[5.0, 4.0, 1.0, 1.0]
+        ));
+        assert_eq!(list, vec![0, 1, 2, 3]);
+
+        // Slot 1 already posts the separating cue.
+        let mut list = vec![1usize, 0, 2, 3];
+        assert!(!apply_c2_step40_cue_validity(&ix, q, &mut list, &scene));
+        assert_eq!(list, vec![1, 0, 2, 3]);
+
+        // Two separating cues, two winners: the tie stays.
+        let ix2 = build_index(
+            &[
+                sess("s", &[("user", "The ledger sits on the desk.")]),
+                sess("t", &[("user", "The zynth ledger sits on the desk.")]),
+                sess("u", &[("user", "The quartz ledger sits on the desk.")]),
+            ],
+            &Params::default(),
+        );
+        let mut list = vec![0usize, 1, 2];
+        let tied = vec![5.0f32, 5.0, 5.0];
+        assert!(!apply_c2_step40_cue_validity(
+            &ix2,
+            "Where is the zynth quartz ledger?",
+            &mut list,
+            &tied
+        ));
+        assert_eq!(list, vec![0, 1, 2]);
     }
 }
