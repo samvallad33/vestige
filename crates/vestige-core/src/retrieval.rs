@@ -6252,6 +6252,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // seat takes the tail seat of the least on-scene lone-session turn
         // (at least as on-scene, never an earlier session). After #43.
         apply_c2_attribution_unseated_opener_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Exchequer split tally: for assistant-attribution questions, an
+        // assistant turn whose own groups and the user turn it answers are
+        // complementary halves takes slot 1 when that pair covers the
+        // incumbent. After #44. Does not touch rsb_seat_behind.
+        apply_c2_step31_exchequer_split(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
