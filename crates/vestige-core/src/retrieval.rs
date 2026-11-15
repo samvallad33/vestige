@@ -6143,6 +6143,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         if !it.assistant_attribution {
             apply_c2_source_superset_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
             apply_c2_unique_group_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
+            apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
         }
     }
     // RSB: the retrieved turn is the symptom. Seat its structural cause
