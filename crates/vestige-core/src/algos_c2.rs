@@ -3477,6 +3477,237 @@ fn apply_c2_step32_trial_balance(
     true
 }
 
+/// Step 34 Bertillonage / Locard point threshold.
+///
+/// A turn agrees with the query on independent feature kinds. Each query
+/// token feeds at most one kind, so the measurements do not double-count:
+/// numeral shape (a token that contains an ASCII digit), speaker (an attested
+/// name the query mentions; user/assistant are roles, not names), title-case
+/// entity (orthographic proper-token, excluding that speaker and any numeral),
+/// and anchor (any other content token). Session match is the fifth kind: the
+/// turn sits in the same session as the strongest pool evidence, the turn with
+/// the greatest scene score (higher session time, then the earlier turn).
+///
+/// N is how many of the four query-side kinds the query actually has in the
+/// index vocabulary. Session is not one of them: the query does not carry a
+/// session. A card counts only the query-side kinds. Slot 1 is left alone when
+/// its card already meets N, and it is not a blank card when it matches the
+/// strongest session.
+///
+/// A slot-1 card below N yields to one top-5 turn that meets N, agrees on every
+/// kind slot 1 agrees on, is a strict superset, shares slot 1's session, and is
+/// strictly more on-scene. The witness must also be admissible: either slot 1
+/// is a question and the witness is not, and the witness is the same speaker or
+/// a speaker the query names; or slot 1's card is empty and slot 1 is not in
+/// the strongest session. Two witnesses with the same number of kinds are not
+/// an identification, so the seat stays. Top-5 membership does not change.
+/// `TurnIx.body` is never read. Does not touch `rsb_seat_behind`.
+const STEP34_ANCHOR: u8 = 1;
+const STEP34_ENTITY: u8 = 2;
+const STEP34_NUMERAL: u8 = 4;
+const STEP34_SPEAKER: u8 = 8;
+
+struct Step34Query {
+    anchor_ids: Vec<u32>,
+    entity_ids: Vec<u32>,
+    numeral_ids: Vec<u32>,
+    speakers: DetHashSet<String>,
+    /// Query-side kinds actually present. Not a free parameter.
+    n: u8,
+}
+
+fn step34_query(ix: &Index, query: &str) -> Step34Query {
+    let mut seen_sp: DetHashSet<String> = DetHashSet::default();
+    let mut speakers: DetHashSet<String> = DetHashSet::default();
+    let mut speaker_toks: DetHashSet<String> = DetHashSet::default();
+    for turn in &ix.turns {
+        let sp = turn.speaker.as_str();
+        let low = sp.to_ascii_lowercase();
+        if low.is_empty() || low == "user" || low == "assistant" || !seen_sp.insert(low.clone()) {
+            continue;
+        }
+        if c2_query_mentions_speaker(query, sp) {
+            speakers.insert(low);
+            for w in raw_tokens(sp) {
+                speaker_toks.insert(w);
+            }
+        }
+    }
+    let mut entity_toks: DetHashSet<String> = DetHashSet::default();
+    for ent in proper_entity_tokens(query) {
+        let Some(body) = ent.strip_prefix('\u{1}').and_then(|s| s.strip_prefix("ent:")) else {
+            continue;
+        };
+        if body.contains('_') || body.bytes().any(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        if speaker_toks.contains(body) || !is_content(body) {
+            continue;
+        }
+        entity_toks.insert(body.to_string());
+    }
+    let mut anchor_ids = Vec::new();
+    let mut entity_ids = Vec::new();
+    let mut numeral_ids = Vec::new();
+    let mut seen_a: DetHashSet<u32> = DetHashSet::default();
+    let mut seen_e: DetHashSet<u32> = DetHashSet::default();
+    let mut seen_n: DetHashSet<u32> = DetHashSet::default();
+    for w in raw_tokens(query) {
+        if w.bytes().any(|b| b.is_ascii_digit()) {
+            if let Some(id) = ix.vocab.get(&w) {
+                if seen_n.insert(id) {
+                    numeral_ids.push(id);
+                }
+            }
+            continue;
+        }
+        if speaker_toks.contains(&w) {
+            continue;
+        }
+        if entity_toks.contains(&w) {
+            if let Some(id) = ix.vocab.get(&w) {
+                if seen_e.insert(id) {
+                    entity_ids.push(id);
+                }
+            }
+            continue;
+        }
+        if is_content(&w) {
+            if let Some(id) = ix.vocab.get(&w) {
+                if seen_a.insert(id) {
+                    anchor_ids.push(id);
+                }
+            }
+        }
+    }
+    let mut n = 0u8;
+    if !anchor_ids.is_empty() {
+        n += 1;
+    }
+    if !entity_ids.is_empty() {
+        n += 1;
+    }
+    if !numeral_ids.is_empty() {
+        n += 1;
+    }
+    if !speakers.is_empty() {
+        n += 1;
+    }
+    Step34Query { anchor_ids, entity_ids, numeral_ids, speakers, n }
+}
+
+fn step34_posts(turn: &TurnIx, id: u32) -> bool {
+    turn.content.contains(&id)
+}
+
+fn step34_card(ix: &Index, ti: usize, q: &Step34Query) -> u8 {
+    let turn = &ix.turns[ti];
+    let mut bits = 0u8;
+    if q.anchor_ids.iter().any(|id| step34_posts(turn, *id)) {
+        bits |= STEP34_ANCHOR;
+    }
+    if q.entity_ids.iter().any(|id| step34_posts(turn, *id)) {
+        bits |= STEP34_ENTITY;
+    }
+    if q.numeral_ids.iter().any(|id| step34_posts(turn, *id)) {
+        bits |= STEP34_NUMERAL;
+    }
+    if q.speakers.contains(&turn.speaker.to_ascii_lowercase()) {
+        bits |= STEP34_SPEAKER;
+    }
+    bits
+}
+
+/// Session of the strongest positive scene score. Tie: later session time, then
+/// the earlier turn. Same order as `order`.
+fn step34_leader_session(ix: &Index, t_scene: &[f32]) -> Option<usize> {
+    let mut best: Option<(usize, f32, i64)> = None;
+    for (ti, turn) in ix.turns.iter().enumerate() {
+        let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+        if sc <= 0.0 {
+            continue;
+        }
+        let ts = ix.session_ts.get(turn.session).copied().unwrap_or(0);
+        let take = match best {
+            None => true,
+            Some((bi, bs, bts)) => sc > bs || (sc == bs && (ts > bts || (ts == bts && ti < bi))),
+        };
+        if take {
+            best = Some((ti, sc, ts));
+        }
+    }
+    best.map(|(ti, _, _)| ix.turns[ti].session)
+}
+
+fn apply_c2_step34_bertillonage(
+    ix: &Index,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let q = step34_query(ix, query);
+    if q.n == 0 {
+        return false;
+    }
+    let top = list[0];
+    let head = step34_card(ix, top, &q);
+    if head.count_ones() >= u32::from(q.n) {
+        return false;
+    }
+    let leader = step34_leader_session(ix, t_scene);
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let head_sc = t_scene.get(top).copied().unwrap_or(0.0);
+    let head_sess = ix.turns[top].session;
+    let head_sp = ix.turns[top].speaker.to_ascii_lowercase();
+    let head_q = ix.turns[top].is_question;
+    let blank = head == 0 && leader != Some(head_sess);
+    let mut best: Option<(u32, usize)> = None;
+    let mut tied = false;
+    for slot in 1..window {
+        let cand = list[slot];
+        if ix.turns[cand].session != head_sess {
+            continue;
+        }
+        let sc = t_scene.get(cand).copied().unwrap_or(0.0);
+        if sc <= head_sc {
+            continue;
+        }
+        let cb = step34_card(ix, cand, &q);
+        if cb.count_ones() < u32::from(q.n) || (cb & head) != head || cb == head {
+            continue;
+        }
+        let csp = ix.turns[cand].speaker.to_ascii_lowercase();
+        let testimony = head_q
+            && !ix.turns[cand].is_question
+            && (csp == head_sp || q.speakers.contains(&csp));
+        if !(testimony || blank) {
+            continue;
+        }
+        let pc = cb.count_ones();
+        match best {
+            None => best = Some((pc, slot)),
+            Some((bp, _)) if pc > bp => {
+                best = Some((pc, slot));
+                tied = false;
+            }
+            Some((bp, _)) if pc == bp => tied = true,
+            _ => {}
+        }
+    }
+    if tied {
+        return false;
+    }
+    let Some((_, slot)) = best else {
+        return false;
+    };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -6985,5 +7216,149 @@ mod algos_c2_tests {
         let scene = vec![0.2f32; ix.turns.len()];
         assert!(apply_c2_step32_trial_balance(&ix, &plan, &mut list, &scene));
         assert_eq!(list[0], parent);
+    }
+
+    #[test]
+    fn step34_bertillonage_yields_to_the_richer_same_session_card() {
+        // Blank card. Slot 1 is a question that posts none of the query's
+        // anchor kind, and it is not the strongest session. The same-session
+        // user turn that posts an anchor and is more on-scene takes slot 1.
+        // A richer turn in the strongest session does not: different session.
+        let ix = build_index(
+            &[
+                sess(
+                    "other",
+                    &[("user", "I listen to music streaming lately on a different service.")],
+                ),
+                sess(
+                    "home",
+                    &[
+                        ("user", "What playlist should we start?"),
+                        ("user", "I have been using that service lately."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = "What is the name of the music streaming service have I been using lately?";
+        let parsed = step34_query(&ix, q);
+        assert!(parsed.n >= 1);
+        assert!(parsed.speakers.is_empty());
+        let head = 1usize;
+        let gold = 2usize;
+        let other = 0usize;
+        assert!(ix.turns[head].is_question);
+        assert!(!ix.turns[gold].is_question);
+        assert_eq!(step34_card(&ix, head, &parsed), 0);
+        assert_ne!(step34_card(&ix, gold, &parsed) & STEP34_ANCHOR, 0);
+        let mut list = vec![head, other, gold];
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 1.0;
+        scene[gold] = 2.0;
+        scene[other] = 5.0;
+        assert_ne!(step34_leader_session(&ix, &scene), Some(ix.turns[head].session));
+        assert!(apply_c2_step34_bertillonage(&ix, q, &mut list, &scene));
+        assert_eq!(list[0], gold);
+        assert_eq!(list.len(), 3);
+
+        // Named-speaker testimony. The question at slot 1 posts an anchor but
+        // not the speaker the query names. That speaker's same-session reply
+        // posts both and is more on-scene, so it takes slot 1. Her turn in
+        // another session is more on-scene still and stays put.
+        let ix = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("jon", "What dance piece did the team perform to win first place?"),
+                        ("gina", "Our piece was a contemporary solo."),
+                    ],
+                ),
+                sess("D2", &[("gina", "The dance piece our team performed won first place.")]),
+            ],
+            &Params::default(),
+        );
+        let q = "What kind of dance piece did Gina's team perform to win first place?";
+        let parsed = step34_query(&ix, q);
+        assert!(parsed.speakers.contains("gina"));
+        assert!(parsed.n >= 2);
+        let head = 0usize;
+        let gold = 1usize;
+        let other = 2usize;
+        assert!(ix.turns[head].is_question);
+        assert!(!ix.turns[gold].is_question);
+        let head_bits = step34_card(&ix, head, &parsed);
+        let gold_bits = step34_card(&ix, gold, &parsed);
+        assert_eq!(head_bits & STEP34_ANCHOR, STEP34_ANCHOR);
+        assert_eq!(head_bits & STEP34_SPEAKER, 0);
+        assert_eq!(gold_bits & STEP34_SPEAKER, STEP34_SPEAKER);
+        assert!(gold_bits.count_ones() > head_bits.count_ones());
+        let mut list = vec![head, gold, other];
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 3.0;
+        scene[gold] = 4.0;
+        scene[other] = 9.0;
+        assert!(apply_c2_step34_bertillonage(&ix, q, &mut list, &scene));
+        assert_eq!(list[0], gold);
+
+        // Slot 1 already meets N: the named speaker who posts the anchor stays,
+        // even when a question in the same session is more on-scene.
+        let mut list = vec![gold, head, other];
+        scene[head] = 8.0;
+        assert!(!apply_c2_step34_bertillonage(&ix, q, &mut list, &scene));
+        assert_eq!(list[0], gold);
+
+        // Echo in the strongest session. Slot 1 is a question with an empty
+        // card, but it already matches the strongest session, and the witness
+        // is a different role the query does not name. The seat stays.
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "What should we do this weekend?"),
+                    ("assistant", "You mentioned musical instruments you currently own."),
+                    ("user", "The catalog is on the shelf."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = "How many musical instruments do I currently own?";
+        let parsed = step34_query(&ix, q);
+        let head = 0usize;
+        let echo = 1usize;
+        assert!(ix.turns[head].is_question);
+        assert!(!ix.turns[echo].is_question);
+        assert_eq!(step34_card(&ix, head, &parsed), 0);
+        assert_ne!(step34_card(&ix, echo, &parsed) & STEP34_ANCHOR, 0);
+        let mut list = vec![head, echo, 2];
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 2.0;
+        scene[echo] = 4.0;
+        scene[2] = 6.0;
+        assert_eq!(step34_leader_session(&ix, &scene), Some(ix.turns[head].session));
+        assert!(!apply_c2_step34_bertillonage(&ix, q, &mut list, &scene));
+        assert_eq!(list, vec![head, echo, 2]);
+
+        // Two same-session witnesses with the same number of kinds are not an
+        // identification. Slot 1 stays.
+        let ix = build_index(
+            &[sess(
+                "home",
+                &[
+                    ("user", "What playlist should we start?"),
+                    ("user", "I have been using that service lately."),
+                    ("user", "The music streaming service is the one I use lately."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = "What is the name of the music streaming service have I been using lately?";
+        let mut list = vec![0usize, 1, 2];
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[0] = 1.0;
+        scene[1] = 3.0;
+        scene[2] = 4.0;
+        assert!(!apply_c2_step34_bertillonage(&ix, q, &mut list, &scene));
+        assert_eq!(list, vec![0, 1, 2]);
     }
 }
