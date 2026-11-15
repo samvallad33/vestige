@@ -6082,6 +6082,15 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Queried-speaker T@5 entry, after the gatekeeper. The pre-RSB pass
+    // (#17) is often undone when the gatekeeper Kemeny-reorders the tail
+    // (slots 2..k). Re-applying the same membership-preserving swap here
+    // is the last ranking change, so the entry survives by construction.
+    // Same preference / event-sequence / assistant-attribution cuts.
+    // Does not touch rsb_seat_behind and adds no WH-slot ballot.
+    if !it.is_event_sequence && !it.assistant_attribution && !it.preference {
+        apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
         .into_iter()
