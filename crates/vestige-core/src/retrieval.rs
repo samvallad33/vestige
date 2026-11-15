@@ -6095,6 +6095,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // with the last assistant in the top 5. Post-gatekeeper so the
         // entry survives. Skipped on preference.
         apply_c2_same_session_user_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Cross-session user-opener T@5 entry: a user opener from a
+        // session not yet in the top 5, already in official k, swaps
+        // with the last non-unique assistant that is not the head's
+        // next turn. Post-gatekeeper, after #20, so the entry survives.
+        // Skipped on preference.
+        apply_c2_cross_session_user_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
