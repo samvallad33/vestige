@@ -4755,6 +4755,81 @@ fn apply_c2_buried_lexical_peak(
     true
 }
 
+/// Anaphoric tail. The strongest non-question in ranks 5..9 of a named-speaker
+/// session, when that turn is anaphoric and its own score strictly beats every
+/// turn in the top 5, swaps with the lowest-own question in slots 1..4.
+/// The swap stays inside the returned list, so the top-10 set is unchanged.
+/// Slot 0 stays. Anaphora is the ingest flag (closed-class continuation or
+/// pronoun), not a new word list. Does not read turn text and does not touch
+/// `rsb_seat_behind` or the session list.
+fn apply_c2_anaphoric_tail(ix: &Index, list: &mut Vec<usize>, t_own: &[f32]) -> bool {
+    if list.len() < 6 {
+        return false;
+    }
+    let top_end = 5.min(list.len());
+    let tail_end = 10.min(list.len());
+    let mut best: Option<usize> = None;
+    for slot in 5..tail_end {
+        let ti = list[slot];
+        if ix.turns[ti].is_question || !c2_named_session(ix, ti) {
+            continue;
+        }
+        let own = t_own.get(ti).copied().unwrap_or(0.0);
+        let take = match best {
+            None => true,
+            Some(bslot) => {
+                let bow = t_own.get(list[bslot]).copied().unwrap_or(0.0);
+                own > bow || (own == bow && slot < bslot)
+            }
+        };
+        if take {
+            best = Some(slot);
+        }
+    }
+    let Some(bslot) = best else {
+        return false;
+    };
+    let best_ti = list[bslot];
+    if !ix.turns[best_ti].anaphoric {
+        return false;
+    }
+    let best_own = t_own.get(best_ti).copied().unwrap_or(0.0);
+    let mut top_max = f32::MIN;
+    for slot in 0..top_end {
+        let own = t_own.get(list[slot]).copied().unwrap_or(0.0);
+        if own > top_max {
+            top_max = own;
+        }
+    }
+    if best_own <= top_max {
+        return false;
+    }
+    let mut victim: Option<usize> = None;
+    for slot in 1..top_end {
+        let ti = list[slot];
+        if !ix.turns[ti].is_question {
+            continue;
+        }
+        let own = t_own.get(ti).copied().unwrap_or(0.0);
+        let take = match victim {
+            None => true,
+            Some(vslot) => {
+                let vow = t_own.get(list[vslot]).copied().unwrap_or(0.0);
+                own < vow || (own == vow && slot < vslot)
+            }
+        };
+        if take {
+            victim = Some(slot);
+        }
+    }
+    let Some(vslot) = victim else {
+        return false;
+    };
+    list.swap(bslot, vslot);
+    true
+}
+
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -9497,5 +9572,82 @@ mod algos_c2_tests {
         assert_eq!(list, vec![0, 1, 2, 3, 4]);
     }
 
+    #[test]
+    fn anaphoric_tail_swaps_the_dominant_pronoun_with_the_weakest_question() {
+        let ix = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("mel", "The shop opened beside the river."),
+                    ("jon", "When did the shop open?"),
+                    ("mel", "The counter faces the window."),
+                    ("jon", "The awning is green."),
+                    ("mel", "The bell is on the door."),
+                    ("jon", "It opened beside the river."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(ix.turns[1].is_question);
+        assert!(!ix.turns[5].is_question);
+        assert!(ix.turns[5].anaphoric);
+        assert!(c2_named_session(&ix, 5));
+        let mut own = vec![0.5f32; ix.turns.len()];
+        own[0] = 1.0;
+        own[1] = 0.2;
+        own[5] = 3.0;
+        let mut list = vec![0usize, 1, 2, 3, 4, 5];
+        assert!(apply_c2_anaphoric_tail(&ix, &mut list, &own));
+        assert_eq!(list, vec![0, 5, 2, 3, 4, 1]);
 
+        // The tail maximum is not anaphoric, so a weaker anaphoric turn stays put.
+        let ix = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("mel", "The shop opened beside the river."),
+                    ("jon", "When did the shop open?"),
+                    ("mel", "The counter faces the window."),
+                    ("jon", "The awning is green."),
+                    ("mel", "The bell is on the door."),
+                    ("jon", "The shop opened after the flood."),
+                    ("mel", "It opened beside the river."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(!ix.turns[5].anaphoric);
+        assert!(ix.turns[6].anaphoric);
+        let mut own = vec![0.5f32; ix.turns.len()];
+        own[0] = 1.0;
+        own[1] = 0.2;
+        own[5] = 4.0;
+        own[6] = 3.0;
+        let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
+        assert!(!apply_c2_anaphoric_tail(&ix, &mut list, &own));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
+
+        // User/assistant transcripts are not named-speaker sessions.
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "The shop opened beside the river."),
+                    ("assistant", "When did the shop open?"),
+                    ("user", "The counter faces the window."),
+                    ("assistant", "The awning is green."),
+                    ("user", "The bell is on the door."),
+                    ("assistant", "It opened beside the river."),
+                ],
+            )],
+            &Params::default(),
+        );
+        assert!(ix.turns[5].anaphoric);
+        let mut own = vec![0.5f32; ix.turns.len()];
+        own[1] = 0.2;
+        own[5] = 9.0;
+        let mut list = vec![0usize, 1, 2, 3, 4, 5];
+        assert!(!apply_c2_anaphoric_tail(&ix, &mut list, &own));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
+    }
 }
