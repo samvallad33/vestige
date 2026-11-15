@@ -2395,6 +2395,106 @@ fn apply_c2_attribution_unseated_opener_t10_entry(
 }
 
 
+/// Exchequer split tally (Step 31). A tally stick proved a payment only when
+/// the stock and the foil carried the same notches. For a question that asks
+/// what the assistant said, an assistant turn is scored on two halves: its
+/// own query-group coverage (the foil) and the coverage of the user turn it
+/// directly answers (the stock, `TurnIx.answers`). The halves combine as a
+/// geometric mean, so a turn that matches on only one half scores zero.
+///
+/// A zero tally cannot hold slot 1 over a split tally already inside the top
+/// 5 whose stock is also seated in the official list. A split means each half
+/// attests a query group the other half lacks (an echo of the same groups is
+/// not two halves). The pair's union must cover every query group the
+/// incumbent attests, so a thinner pair cannot displace a richer head. The
+/// highest geometric mean wins; equal means keep the higher scene score, then
+/// the earlier turn. Top-5 membership is unchanged. No new constant.
+///
+/// Skipped on preference (a "can you recommend" request is not a citation of
+/// a past answer), temporal questions, summary requests, WH-person questions,
+/// event sequences, and named-speaker dialogues. Runs after the gatekeeper,
+/// after #44.
+fn apply_c2_step31_exchequer_split(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2
+        || !plan.intent.assistant_attribution
+        || plan.intent.preference
+        || plan.intent.temporal
+        || plan.intent.is_event_sequence
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    if c2_named_session(ix, top) {
+        return false;
+    }
+    let g_ic = c2_group_ic(ix, plan);
+    let ng = g_ic.len();
+    if ng == 0 {
+        return false;
+    }
+    let head_hit = c2_turn_groups(ix, plan, ng, top);
+    if !head_hit.iter().any(|h| *h) {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let seated: Vec<usize> = list.clone();
+    let mut best: Option<(usize, f32, f32, usize)> = None;
+    for slot in 1..window {
+        let cand = list[slot];
+        let turn = &ix.turns[cand];
+        if turn.speaker != "assistant" {
+            continue;
+        }
+        let Some(parent) = turn.answers else { continue };
+        if ix.turns[parent].speaker != "user" || !seated.contains(&parent) {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        let foil = c2_turn_groups(ix, plan, ng, cand);
+        let stock = c2_turn_groups(ix, plan, ng, parent);
+        let foil_only = foil.iter().zip(&stock).any(|(f, s)| *f && !*s);
+        let stock_only = foil.iter().zip(&stock).any(|(f, s)| !*f && *s);
+        if !foil_only || !stock_only {
+            continue;
+        }
+        let covers = head_hit.iter().enumerate().all(|(i, h)| !h || foil[i] || stock[i]);
+        if !covers {
+            continue;
+        }
+        let tally = (c2_coverage(&g_ic, &foil) * c2_coverage(&g_ic, &stock)).sqrt();
+        if tally <= 0.0 {
+            continue;
+        }
+        let scene = t_scene.get(cand).copied().unwrap_or(0.0);
+        let take = match best {
+            None => true,
+            Some((_, bt, bs, bi)) => {
+                tally > bt || (tally == bt && (scene > bs || (scene == bs && cand < bi)))
+            }
+        };
+        if take {
+            best = Some((slot, tally, scene, cand));
+        }
+    }
+    let Some((slot, _, _, _)) = best else {
+        return false;
+    };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -6390,6 +6490,89 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 2, 3, 4, 5];
         assert!(!apply_c2_cross_session_user_t5_entry(&ixn, &nplan, &nq.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn exchequer_split_seats_complementary_assistant_over_echo() {
+        // Stock (user asks for the dish) and foil (assistant states the egg
+        // count) together cover the echo head, which restates every query
+        // group in one turn. The echo's own reply does not split.
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "How do I make a classic French omelette?"),
+                    ("assistant", "Use 3 eggs and whisk them."),
+                    ("user", "Any tips to keep the omelette fluffy?"),
+                    ("assistant", "Whisk the eggs for a French omelette."),
+                    ("user", "I want to make a classic French omelette with eggs tonight."),
+                    ("assistant", "A classic French omelette with eggs can take cheese or ham."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "How many eggs did you say we need for the classic French omelette?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(plan.intent.assistant_attribution);
+        assert!(!plan.intent.preference);
+        assert!(!plan.intent.temporal);
+        let mut list = vec![5usize, 3, 4, 2, 1, 0];
+        let scene = vec![0.4f32, 0.9, 0.3, 0.8, 0.5, 1.0];
+        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
+        let top5_before: std::collections::HashSet<usize> = list[..5].iter().copied().collect();
+        assert!(apply_c2_step31_exchequer_split(&ix, &plan, &q.text, &mut list, &scene));
+        assert_eq!(list[0], 1);
+        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert_eq!(before, after);
+        let top5_after: std::collections::HashSet<usize> = list[..5].iter().copied().collect();
+        assert_eq!(top5_before, top5_after);
+
+        // Same groups on both halves: not a split, no seat.
+        let ix_echo = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "How many eggs go in a classic French omelette?"),
+                    ("assistant", "A classic French omelette needs 3 eggs."),
+                    ("user", "Thanks, and what pan should I use for the eggs?"),
+                    ("assistant", "Use a nonstick pan."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut echo = vec![1usize, 3, 2, 0];
+        assert!(!apply_c2_step31_exchequer_split(&ix_echo, &plan, &q.text, &mut echo, &[1.0, 0.5, 0.4, 0.8]));
+        assert_eq!(echo, vec![1, 3, 2, 0]);
+
+        // Preference request: no seat.
+        let pq = Query { text: "Can you recommend a classic French omelette recipe with eggs?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![5usize, 3, 4, 2, 1, 0];
+        assert!(!apply_c2_step31_exchequer_split(&ix, &pplan, &pq.text, &mut list, &scene));
+        assert_eq!(list, vec![5, 3, 4, 2, 1, 0]);
+
+        // Named speakers: no seat.
+        let ixn = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("caroline", "How do I make a classic French omelette?"),
+                    ("melanie", "Use 3 eggs and whisk them."),
+                    ("caroline", "Any tips to keep the omelette fluffy?"),
+                    ("melanie", "Whisk the eggs for a French omelette."),
+                    ("caroline", "I want to make a classic French omelette with eggs tonight."),
+                    ("melanie", "A classic French omelette with eggs can take cheese or ham."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut list = vec![5usize, 3, 4, 2, 1, 0];
+        assert!(!apply_c2_step31_exchequer_split(&ixn, &plan, &q.text, &mut list, &scene));
+        assert_eq!(list, vec![5, 3, 4, 2, 1, 0]);
     }
 
 
