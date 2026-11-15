@@ -6214,6 +6214,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // unchanged. After #36, last ranking change. Skipped on
         // preference.
         apply_c2_pool_session_substitution_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Session substitution T@5 entry again after #37, so a pool user
+        // that #37 just seated into official k can still enter the top
+        // 5. After #37, last ranking change. Skipped on preference.
+        apply_c2_session_substitution_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
