@@ -6053,6 +6053,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 // previous same-session statement by a speaker the query
                 // names, already in the top 5. Skipped on preference.
                 apply_c2_queried_speaker_prev_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Queried-speaker T@5 entry: a declarative turn by a
+                // speaker the query names, already in official k outside
+                // the top 5, swaps with the last unmentioned named
+                // speaker in the top 5. Membership-preserving. Skipped
+                // on preference.
+                apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
             }
         }
         // Preference source: ReplySource is skipped on assistant_attribution,
