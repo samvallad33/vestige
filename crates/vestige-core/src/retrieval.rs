@@ -6132,13 +6132,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // Subsequent-answer seat, again, after the gatekeeper. Pre-RSB #10
     // refuses when the next user is still outside the top 5; RSB can
     // then seat that user into the window, and a post-GK pass can take
-    // slot 1. Last ranking change. Same cuts as #10: event-sequence and
-    // assistant-attribution at the call site; the function still skips
-    // temporal and named-speaker sessions. Does not skip preference
-    // (same as #10). Does not run the gatekeeper again and adds no
-    // WH-slot ballot.
+    // slot 1. Later post-gatekeeper C2 seats may still run after this
+    // pass. Same cuts as #10: event-sequence and assistant-attribution
+    // at the call site; the function still skips temporal and
+    // named-speaker sessions. Does not skip preference (same as #10).
+    // Does not run the gatekeeper again and adds no WH-slot ballot.
     if !it.is_event_sequence && !it.assistant_attribution {
         apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+    }
+    // Cross-session opener-pair seat: a user opener at slot 1 yields to
+    // another session's user opener already in the top 5 whose
+    // immediately following assistant reply is also already in the
+    // top 5, when that opener is at least as on-scene. Post-gatekeeper,
+    // after #26, last ranking change. Skipped on preference. Does not
+    // run the gatekeeper again and adds no WH-slot ballot.
+    if !it.is_event_sequence && !it.assistant_attribution && !c2_text_preference(&q.text) {
+        apply_c2_cross_opener_pair_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
