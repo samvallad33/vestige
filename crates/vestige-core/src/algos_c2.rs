@@ -1386,6 +1386,96 @@ fn apply_c2_queried_speaker_qhead_prev_seat(
     true
 }
 
+
+/// Same-session user T@5 entry. In a user/assistant transcript, a user
+/// turn already in the official k but outside the top 5, from a session
+/// already represented in the top 5, that is the session opener or is
+/// later than a same-session turn already in the top 5, swaps into the
+/// top 5 in place of the last assistant. The victim stays in the official
+/// k, so T@10 cannot drop by construction. The swap is refused when it
+/// would push any session out of the first 5 unique-session slots, so
+/// S@5 cannot drop by construction. No new ratio: the same-session
+/// opener-or-later cut is the structure. Skipped on preference, temporal,
+/// WH-person, summary requests, event sequences and assistant-attribution
+/// (caller), and named-speaker sessions. Distinct from the source-superset
+/// and unique-group reallocs (no group test) and from the subsequent-answer
+/// seat (this changes official-k membership, not slot 1). Runs after
+/// `rank1_gatekeeper_keep_rsb_head` so the entry survives the tail reorder.
+fn apply_c2_same_session_user_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || plan.intent.preference
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut top5_sessions = Vec::new();
+    for &tid in &list[..window] {
+        let s = ix.turns[tid].session;
+        if !top5_sessions.contains(&s) {
+            top5_sessions.push(s);
+        }
+    }
+    let mut cand_slot = None;
+    for i in window..list.len() {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user" {
+            continue;
+        }
+        if !top5_sessions.contains(&t.session) {
+            continue;
+        }
+        let cand_pos = c2_session_pos(ix, cand);
+        let opener = cand_pos == 0;
+        let later = list[..window].iter().any(|&tid| {
+            ix.turns[tid].session == t.session && c2_session_pos(ix, tid) < cand_pos
+        });
+        if !opener && !later {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        cand_slot = Some(i);
+        break;
+    }
+    let Some(ci) = cand_slot else {
+        return false;
+    };
+    let mut vs = None;
+    for (i, &tid) in list[..window].iter().enumerate() {
+        if ix.turns[tid].speaker == "assistant" {
+            vs = Some(i);
+        }
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    if !c2_s5_membership_preserved(ix, list, vs, ci) {
+        return false;
+    }
+    list.swap(vs, ci);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -2616,5 +2706,129 @@ mod algos_c2_tests {
         assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![1, 2]);
     }
+
+    #[test]
+    fn same_session_user_t5_entry_swaps_later_or_opener_user_for_assistant() {
+        let ix = build_index(
+            &[
+                sess(
+                    "s1",
+                    &[
+                        ("user", "I went on a week-long trip with my family last year."),
+                        ("assistant", "That sounds like a great trip with your family."),
+                        ("user", "We went to Hawaii on a week-long trip with my family."),
+                    ],
+                ),
+                sess(
+                    "s2",
+                    &[
+                        ("user", "I also took a short weekend trip last month."),
+                        ("assistant", "Weekend trips can be a nice break too."),
+                    ],
+                ),
+                sess(
+                    "s3",
+                    &[("user", "Travel planning takes a lot of time for any family trip.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "Where did I go on a week-long trip with my family?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.preference);
+        assert!(!plan.intent.temporal);
+        // Official k of 6: last assistant (s2) at slot 5 yields to the later
+        // same-session user already in k at slot 6.
+        let mut list = vec![0usize, 3, 5, 1, 4, 2];
+        let t_scene = vec![1.0f32, 0.8, 0.6, 0.9, 0.7, 0.4];
+        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert!(apply_c2_same_session_user_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 3, 5, 1, 2, 4]);
+        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert_eq!(before, after);
+
+        // Session opener in official k, later same-session turn already in top 5.
+        let ixo = build_index(
+            &[
+                sess(
+                    "s1",
+                    &[
+                        ("user", "I went to three movie festivals this year."),
+                        ("assistant", "You have been to quite a few festivals."),
+                        ("user", "How many movie festivals have I attended so far?"),
+                    ],
+                ),
+                sess(
+                    "s2",
+                    &[
+                        ("user", "I also watched a lot of films at home."),
+                        ("assistant", "That is a different kind of movie habit."),
+                    ],
+                ),
+                sess(
+                    "s3",
+                    &[("user", "Festival season always keeps me busy every year.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let oq = Query { text: "How many movie festivals that I attended?".into(), date: String::new() };
+        let oplan = plan_query(&ixo, &oq, &Params::default());
+        // Head is the later same-session question (idx 2); opener (idx 0) is at slot 6.
+        let mut list = vec![2usize, 3, 5, 1, 4, 0];
+        let osc = vec![0.8f32, 0.7, 1.0, 0.9, 0.6, 0.4];
+        assert!(apply_c2_same_session_user_t5_entry(&ixo, &oplan, &oq.text, &mut list, &osc));
+        assert_eq!(list, vec![2, 3, 5, 1, 0, 4]);
+
+        // Different-session user in official k: no entry.
+        let ixd = build_index(
+            &[
+                sess("s1", &[("user", "I went to three movie festivals this year."), ("assistant", "Nice."), ("user", "How many movie festivals have I attended so far?")]),
+                sess("s2", &[("user", "I also watched a lot of films at home."), ("assistant", "Okay.")]),
+                sess("s3", &[("user", "Festival season always keeps me busy every year.")]),
+                sess("s4", &[("user", "I booked a train ticket to another city today.")]),
+            ],
+            &Params::default(),
+        );
+        let mut list = vec![2usize, 3, 5, 1, 4, 6];
+        let dsc = vec![0.8f32, 0.7, 1.0, 0.9, 0.6, 0.4, 0.5];
+        assert!(!apply_c2_same_session_user_t5_entry(&ixd, &oplan, &oq.text, &mut list, &dsc));
+        assert_eq!(list, vec![2, 3, 5, 1, 4, 6]);
+
+        // Preference query: no entry.
+        let pq = Query { text: "What is my favorite week-long trip with my family?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![0usize, 3, 5, 1, 4, 2];
+        assert!(!apply_c2_same_session_user_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 3, 5, 1, 4, 2]);
+
+        // Named-speaker session: no entry.
+        let ixn = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("john", "I went on a week-long trip with my family last year."),
+                        ("maria", "That sounds like a great trip with your family."),
+                        ("john", "We went to Hawaii on a week-long trip with my family."),
+                        ("maria", "I also took a short weekend trip last month."),
+                        ("john", "Weekend trips can be a nice break too."),
+                        ("maria", "Travel planning takes a lot of time for any family trip."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let nq = Query { text: "Where did I go on a week-long trip with my family?".into(), date: String::new() };
+        let nplan = plan_query(&ixn, &nq, &Params::default());
+        let mut list = vec![0usize, 1, 3, 4, 5, 2];
+        assert!(!apply_c2_same_session_user_t5_entry(&ixn, &nplan, &nq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 3, 4, 5, 2]);
+    }
+
 
 }
