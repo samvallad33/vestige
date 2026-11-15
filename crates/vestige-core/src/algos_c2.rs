@@ -4907,7 +4907,157 @@ fn apply_c2_unseated_session_peak(
     true
 }
 
-
+/// Capture-recapture (Step 39, Petersen / Lincoln).
+///
+/// Two rankings mark sessions, not a re-weight of one score. The lexical
+/// ranking orders turns by `t_own` (uncarried). The session ranking orders
+/// turns by `s_score + bridge_boost`, then `t_scene`. Each ranking's capture
+/// is the first three distinct sessions in that order. `n1` and `n2` are the
+/// capture sizes, `m` is their overlap, and `N = n1 * n2 / m` is the Lincoln
+/// estimate of the gold-turn population. `m = 0` is undefined and does not
+/// fire. Identical captures are one population already seated together.
+///
+/// `N` outside 2..=4 is not a two-to-four gold question. The second session is
+/// the highest session sightline in the union other than slot 0's session. It
+/// is filled up to `min(N, 2)` seats in the top 5. One call moves one seat:
+/// the second session's unique best non-question already inside the top 10,
+/// whose own score strictly beats the question it replaces. That question must
+/// keep a same-session sibling in the top 5, so the move does not drop the
+/// only seat of a session. Slot 0 stays. Top-10 membership stays. The session
+/// list is not rewritten. Speaker is not read. `TurnIx.body` is not read.
+/// Does not touch `rsb_seat_behind`.
+fn apply_c2_step39_capture_recapture(
+    ix: &Index,
+    list: &mut Vec<usize>,
+    t_own: &[f32],
+    t_scene: &[f32],
+    s_score: &[f32],
+    bridge_boost: &[f32],
+) -> bool {
+    if list.len() < 6 {
+        return false;
+    }
+    let own = |ti: usize| t_own.get(ti).copied().unwrap_or(0.0);
+    let scene = |ti: usize| t_scene.get(ti).copied().unwrap_or(0.0);
+    let sight = |si: usize| {
+        s_score.get(si).copied().unwrap_or(0.0) + bridge_boost.get(si).copied().unwrap_or(0.0)
+    };
+    let by_id = |a: usize, b: usize| ix.turns[a].id.cmp(&ix.turns[b].id);
+    let capture = |ordered: &[usize]| -> Vec<usize> {
+        let mut seen: Vec<usize> = Vec::new();
+        for &ti in ordered {
+            let s = ix.turns[ti].session;
+            if !seen.contains(&s) {
+                seen.push(s);
+            }
+            if seen.len() == 3 {
+                break;
+            }
+        }
+        seen
+    };
+    let mut lexical: Vec<usize> = (0..ix.turns.len()).filter(|&ti| own(ti) > 0.0).collect();
+    lexical.sort_by(|&a, &b| own(b).partial_cmp(&own(a)).unwrap_or(std::cmp::Ordering::Equal).then_with(|| by_id(a, b)));
+    let mut session_order: Vec<usize> = (0..ix.turns.len())
+        .filter(|&ti| sight(ix.turns[ti].session) > 0.0 || scene(ti) > 0.0)
+        .collect();
+    session_order.sort_by(|&a, &b| {
+        sight(ix.turns[b].session)
+            .partial_cmp(&sight(ix.turns[a].session))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| scene(b).partial_cmp(&scene(a)).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| by_id(a, b))
+    });
+    let cap_l = capture(&lexical);
+    let cap_s = capture(&session_order);
+    if cap_l.is_empty() || cap_s.is_empty() {
+        return false;
+    }
+    let mut lset = cap_l.clone();
+    let mut sset = cap_s.clone();
+    lset.sort_unstable();
+    sset.sort_unstable();
+    if lset == sset {
+        return false;
+    }
+    let overlap = cap_l.iter().filter(|s| cap_s.contains(s)).count();
+    if overlap == 0 {
+        return false;
+    }
+    let estimate = cap_l.len() * cap_s.len() / overlap;
+    if !(2..=4).contains(&estimate) {
+        return false;
+    }
+    let head = ix.turns[list[0]].session;
+    let mut union = cap_l.clone();
+    for &s in &cap_s {
+        if !union.contains(&s) {
+            union.push(s);
+        }
+    }
+    let mut second_cands: Vec<usize> = union.into_iter().filter(|&s| s != head).collect();
+    if second_cands.is_empty() {
+        return false;
+    }
+    second_cands.sort_by(|&a, &b| {
+        sight(b)
+            .partial_cmp(&sight(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| ix.session_ids[a].cmp(&ix.session_ids[b]))
+    });
+    let second = second_cands[0];
+    let top5 = 5.min(list.len());
+    let have = list[..top5].iter().filter(|&&ti| ix.turns[ti].session == second).count();
+    // The second session receives min(N, 2) seats. One call admits one.
+    let budget = estimate.min(2);
+    if have >= budget {
+        return false;
+    }
+    let top10 = 10.min(list.len());
+    let mut entrants: Vec<usize> = list[top5..top10]
+        .iter()
+        .copied()
+        .filter(|&ti| ix.turns[ti].session == second && own(ti) > 0.0 && !ix.turns[ti].is_question)
+        .collect();
+    if entrants.is_empty() {
+        return false;
+    }
+    entrants.sort_by(|&a, &b| own(b).partial_cmp(&own(a)).unwrap_or(std::cmp::Ordering::Equal).then_with(|| by_id(a, b)));
+    if entrants.len() > 1 && own(entrants[0]) == own(entrants[1]) {
+        return false;
+    }
+    let ent = entrants[0];
+    let mut victims: Vec<usize> = Vec::new();
+    for i in 1..top5 {
+        let ti = list[i];
+        let turn = &ix.turns[ti];
+        if turn.session == second || !turn.is_question || !(own(ent) > own(ti)) {
+            continue;
+        }
+        let sibling = list[..top5]
+            .iter()
+            .enumerate()
+            .any(|(j, &u)| j != i && ix.turns[u].session == turn.session);
+        if sibling {
+            victims.push(i);
+        }
+    }
+    if victims.is_empty() {
+        return false;
+    }
+    victims.sort_by(|&a, &b| {
+        own(list[a])
+            .partial_cmp(&own(list[b]))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    let slot = victims[0];
+    let Some(ent_pos) = list.iter().position(|&ti| ti == ent) else {
+        return false;
+    };
+    list.swap(slot, ent_pos);
+    true
+}
 
 /// Month ids the existing calendar compiler emitted for `text` (`__MONTH__MM`).
 /// No word list of our own: `inline_date_tokens` already decides which orthographic
@@ -5237,6 +5387,39 @@ mod algos_c2_tests {
                 .map(|(i, (r, c))| Turn { id: format!("{id}#{i}"), role: (*r).into(), content: (*c).into(), ..Turn::default() })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn capture_recapture_seats_the_second_sessions_declarative() {
+        let ix = build_index(
+            &[
+                sess("A", &[
+                    ("user", "The concert was downtown."),
+                    ("user", "Where was the concert?"),
+                    ("user", "It starts at dusk."),
+                ]),
+                sess("B", &[("user", "Bring the paper tickets.")]),
+                sess("C", &[("user", "Meet at the north gate.")]),
+                sess("D", &[("user", "Wear a blue coat.")]),
+            ],
+            &Params::default(),
+        );
+        assert!(ix.turns[1].is_question);
+        assert!(!ix.turns[0].is_question && !ix.turns[3].is_question);
+        // own: B, A, D are the lexical capture; session sightline A > B > C > D
+        // so the session capture is A, B, C. Overlap 2, N = 4. Second session is B.
+        let t_own = vec![9.0f32, 1.0, 0.4, 10.0, 3.0, 8.0];
+        let t_scene = vec![1.0f32; 6];
+        let s_score = vec![10.0f32, 8.0, 6.0, 1.0];
+        let bridge = vec![0.0f32; 4];
+        let mut list = vec![0usize, 1, 4, 5, 2, 3];
+        assert!(apply_c2_step39_capture_recapture(&ix, &mut list, &t_own, &t_scene, &s_score, &bridge));
+        assert_eq!(list, vec![0, 3, 4, 5, 2, 1]);
+        // Identical captures (D raised above C) are one population. No seat.
+        let s_score = vec![10.0f32, 8.0, 1.0, 6.0];
+        let mut list = vec![0usize, 1, 4, 5, 2, 3];
+        assert!(!apply_c2_step39_capture_recapture(&ix, &mut list, &t_own, &t_scene, &s_score, &bridge));
+        assert_eq!(list, vec![0, 1, 4, 5, 2, 3]);
     }
 
     #[test]
