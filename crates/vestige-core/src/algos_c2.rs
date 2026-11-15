@@ -739,9 +739,12 @@ fn c2_next_user(ix: &Index, ti: usize) -> Option<usize> {
 /// event sequences and assistant-attribution (caller), and named-speaker
 /// sessions. Distinct from primacy testimony (which promotes an earlier
 /// first-half account) and from ReplySource (assistant at slot 1, previous
-/// user). Runs after unique-group realloc, before RSB. Slot 1 is then
-/// frozen by rank1_gatekeeper_keep_rsb_head, so this reseat sticks; it is
-/// not a Kemeny ballot (a tail vote cannot move T@1).
+/// user). Runs after unique-group realloc, before RSB. A later
+/// post-gatekeeper pass may run the same function again after RSB and
+/// the tail reorder, so a next-user turn that only entered the top 5
+/// via RSB can still take slot 1. Slot 1 is then frozen by
+/// rank1_gatekeeper_keep_rsb_head, so a pre-RSB reseat also sticks; it
+/// is not a Kemeny ballot (a tail vote cannot move T@1).
 fn apply_c2_subsequent_answer_seat(
     ix: &Index,
     plan: &QueryPlan,

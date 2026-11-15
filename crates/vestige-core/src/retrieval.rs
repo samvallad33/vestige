@@ -6241,8 +6241,20 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // Queried-speaker first-in-session seat, again, after #23. A
         // first-in-session turn that #23 just admitted into the top 5
         // can now take slot 1; the earlier #22 pass could not see it
-        // there yet. Last ranking change. Skipped on preference.
+        // there yet. Later post-gatekeeper C2 seats may still run after
+        // this pass. Skipped on preference.
         apply_c2_queried_speaker_first_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    }
+    // Subsequent-answer seat, again, after the gatekeeper. Pre-RSB #10
+    // refuses when the next user is still outside the top 5; RSB can
+    // then seat that user into the window, and a post-GK pass can take
+    // slot 1. Last ranking change. Same cuts as #10: event-sequence and
+    // assistant-attribution at the call site; the function still skips
+    // temporal and named-speaker sessions. Does not skip preference
+    // (same as #10). Does not run the gatekeeper again and adds no
+    // WH-slot ballot.
+    if !it.is_event_sequence && !it.assistant_attribution {
+        apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
