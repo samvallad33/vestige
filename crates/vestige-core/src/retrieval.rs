@@ -6159,9 +6159,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // Solo earlier-opener seat: a lone user opener at slot 1 (no
         // other turn from that session in the top 5) yields to an
         // earlier user opener from a different session already in the
-        // top 5, when that opener is at least as on-scene. After #28,
-        // last ranking change. Skipped on preference.
+        // top 5, when that opener is at least as on-scene. After #28.
+        // Later post-gatekeeper C2 seats may still run after this pass.
+        // Skipped on preference.
         apply_c2_solo_earlier_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Pool opener T@10 entry: a user opener in the scene-ranked
+        // pool, not already in the official k, takes the official-k
+        // seat of the last non-unique tail assistant whose session
+        // still has a user in the official k, when that opener is at
+        // least as on-scene. After #29, last ranking change. The top 5
+        // is unchanged. Skipped on preference.
+        apply_c2_pool_opener_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
