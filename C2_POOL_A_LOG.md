@@ -54,3 +54,23 @@ Offline simulation on the tip: 11 fires, T@5 +1, T@10 +1, losses 0. The release 
 
 - hash-check (ranked ids): 0/500 differing questions
 - hash-check (full response incl. f32 scores): 0/500 differing questions
+
+## Attempt 2 — anaphoric tail — WIN
+
+The strongest non-question in ranks 5..9 of a named-speaker session, when that turn is anaphoric and its own score strictly beats every top-5 own score, swaps with the lowest-own question in slots 1..4. The swap stays inside the returned list. Slot 0 and the session list stay. Anaphora is the existing ingest flag (a closed-class continuation or pronoun in the first tokens). The seat does not read turn text.
+
+Offline on the post-peak dumps, the unguarded tail-over-question swap fired 83 times: Turn@5 +4 / −2. Requiring the tail maximum to be anaphoric kept all 4 gains and dropped both losses (68 fires). Other simulated seats were not this commit: a question's immediate reply (+5 / −9 Turn@5), a void-session representative (0 fires), an unseated pool declarative over a redundant question (+14 / −14), and an outside-list peak with no session guard (+4 / −2 Turn@5). Two further 0-loss structures were re-simulated on top of this seat and left for the next commit: digit-shape agreement (Temporal `4:24`, Turn@5 +1 and Turn@10 +1) and an unseated session peak whose session is absent from the top 5 (Temporal `1:10` and `6:64`, Turn@5 +2 and Turn@10 +2).
+
+- Files: `crates/vestige-core/src/algos_c2.rs` (`apply_c2_anaphoric_tail`, 3905–3969, test `anaphoric_tail_swaps_the_dominant_pronoun_with_the_weakest_question`), `crates/vestige-core/src/retrieval.rs` (call after the buried peak, 6299–6303).
+- Release bench versus the buried-peak commit: LoCoMo Turn@5 1128→1132. Turn@1, Turn@10, and both session metrics stay. LME and BEAM coordinate changes: 0. LME session-coordinate drops: 0.
+- Funnel after this seat, measured: Multi-Hop 282 / 243 / 72 / 97 / 158, Temporal 320 corpus / pool 299 / 182 / 191 / 248, Open-Domain 92 / 63 / 14 / 20 / 35, Single-Hop 841 / 811 / 440 / 500 / 691. Only Single-Hop final top 5 moves (687→691).
+- Versus the Step 31+32+33+34 tip: LoCoMo Turn 808/1132/1227, Session 1133/1416. Single-Hop Turn@5 686→691. Losses: 0 on every coordinate of all three benches.
+- Gains versus the buried peak: LoCoMo `7:146`, `9:113`, `9:131`, `9:146`, each Turn@5 only. All four are Single-Hop and were already Turn@10 hits.
+- Gates: clippy `-D warnings` clean, `cargo check -p vestige-mcp` clean, `cargo test -p vestige-core` 565 passed, hash-check 0/500 ranked ids and 0/500 full responses.
+
+### Hash-check
+
+`tools/c2_hashcheck.py` on this release binary:
+
+- hash-check (ranked ids): 0/500 differing questions
+- hash-check (full response incl. f32 scores): 0/500 differing questions
