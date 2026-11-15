@@ -53,6 +53,98 @@ fn apply_c2_bullae_numeral_seat(ix: &Index, list: &mut Vec<usize>, t_scene: &[f3
     false
 }
 
+/// Coverage margin (share of total query IC) a same-session challenger must add over slot 1.
+const C2_COVER_MARGIN: f32 = 0.15;
+
+/// True when the turn's session has a named (non user/assistant) speaker.
+fn c2_named_session(ix: &Index, ti: usize) -> bool {
+    ix.session_turns[ix.turns[ti].session].iter().any(|&m| {
+        let sp = ix.turns[m].speaker.as_str();
+        !sp.is_empty() && sp != "user" && sp != "assistant"
+    })
+}
+
+/// Per query group: the BM25 idf (turn-own stats) of its rarest term times its plan weight.
+fn c2_group_ic(ix: &Index, plan: &QueryPlan) -> Vec<f32> {
+    let mut g_ic = vec![0.0f32; plan.groups.len()];
+    for qt in &plan.terms {
+        if let Some(g) = qt.group {
+            let df = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(0) as f32;
+            let idf = ((ix.t_own_stats.n - df + 0.5) / (df + 0.5) + 1.0).ln().max(0.0);
+            if let Some(slot) = g_ic.get_mut(g) {
+                *slot = slot.max(idf * qt.weight);
+            }
+        }
+    }
+    g_ic
+}
+
+/// Query groups a turn attests (own content or own features).
+fn c2_turn_groups(ix: &Index, plan: &QueryPlan, n_groups: usize, ti: usize) -> Vec<bool> {
+    let t = &ix.turns[ti];
+    let mut hit = vec![false; n_groups];
+    for qt in &plan.terms {
+        let Some(g) = qt.group else { continue };
+        if g < hit.len() && !hit[g] && (t.content.contains(&qt.id) || t.feats.iter().any(|f| f.id == qt.id)) {
+            hit[g] = true;
+        }
+    }
+    hit
+}
+
+/// IC-weighted share of the query groups in `hit`.
+fn c2_coverage(g_ic: &[f32], hit: &[bool]) -> f32 {
+    let total: f32 = g_ic.iter().sum();
+    if total <= 0.0 {
+        return 0.0;
+    }
+    hit.iter().zip(g_ic).filter(|(h, _)| **h).map(|(_, w)| *w).sum::<f32>() / total
+}
+
+/// Patent anticipation ("all elements in a single reference"), same-session form. Inside
+/// slot 1's own session, a same-speaker top-5 turn that attests the query's elements by a
+/// clear IC margin (>= 15% of total query IC more than slot 1) while holding every element
+/// slot 1 holds is the anticipating
+/// reference and takes slot 1. Top-5 membership never changes. Runs before RSB.
+fn apply_c2_coverage_margin_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<usize>) -> bool {
+    if list.len() < 2 || plan.groups.len() < 2 {
+        return false;
+    }
+    let top = list[0];
+    if c2_named_session(ix, top) {
+        return false;
+    }
+    let g_ic = c2_group_ic(ix, plan);
+    let ng = g_ic.len();
+    let top_hit = c2_turn_groups(ix, plan, ng, top);
+    let cov_top = c2_coverage(&g_ic, &top_hit);
+    let (sess, speaker) = (ix.turns[top].session, ix.turns[top].speaker.as_str());
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut best: Option<(usize, f32)> = None;
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.session != sess || t.speaker != speaker {
+            continue;
+        }
+        let hit = c2_turn_groups(ix, plan, ng, cand);
+        // v2: anticipation proper. The challenger must hold every element slot 1 holds.
+        if top_hit.iter().zip(&hit).any(|(t, c)| *t && !*c) {
+            continue;
+        }
+        let cov = c2_coverage(&g_ic, &hit);
+        if cov >= cov_top + C2_COVER_MARGIN && best.is_none_or(|(_, b)| cov > b) {
+            best = Some((i, cov));
+        }
+    }
+    if let Some((i, _)) = best {
+        let cand = list.remove(i);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -95,5 +187,21 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1];
         assert!(!apply_c2_bullae_numeral_seat(&ix, &mut list, &[1.0, 0.9]));
         assert_eq!(list, vec![0, 1]);
+    }
+
+    #[test]
+    fn coverage_margin_needs_superset_of_head_elements() {
+        let ix = build_index(
+            &[sess("s", &[("user", "I like hiking."), ("user", "My hiking boots came from Denver."), ("user", "Denver trip soon.")])],
+            &Params::default(),
+        );
+        let q = Query { text: "Where did I buy my hiking boots?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        let mut list = vec![0usize, 1, 2];
+        assert!(apply_c2_coverage_margin_seat(&ix, &plan, &mut list));
+        assert_eq!(list[0], 1);
+        // Turn 2 lacks "hiking" that slot 1 holds: never seated over turn 0.
+        let mut list = vec![0usize, 2];
+        assert!(!apply_c2_coverage_margin_seat(&ix, &plan, &mut list));
     }
 }
