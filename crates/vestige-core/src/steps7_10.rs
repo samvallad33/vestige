@@ -12,8 +12,8 @@ fn step7_idf(stats: &Stats, term: u32) -> f32 {
 }
 
 /// Lowercased query words written capitalized somewhere other than sentence start.
-fn step7_query_proper_surfaces(q_text: &str) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn step7_query_proper_surfaces(q_text: &str) -> DetHashSet<String> {
+    let mut out = DetHashSet::default();
     let mut sentence_start = true;
     for raw_word in q_text.split_whitespace() {
         let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric());
@@ -65,7 +65,7 @@ fn apply_step7_lex_specialis(
     let Some((mod_g, _)) = top_mod else {
         return;
     };
-    let mod_term_ids: HashSet<u32> =
+    let mod_term_ids: DetHashSet<u32> =
         plan.terms.iter().filter(|qt| qt.group == Some(mod_g)).map(|qt| qt.id).collect();
     let turn_has_mod: Vec<bool> = ix
         .turns
@@ -99,8 +99,8 @@ fn apply_step7_lex_specialis(
 }
 
 /// Step 8 anchor set A(q): query terms with turn-own idf >= 1.5, plus focal ids.
-fn step8_anchor_set(ix: &Index, plan: &QueryPlan) -> HashSet<u32> {
-    let mut a: HashSet<u32> = plan
+fn step8_anchor_set(ix: &Index, plan: &QueryPlan) -> DetHashSet<u32> {
+    let mut a: DetHashSet<u32> = plan
         .terms
         .iter()
         .filter(|qt| step7_idf(&ix.t_own_stats, qt.id) >= 1.5)
@@ -111,7 +111,7 @@ fn step8_anchor_set(ix: &Index, plan: &QueryPlan) -> HashSet<u32> {
 }
 
 /// T(t) restricted to the anchor set: content ids and length-counted feature ids.
-fn step8_anchor_hits(t: &TurnIx, anchors: &HashSet<u32>) -> std::collections::BTreeSet<u32> {
+fn step8_anchor_hits(t: &TurnIx, anchors: &DetHashSet<u32>) -> std::collections::BTreeSet<u32> {
     let mut out: std::collections::BTreeSet<u32> = t.content.iter().copied().filter(|id| anchors.contains(id)).collect();
     out.extend(t.feats.iter().filter(|f| f.counts_len && anchors.contains(&f.id)).map(|f| f.id));
     out
@@ -415,7 +415,7 @@ fn step9_push_typo_fallback(
     has_nick: bool,
     g: usize,
     terms: &mut Vec<QTerm>,
-    group_of: &mut HashMap<u32, usize>,
+    group_of: &mut DetHashMap<u32, usize>,
 ) {
     if has_nick || ix.vocab.get(w).is_some() || ix.vocab.get(&stem_term(st)).is_some() {
         return;
@@ -442,6 +442,64 @@ fn step10_florilegium_floors(strong_top_sessions: usize) -> (f32, f32, bool) {
     } else {
         (0.45, 0.25, true)
     }
+}
+
+/// Step 10A Florilegium evidence seat: an unseated role-structured top-5 session earns seat 5
+/// (index 4) if its best turn covers an uncovered query group and seat 5 is redundant (>= 2 seats
+/// from same session and adds no unique group). Seats 1-4 never move.
+#[allow(clippy::too_many_arguments)]
+fn apply_step10a_evidence_seat(
+    ix: &Index,
+    final_session_indices: &[usize],
+    t_scene: &[f32],
+    t_exact_mask: &[u64],
+    group_limit: u64,
+    t_floored: &dyn Fn(usize) -> bool,
+    k: usize,
+    final_turn_indices: &mut Vec<usize>,
+) {
+    if final_turn_indices.len() < 5 || group_limit == 0 {
+        return;
+    }
+    let seats: Vec<usize> = final_turn_indices[..5].to_vec();
+    let v = seats[4];
+    if t_floored(v) {
+        return;
+    }
+    let v_sess = ix.turns[v].session;
+    if seats.iter().filter(|&&t| ix.turns[t].session == v_sess).count() < 2 {
+        return;
+    }
+    let others: u64 = seats[..4].iter().fold(0, |m, &t| m | t_exact_mask[t]) & group_limit;
+    if t_exact_mask[v] & group_limit & !others != 0 {
+        return;
+    }
+    let covered = others | (t_exact_mask[v] & group_limit);
+    for &si in final_session_indices.iter().take(5).skip(1) {
+        if !step10a_role_session(ix, si) {
+            continue;
+        }
+        if seats.iter().any(|&t| ix.turns[t].session == si) {
+            continue;
+        }
+        let best = ix.session_turns[si]
+            .iter()
+            .copied()
+            .filter(|&t| t_scene[t] > 0.0 && !t_floored(t) && (t_exact_mask[t] & group_limit & !covered) != 0)
+            .max_by(|&a, &b| t_scene[a].partial_cmp(&t_scene[b]).unwrap_or(std::cmp::Ordering::Equal).then(b.cmp(&a)));
+        if let Some(bt) = best {
+            if let Some(pos) = final_turn_indices.iter().position(|&t| t == bt) {
+                final_turn_indices.remove(pos);
+            }
+            final_turn_indices.insert(4, bt);
+            final_turn_indices.truncate(k);
+            return;
+        }
+    }
+}
+
+fn step10a_role_session(ix: &Index, si: usize) -> bool {
+    ix.session_turns[si].iter().any(|&t| ix.turns[t].field == 1)
 }
 
 #[cfg(test)]
