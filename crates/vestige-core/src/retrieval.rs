@@ -1879,6 +1879,8 @@ struct TurnIx {
     form_handle: bool,
     /// A capitalized word of two or more letters that is not sentence-initial.
     form_midcap: bool,
+    /// Ingest-time count of mid-sentence capitalized tokens, digits, and quotes (Rung 1 `--no-dump` safe).
+    slot_entities: u16,
     raw_links: Vec<TurnLink>,
     /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
     /// Never read by ranking.
@@ -3356,6 +3358,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_digit: has_ascii_digit(prose_body),
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
+                slot_entities: count_slot_entities(prose_body),
                 raw_links: t.links.clone(),
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
@@ -4718,6 +4721,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         t_exact_mask[ti] = em_own;
     }
 
+    apply_rung1_declarative_slot_specificity(
+        ix,
+        &plan,
+        pref_on,
+        it.is_event_sequence,
+        &mut t_turn_raw,
+    );
+
     // Weapon 1: Bidirectional 3-Turn Scene Pooling.
     // - On named-speaker dialogues (`LoCoMo` / multi-person chats), pool over uncarried `t_own` +
     //   Center-Peak Monotonicity so follow-up questions & reactions (`gold + 1`) never steal Rank 1!
@@ -4773,21 +4784,30 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 }
             } else {
                 for (pos, &ti) in members.iter().enumerate() {
+                    let own_m = rung_own_qmask(ix, &plan, ti);
+                    let prev_adds = pos > 0 && (rung_own_qmask(ix, &plan, members[pos - 1]) & !own_m) != 0;
+                    let next_adds = pos + 1 < members.len()
+                        && (rung_own_qmask(ix, &plan, members[pos + 1]) & !own_m) != 0;
                     let prev_w = if ix.turns[ti].speaker == "user" && !ix.turns[ti].is_short_reply {
                         0.0
-                    } else if ix.turns[ti].is_backchannel {
-                        0.25
-                    } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
-                        0.75
+                    } else if prev_adds {
+                        if ix.turns[ti].is_backchannel {
+                            0.25
+                        } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
+                            0.75
+                        } else {
+                            0.55
+                        }
                     } else {
-                        0.55
+                        0.15
                     };
+                    let next_w = if next_adds { 0.55 } else { 0.18 };
                     let prev_sess = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
                     let next_sess = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
-                    t_scene_sess[ti] = 1.0 * t_raw[ti] + prev_w * prev_sess + 0.55 * next_sess;
+                    t_scene_sess[ti] = 1.0 * t_raw[ti] + prev_w * prev_sess + next_w * next_sess;
                     let prev_tr = if pos > 0 { t_turn_raw[members[pos - 1]] } else { 0.0 };
                     let next_tr = if pos + 1 < members.len() { t_turn_raw[members[pos + 1]] } else { 0.0 };
-                    t_scene[ti] = 1.0 * t_turn_raw[ti] + prev_w * prev_tr + 0.55 * next_tr;
+                    t_scene[ti] = 1.0 * t_turn_raw[ti] + prev_w * prev_tr + next_w * next_tr;
                     if pos > 0 && !ix.turns[ti].is_backchannel {
                         t_mask[ti] |= t_mask[members[pos - 1]];
                     }
@@ -5125,7 +5145,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     } else {
         (vec![false; ns], vec![false; nt])
     };
-    let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     if it.is_event_sequence {
         let _ = raise_floor(&mut s_score, lexical_smax, 0.42, |si| {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
@@ -5163,6 +5182,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     };
 
     // Session-Level Multi-Hop Bridge Activation + Greedy Submodular Set Cover
+    apply_rung4_hub_damped_rm3(ix, &plan, &mut s_score);
+    let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     let mut bridge_boost = vec![0.0f32; ns];
     let s_ord_base = order(&s_score, &ix.session_ts);
     if p.enable_ppr && ns > 5 && smax > 0.0 {
@@ -5919,7 +5940,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // GivenNew runs after BoundaryPrimacy on the same final list (one path for live and bench).
     given_new(ix, &q_cues, &mut final_turn_indices);
     // SessionOpenerLift runs after GivenNew, on the same final list (one path for live and bench).
-    session_opener_lift(ix, &q_cues, &mut final_turn_indices);
+    session_opener_lift_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&plan));
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
     hearsay(ix, &q_cues, &mut final_turn_indices);
     // RSB: the retrieved turn is the symptom. Seat its structural cause
@@ -6092,7 +6113,17 @@ const SESSION_OPENER_LIFT_WINDOW: usize = 5;
 /// its session, and matched at least one query cue, take the first turn at ranks 2 through
 /// `SESSION_OPENER_LIFT_WINDOW` that opens any session and whose cues cover every cue rank 1
 /// matched. That opener takes slot 1 and the rest keep their order. Never changes the top-5 set.
+#[cfg(test)]
 fn session_opener_lift(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    session_opener_lift_with_plan(ix, q_cues, list, None)
+}
+
+fn session_opener_lift_with_plan(
+    ix: &Index,
+    q_cues: &[u32],
+    list: &mut Vec<usize>,
+    rung2_plan: Option<&QueryPlan>,
+) -> bool {
     if list.len() < 2 {
         return false;
     }
@@ -6113,6 +6144,11 @@ fn session_opener_lift(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> boo
         let cand = list[i];
         if turn_pos(ix, cand) != Some(0) {
             continue;
+        }
+        if let Some(plan) = rung2_plan {
+            if !rung2_opener_lift_allowed(ix, plan, top, cand) {
+                continue;
+            }
         }
         if !covers_cues(&turn_query_cues(ix, q_cues, cand), &top_cues) {
             continue;
@@ -7107,6 +7143,8 @@ pub fn rank(req: &RankRequest) -> RankResponse {
         results,
     }
 }
+
+include!("rungs.rs");
 
 #[cfg(test)]
 mod tests {
