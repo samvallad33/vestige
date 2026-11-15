@@ -6224,6 +6224,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // C2_XWITNESS_RATIO of its scene, never from an earlier session).
         // After #38, last ranking change. Skipped on preference.
         apply_c2_mentioned_session_mate_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Episode-run edge T@10 entry: the pool turn just before / after two
+        // back-to-back official-k turns of one session takes the tail seat of
+        // the least on-scene lone-session turn (at least as on-scene, never an
+        // earlier session). After #39, last ranking change.
+        apply_c2_episode_run_edge_t10_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
