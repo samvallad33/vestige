@@ -121,15 +121,73 @@ fn apply_step11_kemeny_wh_slot_voter(
     }
 }
 
+fn step13_build_query_word_set(
+    ix: &Index,
+    q_text: &str,
+    plan: &QueryPlan,
+) -> (String, std::collections::BTreeSet<String>) {
+    let q_lower = q_text.to_ascii_lowercase();
+    let mut query_words = std::collections::BTreeSet::new();
+    for tok in raw_tokens(q_text) {
+        let low = tok.to_ascii_lowercase();
+        if !low.is_empty() {
+            query_words.insert(low);
+        }
+    }
+    for qt in &plan.terms {
+        if let Some(name) = ix.vocab.names.get(qt.id as usize) {
+            query_words.insert(name.to_ascii_lowercase());
+        }
+    }
+    (q_lower, query_words)
+}
+
+fn step13_is_rare_bridge_entity_candidate(
+    ix: &Index,
+    eid: u32,
+    q_lower: &str,
+    query_words: &std::collections::BTreeSet<String>,
+) -> bool {
+    if is_technical_handle(&ix.vocab, eid) {
+        return false;
+    }
+    let Some(name) = ix.vocab.names.get(eid as usize) else {
+        return false;
+    };
+    let Some(surface) = name.strip_prefix("\u{1}ent:") else {
+        return false;
+    };
+    let low = surface.to_ascii_lowercase();
+    if low.len() < 4 || query_words.contains(&low) {
+        return false;
+    }
+    if MONTHS.contains(&low.as_str())
+        || WEEKDAYS.contains(&low.as_str())
+        || STARTER_STOP.contains(&low.as_str())
+    {
+        return false;
+    }
+    let spaced = low.replace('_', " ");
+    if q_lower.contains(&spaced) {
+        return false;
+    }
+    let parts: Vec<&str> = low.split('_').filter(|p| !p.is_empty()).collect();
+    !(parts.is_empty()
+        || parts.iter().all(|&p| {
+            query_words.contains(p)
+                || MONTHS.contains(&p)
+                || WEEKDAYS.contains(&p)
+                || STARTER_STOP.contains(&p)
+                || stopwords().contains(p)
+        }))
+}
+
 /// Step 13 (`#42 Khipu Two-Hop Rare-Entity Turn Bridge` on `t_scene`):
-/// Extracts non-query rare proper entities (`\u{1}ent:*`, `2 <= exact_df <= 4`, `idf >= 3.45`)
-/// from strong substantive hop-1 turns (`top-2`, `t_own >= 0.65 * top_t_own`) and applies a bounded
-/// proportional score lift (`<= +22%` of `base_sc`, capped at `0.62 * src_scene`) to
+/// Extracts non-query rare proper entities (`\u{1}ent:*`, `2 <= exact_df <= 8`, `idf >= 3.2`)
+/// from strong substantive hop-1 turns (`top-3`, `t_own >= 0.40 * top_t_own`) and applies a bounded
+/// proportional score lift (`<= +28%` of `base_sc`, capped at `0.80 * src_scene`) to
 /// non-question, non-backchannel, non-superseded hop-2 turns in *other* sessions that already
 /// match at least one exact query group and sit below the top-rank ceiling.
-/// Pure entity-graph topology: exact `df` scan over `ix.turns` prevents false-rare `known_proper`
-/// speaker leaks (`known_proper` does not populate `t_own_stats.df`), excludes calendar tokens,
-/// excludes compound query entities, and never disturbs `hop1[0].session`.
 fn apply_step13_khipu_turn_bridge(
     ix: &Index,
     q_text: &str,
@@ -155,19 +213,7 @@ fn apply_step13_khipu_turn_bridge(
     }
     let group_mask = if gl >= 64 { u64::MAX } else { (1u64 << gl) - 1 };
 
-    let q_lower = q_text.to_ascii_lowercase();
-    let mut query_words: BTreeSet<String> = BTreeSet::new();
-    for tok in raw_tokens(q_text) {
-        let low = tok.to_ascii_lowercase();
-        if !low.is_empty() {
-            query_words.insert(low);
-        }
-    }
-    for qt in &plan.terms {
-        if let Some(name) = ix.vocab.names.get(qt.id as usize) {
-            query_words.insert(name.to_ascii_lowercase());
-        }
-    }
+    let (q_lower, query_words) = step13_build_query_word_set(ix, q_text, plan);
 
     let mut hop1: Vec<(f32, usize, usize)> = Vec::new();
     for (ti, &own) in t_own.iter().enumerate() {
@@ -196,39 +242,8 @@ fn apply_step13_khipu_turn_bridge(
     let mut candidate_eids: BTreeSet<u32> = BTreeSet::new();
     for &(_own, _sess, ti) in &hop1 {
         for &eid in &ix.turns[ti].entities {
-            if is_technical_handle(&ix.vocab, eid) {
-                continue;
-            }
-            if let Some(name) = ix.vocab.names.get(eid as usize) {
-                if let Some(surface) = name.strip_prefix("\u{1}ent:") {
-                    let low = surface.to_ascii_lowercase();
-                    if low.len() < 4 || query_words.contains(&low) {
-                        continue;
-                    }
-                    if MONTHS.contains(&low.as_str())
-                        || WEEKDAYS.contains(&low.as_str())
-                        || STARTER_STOP.contains(&low.as_str())
-                    {
-                        continue;
-                    }
-                    let spaced = low.replace('_', " ");
-                    if q_lower.contains(&spaced) {
-                        continue;
-                    }
-                    let parts: Vec<&str> = low.split('_').filter(|p| !p.is_empty()).collect();
-                    if parts.is_empty()
-                        || parts.iter().all(|&p| {
-                            query_words.contains(p)
-                                || MONTHS.contains(&p)
-                                || WEEKDAYS.contains(&p)
-                                || STARTER_STOP.contains(&p)
-                                || stopwords().contains(p)
-                        })
-                    {
-                        continue;
-                    }
-                    candidate_eids.insert(eid);
-                }
+            if step13_is_rare_bridge_entity_candidate(ix, eid, &q_lower, &query_words) {
+                candidate_eids.insert(eid);
             }
         }
     }
@@ -1084,6 +1099,364 @@ fn apply_step15_comparative_dual_slot_seat(
     }
 }
 
+fn step17_is_rare_bridge_term(
+    ix: &Index,
+    tid: u32,
+    q_lower: &str,
+    query_words: &std::collections::BTreeSet<String>,
+    query_stems: &std::collections::BTreeSet<String>,
+) -> Option<bool> {
+    if is_technical_handle(&ix.vocab, tid) {
+        return None;
+    }
+    let name = ix.vocab.names.get(tid as usize)?;
+    if let Some(surface) = name.strip_prefix("\u{1}ent:") {
+        if step13_is_rare_bridge_entity_candidate(ix, tid, q_lower, query_words) {
+            return Some(true);
+        }
+        let _ = surface;
+        return None;
+    }
+    if name.starts_with('\u{1}') || name.starts_with("stem:") {
+        return None;
+    }
+    let low = name.to_ascii_lowercase();
+    if low.len() < 6 || !low.bytes().all(|b| b.is_ascii_lowercase()) {
+        return None;
+    }
+    if query_words.contains(&low)
+        || MONTHS.contains(&low.as_str())
+        || WEEKDAYS.contains(&low.as_str())
+        || STARTER_STOP.contains(&low.as_str())
+        || stopwords().contains(low.as_str())
+    {
+        return None;
+    }
+    let st = stem(&low);
+    if query_stems.contains(&st) {
+        return None;
+    }
+    Some(false)
+}
+
+/// Step 17 (`Isnad Multi-Hop Chain` across up to 3 distinct sessions on `t_scene`):
+/// Transfers bounded decaying rank along chains of rare non-query shared entities/concepts across
+/// up to 3 distinct sessions (`S1 -> b1 -> S2 -> b2 -> S3`), decaying at each hop (`hop3 < hop2 < hop1`),
+/// strictly to substantive non-question `field == 0` turns with `>= 1` exact query-group hit and
+/// non-trivial base relevance (`base_sc >= 0.35 * top_src1`).
+fn apply_step17_isnad_multihop_chain(
+    ix: &Index,
+    q_text: &str,
+    plan: &QueryPlan,
+    pref_on: bool,
+    it: &QueryIntent,
+    t_own: &[f32],
+    t_exact_mask: &[u64],
+    t_scene: &mut [f32],
+) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let gl = plan.groups.len().min(64);
+    if pref_on
+        || it.is_event_sequence
+        || it.assistant_attribution
+        || gl == 0
+        || t_own.is_empty()
+        || t_scene.len() != t_own.len()
+        || t_exact_mask.len() != t_own.len()
+    {
+        return;
+    }
+    let group_mask = if gl >= 64 { u64::MAX } else { (1u64 << gl) - 1 };
+    let (q_lower, query_words) = step13_build_query_word_set(ix, q_text, plan);
+    let mut query_stems: BTreeSet<String> = BTreeSet::new();
+    for w in &query_words {
+        query_stems.insert(stem(w));
+    }
+
+    let mut hop1: Vec<(f32, usize, usize)> = Vec::new();
+    for (ti, &sc) in t_scene.iter().enumerate() {
+        if sc <= 0.0 || t_own[ti] <= 0.0 || (t_exact_mask[ti] & group_mask) == 0 {
+            continue;
+        }
+        let t = &ix.turns[ti];
+        if t.field != 0 || t.is_question || t.is_backchannel || turn_is_superseded(ix, ti) {
+            continue;
+        }
+        hop1.push((sc.max(t_own[ti]), t.session, ti));
+    }
+    if hop1.is_empty() {
+        return;
+    }
+    hop1.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    let top_src1 = hop1[0].0;
+    let top_session = hop1[0].1;
+    hop1.retain(|&(sc, _, _)| sc >= 0.45 * top_src1);
+    hop1.truncate(4);
+
+    // Collect candidate rare bridge IDs (entities + rare lowercase content tokens) from hop1 turns.
+    let mut hop1_cands: BTreeMap<u32, bool> = BTreeMap::new();
+    for &(_sc, _sess, ti) in &hop1 {
+        let t = &ix.turns[ti];
+        for &id in t.entities.iter().chain(t.content.iter()) {
+            if !hop1_cands.contains_key(&id) {
+                if let Some(is_ent) =
+                    step17_is_rare_bridge_term(ix, id, &q_lower, &query_words, &query_stems)
+                {
+                    hop1_cands.insert(id, is_ent);
+                }
+            }
+        }
+    }
+    if hop1_cands.is_empty() {
+        return;
+    }
+
+    let mut hop1_df: BTreeMap<u32, u32> = BTreeMap::new();
+    for &id in hop1_cands.keys() {
+        hop1_df.insert(id, 0);
+    }
+    for t in &ix.turns {
+        for &eid in &t.entities {
+            if let Some(cnt) = hop1_df.get_mut(&eid) {
+                *cnt += 1;
+            }
+        }
+        for &cid in &t.content {
+            if let Some(cnt) = hop1_df.get_mut(&cid) {
+                *cnt += 1;
+            }
+        }
+    }
+
+    let n_docs = ix.t_own_stats.n.max(ix.turns.len() as f32).max(1.0);
+    // id -> (is_ent, idf, src1_sc, src1_sess, df)
+    let mut e1_edges: BTreeMap<u32, (bool, f32, f32, usize, u32)> = BTreeMap::new();
+    for (&id, &df) in &hop1_df {
+        let is_ent = hop1_cands[&id];
+        let max_df = if is_ent { 8 } else { 5 };
+        let min_idf = if is_ent { 3.2 } else { 3.6 };
+        if !(2..=max_df).contains(&df) {
+            continue;
+        }
+        let idf = ((n_docs - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln();
+        if idf < min_idf {
+            continue;
+        }
+        let mut best_src: Option<(f32, usize, usize)> = None;
+        for &(_sc_own, sess, ti) in &hop1 {
+            let t = &ix.turns[ti];
+            let has_id = if is_ent {
+                t.entities.contains(&id)
+            } else {
+                t.content.contains(&id)
+            };
+            if has_id {
+                let sc = t_scene[ti].max(t_own[ti]);
+                let replace = match best_src {
+                    None => true,
+                    Some((bsc, bsess, bti)) => {
+                        sc > bsc || (sc == bsc && (sess < bsess || (sess == bsess && ti < bti)))
+                    }
+                };
+                if replace {
+                    best_src = Some((sc, sess, ti));
+                }
+            }
+        }
+        if let Some((src_sc, src_sess, _)) = best_src {
+            e1_edges.insert(id, (is_ent, idf, src_sc, src_sess, df));
+        }
+    }
+    if e1_edges.is_empty() {
+        return;
+    }
+
+    // Snapshot base_scene before applying decaying Hop-2 and Hop-3 transfers.
+    let base_scene = t_scene.to_vec();
+    let min_target_sc = 0.35 * top_src1;
+    // Collect Hop-2 nodes (S2 != S1) for Hop-3 chaining + apply Hop-2 lift for non-ent rare bridges.
+    // (hop2_carry, s2, t2, parent_s1)
+    let mut hop2_nodes: Vec<(f32, usize, usize, usize)> = Vec::new();
+    for (t2, turn2) in ix.turns.iter().enumerate() {
+        if turn2.field != 0 || turn2.is_question || turn2.is_backchannel || turn_is_superseded(ix, t2) {
+            continue;
+        }
+        let s2 = turn2.session;
+        if s2 == top_session {
+            continue;
+        }
+        let base_sc = base_scene[t2];
+        let has_q_hit = base_sc >= min_target_sc
+            && t_own[t2] > 0.0
+            && (t_exact_mask[t2] & group_mask) != 0;
+
+        let mut best_carry: Option<(f32, usize)> = None;
+        let mut content_idf_sum = 0.0f32;
+        let mut best_content_src = 0.0f32;
+        for &id in turn2.entities.iter().chain(turn2.content.iter()) {
+            if let Some(&(is_ent, idf, src1_sc, s1, df)) = e1_edges.get(&id) {
+                if s2 == s1 {
+                    continue;
+                }
+                if !is_ent && df <= 5 && has_q_hit {
+                    content_idf_sum += idf;
+                    if src1_sc > best_content_src {
+                        best_content_src = src1_sc;
+                    }
+                }
+                if !has_q_hit && !(is_ent && df <= 4 && idf >= 3.2) {
+                    continue;
+                }
+                let carry = 0.82 * src1_sc;
+                if best_carry.is_none_or(|(c, prev_s1)| carry > c || (carry == c && s1 < prev_s1)) {
+                    best_carry = Some((carry, s1));
+                }
+            }
+        }
+        if has_q_hit && content_idf_sum > 0.0 && best_content_src > 0.0 {
+            let hop2_ceiling = 0.82 * best_content_src;
+            if base_sc < hop2_ceiling {
+                let boost = (base_sc * (0.04 * content_idf_sum).min(0.18))
+                    .min(0.16 * best_content_src);
+                t_scene[t2] = (base_sc + boost).min(hop2_ceiling);
+            }
+        }
+        if let Some((carry, s1)) = best_carry {
+            hop2_nodes.push((carry, s2, t2, s1));
+        }
+    }
+    if hop2_nodes.is_empty() {
+        return;
+    }
+    hop2_nodes.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    hop2_nodes.truncate(10);
+
+    // Extract Hop-2 -> Hop-3 rare non-query bridge terms distinct from e1_edges.
+    let mut e2_cands: BTreeMap<u32, bool> = BTreeMap::new();
+    for &(_carry, _s2, t2, _s1) in &hop2_nodes {
+        let turn2 = &ix.turns[t2];
+        for &id in turn2.entities.iter().chain(turn2.content.iter()) {
+            if !e1_edges.contains_key(&id) && !e2_cands.contains_key(&id) {
+                if let Some(is_ent) =
+                    step17_is_rare_bridge_term(ix, id, &q_lower, &query_words, &query_stems)
+                {
+                    e2_cands.insert(id, is_ent);
+                }
+            }
+        }
+    }
+    if e2_cands.is_empty() {
+        return;
+    }
+    let mut e2_df: BTreeMap<u32, u32> = BTreeMap::new();
+    for &id in e2_cands.keys() {
+        e2_df.insert(id, 0);
+    }
+    for t in &ix.turns {
+        for &eid in &t.entities {
+            if let Some(cnt) = e2_df.get_mut(&eid) {
+                *cnt += 1;
+            }
+        }
+        for &cid in &t.content {
+            if let Some(cnt) = e2_df.get_mut(&cid) {
+                *cnt += 1;
+            }
+        }
+    }
+
+    // id -> (is_ent, idf, best_hop2_carry, s2, s1)
+    let mut e2_edges: BTreeMap<u32, (bool, f32, f32, usize, usize)> = BTreeMap::new();
+    for (&id, &df) in &e2_df {
+        let is_ent = e2_cands[&id];
+        let max_df = if is_ent { 8 } else { 5 };
+        let min_idf = if is_ent { 3.2 } else { 3.6 };
+        if !(2..=max_df).contains(&df) {
+            continue;
+        }
+        let idf = ((n_docs - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln();
+        if idf < min_idf {
+            continue;
+        }
+        let mut best_src: Option<(f32, usize, usize, usize)> = None;
+        for &(carry, s2, t2, s1) in &hop2_nodes {
+            let turn2 = &ix.turns[t2];
+            let has_id = if is_ent {
+                turn2.entities.contains(&id)
+            } else {
+                turn2.content.contains(&id)
+            };
+            if has_id {
+                let replace = match best_src {
+                    None => true,
+                    Some((bc, bs2, bt2, _)) => {
+                        carry > bc || (carry == bc && (s2 < bs2 || (s2 == bs2 && t2 < bt2)))
+                    }
+                };
+                if replace {
+                    best_src = Some((carry, s2, t2, s1));
+                }
+            }
+        }
+        if let Some((carry, s2, _t2, s1)) = best_src {
+            e2_edges.insert(id, (is_ent, idf, carry, s2, s1));
+        }
+    }
+    if e2_edges.is_empty() {
+        return;
+    }
+
+    for (t3, sc_mut) in t_scene.iter_mut().enumerate() {
+        let base_sc = base_scene[t3];
+        if base_sc < min_target_sc || t_own[t3] <= 0.0 || (t_exact_mask[t3] & group_mask) == 0 {
+            continue;
+        }
+        let turn3 = &ix.turns[t3];
+        let s3 = turn3.session;
+        if s3 == top_session
+            || turn3.field != 0
+            || turn3.is_question
+            || turn3.is_backchannel
+            || turn_is_superseded(ix, t3)
+        {
+            continue;
+        }
+        let mut best_hop2_carry = 0.0f32;
+        let mut idf_sum = 0.0f32;
+        let mut hit_count = 0usize;
+        for &id in turn3.entities.iter().chain(turn3.content.iter()) {
+            if let Some(&(_is_ent, idf, carry, s2, s1)) = e2_edges.get(&id) {
+                if s3 == s1 || s3 == s2 {
+                    continue;
+                }
+                hit_count += 1;
+                idf_sum += idf;
+                if carry > best_hop2_carry {
+                    best_hop2_carry = carry;
+                }
+            }
+        }
+        if hit_count > 0 && best_hop2_carry > 0.0 && idf_sum > 0.0 {
+            // Hop 3 is strictly bounded below Hop 2 (`0.88 * 0.82 * src1 ~= 0.72 * src1 < 0.82 * src1`).
+            let hop3_ceiling = 0.88 * best_hop2_carry;
+            if *sc_mut < hop3_ceiling {
+                let boost = (base_sc * (0.03 * idf_sum).min(0.14))
+                    .min(0.12 * best_hop2_carry);
+                *sc_mut = (*sc_mut + boost).min(hop3_ceiling);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod steps11_20_tests {
     use super::*;
@@ -1328,5 +1701,93 @@ mod steps11_20_tests {
             &mut t_scene,
         );
         assert!(t_scene[0] > 10.0 && t_scene[0] <= 22.5, "got t_scene={:?}", t_scene);
+    }
+
+    #[test]
+    fn step17_isnad_three_session_chain_decays_per_hop() {
+        let mut sessions = vec![
+            Session {
+                id: "s0".to_string(),
+                date: String::new(),
+                timestamp: 100,
+                turns: vec![Turn {
+                    id: "t0".to_string(),
+                    role: "user".to_string(),
+                    content: "My espresso grinder from AthenaRoast arrived intact.".to_string(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            },
+            Session {
+                id: "s1".to_string(),
+                date: String::new(),
+                timestamp: 200,
+                turns: vec![Turn {
+                    id: "t1".to_string(),
+                    role: "user".to_string(),
+                    content: "AthenaRoast partnered with BorealCeramics last spring.".to_string(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            },
+            Session {
+                id: "s2".to_string(),
+                date: String::new(),
+                timestamp: 300,
+                turns: vec![Turn {
+                    id: "t2".to_string(),
+                    role: "user".to_string(),
+                    content: "My glazed espresso mug from BorealCeramics is blue.".to_string(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            },
+        ];
+        for i in 3..80 {
+            sessions.push(Session {
+                id: format!("s{i}"),
+                date: String::new(),
+                timestamp: (i as i64) * 100,
+                turns: vec![Turn {
+                    id: format!("t{i}"),
+                    role: "user".to_string(),
+                    content: format!("Routine weather entry number {i}."),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            });
+        }
+        let ix = build_index(&sessions, &Params::default());
+        let plan = QueryPlan {
+            intent: QueryIntent::default(),
+            terms: Vec::new(),
+            groups: vec!["espresso".to_string()],
+            group_of: DetHashMap::default(),
+            focal_ids: DetHashSet::default(),
+            focal_domains: DetHashSet::default(),
+        };
+        let mut t_own = vec![0.0f32; ix.turns.len()];
+        let mut t_exact_mask = vec![0u64; ix.turns.len()];
+        let mut t_scene = vec![0.0f32; ix.turns.len()];
+        t_own[0] = 10.0;
+        t_scene[0] = 10.0;
+        t_exact_mask[0] = 1;
+        t_scene[1] = 2.0;
+        t_own[2] = 4.0;
+        t_scene[2] = 4.0;
+        t_exact_mask[2] = 1;
+
+        apply_step17_isnad_multihop_chain(
+            &ix,
+            "Which mug goes with my espresso grinder?",
+            &plan,
+            false,
+            &QueryIntent::default(),
+            &t_own,
+            &t_exact_mask,
+            &mut t_scene,
+        );
+        assert!(t_scene[2] > 4.0, "expected 3-session Isnad lift on t2, got {}", t_scene[2]);
+        assert!(t_scene[2] <= 0.88 * 0.82 * 10.0 + 1e-4, "hop3 must decay below hop2 & hop1: {}", t_scene[2]);
     }
 }

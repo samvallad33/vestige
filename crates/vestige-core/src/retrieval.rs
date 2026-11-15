@@ -5201,6 +5201,16 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &t_exact_mask,
         &mut t_scene,
     );
+    apply_step17_isnad_multihop_chain(
+        ix,
+        &q.text,
+        &plan,
+        pref_on,
+        it,
+        &t_own,
+        &t_exact_mask,
+        &mut t_scene,
+    );
     apply_step14_bipartite_pref_boost(ix, &q.text, &plan, pref_on, it, &t_own, &mut t_scene);
     apply_step15_comparative_dual_slot_scores(
         ix,
