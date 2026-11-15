@@ -1903,6 +1903,121 @@ fn apply_c2_mentioned_session_mate_t5_entry(
 }
 
 
+/// Episode-run edge T@10 entry. Two or more official-k turns that sit
+/// back to back in one session form an episode the retriever already
+/// found; the pool turn just before or just after that run (same session,
+/// t_scene > 0, not in the official k, a declarative, and, in a
+/// named-speaker dialogue, by a speaker the query names and does not
+/// conjoin) is the episode's unread edge. The most on-scene such edge
+/// takes the official-k tail seat (slots 6..k) of the least on-scene
+/// isolated turn (the only official-k turn of its session), when the
+/// edge is at least as on-scene as that turn and the turn's session is
+/// not earlier than the edge's (primacy cut: an earlier lone witness is
+/// never evicted for a later episode). Multi-turn evidence, not a
+/// per-turn feature: neither the candidate nor the victim is chosen by
+/// its own text. Top 5 unchanged, so T@1 / T@5 / All@5 cannot drop; C2
+/// turn seats do not rewrite the session list. No new constant: "at
+/// least as on-scene" is the existing floor and a run is two adjacent
+/// turns. Distinct from #30 / #32 / #37 (pool entry by opener, mentioned
+/// speaker, or left-out session; none uses k-run adjacency) and from the
+/// head-adjacency seats (#2 / #10 / #12 / #15 / #16 move turns next to slot
+/// 1 into the top 5). Skipped on summary requests, preference, temporal,
+/// and WH-person questions; event sequences and assistant-attribution
+/// are skipped by the caller. Invoked after the gatekeeper, after #39,
+/// as the last ranking change.
+fn apply_c2_episode_run_edge_t10_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let sc = |t: usize| t_scene.get(t).copied().unwrap_or(0.0);
+    let mut by_sess: Vec<(usize, Vec<usize>)> = Vec::new();
+    for &t in list.iter() {
+        let s = ix.turns[t].session;
+        let p = c2_session_pos(ix, t);
+        match by_sess.iter_mut().find(|(bs, _)| *bs == s) {
+            Some((_, ps)) => ps.push(p),
+            None => by_sess.push((s, vec![p])),
+        }
+    }
+    let eligible = |t: usize| -> bool {
+        if list.contains(&t) || sc(t) <= 0.0 || ix.turns[t].is_question {
+            return false;
+        }
+        let sp = ix.turns[t].speaker.as_str();
+        if !sp.is_empty() && sp != "user" && sp != "assistant" {
+            return c2_query_mentions_speaker(query, sp) && !c2_speaker_conjoined(query, sp);
+        }
+        true
+    };
+    let mut cand: Option<usize> = None;
+    for (s, ps) in by_sess.iter_mut() {
+        ps.sort_unstable();
+        let turns = &ix.session_turns[*s];
+        let mut start = 0;
+        while start < ps.len() {
+            let mut end = start;
+            while end + 1 < ps.len() && ps[end + 1] == ps[end] + 1 {
+                end += 1;
+            }
+            if end > start {
+                let mut edges: Vec<usize> = Vec::new();
+                if ps[start] > 0 {
+                    edges.push(turns[ps[start] - 1]);
+                }
+                if ps[end] + 1 < turns.len() {
+                    edges.push(turns[ps[end] + 1]);
+                }
+                for t in edges {
+                    if !eligible(t) {
+                        continue;
+                    }
+                    if cand.is_none_or(|c| sc(t) > sc(c) || (sc(t) == sc(c) && t < c)) {
+                        cand = Some(t);
+                    }
+                }
+            }
+            start = end + 1;
+        }
+    }
+    let Some(cand) = cand else {
+        return false;
+    };
+    let sc_c = sc(cand);
+    let mut vs: Option<usize> = None;
+    for i in window..list.len() {
+        let v = list[i];
+        let vsess = ix.turns[v].session;
+        if sc(v) > sc_c || list.iter().filter(|&&t| ix.turns[t].session == vsess).count() != 1 {
+            continue;
+        }
+        if vs.is_none_or(|b| sc(v) <= sc(list[b])) {
+            vs = Some(i);
+        }
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    let ts_of = |ti: usize| ix.session_ts.get(ix.turns[ti].session).copied().unwrap_or(0);
+    if ts_of(list[vs]) < ts_of(cand) {
+        return false;
+    }
+    list[vs] = cand;
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -5082,6 +5197,62 @@ mod algos_c2_tests {
         let mut list = vec![4usize, 1, 2, 5, 6, 0, 3];
         assert!(!apply_c2_mentioned_session_mate_t5_entry(&ixu, &planu, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![4, 1, 2, 5, 6, 0, 3]);
+    }
+
+    #[test]
+    fn episode_run_edge_t10_entry_seats_run_edge_over_isolated_tail() {
+        // LoCoMo 9:91 shape: two back-to-back official-k turns of D3, the
+        // mentioned speaker's declarative just before them is pool-only, and
+        // the weakest tail turn is the lone official-k turn of a later session.
+        let mut ss = vec![
+            sess("D1", &[("john", "I bought a new guitar."), ("tim", "Cool.")]),
+            sess("D2", &[("john", "I went hiking."), ("tim", "Where?")]),
+            sess("D3", &[("tim", "Hi."), ("john", "I own a Ferrari and I am proud of it."), ("tim", "Nice car!"), ("john", "Thanks, it is red.")]),
+            sess("D4", &[("john", "I watched a movie."), ("tim", "Which one?")]),
+        ];
+        for (i, se) in ss.iter_mut().enumerate() {
+            se.timestamp = 1_000 + i as i64;
+        }
+        let ix = build_index(&ss, &Params::default());
+        let q = Query { text: "What car does John own that he is proud of?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        assert!(!c2_summary_request(&q.text));
+        // Turns: D1 0-1, D2 2-3, D3 4-7, D4 8-9. Run = D3 turns 6, 7
+        // (positions 2, 3); its pool edge is turn 5 (john, declarative).
+        let t_scene = vec![3.0f32, 2.9, 2.8, 2.7, 2.6, 2.0, 1.5, 1.4, 2.5, 1.0];
+        let mut list = vec![0usize, 1, 2, 3, 8, 6, 7, 9];
+        // Tail 6, 7, 9: D3 and D4 (8 and 9) each hold two official-k turns,
+        // so there is no lone-session victim.
+        assert!(!apply_c2_episode_run_edge_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        // Tail 6, 7, 9 with 8 out of the list: turn 9 is D4's lone official-k
+        // turn, later than D3, and less on-scene than edge 5.
+        let mut list = vec![0usize, 1, 2, 3, 4, 6, 7, 9];
+        assert!(apply_c2_episode_run_edge_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 6, 7, 5]);
+        // Primacy: an earlier lone witness is not evicted for a later episode.
+        let mut list = vec![8usize, 9, 2, 3, 6, 7, 1, 4];
+        let t2 = vec![3.0f32, 0.5, 2.8, 2.7, 2.6, 2.0, 1.5, 1.4, 2.5, 1.0];
+        // Tail 7, 1, 4: the only lone-session turn is 1 (D1, earlier than D3).
+        assert!(!apply_c2_episode_run_edge_t10_entry(&ix, &plan, &q.text, &mut list, &t2));
+        // An edge less on-scene than the isolated turn does not enter.
+        let t3 = vec![3.0f32, 2.9, 2.8, 2.7, 2.6, 0.5, 1.5, 1.4, 2.5, 1.0];
+        let mut list = vec![0usize, 1, 2, 3, 4, 6, 7, 9];
+        assert!(!apply_c2_episode_run_edge_t10_entry(&ix, &plan, &q.text, &mut list, &t3));
+        // The edge's speaker is not the one the query names: no entry.
+        let qn = Query { text: "What car does Mike own that he is proud of?".into(), date: String::new() };
+        let plann = plan_query(&ix, &qn, &Params::default());
+        let mut list = vec![0usize, 1, 2, 3, 4, 6, 7, 9];
+        assert!(!apply_c2_episode_run_edge_t10_entry(&ix, &plann, &qn.text, &mut list, &t_scene));
+        // Temporal and WH-person questions are skipped.
+        for text in ["When did John buy the car he is proud of?", "Who owns the car John is proud of?"] {
+            let sq = Query { text: text.into(), date: String::new() };
+            let splan = plan_query(&ix, &sq, &Params::default());
+            let mut list = vec![0usize, 1, 2, 3, 4, 6, 7, 9];
+            assert!(!apply_c2_episode_run_edge_t10_entry(&ix, &splan, &sq.text, &mut list, &t_scene));
+        }
     }
 
     #[test]
