@@ -1,10 +1,16 @@
 // crates/vestige-core/src/rungs.rs
 // Included inside `crates/vestige-core/src/retrieval.rs` via `include!("rungs.rs");`
-// Active baked ranking improvements (Rungs 1, 2, 4 — mask=11 on LongMemEval_S).
+// Active structural ranking refinements (Rungs 1, 2, 4 + Step 3A Panini karaka / clean slots / AdjPartnerDiv).
+
+#[inline]
+fn is_first_person_pronoun_cap(trimmed: &str) -> bool {
+    let norm: String = trimmed.chars().map(|c| if c == '’' { '\'' } else { c }).collect();
+    matches!(norm.as_str(), "I" | "I'm" | "I've" | "I'll" | "I'd")
+}
 
 /// Counts non-sentence-initial capitalized proper nouns, digits, or quoted titles at ingest time
 /// so `--no-dump` (where `TurnIx.body` is empty) receives the exact same slot count as `--dump`.
-fn count_slot_entities(prose: &str) -> u16 {
+fn count_slot_entities_mode(prose: &str, exclude_first_person: bool) -> u16 {
     let mut slot_entities = 0u16;
     let mut at_sent_start = true;
     for raw_tok in prose.split_whitespace() {
@@ -14,8 +20,14 @@ fn count_slot_entities(prose: &str) -> u16 {
         }
         let has_digit = trimmed.chars().any(|c| c.is_ascii_digit());
         let starts_quote = raw_tok.starts_with('"') || raw_tok.starts_with('\'');
+        let alpha_count = trimmed.chars().filter(|c| c.is_alphabetic()).count();
         let first_alpha = trimmed.chars().find(|c| c.is_alphabetic());
-        let is_mid_cap = !at_sent_start && first_alpha.is_some_and(|c| c.is_uppercase());
+        let cap_ok = !at_sent_start && first_alpha.is_some_and(|c| c.is_uppercase());
+        let is_mid_cap = if exclude_first_person {
+            cap_ok && alpha_count >= 2 && !is_first_person_pronoun_cap(trimmed)
+        } else {
+            cap_ok
+        };
         if has_digit || starts_quote || is_mid_cap {
             slot_entities = slot_entities.saturating_add(1);
         }
@@ -37,7 +49,7 @@ fn rung_own_qmask(ix: &Index, plan: &QueryPlan, ti: usize) -> u64 {
     m
 }
 
-/// Novel information content (sum of IDF of non-query content features) + proper-noun/numeric slot density.
+/// Novel information content (sum of IDF of non-query content features) + clean proper-noun/numeric slot density.
 fn turn_novel_slot_profile(
     ix: &Index,
     plan: &QueryPlan,
@@ -103,6 +115,104 @@ fn apply_rung1_declarative_slot_specificity(
     }
 }
 
+/// Step 3A (#2 Panini karaka): Closed-class WH target shape -> required structural slot match.
+/// Zero open-domain word lists: uses `wh_slots(q_text)` + ingest structural form/entity traits.
+fn apply_panini_karaka_slot_shape(
+    ix: &Index,
+    q_text: &str,
+    it: &QueryIntent,
+    pref_on: bool,
+    t_turn_raw: &mut [f32],
+) {
+    if pref_on || it.is_event_sequence {
+        return;
+    }
+    let slots = wh_slots(q_text);
+    let effective_slots = if it.multi_hop || it.temporal {
+        slots & !WH_QTY
+    } else {
+        slots
+    };
+    if effective_slots == 0 {
+        return;
+    }
+    let matches_karaka = |t: &TurnIx| -> bool {
+        if effective_slots & WH_TIME != 0 && !t.has_temporal && !t.form_clock {
+            return false;
+        }
+        if effective_slots & WH_QTY != 0 && !t.has_numeric && !t.form_digit {
+            return false;
+        }
+        if effective_slots & WH_PERSON != 0
+            && !t.form_midcap
+            && !t.form_handle
+            && t.slot_entities_clean == 0
+        {
+            return false;
+        }
+        if effective_slots & WH_PLACE != 0
+            && !t.has_spatial
+            && !t.form_midcap
+            && !t.form_handle
+            && t.slot_entities_clean == 0
+        {
+            return false;
+        }
+        if effective_slots & WH_CAUSE != 0 && !t.has_causal {
+            return false;
+        }
+        true
+    };
+    let any_sat = ix
+        .turns
+        .iter()
+        .enumerate()
+        .any(|(ti, t)| t_turn_raw[ti] > 0.0 && !t.is_question && matches_karaka(t));
+    if !any_sat {
+        return;
+    }
+    for (ti, t) in ix.turns.iter().enumerate() {
+        if t_turn_raw[ti] <= 0.0 {
+            continue;
+        }
+        if matches_karaka(t) {
+            if !t.is_question {
+                t_turn_raw[ti] *= 1.12;
+            }
+        } else if t.is_question {
+            t_turn_raw[ti] *= 0.88;
+        }
+    }
+}
+
+/// Bit 0: Deprioritize redundant assistant mirror turn (`ti` = assistant, adjacent partner `|ti - prev| == 1`
+/// already selected in same session) inside greedy top-5 on contended multi-session queries (`max_per_session_top5 < 3`)
+/// when query is not asking what the assistant said.
+#[inline]
+fn adj_partner_diversity_factor(
+    ix: &Index,
+    ti: usize,
+    t_sess: usize,
+    selected_turns: &[usize],
+    assistant_attribution: bool,
+    short_reply: bool,
+    max_per_session_top5: usize,
+) -> f32 {
+    if selected_turns.len() < 5
+        && max_per_session_top5 < 3
+        && !assistant_attribution
+        && !short_reply
+        && ix.turns[ti].field == 1
+        && selected_turns
+            .iter()
+            .any(|&prev| ix.turns[prev].session == t_sess && (prev as isize - ti as isize).abs() == 1)
+    {
+        0.25
+    } else {
+        1.0
+    }
+}
+
 /// Rung 2: Novelty-Gated `session_opener_lift` Guard.
 /// Suppresses promoting a `turn_pos == 0` opener turn `cand` over `top` when `cand` is a question
 /// or has strictly lower `novel_ic` + lower query-cue coverage than a later declarative turn in the same session.
@@ -141,7 +251,12 @@ fn apply_rung4_hub_damped_rm3(
         return;
     }
     let mut ranked: Vec<usize> = (0..s_score.len()).collect();
-    ranked.sort_by(|&a, &b| s_score[b].partial_cmp(&s_score[a]).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|&a, &b| {
+        s_score[b]
+            .partial_cmp(&s_score[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
     if s_score[ranked[0]] <= 0.0 || s_score[ranked[1]] <= 0.0 {
         return;
     }
@@ -172,7 +287,11 @@ fn apply_rung4_hub_damped_rm3(
         .iter()
         .filter_map(|(&fid, &v0)| w1.get(&fid).map(|&v1| (fid, (v0 * v1).sqrt())))
         .collect();
-    shared_rm3.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    shared_rm3.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
     shared_rm3.truncate(4);
     let norm_rm3: f32 = shared_rm3.iter().map(|x| x.1).sum();
     if norm_rm3 <= 0.0 {

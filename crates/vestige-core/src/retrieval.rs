@@ -1881,6 +1881,8 @@ struct TurnIx {
     form_midcap: bool,
     /// Ingest-time count of mid-sentence capitalized tokens, digits, and quotes (Rung 1 `--no-dump` safe).
     slot_entities: u16,
+    /// Clean mid-sentence slot entities excluding first-person pronouns ("I", "I'm", "I've", "I'll", "I'd").
+    slot_entities_clean: u16,
     raw_links: Vec<TurnLink>,
     /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
     /// Never read by ranking.
@@ -3358,7 +3360,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 form_digit: has_ascii_digit(prose_body),
                 form_handle: has_handle_or_path(prose_body),
                 form_midcap: has_mid_sentence_name(prose_body),
-                slot_entities: count_slot_entities(prose_body),
+                slot_entities: count_slot_entities_mode(prose_body, false),
+                slot_entities_clean: count_slot_entities_mode(prose_body, true),
                 raw_links: t.links.clone(),
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
@@ -4728,6 +4731,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         it.is_event_sequence,
         &mut t_turn_raw,
     );
+    apply_panini_karaka_slot_shape(ix, &q.text, &it, pref_on, &mut t_turn_raw);
 
     // Weapon 1: Bidirectional 3-Turn Scene Pooling.
     // - On named-speaker dialogues (`LoCoMo` / multi-person chats), pool over uncarried `t_own` +
@@ -5667,7 +5671,15 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     0.70
                 } else {
                     0.40
-                };
+                } * adj_partner_diversity_factor(
+                    ix,
+                    ti,
+                    t_sess,
+                    &selected_turns,
+                    it.assistant_attribution,
+                    short_reply,
+                    max_per_session_top5,
+                );
                 let uncovered_ratio = if total_query_groups > 0 {
                     uncovered_count / (total_query_groups as f32)
                 } else {
@@ -7896,6 +7908,59 @@ mod tests {
         };
         let ranked = rank(&req);
         assert_eq!(ranked.results[0].turns[0].id, "charity#0");
+    }
+
+    #[test]
+    fn panini_karaka_wh_person_prefers_named_declarative_answer_ignoring_mid_turn_i() {
+        assert_eq!(count_slot_entities_mode("Can you check? I went to the clinic.", true), 0);
+        assert_eq!(count_slot_entities_mode("I visited Elena Alvarez at the clinic.", true), 2);
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "mentor".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("user", "Did you say we could work on the design project at the studio tomorrow?"),
+                    turn("user", "I planned to work on the design project with Elena Morales at the studio."),
+                ],
+            }],
+            queries: vec![Query {
+                text: "Who did I work with at the design studio?".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].turns[0].id, "mentor#1");
+    }
+
+    #[test]
+    fn adj_partner_diversity_factor_demotes_adjacent_assistant_mirror() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "s1".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn("user", "My ceramic mug collection started in Kyoto last autumn."),
+                    turn("assistant", "Kyoto is known for hand-glazed ceramic mugs and pottery kilns."),
+                ],
+            }],
+            queries: vec![Query {
+                text: "Kyoto ceramic mug".into(),
+                date: String::new(),
+            }],
+            top_k: 2,
+            params: Params::default(),
+        };
+        let ix = build_index(&req.sessions, &req.params);
+        let factor = adj_partner_diversity_factor(&ix, 1, 0, &[0], false, false, 2);
+        assert!((factor - 0.25).abs() < 1e-6);
+        let single_sess_factor = adj_partner_diversity_factor(&ix, 1, 0, &[0], false, false, 3);
+        assert!((single_sess_factor - 1.0).abs() < 1e-6);
+        let asst_query_factor = adj_partner_diversity_factor(&ix, 1, 0, &[0], true, false, 2);
+        assert!((asst_query_factor - 1.0).abs() < 1e-6);
     }
 
     #[test]
