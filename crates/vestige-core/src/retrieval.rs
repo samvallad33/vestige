@@ -17,7 +17,10 @@
 #![allow(clippy::all)]
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::OnceLock;
 
 // =========================================================================
@@ -1844,6 +1847,7 @@ struct TurnIx {
     is_short_reply: bool,
     is_backchannel: bool,
     anaphoric: bool,
+    #[allow(dead_code)]
     pref_marker: bool,
     is_personal_constraint: bool,
     is_user_schema: bool,
@@ -1867,7 +1871,18 @@ struct TurnIx {
     /// Backward state-revision / contradiction edges (`t_new -> t_old`).
     supersedes_turns: Vec<usize>,
     stability: f32,
+    /// ISO date or HH:MM in the turn text. Character form, not a month name.
+    form_clock: bool,
+    /// An ASCII digit in the turn text. Number words do not count.
+    form_digit: bool,
+    /// An @handle, a URL, or a path token.
+    form_handle: bool,
+    /// A capitalized word of two or more letters that is not sentence-initial.
+    form_midcap: bool,
     raw_links: Vec<TurnLink>,
+    /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
+    /// Never read by ranking.
+    body: String,
 }
 
 struct Stats {
@@ -3337,7 +3352,16 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 policy_backlinks: Vec::new(),
                 supersedes_turns: Vec::new(),
                 stability: t.stability,
+                form_clock: has_iso_or_hhmm(prose_body),
+                form_digit: has_ascii_digit(prose_body),
+                form_handle: has_handle_or_path(prose_body),
+                form_midcap: has_mid_sentence_name(prose_body),
                 raw_links: t.links.clone(),
+                body: if replay_dump_path().is_some() {
+                    prose_body.to_string()
+                } else {
+                    String::new()
+                },
             });
         }
         for d in s_doms {
@@ -4436,6 +4460,13 @@ fn turn_echoes_query(ix: &Index, t: &TurnIx, g: &HashSet<u32>, names: &HashSet<S
     t.pre_question_ids.is_empty() || clause_hits_query(&t.question_clause_ids, g, ix, names)
 }
 
+fn carry_mode_is_parity() -> bool {
+    static PARITY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PARITY.get_or_init(|| {
+        std::env::var("VESTIGE_CARRY_MODE").map(|v| v == "parity").unwrap_or(false)
+    })
+}
+
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
@@ -4509,7 +4540,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 for &t in members {
                     let tr = &ix.turns[t];
                     if tr.field == 0 {
-                        if tr.pref_marker {
+                        if is_structural_personal_turn(ix, t) {
                             best_pref = best_pref.max(p.preference_boost);
                         } else if tr.is_user_schema
                             && tr.schema_domains.iter().any(|d| plan.focal_domains.contains(d))
@@ -4521,7 +4552,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     }
                 }
                 sc *= best_pref;
-            } else if persona_infer_on && members.iter().any(|&t| ix.turns[t].pref_marker || ix.turns[t].is_user_schema) {
+            } else if persona_infer_on && members.iter().any(|&t| is_structural_personal_turn(ix, t) || ix.turns[t].is_user_schema) {
                 sc *= 1.38;
             }
             if members.iter().any(|&t| ix.turns[t].is_standing_policy) {
@@ -4545,7 +4576,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let domain_hit = tr.schema_domains.iter().any(|d| plan.focal_domains.contains(d));
                 let focal_hit = tr.content.iter().any(|id| plan.focal_ids.contains(id))
                     || tr.feats.iter().any(|f| plan.focal_ids.contains(&f.id));
-                if tr.pref_marker && (focal_hit || domain_hit) {
+                if is_structural_personal_turn(ix, ti) && (focal_hit || domain_hit) {
                     best = best.max(p.preference_boost);
                 } else if tr.is_user_schema && domain_hit {
                     best = best.max(1.45);
@@ -4590,8 +4621,35 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let nt = ix.turns.len();
     let mut t_own = vec![0.0f32; nt];
     let mut t_raw = vec![0.0f32; nt];
+    let mut t_turn_raw = vec![0.0f32; ix.turns.len()];
     let mut t_mask = vec![0u64; nt];
     let mut t_exact_mask = vec![0u64; nt];
+
+    // Q2a: Contiguous query bigram bonus (exact ordered query content-group pairs in t.seq)
+    let mut g_idf_own = vec![0.0f32; plan.groups.len()];
+    for qt in &plan.terms {
+        if let Some(g) = qt.group {
+            if let Some(&df) = ix.t_own_stats.df.get(&qt.id) {
+                let df = df as f32;
+                let idf = ((ix.t_own_stats.n - df + 0.5) / (df + 0.5) + 1.0)
+                    .ln()
+                    .max(0.0)
+                    .powf(p.idf_power);
+                g_idf_own[g] = g_idf_own[g].max(idf * qt.weight);
+            }
+        }
+    }
+    let q_groups: Vec<usize> = raw_tokens(&q.text)
+        .into_iter()
+        .filter(|w| is_content(w))
+        .filter_map(|w| ix.vocab.get(&w).and_then(|id| plan.group_of.get(&id).copied()))
+        .collect();
+    let mut q_bigrams: HashSet<(usize, usize)> = HashSet::new();
+    for pair in q_groups.windows(2) {
+        if pair[0] != pair[1] {
+            q_bigrams.insert((pair[0], pair[1]));
+        }
+    }
     for ti in 0..nt {
         let t = &ix.turns[ti];
         let (mut sc_own, _, em_own) = bm25f(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, p, &fl);
@@ -4612,19 +4670,50 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             sc_own *= 1.05;
         }
         if pref_on && t.field == 0 {
-            if t.pref_marker {
+            if t.speaker == "user" && turn_pos(ix, ti).map_or(false, |p| p <= 4) {
                 sc *= p.preference_boost;
                 sc_own *= p.preference_boost;
             } else if t.is_user_schema && t.schema_domains.iter().any(|d| plan.focal_domains.contains(d)) {
                 sc *= 1.45;
                 sc_own *= 1.45;
             }
-        } else if persona_infer_on && (t.pref_marker || t.is_user_schema) {
+        } else if persona_infer_on && (is_structural_personal_turn(ix, ti) || t.is_user_schema) {
             sc *= 1.40;
             sc_own *= 1.40;
         }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
+        // Content-token count: TurnIx.content is HashSet<u32> of content term ids
+        // (same field the s5 gate analysis used). This is NOT a UTF-8 char count.
+        let content_tokens = t.content.len();
+        let keep_full_carry = t.speaker == "assistant" || t.is_short_reply || content_tokens <= 8;
+        if carry_mode_is_parity() {
+            t_turn_raw[ti] = sc_own + 1.0 * (sc - sc_own);
+        } else if keep_full_carry {
+            t_turn_raw[ti] = sc.max(sc_own);
+        } else {
+            t_turn_raw[ti] = sc_own + 0.18 * (sc - sc_own).max(0.0);
+        }
+        if !q_bigrams.is_empty() && t.seq.len() >= 2 {
+            let mut bigram_bonus = 0.0f32;
+            let mut matched_bi: HashSet<(usize, usize)> = HashSet::new();
+            for win in t.seq.windows(2) {
+                let (ea, sa) = win[0];
+                let (eb, sb) = win[1];
+                if let (Some(&ga), Some(&gb)) = (
+                    plan.group_of.get(&ea).or_else(|| plan.group_of.get(&sa)),
+                    plan.group_of.get(&eb).or_else(|| plan.group_of.get(&sb)),
+                ) {
+                    if q_bigrams.contains(&(ga, gb)) && matched_bi.insert((ga, gb)) {
+                        bigram_bonus += 0.28 * fl.w[t.field.min(2)] * (g_idf_own[ga] + g_idf_own[gb]);
+                    }
+                }
+            }
+            if bigram_bonus > 0.0 {
+                t_own[ti] += bigram_bonus;
+                t_turn_raw[ti] += bigram_bonus;
+            }
+        }
         t_mask[ti] = m;
         t_exact_mask[ti] = em_own;
     }
@@ -4635,6 +4724,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // - On `user`/`assistant` dialogues (`BEAM` / `LME`), preserve symmetric `t_raw` pooling so
     //   concise user turns ending in `?` are never inverted beneath verbose assistant expansions!
     let mut t_scene = vec![0.0f32; nt];
+    let mut t_scene_sess = vec![0.0f32; nt];
     if p.enable_scene {
         for members in &ix.session_turns {
             let has_named_dialogue = members.iter().any(|&m| {
@@ -4678,18 +4768,26 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         t_scene[ti] = 0.92 * t_scene[prev];
                     }
                 }
+                for &ti in members.iter() {
+                    t_scene_sess[ti] = t_scene[ti];
+                }
             } else {
                 for (pos, &ti) in members.iter().enumerate() {
-                    let prev_raw = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
-                    let next_raw = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
-                    let prev_w = if ix.turns[ti].is_backchannel {
+                    let prev_w = if ix.turns[ti].speaker == "user" && !ix.turns[ti].is_short_reply {
+                        0.0
+                    } else if ix.turns[ti].is_backchannel {
                         0.25
                     } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
                         0.75
                     } else {
                         0.55
                     };
-                    t_scene[ti] = 1.0 * t_raw[ti] + prev_w * prev_raw + 0.55 * next_raw;
+                    let prev_sess = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
+                    let next_sess = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
+                    t_scene_sess[ti] = 1.0 * t_raw[ti] + prev_w * prev_sess + 0.55 * next_sess;
+                    let prev_tr = if pos > 0 { t_turn_raw[members[pos - 1]] } else { 0.0 };
+                    let next_tr = if pos + 1 < members.len() { t_turn_raw[members[pos + 1]] } else { 0.0 };
+                    t_scene[ti] = 1.0 * t_turn_raw[ti] + prev_w * prev_tr + 0.55 * next_tr;
                     if pos > 0 && !ix.turns[ti].is_backchannel {
                         t_mask[ti] |= t_mask[members[pos - 1]];
                     }
@@ -4700,262 +4798,276 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             }
         }
     } else {
-        t_scene = t_raw.clone();
+        t_scene = t_turn_raw.clone();
+        t_scene_sess = t_raw.clone();
     }
 
     // Named-speaker boost (never a filter): 1.06x tie-breaker gated on t_own[ti] > 0 or t_raw[ti] > 0.
-    for ti in 0..nt {
-        if t_raw[ti] <= 0.0 && t_own[ti] <= 0.0 {
-            continue;
-        }
-        let sp = ix.turns[ti].speaker.as_str();
-        if !sp.is_empty() && sp != "user" && sp != "assistant" && plan.groups.iter().any(|g| g == sp) {
-            t_scene[ti] *= 1.06;
+    for t_sc in [&mut t_scene[..], &mut t_scene_sess[..]] {
+        for ti in 0..nt {
+            if t_raw[ti] <= 0.0 && t_own[ti] <= 0.0 {
+                continue;
+            }
+            let sp = ix.turns[ti].speaker.as_str();
+            if !sp.is_empty() && sp != "user" && sp != "assistant" && plan.groups.iter().any(|g| g == sp) {
+                t_sc[ti] *= 1.06;
+            }
         }
     }
 
     // Turn-level role alignment: suppress assistant turns on explicit user-role queries,
     // except when no user turn in the same session covers that assistant turn's exact query bits!
-    if user_role {
-        for ti in 0..nt {
-            if ix.turns[ti].field == 1 {
-                let s_idx = ix.turns[ti].session;
-                let a_bits = t_exact_mask[ti];
-                let user_covers = a_bits == 0
-                    || ix.session_turns[s_idx]
-                        .iter()
-                        .any(|&u| ix.turns[u].field == 0 && (t_exact_mask[u] & a_bits) == a_bits);
-                if user_covers {
-                    t_scene[ti] *= 0.35;
-                } else {
-                    t_scene[ti] *= 0.72;
+    let apply_scene_refinements = |t_scene: &mut [f32], t_mask: &mut [u64], t_exact_mask: &mut [u64]| {
+        if user_role {
+            for ti in 0..nt {
+                if ix.turns[ti].field == 1 {
+                    let s_idx = ix.turns[ti].session;
+                    let a_bits = t_exact_mask[ti];
+                    let user_covers = a_bits == 0
+                        || ix.session_turns[s_idx]
+                            .iter()
+                            .any(|&u| ix.turns[u].field == 0 && (t_exact_mask[u] & a_bits) == a_bits);
+                    if user_covers {
+                        t_scene[ti] *= 0.35;
+                    } else {
+                        t_scene[ti] *= 0.72;
+                    }
                 }
             }
         }
-    }
 
-    // Standing policy invariant boost:
-    for ti in 0..nt {
-        let t = &ix.turns[ti];
-        if t.is_standing_policy && t_scene[ti] > 0.0 {
-            t_scene[ti] *= 2.5;
+        // Standing policy invariant boost:
+        for ti in 0..nt {
+            let t = &ix.turns[ti];
+            if t.is_standing_policy && t_scene[ti] > 0.0 {
+                t_scene[ti] *= 2.5;
+            }
         }
-    }
 
-    let exact_groups = exact_query_group_ids(&plan);
+        let exact_groups = exact_query_group_ids(&plan);
 
-    // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
-    if p.enable_sniper {
-        for members in &ix.session_turns {
-            let has_named_dialogue = members.iter().any(|&m| {
-                let sp = ix.turns[m].speaker.as_str();
-                !sp.is_empty() && sp != "user" && sp != "assistant"
-            });
-            let speaker_names = if has_named_dialogue {
-                session_speaker_names(ix, members)
-            } else {
-                HashSet::new()
-            };
-            let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
-            for &ti in members {
-                if t_scene[ti] <= 0.0 {
-                    continue;
-                }
-                let t = &ix.turns[ti];
-                if it.sniper_when {
-                    if t.has_temporal {
+        // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
+        if p.enable_sniper {
+            for members in &ix.session_turns {
+                let has_named_dialogue = members.iter().any(|&m| {
+                    let sp = ix.turns[m].speaker.as_str();
+                    !sp.is_empty() && sp != "user" && sp != "assistant"
+                });
+                let speaker_names = if has_named_dialogue {
+                    session_speaker_names(ix, members)
+                } else {
+                    HashSet::new()
+                };
+                let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
+                for &ti in members {
+                    if t_scene[ti] <= 0.0 {
+                        continue;
+                    }
+                    let t = &ix.turns[ti];
+                    if it.sniper_when {
+                        if t.has_temporal {
+                            t_scene[ti] *= 1.65;
+                        }
+                        if t.is_question {
+                            t_scene[ti] *= 0.55;
+                        }
+                    } else if has_named_dialogue
+                        && has_declarative_peer
+                        && !episodic_user_quote
+                        && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
+                    {
+                        t_scene[ti] *= 0.62;
+                    }
+                    if it.sniper_how_many && t.has_numeric {
                         t_scene[ti] *= 1.65;
                     }
-                    if t.is_question {
+                    if it.sniper_where && t.has_spatial {
+                        t_scene[ti] *= 1.60;
+                    }
+                    if it.sniper_why && t.has_causal {
+                        t_scene[ti] *= 1.55;
+                    }
+                    if t.is_short_question {
+                        t_scene[ti] *= 0.50;
+                    }
+                    if t.is_backchannel {
                         t_scene[ti] *= 0.55;
                     }
-                } else if has_named_dialogue
-                    && has_declarative_peer
-                    && !episodic_user_quote
-                    && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
-                {
-                    t_scene[ti] *= 0.62;
-                }
-                if it.sniper_how_many && t.has_numeric {
-                    t_scene[ti] *= 1.65;
-                }
-                if it.sniper_where && t.has_spatial {
-                    t_scene[ti] *= 1.60;
-                }
-                if it.sniper_why && t.has_causal {
-                    t_scene[ti] *= 1.55;
-                }
-                if t.is_short_question {
-                    t_scene[ti] *= 0.50;
-                }
-                if t.is_backchannel {
-                    t_scene[ti] *= 0.55;
                 }
             }
         }
-    }
 
-    // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
-    let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
-    for ent in proper_entity_tokens(&q.text) {
-        if let Some(id) = ix.vocab.get(&ent) {
-            q_ents_and_vocatives.insert(id);
-        }
-    }
-    for w in raw_tokens(&q.text) {
-        if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{w}")) {
-            q_ents_and_vocatives.insert(id);
-        }
-    }
-    let query_has_temp = it.temporal || it.sniper_when || !inline_date_tokens(&q.text).is_empty();
-    let query_has_num = it.sniper_how_many || q.text.chars().any(|c| c.is_ascii_digit());
-    if p.enable_dyad {
-        for members in &ix.session_turns {
-            let speaker_names = session_speaker_names(ix, members);
-            if speaker_names.is_empty() {
-                continue;
+        // Named-Partner cQA Question-Echo Swap (strictly `named_partner` ONLY — never `user`/`assistant`!):
+        let mut q_ents_and_vocatives: HashSet<u32> = HashSet::new();
+        for ent in proper_entity_tokens(&q.text) {
+            if let Some(id) = ix.vocab.get(&ent) {
+                q_ents_and_vocatives.insert(id);
             }
-            let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
-            for sw in &speaker_names {
-                if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
-                    sess_speaker_ents.insert(id);
-                }
+        }
+        for w in raw_tokens(&q.text) {
+            if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{w}")) {
+                q_ents_and_vocatives.insert(id);
             }
-            for pos in 0..members.len() {
-                let qi = members[pos];
-                let qt = &ix.turns[qi];
-                if t_scene[qi] <= 0.0 || !turn_echoes_query(ix, qt, &exact_groups, &speaker_names) {
+        }
+        let query_has_temp = it.temporal || it.sniper_when || !inline_date_tokens(&q.text).is_empty();
+        let query_has_num = it.sniper_how_many || q.text.chars().any(|c| c.is_ascii_digit());
+        if p.enable_dyad {
+            for members in &ix.session_turns {
+                let speaker_names = session_speaker_names(ix, members);
+                if speaker_names.is_empty() {
                     continue;
                 }
-                let novel_temp = qt.has_temporal && !query_has_temp;
-                let novel_num = qt.has_numeric && !query_has_num;
-                let novel_ent = qt
-                    .entities
-                    .iter()
-                    .any(|eid| !q_ents_and_vocatives.contains(eid) && !sess_speaker_ents.contains(eid));
-                if novel_temp || novel_num || novel_ent {
-                    continue;
-                }
-                if let Some(&ai) = members.get(pos + 1) {
-                    let ans = &ix.turns[ai];
-                    if named_partner(&qt.speaker, &ans.speaker) && !ans.is_question && !ans.is_backchannel {
-                        t_mask[ai] |= t_mask[qi];
-                        t_exact_mask[ai] |= t_exact_mask[qi];
-                        if t_scene[qi] > t_scene[ai] {
-                            t_scene[ai] = t_scene[ai].max(t_scene[qi] * 1.06);
-                            t_scene[qi] *= 0.65;
-                        }
+                let mut sess_speaker_ents: HashSet<u32> = HashSet::new();
+                for sw in &speaker_names {
+                    if let Some(id) = ix.vocab.get(&format!("\u{1}ent:{sw}")) {
+                        sess_speaker_ents.insert(id);
                     }
                 }
-            }
-        }
-    }
-
-    // Weapon 3: Bounded Length-Normalized 2-Iteration Sparse PPR (Turn Level)
-    if p.enable_ppr && nt > 5 {
-        let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
-        let seed_indices: Vec<usize> = order(&t_scene, &turn_ts)
-            .into_iter()
-            .take(16)
-            .filter(|&i| t_scene[i] > 0.0)
-            .collect();
-
-        if let Some(&t0) = seed_indices.first() {
-            let t_max = t_scene[t0];
-            let t0_mask = t_mask[t0];
-            if t_max > 0.0 {
-                let mut activation: HashMap<u32, f32> = HashMap::new();
-                let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
-
-                // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities + Rare Exact Symbols
-                for &s in &seed_indices {
-                    if t_scene[s] < 0.15 * t_max {
-                        break;
+                for pos in 0..members.len() {
+                    let qi = members[pos];
+                    let qt = &ix.turns[qi];
+                    if t_scene[qi] <= 0.0 || !turn_echoes_query(ix, qt, &exact_groups, &speaker_names) {
+                        continue;
                     }
-                    let seed_norm = (t_scene[s] / t_max) / ((ix.turns[s].content.len() + 4) as f32).sqrt();
-                    for &e in &ix.turns[s].entities {
-                        if is_technical_handle(&ix.vocab, e) {
-                            continue;
-                        }
-                        if let Some(&df) = ix.t_stats.df.get(&e) {
-                            if df >= 2 && df <= max_df {
-                                let idf_term = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
-                                *activation.entry(e).or_insert(0.0) += 2.0 * seed_norm * idf_term;
-                            }
-                        }
+                    let novel_temp = qt.has_temporal && !query_has_temp;
+                    let novel_num = qt.has_numeric && !query_has_num;
+                    let novel_ent = qt
+                        .entities
+                        .iter()
+                        .any(|eid| !q_ents_and_vocatives.contains(eid) && !sess_speaker_ents.contains(eid));
+                    if novel_temp || novel_num || novel_ent {
+                        continue;
                     }
-                    for &w in &ix.turns[s].content {
-                        if plan.group_of.contains_key(&w) {
-                            continue;
-                        }
-                        if let Some(&df) = ix.t_stats.df.get(&w) {
-                            if df >= 2 && df <= max_df {
-                                let idf_term = 1.2 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
-                                *activation.entry(w).or_insert(0.0) += 0.75 * seed_norm * idf_term;
+                    if let Some(&ai) = members.get(pos + 1) {
+                        let ans = &ix.turns[ai];
+                        if named_partner(&qt.speaker, &ans.speaker) && !ans.is_question && !ans.is_backchannel {
+                            t_mask[ai] |= t_mask[qi];
+                            t_exact_mask[ai] |= t_exact_mask[qi];
+                            if t_scene[qi] > t_scene[ai] {
+                                t_scene[ai] = t_scene[ai].max(t_scene[qi] * 1.06);
+                                t_scene[qi] *= 0.65;
                             }
                         }
                     }
                 }
+            }
+        }
 
-                // Pass 2: Bridge Entities -> Normalized, Bounded 2nd-Hop Turns
-                if !activation.is_empty() {
-                    for ti in 0..nt {
-                        let mut ent_hit = 0.0f32;
-                        for &e in &ix.turns[ti].entities {
-                            if let Some(&act) = activation.get(&e) {
-                                ent_hit += 2.0 * act;
+        // Weapon 3: Bounded Length-Normalized 2-Iteration Sparse PPR (Turn Level)
+        if p.enable_ppr && nt > 5 {
+            let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
+            let seed_indices: Vec<usize> = order(&t_scene, &turn_ts)
+                .into_iter()
+                .take(16)
+                .filter(|&i| t_scene[i] > 0.0)
+                .collect();
+
+            if let Some(&t0) = seed_indices.first() {
+                let t_max = t_scene[t0];
+                let t0_mask = t_mask[t0];
+                if t_max > 0.0 {
+                    let mut activation: HashMap<u32, f32> = HashMap::new();
+                    let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
+
+                    // Pass 1: Normalized Seed Turn -> Discriminative Bridge Entities + Rare Exact Symbols
+                    for &s in &seed_indices {
+                        if t_scene[s] < 0.15 * t_max {
+                            break;
+                        }
+                        let seed_norm = (t_scene[s] / t_max) / ((ix.turns[s].content.len() + 4) as f32).sqrt();
+                        for &e in &ix.turns[s].entities {
+                            if is_technical_handle(&ix.vocab, e) {
+                                continue;
+                            }
+                            if let Some(&df) = ix.t_stats.df.get(&e) {
+                                if df >= 2 && df <= max_df {
+                                    let idf_term = 1.4 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
+                                    *activation.entry(e).or_insert(0.0) += 2.0 * seed_norm * idf_term;
+                                }
                             }
                         }
-                        let mut ppr_sum = ent_hit;
-                        for &w in &ix.turns[ti].content {
-                            if let Some(&act) = activation.get(&w) {
-                                ppr_sum += 0.75 * act;
+                        for &w in &ix.turns[s].content {
+                            if plan.group_of.contains_key(&w) {
+                                continue;
+                            }
+                            if let Some(&df) = ix.t_stats.df.get(&w) {
+                                if df >= 2 && df <= max_df {
+                                    let idf_term = 1.2 / ((df as f32).sqrt() * (df as f32 + 1.1).ln());
+                                    *activation.entry(w).or_insert(0.0) += 0.75 * seed_norm * idf_term;
+                                }
                             }
                         }
-                        if ppr_sum > 0.0 && (t_scene[ti] > 0.0 || ent_hit > 0.0) {
-                            let target_norm = ppr_sum / ((ix.turns[ti].content.len() + 4) as f32).sqrt();
-                            let sat = target_norm / (target_norm + 0.45);
-                            let mult = if (t_mask[ti] & !t0_mask) != 0 { 1.65 } else { 1.0 };
-                            let boost = t_max * 0.25 * mult * sat;
-                            t_scene[ti] += boost;
+                    }
+
+                    // Pass 2: Bridge Entities -> Normalized, Bounded 2nd-Hop Turns
+                    if !activation.is_empty() {
+                        for ti in 0..nt {
+                            let mut ent_hit = 0.0f32;
+                            for &e in &ix.turns[ti].entities {
+                                if let Some(&act) = activation.get(&e) {
+                                    ent_hit += 2.0 * act;
+                                }
+                            }
+                            let mut ppr_sum = ent_hit;
+                            for &w in &ix.turns[ti].content {
+                                if let Some(&act) = activation.get(&w) {
+                                    ppr_sum += 0.75 * act;
+                                }
+                            }
+                            if ppr_sum > 0.0 && (t_scene[ti] > 0.0 || ent_hit > 0.0) {
+                                let target_norm = ppr_sum / ((ix.turns[ti].content.len() + 4) as f32).sqrt();
+                                let sat = target_norm / (target_norm + 0.45);
+                                let mult = if (t_mask[ti] & !t0_mask) != 0 { 1.65 } else { 1.0 };
+                                let boost = t_max * 0.25 * mult * sat;
+                                t_scene[ti] += boost;
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    // Hierarchical session-to-turn funnel.
-    if p.enable_funnel && smax > 0.0 {
-        for ti in 0..nt {
-            if t_scene[ti] > 0.0 {
-                t_scene[ti] *= 1.0 + p.funnel * (s_score[ix.turns[ti].session] / smax);
+        // Hierarchical session-to-turn funnel.
+        if p.enable_funnel && smax > 0.0 {
+            for ti in 0..nt {
+                if t_scene[ti] > 0.0 {
+                    t_scene[ti] *= 1.0 + p.funnel * (s_score[ix.turns[ti].session] / smax);
+                }
             }
         }
-    }
 
-    // Adjacency-pair dyad coupling: answers to questions AND short commitment/value replies
-    // to statements ("Done.", "Last Tuesday.", "Me too!") ride alongside their setup turn.
-    if p.enable_dyad {
-        let base = t_scene.clone();
-        for members in &ix.session_turns {
-            for pos in 1..members.len() {
-                let (a, b) = (members[pos - 1], members[pos]);
-                if !ix.turns[b].answers_question && !ix.turns[b].is_short_reply {
-                    continue;
+        // Adjacency-pair dyad coupling: answers to questions AND short commitment/value replies
+        // to statements ("Done.", "Last Tuesday.", "Me too!") ride alongside their setup turn.
+        if p.enable_dyad {
+            let base = t_scene.to_vec();
+            for members in &ix.session_turns {
+                for pos in 1..members.len() {
+                    let (a, b) = (members[pos - 1], members[pos]);
+                    if !ix.turns[b].answers_question && !ix.turns[b].is_short_reply {
+                        continue;
+                    }
+                    let partner_ratio = if ix.turns[b].answers_question { p.dyad_partner } else { 0.84 };
+                    let (hi, lo) = if base[a] >= base[b] { (a, b) } else { (b, a) };
+                    if base[hi] <= 0.0 {
+                        continue;
+                    }
+                    let dyad = base[hi] + p.dyad * base[lo];
+                    t_scene[hi] = t_scene[hi].max(dyad);
+                    t_scene[lo] = t_scene[lo].max(dyad * partner_ratio);
+                    t_mask[lo] |= t_mask[hi];
                 }
-                let partner_ratio = if ix.turns[b].answers_question { p.dyad_partner } else { 0.84 };
-                let (hi, lo) = if base[a] >= base[b] { (a, b) } else { (b, a) };
-                if base[hi] <= 0.0 {
-                    continue;
-                }
-                let dyad = base[hi] + p.dyad * base[lo];
-                t_scene[hi] = t_scene[hi].max(dyad);
-                t_scene[lo] = t_scene[lo].max(dyad * partner_ratio);
-                t_mask[lo] |= t_mask[hi];
             }
         }
-    }
+
+    };
+    // Run session-path refinements first on a mask copy, then restore and run the
+    // turn-path refinements so PPR seeds see pre-dyad masks (floor behavior).
+    let t_mask_snap = t_mask.clone();
+    let t_exact_snap = t_exact_mask.clone();
+    apply_scene_refinements(&mut t_scene_sess, &mut t_mask, &mut t_exact_mask);
+    t_mask.copy_from_slice(&t_mask_snap);
+    t_exact_mask.copy_from_slice(&t_exact_snap);
+    apply_scene_refinements(&mut t_scene, &mut t_mask, &mut t_exact_mask);
 
     let k = top_k.max(1);
 
@@ -4965,6 +5077,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // zero-overlap rule does not become a PPR anchor. The standing floor is
     // applied to the policy turn itself, not only its session.
     let lexical_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
+    let lexical_tmax_sess = t_scene_sess.iter().cloned().fold(0.0f32, f32::max);
     let lexical_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
     let multi_evidence_intent = it.multi_hop
         || it.sniper_how_many
@@ -5018,6 +5131,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
         });
         let _ = raise_floor(&mut t_scene, lexical_tmax, 0.38, |ti| ix.turns[ti].is_initiative);
+        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.38, |ti| ix.turns[ti].is_initiative);
+    }
+    // Mirror standing/pref floors onto the session-path t_scene (bridge_boost reads this).
+    if it.task_under_rules && !policy_blocked {
+        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.68, |ti| ix.turns[ti].is_standing_policy);
+        if let Some(top) = standing_rules.first() {
+            let t_win_floor = policy_spec_winner_floor(lexical_tmax_sess);
+            if let Some(top_rule_turn) = ix.turns.iter().position(|t| t.id == top.id) {
+                if t_scene_sess[top_rule_turn] < t_win_floor {
+                    t_scene_sess[top_rule_turn] = t_win_floor;
+                }
+            }
+        }
+    }
+    if pref_on && !multi_evidence_intent {
+        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.50, |ti| ix.turns[ti].is_personal_constraint);
     }
     let initiative_content: Vec<HashSet<u32>> = if it.is_event_sequence {
         ix.session_turns.iter().map(|members| {
@@ -5092,13 +5221,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 for &anc in &anchors {
                     let anc_w = (s_score[anc] / smax).clamp(0.35, 1.0);
                     let members = &ix.session_turns[anc];
-                    let anc_tmax = members.iter().map(|&ti| t_scene[ti]).fold(0.0f32, f32::max);
+                    let anc_tmax = members.iter().map(|&ti| t_scene_sess[ti]).fold(0.0f32, f32::max);
                     let use_hot = anc_tmax > 0.0 && members.len() > 2;
                     for &ti in members {
-                        if use_hot && t_scene[ti] < 0.25 * anc_tmax {
+                        if use_hot && t_scene_sess[ti] < 0.25 * anc_tmax {
                             continue;
                         }
-                        let hot_turn_bonus = if anc_tmax > 0.0 && t_scene[ti] >= 0.60 * anc_tmax { 1.18 } else { 1.0 };
+                        let hot_turn_bonus = if anc_tmax > 0.0 && t_scene_sess[ti] >= 0.60 * anc_tmax { 1.18 } else { 1.0 };
                         let toks = ix.turns[ti].span_ids_cache.get_or_init(|| {
                             ix.turns[ti]
                                 .body_for_headers
@@ -5158,10 +5287,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 let anc_w = (s_score[anc] / smax).clamp(0.25, 1.0);
                 // Prefer highest-scoring matching turns inside anchor session so bridge entities come from hot passage.
                 let members = &ix.session_turns[anc];
-                let anc_tmax = members.iter().map(|&ti| t_scene[ti]).fold(0.0f32, f32::max);
+                let anc_tmax = members.iter().map(|&ti| t_scene_sess[ti]).fold(0.0f32, f32::max);
                 let use_hot = anc_tmax > 0.0 && members.len() > 2;
                 for &ti in members {
-                    if use_hot && t_scene[ti] < 0.25 * anc_tmax {
+                    if use_hot && t_scene_sess[ti] < 0.25 * anc_tmax {
                         continue;
                     }
                     let turn_len_norm = ((ix.turns[ti].content.len() + 6) as f32).sqrt();
@@ -5213,7 +5342,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     if sum > 0.0 && (s_score[si] > 0.0 || allow_zero_hit) {
                         let slen = (ix.session_bags[si].len[0] + ix.session_bags[si].len[1] + 8.0).sqrt();
                         let norm = sum / slen;
-                        let sat = norm / (norm + 0.05);
+                        let bridge_k = if pref_on { 0.05 } else { 0.50 };
+                        let sat = norm / (norm + bridge_k);
                         let mut coeff = if it.multi_hop || plan.groups.len() >= 3 { 0.55 } else { 0.12 };
                         if (s_exact_mask[si] & !s_exact_mask[top0]) != 0 {
                             coeff *= 1.30;
@@ -5403,7 +5533,8 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         .filter(|&&si| smax > 0.0 && !s_policy_floored[si] && !s_pref_floored[si] && (s_score[si] + bridge_boost[si]) >= 0.62 * smax)
         .count();
     let sessions = final_session_indices
-        .into_iter()
+        .iter()
+        .copied()
         .map(|i| RankedItem {
             id: ix.session_ids[i].clone(),
             session_id: ix.session_ids[i].clone(),
@@ -5494,7 +5625,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     0.0
                 };
 
-                let gain = sc * (1.0 + 0.60 * uncovered_ratio) * diversity_factor;
+                let s_rank = final_session_indices.iter().take(5).position(|&s| s == t_sess);
+                let couple = s_rank.map(|r| 1.0 + 0.50 / (1.0 + r as f32)).unwrap_or(1.0);
+                let gain = sc * (1.0 + 0.60 * uncovered_ratio) * diversity_factor * couple;
                 let stab = ix.turns[ti].stability;
                 let take = match best_turn {
                     None => true,
@@ -5566,6 +5699,61 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             .take(k)
             .collect()
     };
+
+    // Q4: Multi-session turn quota guarantee inside top-5 so Session #1 redundant
+    // turns cannot crowd out strong Sessions #2..#5 before exact-edge/RSB stages.
+    if !it.is_event_sequence
+        && !pref_on
+        && !it.task_under_rules
+        && final_turn_indices.len() >= 5
+        && smax > 0.0
+    {
+        let sess_limit = final_session_indices.len().min(5);
+        for &si in &final_session_indices[1..sess_limit] {
+            if s_score[si] + bridge_boost[si] < 0.45 * smax {
+                continue;
+            }
+            if final_turn_indices[..5].iter().any(|&t| ix.turns[t].session == si) {
+                continue;
+            }
+            let Some(best_ti) = ix.session_turns[si]
+                .iter()
+                .copied()
+                .filter(|&t| t_scene[t] > 0.0)
+                .max_by(|&a, &b| {
+                    t_scene[a]
+                        .partial_cmp(&t_scene[b])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(b.cmp(&a))
+                })
+            else {
+                continue;
+            };
+            let victim_slot = (1..5).rev().find(|&slot| {
+                let vti = final_turn_indices[slot];
+                if t_policy_floored[vti] || t_pref_floored[vti] {
+                    return false;
+                }
+                let vs = ix.turns[vti].session;
+                let cnt = final_turn_indices[..5]
+                    .iter()
+                    .filter(|&&t| ix.turns[t].session == vs)
+                    .count();
+                cnt >= 2 && t_scene[best_ti] >= 0.25 * t_scene[vti]
+            });
+            if let Some(slot) = victim_slot {
+                if let Some(existing) = final_turn_indices.iter().position(|&t| t == best_ti) {
+                    if existing >= 5 {
+                        final_turn_indices.remove(existing);
+                        final_turn_indices.insert(slot, best_ti);
+                    }
+                } else {
+                    final_turn_indices.insert(slot, best_ti);
+                    final_turn_indices.truncate(k);
+                }
+            }
+        }
+    }
 
     // Exact-token selection is finished. A recorded backward reply or exact edge
     // promotes its earlier target to the rank position earned by `credit`, including
@@ -5704,10 +5892,21 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             if let Some(pos) = members.iter().position(|&m| m == top) {
                 if pos > 0 {
                     let prev = members[pos - 1];
-                    if ix.turns[prev].speaker == "user" {
-                        if let Some(at) = final_turn_indices.iter().take(5).position(|&t| t == prev) {
-                            final_turn_indices.remove(at);
-                            final_turn_indices.insert(0, prev);
+                    if ix.turns[prev].speaker == "user" && t_raw[prev] > 0.0 {
+                        if let Some(at) = final_turn_indices.iter().position(|&t| t == prev) {
+                            if at < 5 {
+                                final_turn_indices.remove(at);
+                                final_turn_indices.insert(0, prev);
+                            } else {
+                                final_turn_indices.remove(at);
+                                final_turn_indices[0] = prev;
+                                final_turn_indices.insert(5.min(final_turn_indices.len()), top);
+                            }
+                        } else {
+                            final_turn_indices[0] = prev;
+                            if !it.is_event_sequence || final_turn_indices.len() >= 5 {
+                                final_turn_indices.insert(5.min(final_turn_indices.len()), top);
+                            }
                         }
                     }
                 }
@@ -5729,6 +5928,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     if !it.is_event_sequence {
         rsb_seat_behind(ix, &mut final_turn_indices, k);
     }
+    // Rank-1 gatekeeper v2. Slot 1 stays the RSB v4 head. Slots 2..k are the
+    // same Kemeny-Young order as PR 710, computed on that window with the head
+    // removed. No new constant: the frozen slot is position 0 of this window.
+    rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -5799,6 +6003,15 @@ fn covers_cues(sup: &[u32], sub: &[u32]) -> bool {
 /// Position of turn `ti` inside its own session.
 fn turn_pos(ix: &Index, ti: usize) -> Option<usize> {
     ix.session_turns[ix.turns[ti].session].iter().position(|&m| m == ti)
+}
+
+/// Structural user-preference / personal-constraint turn check (no PREF_MARKERS dictionary list).
+fn is_structural_personal_turn(ix: &Index, ti: usize) -> bool {
+    let tr = &ix.turns[ti];
+    tr.field == 0
+        && (tr.is_standing_policy
+            || tr.is_personal_constraint
+            || (tr.speaker == "user" && turn_pos(ix, ti).map_or(false, |pos| pos <= 4)))
 }
 
 /// BoundaryPrimacy (event-boundary primacy; Zheng 2022, Ezzyat & Davachi 2011). If rank 1 is not
@@ -6023,10 +6236,870 @@ fn rsb_seat_behind(ix: &Index, list: &mut Vec<usize>, k: usize) {
     }
 }
 
+/// Exact Kemeny-Young inside one Condorcet component. 8! = 40320 is the
+/// largest search this branch-and-bound solves exactly. Larger components
+/// use Copeland plus adjacent swaps. Fixed from the size of the search,
+/// before any card.
+const KEMENY_EXACT_CAP: usize = 8;
+
+const WH_TIME: u8 = 1;
+const WH_QTY: u8 = 2;
+const WH_PERSON: u8 = 4;
+const WH_PLACE: u8 = 8;
+const WH_CAUSE: u8 = 16;
+
+/// Closed class of English interrogative function words. Not a topical list.
+fn wh_slots(query: &str) -> u8 {
+    let lower = query.to_ascii_lowercase();
+    let tokens: Vec<String> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_string())
+        .collect();
+    let mut slots = 0u8;
+    let has = |w: &str| tokens.iter().any(|t| t == w);
+    let phrase = |a: &str, b: &str| {
+        tokens.windows(2).any(|p| p[0] == a && p[1] == b)
+    };
+    if phrase("what", "time") || phrase("which", "year") || has("when") {
+        slots |= WH_TIME;
+    }
+    if phrase("how", "many") || phrase("how", "much") {
+        slots |= WH_QTY;
+    }
+    if has("who") || has("whom") || has("whose") {
+        slots |= WH_PERSON;
+    }
+    if has("where") {
+        slots |= WH_PLACE;
+    }
+    if has("why") {
+        slots |= WH_CAUSE;
+    }
+    slots
+}
+
+fn has_iso_or_hhmm(body: &str) -> bool {
+    let b = body.as_bytes();
+    if b.len() >= 10 {
+        for i in 0..=b.len() - 10 {
+            if b[i].is_ascii_digit()
+                && b[i + 1].is_ascii_digit()
+                && b[i + 2].is_ascii_digit()
+                && b[i + 3].is_ascii_digit()
+                && b[i + 4] == b'-'
+                && b[i + 5].is_ascii_digit()
+                && b[i + 6].is_ascii_digit()
+                && b[i + 7] == b'-'
+                && b[i + 8].is_ascii_digit()
+                && b[i + 9].is_ascii_digit()
+            {
+                return true;
+            }
+        }
+    }
+    for i in 0..b.len() {
+        if b[i] == b':'
+            && i > 0
+            && i + 2 < b.len()
+            && b[i - 1].is_ascii_digit()
+            && b[i + 1].is_ascii_digit()
+            && b[i + 2].is_ascii_digit()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_ascii_digit(body: &str) -> bool {
+    body.bytes().any(|c| c.is_ascii_digit())
+}
+
+fn has_handle_or_path(body: &str) -> bool {
+    let b = body.as_bytes();
+    for i in 0..b.len() {
+        if b[i] == b'@' && i + 1 < b.len() && b[i + 1].is_ascii_alphanumeric() {
+            return true;
+        }
+        if i + 2 < b.len() && b[i] == b':' && b[i + 1] == b'/' && b[i + 2] == b'/' {
+            return true;
+        }
+    }
+    body.split_whitespace().any(|tok| tok.contains('/') && tok.len() > 1)
+}
+
+/// A capitalized word of at least two letters that is not the first word of a sentence.
+fn has_mid_sentence_name(body: &str) -> bool {
+    let chars: Vec<char> = body.chars().collect();
+    let mut sentence_start = true;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '.' || c == '!' || c == '?' || c == '\n' {
+            sentence_start = true;
+            i += 1;
+            continue;
+        }
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        if c.is_uppercase() {
+            let start = i;
+            while i < chars.len() && chars[i].is_alphabetic() {
+                i += 1;
+            }
+            if !sentence_start && i - start >= 2 {
+                return true;
+            }
+            sentence_start = false;
+            continue;
+        }
+        sentence_start = false;
+        i += 1;
+    }
+    false
+}
+
+fn wh_satisfied(ix: &Index, ti: usize, slots: u8, has_cause_edge: bool) -> bool {
+    if slots == 0 {
+        return true;
+    }
+    let turn = &ix.turns[ti];
+    let ts = ix.session_ts.get(turn.session).copied().unwrap_or(0);
+    if slots & WH_TIME != 0 && ts == 0 && !turn.form_clock {
+        return false;
+    }
+    if slots & WH_QTY != 0 && !turn.form_digit {
+        return false;
+    }
+    if slots & WH_PERSON != 0 && !turn.form_handle && !turn.form_midcap {
+        return false;
+    }
+    if slots & WH_PLACE != 0 && !turn.form_midcap && !turn.form_handle {
+        return false;
+    }
+    if slots & WH_CAUSE != 0 && !has_cause_edge {
+        return false;
+    }
+    true
+}
+
+/// In-degree inside the pool from edges the index already stored, plus the
+/// RSB antecedent. One pass over the log, not one pass per candidate.
+fn pool_structural_degree(ix: &Index, pool: &[usize]) -> Vec<i64> {
+    let mut at = vec![None; ix.turns.len()];
+    for (i, &ti) in pool.iter().enumerate() {
+        if let Some(slot) = at.get_mut(ti) {
+            *slot = Some(i);
+        }
+    }
+    let mut degree = vec![0i64; pool.len()];
+    for (src, t) in ix.turns.iter().enumerate() {
+        let mut hit = |target: usize| {
+            if target == src {
+                return;
+            }
+            if let Some(Some(slot)) = at.get(target) {
+                degree[*slot] += 1;
+            }
+        };
+        for &target in &t.policy_backlinks {
+            hit(target);
+        }
+        for &target in &t.supersedes_turns {
+            hit(target);
+        }
+        for &(_, target) in &t.exact_edges {
+            hit(target);
+        }
+        if let Some(target) = rsb_antecedent(ix, src) {
+            hit(target);
+        }
+    }
+    degree
+}
+
+fn turn_is_superseded(ix: &Index, ti: usize) -> bool {
+    ix.turns.iter().any(|t| t.supersedes_turns.contains(&ti))
+}
+
+fn kemeny_pair_score(order: &[usize], net: &[Vec<i64>]) -> i64 {
+    let mut score = 0i64;
+    for i in 0..order.len() {
+        for j in (i + 1)..order.len() {
+            score += net[order[i]][order[j]];
+        }
+    }
+    score
+}
+
+fn kemeny_bound(prefix: &[usize], used: &[bool], net: &[Vec<i64>]) -> i64 {
+    let m = used.len();
+    let mut score = kemeny_pair_score(prefix, net);
+    for &p in prefix {
+        for c in 0..m {
+            if !used[c] {
+                score += net[p][c];
+            }
+        }
+    }
+    let rest: Vec<usize> = (0..m).filter(|&c| !used[c]).collect();
+    for i in 0..rest.len() {
+        for j in (i + 1)..rest.len() {
+            score += net[rest[i]][rest[j]].abs();
+        }
+    }
+    score
+}
+
+/// Exact Kemeny order of a component. Equal scores keep the RSB order,
+/// which is the initial incumbent, so a tie never falls through to turn id.
+fn kemeny_branch_and_bound(members: &[usize], net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
+    let m = members.len();
+    let mut local = vec![vec![0i64; m]; m];
+    for i in 0..m {
+        for j in 0..m {
+            local[i][j] = net[members[i]][members[j]];
+        }
+    }
+    let mut start: Vec<usize> = (0..m).collect();
+    start.sort_by(|&a, &b| rsb[members[a]].cmp(&rsb[members[b]]));
+    let key_of = |order: &[usize]| -> Vec<usize> {
+        order.iter().map(|&i| rsb[members[i]]).collect()
+    };
+    let mut best_score = kemeny_pair_score(&start, &local);
+    let mut best = start;
+    let mut best_key = key_of(&best);
+    let mut used = vec![false; m];
+    let mut prefix: Vec<usize> = Vec::with_capacity(m);
+    fn rec(
+        local: &[Vec<i64>],
+        members: &[usize],
+        rsb: &[usize],
+        used: &mut [bool],
+        prefix: &mut Vec<usize>,
+        best_score: &mut i64,
+        best: &mut Vec<usize>,
+        best_key: &mut Vec<usize>,
+    ) {
+        let m = used.len();
+        if prefix.len() == m {
+            let score = kemeny_pair_score(prefix, local);
+            let key: Vec<usize> = prefix.iter().map(|&i| rsb[members[i]]).collect();
+            if score > *best_score || (score == *best_score && key < *best_key) {
+                *best_score = score;
+                *best_key = key;
+                *best = prefix.clone();
+            }
+            return;
+        }
+        if kemeny_bound(prefix, used, local) < *best_score {
+            return;
+        }
+        for c in 0..m {
+            if used[c] {
+                continue;
+            }
+            used[c] = true;
+            prefix.push(c);
+            rec(local, members, rsb, used, prefix, best_score, best, best_key);
+            prefix.pop();
+            used[c] = false;
+        }
+    }
+    rec(&local, members, rsb, &mut used, &mut prefix, &mut best_score, &mut best, &mut best_key);
+    best.into_iter().map(|i| members[i]).collect()
+}
+
+fn kemeny_copeland(members: &[usize], net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
+    let mut order = members.to_vec();
+    order.sort_by(|&a, &b| {
+        let sa: i64 = members.iter().map(|&c| (net[a][c] > 0) as i64 - (net[a][c] < 0) as i64).sum();
+        let sb: i64 = members.iter().map(|&c| (net[b][c] > 0) as i64 - (net[b][c] < 0) as i64).sum();
+        sb.cmp(&sa).then(rsb[a].cmp(&rsb[b]))
+    });
+    let mut improved = true;
+    while improved {
+        improved = false;
+        for i in 0..order.len().saturating_sub(1) {
+            let a = order[i];
+            let b = order[i + 1];
+            if net[a][b] < 0 {
+                order.swap(i, i + 1);
+                improved = true;
+            }
+        }
+    }
+    order
+}
+
+fn tarjan_sccs_best_first(net: &[Vec<i64>], rsb: &[usize]) -> Vec<Vec<usize>> {
+    let n = net.len();
+    let mut index = 0usize;
+    let mut indices = vec![None; n];
+    let mut low = vec![0usize; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut on = vec![false; n];
+    let mut sccs: Vec<Vec<usize>> = Vec::new();
+    fn strong(
+        v: usize,
+        net: &[Vec<i64>],
+        index: &mut usize,
+        indices: &mut [Option<usize>],
+        low: &mut [usize],
+        stack: &mut Vec<usize>,
+        on: &mut [bool],
+        sccs: &mut Vec<Vec<usize>>,
+    ) {
+        indices[v] = Some(*index);
+        low[v] = *index;
+        *index += 1;
+        stack.push(v);
+        on[v] = true;
+        for w in 0..net.len() {
+            if v != w && net[v][w] > 0 {
+                if indices[w].is_none() {
+                    strong(w, net, index, indices, low, stack, on, sccs);
+                    low[v] = low[v].min(low[w]);
+                } else if on[w] {
+                    low[v] = low[v].min(indices[w].unwrap_or(0));
+                }
+            }
+        }
+        if low[v] == indices[v].unwrap_or(0) {
+            let mut comp = Vec::new();
+            while let Some(w) = stack.pop() {
+                on[w] = false;
+                comp.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            sccs.push(comp);
+        }
+    }
+    for v in 0..n {
+        if indices[v].is_none() {
+            strong(v, net, &mut index, &mut indices, &mut low, &mut stack, &mut on, &mut sccs);
+        }
+    }
+    let mut id_of = vec![0usize; n];
+    for (i, comp) in sccs.iter().enumerate() {
+        for &v in comp {
+            id_of[v] = i;
+        }
+    }
+    let ns = sccs.len();
+    let mut indeg = vec![0usize; ns];
+    let mut next: Vec<Vec<usize>> = vec![Vec::new(); ns];
+    for a in 0..n {
+        for b in 0..n {
+            if a != b && net[a][b] > 0 && id_of[a] != id_of[b] {
+                let (u, v) = (id_of[a], id_of[b]);
+                if !next[u].contains(&v) {
+                    next[u].push(v);
+                    indeg[v] += 1;
+                }
+            }
+        }
+    }
+    let anchor = |comp: &[usize]| comp.iter().map(|&v| rsb.get(v).copied().unwrap_or(usize::MAX)).min().unwrap_or(usize::MAX);
+    let mut ready: Vec<usize> = (0..ns).filter(|&s| indeg[s] == 0).collect();
+    let sort_ready = |ready: &mut Vec<usize>, sccs: &[Vec<usize>]| {
+        ready.sort_by(|&a, &b| anchor(&sccs[b]).cmp(&anchor(&sccs[a])).then(b.cmp(&a)));
+    };
+    sort_ready(&mut ready, &sccs);
+    let mut ordered = Vec::with_capacity(ns);
+    while let Some(u) = ready.pop() {
+        ordered.push(u);
+        let mut outs = next[u].clone();
+        outs.sort_unstable();
+        for v in outs {
+            indeg[v] -= 1;
+            if indeg[v] == 0 {
+                ready.push(v);
+            }
+        }
+        sort_ready(&mut ready, &sccs);
+    }
+    if ordered.len() != ns {
+        ordered = (0..ns).collect();
+    }
+    // Tarjan's component ids are not best-first. Kahn from sources of the
+    // "beats" condensation puts undefeated components first.
+    ordered.into_iter().map(|i| sccs[i].clone()).collect()
+}
+
+fn kemeny_young(net: &[Vec<i64>], rsb: &[usize]) -> Vec<usize> {
+    let mut out = Vec::with_capacity(net.len());
+    for scc in tarjan_sccs_best_first(net, rsb) {
+        if scc.len() <= 1 {
+            out.extend(scc);
+        } else if scc.len() <= KEMENY_EXACT_CAP {
+            out.extend(kemeny_branch_and_bound(&scc, net, rsb));
+        } else {
+            out.extend(kemeny_copeland(&scc, net, rsb));
+        }
+    }
+    out
+}
+
+/// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
+/// grow the window. The pool is that window, so its size is the caller's k.
+fn rank1_gatekeeper(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+    let n = list.len();
+    if n < 2 {
+        return;
+    }
+    let pool = list.clone();
+    let slots = wh_slots(query);
+    let degree = pool_structural_degree(ix, &pool);
+    let mut net = vec![vec![0i64; n]; n];
+    for a in 0..n {
+        for b in (a + 1)..n {
+            let (ta, tb) = (pool[a], pool[b]);
+            let mut margin = 0i64;
+            let scene_a = t_scene.get(ta).copied().unwrap_or(0.0);
+            let scene_b = t_scene.get(tb).copied().unwrap_or(0.0);
+            match scene_a.partial_cmp(&scene_b).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Greater => margin += 1,
+                std::cmp::Ordering::Less => margin -= 1,
+                std::cmp::Ordering::Equal => {}
+            }
+            match degree[a].cmp(&degree[b]) {
+                std::cmp::Ordering::Greater => margin += 1,
+                std::cmp::Ordering::Less => margin -= 1,
+                std::cmp::Ordering::Equal => {}
+            }
+            let stab_a = ix.turns.get(ta).map(|t| t.stability).unwrap_or(0.0);
+            let stab_b = ix.turns.get(tb).map(|t| t.stability).unwrap_or(0.0);
+            match stab_a.partial_cmp(&stab_b).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Greater => margin += 1,
+                std::cmp::Ordering::Less => margin -= 1,
+                std::cmp::Ordering::Equal => {}
+            }
+            if slots != 0 {
+                let ok_a = wh_satisfied(ix, ta, slots, degree[a] > 0);
+                let ok_b = wh_satisfied(ix, tb, slots, degree[b] > 0);
+                if ok_a && !ok_b {
+                    margin += 1;
+                } else if ok_b && !ok_a {
+                    margin -= 1;
+                }
+            }
+            net[a][b] = margin;
+            net[b][a] = -margin;
+        }
+    }
+    let rsb: Vec<usize> = (0..n).collect();
+    let mut order = kemeny_young(&net, &rsb);
+    if order.len() != n {
+        order = rsb.clone();
+    }
+    let mut turned: Vec<usize> = order.iter().map(|&i| pool[i]).collect();
+    if turn_is_superseded(ix, turned[0]) {
+        if let Some(pos) = turned.iter().position(|&ti| !turn_is_superseded(ix, ti)) {
+            let keeper = turned.remove(pos);
+            turned.insert(0, keeper);
+        }
+    }
+    *list = turned;
+}
+
+/// Slot 1 is the RSB v4 head. The gatekeeper reorders only the rest.
+/// ATMS, the four ballots, and the Copeland cap run on that tail exactly as
+/// they do on a full window. The head is not a candidate for demotion.
+fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>, t_scene: &[f32]) {
+    if list.len() < 2 {
+        return;
+    }
+    let head = list[0];
+    let mut tail = list[1..].to_vec();
+    rank1_gatekeeper(ix, query, &mut tail, t_scene);
+    list.clear();
+    list.push(head);
+    list.extend(tail);
+}
+
+
+// =========================================================================
+// REPLAY DUMP (off unless VESTIGE_REPLAY_DUMP is set; never changes ranking)
+// =========================================================================
+
+fn replay_dump_path() -> Option<String> {
+    match std::env::var("VESTIGE_REPLAY_DUMP") {
+        Ok(p) if !p.is_empty() => Some(p),
+        _ => None,
+    }
+}
+
+/// Snapshot only. No HashMap/HashSet: those would advance Rust's hasher
+/// seed and change later queries in the same RankRequest.
+struct ReplaySnap {
+    query_text: String,
+    query_date: String,
+    k: usize,
+    is_event_sequence: bool,
+    temporal: bool,
+    seated: Vec<usize>,
+    final_session_indices: Vec<usize>,
+    t_scene: Vec<f32>,
+}
+
+thread_local! {
+    static REPLAY_SNAPS: std::cell::RefCell<Vec<ReplaySnap>> = std::cell::RefCell::new(Vec::new());
+}
+
+fn maybe_dump_replay(
+    _ix: &Index,
+    q: &Query,
+    k: usize,
+    it: &QueryIntent,
+    t_scene: &[f32],
+    seated: &[usize],
+    final_session_indices: &[usize],
+) {
+    if replay_dump_path().is_none() {
+        return;
+    }
+    REPLAY_SNAPS.with(|slot| {
+        slot.borrow_mut().push(ReplaySnap {
+            query_text: q.text.clone(),
+            query_date: q.date.clone(),
+            k,
+            is_event_sequence: it.is_event_sequence,
+            temporal: it.temporal,
+            seated: seated.to_vec(),
+            final_session_indices: final_session_indices.to_vec(),
+            t_scene: t_scene.to_vec(),
+        });
+    });
+}
+
+fn flush_replay_dumps(ix: &Index) {
+    let Some(path) = replay_dump_path() else {
+        return;
+    };
+    let snaps = REPLAY_SNAPS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+    if snaps.is_empty() {
+        return;
+    }
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => std::io::BufWriter::new(f),
+        Err(e) => {
+            eprintln!("VESTIGE_REPLAY_DUMP open failed: {e}");
+            return;
+        }
+    };
+    for snap in snaps {
+        write_one_replay_dump(ix, &snap, &mut file);
+    }
+    let _ = file.flush();
+}
+
+/// Dump-only. ASCII alphanumeric split, same character geometry as the later
+/// `query_tokens` helper. Not wired into ranking.
+fn dump_query_tokens(query: &str) -> Vec<String> {
+    query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// Dump-only information content from the conversation's own counts.
+/// `((n+1)/(df+1)).ln()`. Not wired into ranking.
+fn dump_token_ic(n: usize, df: usize) -> f64 {
+    ((n as f64 + 1.0) / (df as f64 + 1.0)).ln()
+}
+
+/// Last non-space character is ASCII '?'. Dump-only. Not wired into ranking.
+fn dump_ends_with_question(body: &str) -> bool {
+    body.as_bytes()
+        .iter()
+        .rev()
+        .find(|&&b| b != b' ' && b != b'\t' && b != b'\n' && b != b'\r')
+        .copied()
+        == Some(b'?')
+}
+
+/// Direct same-session reply: the next turn in this session whose stored
+/// `answers` edge points at `ti`. None when that edge is absent. Dump-only.
+fn dump_response_turn_of(ix: &Index, ti: usize) -> Option<usize> {
+    let t = ix.turns.get(ti)?;
+    let members = ix.session_turns.get(t.session)?;
+    let pos = members.iter().position(|&m| m == ti)?;
+    let next = *members.get(pos + 1)?;
+    if ix.turns.get(next).and_then(|n| n.answers) == Some(ti) {
+        Some(next)
+    } else {
+        None
+    }
+}
+
+/// `IC_novel(t \ Q)`: sum of dump_token_ic over the turn's distinct raw_tokens
+/// that are not in the query token set, using the engine tokenizer and
+/// `t_own_stats` df. Tokens the engine never interned are skipped. Dump-only.
+fn dump_turn_ic_novel(ix: &Index, ti: usize, qset: &HashSet<String>, n_docs: usize) -> f64 {
+    let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut sum = 0.0;
+    for w in raw_tokens(body) {
+        if !seen.insert(w.clone()) || qset.contains(&w) {
+            continue;
+        }
+        let Some(id) = ix.vocab.get(&w) else {
+            continue;
+        };
+        let df = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+        sum += dump_token_ic(n_docs, df);
+    }
+    sum
+}
+
+fn dump_edge_ids(ix: &Index, targets: impl IntoIterator<Item = usize>) -> Vec<String> {
+    targets
+        .into_iter()
+        .filter_map(|tgt| ix.turns.get(tgt).map(|t| t.id.clone()))
+        .collect()
+}
+
+/// Dump-only copy of `pool_structural_degree` with an optional antecedent arm.
+/// Not wired into ranking. `include_rsb_antecedent = false` is `degree_none`.
+fn dump_pool_structural_degree(ix: &Index, pool: &[usize], include_rsb_antecedent: bool) -> Vec<i64> {
+    let mut at = vec![None; ix.turns.len()];
+    for (i, &ti) in pool.iter().enumerate() {
+        if let Some(slot) = at.get_mut(ti) {
+            *slot = Some(i);
+        }
+    }
+    let mut degree = vec![0i64; pool.len()];
+    for (src, t) in ix.turns.iter().enumerate() {
+        let mut hit = |target: usize| {
+            if target == src {
+                return;
+            }
+            if let Some(Some(slot)) = at.get(target) {
+                degree[*slot] += 1;
+            }
+        };
+        for &target in &t.policy_backlinks {
+            hit(target);
+        }
+        for &target in &t.supersedes_turns {
+            hit(target);
+        }
+        for &(_, target) in &t.exact_edges {
+            hit(target);
+        }
+        if include_rsb_antecedent {
+            if let Some(target) = rsb_antecedent(ix, src) {
+                hit(target);
+            }
+        }
+    }
+    degree
+}
+
+fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufWriter<std::fs::File>) {
+    let n_docs = ix.turns.len();
+    let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
+    let mut pool: Vec<usize> = snap.seated.clone();
+    for ti in order(&snap.t_scene, &turn_ts) {
+        if pool.len() >= 50 {
+            break;
+        }
+        if snap.t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        if !pool.contains(&ti) {
+            pool.push(ti);
+        }
+    }
+    let mut pre_rank: HashMap<usize, usize> = HashMap::with_capacity(pool.len());
+    for (i, &ti) in pool.iter().enumerate() {
+        pre_rank.insert(ti, i);
+    }
+    let mut final_rank: HashMap<usize, usize> = HashMap::new();
+    for (i, &ti) in snap.seated.iter().enumerate() {
+        final_rank.insert(ti, i);
+    }
+    let deg_closed = dump_pool_structural_degree(ix, &pool, true);
+    let deg_none = dump_pool_structural_degree(ix, &pool, false);
+    let mut degree_closed: HashMap<usize, i64> = HashMap::new();
+    let mut degree_none: HashMap<usize, i64> = HashMap::new();
+    for (i, &ti) in pool.iter().enumerate() {
+        degree_closed.insert(ti, deg_closed[i]);
+        degree_none.insert(ti, deg_none[i]);
+    }
+
+    let qset: HashSet<String> = raw_tokens(&snap.query_text).into_iter().collect();
+    let mut qtoks: Vec<Value> = Vec::new();
+    let mut seen_tok: HashSet<String> = HashSet::new();
+    for tok in dump_query_tokens(&snap.query_text) {
+        if !seen_tok.insert(tok.clone()) {
+            continue;
+        }
+        let mut df = 0usize;
+        let mut ids: Vec<u32> = Vec::new();
+        if let Some(id) = ix.vocab.get(&tok) {
+            ids.push(id);
+            df = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+        }
+        let stemmed = stem(&tok);
+        if stemmed != tok {
+            if let Some(id) = ix.vocab.get(&stemmed) {
+                ids.push(id);
+                let d2 = ix.t_own_stats.df.get(&id).copied().unwrap_or(0) as usize;
+                if d2 > df {
+                    df = d2;
+                }
+            }
+        }
+        let ic = dump_token_ic(n_docs, df);
+        qtoks.push(json!({
+            "tok": tok,
+            "df": df,
+            "ic": ic,
+            "ids": ids,
+        }));
+    }
+
+    let qtok_present = |ti: usize| -> Vec<bool> {
+        let body = ix.turns.get(ti).map(|t| t.body.as_str()).unwrap_or("");
+        let body_toks: HashSet<String> = dump_query_tokens(body).into_iter().collect();
+        let content = ix.turns.get(ti).map(|t| &t.content);
+        let mut present: Vec<bool> = Vec::with_capacity(qtoks.len());
+        for tok in qtoks.iter() {
+            let t = tok.get("tok").and_then(|v| v.as_str()).unwrap_or("");
+            let mut hit = body_toks.contains(t);
+            if !hit {
+                if let Some(arr) = tok.get("ids").and_then(|v| v.as_array()) {
+                    if let Some(content) = content {
+                        for idv in arr {
+                            if let Some(id) = idv.as_u64() {
+                                if content.contains(&(id as u32)) {
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            present.push(hit);
+        }
+        present
+    };
+
+    let emit_turn = |ti: usize, rank_pre: Option<usize>| -> Value {
+        let t = &ix.turns[ti];
+        let cause = rsb_cause(ix, ti);
+        let cause_id = cause.map(|c| ix.turns[c].id.clone());
+        let cause_rank = cause.and_then(|c| pre_rank.get(&c).copied());
+        let mut symptom_ids: Vec<String> = Vec::new();
+        for &s in &snap.seated {
+            if rsb_cause(ix, s) == Some(ti) {
+                symptom_ids.push(ix.turns[s].id.clone());
+            }
+        }
+        let sess = t.session;
+        let session_order = turn_pos(ix, ti).unwrap_or(0);
+        let parent_id = t.answers.and_then(|p| ix.turns.get(p).map(|x| x.id.clone()));
+        json!({
+            "id": t.id,
+            "idx": ti,
+            "rank_pre": rank_pre,
+            "rank": final_rank.get(&ti).copied(),
+            "t_scene": snap.t_scene.get(ti).copied().unwrap_or(0.0),
+            "t_scene_bits": snap.t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+            "stability": t.stability,
+            "stability_bits": t.stability.to_bits(),
+            "session": sess,
+            "session_id": ix.session_ids.get(sess).cloned().unwrap_or_default(),
+            "session_order": session_order,
+            "role": t.speaker,
+            "ends_with_question": dump_ends_with_question(&t.body),
+            "is_question": t.is_question,
+            "turn_ic_novel": dump_turn_ic_novel(ix, ti, &qset, n_docs),
+            "ts": ix.session_ts.get(sess).copied().unwrap_or(0),
+            "superseded": turn_is_superseded(ix, ti),
+            "response_turn_id": dump_response_turn_of(ix, ti).map(|r| ix.turns[r].id.clone()),
+            "parent_user_turn_id": parent_id,
+            "rsb_seated": final_rank.contains_key(&ti),
+            "rsb_cause_id": cause_id,
+            "rsb_cause_rank": cause_rank,
+            "rsb_symptom_ids": symptom_ids,
+            "exact_edges": dump_edge_ids(ix, t.exact_edges.iter().map(|&(_, tgt)| tgt)),
+            "policy_backlinks": dump_edge_ids(ix, t.policy_backlinks.iter().copied()),
+            "degree_closed": degree_closed.get(&ti).copied().unwrap_or(0),
+            "degree_none": degree_none.get(&ti).copied().unwrap_or(0),
+            "qtok_present": qtok_present(ti),
+        })
+    };
+
+    let mut cands: Vec<Value> = Vec::with_capacity(pool.len());
+    for (rank, &ti) in pool.iter().enumerate() {
+        cands.push(emit_turn(ti, Some(rank)));
+    }
+
+    // Sessions in official turn top-10 or official session top-10: every turn.
+    let mut sess_keep: HashSet<usize> = HashSet::new();
+    for &ti in snap.seated.iter().take(10) {
+        sess_keep.insert(ix.turns[ti].session);
+    }
+    for &si in snap.final_session_indices.iter().take(10) {
+        sess_keep.insert(si);
+    }
+    let mut sess_keys: Vec<usize> = sess_keep.into_iter().collect();
+    sess_keys.sort_unstable();
+    let mut session_turns: Vec<Value> = Vec::new();
+    for sess in sess_keys {
+        let members = match ix.session_turns.get(sess) {
+            Some(m) => m,
+            None => continue,
+        };
+        for &ti in members {
+            session_turns.push(emit_turn(ti, pre_rank.get(&ti).copied()));
+        }
+    }
+
+    let query_ts = parse_date(&snap.query_date);
+    let slots = wh_slots(&snap.query_text);
+    let rec = json!({
+        "query_text": snap.query_text,
+        "query_date": snap.query_date,
+        "query_ts": query_ts,
+        "first_session_id": ix.session_ids.first().cloned().unwrap_or_default(),
+        "n_sessions": ix.session_ids.len(),
+        "n_turns": ix.turns.len(),
+        "k": snap.k,
+        "wh_slots": slots,
+        "wh_class": format!("WH_SLOTS_{slots}"),
+        "is_event_sequence": snap.is_event_sequence,
+        "temporal": snap.temporal,
+        "pool_size": pool.len(),
+        "pre_ids": pool.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "seated_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "final_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "final_session_ids": snap.final_session_indices.iter().map(|&si| ix.session_ids[si].clone()).collect::<Vec<_>>(),
+        "head_id": snap.seated.first().map(|&ti| ix.turns[ti].id.clone()),
+        "query_tokens": qtoks,
+        "candidates": cands,
+        "session_turns": session_turns,
+    });
+    let _ = writeln!(file, "{rec}");
+}
+
+
 pub fn rank(req: &RankRequest) -> RankResponse {
 
     let ix = build_index(&req.sessions, &req.params);
     let results = req.queries.iter().map(|q| rank_one(&ix, q, &req.params, req.top_k)).collect();
+    flush_replay_dumps(&ix);
     RankResponse {
         engine: ENGINE,
         sessions_indexed: ix.session_ids.len(),
@@ -7720,6 +8793,147 @@ mod recall_cue_tests {
             !ids.contains(&"rule".to_string()),
             "a temporal question must not import a policy from another episode, got {ids:?}"
         );
+    }
+
+    #[test]
+    fn kemeny_puts_the_condorcet_winner_first() {
+        let net = vec![
+            vec![0, 1, 1],
+            vec![-1, 0, 1],
+            vec![-1, -1, 0],
+        ];
+        assert_eq!(kemeny_young(&net, &[0, 1, 2]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn kemeny_branch_and_bound_matches_brute_force() {
+        let net = vec![
+            vec![0, 2, -1, 1],
+            vec![-2, 0, 3, -1],
+            vec![1, -3, 0, 2],
+            vec![-1, 1, -2, 0],
+        ];
+        let rsb = [0, 1, 2, 3];
+        let solved = kemeny_branch_and_bound(&[0, 1, 2, 3], &net, &rsb);
+        let mut best = i64::MIN;
+        let mut best_order = Vec::new();
+        let mut perm = vec![0usize, 1, 2, 3];
+        fn walk(perm: &mut [usize], i: usize, net: &[Vec<i64>], best: &mut i64, best_order: &mut Vec<usize>) {
+            if i == perm.len() {
+                let score = kemeny_pair_score(perm, net);
+                if score > *best {
+                    *best = score;
+                    *best_order = perm.to_vec();
+                }
+                return;
+            }
+            for j in i..perm.len() {
+                perm.swap(i, j);
+                walk(perm, i + 1, net, best, best_order);
+                perm.swap(i, j);
+            }
+        }
+        walk(&mut perm, 0, &net, &mut best, &mut best_order);
+        assert_eq!(kemeny_pair_score(&solved, &net), best);
+        let solved_key: Vec<usize> = solved.iter().copied().collect();
+        let mut lex_best = solved_key.clone();
+        let mut perm = vec![0usize, 1, 2, 3];
+        fn walk_lex(perm: &mut [usize], i: usize, net: &[Vec<i64>], best: i64, lex_best: &mut Vec<usize>) {
+            if i == perm.len() {
+                if kemeny_pair_score(perm, net) == best && perm < lex_best {
+                    *lex_best = perm.to_vec();
+                }
+                return;
+            }
+            for j in i..perm.len() {
+                perm.swap(i, j);
+                walk_lex(perm, i + 1, net, best, lex_best);
+                perm.swap(i, j);
+            }
+        }
+        walk_lex(&mut perm, 0, &net, best, &mut lex_best);
+        assert_eq!(solved_key, lex_best);
+    }
+
+    #[test]
+    fn kemeny_tie_keeps_the_rsb_order() {
+        let net = vec![vec![0i64; 4]; 4];
+        assert_eq!(kemeny_young(&net, &[0, 1, 2, 3]), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn gatekeeper_demotes_a_superseded_rank_one() {
+        let sessions = vec![s("s", vec![
+            t("old", "user", "The camera is a Sony A7."),
+            t("fresh", "user", "The camera is a Sony A7C."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let old = idx(&ix, "old");
+        let fresh = idx(&ix, "fresh");
+        ix.turns[fresh].supersedes_turns.push(old);
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[old] = 3.0;
+        scene[fresh] = 1.0;
+        let mut list = vec![old, fresh];
+        rank1_gatekeeper(&ix, "which camera", &mut list, &scene);
+        assert_eq!(list[0], fresh, "a superseded turn cannot hold rank 1");
+    }
+
+    #[test]
+    fn gatekeeper_when_query_prefers_a_clock_form() {
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let clock = idx(&ix, "clock");
+        assert!(ix.turns[clock].form_clock);
+        assert!(!ix.turns[plain].form_clock);
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![plain, clock];
+        rank1_gatekeeper(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list[0], clock);
+    }
+
+    #[test]
+    fn gatekeeper_v2_keeps_the_rsb_head_and_reorders_the_tail() {
+        let sessions = vec![s("s", vec![
+            t("plain", "user", "We met downtown after the show."),
+            t("other", "user", "We met downtown after the show again."),
+            t("clock", "user", "We met at 18:40 after the show."),
+        ])];
+        let ix = ix_of(&sessions);
+        let plain = idx(&ix, "plain");
+        let other = idx(&ix, "other");
+        let clock = idx(&ix, "clock");
+        let scene = vec![1.0f32; ix.turns.len()];
+        let mut list = vec![plain, other, clock];
+        rank1_gatekeeper_keep_rsb_head(&ix, "When did we meet?", &mut list, &scene);
+        assert_eq!(list, vec![plain, clock, other]);
+    }
+
+    #[test]
+    fn gatekeeper_v2_does_not_demote_the_rsb_head() {
+        let sessions = vec![s("s", vec![
+            t("head", "user", "The camera is a Sony A7."),
+            t("old", "user", "The lens is a fifty."),
+            t("fresh", "user", "The lens is a thirty five."),
+        ])];
+        let mut ix = ix_of(&sessions);
+        let head = idx(&ix, "head");
+        let old = idx(&ix, "old");
+        let fresh = idx(&ix, "fresh");
+        ix.turns[fresh].supersedes_turns.push(head);
+        ix.turns[fresh].supersedes_turns.push(old);
+        let mut scene = vec![0.0f32; ix.turns.len()];
+        scene[head] = 1.0;
+        scene[old] = 3.0;
+        scene[fresh] = 1.0;
+        let mut list = vec![head, old, fresh];
+        rank1_gatekeeper_keep_rsb_head(&ix, "which camera", &mut list, &scene);
+        assert_eq!(list[0], head, "slot 1 stays the RSB head");
+        assert_eq!(list[1], fresh, "ATMS still demotes a superseded turn inside the tail");
     }
 
     #[test]
