@@ -5936,13 +5936,18 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     }
     // BoundaryPrimacy: runs after ReplySource, on the final list, so it shares one path with live recall.
     let q_cues = query_cues(ix, &q.text);
-    boundary_primacy(ix, &q_cues, &mut final_turn_indices);
+    let cue_guard = RecallCueGuard {
+        plan: &plan,
+        it: &it,
+        t_scene: &t_scene,
+    };
+    boundary_primacy_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // GivenNew runs after BoundaryPrimacy on the same final list (one path for live and bench).
-    given_new(ix, &q_cues, &mut final_turn_indices);
+    given_new_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // SessionOpenerLift runs after GivenNew, on the same final list (one path for live and bench).
-    session_opener_lift_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&plan));
+    session_opener_lift_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
-    hearsay(ix, &q_cues, &mut final_turn_indices);
+    hearsay_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
     // Never in front of the symptom. A full window does not grow.
@@ -6035,11 +6040,100 @@ fn is_structural_personal_turn(ix: &Index, ti: usize) -> bool {
             || (tr.speaker == "user" && turn_pos(ix, ti).map_or(false, |pos| pos <= 4)))
 }
 
+struct RecallCueGuard<'a> {
+    plan: &'a QueryPlan,
+    it: &'a QueryIntent,
+    t_scene: &'a [f32],
+}
+
+/// Score-dominance and state-polarity guard for `boundary_primacy`, `given_new`,
+/// and `session_opener_lift_with_plan`. When `guard` is `None` (direct unit tests),
+/// preserves baseline structural behavior.
+fn recall_cue_promotion_allowed(
+    ix: &Index,
+    guard: Option<&RecallCueGuard<'_>>,
+    top: usize,
+    cand: usize,
+) -> bool {
+    let Some(g) = guard else {
+        return true;
+    };
+    let t_top = &ix.turns[top];
+    let t_cand = &ix.turns[cand];
+    // Never demote a user turn to an assistant turn unless the query asks what the assistant said.
+    if !g.it.assistant_attribution && t_top.speaker == "user" && t_cand.speaker == "assistant" {
+        return false;
+    }
+    // Never promote a superseded turn over a non-superseded turn on non-sequence queries.
+    if !g.it.is_event_sequence && turn_is_superseded(ix, cand) && !turn_is_superseded(ix, top) {
+        return false;
+    }
+    let sc_top = g.t_scene.get(top).copied().unwrap_or(0.0);
+    let sc_cand = g.t_scene.get(cand).copied().unwrap_or(0.0);
+    // On assistant-attribution queries, never demote a clearly dominant assistant turn (>1.25x) to user.
+    if g.it.assistant_attribution
+        && t_top.speaker == "assistant"
+        && t_cand.speaker == "user"
+        && sc_top > 1.25 * sc_cand
+    {
+        return false;
+    }
+    let cand_is_opener = turn_pos(ix, cand) == Some(0);
+    // Never promote a mid-session interrogative user turn over a stronger declarative user turn.
+    if !cand_is_opener
+        && t_cand.speaker == "user"
+        && t_top.speaker == "user"
+        && t_cand.is_question
+        && !t_top.is_question
+        && sc_top > 1.05 * sc_cand
+    {
+        return false;
+    }
+    // On current-state queries, never demote a stronger same-session later turn to a non-opener earlier turn.
+    if g.it.current_state
+        && !cand_is_opener
+        && t_cand.session == t_top.session
+        && t_cand.speaker == "user"
+        && t_top.speaker == "user"
+        && sc_top > 1.05 * sc_cand
+    {
+        return false;
+    }
+    // Score-dominance guard (>1.45x): block overriding a clearly dominant `top` unless
+    // `cand` is a richer candidate against an interrogative `top` (`cand_ic > top_ic`) or
+    // a high-information session opener (`cand_ic >= 1.5 * top_ic` or `top_ic < 15.0`).
+    if sc_top > 1.45 * sc_cand {
+        if g.it.assistant_attribution && t_top.speaker == "assistant" {
+            return false;
+        }
+        let (cand_ic, _, _) = turn_novel_slot_profile(ix, g.plan, cand);
+        let (top_ic, _, _) = turn_novel_slot_profile(ix, g.plan, top);
+        if t_top.is_question {
+            if cand_ic <= top_ic {
+                return false;
+            }
+        } else if !cand_is_opener || (top_ic >= 15.0 && cand_ic < 1.5 * top_ic) {
+            return false;
+        }
+    }
+    true
+}
+
 /// BoundaryPrimacy (event-boundary primacy; Zheng 2022, Ezzyat & Davachi 2011). If rank 1 is not
 /// its session's opening turn, it matched at least one query cue, and that session's opener is
 /// already inside the top `PRIMACY_WINDOW` and carries every cue rank 1 matched, the opener takes
 /// slot 1 and the rest keep their order. Never crosses sessions; never changes the top-5 set.
+#[cfg(test)]
 fn boundary_primacy(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    boundary_primacy_with_plan(ix, q_cues, list, None)
+}
+
+fn boundary_primacy_with_plan(
+    ix: &Index,
+    q_cues: &[u32],
+    list: &mut Vec<usize>,
+    guard: Option<&RecallCueGuard<'_>>,
+) -> bool {
     if list.len() < 2 {
         return false;
     }
@@ -6058,6 +6152,9 @@ fn boundary_primacy(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
     if !covers_cues(&turn_query_cues(ix, q_cues, opener), &top_cues) {
         return false;
     }
+    if !recall_cue_promotion_allowed(ix, guard, top, opener) {
+        return false;
+    }
     list.remove(at);
     list.insert(0, opener);
     true
@@ -6074,7 +6171,17 @@ const GIVEN_NEW_CHAT_ROLES_ONLY: bool = true;
 /// matched at least one query cue, take the earliest turn of rank 1's own session whose cues cover
 /// every cue rank 1 matched. When that turn comes before rank 1 and is already inside the top
 /// `GIVEN_NEW_WINDOW`, it takes slot 1 and the rest keep their order. Never crosses sessions.
+#[cfg(test)]
 fn given_new(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    given_new_with_plan(ix, q_cues, list, None)
+}
+
+fn given_new_with_plan(
+    ix: &Index,
+    q_cues: &[u32],
+    list: &mut Vec<usize>,
+    guard: Option<&RecallCueGuard<'_>>,
+) -> bool {
     if list.len() < 2 {
         return false;
     }
@@ -6094,6 +6201,9 @@ fn given_new(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
             return false;
         }
         if covers_cues(&turn_query_cues(ix, q_cues, z), &top_cues) {
+            if !recall_cue_promotion_allowed(ix, guard, top, z) {
+                continue;
+            }
             let window = list.len().min(GIVEN_NEW_WINDOW);
             let Some(at) = list[1..window].iter().position(|&t| t == z).map(|i| i + 1) else { return false };
             list.remove(at);
@@ -6122,7 +6232,7 @@ fn session_opener_lift_with_plan(
     ix: &Index,
     q_cues: &[u32],
     list: &mut Vec<usize>,
-    rung2_plan: Option<&QueryPlan>,
+    guard: Option<&RecallCueGuard<'_>>,
 ) -> bool {
     if list.len() < 2 {
         return false;
@@ -6145,10 +6255,13 @@ fn session_opener_lift_with_plan(
         if turn_pos(ix, cand) != Some(0) {
             continue;
         }
-        if let Some(plan) = rung2_plan {
-            if !rung2_opener_lift_allowed(ix, plan, top, cand) {
+        if let Some(g) = guard {
+            if !rung2_opener_lift_allowed(ix, g.plan, top, cand) {
                 continue;
             }
+        }
+        if !recall_cue_promotion_allowed(ix, guard, top, cand) {
+            continue;
         }
         if !covers_cues(&turn_query_cues(ix, q_cues, cand), &top_cues) {
             continue;
@@ -6168,9 +6281,24 @@ const HEARSAY_WINDOW: usize = 5;
 /// least one query cue, take the first user turn at ranks 2 through `HEARSAY_WINDOW`,
 /// from any session, whose cues cover every cue rank 1 matched. That user turn takes
 /// slot 1 and the rest keep their order. Never changes the top-5 set.
+#[cfg(test)]
 fn hearsay(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
+    hearsay_with_plan(ix, q_cues, list, None)
+}
+
+fn hearsay_with_plan(
+    ix: &Index,
+    q_cues: &[u32],
+    list: &mut Vec<usize>,
+    guard: Option<&RecallCueGuard<'_>>,
+) -> bool {
     if list.len() < 2 {
         return false;
+    }
+    if let Some(g) = guard {
+        if g.it.assistant_attribution {
+            return false;
+        }
     }
     let top = list[0];
     if ix.turns[top].speaker.as_str() != "assistant" {
@@ -6185,6 +6313,16 @@ fn hearsay(ix: &Index, q_cues: &[u32], list: &mut Vec<usize>) -> bool {
         let cand = list[i];
         if ix.turns[cand].speaker.as_str() != "user" {
             continue;
+        }
+        if let Some(g) = guard {
+            let sc_top = g.t_scene.get(top).copied().unwrap_or(0.0);
+            let sc_cand = g.t_scene.get(cand).copied().unwrap_or(0.0);
+            if sc_top > 2.0 * sc_cand {
+                continue;
+            }
+            if !g.it.is_event_sequence && turn_is_superseded(ix, cand) && !turn_is_superseded(ix, top) {
+                continue;
+            }
         }
         if !covers_cues(&turn_query_cues(ix, q_cues, cand), &top_cues) {
             continue;
