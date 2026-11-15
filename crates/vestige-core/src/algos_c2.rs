@@ -1232,7 +1232,8 @@ fn apply_c2_answered_opener_decl_seat(
 /// questions, event sequences and assistant-attribution (caller), and
 /// named-speaker sessions. No new constant: the scene floor is "at
 /// least as on-scene," the same comparison #12, #27, and #28 use.
-/// Invoked after the gatekeeper, after #28, as the last ranking change.
+/// Invoked after the gatekeeper, after #28. A later post-gatekeeper
+/// C2 seat may still run after this pass.
 fn apply_c2_solo_earlier_opener_seat(
     ix: &Index,
     plan: &QueryPlan,
@@ -1283,6 +1284,106 @@ fn apply_c2_solo_earlier_opener_seat(
         }
         list.remove(i);
         list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
+
+/// Pool opener T@10 entry. A user session opener that is in the
+/// scene-ranked retrieval pool but not yet in the official k takes the
+/// official-k seat of the last assistant in the official-k tail (slots
+/// 6..k) that is not the unique official-k representative of its
+/// session, is not slot 1's immediately following same-session turn,
+/// and whose session still has a user turn in the official k, when that
+/// opener is at least as on-scene as the evicted assistant. The top 5
+/// is unchanged, so T@5 and All@5 cannot drop. The replacement is
+/// refused when it would push any session out of the first 5
+/// unique-session slots, so S@5 cannot drop. Distinct from #21 (the
+/// candidate is already in the official k, and the victim is pulled
+/// into the top 5) and from pull-outsider / drop-official-last (that
+/// class evicts official last and can change the top 5). No new
+/// constant: the scene floor is "at least as on-scene," the same
+/// comparison #12 and #21 use. Skipped on summary requests (existing
+/// `summary_hold` shape), preference, temporal, and WH-person questions,
+/// event sequences and assistant-attribution (caller), and named-speaker
+/// sessions. Invoked after the gatekeeper, after #29, as the last
+/// ranking change.
+fn apply_c2_pool_opener_t10_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    if list.len() <= window {
+        return false;
+    }
+    let k = list.len();
+    let head_sess = ix.turns[top].session;
+    let head_pos = c2_session_pos(ix, top);
+    let mut vs = None;
+    for i in window..k {
+        let tid = list[i];
+        if ix.turns[tid].speaker != "assistant" || c2_named_session(ix, tid) {
+            continue;
+        }
+        let sess = ix.turns[tid].session;
+        if list.iter().filter(|&&u| ix.turns[u].session == sess).count() < 2 {
+            continue;
+        }
+        if sess == head_sess && c2_session_pos(ix, tid) == head_pos + 1 {
+            continue;
+        }
+        if !list
+            .iter()
+            .any(|&u| u != tid && ix.turns[u].speaker == "user" && ix.turns[u].session == sess)
+        {
+            continue;
+        }
+        vs = Some(i);
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    let sc_v = t_scene.get(list[vs]).copied().unwrap_or(0.0);
+    if sc_v <= 0.0 {
+        return false;
+    }
+    let turn_ts: Vec<i64> = ix
+        .turns
+        .iter()
+        .map(|t| ix.session_ts.get(t.session).copied().unwrap_or(0))
+        .collect();
+    for ti in order(t_scene, &turn_ts) {
+        if list.contains(&ti) || t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        let t = &ix.turns[ti];
+        if t.speaker != "user" || c2_named_session(ix, ti) || c2_session_pos(ix, ti) != 0 {
+            continue;
+        }
+        if t_scene.get(ti).copied().unwrap_or(0.0) < sc_v {
+            continue;
+        }
+        if !c2_s5_replace_preserved(ix, list, vs, ti) {
+            continue;
+        }
+        list[vs] = ti;
         return true;
     }
     false
@@ -1473,6 +1574,20 @@ fn c2_s5_membership_preserved(ix: &Index, list: &[usize], vs: usize, ci: usize) 
     let before = c2_first_sessions(ix, list, 5);
     let mut trial = list.to_vec();
     trial.swap(vs, ci);
+    let after = c2_first_sessions(ix, &trial, 5);
+    before.iter().all(|s| after.contains(s))
+}
+
+/// True when replacing official-k slot `vs` with `cand` (a turn not already
+/// in the list) keeps every session that already sat in the first 5
+/// unique-session slots of the official k.
+fn c2_s5_replace_preserved(ix: &Index, list: &[usize], vs: usize, cand: usize) -> bool {
+    if vs >= list.len() {
+        return false;
+    }
+    let before = c2_first_sessions(ix, list, 5);
+    let mut trial = list.to_vec();
+    trial[vs] = cand;
     let after = c2_first_sessions(ix, &trial, 5);
     before.iter().all(|s| after.contains(s))
 }
@@ -3755,6 +3870,96 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 2, 3];
         assert!(!apply_c2_solo_earlier_opener_seat(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 2, 3]);
+    }
+
+    #[test]
+
+    fn pool_opener_t10_entry_replaces_tail_assistant_with_pool_opener() {
+        // 2:instruction_following:1 shape: a user opener in the scene-ranked
+        // pool, not already in the official k, takes the official-k seat of
+        // the last non-unique tail assistant whose session still has a user
+        // in the official k, when that opener is at least as on-scene. The
+        // top 5 is unchanged.
+        let ix = build_index(
+            &[
+                sess("s0", &[("user", "I am starting a new practice project this month."), ("assistant", "Noted, I will keep that in mind.")]),
+                sess("s1", &[("user", "I also sketched a second practice project."), ("assistant", "I recorded that sketch.")]),
+                sess("s2", &[("user", "A third note is already in the log."), ("assistant", "The third note is stored.")]),
+                sess("s3", &[("user", "I logged a fourth practice reminder."), ("assistant", "I stored the fourth reminder.")]),
+                sess("s4", &[("user", "I keep a running total of API error types."), ("assistant", "I recorded those error types.")]),
+                sess("s5", &[("user", "Always confirm typical REST API errors when I build an application."), ("assistant", "Timeouts, 404s, and 500s are typical.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What typical errors should I be prepared to handle with a REST API?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        // Turns: 0-1 s0, 2-3 s1, 4-5 s2, 6-7 s3, 8-9 s4, 10-11 s5 (pool opener).
+        // Official k of 10; tail last evictable assistant is 9 (s4).
+        let mut list = vec![0usize, 1, 2, 3, 5, 6, 8, 4, 7, 9];
+        let t_scene = vec![1.0f32, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4, 0.35, 0.3, 0.5, 0.2];
+        let top5 = list[..5].to_vec();
+        assert!(apply_c2_pool_opener_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(&list[..5], &top5[..]);
+        assert_eq!(list[9], 10);
+        assert!(!list.contains(&9));
+        // Candidate below the victim's scene score: no entry.
+        let mut list = vec![0usize, 1, 2, 3, 5, 6, 8, 4, 7, 9];
+        assert!(!apply_c2_pool_opener_t10_entry(
+            &ix,
+            &plan,
+            &q.text,
+            &mut list,
+            &[1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4, 0.35, 0.55, 0.5, 0.2]
+        ));
+        assert_eq!(list, vec![0, 1, 2, 3, 5, 6, 8, 4, 7, 9]);
+        // Only evictable assistants are in the top 5; the tail assistant
+        // is unique and has no user in the official k: no entry.
+        let mut list = vec![0usize, 1, 3, 5, 7, 2, 4, 6, 8, 11];
+        assert!(!apply_c2_pool_opener_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 3, 5, 7, 2, 4, 6, 8, 11]);
+        // Preference questions are skipped.
+        let pq = Query { text: "What is my favorite way to handle REST API errors?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(c2_text_preference(&pq.text));
+        let mut list = vec![0usize, 1, 2, 3, 5, 6, 8, 4, 7, 9];
+        assert!(!apply_c2_pool_opener_t10_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 5, 6, 8, 4, 7, 9]);
+        // Temporal questions keep the timeline path.
+        let tq = Query { text: "When do I handle REST API errors?".into(), date: String::new() };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(tplan.intent.temporal);
+        let mut list = vec![0usize, 1, 2, 3, 5, 6, 8, 4, 7, 9];
+        assert!(!apply_c2_pool_opener_t10_entry(&ix, &tplan, &tq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 5, 6, 8, 4, 7, 9]);
+        // WH-person questions are left to the existing midcap path.
+        let wq = Query { text: "Who handled the REST API errors?".into(), date: String::new() };
+        let wplan = plan_query(&ix, &wq, &Params::default());
+        assert_ne!(wh_slots(&wq.text) & WH_PERSON, 0);
+        let mut list = vec![0usize, 1, 2, 3, 5, 6, 8, 4, 7, 9];
+        assert!(!apply_c2_pool_opener_t10_entry(&ix, &wplan, &wq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 5, 6, 8, 4, 7, 9]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[
+                sess("D0", &[("caroline", "I am starting a new practice project this month."), ("melanie", "Noted, I will keep that in mind.")]),
+                sess("D1", &[("caroline", "I also sketched a second practice project."), ("melanie", "I recorded that sketch.")]),
+                sess("D2", &[("caroline", "A third note is already in the log."), ("melanie", "The third note is stored.")]),
+                sess("D3", &[("caroline", "I logged a fourth practice reminder."), ("melanie", "I stored the fourth reminder.")]),
+                sess("D4", &[("caroline", "I keep a running total of API error types."), ("melanie", "I recorded those error types.")]),
+                sess("D5", &[("caroline", "Always confirm typical REST API errors when I build an application."), ("melanie", "Timeouts, 404s, and 500s are typical.")]),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![0usize, 1, 2, 3, 5, 6, 8, 4, 7, 9];
+        assert!(!apply_c2_pool_opener_t10_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 5, 6, 8, 4, 7, 9]);
     }
 
     #[test]
