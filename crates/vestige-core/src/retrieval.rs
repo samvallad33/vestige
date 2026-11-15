@@ -4802,16 +4802,28 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         0.15
                     };
                     let next_w = if next_adds { 0.55 } else { 0.18 };
+                    let user_q_before_asst = ix.turns[ti].speaker == "user"
+                        && ix.turns[ti].is_question
+                        && !it.assistant_attribution
+                        && pos + 1 < members.len()
+                        && ix.turns[members[pos + 1]].speaker == "assistant";
+                    let next_tr_w = if user_q_before_asst && ix.turns[ti].is_pure_info_question {
+                        0.12
+                    } else {
+                        next_w
+                    };
                     let prev_sess = if pos > 0 { t_raw[members[pos - 1]] } else { 0.0 };
                     let next_sess = if pos + 1 < members.len() { t_raw[members[pos + 1]] } else { 0.0 };
                     t_scene_sess[ti] = 1.0 * t_raw[ti] + prev_w * prev_sess + next_w * next_sess;
                     let prev_tr = if pos > 0 { t_turn_raw[members[pos - 1]] } else { 0.0 };
                     let next_tr = if pos + 1 < members.len() { t_turn_raw[members[pos + 1]] } else { 0.0 };
-                    t_scene[ti] = 1.0 * t_turn_raw[ti] + prev_w * prev_tr + next_w * next_tr;
+                    t_scene[ti] = 1.0 * t_turn_raw[ti] + prev_w * prev_tr + next_tr_w * next_tr;
                     if pos > 0 && !ix.turns[ti].is_backchannel {
                         t_mask[ti] |= t_mask[members[pos - 1]];
                     }
-                    if pos + 1 < members.len() {
+                    if pos + 1 < members.len()
+                        && !(user_q_before_asst && ix.turns[ti].is_pure_info_question)
+                    {
                         t_mask[ti] |= t_mask[members[pos + 1]];
                     }
                 }
@@ -4865,6 +4877,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         }
 
         let exact_groups = exact_query_group_ids(&plan);
+        let q_ids: HashSet<u32> = plan.terms.iter().map(|qt| qt.id).collect();
 
         // Weapon 2: Deterministic Answer-Type Sniper + Query-Local Question-Echo Demotion
         if p.enable_sniper {
@@ -4879,11 +4892,16 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                     HashSet::new()
                 };
                 let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
+                let has_declarative_user_peer = members.iter().any(|&m| {
+                    ix.turns[m].speaker == "user" && !ix.turns[m].is_question && !ix.turns[m].is_backchannel
+                });
                 for &ti in members {
                     if t_scene[ti] <= 0.0 {
                         continue;
                     }
                     let t = &ix.turns[ti];
+                    let novel_entities = t.entities.iter().filter(|&&eid| !q_ids.contains(&eid)).count();
+                    let lacks_novel_assertion = !t.has_numeric && !t.form_clock && novel_entities < 2;
                     if it.sniper_when {
                         if t.has_temporal {
                             t_scene[ti] *= 1.65;
@@ -4897,6 +4915,16 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                         && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
                     {
                         t_scene[ti] *= 0.62;
+                    } else if !has_named_dialogue
+                        && !it.assistant_attribution
+                        && has_declarative_user_peer
+                        && !episodic_user_quote
+                        && t.speaker == "user"
+                        && t.is_question
+                        && lacks_novel_assertion
+                        && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
+                    {
+                        t_scene[ti] *= 0.72;
                     }
                     if it.sniper_how_many && t.has_numeric {
                         t_scene[ti] *= 1.65;
@@ -7805,6 +7833,69 @@ mod tests {
         let ranked = rank(&req);
         let ids: Vec<&str> = ranked.results[0].turns.iter().map(|t| t.id.as_str()).collect();
         assert!(ids.iter().any(|id| id.ends_with("#1")), "short reply missed the neighbor words: {ids:?}");
+    }
+
+    #[test]
+    fn harris_pure_info_question_does_not_leak_assistant_reply_while_factual_question_keeps_answer() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "trip".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn(
+                        "user",
+                        "I am planning another vacation soon. Can you give me tips on traveling in Asia?",
+                    ),
+                    turn(
+                        "assistant",
+                        "Sure! Many travelers spend fourteen days visiting ancient Kyoto temples in Japan.",
+                    ),
+                    turn(
+                        "user",
+                        "I actually visited Fushimi Inari Shrine in Kyoto and stayed two weeks in Japan during autumn.",
+                    ),
+                ],
+            }],
+            queries: vec![Query {
+                text: "How long was I in Kyoto Japan?".into(),
+                date: String::new(),
+            }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].turns[0].id, "trip#2");
+    }
+
+    #[test]
+    fn novel_assertion_protected_from_qecho_penalty_even_with_trailing_question() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "charity".into(),
+                date: String::new(),
+                timestamp: 1,
+                turns: vec![
+                    turn(
+                        "user",
+                        "I need training tips for raising money for charity since I raised $500 for American Cancer Society last month. Any advice?",
+                    ),
+                    turn(
+                        "user",
+                        "I am thinking about raising money for charity this season and hoping to do well. Can you share advice on raising money for charity?",
+                    ),
+                    turn("user", "Earlier I stretched before going out on the track."),
+                ],
+            }],
+            queries: vec![Query {
+                text: "How much money did I raise for charity?".into(),
+                date: String::new(),
+            }],
+            top_k: 3,
+            params: Params::default(),
+        };
+        let ranked = rank(&req);
+        assert_eq!(ranked.results[0].turns[0].id, "charity#0");
     }
 
     #[test]
