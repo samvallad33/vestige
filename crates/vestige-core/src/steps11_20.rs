@@ -121,6 +121,212 @@ fn apply_step11_kemeny_wh_slot_voter(
     }
 }
 
+/// Step 13 (`#42 Khipu Two-Hop Rare-Entity Turn Bridge` on `t_scene`):
+/// Extracts non-query rare proper entities (`\u{1}ent:*`, `2 <= exact_df <= 4`, `idf >= 3.45`)
+/// from strong substantive hop-1 turns (`top-2`, `t_own >= 0.65 * top_t_own`) and applies a bounded
+/// proportional score lift (`<= +22%` of `base_sc`, capped at `0.62 * src_scene`) to
+/// non-question, non-backchannel, non-superseded hop-2 turns in *other* sessions that already
+/// match at least one exact query group and sit below the top-rank ceiling.
+/// Pure entity-graph topology: exact `df` scan over `ix.turns` prevents false-rare `known_proper`
+/// speaker leaks (`known_proper` does not populate `t_own_stats.df`), excludes calendar tokens,
+/// excludes compound query entities, and never disturbs `hop1[0].session`.
+fn apply_step13_khipu_turn_bridge(
+    ix: &Index,
+    q_text: &str,
+    plan: &QueryPlan,
+    pref_on: bool,
+    it: &QueryIntent,
+    t_own: &[f32],
+    t_exact_mask: &[u64],
+    t_scene: &mut [f32],
+) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let gl = plan.groups.len().min(64);
+    if pref_on
+        || it.is_event_sequence
+        || it.assistant_attribution
+        || gl == 0
+        || t_own.is_empty()
+        || t_scene.len() != t_own.len()
+        || t_exact_mask.len() != t_own.len()
+    {
+        return;
+    }
+    let group_mask = if gl >= 64 { u64::MAX } else { (1u64 << gl) - 1 };
+
+    let q_lower = q_text.to_ascii_lowercase();
+    let mut query_words: BTreeSet<String> = BTreeSet::new();
+    for tok in raw_tokens(q_text) {
+        let low = tok.to_ascii_lowercase();
+        if !low.is_empty() {
+            query_words.insert(low);
+        }
+    }
+    for qt in &plan.terms {
+        if let Some(name) = ix.vocab.names.get(qt.id as usize) {
+            query_words.insert(name.to_ascii_lowercase());
+        }
+    }
+
+    let mut hop1: Vec<(f32, usize, usize)> = Vec::new();
+    for (ti, &own) in t_own.iter().enumerate() {
+        if own <= 0.0 || (t_exact_mask[ti] & group_mask) == 0 {
+            continue;
+        }
+        let t = &ix.turns[ti];
+        if t.field != 0 || t.is_question || t.is_backchannel || turn_is_superseded(ix, ti) {
+            continue;
+        }
+        hop1.push((own, t.session, ti));
+    }
+    if hop1.is_empty() {
+        return;
+    }
+    hop1.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    let top_own = hop1[0].0;
+    let top_session = hop1[0].1;
+    hop1.retain(|&(own, _, _)| own >= 0.40 * top_own);
+    hop1.truncate(3);
+
+    let mut candidate_eids: BTreeSet<u32> = BTreeSet::new();
+    for &(_own, _sess, ti) in &hop1 {
+        for &eid in &ix.turns[ti].entities {
+            if is_technical_handle(&ix.vocab, eid) {
+                continue;
+            }
+            if let Some(name) = ix.vocab.names.get(eid as usize) {
+                if let Some(surface) = name.strip_prefix("\u{1}ent:") {
+                    let low = surface.to_ascii_lowercase();
+                    if low.len() < 4 || query_words.contains(&low) {
+                        continue;
+                    }
+                    if MONTHS.contains(&low.as_str())
+                        || WEEKDAYS.contains(&low.as_str())
+                        || STARTER_STOP.contains(&low.as_str())
+                    {
+                        continue;
+                    }
+                    let spaced = low.replace('_', " ");
+                    if q_lower.contains(&spaced) {
+                        continue;
+                    }
+                    let parts: Vec<&str> = low.split('_').filter(|p| !p.is_empty()).collect();
+                    if parts.is_empty()
+                        || parts.iter().all(|&p| {
+                            query_words.contains(p)
+                                || MONTHS.contains(&p)
+                                || WEEKDAYS.contains(&p)
+                                || STARTER_STOP.contains(&p)
+                                || stopwords().contains(p)
+                        })
+                    {
+                        continue;
+                    }
+                    candidate_eids.insert(eid);
+                }
+            }
+        }
+    }
+    if candidate_eids.is_empty() {
+        return;
+    }
+
+    let mut exact_df: BTreeMap<u32, u32> = BTreeMap::new();
+    for &eid in &candidate_eids {
+        exact_df.insert(eid, 0);
+    }
+    for t in &ix.turns {
+        for &eid in &t.entities {
+            if let Some(cnt) = exact_df.get_mut(&eid) {
+                *cnt += 1;
+            }
+        }
+    }
+
+    let n_docs = ix.t_own_stats.n.max(ix.turns.len() as f32).max(1.0);
+    let mut rare_bridges: BTreeMap<u32, (f32, f32, usize)> = BTreeMap::new();
+    for (&eid, &df) in &exact_df {
+        if !(2..=8).contains(&df) {
+            continue;
+        }
+        let idf = ((n_docs - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln();
+        if idf < 3.2 {
+            continue;
+        }
+        let mut best_src: Option<(f32, usize, usize)> = None;
+        for &(_own, sess, ti) in &hop1 {
+            if ix.turns[ti].entities.contains(&eid) {
+                let sc = t_scene[ti].max(t_own[ti]);
+                if sc <= 0.0 {
+                    continue;
+                }
+                let replace = match best_src {
+                    None => true,
+                    Some((bsc, bsess, bti)) => {
+                        sc > bsc
+                            || (sc == bsc && (sess < bsess || (sess == bsess && ti < bti)))
+                    }
+                };
+                if replace {
+                    best_src = Some((sc, sess, ti));
+                }
+            }
+        }
+        if let Some((best_src_scene, best_src_sess, _)) = best_src {
+            rare_bridges.insert(eid, (idf, best_src_scene, best_src_sess));
+        }
+    }
+    if rare_bridges.is_empty() {
+        return;
+    }
+
+    let base_scene = t_scene.to_vec();
+    for (tj, sc_mut) in t_scene.iter_mut().enumerate() {
+        let base_sc = base_scene[tj];
+        if base_sc <= 0.0 || t_own[tj] <= 0.0 || (t_exact_mask[tj] & group_mask) == 0 {
+            continue;
+        }
+        let tj_turn = &ix.turns[tj];
+        if tj_turn.session == top_session
+            || tj_turn.field != 0
+            || tj_turn.is_question
+            || tj_turn.is_backchannel
+            || turn_is_superseded(ix, tj)
+        {
+            continue;
+        }
+        let mut best_cap = 0.0f32;
+        let mut hit_count = 0usize;
+        let mut idf_sum = 0.0f32;
+        for (&eid, &(idf, src_scene, best_src_sess)) in &rare_bridges {
+            if tj_turn.session == best_src_sess {
+                continue;
+            }
+            if tj_turn.entities.contains(&eid) {
+                hit_count += 1;
+                idf_sum += idf;
+                if src_scene > best_cap {
+                    best_cap = src_scene;
+                }
+            }
+        }
+        if hit_count > 0 && best_cap > 0.0 && idf_sum > 0.0 {
+            let ceiling = 0.80 * best_cap;
+            if base_sc < ceiling {
+                let mult_boost = base_sc * (0.05 * idf_sum).min(0.28);
+                let additive_cap = 0.22 * best_cap;
+                let boost = mult_boost.min(additive_cap);
+                *sc_mut = (base_sc + boost).min(ceiling);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod steps11_20_tests {
     use super::*;
@@ -132,5 +338,80 @@ mod steps11_20_tests {
         assert_eq!(step11_wh_qa_mode("How much did the repair cost?", false), (true, false));
         assert_eq!(step11_wh_qa_mode("Who won the bake-off?", false), (false, true));
         assert_eq!(step11_wh_qa_mode("Where did I put my keys?", false), (false, false));
+    }
+
+    #[test]
+    fn step13_khipu_bridge_transfers_across_sessions_bounded() {
+        let mut sessions = vec![
+            Session {
+                id: "s0".to_string(),
+                date: String::new(),
+                timestamp: 100,
+                turns: vec![Turn {
+                    id: "t0".to_string(),
+                    role: "user".to_string(),
+                    content: "I bought the espresso machine from ZappoRoast.".to_string(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            },
+            Session {
+                id: "s1".to_string(),
+                date: String::new(),
+                timestamp: 200,
+                turns: vec![Turn {
+                    id: "t1".to_string(),
+                    role: "user".to_string(),
+                    content: "ZappoRoast shipped a ceramic grinder to Portland.".to_string(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            },
+        ];
+        for i in 2..80 {
+            sessions.push(Session {
+                id: format!("s{i}"),
+                date: String::new(),
+                timestamp: (i as i64) * 100,
+                turns: vec![Turn {
+                    id: format!("t{i}"),
+                    role: "user".to_string(),
+                    content: format!("Routine filler note number {i} about weather."),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            });
+        }
+        let ix = build_index(&sessions, &Params::default());
+        let plan = QueryPlan {
+            intent: QueryIntent::default(),
+            terms: Vec::new(),
+            groups: vec!["espresso".to_string()],
+            group_of: DetHashMap::default(),
+            focal_ids: DetHashSet::default(),
+            focal_domains: DetHashSet::default(),
+        };
+        let mut t_own = vec![0.0f32; ix.turns.len()];
+        let mut t_exact_mask = vec![0u64; ix.turns.len()];
+        let mut t_scene = vec![0.0f32; ix.turns.len()];
+        t_own[0] = 10.0;
+        t_scene[0] = 10.0;
+        t_exact_mask[0] = 1;
+        t_own[1] = 2.0;
+        t_scene[1] = 2.0;
+        t_exact_mask[1] = 1;
+
+        apply_step13_khipu_turn_bridge(
+            &ix,
+            "Where did I buy the espresso machine?",
+            &plan,
+            false,
+            &QueryIntent::default(),
+            &t_own,
+            &t_exact_mask,
+            &mut t_scene,
+        );
+        assert!(t_scene[1] > 2.0, "expected cross-session ZappoRoast bridge boost, got {}", t_scene[1]);
+        assert!(t_scene[1] <= 8.0, "expected bounded cap <= 0.80 * 10.0, got {}", t_scene[1]);
     }
 }
