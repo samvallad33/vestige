@@ -6145,6 +6145,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             apply_c2_unique_group_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
             apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
         }
+        // Preference source: ReplySource is skipped on assistant_attribution,
+        // but "can you recommend..." is tagged that way by a present-tense cue.
+        // Membership-preserving; runs even when assistant_attribution is set.
+        apply_c2_preference_source_seat(ix, &plan, &q.text, &mut final_turn_indices);
     }
     // RSB: the retrieved turn is the symptom. Seat its structural cause
     // immediately after it. The cause can share no words with the query.
