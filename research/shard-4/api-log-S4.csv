@@ -1,0 +1,156 @@
+endpoint,http_status,result_count,note
+https://archive.org/advancedsearch.php?q=ashtadhyayi&fl[]=identifier&fl[]=title&fl[]=creator&rows=20&page=1&output=json,200,330,first-wave ia_ashtadhyayi; bytes=3670; 
+https://archive.org/advancedsearch.php?q=nyaya%20sutra%20AND%20mediatype:texts&fl[]=identifier&fl[]=title&rows=10&page=1&output=json,200,90,first-wave ia_nyayasutra; bytes=2213; 
+https://archive.org/advancedsearch.php?q=sanskrit%20palm%20leaf%20manuscript&fl[]=identifier&fl[]=title&rows=10&page=1&output=json,200,2849,first-wave ia_palmleaf; bytes=1281; 
+https://gretil.sub.uni-goettingen.de/,200,1,first-wave gretil_root; bytes=59; 
+https://gretil.sub.uni-goettingen.de/gretil.html,200,3074,first-wave gretil_html; bytes=1033721; 
+http://gretil.sub.uni-goettingen.de/gretil.htm,200,1,first-wave gretil_old; bytes=59; 
+https://dcs.clld.org/,ERR,0,"first-wave dcs_root; bytes=0; URLError: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'dcs.clld.org'. (_ssl.c:100"
+https://dcs.clld.org/contributions.json?__limit__=5,ERR,0,"first-wave dcs_contrib; bytes=0; URLError: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname mismatch, certificate is not valid for 'dcs.clld.org'. (_ssl.c:100"
+https://84000.co/,200,95,first-wave 84000_root; bytes=36261; 
+https://84000.co/translation/toh1,200,32,first-wave 84000_toh1; bytes=46753; 
+https://library.bdrc.io/,200,0,first-wave bdrc_home; bytes=3092; 
+https://library.bdrc.io/show/bdr:WA0RK8,200,0,first-wave bdrc_work; bytes=3092; 
+https://query.wikidata.org/sparql?format=json&query=SELECT%20%3Fitem%20%3FitemLabel%20WHERE%20%7B%20%3Fitem%20wdt%3AP31%20wd%3AQ11462.%20%3Fitem%20rdfs%3Alabel%20%22A%E1%B9%A3%E1%B9%AD%C4%81dhy%C4%81y%C4%AB%22%40en.%20SERVICE%20wikibase%3Alabel%20%7B%20bd%3AserviceParam%20wikibase%3Alanguage%20%22en%22.%20%7D%20%7D%20LIMIT%205,200,0,first-wave wd_asht; bytes=99; 
+https://api.openalex.org/works?search=Panini%20Ashtadhyayi%20anuvrtti&per-page=3&mailto=research@example.com,200,3,first-wave oa_panini; bytes=44608; 
+https://api.crossref.org/works?query=Navya-Nyaya%20avacchedaka&rows=3,200,4,first-wave cr_nyaya; bytes=6870; 
+"https://api.semanticscholar.org/graph/v1/paper/search?query=Dignaga%20trairupya&limit=3&fields=title,year,externalIds,url",429,2,first-wave s2_trairupya; bytes=174; 
+https://gretil.sub.uni-goettingen.de/gretil.html#plaintext-count,200,801,"derived from the saved catalog body, not a second fetch; plaintext-path mentions"
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_Anandavardhana-dhvanyAloka.txt,200,1,plaintext bytes=204207
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_AryazUra-pAramitAsamAsa.txt,200,1,plaintext bytes=60302
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_IzvarakRSNa-sAMkhyakArikA.txt,200,1,plaintext bytes=23044
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_RgvedasaMhitApadapATha.txt,200,1,plaintext bytes=1942589
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_abhisamayAlaMkAra.txt,200,1,plaintext bytes=39968
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_abhisamayAlaMkAravRttiH-sphuTArthA.txt,200,1,plaintext bytes=171409
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_amRtAkara-catuHstavasamAsArtha.txt,200,1,plaintext bytes=13556
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_annaMbhatta-tarkasaMgraha.txt,200,1,plaintext bytes=18598
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_bhAskarakaNTha-mokSopAyaTIkA.txt,200,1,plaintext bytes=1193162
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_bhartRhari-vAkyapadIya.txt,200,1,plaintext bytes=256732
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_brahmagupta-brAhmasphuTasiddhAnta.txt,200,1,plaintext bytes=35426
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_dharmakIrti-nyAyabindu.txt,200,1,plaintext bytes=24888
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_dharmakIrti-pramANavArttikakArikA.txt,200,1,plaintext bytes=145943
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_dignAga-prajJApAramitApiNDArtha.txt,200,1,plaintext bytes=9352
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_dignAga-yogAvatAra.txt,200,1,plaintext bytes=3189
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_gAGgeza-tattvacintAmaNizabdakhANDa.txt,200,1,plaintext bytes=250356
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_gautama-nyAyasUtra.txt,200,1,plaintext bytes=51699
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_hetvAbhAsadazaka.txt,200,1,plaintext bytes=4233
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_jaimini-mImAMsAsUtra.txt,200,1,plaintext bytes=166732
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_kaNAda-vaizeSikasUtra.txt,200,1,plaintext bytes=24311
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_kumArila-mImAMsazlokavArttika-comm.txt,200,1,plaintext bytes=433392
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_madhusUdanasarasvatI-siddhAntabindu.txt,200,1,plaintext bytes=75602
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_mammaTa-kAvyaprakAza.txt,200,1,plaintext bytes=296846
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_nAgeza-paribhASenduzekhara.txt,200,1,plaintext bytes=151650
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_pANini-aSTAdhyAyI.txt,200,1,plaintext bytes=171652
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_pataJjali-vyAkaraNamahAbhASya.txt,200,1,plaintext bytes=4829724
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_sAMkhyaparibhASA.txt,200,1,plaintext bytes=33339
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_samantabhadra-AptamImAMsA.txt,200,1,plaintext bytes=16246
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_siddhasenamahAmati-nyAyAvatAra-comm.txt,200,1,plaintext bytes=226675
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_udayana-nyAyavArttikatAtparyaparizuddhi-1.txt,200,1,plaintext bytes=650700
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_varadarAja-laghusiddhAntakaumudI.txt,200,1,plaintext bytes=236074
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_vasubandhu-abhidharmakoza.txt,200,1,plaintext bytes=83161
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_zAntideva-zikSAsamuccaya-alt.txt,200,1,plaintext bytes=591163
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_zAntideva-zikSAsamuccaya.txt,200,1,plaintext bytes=603629
+https://gretil.sub.uni-goettingen.de/gretil/corpustei/transformations/plaintext/sa_zabara-mImAMsAsUtrabhASya-1.txt,404,0,confirmed HTTP 404 on a fresh GET; Śābara bhāṣya not cited
+https://www.sanskrit-linguistics.org/dcs/index.php?contents=corpus,200,285,"corpus catalog; textdetails links. IDText 247 on this page is AMTest, not Abhidharmakośa. Abhidharmakośa row is IDText 378."
+https://www.sanskrit-linguistics.org/dcs/index.php?contents=textdetails&IDText=413,200,1,"Title Aṣṭādhyāyī, author Pāṇini, digitized by Mari Minamino (GRETIL), managed by Oliver Hellwig, status complete"
+https://www.sanskrit-linguistics.org/dcs/index.php?contents=textdetails&IDText=382,200,1,"Title Nyāyasūtra, author Gautama"
+https://www.sanskrit-linguistics.org/dcs/index.php?contents=textdetails&IDText=424,200,1,"Title Nyāyabindu, author Dharmakīrti"
+https://www.sanskrit-linguistics.org/dcs/index.php?contents=textdetails&IDText=409,200,1,"Title Tarkasaṃgraha, author Annambhaṭṭa"
+https://www.sanskrit-linguistics.org/dcs/index.php?contents=textdetails&IDText=450,200,1,"Title Ṛgveda, editor Theodor Aufrecht, Bonn, 1877, digitized by Barend A. Van Nooten and Gary B. Holland"
+https://www.sanskrit-linguistics.org/dcs/index.php?contents=textdetails&IDText=384,200,1,"Title Nyāyabhāṣya, author Vātsyāyana"
+https://www.sanskrit-linguistics.org/dcs/index.php?contents=textdetails&IDText=412,200,1,"Title Kāśikāvṛtti, authors Jayāditya, Vāmana"
+https://dcs.clld.org/ insecure retry,502,0,saved dcs_insec.bin is nginx 502; the TLS failure itself is the first-wave ERR row
+https://ldspdi.bdrc.io/resource/MW23703.json,200,1,"Derge Tanjur, extentStatement 213 v."
+https://ldspdi.bdrc.io/resource/MW1KG14.json,200,1,"rin chen gter mdzod chen mo, extent 70 v."
+https://ldspdi.bdrc.io/resource/IE23703.json,200,1,instance graph for the Derge Tanjur
+https://ldspdi.bdrc.io/resource/W22084.json,200,1,graph returned; no rdfs label in the payload
+https://ldspdi.bdrc.io/resource/W1PD96682.json,200,1,graph returned; no rdfs label extracted
+https://ldspdi.bdrc.io/resource/W1KG14.json,200,1,graph returned; no rdfs label extracted
+https://ldspdi.bdrc.io/resource/WA0RK8.json,404,0,fresh GET 404
+https://ldspdi.bdrc.io/resource/UT22084.json,404,0,saved body status 404 code 5010
+https://ldspdi.bdrc.io/query/sparql,400,0,fresh GET with no query returned 400; an earlier saved sparql error file is also present
+https://ldspdi.bdrc.io/search,500,0,"saved bdrc_es.bin status 500, cannot understand path /search"
+https://ldspdi.bdrc.io/openapi,404,0,HTML 404
+https://ldspdi.bdrc.io/swagger,404,0,HTML 404
+https://ldspdi.bdrc.io/unapi,200,1,empty formats element
+https://read.84000.co/translation/toh1.html,200,0,fresh GET title Toh 1; no verse body
+https://84000.co/sitemap.xml,200,1038,locs=1038; toh occurrences=0
+https://84000.co/api/translations,404,0,fresh GET 404
+https://84000.co/data/catalog.json,404,0,fresh GET 404
+https://archive.org/metadata/LGJe_ashtadhyayi-manu-01-01-118-lal-bahadur-shastri-sanskrit-university,200,1,title ( Ashtadhyayi) Manu 01 01 # 118 Lal Bahadur Shastri Sanskrit University; mediatype texts
+https://openlibrary.org/search.json?q=ashtadhyayi,200,25,numFound 25; works include OL19802249W and OL34320356W
+https://zenodo.org/api/records?q=ashtadhyayi&size=3,200,18,"total 18; top titles CarakaBinary, an Amarakośa/Hindi WordNet paper, an unrelated Uzbek article. Not used as a grammar witness."
+figshare search body saved as figshare.bin,404,0,"HTML 404 Not Found, predicate mismatch for view ArticlesPublicView. Exact query URL was not retained in the body."
+https://api.github.com/search/repositories?q=84000+toh+translation,200,0,"saved gh_84000.bin is {""total_count"":0,""incomplete_results"":false,""items"":[]}"
+https://api.github.com/repos/OliverHellwig/sanskrit,200,1,"OliverHellwig/sanskrit, 170 stars, Data for the quantitative study of (Vedic) Sanskrit"
+https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ashtadhyayi&language=en&format=json,200,1,wbsearchentities hit; EntityData also fetched
+https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Nyaya%20Sutra&language=en&format=json,200,1,wbsearchentities hit
+https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Nyayabindu&language=en&format=json,200,1,wbsearchentities hit
+https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Tattvacintamani&language=en&format=json,200,1,wbsearchentities hit
+https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Mahabhashya&language=en&format=json,200,1,first hit is not the vyākaraṇa text; not used
+https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Jaimini%20Mimamsa&language=en&format=json,200,0,empty search list
+https://www.wikidata.org/w/api.php?action=wbsearchentities&search=palm-leaf%20manuscript%20Sanskrit&language=en&format=json,200,0,empty search list
+https://www.wikidata.org/wiki/Special:EntityData/Q2868351.json,200,1,"item Q2868351, labels include Astadhyayi"
+https://api.openalex.org/works?search=anuvrtti%20bahuvrihi%20retrieval&per-page=2,200,0,novelty batch 1
+https://api.openalex.org/works?search=trairupya%20anupalabdhi%20ranking&per-page=2,200,0,novelty batch 1
+https://api.openalex.org/works?search=avacchedaka%20pratiyogin%20index&per-page=2,200,6,novelty batch 1
+https://api.openalex.org/works?search=Panini%20asiddha%20vipratisedha%20algorithm&per-page=2,200,2,novelty batch 1
+https://api.openalex.org/works?search=saptabhangi%20grantha%20checksum&per-page=2,200,0,novelty batch 1
+https://api.openalex.org/works?search=adhikara%20anukramani%20outline&per-page=2,200,1,novelty batch 1
+https://api.openalex.org/works?search=anvitabhidhana%20multi-hop&per-page=2,200,0,novelty batch 1
+https://api.openalex.org/works?search=bahuvrihi%20exocentric%20retrieval&per-page=2,200,16,novelty batch 1
+https://api.openalex.org/works?search=ekaśeṣa%20duplicate&per-page=2,200,2,novelty batch 1
+https://api.openalex.org/works?search=kākapada%20marginal%20insertion%20index&per-page=2,200,2,novelty batch 1
+https://api.openalex.org/works?search=yogavibhaga%20clause%20length%20BM25&per-page=2,200,0,novelty batch 1
+https://api.openalex.org/works?search=pañcāvayava%20udāharaṇa%20seat&per-page=2,200,2,novelty batch 1
+https://api.openalex.org/works?search=dhvani%20lakṣaṇā%20blocked%20primary&per-page=2,200,8,novelty batch 1
+https://api.openalex.org/works?search=Paṭṭhāna%20natthi-paccaya%20change%20point&per-page=2,200,2,novelty batch 1
+https://api.openalex.org/works?search=Jaina%20nikṣepa%20quote%20mention%20ranking&per-page=2,200,0,novelty batch 1
+https://api.openalex.org/works?search=adhikara%20scope%20stack%20anuvrtti%20ellipsis&per-page=2,200,1,novelty batch 2; titles: Constructing and deconstructing Panini’s grammar: the role of commentators
+https://api.openalex.org/works?search=asiddha%20vipratisedha%20equal%20rule%20conflict&per-page=2,200,1,novelty batch 2; titles: Between Śāstra and Software: Formal and Computational Readings of Pāṇini’s Aṣṭādhyāyī
+https://api.openalex.org/works?search=bahuvrihi%20exocentric%20anaphora%20retrieval&per-page=2,200,7,novelty batch 2; titles: Sandarśana: A Survey on Sanskrit Computational Linguistics and Digital Infrastructure for Sanskrit | Using the Web as an Implicit Training Set: Application to Noun Compound Syntax and Semantics
+https://api.openalex.org/works?search=ekaśesa%20dual%20residue%20list%20count&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=it-marker%20lopa%20adjacency%20gap%20Panini&per-page=2,200,1,novelty batch 2; titles: Constructing and deconstructing Panini’s grammar: the role of commentators
+https://api.openalex.org/works?search=yogavibhaga%20clause%20segmentation%20ranking&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=pratyahara%20abbreviation%20range%20index&per-page=2,200,19,novelty batch 2; titles: Paninian Studies: Professor S. D. Joshi Felicitation Volume | A Closer Look at Yoga Nidra: Sleep Lab Protocol
+https://api.openalex.org/works?search=anukramani%20grantha%20syllable%20checksum&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=sutra%20bhashya%20alternation%20containment&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=varttika%20anukta%20tika%20depth&per-page=2,200,1,novelty batch 2; titles: On the Relative Chronology of Dharmakīrti and Samantabhadra
+https://api.openalex.org/works?search=adhikarana%20pancavayava%20discourse%20quota&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=trairupya%20karyahetu%20effect%20reason&per-page=2,200,5,novelty batch 2; titles: The Pram?navini?caya on the Purpose of the Division of Reasons into Nine Types in the Hetucakra | Dharmakīrti
+https://api.openalex.org/works?search=anvitabhidhana%20abhihitanvaya%20composition&per-page=2,200,9,novelty batch 2; titles: Postscript: Elements of Sarvajñātman’s Philosophy of Language | Linguistic and Phenomenological Theories of Verbal Cognition in Mīmāṃsā: A Study of the Arguments in Śālikanāt
+https://api.openalex.org/works?search=laksana%20secondary%20meaning%20blocked%20literal&per-page=2,200,39,"novelty batch 2; titles: Deciphering the Hidden Meaning: Language and the Highest Good in Early Advaita Vedānta | Contrasting Approaches to Language, Meaning, and Knowledge in Advaita Vedanta and the Western Literary Traditi"
+https://api.openalex.org/works?search=paribhasa%20sakrd%20once-only%20coverage&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=ganapatha%20enumeration%20dvandva%20coordination&per-page=2,200,1,novelty batch 2; titles: Meanings of ca ‘and’ in the Lexicographical Tradition: Beyond Patañjali
+https://api.openalex.org/works?search=kakapada%20adesha%20marginal%20substitution&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=pecha%20folio%20gap%20asiddha%20inheritance&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=mula%20bhashya%20ekasesa%20residual%20commentary&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=natthi%20paccaya%20change-point%20explicit&per-page=2,200,11,novelty batch 2; titles: On Some Doctrinal Disputations in Early Buddhist Interpretations of pratītyasamutpāda (Dependent Co-arising) | The Pleasure of Not Experiencing Anything: Some Reflections on Consciousness in the Context of the Early Buddh
+https://api.openalex.org/works?search=matrika%20feature%20matrix%20limb%20quota&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=hetvabhasa%20asiddha%20viruddha%20anaikantika&per-page=2,200,13,novelty batch 2; titles: On Asrayasiddha | Bhasarvajña's View of ‘hetvabhasa’
+https://api.openalex.org/works?search=paksabhasa%20dusana%20refutation%20seat&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=abhava%20pratiyogin%20anuyogin%20triple&per-page=2,200,1,novelty batch 2; titles: Cubical Type Theoretic Navya-Nyāya
+https://api.openalex.org/works?search=pragabhava%20pradhvamsa%20interval&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=saptabhangi%20polarity%20ekaśesa&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=niksepa%20nama%20mention%20it-marker&per-page=2,200,2,novelty batch 2; titles: Jaina-Prosopography I: Sociology of Jaina-Names | Studies in Jaina History and Culture: Disputes and dialogues
+https://api.openalex.org/works?search=sphota%20dvandva%20window%20coordination&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=vyapaka%20anupalabdhi%20pervader%20absence&per-page=2,200,7,novelty batch 2; titles: Exploring the Significance of Various Classifications of Logical Reasons as Non-cognition (anupalabdhihetu) in | Jain conceptions of non-cognition : a dialogue with Dharmakirti on inferential evidence
+https://api.openalex.org/works?search=dushana%20anaikantika%20wide%20reason&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=grantha%20pecha%20volume%20quota%20summary&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=simile%20udaharana%20field%20split&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=samskara%20anupurvya%20jaimini%20order&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=kashika%20varttika%20omission%20field&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=dhvani%20tattparya%20example%20sense&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=jaina%20syadvada%20seven%20predicate%20seat&per-page=2,200,9,novelty batch 2; titles: Strategies for justifying violence in societal self-defense in Indian lay Jainism : a textual and ethnographic | On the Relative Chronology of Dharmakīrti and Samantabhadra
+https://api.openalex.org/works?search=abhidharma%20matrka%20session%20bits&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=rgveda%20padapatha%20pratyahara&per-page=2,200,2,novelty batch 2; titles: Paninian Studies: Professor S. D. Joshi Felicitation Volume | WORD BOUNDARIES IN PāṇINI AND AVESTA: A LINGUISTIC VIEW
+https://api.openalex.org/works?search=nageśa%20paribhasa%20submodular&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=annambhatta%20abhava%20padartha%20index&per-page=2,200,4,novelty batch 2; titles: ガンゲーシャ著『タットヴァ・チンターマニ』「非認識章」の研究 (1) : 翻訳と訳注の序 | Sull’epistemologia del sogno secondo il Vaiśeṣika. Appunti per una tassonomia del fenomeno onirico (1)
+https://api.openalex.org/works?search=hrasva%20dirgha%20guru%20laghu%20partition&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=ekadesa%20lopa%20substitute%20place%20count&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=vipratisedha%20anga%20head%20token&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=samsaya%20siddhanta%20question%20yield&per-page=2,200,6,"novelty batch 2; titles: ""Marxvad Aur Ramrajya"": Contestation, Convergence and Micro-Phenomena of Governance of Polity and Economics | 17 Indigenous Studies with an Integrative Research Approach"
+https://api.openalex.org/works?search=tika%20depth%20bahuvrihi%20external%20referent&per-page=2,200,1,"novelty batch 2; titles: Indic-Vernacular Bitexts from Thailand: Bilingual Modes of Philology, Exegetics, Homiletics, and Poetry, 1450–"
+https://api.openalex.org/works?search=durukta%20correction%20viruddha%20negation&per-page=2,200,0,novelty batch 2; titles: 
+https://api.openalex.org/works?search=gana%20pratyahara%20list%20endpoints&per-page=2,200,1,novelty batch 2; titles: 4 | 2 | 2025
+https://api.openalex.org/works?search=sakrd%20vipratisedha%20once%20coverage&per-page=2,200,0,novelty batch 2; titles: 
