@@ -1721,6 +1721,91 @@ fn apply_c2_session_substitution_t5_entry(
 }
 
 
+/// Pool session substitution T@10 entry. The most on-scene user turn in the
+/// scene-ranked pool (exact ties to the earliest session, the original
+/// attestation) from a session with no turn in the official k takes
+/// the official-k seat of the least on-scene turn in the official-k tail
+/// (slots 6..k) when that turn is a declarative and holds at most
+/// `C2_XWITNESS_RATIO` of the candidate's scene (reused, not re-tuned). The
+/// T@10 analogue of #36: a clearly stronger session the official k left out
+/// replaces the weakest tail seat. The top 5 is unchanged, so T@1, T@5 and
+/// All@5 cannot drop; C2 turn seats do not rewrite the session list. The
+/// declarative cut is the #36 cut (a weakest question is often a sitting
+/// gold). Distinct from #30 (openers only, non-unique tail assistant
+/// victim, "at least as on-scene" floor) and #32 (named speakers).
+/// Skipped on summary requests, preference, temporal, and WH-person
+/// questions, event sequences and assistant-attribution (caller), and
+/// named-speaker sessions. Invoked after the gatekeeper, after #36, as the
+/// last ranking change.
+fn apply_c2_pool_session_substitution_t10_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    if t_scene.get(top).copied().unwrap_or(0.0) <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    if list.len() <= window {
+        return false;
+    }
+    let k_sessions: Vec<usize> = list.iter().map(|&t| ix.turns[t].session).collect();
+    // Most on-scene eligible pool user. Exact scene ties go to the earliest
+    // session (the original attestation; a later session repeating the
+    // same turn scores identically), then the lower turn index.
+    let mut cand: Option<(usize, f32, i64)> = None;
+    for (ti, t) in ix.turns.iter().enumerate() {
+        let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+        if sc <= 0.0 || list.contains(&ti) {
+            continue;
+        }
+        if t.speaker != "user" || c2_named_session(ix, ti) || k_sessions.contains(&t.session) {
+            continue;
+        }
+        let ts = ix.session_ts.get(t.session).copied().unwrap_or(0);
+        if cand.is_none_or(|(_, bs, bt)| sc > bs || (sc == bs && ts < bt)) {
+            cand = Some((ti, sc, ts));
+        }
+    }
+    let Some((cand, sc_c, _)) = cand else {
+        return false;
+    };
+    let mut vs: Option<(usize, f32)> = None;
+    for (i, &tid) in list.iter().enumerate().skip(window) {
+        let sc = t_scene.get(tid).copied().unwrap_or(0.0);
+        if sc > C2_XWITNESS_RATIO * sc_c {
+            continue;
+        }
+        if vs.is_none_or(|(_, best)| sc < best) {
+            vs = Some((i, sc));
+        }
+    }
+    let Some((vs, _)) = vs else {
+        return false;
+    };
+    if ix.turns[list[vs]].is_question {
+        return false;
+    }
+    list[vs] = cand;
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -4735,6 +4820,90 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 2, 4, 6, 8, 1, 10];
         assert!(!apply_c2_session_substitution_t5_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 2, 4, 6, 8, 1, 10]);
+    }
+
+    #[test]
+    fn pool_session_substitution_t10_entry_replaces_weakest_declarative_tail() {
+        // BEAM 19:instruction_following:1 shape: a user turn from a session
+        // with no official-k seat is clearly stronger than the weakest
+        // official-k tail turn, a declarative.
+        let ix = build_index(
+            &[
+                sess("s0", &[("user", "Please always format code answers with comments."), ("assistant", "I will add comments.")]),
+                sess("s1", &[("user", "I started a new parser module."), ("assistant", "The parser module is noted.")]),
+                sess("s2", &[("user", "I added a lexer test."), ("assistant", "The lexer test is noted.")]),
+                sess("s3", &[("user", "Always include comments when you format my code."), ("assistant", "Understood.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query { text: "How should you format code answers for me?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        assert!(!c2_summary_request(&q.text));
+        // Turns: s0 0-1, s1 2-3, s2 4-5, s3 6-7. Official k: 0,1,2,3,4,5 (s3 absent).
+        let mut t_scene = vec![2.0f32, 1.8, 1.0, 0.9, 0.8, 0.3, 1.5, 0.2];
+        let mut list = vec![0usize, 1, 2, 3, 4, 5];
+        assert!(apply_c2_pool_session_substitution_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 6]);
+        // Exact scene ties go to the earliest session: a later session
+        // repeating the same turn does not take the seat.
+        let mut s_dup = vec![
+            sess("s0", &[("user", "Please always format code answers with comments."), ("assistant", "I will add comments.")]),
+            sess("s1", &[("user", "I started a new parser module."), ("assistant", "The parser module is noted.")]),
+            sess("s2", &[("user", "I added a lexer test."), ("assistant", "The lexer test is noted.")]),
+            sess("s3", &[("user", "Always include comments when you format my code."), ("assistant", "Understood.")]),
+            sess("s4", &[("user", "Always include comments when you format my code."), ("assistant", "Understood.")]),
+        ];
+        for (i, se) in s_dup.iter_mut().enumerate() {
+            se.timestamp = 1_000 + i as i64;
+        }
+        let ixd = build_index(&s_dup, &Params::default());
+        let pland = plan_query(&ixd, &q, &Params::default());
+        let td = vec![2.0f32, 1.8, 1.0, 0.9, 0.8, 0.3, 1.5, 0.2, 1.5, 0.2];
+        let mut list = vec![0usize, 1, 2, 3, 4, 5];
+        assert!(apply_c2_pool_session_substitution_t10_entry(&ixd, &pland, &q.text, &mut list, &td));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 6]);
+        // The weakest tail turn is not dominated by the ratio: no entry.
+        t_scene[6] = 0.4;
+        let mut list = vec![0usize, 1, 2, 3, 4, 5];
+        assert!(!apply_c2_pool_session_substitution_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
+        t_scene[6] = 1.5;
+        // A pool user whose session already has an official-k seat does not enter.
+        let mut list = vec![0usize, 1, 2, 3, 7, 5];
+        let mut ts = t_scene.clone();
+        ts[4] = 1.4;
+        ts[6] = 0.0;
+        assert!(!apply_c2_pool_session_substitution_t10_entry(&ix, &plan, &q.text, &mut list, &ts));
+        assert_eq!(list, vec![0, 1, 2, 3, 7, 5]);
+        // Preference, temporal, and WH-person questions are skipped.
+        for text in [
+            "What is my favorite way to format code answers?",
+            "When did I ask you to format code answers?",
+            "Who asked you to format code answers?",
+        ] {
+            let sq = Query { text: text.into(), date: String::new() };
+            let splan = plan_query(&ix, &sq, &Params::default());
+            let mut list = vec![0usize, 1, 2, 3, 4, 5];
+            assert!(!apply_c2_pool_session_substitution_t10_entry(&ix, &splan, &sq.text, &mut list, &t_scene));
+            assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
+        }
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[
+                sess("D0", &[("caroline", "Format code with comments."), ("melanie", "Will do.")]),
+                sess("D1", &[("caroline", "New parser module."), ("melanie", "Noted.")]),
+                sess("D2", &[("caroline", "Added a lexer test."), ("melanie", "Noted.")]),
+                sess("D3", &[("caroline", "Always include comments in code."), ("melanie", "Understood.")]),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![0usize, 1, 2, 3, 4, 5];
+        assert!(!apply_c2_pool_session_substitution_t10_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
     }
 
     #[test]
