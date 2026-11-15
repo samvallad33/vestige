@@ -1476,6 +1476,104 @@ fn apply_c2_same_session_user_t5_entry(
     true
 }
 
+
+/// Cross-session user-opener T@5 entry. In a user/assistant transcript, a
+/// user session opener already in the official k but outside the top 5,
+/// from a session not yet represented in the top 5, swaps into the top 5
+/// in place of the last assistant that is not the unique top-5
+/// representative of its session and is not slot 1's immediately
+/// following same-session turn. The last cut refuses to break the seated
+/// continuation of the head (a user-assistant pair starting at slot 1).
+/// The victim stays in the official k, so T@10 cannot drop. The swap is
+/// refused when it would push any session out of the first 5
+/// unique-session slots, so S@5 cannot drop. No new ratio: the
+/// cross-session opener cut, plus not evicting the head's next turn, is
+/// the structure. Skipped on preference, temporal, WH-person, summary
+/// requests, event sequences and assistant-attribution (caller), and
+/// named-speaker sessions. Distinct from the same-session user T@5 entry
+/// (#20: session already in the top 5) and from the source-superset and
+/// unique-group reallocs (no group test). Runs after
+/// `rank1_gatekeeper_keep_rsb_head`, after #20, as the last ranking change.
+fn apply_c2_cross_session_user_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || plan.intent.preference
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut top5_sessions = Vec::new();
+    for &tid in &list[..window] {
+        let s = ix.turns[tid].session;
+        if !top5_sessions.contains(&s) {
+            top5_sessions.push(s);
+        }
+    }
+    let head_sess = ix.turns[top].session;
+    let head_pos = c2_session_pos(ix, top);
+    let mut cand_slot = None;
+    for i in window..list.len() {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user" {
+            continue;
+        }
+        if top5_sessions.contains(&t.session) {
+            continue;
+        }
+        if c2_session_pos(ix, cand) != 0 {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        cand_slot = Some(i);
+        break;
+    }
+    let Some(ci) = cand_slot else {
+        return false;
+    };
+    let mut vs = None;
+    for (i, &tid) in list[..window].iter().enumerate() {
+        if ix.turns[tid].speaker != "assistant" {
+            continue;
+        }
+        let sess = ix.turns[tid].session;
+        if list[..window].iter().filter(|&&u| ix.turns[u].session == sess).count() < 2 {
+            continue;
+        }
+        if sess == head_sess && c2_session_pos(ix, tid) == head_pos + 1 {
+            continue;
+        }
+        vs = Some(i);
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    if !c2_s5_membership_preserved(ix, list, vs, ci) {
+        return false;
+    }
+    list.swap(vs, ci);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -2828,6 +2926,140 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 3, 4, 5, 2];
         assert!(!apply_c2_same_session_user_t5_entry(&ixn, &nplan, &nq.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 3, 4, 5, 2]);
+    }
+
+    #[test]
+    fn cross_session_user_t5_entry_swaps_opener_for_non_head_assistant() {
+        let ix = build_index(
+            &[
+                sess(
+                    "s1",
+                    &[
+                        ("user", "I have been tracking my family size for a genealogy project."),
+                        ("assistant", "That is a useful way to organize family records."),
+                        ("user", "I also wrote down the cousins on my mother's side."),
+                    ],
+                ),
+                sess(
+                    "s2",
+                    &[
+                        ("user", "I have been cataloging recipes from different relatives."),
+                        ("assistant", "Recipes can be a nice complement to a family archive."),
+                    ],
+                ),
+                sess(
+                    "s3",
+                    &[
+                        ("user", "I have two siblings, one older brother and one younger sister."),
+                        ("assistant", "So you have two siblings in total."),
+                    ],
+                ),
+                sess(
+                    "s4",
+                    &[("user", "I have been thinking about printing the family book next year.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What is the total number of siblings I have?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.preference);
+        assert!(!plan.intent.temporal);
+        // Official k of 6: last non-unique assistant that is not the head's
+        // next turn (s2 assistant at slot 4) yields to the cross-session
+        // user opener already in k at slot 6. The s1 assistant at slot 2
+        // is the head's immediate continuation and is not evicted.
+        // ids: s1 u0=0 a=1 u2=2; s2 u=3 a=4; s3 u=5 a=6; s4 u=7
+        let mut list = vec![0usize, 1, 3, 4, 7, 5];
+        let t_scene = vec![1.0f32, 0.9, 0.5, 0.8, 0.7, 0.4, 0.3, 0.6];
+        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert!(apply_c2_cross_session_user_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 3, 5, 7, 4]);
+        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert_eq!(before, after);
+
+        // Only evictable assistant is the head's next turn: no entry.
+        let mut list = vec![0usize, 1, 7, 2, 3, 5];
+        assert!(!apply_c2_cross_session_user_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 7, 2, 3, 5]);
+
+        // Mid-session cross-session user in official k: no entry.
+        let ixm = build_index(
+            &[
+                sess(
+                    "s1",
+                    &[
+                        ("user", "I have been tracking my family size for a genealogy project."),
+                        ("assistant", "That is a useful way to organize family records."),
+                    ],
+                ),
+                sess(
+                    "s2",
+                    &[
+                        ("user", "I have been cataloging recipes from different relatives."),
+                        ("assistant", "Recipes can be a nice complement to a family archive."),
+                    ],
+                ),
+                sess(
+                    "s3",
+                    &[
+                        ("user", "I started a diary last year about my relatives."),
+                        ("assistant", "A diary is a good place to keep family notes."),
+                        ("user", "I have two siblings, one older brother and one younger sister."),
+                    ],
+                ),
+                sess(
+                    "s4",
+                    &[("user", "I have been thinking about printing the family book next year.")],
+                ),
+            ],
+            &Params::default(),
+        );
+        // ids: s1 u=0 a=1; s2 u=2 a=3; s3 u=4 a=5 u=6; s4 u=7. Mid user (6) at slot 6.
+        let mut list = vec![0usize, 1, 2, 3, 7, 6];
+        let msc = vec![1.0f32, 0.9, 0.8, 0.7, 0.4, 0.3, 0.5, 0.6];
+        assert!(!apply_c2_cross_session_user_t5_entry(&ixm, &plan, &q.text, &mut list, &msc));
+        assert_eq!(list, vec![0, 1, 2, 3, 7, 6]);
+
+        // Same-session opener already represented in the top 5: no entry (that is #20).
+        // ids: 0,1,2 s1; 3,4 s2; 5,6 s3; 7 s4. Head is s1 later user; s1 opener at slot 6.
+        let mut list = vec![2usize, 3, 1, 7, 4, 0];
+        assert!(!apply_c2_cross_session_user_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 3, 1, 7, 4, 0]);
+
+        // Preference query: no entry.
+        let pq = Query { text: "What is my favorite way to record the total number of siblings I have?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![0usize, 1, 3, 4, 7, 5];
+        assert!(!apply_c2_cross_session_user_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 3, 4, 7, 5]);
+
+        // Named-speaker session: no entry.
+        let ixn = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("john", "I have been tracking my family size for a genealogy project."),
+                        ("maria", "That is a useful way to organize family records."),
+                        ("john", "I also wrote down the cousins on my mother's side."),
+                        ("maria", "I have been cataloging recipes from different relatives."),
+                        ("john", "Recipes can be a nice complement to a family archive."),
+                        ("maria", "I have two siblings, one older brother and one younger sister."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let nq = Query { text: "What is the total number of siblings I have?".into(), date: String::new() };
+        let nplan = plan_query(&ixn, &nq, &Params::default());
+        let mut list = vec![0usize, 1, 2, 3, 4, 5];
+        assert!(!apply_c2_cross_session_user_t5_entry(&ixn, &nplan, &nq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
     }
 
 
