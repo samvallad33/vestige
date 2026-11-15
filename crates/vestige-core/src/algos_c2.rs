@@ -92,6 +92,19 @@ fn c2_turn_groups(ix: &Index, plan: &QueryPlan, n_groups: usize, ti: usize) -> V
     hit
 }
 
+/// Query term ids a turn attests from its own content or features. Index
+/// token stats only. Not a group collapse: two terms stay two marks.
+fn c2_term_ids(ix: &Index, plan: &QueryPlan, ti: usize) -> DetHashSet<u32> {
+    let t = &ix.turns[ti];
+    let mut hit: DetHashSet<u32> = DetHashSet::default();
+    for qt in &plan.terms {
+        if t.content.contains(&qt.id) || t.feats.iter().any(|f| f.id == qt.id) {
+            hit.insert(qt.id);
+        }
+    }
+    hit
+}
+
 /// IC-weighted share of the query groups in `hit`.
 fn c2_coverage(g_ic: &[f32], hit: &[bool]) -> f32 {
     let total: f32 = g_ic.iter().sum();
@@ -2489,6 +2502,91 @@ fn apply_c2_step31_exchequer_split(
     let Some((slot, _, _, _)) = best else {
         return false;
     };
+    let cand = list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
+/// Unique strict maximum. Equal scores are not a sightline: a survey fixes a
+/// point only when one mark is strictly best. Ties return `None`.
+fn c2_unique_max(ids: &[usize], score: impl Fn(usize) -> f32) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    let mut tie = false;
+    for &id in ids {
+        let v = score(id);
+        match best {
+            None => best = Some((id, v)),
+            Some((_, b)) if v > b => {
+                best = Some((id, v));
+                tie = false;
+            }
+            Some((_, b)) if v == b => tie = true,
+            _ => {}
+        }
+    }
+    if tie { None } else { best.map(|(i, _)| i) }
+}
+
+/// Triangulation (Step 33). Two independent sightlines over the top 5: the
+/// turn's own lexical score (`t_own`, uncarried BM25) and its session score
+/// (`s_score + bridge_boost`, the official session rank score). A top-5 turn
+/// that is strictly best on both takes slot 1. A turn already best on both
+/// stays at slot 1. Ties on either sightline fix nothing.
+///
+/// The sitting head yields only when the agreed turn attests every query
+/// term the head attests and at least one term the head does not. A thinner
+/// mark cannot displace a richer one. Top-5 membership is unchanged.
+///
+/// Named-speaker dialogues only. User/assistant chats keep the seats that
+/// already chose the user source over an assistant echo. No new constant.
+/// Does not read turn bodies and does not touch `rsb_seat_behind`.
+fn apply_c2_step33_triangulation(
+    ix: &Index,
+    plan: &QueryPlan,
+    list: &mut Vec<usize>,
+    t_own: &[f32],
+    s_score: &[f32],
+    bridge_boost: &[f32],
+) -> bool {
+    if list.len() < 2 {
+        return false;
+    }
+    let head = list[0];
+    if !c2_named_session(ix, head) {
+        return false;
+    }
+    if plan.terms.is_empty() {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let top5 = &list[..window];
+    let own = |ti: usize| t_own.get(ti).copied().unwrap_or(0.0);
+    let sess = |ti: usize| {
+        let s = ix.turns[ti].session;
+        s_score.get(s).copied().unwrap_or(0.0) + bridge_boost.get(s).copied().unwrap_or(0.0)
+    };
+    let lex = c2_unique_max(top5, own);
+    let scene = c2_unique_max(top5, sess);
+    let Some(cand) = lex else { return false };
+    if scene != Some(cand) || cand == head {
+        return false;
+    }
+    if !c2_named_session(ix, cand) {
+        return false;
+    }
+    let head_hit = c2_term_ids(ix, plan, head);
+    let cand_hit = c2_term_ids(ix, plan, cand);
+    let covers = head_hit.iter().all(|id| cand_hit.contains(id));
+    let extra = cand_hit.iter().any(|id| !head_hit.contains(id));
+    if !covers || !extra {
+        return false;
+    }
+    let Some(slot) = list.iter().position(|&t| t == cand) else {
+        return false;
+    };
+    if slot == 0 || slot >= window {
+        return false;
+    }
     let cand = list.remove(slot);
     list.insert(0, cand);
     true
@@ -6573,6 +6671,98 @@ mod algos_c2_tests {
         let mut list = vec![5usize, 3, 4, 2, 1, 0];
         assert!(!apply_c2_step31_exchequer_split(&ixn, &plan, &q.text, &mut list, &scene));
         assert_eq!(list, vec![5, 3, 4, 2, 1, 0]);
+    }
+
+    #[test]
+    fn triangulation_seats_dual_best_richer_mark_in_named_dialogue() {
+        // s1 is the winning session and contributes one top-5 turn. That turn
+        // is also the unique own-lexical best and attests a query term the
+        // head lacks. The head's session is tied with another top-5 turn, so
+        // it is not best on the session sightline.
+        let ix = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("melanie", "The weather was nice yesterday."),
+                        ("caroline", "I saw a small museum."),
+                    ],
+                ),
+                sess(
+                    "D2",
+                    &[
+                        ("caroline", "I visited Rome and Florence in Italy."),
+                        ("melanie", "That was a long trip."),
+                    ],
+                ),
+                sess(
+                    "D3",
+                    &[
+                        ("caroline", "I stayed home all weekend."),
+                        ("melanie", "Home is quiet."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "Which cities in Italy did Caroline visit?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(c2_named_session(&ix, 0));
+        let ng = plan.groups.len();
+        assert!(ng > 0);
+        // turns: 0,1 s1; 2,3 s2; 4,5 s3. Head is 0. Dual-best candidate is 2,
+        // the only top-5 member of the highest session score.
+        let mut list = vec![0usize, 1, 4, 5, 2];
+        let t_own = vec![0.2f32, 1.0, 4.0, 0.5, 0.4, 0.3];
+        let s_score = vec![0.2f32, 0.9, 0.4];
+        let bridge = vec![0.0f32, 0.0, 0.0];
+        let head_hit = c2_term_ids(&ix, &plan, 0);
+        let cand_hit = c2_term_ids(&ix, &plan, 2);
+        assert!(head_hit.iter().all(|id| cand_hit.contains(id)));
+        assert!(cand_hit.iter().any(|id| !head_hit.contains(id)));
+        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
+        let top5_before: std::collections::HashSet<usize> = list[..5].iter().copied().collect();
+        assert!(apply_c2_step33_triangulation(&ix, &plan, &mut list, &t_own, &s_score, &bridge));
+        assert_eq!(list[0], 2);
+        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
+        assert_eq!(before, after);
+        let top5_after: std::collections::HashSet<usize> = list[..5].iter().copied().collect();
+        assert_eq!(top5_before, top5_after);
+
+        // Already best on both: turn 2 is slot 1. Do not move it.
+        let mut seated = vec![2usize, 0, 1, 4, 5];
+        assert!(!apply_c2_step33_triangulation(&ix, &plan, &mut seated, &t_own, &s_score, &bridge));
+        assert_eq!(seated, vec![2, 0, 1, 4, 5]);
+
+        // Two turns share the winning session score: no unique session sightline.
+        let mut tied = vec![0usize, 1, 4, 2, 3];
+        assert!(!apply_c2_step33_triangulation(&ix, &plan, &mut tied, &t_own, &s_score, &bridge));
+        assert_eq!(tied, vec![0, 1, 4, 2, 3]);
+
+        // User/assistant chat: named-speaker sightline does not apply.
+        let ixu = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "The weather was nice yesterday."),
+                    ("assistant", "I visited Rome and Florence in Italy."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut users = vec![0usize, 1];
+        assert!(!apply_c2_step33_triangulation(
+            &ixu,
+            &plan,
+            &mut users,
+            &[0.1, 5.0],
+            &[0.2],
+            &[0.0],
+        ));
+        assert_eq!(users, vec![0, 1]);
     }
 
 
