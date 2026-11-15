@@ -6018,6 +6018,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         apply_c2_bullae_numeral_seat(ix, &mut final_turn_indices, &t_scene);
         apply_c2_coverage_margin_seat(ix, &plan, &mut final_turn_indices);
         apply_c2_testimony_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+        apply_c2_cross_witness_seat(ix, &plan, &mut final_turn_indices, &t_scene);
         apply_c2_mimamsa_seat(ix, &plan, &mut final_turn_indices, &t_scene);
         apply_c2_dichotomous_key(ix, &plan, &mut final_turn_indices, &t_scene);
     }
