@@ -6395,6 +6395,94 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &s_score,
         &bridge_boost,
     );
+    // Step 34 Bertillonage. After trial balance and triangulation. Slot 1 below
+    // the query's kind-count yields to one admissible same-session top-5 card.
+    // Does not touch rsb_seat_behind and does not rewrite the session list.
+    apply_c2_step34_bertillonage(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Step 35 Mill's method of agreement. After the gatekeeper and Steps 31–34.
+    // The unique session common to every surface-anchor hit set lends slot 1
+    // to its unique top-5 instance when the head posts no anchor, or to its
+    // unique same-speaker turn that posts every anchor when the head posts
+    // only some. A head already inside that session stays. Does not touch
+    // rsb_seat_behind.
+    apply_c2_step35_mill_agreement(ix, &plan, &mut final_turn_indices, &t_scene);
+    // Step 36 Antaranga-bahiranga. After Bertillonage. A question at slot 1
+    // whose scene score is mostly external yields to a top-5 declarative
+    // turn held by its own lexical score. Does not touch rsb_seat_behind
+    // and does not rewrite the session list.
+    apply_c2_step36_antaranga(
+        ix,
+        &q.text,
+        &mut final_turn_indices,
+        &t_own,
+        &t_scene,
+        &s_score,
+        &bridge_boost,
+    );
+    // Step 37 Kalevala parallelism. After the gatekeeper and Steps 31–35.
+    // Adjacent same-speaker restatements are one line. The following line
+    // takes slot 1 when its content query cues strictly cover the head and
+    // it already sits in the top 5. Does not touch rsb_seat_behind.
+    apply_c2_step37_kalevala(ix, &q.text, &mut final_turn_indices);
+    // Step 38 Hermeneutic circle. After Antaranga. A question at slot 1 yields
+    // to the one top-5 declarative that posts the same content anchors, whose
+    // session covers the anchors that part does not, when the incumbent
+    // session does not and the declarative's own score is strictly stronger.
+    // Does not touch rsb_seat_behind and does not rewrite the session list.
+    apply_c2_step38_hermeneutic(ix, &q.text, &mut final_turn_indices, &t_own);
+    // Pool C session-key opener. After Bertillonage. A same-session assistant
+    // elaboration in slots 2–5 yields to that session's user opener when the
+    // top 5 already spans two sessions and the opener is outside it. Slot 1
+    // stays. Does not touch rsb_seat_behind.
+    apply_c2_pool_c_session_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    // Absent session key. After the same-session yield. A user opener whose
+    // session is not in the top 5 takes a redundant assistant from a
+    // non-dominant session. The dominant session stays. Slot 1 stays.
+    apply_c2_pool_c_absent_session_key(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    // Absent session key. After the same-session yield. A user opener whose
+    // session is not in the top 5 takes a redundant assistant from a
+    // non-dominant session. The dominant session stays. Slot 1 stays.
+    apply_c2_pool_c_absent_session_key(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    // Pool-B standing-rule seat. After Bertillonage, so a user question left
+    // at slot 1 can still yield to the zero-lexical standing opener the
+    // stratified channel already selected. Top-5 membership is unchanged.
+    // Does not touch rsb_seat_behind and does not rewrite the session list.
+    apply_c2_pool_b_standing_seat(
+        ix,
+        &plan,
+        &q.text,
+        &standing_rules,
+        &mut final_turn_indices,
+        &t_own,
+    );
+    // Buried lexical peak. After Bertillonage. A unique named-speaker
+    // declarative whose own score beats the entire scene pool takes the
+    // lowest-own question seat inside slots 1..4. Slot 0 and the session
+    // list stay. Does not touch rsb_seat_behind.
+    apply_c2_buried_lexical_peak(
+        ix,
+        &mut final_turn_indices,
+        &t_scene,
+        &t_own,
+        &turn_ts,
+        k,
+    );
+    // Anaphoric tail. After the buried peak. The strongest anaphoric
+    // declarative in ranks 5..9 swaps with the lowest-own question in slots
+    // 1..4 when its own score beats the whole top 5. Slot 0 and the session
+    // list stay. Does not touch rsb_seat_behind.
+    apply_c2_anaphoric_tail(ix, &mut final_turn_indices, &t_own);
+    // Anaphoric tail. After the buried peak. The strongest anaphoric
+    // declarative in ranks 5..9 swaps with the lowest-own question in slots
+    // 1..4 when its own score beats the whole top 5. Slot 0 and the session
+    // list stay. Does not touch rsb_seat_behind.
+    apply_c2_anaphoric_tail(ix, &mut final_turn_indices, &t_own);
+    // Unseated session peak. After the anaphoric tail. The unique named-speaker
+    // declarative outside the returned list whose own score beats every
+    // returned turn takes the lowest-own question seat in slots 1..4, when its
+    // session is absent from the top 5. Slot 0 and the session list stay.
+    // Does not touch rsb_seat_behind.
+    apply_c2_unseated_session_peak(ix, &mut final_turn_indices, &t_own, k);
     maybe_dump_replay(
         ix,
         q,
@@ -7716,6 +7804,64 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         }
     }
 
+    // Dump-only compact scores for every turn and session. Bit layout of `flags`:
+    // 0 question, 1 digit form, 2 clock form, 3 midcap, 4 numeric, 5 temporal,
+    // 6 anaphoric, 7 short reply, 8 answers a question, 9 backchannel.
+    let score_rows: Vec<Value> = (0..ix.turns.len())
+        .map(|ti| {
+            let t = &ix.turns[ti];
+            let mut flags = 0u16;
+            if t.is_question {
+                flags |= 1;
+            }
+            if t.form_digit {
+                flags |= 1 << 1;
+            }
+            if t.form_clock {
+                flags |= 1 << 2;
+            }
+            if t.form_midcap {
+                flags |= 1 << 3;
+            }
+            if t.has_numeric {
+                flags |= 1 << 4;
+            }
+            if t.has_temporal {
+                flags |= 1 << 5;
+            }
+            if t.anaphoric {
+                flags |= 1 << 6;
+            }
+            if t.is_short_reply {
+                flags |= 1 << 7;
+            }
+            if t.answers_question {
+                flags |= 1 << 8;
+            }
+            if t.is_backchannel {
+                flags |= 1 << 9;
+            }
+            json!([
+                t.id,
+                ix.session_ids.get(t.session).cloned().unwrap_or_default(),
+                turn_pos(ix, ti).unwrap_or(0),
+                snap.t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+                snap.t_own.get(ti).copied().unwrap_or(0.0).to_bits(),
+                snap.t_turn_raw.get(ti).copied().unwrap_or(0.0).to_bits(),
+                flags,
+            ])
+        })
+        .collect();
+    let session_rows: Vec<Value> = (0..ix.session_ids.len())
+        .map(|si| {
+            json!([
+                ix.session_ids[si],
+                snap.s_score.get(si).copied().unwrap_or(0.0).to_bits(),
+                snap.bridge_boost.get(si).copied().unwrap_or(0.0).to_bits(),
+            ])
+        })
+        .collect();
+
     let query_ts = parse_date(&snap.query_date);
     let slots = wh_slots(&snap.query_text);
     let rec = json!({
@@ -7741,6 +7887,10 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         "query_tokens": qtoks,
         "candidates": cands,
         "session_turns": session_turns,
+        // Dump-only. Every indexed turn and session, so a gold absent from
+        // `pre_ids` can be staged. Ranking never reads this object.
+        "score_rows": score_rows,
+        "session_rows": session_rows,
     });
     let _ = writeln!(file, "{rec}");
 }
