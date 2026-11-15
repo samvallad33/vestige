@@ -4524,6 +4524,154 @@ fn apply_c2_pool_c_absent_session_key(
 }
 
 
+/// Pool-B standing-rule seat. `rank_standing_rules` already names the one
+/// standing imperative that applies. When that rule is a user session-opener
+/// already inside the top 5, its own lexical score is zero (the standing
+/// floor, not a content match, is why it is seated), it carries an explicit
+/// conditional, and one of its stored content terms is an inflection of a
+/// query focal term, the rule takes slot 1 over a different user question.
+/// Top-5 membership does not change. Does not read turn bodies, does not
+/// touch `rsb_seat_behind`, and does not rewrite the session list.
+///
+/// A zero-specificity firing (the channel keeps every task-under-rules
+/// policy when none of them hit the query) does not take slot 1. That is
+/// the case that displaces a question which is itself the answer. Closed
+/// class gates: task-under-rules, and not a text-level preference question,
+/// summary request, temporal question, event sequence, multi-hop,
+/// count/when/where/why sniper, current-state question, or
+/// assistant-attribution question. Named-speaker sessions are skipped. A
+/// rule that still carries its own lexical score stays where submodular
+/// seating put it.
+fn apply_c2_pool_b_standing_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    standing: &[RankedItem],
+    list: &mut Vec<usize>,
+    t_own: &[f32],
+) -> bool {
+    let it = &plan.intent;
+    if list.len() < 2
+        || standing.is_empty()
+        || !it.task_under_rules
+        || it.temporal
+        || it.is_event_sequence
+        || it.multi_hop
+        || it.sniper_how_many
+        || it.sniper_when
+        || it.sniper_where
+        || it.sniper_why
+        || it.current_state
+        || it.assistant_attribution
+        || c2_text_preference(query)
+        || c2_summary_request(query)
+    {
+        return false;
+    }
+    let head = list[0];
+    let head_turn = &ix.turns[head];
+    if head_turn.speaker != "user" || !head_turn.is_question || head_turn.is_standing_policy {
+        return false;
+    }
+    let winner = standing[0].id.as_str();
+    let Some(rule) = ix
+        .standing_rules
+        .iter()
+        .find(|r| ix.turns[r.turn].id == winner)
+    else {
+        return false;
+    };
+    // The channel fires every task-under-rules policy when none of them hit
+    // a focal id. That zero-specificity winner is what displaces a question
+    // that is itself the answer. The scope set itself is fan-cut, so a rare
+    // conditional word may be gone. Require an explicit conditional, then an
+    // orthographic inflection between the policy's stored content terms and
+    // a query focal term (`implement` / `implementation`). A shared prefix
+    // that is not an inflection (`date` / `deadline`) does not count.
+    if !rule.has_explicit_scope || !c2_policy_inflects_query(ix, rule.turn, plan) {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let Some(slot) = list[..window]
+        .iter()
+        .position(|&ti| ix.turns[ti].id == winner)
+    else {
+        return false;
+    };
+    if slot == 0 {
+        return false;
+    }
+    let cand = list[slot];
+    let t = &ix.turns[cand];
+    if t.speaker != "user"
+        || t.is_question
+        || !t.is_standing_policy
+        || c2_named_session(ix, cand)
+        || c2_session_pos(ix, cand) != 0
+    {
+        return false;
+    }
+    if t_own.get(cand).copied().unwrap_or(0.0) > 0.0 {
+        return false;
+    }
+    let moved = list.remove(slot);
+    list.insert(0, moved);
+    true
+}
+
+/// Surface form of a vocab id, with the stem/entity mark stripped.
+fn c2_term_surface<'a>(ix: &'a Index, id: u32) -> &'a str {
+    let raw = ix.vocab.names.get(id as usize).map(String::as_str).unwrap_or("");
+    raw.strip_prefix("\u{1}stem:")
+        .or_else(|| raw.strip_prefix("\u{1}ent:"))
+        .or_else(|| raw.strip_prefix("\u{1}hyp:"))
+        .unwrap_or(raw)
+}
+
+/// True when one of the policy turn's stored content terms and a query focal
+/// term differ only by a closed inflectional suffix. Orthographic shape, not
+/// a domain list. `date` does not meet `deadline`.
+fn c2_policy_inflects_query(ix: &Index, ti: usize, plan: &QueryPlan) -> bool {
+    fn inflects(shorter: &str, longer: &str) -> bool {
+        if shorter.len() < 5 {
+            return false;
+        }
+        let Some(rest) = longer.strip_prefix(shorter) else {
+            return false;
+        };
+        matches!(
+            rest,
+            "" | "s"
+                | "es"
+                | "ed"
+                | "ing"
+                | "ings"
+                | "er"
+                | "ers"
+                | "ly"
+                | "al"
+                | "ment"
+                | "ments"
+                | "tion"
+                | "tions"
+                | "ation"
+                | "ations"
+        )
+    }
+    ix.turns[ti].seq.iter().any(|&(raw, _)| {
+        let term = c2_term_surface(ix, raw);
+        plan.focal_ids.iter().any(|&fid| {
+            let focal = c2_term_surface(ix, fid);
+            if term.len() <= focal.len() {
+                inflects(term, focal)
+            } else {
+                inflects(focal, term)
+            }
+        })
+    })
+}
+
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -9057,5 +9205,135 @@ mod algos_c2_tests {
             &ix_d, &plan_d, &q.text, &mut dlist, &dscene
         ));
         assert_eq!(dlist, vec![0, 4, 3, 1, 2]);
+    }
+
+    #[test]
+    fn pool_b_standing_seat_promotes_zero_own_opener_on_task_question() {
+        let ix = build_index(
+            &[
+                sess(
+                    "s1",
+                    &[(
+                        "user",
+                        "Always format code with syntax highlighting when I ask about implementation.",
+                    )],
+                ),
+                sess(
+                    "s2",
+                    &[(
+                        "user",
+                        "Could you show me how to implement a login feature?",
+                    )],
+                ),
+            ],
+            &Params::default(),
+        );
+        assert!(ix.turns[0].is_standing_policy);
+        assert!(!ix.turns[0].is_question);
+        assert!(ix.turns[1].is_question);
+        assert_eq!(c2_session_pos(&ix, 0), 0);
+        let q = Query {
+            text: "Could you show me how to implement a login feature?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(plan.intent.task_under_rules);
+        assert!(!plan.intent.temporal);
+        assert!(!c2_text_preference(&q.text));
+        assert!(!c2_summary_request(&q.text));
+        let standing = vec![RankedItem {
+            id: ix.turns[0].id.clone(),
+            session_id: "s1".into(),
+            score: 1.0,
+            matched: Vec::new(),
+        }];
+        let t_own = vec![0.0f32, 4.0];
+        let mut list = vec![1usize, 0];
+        assert!(apply_c2_pool_b_standing_seat(
+            &ix, &plan, &q.text, &standing, &mut list, &t_own
+        ));
+        assert_eq!(list, vec![0, 1]);
+
+        // Own lexical mass: the submodular order stays.
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_pool_b_standing_seat(
+            &ix,
+            &plan,
+            &q.text,
+            &standing,
+            &mut list,
+            &[1.5, 4.0]
+        ));
+        assert_eq!(list, vec![1, 0]);
+
+        // Episodic "when did" is not a task under stored rules.
+        let tq = Query {
+            text: "When did I ask about implementing a login feature?".into(),
+            date: String::new(),
+        };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(!tplan.intent.task_under_rules);
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_pool_b_standing_seat(
+            &ix, &tplan, &tq.text, &standing, &mut list, &t_own
+        ));
+        assert_eq!(list, vec![1, 0]);
+
+        // A recommendation question is text-level preference.
+        let pq = Query {
+            text: "What movies would you recommend for me to watch?".into(),
+            date: String::new(),
+        };
+        assert!(c2_text_preference(&pq.text));
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_pool_b_standing_seat(
+            &ix, &pplan, &pq.text, &standing, &mut list, &t_own
+        ));
+        assert_eq!(list, vec![1, 0]);
+
+        // A scoped rule whose conditional clause does not meet the query
+        // stays off slot 1, even on a task-under-rules question.
+        let ix = build_index(
+            &[
+                sess(
+                    "s1",
+                    &[(
+                        "user",
+                        "Always provide percentage improvements when I ask about editing progress.",
+                    )],
+                ),
+                sess(
+                    "s2",
+                    &[(
+                        "user",
+                        "What deadline should I aim for to submit my peer-reviewed draft?",
+                    )],
+                ),
+            ],
+            &Params::default(),
+        );
+        let dq = Query {
+            text: "What deadline should I aim for to submit my peer-reviewed draft?".into(),
+            date: String::new(),
+        };
+        let dplan = plan_query(&ix, &dq, &Params::default());
+        assert!(dplan.intent.task_under_rules);
+        let standing = vec![RankedItem {
+            id: ix.turns[0].id.clone(),
+            session_id: "s1".into(),
+            score: 1.0,
+            matched: Vec::new(),
+        }];
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_pool_b_standing_seat(
+            &ix,
+            &dplan,
+            &dq.text,
+            &standing,
+            &mut list,
+            &[0.0, 4.0]
+        ));
+        assert_eq!(list, vec![1, 0]);
     }
 }

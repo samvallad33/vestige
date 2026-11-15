@@ -6443,6 +6443,18 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // session is not in the top 5 takes a redundant assistant from a
     // non-dominant session. The dominant session stays. Slot 1 stays.
     apply_c2_pool_c_absent_session_key(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    // Pool-B standing-rule seat. After Bertillonage, so a user question left
+    // at slot 1 can still yield to the zero-lexical standing opener the
+    // stratified channel already selected. Top-5 membership is unchanged.
+    // Does not touch rsb_seat_behind and does not rewrite the session list.
+    apply_c2_pool_b_standing_seat(
+        ix,
+        &plan,
+        &q.text,
+        &standing_rules,
+        &mut final_turn_indices,
+        &t_own,
+    );
     maybe_dump_replay(
         ix,
         q,
