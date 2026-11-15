@@ -2315,6 +2315,86 @@ fn apply_c2_assistant_reply_t5_entry(
 }
 
 
+/// Assistant-attribution left-out-session opener T@10 entry, for
+/// assistant-attribution questions only (outside the C2 skip, beside #43).
+/// The most on-scene declarative session opener (t_scene > 0) in the pool
+/// whose session has no official-k seat at all takes the official-k tail
+/// seat (slots 6..k) of the least on-scene turn that is the only official-k
+/// turn of its session, when the opener is at least as on-scene and that
+/// turn's session is not earlier than the opener's (primacy). The question
+/// points back at a past conversation; an unseated conversation's opening
+/// statement is where that conversation is anchored. Top 5 unchanged; C2
+/// turn seats do not rewrite the session list. No new constant: "at least
+/// as on-scene" is the existing floor. Distinct from #30 (user openers on
+/// non-attribution questions, victim the last non-unique assistant) and #37
+/// (any pool user, reused 0.7 ratio, declarative victim); both are skipped
+/// on assistant-attribution questions. Skipped on temporal (Gemini Step
+/// 17), summary, WH-person, named dialogues, and event sequences (caller).
+/// Last ranking change.
+fn apply_c2_attribution_unseated_opener_t10_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let sc = |t: usize| t_scene.get(t).copied().unwrap_or(0.0);
+    let ts_of = |ti: usize| ix.session_ts.get(ix.turns[ti].session).copied().unwrap_or(0);
+    let k_sessions: Vec<usize> = list.iter().map(|&t| ix.turns[t].session).collect();
+    let mut cand: Option<usize> = None;
+    for (ti, t) in ix.turns.iter().enumerate() {
+        if sc(ti) <= 0.0 || t.is_question || c2_session_pos(ix, ti) != 0 || k_sessions.contains(&t.session) {
+            continue;
+        }
+        let tsp = t.speaker.as_str();
+        if (tsp != "user" && tsp != "assistant") || c2_named_session(ix, ti) {
+            continue;
+        }
+        // Exact scene ties go to the earliest session (the original
+        // attestation; a later session repeating the opener scores the same),
+        // the #37 tie rule.
+        if cand.is_none_or(|c| sc(ti) > sc(c) || (sc(ti) == sc(c) && ts_of(ti) < ts_of(c))) {
+            cand = Some(ti);
+        }
+    }
+    let Some(cand) = cand else {
+        return false;
+    };
+    let mut vs: Option<usize> = None;
+    for i in window..list.len() {
+        let v = list[i];
+        let vsess = ix.turns[v].session;
+        if sc(v) > sc(cand) || list.iter().filter(|&&t| ix.turns[t].session == vsess).count() != 1 {
+            continue;
+        }
+        if vs.is_none_or(|b| sc(v) <= sc(list[b])) {
+            vs = Some(i);
+        }
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    if ts_of(list[vs]) < ts_of(cand) {
+        return false;
+    }
+    list[vs] = cand;
+    true
+}
+
+
 /// Pool mentioned-speaker T@10 entry. In a named-speaker dialogue, a
 /// turn by a speaker the query names, in the scene-ranked pool but not
 /// already in the official k, takes the official-k seat of the last
@@ -5697,6 +5777,52 @@ mod algos_c2_tests {
         let plant = plan_query(&ix, &qt, &Params::default());
         let mut list = vec![2usize, 4, 0, 5, 1, 3];
         assert!(!apply_c2_assistant_reply_t5_entry(&ix, &plant, &qt.text, &mut list, &t_scene));
+    }
+
+    #[test]
+    fn attribution_unseated_opener_t10_entry_seats_opener_of_unseated_session() {
+        // BEAM 14:instruction_following:0 shape: the opener of a session with
+        // no official-k seat outscores the lone-session last tail turn.
+        let mk = |ts: [i64; 3]| {
+            let mut ss = vec![
+                sess("s1", &[("user", "I love sci-fi films like Interstellar."), ("assistant", "Great taste.")]),
+                sess("s2", &[("user", "Recommend a movie?"), ("assistant", "Try Arrival."), ("user", "More?"), ("assistant", "Try Contact."), ("user", "Thanks."), ("assistant", "Enjoy.")]),
+                sess("s3", &[("user", "What about series?"), ("assistant", "Try The Expanse.")]),
+            ];
+            for (se, t) in ss.iter_mut().zip(ts) {
+                se.timestamp = t;
+            }
+            build_index(&ss, &Params::default())
+        };
+        let ix = mk([1_000, 1_001, 1_002]);
+        let q = Query { text: "What movies would you recommend for me to watch?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        assert!(!c2_summary_request(&q.text));
+        // Turns: s1 0-1, s2 2-7, s3 8-9. Official k: 2..=6 (s2), then 9 (s3's
+        // lone k turn, later than s1). Opener 0 (s1) has no k seat.
+        let t_scene = vec![2.0f32, 0.1, 3.0, 2.9, 2.8, 2.7, 2.6, 0.5, 0.0, 1.5];
+        let mut list = vec![2usize, 3, 4, 5, 6, 9];
+        assert!(apply_c2_attribution_unseated_opener_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 3, 4, 5, 6, 0]);
+        // Primacy: the lone tail turn's session is earlier than the opener's.
+        let ixe = mk([1_005, 1_001, 1_002]);
+        let plane = plan_query(&ixe, &q, &Params::default());
+        let mut list = vec![2usize, 3, 4, 5, 6, 9];
+        assert!(!apply_c2_attribution_unseated_opener_t10_entry(&ixe, &plane, &q.text, &mut list, &t_scene));
+        // An opener less on-scene than the lone tail turn does not enter.
+        let t2 = vec![1.0f32, 0.1, 3.0, 2.9, 2.8, 2.7, 2.6, 0.5, 0.0, 1.5];
+        let mut list = vec![2usize, 3, 4, 5, 6, 9];
+        assert!(!apply_c2_attribution_unseated_opener_t10_entry(&ix, &plan, &q.text, &mut list, &t2));
+        // No lone-session tail turn: 8 and 9 both from s3.
+        let mut list = vec![2usize, 3, 4, 5, 8, 9];
+        assert!(!apply_c2_attribution_unseated_opener_t10_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        // Temporal questions are left alone.
+        let qt = Query { text: "When did you recommend movies for me to watch?".into(), date: String::new() };
+        let plant = plan_query(&ix, &qt, &Params::default());
+        let mut list = vec![2usize, 3, 4, 5, 6, 9];
+        assert!(!apply_c2_attribution_unseated_opener_t10_entry(&ix, &plant, &qt.text, &mut list, &t_scene));
     }
 
     #[test]
