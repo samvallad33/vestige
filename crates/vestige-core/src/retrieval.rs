@@ -6033,8 +6033,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             // when that follow-up is at least as on-scene. Skipped on
             // preference so the rule stays independent of the
             // preference-source seat.
-            if !it.preference {
-                apply_c2_elaboration_seat(ix, &plan, &mut final_turn_indices, &t_scene);
+            // Text-level preference only (PREF_QUERY_CUES), not the
+            // constraint-object upgrade on plan.intent.preference, so
+            // #12–#18 stay independent of #11 without treating a factual
+            // question that mentions a constraint object as preference.
+            if !c2_text_preference(&q.text) {
+                apply_c2_elaboration_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
                 // Cross-session opener: mid-session user head yields to a
                 // user session-opener already in the top 5 from another
                 // session. Skipped on preference and on summary requests.
@@ -6090,7 +6094,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // may still run after this pass.
     // Same preference / event-sequence / assistant-attribution cuts.
     // Does not touch rsb_seat_behind and adds no WH-slot ballot.
-    if !it.is_event_sequence && !it.assistant_attribution && !it.preference {
+    if !it.is_event_sequence && !it.assistant_attribution && !c2_text_preference(&q.text) {
         apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
         // Same-session user T@5 entry: a user opener or later turn from
         // a session already in the top 5, already in official k, swaps
@@ -7078,6 +7082,8 @@ struct ReplaySnap {
     k: usize,
     is_event_sequence: bool,
     temporal: bool,
+    preference: bool,
+    assistant_attribution: bool,
     seated: Vec<usize>,
     final_session_indices: Vec<usize>,
     t_scene: Vec<f32>,
@@ -7106,6 +7112,8 @@ fn maybe_dump_replay(
             k,
             is_event_sequence: it.is_event_sequence,
             temporal: it.temporal,
+            preference: it.preference,
+            assistant_attribution: it.assistant_attribution,
             seated: seated.to_vec(),
             final_session_indices: final_session_indices.to_vec(),
             t_scene: t_scene.to_vec(),
@@ -7416,6 +7424,8 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         "wh_class": format!("WH_SLOTS_{slots}"),
         "is_event_sequence": snap.is_event_sequence,
         "temporal": snap.temporal,
+        "preference": snap.preference,
+        "assistant_attribution": snap.assistant_attribution,
         "pool_size": pool.len(),
         "pre_ids": pool.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
         "seated_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
