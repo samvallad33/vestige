@@ -1068,6 +1068,80 @@ fn apply_c2_same_opener_seat(
 }
 
 
+/// Cross-session opener-pair seat. A user session-opener at slot 1 is
+/// often a sibling conversation start that still shares topic words; a
+/// user opener from a different user/assistant session already in the
+/// top 5, whose immediately following assistant reply is also already
+/// in the top 5, and that is at least as on-scene, is a retrieved
+/// conversation start and takes slot 1. Top-5 membership never changes.
+/// The pair cut is the structure: an opener whose reply was not
+/// retrieved with it is not promoted, which is what would otherwise
+/// unseat a sitting gold opener that a higher-scoring lone opener
+/// outranks. Distinct from the cross-session opener seat (#13), which
+/// requires a mid-session head and does not require the candidate's
+/// reply to be in the top 5, and from the same-session opener seat
+/// (#14). Skipped on summary requests (existing `summary_hold` shape),
+/// preference and temporal questions, event sequences and
+/// assistant-attribution (caller), and named-speaker sessions. No new
+/// constant: the scene floor is "at least as on-scene," the same
+/// comparison #12 uses. Invoked after the gatekeeper, after #26, as
+/// the last ranking change.
+fn apply_c2_cross_opener_pair_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || c2_text_preference(query) || plan.intent.temporal || c2_summary_request(query)
+    {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker != "user"
+        || c2_named_session(ix, top)
+        || c2_session_pos(ix, top) != 0
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user"
+            || t.session == ix.turns[top].session
+            || c2_named_session(ix, cand)
+            || c2_session_pos(ix, cand) != 0
+        {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) < sc_top {
+            continue;
+        }
+        let Some(members) = ix.session_turns.get(t.session) else {
+            continue;
+        };
+        let Some(&reply) = members.get(1) else {
+            continue;
+        };
+        if ix.turns[reply].speaker != "assistant" {
+            continue;
+        }
+        if !list[..window].contains(&reply) {
+            continue;
+        }
+        list.remove(i);
+        list.insert(0, cand);
+        return true;
+    }
+    false
+}
+
+
 /// True when the padded query contains the speaker's name as a whole token.
 /// Speakers are the conversation's own role labels (no name list). User and
 /// assistant roles never count.
@@ -3228,6 +3302,104 @@ mod algos_c2_tests {
         assert_ne!(list[0], 5, "entry alone should not take slot 1");
         assert!(apply_c2_queried_speaker_first_seat(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list[0], 5);
+    }
+
+    #[test]
+
+    fn cross_opener_pair_seat_promotes_other_session_opener_with_reply_in_top5() {
+        // 10:knowledge_update:1 shape: a user opener at slot 1 yields to
+        // another session's user opener already in the top 5 whose
+        // assistant reply is also already in the top 5, when that opener
+        // is at least as on-scene.
+        let ix = build_index(
+            &[
+                sess(
+                    "s1",
+                    &[
+                        ("user", "I need to pick a day to drop off the draft."),
+                        ("assistant", "Any morning this week should work."),
+                    ],
+                ),
+                sess(
+                    "s2",
+                    &[
+                        ("user", "I want to submit my peer-reviewed draft to the local writing group by Friday."),
+                        ("assistant", "Friday is a solid deadline for that group."),
+                        ("user", "I will also send a copy to my advisor."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What deadline should I aim for to submit my peer-reviewed draft to the local writing group?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        // Turns: 0-1 session s1, 2-4 session s2. Candidate opener is 2, reply is 3.
+        let mut list = vec![0usize, 3, 2, 4];
+        let t_scene = vec![0.8f32, 0.7, 1.45, 1.6, 0.5];
+        assert!(apply_c2_cross_opener_pair_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 0, 3, 4]);
+        // Reply not already in the top 5: no seat.
+        let mut list = vec![0usize, 2, 4];
+        assert!(!apply_c2_cross_opener_pair_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 2, 4]);
+        // Candidate below the head's scene score: no seat. This is the
+        // 6:information_extraction:0 shape (lone opener at r=0.91).
+        let mut list = vec![0usize, 3, 2, 4];
+        assert!(!apply_c2_cross_opener_pair_seat(
+            &ix,
+            &plan,
+            &q.text,
+            &mut list,
+            &[1.0, 0.7, 0.9, 1.0, 0.5]
+        ));
+        assert_eq!(list, vec![0, 3, 2, 4]);
+        // Mid-session head: no seat (#13's territory, not this one).
+        let mut list = vec![4usize, 3, 2, 0];
+        assert!(!apply_c2_cross_opener_pair_seat(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![4, 3, 2, 0]);
+        // Preference questions are skipped.
+        let pq = Query { text: "What is my favorite writing group deadline?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(c2_text_preference(&pq.text));
+        let mut list = vec![0usize, 3, 2, 4];
+        assert!(!apply_c2_cross_opener_pair_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 3, 2, 4]);
+        // Temporal questions keep the timeline path.
+        let tq = Query { text: "When do I submit my peer-reviewed draft to the local writing group?".into(), date: String::new() };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(tplan.intent.temporal);
+        let mut list = vec![0usize, 3, 2, 4];
+        assert!(!apply_c2_cross_opener_pair_seat(&ix, &tplan, &tq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 3, 2, 4]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("caroline", "I need to pick a day to drop off the draft."),
+                        ("melanie", "Any morning this week should work."),
+                    ],
+                ),
+                sess(
+                    "D2",
+                    &[
+                        ("caroline", "I want to submit my peer-reviewed draft by Friday."),
+                        ("melanie", "Friday is a solid deadline."),
+                    ],
+                ),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![0usize, 3, 2, 1];
+        assert!(!apply_c2_cross_opener_pair_seat(&ixn, &plann, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 3, 2, 1]);
     }
 
     #[test]
