@@ -6312,6 +6312,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // change, so it sees openers the pool T@10 entry (#30) seated.
         // Skipped on preference.
         apply_c2_late_opener_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Head-session opener T@5 entry: the opener of slot 1's session,
+        // already in official k, swaps with the least on-scene top-5
+        // user from another session when at least as on-scene. After
+        // #34, last ranking change. Skipped on preference.
+        apply_c2_head_session_opener_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
