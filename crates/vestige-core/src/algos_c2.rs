@@ -852,6 +852,62 @@ fn apply_c2_preference_source_seat(
     true
 }
 
+
+/// Next-user elaboration seat. A mid-session declarative user turn at
+/// slot 1 is often a list or scene overview; the next same-session user
+/// turn already in the top 5, also declarative, with a scene score at
+/// least that of the head, is the elaboration and takes slot 1. Top-5
+/// membership never changes. Session openers stay put. Skipped on
+/// temporal questions, preference questions, event sequences and
+/// assistant-attribution (caller), and named-speaker sessions. Sibling
+/// of subsequent-answer (#10), which fires when the mid-session head is
+/// a question and the follow-up holds >= 50% of its scene score. This
+/// seat requires a declarative head and a follow-up that is at least as
+/// on-scene as that head. Runs after subsequent-answer, before RSB.
+/// Slot 1 is then frozen by rank1_gatekeeper_keep_rsb_head.
+fn apply_c2_elaboration_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 2 || plan.intent.temporal || plan.intent.preference {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker != "user"
+        || ix.turns[top].is_question
+        || c2_named_session(ix, top)
+        || c2_session_pos(ix, top) < 1
+    {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let Some(cand) = c2_next_user(ix, top) else {
+        return false;
+    };
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let Some(slot) = list[..window].iter().position(|&t| t == cand) else {
+        return false;
+    };
+    if slot == 0 {
+        return false;
+    }
+    let t = &ix.turns[cand];
+    if t.speaker != "user" || t.is_question {
+        return false;
+    }
+    if t_scene.get(cand).copied().unwrap_or(0.0) < sc_top {
+        return false;
+    }
+    list.remove(slot);
+    list.insert(0, cand);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -1257,6 +1313,91 @@ mod algos_c2_tests {
         let mut list = vec![1usize, 2, 0, 3];
         assert!(!apply_c2_preference_source_seat(&ix, &nplan, &nq.text, &mut list));
         assert_eq!(list, vec![1, 2, 0, 3]);
+    }
+
+
+    #[test]
+    fn elaboration_seat_promotes_next_user_over_mid_session_overview() {
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "I'm planning gifts this year."),
+                    ("assistant", "Nice."),
+                    ("user", "Here's a start - I've bought gifts for my sister's birthday, my mom, and my neighbor."),
+                    ("assistant", "That's a good list."),
+                    ("user", "For my sister's birthday, I got her a yellow dress and a pair of earrings to match."),
+                    ("user", "I also got mom some flowers."),
+                    ("assistant", "Lovely."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query { text: "What did I buy for my sister's birthday gift?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.temporal);
+        assert!(!plan.intent.preference);
+        assert!(!ix.turns[2].is_question);
+        assert!(!ix.turns[4].is_question);
+        // Slot 1 is the mid-session overview (turn 2). The next user (turn 4)
+        // is already in the top 5, declarative, and at least as on-scene.
+        let mut list = vec![2usize, 3, 4, 5, 6];
+        let t_scene = vec![0.5f32, 0.4, 1.0, 0.8, 1.05, 0.9, 0.2];
+        assert!(apply_c2_elaboration_seat(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![4, 2, 3, 5, 6]);
+        // Equal scene is enough (at least as on-scene as the head).
+        let mut list = vec![2usize, 3, 4, 5, 6];
+        assert!(apply_c2_elaboration_seat(&ix, &plan, &mut list, &[0.5, 0.4, 1.0, 0.8, 1.0, 0.9, 0.2]));
+        assert_eq!(list, vec![4, 2, 3, 5, 6]);
+        // Below the head's scene score: no swap.
+        let mut list = vec![2usize, 3, 4, 5, 6];
+        assert!(!apply_c2_elaboration_seat(
+            &ix,
+            &plan,
+            &mut list,
+            &[0.5, 0.4, 1.0, 0.8, 0.99, 0.9, 0.2]
+        ));
+        assert_eq!(list, vec![2, 3, 4, 5, 6]);
+        // Session opener at slot 1: no swap.
+        let mut list = vec![0usize, 1, 4, 5, 6];
+        assert!(!apply_c2_elaboration_seat(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 5, 6]);
+        // Next user not already in the top 5: membership must not change.
+        let mut list = vec![2usize, 3, 5, 6, 1];
+        assert!(!apply_c2_elaboration_seat(&ix, &plan, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 3, 5, 6, 1]);
+        // Preference query: no swap.
+        let pq = Query { text: "Can you recommend a birthday gift for my sister?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(pplan.intent.preference);
+        let mut list = vec![2usize, 3, 4, 5, 6];
+        assert!(!apply_c2_elaboration_seat(&ix, &pplan, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 3, 4, 5, 6]);
+        // Temporal questions keep the timeline path.
+        let tq = Query { text: "When did I buy my sister's birthday gift?".into(), date: String::new() };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(tplan.intent.temporal);
+        let mut list = vec![2usize, 3, 4, 5, 6];
+        assert!(!apply_c2_elaboration_seat(&ix, &tplan, &mut list, &t_scene));
+        assert_eq!(list, vec![2, 3, 4, 5, 6]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("Caroline", "I'm planning gifts this year."),
+                    ("Melanie", "Nice."),
+                    ("Caroline", "Here's a start - I've bought gifts for my sister's birthday, my mom, and my neighbor."),
+                    ("Melanie", "That's a good list."),
+                    ("Caroline", "For my sister's birthday, I got her a yellow dress and a pair of earrings to match."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![2usize, 3, 4];
+        assert!(!apply_c2_elaboration_seat(&ixn, &plann, &mut list, &[0.5, 0.4, 1.0, 0.8, 1.05]));
+        assert_eq!(list, vec![2, 3, 4]);
     }
 
 
