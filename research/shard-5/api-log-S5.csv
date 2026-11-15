@@ -1,0 +1,494 @@
+source_log,endpoint,http_status,result_count,note
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%8F%B2%E8%A8%98,200,72,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%BC%A2%E6%9B%B8,200,113,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%BE%8C%E6%BC%A2%E6%9B%B8,200,50,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E4%B8%89%E5%9C%8B%E5%BF%97,200,49,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E8%B3%87%E6%B2%BB%E9%80%9A%E9%91%91,200,70,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E9%80%9A%E9%91%91%E7%B4%80%E4%BA%8B%E6%9C%AC%E6%9C%AB,200,8,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%98%A5%E7%A7%8B,200,660,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%B7%A6%E5%82%B3,200,120,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%9C%8B%E8%AA%9E,200,33,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E7%AB%B9%E6%9B%B8%E7%B4%80%E5%B9%B4,200,26,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%8F%B2%E9%80%9A,200,39,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E9%80%9A%E5%85%B8,200,19,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%94%90%E6%9C%83%E8%A6%81,200,5,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%94%90%E5%BE%8B%E7%96%8F%E8%AD%B0,200,4,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%94%90%E5%85%AD%E5%85%B8,200,3,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%96%87%E7%8D%BB%E9%80%9A%E8%80%83,200,22,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%86%8A%E5%BA%9C%E5%85%83%E9%BE%9C,200,3,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%B0%B8%E6%A8%82%E5%A4%A7%E5%85%B8,200,6,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%9B%9B%E5%BA%AB%E5%85%A8%E6%9B%B8%E7%B8%BD%E7%9B%AE,200,5,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%91%A8%E7%A6%AE,200,118,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%84%80%E7%A6%AE,200,126,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E7%A6%AE%E8%A8%98,200,173,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%91%A8%E6%98%93,200,499,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%B0%9A%E6%9B%B8,200,258,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E9%80%B8%E5%91%A8%E6%9B%B8,200,10,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%91%82%E6%B0%8F%E6%98%A5%E7%A7%8B,200,9,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%B7%AE%E5%8D%97%E5%AD%90,200,7,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E9%B9%BD%E9%90%B5%E8%AB%96,200,11,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E7%99%BD%E8%99%8E%E9%80%9A%E7%BE%A9,200,7,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E9%A2%A8%E4%BF%97%E9%80%9A%E7%BE%A9,200,10,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E8%8F%AF%E9%99%BD%E5%9C%8B%E5%BF%97,200,10,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%B0%B4%E7%B6%93%E6%B3%A8,200,38,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%BB%BA%E7%82%8E%E4%BB%A5%E4%BE%86%E7%B9%AB%E5%B9%B4%E8%A6%81%E9%8C%84,200,1,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%85%83%E5%85%B8%E7%AB%A0,200,2,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%A4%A7%E6%98%8E%E6%9C%83%E5%85%B8,200,3,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%B4%97%E5%86%A4%E9%9B%86%E9%8C%84,200,3,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E7%87%9F%E9%80%A0%E6%B3%95%E5%BC%8F,200,2,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E4%B9%9D%E7%AB%A0%E7%AE%97%E8%A1%93,200,7,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%91%A8%E9%AB%80%E7%AE%97%E7%B6%93,200,10,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E7%BE%A4%E6%9B%B8%E6%B2%BB%E8%A6%81,200,4,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E8%B2%9E%E8%A7%80%E6%94%BF%E8%A6%81,200,6,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E9%80%9A%E5%BF%97,200,143,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E7%8E%89%E6%B5%B7,200,6,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%AE%8B%E6%9C%83%E8%A6%81%E8%BC%AF%E7%A8%BF,200,1,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%A4%A7%E5%94%90%E9%96%8B%E5%85%83%E7%A6%AE,200,2,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%BC%A2%E5%AE%98%E8%88%8A%E5%84%80,200,1,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E7%8D%A8%E6%96%B7,200,8,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E6%9D%B1%E8%A7%80%E6%BC%A2%E8%A8%98,200,3,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E8%B6%8A%E7%B5%95%E6%9B%B8,200,5,
+log-wave3.json,https://api.ctext.org/searchtexts?title=%E5%90%B3%E8%B6%8A%E6%98%A5%E7%A7%8B,200,10,
+log-wave3.json,https://api.github.com/repos/kanripo/KR-Catalog/contents/KR?ref=master,200,,
+log-wave3.json,https://raw.githubusercontent.com/kanripo/KR-Catalog/master/README.org,200,,
+log-wave3.json,https://raw.githubusercontent.com/cbeta-org/xml-p5/master/canons.json,200,,
+log-wave3.json,https://api.github.com/repos/cbeta-org/xml-p5/contents/K?ref=master,200,,
+log-wave3.json,https://raw.githubusercontent.com/cbeta-org/xml-p5/master/README.md,200,,
+log-wave4.json,https://raw.githubusercontent.com/kanripo/KR-Catalog/master/KR/KR2.txt,200,,
+log-wave4.json,https://raw.githubusercontent.com/kanripo/KR-Catalog/master/KR/KR2a.txt,200,,
+log-wave4.json,https://raw.githubusercontent.com/kanripo/KR-Catalog/master/KR/KR4a.txt,200,,
+log-wave4.json,https://api.github.com/repos/cbeta-org/xml-p5/contents/K/K05?ref=master,200,,
+log-wave4.json,https://raw.githubusercontent.com/cbeta-org/xml-p5/master/K/K05/K05n0016.xml,200,,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Records%20of%20the%20Grand%20Historian&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Book%20of%20Han&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Book%20of%20the%20Later%20Han&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zizhi%20Tongjian&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Comprehensive%20Mirror%20to%20Aid%20in%20Government&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Spring%20and%20Autumn%20Annals&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zuo%20Zhuan&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Bamboo%20Annals&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Shitong&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Tongdian&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Tang%20Huiyao&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Tang%20Code&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yongle%20Encyclopedia&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Siku%20Quanshu&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Tsinghua%20bamboo%20slips&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Shuihudi%20Qin%20bamboo%20texts&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zhangjiashan%20Han%20bamboo%20texts&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Liye%20Qin%20slips&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Juyan%20Han%20wooden%20slips&language=en&format=json&limit=3&type=item,200,0,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Mawangdui%20silk%20texts&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Guodian%20Chu%20Slips&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Dunhuang%20manuscripts&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Turfan%20manuscripts&language=en&format=json&limit=3&type=item,200,0,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Xuanquan&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yinqueshan%20Han%20slips&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Baoshan%20bamboo%20slips&language=en&format=json&limit=3&type=item,200,0,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zoumalou%20bamboo%20slips&language=en&format=json&limit=3&type=item,200,0,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Veritable%20Records%20of%20the%20Joseon%20Dynasty&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Seungjeongwon%20ilgi&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Samguk%20sagi&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Samguk%20yusa&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Goryeosa&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Tripitaka%20Koreana&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Gyeongguk%20daejeon&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Gwanggaeto%20Stele&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Jikji&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Uigwe&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ilseongnok&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Dongguk%20Tonggam&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Sokdaejeon&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Nihon%20Shoki&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kojiki&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Shoku%20Nihongi&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Engishiki&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Sh%C5%8Ds%C5%8Din%20documents&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Azuma%20Kagami&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Goseibai%20Shikimoku&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Man%27y%C5%8Dsh%C5%AB&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ruij%C5%AB%20Kokushi&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Dai%20Nihon%20Shiry%C5%8D&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=T%C5%8D-ji%20Hyakug%C5%8D%20Monjo&language=en&format=json&limit=3&type=item,200,0,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Meigetsuki&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Gyokuy%C5%8D&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ritsury%C5%8D&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Taih%C5%8D%20Code&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Izumo%20Fudoki&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Nihon%20Sandai%20Jitsuroku&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Tokugawa%20jikki&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%C4%90%E1%BA%A1i%20Vi%E1%BB%87t%20s%E1%BB%AD%20k%C3%BD%20to%C3%A0n%20th%C6%B0&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%C4%90%E1%BA%A1i%20Nam%20th%E1%BB%B1c%20l%E1%BB%A5c&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kh%C3%A2m%20%C4%91%E1%BB%8Bnh%20Vi%E1%BB%87t%20s%E1%BB%AD%20th%C3%B4ng%20gi%C3%A1m%20c%C6%B0%C6%A1ng%20m%E1%BB%A5c&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=An%20Nam%20ch%C3%AD%20l%C6%B0%E1%BB%A3c&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=L%C4%A9nh%20Nam%20ch%C3%ADch%20qu%C3%A1i&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=L%E1%BB%8Bch%20tri%E1%BB%81u%20hi%E1%BA%BFn%20ch%C6%B0%C6%A1ng%20lo%E1%BA%A1i%20ch%C3%AD&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Qu%E1%BB%91c%20tri%E1%BB%81u%20h%C3%ACnh%20lu%E1%BA%ADt&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ho%C3%A0ng%20Vi%E1%BB%87t%20lu%E1%BA%ADt%20l%E1%BB%87&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%C4%90%E1%BA%A1i%20Nam%20nh%E1%BA%A5t%20th%E1%BB%91ng%20ch%C3%AD&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=V%C4%83n%20Mi%E1%BA%BFu&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Nguy%E1%BB%85n%20dynasty%20woodblocks&language=en&format=json&limit=3&type=item,200,0,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ch%C3%A2u%20b%E1%BA%A3n&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%C4%91%E1%BB%8Ba%20b%E1%BA%A1&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Xiyuan%20lu&language=en&format=json&limit=3&type=item,200,2,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ming%20Shilu&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Qing%20Shilu&language=en&format=json&limit=3&type=item,200,0,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Fangshan%20Stone%20Sutras&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kaicheng%20Stone%20Classics&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Houma%20covenant%20texts&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Chu%20Silk%20Manuscript&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Shi%20Qiang%20pan&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Mao%20Gong%20ding&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=He%20zun&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=I%20Ching&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Collected%20Statutes%20of%20the%20Ming&language=en&format=json&limit=3&type=item,200,0,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yuan%20Dianzhang&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Song%20huiyao&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Cefu%20Yuangui&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Jianyan%20yilai%20xinian%20yaolu&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zizhi%20tongjian%20jishi%20benmo&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Qunshu%20zhiyao&language=en&format=json&limit=3&type=item,200,1,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Haeinsa&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Palman%20Daejanggyeong&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Bibyeonsa&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Joseon%20wangjo%20sillok&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Heijo-kyo%20mokkan&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Shosoin&language=en&format=json&limit=3&type=item,200,3,
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Manyoshu&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Engi-shiki&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Dai%20Viet%20su%20ky&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Dai%20Nam%20thuc%20luc&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Viet%20su%20thong%20giam%20cuong%20muc&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Annam%20chi%20luoc&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Phan%20Huy%20Chu&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Hong%20Duc%20code&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Gia%20Long%20Code&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Vinh%20Nghiem&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Moc%20ban%20trieu%20Nguyen&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Dia%20ba&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Chau%20ban%20Nguyen&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Gyeongju%20wooden%20tablets&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Wolseong%20mokkan&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Jikji%20simche%20yojeol&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Annals%20of%20the%20Joseon%20Dynasty&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Diary%20of%20the%20Royal%20Secretariat&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Essentials%20of%20the%20Three%20Kingdoms&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Memorabilia%20of%20the%20Three%20Kingdoms&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=History%20of%20Goryeo&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=National%20Code&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Protocols%20of%20the%20Joseon%20Dynasty&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Chronicles%20of%20Japan&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Records%20of%20Ancient%20Matters&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Continued%20Chronicles%20of%20Japan&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Procedures%20of%20the%20Engi%20Era&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Azuma%20Kagami&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Formulary%20of%20Adjudications&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Classified%20National%20Histories&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Complete%20Historical%20Records%20of%20Great%20Japan&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Collected%20Writings%20of%20Toji&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Meigetsu%20diary&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Complete%20Book%20of%20the%20Historical%20Records%20of%20Dai%20Viet&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Veritable%20Records%20of%20Dai%20Nam&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Imperially%20Commissioned%20Mirror%20and%20Outline&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Brief%20Records%20of%20Annam&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Categorized%20Records%20of%20the%20Institutions%20of%20Successive%20Dynasties&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Collected%20Cases%20of%20Injustice%20Rectified&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Veritable%20Records%20of%20the%20Ming&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Veritable%20Records%20of%20the%20Qing&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yuelu%20Academy%20Qin%20slips&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Peking%20University%20Han%20bamboo%20slips&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yinwan%20Han%20slips&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Niya%20documents&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Astana%20tombs&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Xiping%20Stone%20Classics&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Jiaxing%20Canon&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zhaocheng%20Jin%20Tripitaka&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Goryeo%20Dogyeong&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Haedong%20goseung%20jeon&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Muye%20Dobo%20Tongji&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Sejong%20sillok&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Taejo%20sillok&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Sukjong%20sillok&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yeongjo%20sillok&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Nihon%20Koki&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Shoku%20Nihon%20Koki&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Nihon%20Montoku%20Tennoki&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Honcho%20Seiki&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Hyakurensho&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Heian%20ibun&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kamakura%20ibun&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Dai%20Nihon%20komonjo&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kujikata%20Osadamegaki&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ofuregaki&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Shumon%20aratame&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ninbetsu%20cho&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Taiko%20kenchi&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kakoch%C5%8D&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kishomon&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Gonin-gumi&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=L%C3%AA%20tri%E1%BB%81u%20h%C3%ACnh%20lu%E1%BA%ADt&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Gia%20Long%20lu%E1%BA%ADt&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%C4%90%E1%BA%A1i%20Vi%E1%BB%87t%20s%E1%BB%AD%20l%C6%B0%E1%BB%A3c&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Vi%E1%BB%87t%20%C4%91i%E1%BB%87n%20u%20linh%20t%E1%BA%ADp&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kh%C3%A2m%20%C4%91%E1%BB%8Bnh%20%C4%90%E1%BA%A1i%20Nam%20h%E1%BB%99i%20%C4%91i%E1%BB%83n&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%C4%90%E1%BA%A1i%20Nam%20th%E1%BB%B1c%20l%E1%BB%A5c%20ch%C3%ADnh%20bi%C3%AAn&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Qu%E1%BB%91c%20s%E1%BB%AD%20qu%C3%A1n&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Th%C4%83ng%20Long%20imperial%20citadel&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Doctoral%20stele%20V%C4%83n%20Mi%E1%BA%BFu&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=M%E1%BB%99c%20b%E1%BA%A3n%20tri%E1%BB%81u%20Nguy%E1%BB%85n&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Bamboo%20slips%20of%20Liye&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Han%20wooden%20slips%20from%20Juyan&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Qin%20bamboo%20texts%20from%20Shuihudi&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Han%20bamboo%20texts%20from%20Zhangjiashan&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Silk%20texts%20from%20Mawangdui&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Chu%20slips%20from%20Guodian&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Covenant%20texts%20from%20Houma&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Stone%20classics%20of%20the%20Xiping%20period&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Stone%20classics%20of%20the%20Kaicheng%20period&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Stone%20sutras%20of%20Fangshan&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Woodblocks%20of%20the%20Nguy%E1%BB%85n%20dynasty&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Vermilion%20records%20Nguy%E1%BB%85n&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Land%20register%20%C4%91%E1%BB%8Ba%20b%E1%BA%A1&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Outline%20and%20detail%20history%20of%20Vietnam&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Categorized%20institutions%20Phan%20Huy%20Ch%C3%BA&language=en&format=json&limit=3&type=item,429,,rate limited
+log-wave4.json,https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q272530|Q846905|Q430428|Q207062|Q747720|Q230230|Q805994|Q856025|Q2615272|Q1146980|Q1195751|Q696077|Q699477|Q7849730|Q689661|Q5931471|Q10563850|Q6794358|Q1151566|Q276864|Q11073214|Q1167293|Q497030|Q483160|Q485552|Q485538|Q707566|Q138733|Q489676|Q701096|Q494611|Q1073141|Q626206|Q496446|Q16177106|Q813935|Q813031|Q611399|Q1342448|Q11545362|Q1042324|Q63889|Q834321|Q1038639|Q3012021|Q1483937|Q11572778|Q1059892|Q11395858|Q1052981&props=labels|descriptions&languages=en&format=json,429,,rate limited
+log-wave5.json,https://raw.githubusercontent.com/kanripo/KR-Catalog/master/KR/KR2b.txt,200,,
+log-wave5.json,https://raw.githubusercontent.com/kanripo/KR-Catalog/master/KR/KR2c.txt,200,,
+log-wave5.json,https://raw.githubusercontent.com/kanripo/KR-Catalog/master/KR/KR2m.txt,200,,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Juyan%20Han%20slips&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Edsen-gol%20wooden%20slips&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Xuanquan%20bamboo%20slips&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Baoshan%20Chu%20slips&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zoumalou%20Wu%20slips&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yuelu%20Qin%20slips&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Turfan%20documents&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Qing%20shilu&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Da%20Qing%20lichao%20shilu&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Kaicheng%20Stone%20Classics&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Houma%20covenant&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=He%20zun%20inscription&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Meigetsuki%20Fujiwara%20no%20Teika&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Gyokuyo%20Kujo%20Kanezane&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Toji%20Hyakugo%20Monjo&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Ritsuryo%20codes&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Bibyeonsa%20deungnok&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Heijo%20mokkan&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Lich%20trieu%20hien%20chuong%20loai%20chi&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Quoc%20trieu%20hinh%20luat&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Hong%20Duc%20thien%20chinh&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Nguyen%20dynasty%20chau%20ban&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Woodblocks%20of%20the%20Nguyen%20Dynasty&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=dia%20ba%20land%20register%20Vietnam&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Van%20Mieu%20doctoral%20steles&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Eighty-two%20steles%20of%20doctors&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=I%20Ching&language=en&format=json&limit=5&type=item,200,5,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zhouyi&language=en&format=json&limit=5&type=item,200,5,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Book%20of%20Changes&language=en&format=json&limit=5&type=item,200,5,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Tang%20Huiyao&language=en&format=json&limit=5&type=item,200,2,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Collected%20Statutes%20Tang&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Xiyuan%20jilu&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Collected%20Cases%20of%20Injustice%20Rectified&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Yuan%20dianzhang&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Da%20Yuan%20shengzheng&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Song%20huiyao%20jigao&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Zizhi%20tongjian%20jishi%20benmo&language=en&format=json&limit=5&type=item,200,0,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Qunshu%20zhiyao&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Group%20of%20Books&language=en&format=json&limit=5&type=item,200,1,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Juyan%20wooden%20slips&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,0,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Joseon%20uigwe&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,0,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Dai%20Viet%20su%20ky&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,1895,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Nihon%20shoki&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,54,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Shosoin%20documents&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,0,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Tripitaka%20Koreana&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,8,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Dunhuang%20manuscripts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,67,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Engishiki&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,2,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Azuma%20Kagami&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,5,
+log-wave5.json,https://archive.org/advancedsearch.php?q=dia%20ba%20Vietnam&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,160,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Nguyen%20chau%20ban&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,564,
+log-wave5.json,https://archive.org/advancedsearch.php?q=Zizhi%20tongjian&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,10,
+log-wave5.json,https://archive.org/metadata/92295871-3612263248800396-1572473117173874688-o,200,1,
+log-wave5.json,https://archive.org/metadata/8-xbet-tham-gia-cuoc-nhan-hang-ngan-uu-dai,200,1,
+log-wave5.json,https://archive.org/metadata/zhorikkokushi088800,200,1,
+log-wave5.json,https://archive.org/metadata/kikironkykamiyoh01mats,200,1,
+log-wave5.json,https://archive.org/metadata/koreana-tripitaka-goryeo-daejanggyeong,200,1,
+log-wave5.json,https://archive.org/metadata/tripitaka-koreana,200,1,
+log-wave5.json,https://archive.org/metadata/oapen-20.500.12657-51341,200,1,
+log-wave5.json,https://archive.org/metadata/mirsky-1977-sir-aurel-stein-archaeological-explorer,200,1,
+log-wave6.json,https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q6347577|Q42412865|Q7302959|Q4896718|Q4705345|Q8032387|Q181937|Q1146991|Q5146039|Q10889556|Q3490339|Q11609507|Q11545362|Q497030|Q483160|Q6770796|Q911328|Q855899|Q138733|Q813935|Q1042324|Q207062|Q846905|Q272530|Q805994|Q701096|Q494611|Q1073141|Q489676|Q63889|Q1342448|Q3012021|Q1038639|Q611399|Q1059892|Q11395858|Q1052981|Q485552|Q485538|Q707566&props=labels|descriptions&languages=en&format=json,200,,
+log-wave6.json,https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q626206|Q496446|Q16177106|Q834321|Q813031|Q699477|Q696077|Q1195751|Q2615272|Q856025|Q747720|Q230230|Q7849730|Q689661|Q5931471|Q10563850|Q6794358|Q1151566|Q276864|Q28772|Q11075483|Q7495914|Q11126402|Q4750162|Q6711685|Q8079953|Q430428|Q489795&props=labels|descriptions&languages=en&format=json,200,,
+log-wave6.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%E5%B1%85%E5%BB%B6%E6%BC%A2%E7%B0%A1&language=en&format=json&limit=3,200,,
+log-wave6.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%C4%91%E1%BB%8Ba%20b%E1%BA%A1&language=en&format=json&limit=3,200,,
+log-wave6.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=ch%C3%A2u%20b%E1%BA%A3n%20tri%E1%BB%81u%20Nguy%E1%BB%85n&language=en&format=json&limit=3,200,,
+log-wave6.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%E6%9C%A8%E7%B0%A1%20%E5%B9%B3%E5%9F%8E&language=en&format=json&limit=3,200,,
+log-wave6.json,https://archive.org/metadata/koreana-tripitaka-goryeo-daejanggyeong,200,,
+log-wave6.json,https://archive.org/metadata/zhorikkokushi088800,200,,
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=jishi%20benmo%20date%20diversity%20retrieval&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=cuong%20muc%20outline%20detail%20ranking&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=kaeriten%20reading%20order%20index&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=gugyeol%20particle%20index%20retrieval&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=office%20holder%20change%20event%20boundary&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=intercalary%20parenthetical%20date%20bucket&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=qiju%20diary%20adjacent%20day%20only&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=dual%20era%20date%20key%20index&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=reign%20year%20ordinal%20epoch&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=bamboo%20slip%20ordinal%20permutation&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=verso%20notch%20bundle%20match&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=hyakugo%20box%20number%20address&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=uigwe%20procedure%20step%20ordinal&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=vermilion%20rescript%20layer%20ranking&limit=3&fields=title,year",200,2,
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=dia%20ba%20four%20boundary%20parcel&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=tripitaka%20block%20address%20retrieval&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=siku%20four%20division%20shape%20filter&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=yongle%20two-key%20radical%20stroke%20index&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=kaoyi%20third%20source%20date%20adjudication&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=hujian%20cross%20reference%20see%20ordinal&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=changbian%20date%20density%20versus%20shilu&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=piaoni%20draft%20versus%20final%20rescript&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=countersignature%20route%20position%20count&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=split%20seal%20symbol%20cluster&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=numbered%20article%20partial%20replacement&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=exam%20roster%20rank%20within%20year&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=generation%20depth%20indent%20ordinal&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=hopae%20positional%20field%20year&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=register%20copy%20monotonic%20numbers&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=chronicle%20line%20versus%20anecdote&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=undated%20genealogy%20versus%20dated%20chronicle&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=ruiju%20embedded%20date%20ignores%20header&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=kobun%20headline%20over%20quotation&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=recto%20verso%20split%20at%20second%20date&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=nengo%20era%20cut%20mid%20year&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=prohibition%20day%20negative%20date&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=changing%20line%20state%20difference%20event&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=postal%20receipt%20later%20than%20dispatch&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=witness%20line-end%20order&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=bundle%20tag%20subset%20donation&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=missing%20ordinal%20hole%20not%20renumbered&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=verdict%20last%20digit%20turn&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=formula%20tail%20conditional%20exclusion&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=woodblock%20missing%20number%20gap&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=later%20cadastral%20survey%20second%20event&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=gazetteer%20chapter%20date%20order&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=stele%20year%20and%20rank%20two%20level&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=review%20mark%20finalized%20copy&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=daybook%20cycle%20modulo%20admission&limit=3&fields=title,year",429,,rate limited
+log-wave6.json,"https://api.semanticscholar.org/graph/v1/paper/search?query=quotation%20date%20versus%20opinion%20paragraph&limit=3&fields=title,year",429,,rate limited
+log-wave7.json,https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q1714726|Q131787012|Q16481267|Q207062|Q4896718&props=labels|descriptions&languages=en|vi|zh&format=json,200,,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Tongjian%20jishi%20benmo%20event%20monograph%20distinct%20dates&rows=3&select=title,DOI,issued",200,389784,
+log-wave7.json,"https://api.openalex.org/works?search=Tongjian%20jishi%20benmo%20event%20monograph%20distinct%20dates&per-page=2&select=id,display_name,publication_year",200,3,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=cuong%20muc%20outline%20Dai%20Nihon%20Shiryo%20kobun%20headline&rows=3&select=title,DOI,issued",200,510322,
+log-wave7.json,"https://api.openalex.org/works?search=cuong%20muc%20outline%20Dai%20Nihon%20Shiryo%20kobun%20headline&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Seungjeongwon%20ilgi%20daily%20record%20office%20appointment%20table&rows=3&select=title,DOI,issued",200,1400796,
+log-wave7.json,"https://api.openalex.org/works?search=Seungjeongwon%20ilgi%20daily%20record%20office%20appointment%20table&per-page=2&select=id,display_name,publication_year",200,1,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=kaeriten%20reading%20order%20gugyeol%20particle&rows=3&select=title,DOI,issued",200,1189319,
+log-wave7.json,"https://api.openalex.org/works?search=kaeriten%20reading%20order%20gugyeol%20particle&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Joseon%20sillok%20dual%20era%20year%20earlier%20date%20key&rows=3&select=title,DOI,issued",200,1997347,
+log-wave7.json,"https://api.openalex.org/works?search=Joseon%20sillok%20dual%20era%20year%20earlier%20date%20key&per-page=2&select=id,display_name,publication_year",200,21,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=intercalary%20month%20parenthetical%20date%20qiju%20diary%20gap&rows=3&select=title,DOI,issued",200,419806,
+log-wave7.json,"https://api.openalex.org/works?search=intercalary%20month%20parenthetical%20date%20qiju%20diary%20gap&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Shiji%20tables%20biao%20cell%20shortest%20entry%20per%20day&rows=3&select=title,DOI,issued",200,3444044,
+log-wave7.json,"https://api.openalex.org/works?search=Shiji%20tables%20biao%20cell%20shortest%20entry%20per%20day&per-page=2&select=id,display_name,publication_year",200,1,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=colophon%20date%20ignored%20text%20date%20event%20key&rows=3&select=title,DOI,issued",200,1076643,
+log-wave7.json,"https://api.openalex.org/works?search=colophon%20date%20ignored%20text%20date%20event%20key&per-page=2&select=id,display_name,publication_year",200,1399,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=uigwe%20procedure%20ordinal%20annal%20spine&rows=3&select=title,DOI,issued",200,360352,
+log-wave7.json,"https://api.openalex.org/works?search=uigwe%20procedure%20ordinal%20annal%20spine&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Siku%20Quanshu%20four%20divisions%20Yongle%20two-key%20index&rows=3&select=title,DOI,issued",200,3702839,
+log-wave7.json,"https://api.openalex.org/works?search=Siku%20Quanshu%20four%20divisions%20Yongle%20two-key%20index&per-page=2&select=id,display_name,publication_year",200,16,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Zizhi%20tongjian%20kaoyi%20third%20witness%20date%20digits&rows=3&select=title,DOI,issued",200,459058,
+log-wave7.json,"https://api.openalex.org/works?search=Zizhi%20tongjian%20kaoyi%20third%20witness%20date%20digits&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=cross%20reference%20ordinal%20Tripitaka%20block%20address&rows=3&select=title,DOI,issued",200,1651148,
+log-wave7.json,"https://api.openalex.org/works?search=cross%20reference%20ordinal%20Tripitaka%20block%20address&per-page=2&select=id,display_name,publication_year",200,3,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Jianyan%20yilai%20xinian%20yaolu%20date%20density%20veritable%20record&rows=3&select=title,DOI,issued",200,907094,
+log-wave7.json,"https://api.openalex.org/works?search=Jianyan%20yilai%20xinian%20yaolu%20date%20density%20veritable%20record&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=draft%20bracket%20final%20rescript%20verdict%20last&rows=3&select=title,DOI,issued",429,,rate limited
+log-wave7.json,"https://api.openalex.org/works?search=draft%20bracket%20final%20rescript%20verdict%20last&per-page=2&select=id,display_name,publication_year",200,9,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=tally%20seal%20countersignature%20route%20order&rows=3&select=title,DOI,issued",200,675592,
+log-wave7.json,"https://api.openalex.org/works?search=tally%20seal%20countersignature%20route%20order&per-page=2&select=id,display_name,publication_year",200,3,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Goseibai%20Shikimoku%20article%20Sokdaejeon%20supplement&rows=3&select=title,DOI,issued",200,782889,
+log-wave7.json,"https://api.openalex.org/works?search=Goseibai%20Shikimoku%20article%20Sokdaejeon%20supplement&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Gwanggaeto%20stele%20reign%20year%20rank%20order&rows=3&select=title,DOI,issued",200,1187766,
+log-wave7.json,"https://api.openalex.org/works?search=Gwanggaeto%20stele%20reign%20year%20rank%20order&per-page=2&select=id,display_name,publication_year",200,6,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=cadastral%20four%20boundaries%20later%20survey&rows=3&select=title,DOI,issued",200,1240309,
+log-wave7.json,"https://api.openalex.org/works?search=cadastral%20four%20boundaries%20later%20survey&per-page=2&select=id,display_name,publication_year",200,6842,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=quoted%20source%20date%20colophon%20date&rows=3&select=title,DOI,issued",200,575152,
+log-wave7.json,"https://api.openalex.org/works?search=quoted%20source%20date%20colophon%20date&per-page=2&select=id,display_name,publication_year",200,4447,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Yijing%20changing%20line%20daybook%20cycle&rows=3&select=title,DOI,issued",200,1143514,
+log-wave7.json,"https://api.openalex.org/works?search=Yijing%20changing%20line%20daybook%20cycle&per-page=2&select=id,display_name,publication_year",200,8,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=postal%20receipt%20time%20witness%20order&rows=3&select=title,DOI,issued",200,2363202,
+log-wave7.json,"https://api.openalex.org/works?search=postal%20receipt%20time%20witness%20order&per-page=2&select=id,display_name,publication_year",200,5292,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=bundle%20tag%20chronicle%20date%20header%20inheritance&rows=3&select=title,DOI,issued",200,234341,
+log-wave7.json,"https://api.openalex.org/works?search=bundle%20tag%20chronicle%20date%20header%20inheritance&per-page=2&select=id,display_name,publication_year",200,9,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Tripitaka%20Koreana%20missing%20block%20number%20not%20renumbered&rows=3&select=title,DOI,issued",200,677492,
+log-wave7.json,"https://api.openalex.org/works?search=Tripitaka%20Koreana%20missing%20block%20number%20not%20renumbered&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=document%20shape%20class%20two-key%20index&rows=3&select=title,DOI,issued",200,4183281,
+log-wave7.json,"https://api.openalex.org/works?search=document%20shape%20class%20two-key%20index&per-page=2&select=id,display_name,publication_year",200,408293,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=nengo%20era%20reign%20ordinal%20year&rows=3&select=title,DOI,issued",200,957348,
+log-wave7.json,"https://api.openalex.org/works?search=nengo%20era%20reign%20ordinal%20year&per-page=2&select=id,display_name,publication_year",200,1,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Ruiju%20kokushi%20An%20Nam%20chi%20luoc%20embedded%20date&rows=3&select=title,DOI,issued",200,547711,
+log-wave7.json,"https://api.openalex.org/works?search=Ruiju%20kokushi%20An%20Nam%20chi%20luoc%20embedded%20date&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Samguk%20sagi%20chronicle%20Samguk%20yusa%20anecdote&rows=3&select=title,DOI,issued",200,58369,
+log-wave7.json,"https://api.openalex.org/works?search=Samguk%20sagi%20chronicle%20Samguk%20yusa%20anecdote&per-page=2&select=id,display_name,publication_year",200,21,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Shosoin%20recto%20verso%20dual%20date&rows=3&select=title,DOI,issued",200,589308,
+log-wave7.json,"https://api.openalex.org/works?search=Shosoin%20recto%20verso%20dual%20date&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=daybook%20prohibition%20conditional%20formula%20tail&rows=3&select=title,DOI,issued",200,174314,
+log-wave7.json,"https://api.openalex.org/works?search=daybook%20prohibition%20conditional%20formula%20tail&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=genealogy%20generation%20depth%20examination%20rank&rows=3&select=title,DOI,issued",200,1212469,
+log-wave7.json,"https://api.openalex.org/works?search=genealogy%20generation%20depth%20examination%20rank&per-page=2&select=id,display_name,publication_year",200,7733,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=identity%20tablet%20positional%20year%20canon%20address&rows=3&select=title,DOI,issued",200,1125189,
+log-wave7.json,"https://api.openalex.org/works?search=identity%20tablet%20positional%20year%20canon%20address&per-page=2&select=id,display_name,publication_year",200,303,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=household%20register%20monotonic%20numbers%20event%20monograph&rows=3&select=title,DOI,issued",200,541512,
+log-wave7.json,"https://api.openalex.org/works?search=household%20register%20monotonic%20numbers%20event%20monograph&per-page=2&select=id,display_name,publication_year",200,461,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=vermilion%20rescript%20decision%20layer%20unmarked%20line&rows=3&select=title,DOI,issued",200,1793756,
+log-wave7.json,"https://api.openalex.org/works?search=vermilion%20rescript%20decision%20layer%20unmarked%20line&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=date%20headline%20detail%20line%20event%20slot&rows=3&select=title,DOI,issued",200,854684,
+log-wave7.json,"https://api.openalex.org/works?search=date%20headline%20detail%20line%20event%20slot&per-page=2&select=id,display_name,publication_year",200,3522,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=adjacent%20diary%20day%20shortest%20table%20cell&rows=3&select=title,DOI,issued",200,3842789,
+log-wave7.json,"https://api.openalex.org/works?search=adjacent%20diary%20day%20shortest%20table%20cell&per-page=2&select=id,display_name,publication_year",200,676,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=office%20holder%20change%20parenthetical%20intercalary&rows=3&select=title,DOI,issued",200,1326309,
+log-wave7.json,"https://api.openalex.org/works?search=office%20holder%20change%20parenthetical%20intercalary&per-page=2&select=id,display_name,publication_year",200,2,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=cross%20reference%20pointer%20numbered%20article%20replacement&rows=3&select=title,DOI,issued",200,1875688,
+log-wave7.json,"https://api.openalex.org/works?search=cross%20reference%20pointer%20numbered%20article%20replacement&per-page=2&select=id,display_name,publication_year",200,6230,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=countersignature%20count%20review%20marks%20finalized&rows=3&select=title,DOI,issued",200,7686527,
+log-wave7.json,"https://api.openalex.org/works?search=countersignature%20count%20review%20marks%20finalized&per-page=2&select=id,display_name,publication_year",200,9,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=second%20date%20line%20split%20ignored%20colophon&rows=3&select=title,DOI,issued",200,1309248,
+log-wave7.json,"https://api.openalex.org/works?search=second%20date%20line%20split%20ignored%20colophon&per-page=2&select=id,display_name,publication_year",200,629,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=leading%20ordinal%20session%20cap%20exemption&rows=3&select=title,DOI,issued",200,291430,
+log-wave7.json,"https://api.openalex.org/works?search=leading%20ordinal%20session%20cap%20exemption&per-page=2&select=id,display_name,publication_year",200,78,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=session%20epoch%20year%20deictic%20day&rows=3&select=title,DOI,issued",200,987471,
+log-wave7.json,"https://api.openalex.org/works?search=session%20epoch%20year%20deictic%20day&per-page=2&select=id,display_name,publication_year",200,83,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=four%20division%20shape%20partition%20event%20date&rows=3&select=title,DOI,issued",200,1141114,
+log-wave7.json,"https://api.openalex.org/works?search=four%20division%20shape%20partition%20event%20date&per-page=2&select=id,display_name,publication_year",200,48851,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Fangshan%20stone%20sutra%20Tripitaka%20Koreana%20address&rows=3&select=title,DOI,issued",200,257146,
+log-wave7.json,"https://api.openalex.org/works?search=Fangshan%20stone%20sutra%20Tripitaka%20Koreana%20address&per-page=2&select=id,display_name,publication_year",200,1,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=gazetteer%20chapter%20date%20jishi%20benmo&rows=3&select=title,DOI,issued",200,618371,
+log-wave7.json,"https://api.openalex.org/works?search=gazetteer%20chapter%20date%20jishi%20benmo&per-page=2&select=id,display_name,publication_year",200,4,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Tang%20code%20article%20Zhangjiashan%20verdict&rows=3&select=title,DOI,issued",200,1294172,
+log-wave7.json,"https://api.openalex.org/works?search=Tang%20code%20article%20Zhangjiashan%20verdict&per-page=2&select=id,display_name,publication_year",200,3,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Joseon%20sillok%20Azuma%20Kagami%20missing%20day&rows=3&select=title,DOI,issued",200,378640,
+log-wave7.json,"https://api.openalex.org/works?search=Joseon%20sillok%20Azuma%20Kagami%20missing%20day&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Yijing%20line%20change%20Hanshu%20office%20table&rows=3&select=title,DOI,issued",200,2454383,
+log-wave7.json,"https://api.openalex.org/works?search=Yijing%20line%20change%20Hanshu%20office%20table&per-page=2&select=id,display_name,publication_year",200,24,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=quoted%20annal%20date%20biography%20slot&rows=3&select=title,DOI,issued",200,322428,
+log-wave7.json,"https://api.openalex.org/works?search=quoted%20annal%20date%20biography%20slot&per-page=2&select=id,display_name,publication_year",200,4,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Nguyen%20dynasty%20woodblock%20ordinal%20uigwe&rows=3&select=title,DOI,issued",200,393408,
+log-wave7.json,"https://api.openalex.org/works?search=Nguyen%20dynasty%20woodblock%20ordinal%20uigwe&per-page=2&select=id,display_name,publication_year",200,0,
+log-wave7.json,"https://api.crossref.org/works?query.bibliographic=Lich%20trieu%20hien%20chuong%20Hong%20Duc%20code&rows=3&select=title,DOI,issued",200,708962,
+log-wave7.json,"https://api.openalex.org/works?search=Lich%20trieu%20hien%20chuong%20Hong%20Duc%20code&per-page=2&select=id,display_name,publication_year",200,155,
+probe.json,https://api.ctext.org/gettext?urn=ctp:analects,200,,HTTP 200 body is ERR_REQUIRES_AUTHENTICATION; no passage text
+probe.json,https://api.ctext.org/gettext?urn=ctp:shiji/wu-di-ben-ji,200,,HTTP 200 body is ERR_REQUIRES_AUTHENTICATION; no passage text
+probe.json,https://ctext.org/tools/api,200,,HTTP 200 is a Cloudflare challenge page; not bypassed
+probe.json,https://api.ctext.org/searchtexts?query=%E5%8F%B2%E8%A8%98,200,,HTTP 200 body is ERR_MISSING_PARAM; searchtexts requires title
+probe.json,https://www.kanripo.org/,403,,403; not bypassed
+probe.json,https://www.kanripo.org/search?query=shiji,403,,403; not bypassed
+probe.json,https://api.github.com/repos/kanripo/KR-Catalog,200,,
+probe.json,https://api.github.com/repos/cbeta-org/xml-p5,200,,
+probe.json,https://api.github.com/search/repositories?q=cbeta+xml+in:name&per_page=5,200,,
+probe.json,https://www.wikidata.org/w/api.php?action=wbsearchentities&search=Records%20of%20the%20Grand%20Historian&language=en&format=json&limit=3,200,,
+probe.json,https://archive.org/advancedsearch.php?q=title%3A%28%22Records%20of%20the%20Grand%20Historian%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,,
+probe.json,https://api.openalex.org/works?search=jishi%20benmo%20chronicle%20reordering&per-page=1,200,,
+probe.json,https://api.crossref.org/works?query=kaeriten%20kunten%20reading%20order&rows=1,200,,
+wave2.json,https://api.ctext.org/searchtexts?title=%E5%8F%B2%E8%A8%98,200,,
+wave2.json,https://api.ctext.org/searchtexts?title=Shiji,200,,
+wave2.json,https://api.ctext.org/gettext?urn=ctp:analects/xue-er,200,,HTTP 200 body is ERR_REQUIRES_AUTHENTICATION; no passage text
+wave2.json,https://api.github.com/repos/kanripo/KR-Catalog/contents/,200,,
+wave2.json,https://api.github.com/repos/cbeta-org/xml-p5/contents/?ref=master,200,,
+wave2.json,https://api.github.com/repos/cbeta-org/xml-p5/git/trees/master?recursive=0,200,,
