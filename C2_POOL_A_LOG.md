@@ -74,3 +74,23 @@ Offline on the post-peak dumps, the unguarded tail-over-question swap fired 83 t
 
 - hash-check (ranked ids): 0/500 differing questions
 - hash-check (full response incl. f32 scores): 0/500 differing questions
+
+## Attempt 3 — unseated session peak — WIN
+
+The unique named-speaker declarative outside the returned list whose own score strictly beats every returned turn, and whose session has no turn in the top 5, takes the lowest-own question seat in slots 1..4. The displaced question stays in the list (appended while the list is short of `k`, otherwise written over the tail). Slot 0 and the session list stay.
+
+Offline, the same predicate on the post-peak dumps was Turn@5 +4 / −2 before the session-absence guard, and Turn@5 +2 / Turn@10 +2 / losses 0 with the guard. Re-simulated after the anaphoric tail, the guarded form still fired on Temporal `1:10` and `6:64` only, with losses 0. The release bench matches that delta. Both golds were already inside pool@50 and outside the top 10, so this seat spends `pool_not_k`. It does not move pool@50.
+
+- Files: `crates/vestige-core/src/algos_c2.rs` (`apply_c2_unseated_session_peak`, 3978–4048, test `unseated_session_peak_seats_the_unique_outsider_from_a_missing_session`), `crates/vestige-core/src/retrieval.rs` (call after the anaphoric tail, 6304–6309).
+- Release bench versus the anaphoric-tail commit: LoCoMo Turn@5 1132→1134, Turn@10 1227→1229. Temporal Turn@5 248→250, Turn@10 260→262. LME and BEAM coordinate changes: 0. LME session-coordinate drops: 0.
+- Versus the Step 31+32+33+34 tip: LoCoMo Turn 808/1134/1229, Session 1133/1416. Losses: 0 on every coordinate of all three benches.
+- Gains versus the anaphoric tail: LoCoMo `1:10` and `6:64`, each Turn@5 and Turn@10. Session bits stay `[1, 1]`.
+- Funnel after this seat, measured: Multi-Hop 282 / 243 / 72 / 97 / 158, Temporal 320 corpus / pool 299 / 182 / 191 / 250, Open-Domain 92 / 63 / 14 / 20 / 35, Single-Hop 841 / 811 / 440 / 500 / 691. Only Temporal final top 5 moves (248→250).
+- Gates: clippy `-D warnings` clean, `cargo check -p vestige-mcp` clean, `cargo test -p vestige-core` 566 passed, hash-check 0/500 ranked ids and 0/500 full responses.
+
+### Hash-check
+
+`tools/c2_hashcheck.py` on this release binary:
+
+- hash-check (ranked ids): 0/500 differing questions
+- hash-check (full response incl. f32 scores): 0/500 differing questions
