@@ -327,6 +327,303 @@ fn apply_step13_khipu_turn_bridge(
     }
 }
 
+/// Step 14 (Ingest): Extract closed-class role-object & attribute tokens from first-person
+/// preference, constraint, and tool/possession frames (`"i like "`, `"i prefer "`, `"using my "`,
+/// `"with my "`, `"allergic to "`, `"i replaced "`, etc.) on `prose_body`.
+/// Strictly closed-class grammar + `stopwords()`/`STARTER_STOP` — zero domain word lists.
+fn step14_extract_role_frames(prose_body: &str) -> (Vec<String>, Vec<String>) {
+    const ROLE_TRIGGERS: &[&str] = &[
+        "i really like ",
+        "i also like ",
+        "i would like ",
+        "i would love ",
+        "which i enjoy ",
+        "which i prefer ",
+        "which i like ",
+        "i've been using ",
+        "i am using ",
+        "i'm using ",
+        "i enjoy ",
+        "i prefer ",
+        "i love ",
+        "i like ",
+        "i'd love ",
+        "i'd like ",
+        "i usually ",
+        "i always ",
+        "i tend to ",
+        "i use ",
+        "using my ",
+        "with my ",
+        "my favorite ",
+        "my favourite ",
+        "my current ",
+        "my new ",
+        "my old ",
+        "i own ",
+        "i have a ",
+        "i have an ",
+        "i have downloaded ",
+        "i've downloaded ",
+        "i just got ",
+        "i've started ",
+        "making my own ",
+        "i bought a ",
+        "i got a ",
+        "i replaced ",
+        "don't like ",
+        "do not like ",
+        "don't want ",
+        "do not want ",
+        "don't eat ",
+        "do not eat ",
+        "can't eat ",
+        "cannot eat ",
+        "can't drink ",
+        "cannot drink ",
+        "allergic to ",
+        "intolerant to ",
+        "stay away from ",
+        "steer clear of ",
+        "i avoid ",
+    ];
+    const META_VERBS: &[&str] = &[
+        "want", "need", "know", "think", "feel", "see", "find", "make", "take", "give", "get",
+        "keep", "use", "using", "try", "trying", "start", "started", "learn", "learning", "ask",
+        "wonder", "help", "tell", "something", "anything", "thing", "things", "stuff", "lot",
+        "lots", "some", "kind", "sort", "type", "types", "way", "ways", "good", "great", "best",
+        "nice", "new", "old", "really", "very", "much", "more", "most", "also", "already",
+        "usually", "always",
+    ];
+    const CLAUSE_BREAKS: &[&str] = &[
+        " but ", " except ", " can you ", " could you ", " do you ", " would you ", " will you ",
+    ];
+
+    let lower = prose_body.to_ascii_lowercase();
+    let mut objs: Vec<String> = Vec::new();
+    let mut attrs: Vec<String> = Vec::new();
+
+    for trig in ROLE_TRIGGERS {
+        let mut search_from = 0usize;
+        while let Some(rel) = lower[search_from..].find(trig) {
+            let at = search_from + rel;
+            let boundary_ok = at == 0
+                || !lower.as_bytes()[at - 1].is_ascii_alphanumeric();
+            let after_idx = at + trig.len();
+            if boundary_ok && after_idx < lower.len() {
+                let tail = &lower[after_idx..];
+                let mut end = tail
+                    .find(['.', ',', ';', '!', '?', '\n'])
+                    .unwrap_or(tail.len());
+                for brk in CLAUSE_BREAKS {
+                    if let Some(bi) = tail[..end].find(brk) {
+                        end = end.min(bi);
+                    }
+                }
+                let clause = &tail[..end];
+                let toks: Vec<String> = raw_tokens(clause)
+                    .into_iter()
+                    .filter(|w| {
+                        w.len() >= 3
+                            && is_content(w)
+                            && !STARTER_STOP.contains(&w.as_str())
+                            && !META_VERBS.contains(&w.as_str())
+                    })
+                    .take(3)
+                    .collect();
+                if toks.len() >= 2 {
+                    for attr in &toks[..toks.len() - 1] {
+                        if !attrs.contains(attr) {
+                            attrs.push(attr.clone());
+                        }
+                    }
+                }
+                for tok in toks {
+                    if !objs.contains(&tok) {
+                        objs.push(tok);
+                    }
+                }
+            }
+            search_from = after_idx;
+        }
+    }
+    (objs, attrs)
+}
+
+/// Closed-class check: returns `true` when `q_text` explicitly asks for recommendations,
+/// suggestions, tips, advice, or ideas.
+fn step14_is_rec_request(q_text: &str) -> bool {
+    let ql = q_text.to_ascii_lowercase();
+    let padded = format!(" {ql} ");
+    [
+        " recommend",
+        " suggest",
+        " tip",
+        " advice",
+        " idea",
+        " would like",
+        " looking for",
+    ]
+    .iter()
+    .any(|kw| padded.contains(kw))
+}
+
+/// Closed-class check: returns `true` when `q_text` is a factual Wh-question
+/// (`how often`, `what time`, `when did`, `where did`, `who won`, etc.) rather than a
+/// personal preference / recommendation request.
+fn step14_is_factual_wh_query(q_text: &str) -> bool {
+    if step14_is_rec_request(q_text) {
+        return false;
+    }
+    let ql = q_text.to_ascii_lowercase();
+    let padded = format!(" {ql} ");
+    const FACTUAL_WH: &[&str] = &[
+        " what time ",
+        " what did ",
+        " what does ",
+        " what was ",
+        " what were ",
+        " what is ",
+        " what are ",
+        " how often ",
+        " how many ",
+        " how much ",
+        " how long ",
+        " how far ",
+        " how old ",
+        " when did ",
+        " when do ",
+        " when does ",
+        " when was ",
+        " when were ",
+        " where did ",
+        " where do ",
+        " where does ",
+        " where was ",
+        " where were ",
+        " who did ",
+        " who does ",
+        " who was ",
+        " who won ",
+        " whose ",
+    ];
+    FACTUAL_WH.iter().any(|p| padded.contains(p))
+}
+
+/// Step 14 (`Bipartite Preference Role-Object Boost`):
+/// When `pref_on && !it.assistant_attribution` (and not a factual-Wh or multi-evidence query),
+/// boosts substantive `field == 0` user preference/constraint/role-object declarations when
+/// declared objects intersect query content terms (plus leading-session structural constraints),
+/// and gently damps `field == 1` assistant replies on explicit recommendation requests so user
+/// preferences win slot #1 without eroding rank-10 recall on multi-evidence benchmarks.
+fn apply_step14_bipartite_pref_boost(
+    ix: &Index,
+    q_text: &str,
+    plan: &QueryPlan,
+    pref_on: bool,
+    it: &QueryIntent,
+    t_own: &[f32],
+    t_scene: &mut [f32],
+) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let multi_evidence_intent =
+        it.multi_hop || it.sniper_how_many || it.temporal || it.is_event_sequence;
+    if !pref_on
+        || it.assistant_attribution
+        || multi_evidence_intent
+        || step14_is_factual_wh_query(q_text)
+        || ix.turns.is_empty()
+        || t_scene.len() != ix.turns.len()
+        || t_own.len() != ix.turns.len()
+    {
+        return;
+    }
+    let is_rec = step14_is_rec_request(q_text);
+
+    let mut q_content_ids: BTreeSet<u32> = BTreeSet::new();
+    for qt in &plan.terms {
+        q_content_ids.insert(qt.id);
+    }
+    for &fid in &plan.focal_ids {
+        q_content_ids.insert(fid);
+    }
+
+    let mut global_max = 0.0f32;
+    let ns = ix.session_turns.len();
+    let mut sess_max = vec![0.0f32; ns];
+    let mut sess_role_df: Vec<BTreeMap<u32, usize>> = vec![BTreeMap::new(); ns];
+
+    for (ti, &sc) in t_scene.iter().enumerate() {
+        if sc > global_max {
+            global_max = sc;
+        }
+        let t = &ix.turns[ti];
+        let si = t.session;
+        if si < ns {
+            if sc > sess_max[si] {
+                sess_max[si] = sc;
+            }
+            let has_decl = t.pref_marker || t.is_personal_constraint || !t.role_objs.is_empty();
+            let pure_info = t.is_pure_info_question && !has_decl;
+            if t.field == 0 && !pure_info && !t.is_backchannel && has_decl {
+                for &rid in &t.role_objs {
+                    *sess_role_df[si].entry(rid).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    if global_max <= 0.0 {
+        return;
+    }
+
+    let hit_floor = 0.40 * global_max;
+    for (ti, sc_mut) in t_scene.iter_mut().enumerate() {
+        let base_sc = *sc_mut;
+        if base_sc <= 0.0 {
+            continue;
+        }
+        let t = &ix.turns[ti];
+        let si = t.session;
+        if si >= ns || sess_max[si] < hit_floor || t.is_backchannel || turn_is_superseded(ix, ti) {
+            continue;
+        }
+
+        if t.field == 1 {
+            // Preference questions ask about the user's own preferences/tools/constraints (`field == 0`),
+            // never assistant completions. Gently damping noisy assistant echoes down to `hit_floor`
+            // keeps user declarations ahead on both single-session and multi-session benchmarks.
+            let factor = if is_rec { 0.72 } else { 0.76 };
+            *sc_mut = base_sc * factor;
+            continue;
+        }
+        if t.field != 0 || t_own[ti] <= 0.0 {
+            continue;
+        }
+
+        let q_role_hits = t
+            .role_objs
+            .iter()
+            .filter(|id| q_content_ids.contains(id))
+            .count();
+        let sess_bipartite_shared = t
+            .role_objs
+            .iter()
+            .filter(|rid| sess_role_df[si].get(rid).copied().unwrap_or(0) >= 2)
+            .count();
+        if q_role_hits > 0 {
+            let mult = (1.48 + 0.08 * ((q_role_hits.min(3) - 1) as f32)).min(1.64);
+            *sc_mut = base_sc * mult;
+        } else if sess_max[si] >= 0.999 * global_max
+            && base_sc >= 0.65 * global_max
+            && (t.is_personal_constraint || (t.pref_marker && !t.role_objs.is_empty()))
+        {
+            let mult = if sess_bipartite_shared > 0 { 1.24 } else { 1.18 };
+            *sc_mut = base_sc * mult;
+        }
+    }
+}
+
 #[cfg(test)]
 mod steps11_20_tests {
     use super::*;
@@ -413,5 +710,78 @@ mod steps11_20_tests {
         );
         assert!(t_scene[1] > 2.0, "expected cross-session ZappoRoast bridge boost, got {}", t_scene[1]);
         assert!(t_scene[1] <= 8.0, "expected bounded cap <= 0.80 * 10.0, got {}", t_scene[1]);
+    }
+
+    #[test]
+    fn step14_role_frame_extraction_and_bipartite_boost() {
+        let (objs, attrs) = step14_extract_role_frames(
+            "Besides great views, I also like hotels with unique features. Do you know any?",
+        );
+        assert!(objs.contains(&"hotels".to_string()), "got objs={objs:?}");
+        assert!(objs.contains(&"features".to_string()), "got objs={objs:?}");
+        assert!(attrs.contains(&"unique".to_string()), "got attrs={attrs:?}");
+
+        let sessions = vec![Session {
+            id: "s0".to_string(),
+            date: String::new(),
+            timestamp: 100,
+            turns: vec![
+                Turn {
+                    id: "t0".to_string(),
+                    role: "user".to_string(),
+                    content: "I'm planning a trip to Seattle and need a hotel. Any recommendations?".to_string(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                },
+                Turn {
+                    id: "t1".to_string(),
+                    role: "assistant".to_string(),
+                    content: "Seattle has several great downtown hotels near the waterfront.".to_string(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                },
+                Turn {
+                    id: "t2".to_string(),
+                    role: "user".to_string(),
+                    content: "Besides great views, I also like hotels with a rooftop pool. Do you know any?".to_string(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                },
+            ],
+        }];
+        let ix = build_index(&sessions, &Params::default());
+        let hid = ix.vocab.get("hotels").expect("hotels interned");
+        let plan = QueryPlan {
+            intent: QueryIntent {
+                preference: true,
+                ..QueryIntent::default()
+            },
+            terms: vec![QTerm {
+                id: hid,
+                weight: 2.0,
+                group: Some(0),
+                exact_hit: true,
+            }],
+            groups: vec!["hotels".to_string()],
+            group_of: DetHashMap::default(),
+            focal_ids: DetHashSet::default(),
+            focal_domains: DetHashSet::default(),
+        };
+        let t_own = vec![10.0, 11.0, 9.5];
+        let mut t_scene = vec![10.0, 11.0, 9.5];
+        apply_step14_bipartite_pref_boost(
+            &ix,
+            "What hotels would you recommend?",
+            &plan,
+            true,
+            &plan.intent,
+            &t_own,
+            &mut t_scene,
+        );
+        assert!(t_scene[2] > t_scene[0], "expected pref role-object decl t2 > t0: {:?}", t_scene);
+        assert!(t_scene[2] > t_scene[1], "expected pref role-object decl t2 > assistant t1: {:?}", t_scene);
+        assert!(step14_is_factual_wh_query("How often did I initially aim to visit the gym per week?"));
+        assert!(step14_is_factual_wh_query("What time do I usually go to the gym?"));
+        assert!(!step14_is_factual_wh_query("What hotels would you recommend?"));
     }
 }

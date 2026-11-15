@@ -1893,6 +1893,8 @@ struct TurnIx {
     /// Step 9 ingest-time prose shape (`--no-dump` safe): list-marker lines and first game move.
     list_item_count: u8,
     first_move_num: u16,
+    /// Step 14 ingest-time closed-class user preference/constraint role-object ids (`prose_body` only).
+    role_objs: Vec<u32>,
     raw_links: Vec<TurnLink>,
     /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
     /// Never read by ranking.
@@ -3297,6 +3299,23 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 && !pref_marker
                 && !is_standing_policy
                 && raw.first().is_some_and(|w| BACKCHANNEL_LEADS.contains(&w.as_str()));
+            let mut role_objs: Vec<u32> = Vec::new();
+            if field == 0 && !is_backchannel {
+                let (r_objs, _r_attrs) = step14_extract_role_frames(prose_body);
+                for obj in r_objs {
+                    let pid = vocab.intern(&obj);
+                    if !role_objs.contains(&pid) {
+                        role_objs.push(pid);
+                    }
+                    if p.enable_stemming {
+                        let st = stem(&obj);
+                        let sid = vocab.intern(&stem_term(&st));
+                        if !role_objs.contains(&sid) {
+                            role_objs.push(sid);
+                        }
+                    }
+                }
+            }
             let is_initiative = field == 0
                 && !is_standing_policy
                 && !anaphoric
@@ -3374,6 +3393,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 slot_entities_clean: count_slot_entities_mode(prose_body, true),
                 list_item_count: step9_list_item_count(prose_body),
                 first_move_num: step9_first_move_num(prose_body),
+                role_objs,
                 raw_links: t.links.clone(),
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
@@ -5181,6 +5201,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &t_exact_mask,
         &mut t_scene,
     );
+    apply_step14_bipartite_pref_boost(ix, &q.text, &plan, pref_on, it, &t_own, &mut t_scene);
 
     let k = top_k.max(1);
 
