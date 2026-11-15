@@ -785,6 +785,73 @@ fn apply_c2_subsequent_answer_seat(
     true
 }
 
+
+/// True when the query cites a prior assistant utterance (collective chat,
+/// "remind me", "you recommended", …) rather than only asking for a new
+/// recommendation. The present-tense cue "you recommend" is excluded because
+/// it also matches preference requests ("can you recommend...").
+fn c2_retrospective_attribution(text: &str) -> bool {
+    let padded = word_padded(text);
+    if has_any(&padded, COLLECTIVE_CHAT_CUES) {
+        return true;
+    }
+    ASSISTANT_ATTRIBUTION_CUES
+        .iter()
+        .any(|c| *c != "you recommend" && has_any(&padded, &[*c]))
+}
+
+/// Preference source seat. ReplySource already yields an assistant at slot 1
+/// to its previous user turn when that source is already in the top 5, but it
+/// is skipped on assistant-attribution queries. Preference requests of the
+/// form "can you recommend..." are tagged assistant_attribution by the
+/// present-tense "you recommend" cue, so the user's preference-stating
+/// source never takes slot 1. When the query is a preference intent and is
+/// not a retrospective citation of a prior assistant utterance, apply the
+/// same membership-preserving source move (position and role only). Skipped
+/// on temporal questions, event sequences (caller), and named-speaker
+/// sessions. Distinct from ReplySource (unchanged; still skipped on
+/// assistant_attribution) and from subsequent-answer (#10; a user question
+/// at slot 1). Runs after the other C2 seats, before RSB. Slot 1 is then
+/// frozen by rank1_gatekeeper_keep_rsb_head.
+fn apply_c2_preference_source_seat(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+) -> bool {
+    if list.len() < 2 || plan.intent.temporal || !plan.intent.preference {
+        return false;
+    }
+    if c2_retrospective_attribution(query) {
+        return false;
+    }
+    let top = list[0];
+    if ix.turns[top].speaker != "assistant" || c2_named_session(ix, top) {
+        return false;
+    }
+    let members = &ix.session_turns[ix.turns[top].session];
+    let Some(pos) = members.iter().position(|&m| m == top) else {
+        return false;
+    };
+    if pos == 0 {
+        return false;
+    }
+    let prev = members[pos - 1];
+    if ix.turns[prev].speaker != "user" {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let Some(slot) = list[..window].iter().position(|&t| t == prev) else {
+        return false;
+    };
+    if slot == 0 {
+        return false;
+    }
+    list.remove(slot);
+    list.insert(0, prev);
+    true
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -1132,6 +1199,64 @@ mod algos_c2_tests {
         let mut list = vec![2usize, 3, 4];
         assert!(!apply_c2_subsequent_answer_seat(&ixn, &plann, &mut list, &[0.5, 0.4, 1.0, 0.8, 0.64]));
         assert_eq!(list, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn preference_source_seat_promotes_prev_user_on_can_you_recommend() {
+        let ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "I'm trying to learn more about video editing with Premiere, which I enjoy to use."),
+                    ("assistant", "Adobe Premiere Pro is a powerful video editing software with many resources."),
+                    ("user", "What about color grading?"),
+                    ("assistant", "For color grading, start with a simple LUT."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query { text: "Can you recommend some resources where I can learn more about video editing?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(plan.intent.preference);
+        assert!(plan.intent.assistant_attribution);
+        assert!(!c2_retrospective_attribution(&q.text));
+        // Assistant at slot 1; previous user already in the top 5.
+        let mut list = vec![1usize, 2, 0, 3];
+        assert!(apply_c2_preference_source_seat(&ix, &plan, &q.text, &mut list));
+        assert_eq!(list, vec![0, 1, 2, 3]);
+        // Previous user not already in the top 5: membership must not change.
+        let mut list = vec![1usize, 2, 3];
+        assert!(!apply_c2_preference_source_seat(&ix, &plan, &q.text, &mut list));
+        assert_eq!(list, vec![1, 2, 3]);
+        // Retrospective "remind me / you recommended": no swap (SSA path).
+        let rq = Query { text: "Can you remind me of the resources you recommended for video editing?".into(), date: String::new() };
+        let rplan = plan_query(&ix, &rq, &Params::default());
+        assert!(c2_retrospective_attribution(&rq.text));
+        let mut list = vec![1usize, 2, 0, 3];
+        assert!(!apply_c2_preference_source_seat(&ix, &rplan, &rq.text, &mut list));
+        assert_eq!(list, vec![1, 2, 0, 3]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("Caroline", "I'm trying to learn more about video editing with Premiere."),
+                    ("Melanie", "Adobe Premiere Pro is a powerful video editing software."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![1usize, 0];
+        assert!(!apply_c2_preference_source_seat(&ixn, &plann, &q.text, &mut list));
+        assert_eq!(list, vec![1, 0]);
+        // Non-preference query: no swap.
+        let nq = Query { text: "What degree did I graduate with?".into(), date: String::new() };
+        let nplan = plan_query(&ix, &nq, &Params::default());
+        assert!(!nplan.intent.preference);
+        let mut list = vec![1usize, 2, 0, 3];
+        assert!(!apply_c2_preference_source_seat(&ix, &nplan, &nq.text, &mut list));
+        assert_eq!(list, vec![1, 2, 0, 3]);
     }
 
 
