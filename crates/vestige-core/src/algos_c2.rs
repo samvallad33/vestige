@@ -362,6 +362,51 @@ fn apply_c2_testimony_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<usize>, 
     false
 }
 
+/// Share of slot 1's scene score a cross-session earlier witness must keep.
+const C2_XWITNESS_RATIO: f32 = 0.7;
+
+/// Earlier-witness seat across sessions (the deposition taken closest to the start of a
+/// proceeding outranks a later restatement elsewhere). Not for temporal questions. When slot 1
+/// is a user turn, a user turn from a different user/assistant session in the top 5 that sits
+/// strictly earlier in its own session than slot 1 sits in slot 1's, keeps slot 1's digit form,
+/// attests at least one query group, and holds >= 70% of slot 1's scene score takes slot 1.
+/// Top-5 membership never changes. Runs before RSB, after the primacy testimony seat.
+fn apply_c2_cross_witness_seat(ix: &Index, plan: &QueryPlan, list: &mut Vec<usize>, t_scene: &[f32]) -> bool {
+    if list.len() < 2 || plan.groups.is_empty() {
+        return false;
+    }
+    let top = list[0];
+    if plan.intent.temporal || ix.turns[top].speaker != "user" || c2_named_session(ix, top) {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let ng = plan.groups.len();
+    let pos_top = c2_session_pos(ix, top);
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    for i in 1..window {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user" || t.session == ix.turns[top].session || c2_named_session(ix, cand) {
+            continue;
+        }
+        if (ix.turns[top].form_digit && !t.form_digit) || c2_session_pos(ix, cand) >= pos_top {
+            continue;
+        }
+        if t_scene.get(cand).copied().unwrap_or(0.0) < C2_XWITNESS_RATIO * sc_top {
+            continue;
+        }
+        if c2_turn_groups(ix, plan, ng, cand).iter().any(|h| *h) {
+            list.remove(i);
+            list.insert(0, cand);
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -503,5 +548,25 @@ mod algos_c2_tests {
         // Assistant heads are never displaced.
         let mut list = vec![1usize, 0];
         assert!(!apply_c2_testimony_seat(&ix, &plan, &mut list, &[0.9, 1.0, 0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn cross_witness_seats_earlier_user_turn_from_other_session() {
+        let ix = build_index(
+            &[
+                sess("a", &[("user", "I adopted my cat Luna."), ("assistant", "Lovely.")]),
+                sess("b", &[("user", "Hi."), ("assistant", "Hello."), ("user", "My cat needs toys.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query { text: "What is my cat called?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!plan.intent.temporal);
+        // Slot 1 = turn 4 (session b, pos 2); challenger turn 0 (session a, pos 0) at 0.8 share.
+        let mut list = vec![4usize, 0];
+        assert!(apply_c2_cross_witness_seat(&ix, &plan, &mut list, &[0.8, 0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(list, vec![0, 4]);
+        let mut list = vec![4usize, 0];
+        assert!(!apply_c2_cross_witness_seat(&ix, &plan, &mut list, &[0.6, 0.0, 0.0, 0.0, 1.0]));
     }
 }
