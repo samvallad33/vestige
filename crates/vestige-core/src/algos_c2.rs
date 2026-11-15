@@ -8925,6 +8925,7 @@ mod algos_c2_tests {
         ));
         assert_eq!(list, vec![1, 0, 2]);
     }
+    #[test]
     fn step37_kalevala_seats_the_richer_parallel_line() {
         let q = "What artist did I start to listen to?";
         let ix = build_index(
@@ -9026,6 +9027,7 @@ mod algos_c2_tests {
         ));
         assert_eq!(closed, vec![0, 1, 2]);
     }
+    #[test]
     fn hermeneutic_circle_seats_the_part_its_session_completes() {
         let ix = build_index(
             &[
@@ -9134,6 +9136,7 @@ mod algos_c2_tests {
         assert!(!apply_c2_step38_hermeneutic(&ix, q, &mut list, &[0.2, 0.1, 0.4, 4.0]));
         assert_eq!(list[0], 3);
     }
+    #[test]
     fn pool_c_session_opener_replaces_same_session_assistant_echo() {
         let ix = build_index(
             &[
@@ -9438,6 +9441,7 @@ mod algos_c2_tests {
         ));
         assert_eq!(dlist, vec![0, 4, 3, 1, 2]);
     }
+    #[test]
     fn pool_b_standing_seat_promotes_zero_own_opener_on_task_question() {
         let ix = build_index(
             &[
@@ -9566,6 +9570,7 @@ mod algos_c2_tests {
         ));
         assert_eq!(list, vec![1, 0]);
     }
+    #[test]
     fn buried_lexical_peak_seats_the_unique_unpooled_declarative() {
         let ix = build_index(
             &[sess(
