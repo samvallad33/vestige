@@ -1,0 +1,866 @@
+api,endpoint,http_status,result_count,note
+openalex,https://api.openalex.org/works?search=Euclid%20anthyphairesis&per-page=1&mailto=shard9@example.com,200,60,Euclid anthyphairesis
+openalex,https://api.openalex.org/works?search=Rhind%20papyrus%20false%20position&per-page=1&mailto=shard9@example.com,200,136,Rhind papyrus false position
+openalex,https://api.openalex.org/works?search=Sunzi%20Chinese%20remainder%20theorem&per-page=1&mailto=shard9@example.com,200,75,Sunzi Chinese remainder theorem
+openalex,https://api.openalex.org/works?search=Ptolemy%20Almagest%20chord%20table&per-page=1&mailto=shard9@example.com,200,179,Ptolemy Almagest chord table
+openalex,https://api.openalex.org/works?search=Babylonian%20System%20A%20zigzag&per-page=1&mailto=shard9@example.com,200,328,Babylonian System A zigzag
+openalex,https://api.openalex.org/works?search=Nicomachus%20sieve%20of%20Eratosthenes&per-page=1&mailto=shard9@example.com,200,23,Nicomachus sieve of Eratosthenes
+openalex,https://api.openalex.org/works?search=Boole%20laws%20of%20thought%20constituents&per-page=1&mailto=shard9@example.com,200,717,Boole laws of thought constituents
+openalex,https://api.openalex.org/works?search=Leibniz%20de%20arte%20combinatoria&per-page=1&mailto=shard9@example.com,200,1595,Leibniz de arte combinatoria
+openalex,https://api.openalex.org/works?search=Kepler%20equation%20of%20centre&per-page=1&mailto=shard9@example.com,200,13943,Kepler equation of centre
+openalex,https://api.openalex.org/works?search=Metonic%20cycle%20intercalation&per-page=1&mailto=shard9@example.com,200,89,Metonic cycle intercalation
+openalex,https://api.openalex.org/works?search=Kirkman%20triple%20system%201850&per-page=1&mailto=shard9@example.com,200,163,Kirkman triple system 1850
+openalex,https://api.openalex.org/works?search=Brahmagupta%20zero%20placeholder&per-page=1&mailto=shard9@example.com,200,65,Brahmagupta zero placeholder
+crossref,https://api.crossref.org/works?query.bibliographic=Rhind%20Mathematical%20Papyrus%20false%20position&rows=2&mailto=shard9@example.com,200,1370822,Rhind Mathematical Papyrus false position | The Rhind Mathematical Papyrus || The Rhind Mathematical Papyrus
+crossref,https://api.crossref.org/works?query.bibliographic=Ptolemy%20Almagest%20chord&rows=2&mailto=shard9@example.com,200,6041,Ptolemy Almagest chord | Ptolemy's Almagest || Ptolemy's Almagest
+crossref,https://api.crossref.org/works?query.bibliographic=Sunzi%20Suanjing%20remainder&rows=2&mailto=shard9@example.com,200,2667,Sunzi Suanjing remainder | Zhoubi Suanjing || Zhang Qiujian Suanjing
+crossref,https://api.crossref.org/works?query.bibliographic=Liber%20Abaci%20Fibonacci&rows=2&mailto=shard9@example.com,200,30626,Liber Abaci Fibonacci | <i>Liber Abaci</i>                     and the Fibonacci Sequence || A New Book on Liber Abaci
+crossref,https://api.crossref.org/works?query.bibliographic=Boole%20Investigation%20of%20the%20Laws%20of%20Thought&rows=2&mailto=shard9@example.com,200,1270506,Boole Investigation of the Laws of Thought | From An Investigation of the Laws of Thought (1854) || An investigation of the laws of thought on which are founded the mathematical th
+crossref,https://api.crossref.org/works?query.bibliographic=anthyphairesis%20casting%20out%20nines&rows=2&mailto=shard9@example.com,200,338309,"anthyphairesis casting out nines | Nines, Casting Out || Arithmetic: Casting out nines"
+crossref,https://api.crossref.org/works?query.bibliographic=false%20position%20rule%20of%20three%20retrieval&rows=2&mailto=shard9@example.com,200,1512679,"false position rule of three retrieval | False Position, Double False Position and Cramer's Rule || The Rule of False Position, Don                     Chakerian"
+crossref,https://api.crossref.org/works?query.bibliographic=Kirkman%20triple%20Pascal%20identity&rows=2&mailto=shard9@example.com,200,531368,Kirkman triple Pascal identity | Kirkman Triple Systems || Kirkman Triple Systems and Generalizations
+crossref,https://api.crossref.org/works?query.bibliographic=Leibniz%20characteristic%20prime%20divisibility%20ranking&rows=2&mailto=shard9@example.com,200,191996,Leibniz characteristic prime divisibility ranking | The Chairux Divisibility Transformation: A Systematic Approach to Prime Divisibility Testing || Prime Suspects: On the Divisibil
+crossref,https://api.crossref.org/works?query.bibliographic=contrapositive%20De%20Morgan%20memory%20index&rows=2&mailto=shard9@example.com,200,12191386,"contrapositive De Morgan memory index | contrapositive, adj. &amp; n. || Methods of Proof — Contrapositive"
+crossref,https://api.crossref.org/works?query.bibliographic=Babylonian%20zigzag%20finite%20differences%20ranking&rows=2&mailto=shard9@example.com,200,810408,"Babylonian zigzag finite differences ranking | Zigzag polynomials, Artin's conjecture and trinomials || Forward Ladder Zigzag; Backward Ladder Zigzag"
+crossref,https://api.crossref.org/works?query.bibliographic=Kendall%20tau%20derangement%20event%20order&rows=2&mailto=shard9@example.com,200,798707,Kendall tau derangement event order | Medidas de asociación para datos numéricos y categóricos. Correlación Tau B de Kendall. Tau C de Ken || Kendall-DPO: Preference optimization w
+crossref,https://api.crossref.org/works?query.bibliographic=square%20of%20opposition%20dictum%20de%20omni&rows=2&mailto=shard9@example.com,200,10507829,"square of opposition dictum de omni | dictum de omni et nullo, n. || 2. The dictum de omni"
+crossref,https://api.crossref.org/works?query.bibliographic=inclusion-exclusion%20Venn%20diagram%20ranking%20memory&rows=2&mailto=shard9@example.com,200,808515,inclusion-exclusion Venn diagram ranking memory | Figure 1: Subject inclusion/exclusion flow diagram. || Figure 1: Inclusion and exclusion flow diagram.
+crossref,https://api.crossref.org/works?query.bibliographic=Metonic%20cycle%20Saros%20cycle%20information%20retrieval&rows=2&mailto=shard9@example.com,200,3247681,Metonic cycle Saros cycle information retrieval | Saros cycle || Metonic Cycle
+crossref,https://api.crossref.org/works?query.bibliographic=clepsydra%20canonical%20hours%20scheduling%20algorithm&rows=2&mailto=shard9@example.com,200,974881,"clepsydra canonical hours scheduling algorithm | Hours, Canonical || Canonical Hours"
+crossref,https://api.crossref.org/works?query.bibliographic=Ptolemy%20interpolation%20Brahmagupta%20second%20difference&rows=2&mailto=shard9@example.com,200,914184,Ptolemy interpolation Brahmagupta second difference | Ptolemy || Ptolemy VIII
+crossref,https://api.crossref.org/works?query.bibliographic=stomachion%20partition%20Euclid%20lemma&rows=2&mailto=shard9@example.com,200,43953,stomachion partition Euclid lemma | The Hero–Apollonius Lemma in Nicomedes and Euclid || A Greedy Partition Lemma for directed domination
+crossref,https://api.crossref.org/works?query.bibliographic=Josephus%20problem%20Benedictine%20hours&rows=2&mailto=shard9@example.com,200,716999,Josephus problem Benedictine hours | Benedictine hours || Josephus Problem
+crossref,https://api.crossref.org/works?query.bibliographic=sexagesimal%20Napier%20logarithm%20ordinal&rows=2&mailto=shard9@example.com,200,21588,sexagesimal Napier logarithm ordinal | John Napier: Logarithm John || Sexagesimal System
+crossref,https://api.crossref.org/works?query.bibliographic=equant%20Kepler%20fixed%20point%20ranking&rows=2&mailto=shard9@example.com,200,577196,"equant Kepler fixed point ranking | Transverse foliations in the rotating Kepler problem || Exercises on the Kepler ellipses through a fixed point in space, after Otto Laporte"
+crossref,https://api.crossref.org/works?query.bibliographic=Pingala%20binary%20Catalan%20numbers%20prosody&rows=2&mailto=shard9@example.com,200,319415,Pingala binary Catalan numbers prosody | A Family of Binary Words || Catalan Numbers
+crossref,https://api.crossref.org/works?query.bibliographic=alligation%20partnership%20Hamilton%20apportionment&rows=2&mailto=shard9@example.com,200,191390,"alligation partnership Hamilton apportionment | alligation, n. || Partnership. Dissolution and Winding up of Partnership. Apportionment of Profits between Life Tenant"
+crossref,https://api.crossref.org/works?query.bibliographic=heliacal%20rising%20acronychal%20rising%20index&rows=2&mailto=shard9@example.com,200,1225989,heliacal rising acronychal rising index | Heliacal Rising || THE HELIACAL RISING OF SIRIUS
+crossref,https://api.crossref.org/works?query.bibliographic=method%20of%20exhaustion%20golden%20section&rows=2&mailto=shard9@example.com,200,2731850,method of exhaustion golden section | Golden section || Dynamic Ratio Golden Section Method for Single Variable Optimization Studies
+crossref,https://api.crossref.org/works?query.bibliographic=Ladd-Franklin%20antilogism%20reductio&rows=2&mailto=shard9@example.com,200,126347,Ladd-Franklin antilogism reductio | THE ANTILOGISM || THE LADD-FRANKLIN FORMULA IN LOGIC: THE ANTILOGISM
+crossref,https://api.crossref.org/works?query.bibliographic=Galen%20exclusive%20disjunction%20De%20Morgan&rows=2&mailto=shard9@example.com,200,10562875,Galen exclusive disjunction De Morgan | But Not Both: The Exclusive Disjunction in Qualitative Comparative Analysis (QCA) || The exclusive disjunction
+crossref,https://api.crossref.org/works?query.bibliographic=Latin%20square%20magic%20square%20line%20sum&rows=2&mailto=shard9@example.com,200,969497,Latin square magic square line sum | Modified Hill Cipher Secure Technique using Latin Square and Magic Square || A generalization of sum composition: Self orthogonal Latin square 
+crossref,https://api.crossref.org/works?query.bibliographic=Chinese%20remainder%20Metonic%20residue&rows=2&mailto=shard9@example.com,200,1054030,Chinese remainder Metonic residue | An efficient implementation of the Chinese Remainder Theorem in minimally redundant Residue Number S || Chinese Remainder Algorithm
+crossref,https://api.crossref.org/works?query.bibliographic=epicycle%20retrograde%20station&rows=2&mailto=shard9@example.com,200,134424,"epicycle retrograde station | epicycle, v. || A New Epicycle of Erosion"
+crossref,https://api.crossref.org/works?query.bibliographic=parallax%20refraction%20horizon%20altitude&rows=2&mailto=shard9@example.com,200,129986,"parallax refraction horizon altitude | Critique, Postcritique and the Pandemoniac Horizon || "
+crossref,https://api.crossref.org/works?query.bibliographic=goal-year%20text%20Saros&rows=2&mailto=shard9@example.com,200,958821,goal-year text Saros | Saros cycle || Saros
+crossref,https://api.crossref.org/works?query.bibliographic=QED%20porism%20Euclid&rows=2&mailto=shard9@example.com,200,10055,"QED porism Euclid | porism, n. || 39. Steiner’s Porism"
+crossref,https://api.crossref.org/works?query.bibliographic=obversion%20conversion%20syllogism&rows=2&mailto=shard9@example.com,200,320743,"obversion conversion syllogism | obversion, n. || Obversion"
+crossref,https://api.crossref.org/works?query.bibliographic=continued%20fraction%20anthyphairesis%20convergent&rows=2&mailto=shard9@example.com,200,163129,continued fraction anthyphairesis convergent | Convergent continued fraction approximants to generalised polylogarithms || The Convergent in Continued β-Fraction
+crossref,https://api.crossref.org/works?query.bibliographic=amicable%20numbers%20perfect%20numbers%20pair&rows=2&mailto=shard9@example.com,200,238231,amicable numbers perfect numbers pair | Amicable Numbers || Perfect Numbers
+crossref,https://api.crossref.org/works?query.bibliographic=Borda%20count%20Hamilton%20method%20apportionment&rows=2&mailto=shard9@example.com,200,2276347,Borda count Hamilton method apportionment | Indian Voting System with Borda count method || Selecting a Voting Method: The Case for the Borda Count
+crossref,https://api.crossref.org/works?query.bibliographic=Newton%20divided%20difference%20Lagrange%20interpolation&rows=2&mailto=shard9@example.com,200,361636,Newton divided difference Lagrange interpolation | Solving a multi-choice solid fractional multi objective transportation problem: involving the Newton || Newton Interpolation and 
+crossref,https://api.crossref.org/works?query.bibliographic=Legendre%20least%20squares%20orthogonal%20residual&rows=2&mailto=shard9@example.com,200,290736,Legendre least squares orthogonal residual | Fuzzy Least Squares and Fuzzy Orthogonal Least Squares Linear Regressions || Least Squares Orthogonal Polynomials
+crossref,https://api.crossref.org/works?query.bibliographic=zero%20placeholder%20positional%20notation%20Brahmagupta&rows=2&mailto=shard9@example.com,200,178508,zero placeholder positional notation Brahmagupta | Brahmagupta and the concept of Zero || BRAHMAGUPTA AND THE CONCEPT OF ZERO
+crossref,https://api.crossref.org/works?query.bibliographic=exeligmos%20Saros%20triple&rows=2&mailto=shard9@example.com,200,121611,exeligmos Saros triple | Saros cycle || Saros
+crossref,https://api.crossref.org/works?query.bibliographic=Callippic%20cycle%20Metonic&rows=2&mailto=shard9@example.com,200,377679,Callippic cycle Metonic | The Metonic and Callippic Cycles || Metonic Cycle
+crossref,https://api.crossref.org/works?query.bibliographic=analemma%20equation%20of%20time&rows=2&mailto=shard9@example.com,200,2093828,analemma equation of time | The equation of time and the analemma || Analemma
+crossref,https://api.crossref.org/works?query.bibliographic=syzygy%20lunar%20node&rows=2&mailto=shard9@example.com,200,154780,syzygy lunar node | Lunar Perigee-Syzygy-Declination Cycle Of 8 years: Evidence in Rainfall Records: ABSTRACT || Syzygy
+crossref,https://api.crossref.org/works?query.bibliographic=astrolabe%20stereographic%20armillary&rows=2&mailto=shard9@example.com,200,1595,astrolabe stereographic armillary | Observing with the Armillary Astrolabe || <i>The Armillary Sphere</i>. Seymour Robins<i>The Astrolabe</i>. Harold Saunders
+crossref,https://api.crossref.org/works?query.bibliographic=figurate%20triangular%20Pascal&rows=2&mailto=shard9@example.com,200,55848,"figurate triangular Pascal | Figurate Numbers and Sums of Numerical Powers: Fermat, Pascal, Bernoulli || Some Properties of the Multi-Figurate Numbers That Are Simultaneously Trian"
+crossref,https://api.crossref.org/works?query.bibliographic=existential%20import%20square%20of%20opposition&rows=2&mailto=shard9@example.com,200,149108,"existential import square of opposition | Existential Import and the Square of Opposition || Dialectic, Existential Import, and the Square of Opposition"
+crossref,https://api.crossref.org/works?query.bibliographic=modus%20tollens%20contrapositive&rows=2&mailto=shard9@example.com,200,4161,"modus tollens contrapositive | Modus Tollens, Modus Shmollens: Contrapositive reasoning and the pragmatics of negation || modus tollens, n."
+crossref,https://api.crossref.org/works?query.bibliographic=Boole%20constituents%20Jevons%20logical%20piano&rows=2&mailto=shard9@example.com,200,109418,"Boole constituents Jevons logical piano | <i>Algebre et logique d'apres les textes originaux de G. Boole et W. S. Jevons avec les plans de la  || Review for ""From Babel to Boole: t"
+crossref,https://api.crossref.org/works?query.bibliographic=Euclid%20division%20algorithm%20check%20digit&rows=2&mailto=shard9@example.com,200,1041276,Euclid division algorithm check digit | verhoeff: Implementation of the 'Verhoeff' Check Digit Algorithm || check digit
+crossref,https://api.crossref.org/works?query.bibliographic=precession%20equinox%20colure&rows=2&mailto=shard9@example.com,200,6747,precession equinox colure | Notes on equinox motion and corrections to precession || Notes on Equinox Motion and Corrections to Precession
+crossref,https://api.crossref.org/works?query.bibliographic=octaeteris%20Venus%20cycle&rows=2&mailto=shard9@example.com,200,393740,"octaeteris Venus cycle | Octaeteris || octaeteris, n."
+crossref,https://api.crossref.org/works?query.bibliographic=Dresden%20codex%20Venus%20table&rows=2&mailto=shard9@example.com,200,708977,Dresden codex Venus table | A. The Venus Table in the Dresden Codex || Ernst Förstemann and the Dresden Codex Venus Table
+crossref,https://api.crossref.org/works?query.bibliographic=Almagest%20linear%20interpolation&rows=2&mailto=shard9@example.com,200,579522,Almagest linear interpolation | Against Chronological and Impersonal Accounts of the History of Science. Towards non-linear didactic || 
+openalex-novelty,https://api.openalex.org/works?search=%22anthyphairesis%22%20%22casting%20out%20nines%22&per-page=1&mailto=shard9@example.com,200,0,anthyphairesis + casting out nines :: 
+openalex-novelty,https://api.openalex.org/works?search=%22regula%20falsi%22%20%22rule%20of%20three%22&per-page=1&mailto=shard9@example.com,200,6,regula falsi + rule of three :: Lineare Funktionen
+openalex-novelty,https://api.openalex.org/works?search=%22double%20false%20position%22%20%22alligation%22&per-page=1&mailto=shard9@example.com,200,6,"double false position + alligation :: Daughters of the Revolution: Martha and Elisabeth Ryan’s Cyphering Book, Circa 1780"
+openalex-novelty,https://api.openalex.org/works?search=%22sieve%20of%20Eratosthenes%22%20%22characteristic%20numbers%22&per-page=1&mailto=shard9@example.com,200,1,sieve of Eratosthenes + characteristic numbers :: General Approach to Function Approximation
+openalex-novelty,https://api.openalex.org/works?search=%22Chinese%20remainder%20theorem%22%20%22Metonic%20cycle%22&per-page=1&mailto=shard9@example.com,200,2,Chinese remainder theorem + Metonic cycle :: Cluster automata
+openalex-novelty,https://api.openalex.org/works?search=%22System%20A%20zigzag%22%20%22lunar%20station%22&per-page=1&mailto=shard9@example.com,200,0,System A zigzag + lunar station :: 
+openalex-novelty,https://api.openalex.org/works?search=%22finite%20differences%22%20%22goal-year%22&per-page=1&mailto=shard9@example.com,200,2,finite differences + goal-year :: Science plan for improving three-dimensional seismic velocity models in the San Francisco Bay region
+openalex-novelty,https://api.openalex.org/works?search=%22Kendall%20tau%22%20%22derangement%22&per-page=1&mailto=shard9@example.com,200,135,Kendall tau + derangement :: New bounds of permutation codes under Hamming metric and Kendall’s $$\tau $$ τ -metric
+openalex-novelty,https://api.openalex.org/works?search=%22inclusion-exclusion%22%20%22Kirkman%20triple%20system%22&per-page=1&mailto=shard9@example.com,200,2,inclusion-exclusion + Kirkman triple system :: A new SAT Encoding Scheme for Exactly-one Constraints
+openalex-novelty,https://api.openalex.org/works?search=%22Latin%20square%22%20%22magic%20square%22&per-page=1&mailto=shard9@example.com,200,514,Latin square + magic square :: Discrete Mathematics Using Latin Squares
+openalex-novelty,https://api.openalex.org/works?search=%22Borda%20count%22%20%22Hamilton%20apportionment%22&per-page=1&mailto=shard9@example.com,200,1,Borda count + Hamilton apportionment :: Let the Barbarians In: How AI Can Accelerate Systems Performance Research
+openalex-novelty,https://api.openalex.org/works?search=%22square%20of%20opposition%22%20%22dictum%20de%20omni%22&per-page=1&mailto=shard9@example.com,200,25,square of opposition + dictum de omni :: Prazni termini u Aristotelovoj logici
+openalex-novelty,https://api.openalex.org/works?search=%22modus%20tollens%22%20%22contrapositive%22&per-page=1&mailto=shard9@example.com,200,249,modus tollens + contrapositive :: Arguing Modus Tollens with Conditional Probabilities in Place of Conditionals
+openalex-novelty,https://api.openalex.org/works?search=%22De%20Morgan%22%20%22exclusive%20disjunction%22&per-page=1&mailto=shard9@example.com,200,121,"De Morgan + exclusive disjunction :: Boolean basis, formula size, and number of modal operators"
+openalex-novelty,https://api.openalex.org/works?search=%22Boole%20constituents%22%20%22logical%20piano%22&per-page=1&mailto=shard9@example.com,200,0,Boole constituents + logical piano :: 
+openalex-novelty,https://api.openalex.org/works?search=%22characteristica%20universalis%22%20%22fundamental%20theorem%20of%20arithmetic%22&per-page=1&mailto=shard9@example.com,200,1,characteristica universalis + fundamental theorem of arithmetic :: On the Completion of the Calculus Ratiocinator: An Intensional Arithmetic of Categorical Logic
+openalex-novelty,https://api.openalex.org/works?search=%22sexagesimal%22%20%22Napier%20logarithm%22&per-page=1&mailto=shard9@example.com,200,3,sexagesimal + Napier logarithm :: The Doctrines of Triangles: A History of Modern Trigonometry by Glen Van Brummelen
+openalex-novelty,https://api.openalex.org/works?search=%22Brahmagupta%22%20%22positional%20notation%22&per-page=1&mailto=shard9@example.com,200,29,"Brahmagupta + positional notation :: Shunya and Ananta: How India Gave the World Zero, Infinity and the Foundation of All Knowledge"
+openalex-novelty,https://api.openalex.org/works?search=%22Pingala%22%20%22Catalan%20number%22&per-page=1&mailto=shard9@example.com,200,3,Pingala + Catalan number :: The Use and Development of Mathematics Within Creative Literature
+openalex-novelty,https://api.openalex.org/works?search=%22golden%20section%22%20%22method%20of%20exhaustion%22&per-page=1&mailto=shard9@example.com,200,9,golden section + method of exhaustion :: Mnémosyne. Num. 1: De la méthode par exhaustion.
+openalex-novelty,https://api.openalex.org/works?search=%22Josephus%20problem%22%20%22canonical%20hours%22&per-page=1&mailto=shard9@example.com,200,0,Josephus problem + canonical hours :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Saros%20cycle%22%20%22exeligmos%22&per-page=1&mailto=shard9@example.com,200,61,Saros cycle + exeligmos :: The Saros Cycle's 120° Shift Creates a 54-Year Eclipse Symmetry — E8 Intelligence Research
+openalex-novelty,https://api.openalex.org/works?search=%22Metonic%20cycle%22%20%22Callippic%20cycle%22&per-page=1&mailto=shard9@example.com,200,44,Metonic cycle + Callippic cycle :: The Metonic and Callippic Cycles
+openalex-novelty,https://api.openalex.org/works?search=%22equation%20of%20time%22%20%22analemma%22&per-page=1&mailto=shard9@example.com,200,74,equation of time + analemma :: The equation of time and the analemma
+openalex-novelty,https://api.openalex.org/works?search=%22epicycle%22%20%22retrograde%20station%22&per-page=1&mailto=shard9@example.com,200,3,epicycle + retrograde station :: Εφαρμογή της θεωρίας των επίκυκλων στο Μηχανισμό των Αντικυθήρων: μελέτη της πλανητικής κίνησης στο 
+openalex-novelty,https://api.openalex.org/works?search=%22syzygy%22%20%22lunar%20node%22&per-page=1&mailto=shard9@example.com,200,36,syzygy + lunar node :: THE LUNAR PERIGEE-SYZYGY CYCLE FOR 1998: IMPLICATIONS FOR ASTRONOMIC TIDAL HEIGHTS
+openalex-novelty,https://api.openalex.org/works?search=%22parallax%22%20%22atmospheric%20refraction%22&per-page=1&mailto=shard9@example.com,200,530,parallax + atmospheric refraction :: Megalithic Lunar Observatories
+openalex-novelty,https://api.openalex.org/works?search=%22heliacal%20rising%22%20%22acronychal%20rising%22&per-page=1&mailto=shard9@example.com,200,33,heliacal rising + acronychal rising :: Acronychal Risings in Babylonian Planetary Theory
+openalex-novelty,https://api.openalex.org/works?search=%22chord%20table%22%20%22linear%20interpolation%22&per-page=1&mailto=shard9@example.com,200,13,chord table + linear interpolation :: Mathematical tables in Ptolemy's Almagest
+openalex-novelty,https://api.openalex.org/works?search=%22Kepler%20equation%22%20%22equant%22&per-page=1&mailto=shard9@example.com,200,8,"Kepler equation + equant :: Keplers's Equation and Angular Momentum: Historical Perspective, Critical Analysis and Implications "
+openalex-novelty,https://api.openalex.org/works?search=%22stereographic%20projection%22%20%22armillary%20sphere%22&per-page=1&mailto=shard9@example.com,200,32,stereographic projection + armillary sphere :: The Astrolabe: A Mechanism for Reading the Stars
+openalex-novelty,https://api.openalex.org/works?search=%22clepsydra%22%20%22seasonal%20hours%22&per-page=1&mailto=shard9@example.com,200,13,clepsydra + seasonal hours :: Greco-Roman Sundials: Precision and Displacement
+openalex-novelty,https://api.openalex.org/works?search=%22Stomachion%22%20%22Euclid%20lemma%22&per-page=1&mailto=shard9@example.com,200,0,Stomachion + Euclid lemma :: 
+openalex-novelty,https://api.openalex.org/works?search=%22quod%20erat%20demonstrandum%22%20%22porism%22&per-page=1&mailto=shard9@example.com,200,179,quod erat demonstrandum + porism :: Como queríamos demonstrar - Q.E.D -Quod Erat Demonstrandum
+openalex-novelty,https://api.openalex.org/works?search=%22antilogism%22%20%22reductio%20ad%20absurdum%22&per-page=1&mailto=shard9@example.com,200,4,antilogism + reductio ad absurdum :: Aristotle’s Theory of Deduction and Paraconsistency DOI:10.5007/1808-1711.2010v14n1p71
+openalex-novelty,https://api.openalex.org/works?search=%22sorites%22%20%22Barbara%20syllogism%22&per-page=1&mailto=shard9@example.com,200,6,"sorites + Barbara syllogism :: Variation and Pattern in the 3-term Syllogisms and the Biliteral Sorites of Types Barbara, Darapti a"
+openalex-novelty,https://api.openalex.org/works?search=%22obversion%22%20%22conversion%22&per-page=1&mailto=shard9@example.com,200,2905,obversion + conversion :: The existential assumptions of traditional logic
+openalex-novelty,https://api.openalex.org/works?search=%22existential%20import%22%20%22square%20of%20opposition%22&per-page=1&mailto=shard9@example.com,200,193,existential import + square of opposition :: Existential Import and the Square of Opposition
+openalex-novelty,https://api.openalex.org/works?search=%22continued%20fraction%22%20%22anthyphairesis%22&per-page=1&mailto=shard9@example.com,200,35,continued fraction + anthyphairesis :: Plato's theory of knowledge of Forms by Division and Collection in the Sophistes is a philosophic an
+openalex-novelty,https://api.openalex.org/works?search=%22amicable%20numbers%22%20%22perfect%20numbers%22&per-page=1&mailto=shard9@example.com,200,226,amicable numbers + perfect numbers :: Note on Amicable Numbers and Perfect Numbers
+openalex-novelty,https://api.openalex.org/works?search=%22octaeteris%22%20%22Venus%20tablet%22&per-page=1&mailto=shard9@example.com,200,3,octaeteris + Venus tablet :: Evidence of Minoan astronomy and calendrical practices
+openalex-novelty,https://api.openalex.org/works?search=%22precession%20of%20the%20equinoxes%22%20%22colure%22&per-page=1&mailto=shard9@example.com,200,20,precession of the equinoxes + colure :: Ibn al-Hā'im's Trepidation Mode1
+openalex-novelty,https://api.openalex.org/works?search=%22integer%20partition%22%20%22generating%20function%22&per-page=1&mailto=shard9@example.com,200,3379,integer partition + generating function :: Integer Partitions
+openalex-novelty,https://api.openalex.org/works?search=%22divided%20difference%22%20%22Lagrange%20interpolation%22&per-page=1&mailto=shard9@example.com,200,645,divided difference + Lagrange interpolation :: Lagrange interpolation on a lattice: Bounding derivatives by divided differences
+openalex-novelty,https://api.openalex.org/works?search=%22least%20squares%22%20%22normal%20equations%22&per-page=1&mailto=shard9@example.com,200,13825,least squares + normal equations :: A Problem in Least Squares
+openalex-novelty,https://api.openalex.org/works?search=%22Euclidean%20algorithm%22%20%22check%20digit%22&per-page=1&mailto=shard9@example.com,200,18,Euclidean algorithm + check digit :: A course in computational number theory
+openalex-novelty,https://api.openalex.org/works?search=%22partnership%20rule%22%20%22alligation%22&per-page=1&mailto=shard9@example.com,200,3,partnership rule + alligation :: The World of the Abbaco: Abbacus Mathematics Analyzed and Situated Historically Between Fibonacci an
+openalex-novelty,https://api.openalex.org/works?search=%22excess%20and%20deficit%22%20%22regula%20falsi%22&per-page=1&mailto=shard9@example.com,200,1,excess and deficit + regula falsi :: History for Diversity in the Teaching and Learning of Mathematics
+openalex-novelty,https://api.openalex.org/works?search=%22figurate%20numbers%22%20%22Pascal%20triangle%22&per-page=1&mailto=shard9@example.com,200,67,"figurate numbers + Pascal triangle :: Figurate Numbers, Supermarkets, and Pascal Triangles."
+openalex-novelty,https://api.openalex.org/works?search=%22harmonic%20mean%22%20%22geometric%20mean%22&per-page=1&mailto=shard9@example.com,200,8113,"harmonic mean + geometric mean :: Two Sharp Inequalities for Power Mean, Geometric Mean, and Harmonic Mean"
+arxiv,http://export.arxiv.org/api/query?search_query=all%3AAntikythera%20mechanism%20Saros&start=0&max_results=1,200,1,entries
+arxiv,http://export.arxiv.org/api/query?search_query=all%3A%22casting%20out%20nines%22%20anthyphairesis&start=0&max_results=1,200,1,entries
+arxiv,http://export.arxiv.org/api/query?search_query=all%3ABabylonian%20%22System%20A%22%20zigzag&start=0&max_results=1,200,1,entries
+arxiv,http://export.arxiv.org/api/query?search_query=all%3ARhind%20papyrus%20false%20position&start=0&max_results=1,200,1,entries
+arxiv,http://export.arxiv.org/api/query?search_query=all%3A%22Chinese%20remainder%22%20Metonic&start=0&max_results=1,200,1,entries
+arxiv,http://export.arxiv.org/api/query?search_query=all%3ADresden%20Codex%20Venus&start=0&max_results=1,200,1,entries
+s2,https://api.semanticscholar.org/graph/v1/paper/search?query=Ptolemy%20Almagest%20chord%20table&limit=1,429,,s2
+s2,https://api.semanticscholar.org/graph/v1/paper/search?query=Antikythera%20mechanism&limit=1,429,,s2
+zenodo,https://zenodo.org/api/records?q=Antikythera%20mechanism&size=1,200,110945,zenodo
+zenodo,https://zenodo.org/api/records?q=Rhind%20mathematical%20papyrus&size=1,200,110983,zenodo
+zenodo,https://zenodo.org/api/records?q=Almagest&size=1,200,30,zenodo
+zenodo,https://zenodo.org/api/records?q=Babylonian%20astronomical%20diaries&size=1,200,11395,zenodo
+zenodo,https://zenodo.org/api/records?q=Euclid%20Elements&size=1,200,89588,zenodo
+zenodo,https://zenodo.org/api/records?q=%22casting%20out%20nines%22%20anthyphairesis&size=1,200,8,zenodo
+ol,https://openlibrary.org/search.json?q=title%3AAlmagest&limit=1,200,65,ol
+ol,https://openlibrary.org/search.json?q=Rhind%20mathematical%20papyrus&limit=1,200,27,ol
+ol,https://openlibrary.org/search.json?q=Liber%20Abaci&limit=1,200,15,ol
+ol,https://openlibrary.org/search.json?q=Arithmetica%20logarithmica%20Briggs&limit=1,200,6,ol
+gh,https://api.github.com/search/repositories?q=rhind%20mathematical%20papyrus&per_page=1,200,2,gh
+gh,https://api.github.com/search/repositories?q=antikythera%20mechanism&per_page=1,200,81,gh
+gh,https://api.github.com/search/code?q=sunzi%20suanjing%20extension%3Atxt&per_page=1,401,,gh
+figshare,https://api.figshare.com/v2/articles/search q=Euclid Elements,200,1,Euclid Elements
+figshare,https://api.figshare.com/v2/articles/search q=Almagest,200,1,Almagest
+figshare,https://api.figshare.com/v2/articles/search q=Rhind papyrus,200,1,Rhind papyrus
+figshare,https://api.figshare.com/v2/articles/search q=Antikythera,200,1,Antikythera
+figshare,https://api.figshare.com/v2/articles/search q=Babylonian astronomy,200,1,Babylonian astronomy
+figshare,https://api.figshare.com/v2/articles/search q=Kepler Rudolphine,200,0,Kepler Rudolphine
+figshare,https://api.figshare.com/v2/articles/search q=Boole logic,200,1,Boole logic
+figshare,https://api.figshare.com/v2/articles/search q=Dresden Codex,200,0,Dresden Codex
+wikidata,https://query.wikidata.org/sparql?query=SELECT%20%3Fitem%20%3FitemLabel%20WHERE%20%7B%20VALUES%20%3Fname%20%7B%22Rhind%20Mathematical%20Papyrus%22%40en%20%22Antikythera%20mechanism%22%40en%20%22Plimpt,200,5,Plimpton 322=Q1470425; Antikythera mechanism=Q182324; Dresden Codex=Q200944; Rhind Mathematical Papyrus=Q213540; YBC 7289=Q2178529
+mactutor,https://mathshistory.st-andrews.ac.uk/Biographies/Qin_Jiushao/,200,1,Biographies/Qin_Jiushao/
+mactutor,https://mathshistory.st-andrews.ac.uk/Biographies/Jia_Xian/,200,1,Biographies/Jia_Xian/
+mactutor,https://mathshistory.st-andrews.ac.uk/Biographies/Sun_Zi/,200,1,Biographies/Sun_Zi/
+mactutor,https://mathshistory.st-andrews.ac.uk/Biographies/Kepler/,200,1,Biographies/Kepler/
+mactutor,https://mathshistory.st-andrews.ac.uk/Biographies/Boole/,200,1,Biographies/Boole/
+mactutor,https://mathshistory.st-andrews.ac.uk/Biographies/Leibniz/,200,1,Biographies/Leibniz/
+mactutor,https://mathshistory.st-andrews.ac.uk/Biographies/Napier/,200,1,Biographies/Napier/
+mactutor,https://mathshistory.st-andrews.ac.uk/Biographies/Eratosthenes/,200,1,Biographies/Eratosthenes/
+mactutor,https://mathshistory.st-andrews.ac.uk/HistTopics/Chinese_remainder_theorem/,404,0,HistTopics/Chinese_remainder_theorem/
+mactutor,https://mathshistory.st-andrews.ac.uk/HistTopics/Perfect_numbers/,200,1,HistTopics/Perfect_numbers/
+openalex-novelty,https://api.openalex.org/works?search=%22anthyphairesis%22%20%22goal-year%20text%22&per-page=1&mailto=shard9@example.com,200,1,anthyphairesis + goal-year text :: A Model of the Cosmos in the ancient Greek Antikythera Mechanism
+openalex-novelty,https://api.openalex.org/works?search=%22regula%20falsi%22%20%22Saros%20cycle%22&per-page=1&mailto=shard9@example.com,200,0,regula falsi + Saros cycle :: 
+openalex-novelty,https://api.openalex.org/works?search=%22casting%20out%20nines%22%20%22Metonic%20cycle%22&per-page=1&mailto=shard9@example.com,200,0,casting out nines + Metonic cycle :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Josephus%20problem%22%20%22sexagesimal%22&per-page=1&mailto=shard9@example.com,200,4,Josephus problem + sexagesimal :: Mathematical Surprises
+openalex-novelty,https://api.openalex.org/works?search=%22Stomachion%22%20%22clepsydra%22&per-page=1&mailto=shard9@example.com,200,57,Stomachion + clepsydra :: From Rituals to Instruments
+openalex-novelty,https://api.openalex.org/works?search=%22Pingala%22%20%22exeligmos%22&per-page=1&mailto=shard9@example.com,200,0,Pingala + exeligmos :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Kirkman%20triple%20system%22%20%22heliacal%20rising%22&per-page=1&mailto=shard9@example.com,200,0,Kirkman triple system + heliacal rising :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Borda%20count%22%20%22analemma%22&per-page=1&mailto=shard9@example.com,200,0,Borda count + analemma :: 
+openalex-novelty,https://api.openalex.org/works?search=%22alligation%22%20%22epicycle%22&per-page=1&mailto=shard9@example.com,200,1,alligation + epicycle :: Baroque Mind-set and New Science: A Dialectic of Seventeenth-Century High Culture
+openalex-novelty,https://api.openalex.org/works?search=%22porism%22%20%22clepsydra%22&per-page=1&mailto=shard9@example.com,200,817,porism + clepsydra :: Una nueva forma en el repertorio cerámico protohistórico de la Península Ibérica: clepsidr
+openalex-novelty,https://api.openalex.org/works?search=%22kuttaka%22%20%22canonical%20hours%22&per-page=1&mailto=shard9@example.com,200,0,kuttaka + canonical hours :: 
+openalex-novelty,https://api.openalex.org/works?search=%22excess%20and%20deficit%22%20%22Josephus%20problem%22&per-page=1&mailto=shard9@example.com,200,0,excess and deficit + Josephus problem :: 
+openalex-novelty,https://api.openalex.org/works?search=%22figurate%20numbers%22%20%22Saros%20cycle%22&per-page=1&mailto=shard9@example.com,200,0,figurate numbers + Saros cycle :: 
+openalex-novelty,https://api.openalex.org/works?search=%22quod%20erat%20demonstrandum%22%20%22goal-year%22&per-page=1&mailto=shard9@example.com,200,0,quod erat demonstrandum + goal-year :: 
+openalex-novelty,https://api.openalex.org/works?search=%22characteristica%20universalis%22%20%22zigzag%20function%22&per-page=1&mailto=shard9@example.com,200,0,characteristica universalis + zigzag function :: 
+openalex-novelty,https://api.openalex.org/works?search=%22sand%20reckoner%22%20%22Latin%20square%22&per-page=1&mailto=shard9@example.com,200,0,sand reckoner + Latin square :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Rule%20of%20St%20Benedict%22%20%22Chinese%20remainder%20theorem%22&per-page=1&mailto=shard9@example.com,200,0,Rule of St Benedict + Chinese remainder theorem :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Vitruvius%22%20%22Pascal%20triangle%22&per-page=1&mailto=shard9@example.com,200,3,Vitruvius + Pascal triangle :: On Some Aspects of Study on Dimensions and Proportions of Church Architecture
+openalex-novelty,https://api.openalex.org/works?search=%22Dresden%20Codex%22%20%22square%20of%20opposition%22&per-page=1&mailto=shard9@example.com,200,0,Dresden Codex + square of opposition :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Antikythera%20mechanism%22%20%22alligation%22&per-page=1&mailto=shard9@example.com,200,0,Antikythera mechanism + alligation :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Alphonsine%20tables%22%20%22derangement%22&per-page=1&mailto=shard9@example.com,200,0,Alphonsine tables + derangement :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Napier%22%20%22Stomachion%22&per-page=1&mailto=shard9@example.com,200,3226,"Napier + Stomachion :: Comments on the Medical Aspect of the Battle of Waterloo, 1815"
+openalex-novelty,https://api.openalex.org/works?search=%22Boethius%22%20%22Saros%22&per-page=1&mailto=shard9@example.com,200,52,Boethius + Saros :: Babylonian astronomy: a new understanding of column Φ
+openalex-novelty,https://api.openalex.org/works?search=%22Martianus%20Capella%22%20%22false%20position%22&per-page=1&mailto=shard9@example.com,200,3,Martianus Capella + false position :: Terra Incognita: Mapping the Antipodes before 1600 (review)
+openalex-novelty,https://api.openalex.org/works?search=%22Censorinus%22%20%22inclusion-exclusion%22&per-page=1&mailto=shard9@example.com,200,0,Censorinus + inclusion-exclusion :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Oughtred%22%20%22heliacal%20rising%22&per-page=1&mailto=shard9@example.com,200,0,Oughtred + heliacal rising :: 
+openalex-novelty,https://api.openalex.org/works?search=%22methodus%20incrementorum%22%20%22canonical%20hours%22&per-page=1&mailto=shard9@example.com,200,0,methodus incrementorum + canonical hours :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Diophantus%22%20%22canonical%20hours%22&per-page=1&mailto=shard9@example.com,200,0,Diophantus + canonical hours :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Apollonius%20of%20Perga%22%20%22casting%20out%20nines%22&per-page=1&mailto=shard9@example.com,200,1,"Apollonius of Perga + casting out nines :: Perspectivism and Wicked Problems - Patterns in the Discovery Process of Leibniz, Bohr, an"
+openalex-novelty,https://api.openalex.org/works?search=%22Aristarchus%20of%20Samos%22%20%22Latin%20square%22&per-page=1&mailto=shard9@example.com,200,0,Aristarchus of Samos + Latin square :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Geminos%22%20%22Borda%20count%22&per-page=1&mailto=shard9@example.com,200,2,Geminos + Borda count :: AVA: Towards Agentic Video Analytics with Vision Language Models
+openalex-novelty,https://api.openalex.org/works?search=%22Flamsteed%22%20%22square%20of%20opposition%22&per-page=1&mailto=shard9@example.com,200,0,Flamsteed + square of opposition :: 
+openalex-novelty,https://api.openalex.org/works?search=%22al-Sufi%22%20%22regula%20falsi%22&per-page=1&mailto=shard9@example.com,200,1,al-Sufi + regula falsi :: Aspectos científicos del viaje del Descubrimiento
+openalex-novelty,https://api.openalex.org/works?search=%22Lilavati%22%20%22derangement%22&per-page=1&mailto=shard9@example.com,200,7,Lilavati + derangement :: Abstracts
+openalex-novelty,https://api.openalex.org/works?search=%22Plimpton%20322%22%20%22modus%20tollens%22&per-page=1&mailto=shard9@example.com,200,1,Plimpton 322 + modus tollens :: Теоретико-типовое обоснование математического структурализма: онто-эпистемологические аспе
+openalex-novelty,https://api.openalex.org/works?search=%22YBC%207289%22%20%22square%20of%20opposition%22&per-page=1&mailto=shard9@example.com,200,0,YBC 7289 + square of opposition :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Rhind%20papyrus%22%20%22Borda%20count%22&per-page=1&mailto=shard9@example.com,200,0,Rhind papyrus + Borda count :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Zhoubi%20Suanjing%22%20%22Kendall%20tau%22&per-page=1&mailto=shard9@example.com,200,0,Zhoubi Suanjing + Kendall tau :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Brihat%20Samhita%22%20%22Latin%20square%22&per-page=1&mailto=shard9@example.com,200,0,Brihat Samhita + Latin square :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Harmonices%20mundi%22%20%22Kirkman%22&per-page=1&mailto=shard9@example.com,200,1,Harmonices mundi + Kirkman :: Graphs of polyhedra; polyhedra as graphs
+openalex-novelty,https://api.openalex.org/works?search=%22Tabulae%20Rudolphinae%22%20%22alligation%22&per-page=1&mailto=shard9@example.com,200,0,Tabulae Rudolphinae + alligation :: 
+openalex-novelty,https://api.openalex.org/works?search=%22De%20arte%20combinatoria%22%20%22clepsydra%22&per-page=1&mailto=shard9@example.com,200,0,De arte combinatoria + clepsydra :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Institutio%20logica%22%20%22epicycle%22&per-page=1&mailto=shard9@example.com,200,1,"Institutio logica + epicycle :: Experimental philosophy, method, and the art of thinking, 1700–1750"
+openalex-novelty,https://api.openalex.org/works?search=%22Summa%20logicae%22%20%22chord%20table%22&per-page=1&mailto=shard9@example.com,200,0,Summa logicae + chord table :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Port-Royal%20Logic%22%20%22retrograde%20station%22&per-page=1&mailto=shard9@example.com,200,0,Port-Royal Logic + retrograde station :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Liber%20de%20ludo%20aleae%22%20%22Metonic%20cycle%22&per-page=1&mailto=shard9@example.com,200,0,Liber de ludo aleae + Metonic cycle :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Arithmetica%20infinitorum%22%20%22lunar%20mansion%22&per-page=1&mailto=shard9@example.com,200,0,Arithmetica infinitorum + lunar mansion :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Cours%20d%27analyse%22%20%22zigzag%20function%22&per-page=1&mailto=shard9@example.com,200,1,Cours d'analyse + zigzag function :: Effectively Absolute Continuity and Effective Jordan Decomposability
+openalex-novelty,https://api.openalex.org/works?search=%22Disquisitiones%20arithmeticae%22%20%22heliacal%20rising%22&per-page=1&mailto=shard9@example.com,200,0,Disquisitiones arithmeticae + heliacal rising :: 
+openalex-novelty,https://api.openalex.org/works?search=%22The%20Whetstone%20of%20Witte%22%20%22Saros%22&per-page=1&mailto=shard9@example.com,200,0,The Whetstone of Witte + Saros :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Euclid%20lemma%22%20%22Saros%20cycle%22&per-page=1&mailto=shard9@example.com,200,0,Euclid lemma + Saros cycle :: 
+openalex-novelty,https://api.openalex.org/works?search=%22regula%20falsi%22%20%22exeligmos%22&per-page=1&mailto=shard9@example.com,200,0,regula falsi + exeligmos :: 
+openalex-novelty,https://api.openalex.org/works?search=%22casting%20out%20nines%22%20%22clepsydra%22&per-page=1&mailto=shard9@example.com,200,0,casting out nines + clepsydra :: 
+openalex-novelty,https://api.openalex.org/works?search=%22double%20false%20position%22%20%22lunar%20mansion%22&per-page=1&mailto=shard9@example.com,200,0,double false position + lunar mansion :: 
+openalex-novelty,https://api.openalex.org/works?search=%22rule%20of%20three%22%20%22analemma%22&per-page=1&mailto=shard9@example.com,200,0,rule of three + analemma :: 
+openalex-novelty,https://api.openalex.org/works?search=%22sieve%20of%20Eratosthenes%22%20%22canonical%20hours%22&per-page=1&mailto=shard9@example.com,200,0,sieve of Eratosthenes + canonical hours :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Chinese%20remainder%20theorem%22%20%22equation%20of%20time%22&per-page=1&mailto=shard9@example.com,200,15,Chinese remainder theorem + equation of time :: Counting points on genus-3 hyperelliptic curves with explicit real multiplicatio
+openalex-novelty,https://api.openalex.org/works?search=%22zigzag%20function%22%20%22Borda%20count%22&per-page=1&mailto=shard9@example.com,200,0,zigzag function + Borda count :: 
+openalex-novelty,https://api.openalex.org/works?search=%22continued%20fraction%22%20%22heliacal%20rising%22&per-page=1&mailto=shard9@example.com,200,2,continued fraction + heliacal rising :: Glimpses of contributions of some top Indian mathematicians: A review article
+openalex-novelty,https://api.openalex.org/works?search=%22amicable%20numbers%22%20%22Metonic%20cycle%22&per-page=1&mailto=shard9@example.com,200,0,amicable numbers + Metonic cycle :: 
+openalex-novelty,https://api.openalex.org/works?search=%22perfect%20numbers%22%20%22Josephus%20problem%22&per-page=1&mailto=shard9@example.com,200,21,"perfect numbers + Josephus problem :: Numberphile's Unsolved Math Problems: Chromatic Plane, Odd Perfect Numbers, and "
+openalex-novelty,https://api.openalex.org/works?search=%22golden%20section%22%20%22goal-year%20text%22&per-page=1&mailto=shard9@example.com,200,0,golden section + goal-year text :: 
+openalex-novelty,https://api.openalex.org/works?search=%22method%20of%20exhaustion%22%20%22Kirkman%20triple%20system%22&per-page=1&mailto=shard9@example.com,200,0,method of exhaustion + Kirkman triple system :: 
+openalex-novelty,https://api.openalex.org/works?search=%22sexagesimal%20place%22%20%22square%20of%20opposition%22&per-page=1&mailto=shard9@example.com,200,0,sexagesimal place + square of opposition :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Brahmagupta%20zero%22%20%22Kendall%20tau%22&per-page=1&mailto=shard9@example.com,200,0,Brahmagupta zero + Kendall tau :: 
+openalex-novelty,https://api.openalex.org/works?search=%22octaeteris%22%20%22Latin%20square%22&per-page=1&mailto=shard9@example.com,200,0,octaeteris + Latin square :: 
+openalex-novelty,https://api.openalex.org/works?search=%22exeligmos%22%20%22alligation%22&per-page=1&mailto=shard9@example.com,200,0,exeligmos + alligation :: 
+openalex-novelty,https://api.openalex.org/works?search=%22Callippic%20cycle%22%20%22derangement%22&per-page=1&mailto=shard9@example.com,200,0,Callippic cycle + derangement :: 
+openalex-novelty,https://api.openalex.org/works?search=%22parallax%20correction%22%20%22modus%20tollens%22&per-page=1&mailto=shard9@example.com,200,0,parallax correction + modus tollens :: 
+openalex-novelty,https://api.openalex.org/works?search=%22acronychal%20rising%22%20%22Pascal%20triangle%22&per-page=1&mailto=shard9@example.com,200,0,acronychal rising + Pascal triangle :: 
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Kirkman/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Kirkman/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Borda/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Borda/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Euler/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Euler/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Cauchy/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Cauchy/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Catalan/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Catalan/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/De_Morgan/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/De_Morgan/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Fibonacci/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Fibonacci/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Ptolemy/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Ptolemy/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Euclid/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Euclid/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Al-Khwarizmi/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Al-Khwarizmi/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Brahmagupta/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Brahmagupta/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Bhaskara_II/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Bhaskara_II/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Aryabhata_I/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Aryabhata_I/
+record-verify,https://mathshistory.st-andrews.ac.uk/HistTopics/Nine_chapters/,200,800,https://mathshistory.st-andrews.ac.uk/HistTopics/Nine_chapters/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Pascal/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Pascal/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Cardan/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Cardan/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Recorde/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Recorde/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Oughtred/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Oughtred/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Wallis/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Wallis/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Fermat/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Fermat/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Legendre/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Legendre/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Gauss/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Gauss/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Newton/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Newton/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Kepler/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Kepler/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Copernicus/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Copernicus/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Regiomontanus/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Regiomontanus/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Hipparchus/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Hipparchus/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Eratosthenes/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Eratosthenes/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Archimedes/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Archimedes/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Diophantus/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Diophantus/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Apollonius/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Apollonius/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Nicomachus/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Nicomachus/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Boole/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Boole/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Leibniz/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Leibniz/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Napier/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Napier/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Jia_Xian/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Jia_Xian/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Sun_Zi/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Sun_Zi/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Qin_Jiushao/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Qin_Jiushao/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Venn/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Venn/
+record-verify,https://mathshistory.st-andrews.ac.uk/Biographies/Jevons/,200,800,https://mathshistory.st-andrews.ac.uk/Biographies/Jevons/
+record-verify,https://mathshistory.st-andrews.ac.uk/HistTopics/Perfect_numbers/,200,800,https://mathshistory.st-andrews.ac.uk/HistTopics/Perfect_numbers/
+record-verify,https://mathshistory.st-andrews.ac.uk/HistTopics/Chinese_overview/,200,800,https://mathshistory.st-andrews.ac.uk/HistTopics/Chinese_overview/
+record-verify,https://www.perseus.tufts.edu/hopper/text?doc=Perseus:text:1999.01.0052,200,800,https://www.perseus.tufts.edu/hopper/text?doc=Perseus:text:1999.01.0052
+record-verify,https://www.wikidata.org/wiki/Q182324,200,800,https://www.wikidata.org/wiki/Q182324
+record-verify,https://www.wikidata.org/wiki/Q213540,200,800,https://www.wikidata.org/wiki/Q213540
+record-verify,https://www.wikidata.org/wiki/Q2178529,200,800,https://www.wikidata.org/wiki/Q2178529
+record-verify,https://www.wikidata.org/wiki/Q200944,200,800,https://www.wikidata.org/wiki/Q200944
+record-verify,https://www.wikidata.org/wiki/Q1470425,200,800,https://www.wikidata.org/wiki/Q1470425
+record-verify,https://ctext.org/sunzi-suan-jing,200,800,https://ctext.org/sunzi-suan-jing
+record-verify,https://ctext.org/zhoubi-suanjing,200,800,https://ctext.org/zhoubi-suanjing
+record-verify,https://ctext.org/nine-chapters,200,800,https://ctext.org/nine-chapters
+record-verify,https://sachsen.digital/werk/2967/1,200,800,https://sachsen.digital/werk/2967/1
+ia-metadata,https://archive.org/metadata/almagest00ptol/metadata,200,1,The almagest
+ia-metadata,https://archive.org/metadata/thirteenbooksofe00eucl/metadata,200,1,The thirteen books of Euclid's Elements
+ia-metadata,https://archive.org/metadata/josephuswithengl02joseuoft/metadata,200,1,"Josephus; with an English translation by H. St. J. Thackeray, in nine volumes"
+ia-metadata,https://archive.org/metadata/ruleofstbenedict00bene/metadata,200,1,The rule of St. Benedict
+ia-metadata,https://archive.org/metadata/lilavati00bhas/metadata,200,1,Colebrooke's translation of the Lílávatí
+ia-metadata,https://archive.org/metadata/formallogicorthe00demouoft/metadata,200,1,"Formal logic, or, The calculus of inference, necessary and probable"
+ia-metadata,https://archive.org/metadata/sphaeramundi00sacr/metadata,200,1,Sphaera mundi
+ia-metadata,https://archive.org/metadata/euclid-the-thirteen-books-of-the-elements-vol.-3/metadata,200,1,"Euclid The Thirteen Books Of The Elements, Vol. 3"
+ia-metadata,https://archive.org/metadata/AlBattani/metadata,200,1,Al Battani
+ia-metadata,https://archive.org/metadata/philosophiaenat00newt/metadata,200,1,Philosophiae naturalis principia mathematica
+ia-metadata,https://archive.org/metadata/bub_gb_HscAAAAAMAAJ/metadata,200,1,Formal logic;
+ia-metadata,https://archive.org/metadata/expoundingmathematicalseed/metadata,200,0,None
+ia-metadata,https://archive.org/metadata/Peet_1923/metadata,200,1,"Peet, T. Eric - The Rhind mathematical papyrus British Museum 10057 and 10058 (1923)"
+archive.org,https://archive.org/advancedsearch.php?q=title%3A%28Astronomical%20Cuneiform%20Texts%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,0,title:(Astronomical Cuneiform Texts) AND mediatype:texts
+archive.org,https://archive.org/advancedsearch.php?q=title%3A%28Babylonian%20astronomical%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,5,title:(Babylonian astronomical) AND mediatype:texts
+archive.org,https://archive.org/advancedsearch.php?q=neugebauer%20AND%20%28ACT%20OR%20zigzag%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,15,neugebauer AND (ACT OR zigzag) AND mediatype:texts
+archive.org,https://archive.org/advancedsearch.php?q=title%3A%28Almagest%29%20AND%20creator%3APtolemy%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,13,title:(Almagest) AND creator:Ptolemy AND mediatype:texts
+archive.org,https://archive.org/advancedsearch.php?q=title%3A%28Clavis%20mathematicae%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,4,title:(Clavis mathematicae) AND mediatype:texts
+archive.org,https://archive.org/advancedsearch.php?q=title%3A%28Traite%20du%20triangle%20arithmetique%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,1,title:(Traite du triangle arithmetique) AND mediatype:texts
+archive.org,https://archive.org/advancedsearch.php?q=Kirkman%20AND%20combinations%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,0,Kirkman AND combinations AND mediatype:texts
+archive.org,https://archive.org/advancedsearch.php?q=title%3A%28Borda%29%20AND%20election%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&rows=3&page=1&output=json,200,1,title:(Borda) AND election AND mediatype:texts
+ia-metadata,https://archive.org/metadata/bub_gb_UqgUAAAAQAAJ/metadata,200,1,Traité du triangle arithmétique avec quelques autres petits traitez sur la mesme matière
+ia-metadata,https://archive.org/metadata/saroscycledatesr0000unse/metadata,200,1,Saros cycle dates and related babylonian astronomical texts
+ia-metadata,https://archive.org/metadata/bim_early-english-books-1641-1700_clavis-mathematic-_oughtred-william_1693/metadata,200,1,Clavis mathematicæ ...  1693
+ia-metadata,https://archive.org/metadata/NEUGEBAUERERICH-0007/metadata,200,1,"NEUGEBAUER, ERICH_0007"
+ia-metadata,https://archive.org/metadata/historyofancient0000neug/metadata,200,1,A history of ancient mathematical astronomy part one
+ia-metadata,https://archive.org/metadata/Brahmasphutasiddhanta_Vol_1/metadata,200,1,Brahmagupta's Brāhmasphuṭasiddhānta VOL I (Also Brahmasphutasiddhanta Brahmasphuta-siddhanta)
+ia-metadata,https://archive.org/metadata/exactsciencesina0000oneu_c3u5/metadata,200,1,The exact sciences in antiquity
+ia-metadata,https://archive.org/metadata/bub_gb_UqgUAAAAQAAJ/metadata,200,1,Traité du triangle arithmétique avec quelques autres petits traitez sur la mesme matière
+record-verify,https://api.openalex.org/works?search=,200,1,cited record
+record-verify,https://archive.org/details/16990817,200,1,cited record
+record-verify,https://archive.org/details/18YBC7289,200,1,cited record
+record-verify,https://archive.org/details/Brahmasphutasiddhanta_Vol_1,200,1,cited record
+record-verify,https://archive.org/details/CFIE011642_TO0324_PNI-17329_000000,200,1,cited record
+record-verify,https://archive.org/details/L325AristotleIPriorAnalytics,200,1,cited record
+record-verify,https://archive.org/details/LiberAbaci,200,1,cited record
+record-verify,https://archive.org/details/MSEng0920_2,200,1,cited record
+record-verify,https://archive.org/details/Peet_1923,200,1,cited record
+record-verify,https://archive.org/details/TO0E039714_TO0324_PNI-1692_000000,200,1,cited record
+record-verify,https://archive.org/details/TheWhetstoneOfWitte,200,1,cited record
+record-verify,https://archive.org/details/UFIE003454_TO0324_PNI-2529_000000,200,1,cited record
+record-verify,https://archive.org/details/algebrawitharith00brahuoft,200,1,cited record
+record-verify,https://archive.org/details/almagest00ptol,200,1,cited record
+record-verify,https://archive.org/details/anwendungderline00niem,200,1,cited record
+record-verify,https://archive.org/details/archimedessandreckonervardi,200,1,cited record
+record-verify,https://archive.org/details/aristarchusofsam00heatuoft,200,1,cited record
+record-verify,https://archive.org/details/bim_early-english-books-1641-1700_censorinus-de-die-natal_1695,200,1,cited record
+record-verify,https://archive.org/details/bim_early-english-books-1641-1700_clavis-mathematic-_oughtred-william_1693,200,1,cited record
+record-verify,https://archive.org/details/bub_gb_UqgUAAAAQAAJ,200,1,cited record
+record-verify,https://archive.org/details/de-solla-price-derek-gears-from-the-greeks,200,1,cited record
+record-verify,https://archive.org/details/disquisitionesa00gaus,200,1,cited record
+record-verify,https://archive.org/details/doctrineofchance00moiv,200,1,cited record
+record-verify,https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2,200,1,cited record
+record-verify,https://archive.org/details/formallogicorthe00demouoft,200,1,cited record
+record-verify,https://archive.org/details/geminos-introduction-to-the-phenomena,200,1,cited record
+record-verify,https://archive.org/details/historia-coelestis-britannica-vol.-1,200,1,cited record
+record-verify,https://archive.org/details/historyofancient0000neug,200,1,cited record
+record-verify,https://archive.org/details/historyofhindumathematicsbhibutibhushandattaavadeshnarayansinghvol1_343_D,200,1,cited record
+record-verify,https://archive.org/details/in.ernet.dli.2015.46372,200,1,cited record
+record-verify,https://archive.org/details/ioanniskepplerih00kepl,200,1,cited record
+record-verify,https://archive.org/details/ita-bnc-in1-00000266-001,200,1,cited record
+record-verify,https://archive.org/details/ita-bnc-mag-00000844-001,200,1,cited record
+record-verify,https://archive.org/details/jbc.bj.uj.edu.pl.NDIGSTDR095415,200,1,cited record
+record-verify,https://archive.org/details/jiuzhangsuanshu0000zeng,200,1,cited record
+record-verify,https://archive.org/details/josephuswithengl02joseuoft,200,1,cited record
+record-verify,https://archive.org/details/ldpd_6444894_000,200,1,cited record
+record-verify,https://archive.org/details/lilavati00bhas,200,1,cited record
+record-verify,https://archive.org/details/logicorartofthin00arna,200,1,cited record
+record-verify,https://archive.org/details/nicomachus-introduction-to-arithmetic,200,1,cited record
+record-verify,https://archive.org/details/ockhamstheoryoft0000will_x6f5,200,1,cited record
+record-verify,https://archive.org/details/planisphericastr0000vari,200,1,cited record
+record-verify,https://archive.org/details/ruleofstbenedict00bene,200,1,cited record
+record-verify,https://archive.org/details/summa-de-arithmetica-geometria-proportioni-et-proportionalita,200,1,cited record
+record-verify,https://archive.org/details/tabulaerudolphin00kepl,200,1,cited record
+record-verify,https://archive.org/details/tapas-io-133158-book-of-fixed-stars,200,1,cited record
+record-verify,https://archive.org/details/the-complete-forstemann-version-of-the-dresden-codex,200,1,cited record
+record-verify,https://archive.org/details/theprinciplesofs00jevoiala,200,1,cited record
+record-verify,https://archive.org/details/varahamihiras-brihat-samhita-by-v-subrahmanya-sastri,200,1,cited record
+record-verify,https://archive.org/details/vitruviustenbook00vitr,200,1,cited record
+record-verify,https://archive.org/details/worksofarchimede0000tlhe,200,1,cited record
+archive.org,https://archive.org/advancedsearch.php?q=title:(Thirteen books of Euclid Elements) AND mediatype:texts,200,3,first=euclid-the-thirteen-books-of-the-elements-vol.-2
+archive.org,https://archive.org/advancedsearch.php?q=title:(Works of Archimedes) AND creator:(Heath) AND mediatype:texts,200,10,first=worksofarchimede0000tlhe
+archive.org,https://archive.org/advancedsearch.php?q=title:(Almagest) AND creator:(Ptolemy) AND mediatype:texts,200,13,first=almagestonrevolu0000ptol
+archive.org,https://archive.org/advancedsearch.php?q=title:(Philosophiae naturalis principia) AND mediatype:texts,200,96,first=institutionesphi01pesc
+archive.org,https://archive.org/advancedsearch.php?q=title:(Disquisitiones arithmeticae) AND mediatype:texts,200,5,first=disquisitionesa00gaus
+archive.org,https://archive.org/advancedsearch.php?q=title:(Doctrine of chances) AND creator:(Moivre) AND mediatype:texts,200,8,first=TO0E039714_TO0324_PNI-1692_000000
+archive.org,https://archive.org/advancedsearch.php?q=title:(Formal logic) AND creator:(Morgan) AND mediatype:texts,200,7,first=bub_gb_HscAAAAAMAAJ
+archive.org,https://archive.org/advancedsearch.php?q=title:(Investigation of the laws of thought) AND mediatype:texts,200,19,first=in.ernet.dli.2015.46372
+archive.org,https://archive.org/advancedsearch.php?q=title:(Symbolic logic) AND creator:(Venn) AND mediatype:texts,200,11,first=symboliclogic0000venn
+archive.org,https://archive.org/advancedsearch.php?q=title:(Lilavati) AND mediatype:texts,200,155,first=lilavatiofbhakaracharyaatreatiseonmensurationed.sudhakaradvivedichowkambhams_552_I
+archive.org,https://archive.org/advancedsearch.php?q=title:(Algebra with arithmetic and mensuration) AND creator:(Colebrooke) AND mediatype:texts,200,1,first=algebrawitharith00brahuoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Summa de arithmetica) AND mediatype:texts,200,1,first=summa-de-arithmetica-geometria-proportioni-et-proportionalita
+archive.org,https://archive.org/advancedsearch.php?q=title:(Tabulae Rudolphinae) AND mediatype:texts,200,6,first=tabulaemathemat00grgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sphaera mundi) AND mediatype:texts,200,40,first=ita-bnc-in1-00000266-001
+archive.org,https://archive.org/advancedsearch.php?q=title:(Josephus) AND creator:(Thackeray) AND mediatype:texts,200,30,first=josephusvolvjewi0005tran
+archive.org,https://archive.org/advancedsearch.php?q=title:(Geometry of Rene Descartes) AND mediatype:texts,200,6,first=geometryofrenede0000davi
+archive.org,https://archive.org/advancedsearch.php?q=title:(Arithmetica logarithmica) AND creator:(Briggs) AND mediatype:texts,200,1,first=bim_early-english-books-1475-1640_arithmetica-logarithmica_briggs-h_1624
+archive.org,https://archive.org/advancedsearch.php?q=title:(Mirifici logarithmorum) AND mediatype:texts,200,5,first=mirificilogarit00napi
+archive.org,https://archive.org/advancedsearch.php?q=title:(Rule of St Benedict) AND mediatype:texts,200,51,first=ruleofstbenedict0000bene_h9w2
+archive.org,https://archive.org/advancedsearch.php?q=title:(Opticks) AND creator:(Newton) AND mediatype:texts,200,32,first=opticksortreatis0000newt_r9k6
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ars conjectandi) AND mediatype:texts,200,11,first=doctrinepermuta00newtgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Begriffsschrift) AND mediatype:texts,200,5,first=arxiv-1406.6916
+archive.org,https://archive.org/advancedsearch.php?q=title:(De arte combinatoria) AND mediatype:texts,200,1,first=ita-bnc-mag-00000844-001
+archive.org,https://archive.org/advancedsearch.php?q=title:(Introductio in analysin infinitorum) AND mediatype:texts,200,5,first=bub_gb_ryM0Kh6yLkwC
+archive.org,https://archive.org/advancedsearch.php?q=title:(Theoria motus) AND creator:(Gauss) AND mediatype:texts,200,8,first=theoryofmotionof00gausuoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Mecanique celeste) AND mediatype:texts,200,106,first=TO01179666_TO0324_68521_000000
+archive.org,https://archive.org/advancedsearch.php?q=title:(Algebra of Mohammed ben Musa) AND mediatype:texts,200,9,first=1342TheAlgebraOfMohammedBenMusaAlKwarizmiInArabic
+archive.org,https://archive.org/advancedsearch.php?q=title:(Aryabhatiya) AND mediatype:texts,200,39,first=expoundingmathematicalseedtransofbhaskaraionmathematicalchapteraryabhatiyaagathekellervol2_473_j
+archive.org,https://archive.org/advancedsearch.php?q=title:(Brihat samhita) AND mediatype:texts,200,86,first=varahamihiras-brihat-samhita-by-v-subrahmanya-sastri
+archive.org,https://archive.org/advancedsearch.php?q=title:(Chronology of ancient nations) AND creator:(Biruni) AND mediatype:texts,200,2,first=biruni-1879-sachau-chronology-ancient-nations
+archive.org,https://archive.org/advancedsearch.php?q=title:(Treatise on the astrolabe) AND creator:(Chaucer) AND mediatype:texts,200,15,first=MSEng0920_2
+archive.org,https://archive.org/advancedsearch.php?q=title:(Saturnalia) AND creator:(Macrobius) AND mediatype:texts,200,7,first=saturnaliaappara0001macr
+archive.org,https://archive.org/advancedsearch.php?q=title:(De die natali) AND mediatype:texts,200,43,first=bim_early-english-books-1641-1700_censorinus-de-die-natal_1695
+archive.org,https://archive.org/advancedsearch.php?q=title:(Introduction to arithmetic) AND creator:(Nicomachus) AND mediatype:texts,200,1,first=nicomachus-introduction-to-arithmetic
+archive.org,https://archive.org/advancedsearch.php?q=title:(Diophantus of Alexandria) AND mediatype:texts,200,8,first=16990817
+archive.org,https://archive.org/advancedsearch.php?q=title:(Pappus) AND title:(Collection) AND mediatype:texts,200,2,first=PappusDAlexandrieEd.PaulVerEeckeLaCollectionMathmatique
+archive.org,https://archive.org/advancedsearch.php?q=title:(Proclus) AND title:(Euclid) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Lives of eminent philosophers) AND mediatype:texts,200,91,first=bim_eighteenth-century_the-british-plutarch-co_mortimer-thomas_1795_7
+archive.org,https://archive.org/advancedsearch.php?q=title:(Problemes plaisans) AND mediatype:texts,200,10,first=jbc.bj.uj.edu.pl.NDIGSTDR081751
+archive.org,https://archive.org/advancedsearch.php?q=title:(L'algebra) AND creator:(Bombelli) AND mediatype:texts,200,1,first=lalgebra00bomb
+archive.org,https://archive.org/advancedsearch.php?q=title:(Whetstone of witte) AND mediatype:texts,200,3,first=TheWhetstoneOfWitte
+archive.org,https://archive.org/advancedsearch.php?q=title:(De Thiende) AND mediatype:texts,200,1,first=keizerlijke-ordonnantie-1769-aangaande-alienatie-van-thiende-door-de-pastoors-aen-de-thiende-heffers
+archive.org,https://archive.org/advancedsearch.php?q=title:(Liber abaci) AND mediatype:texts,200,7,first=LiberAbaci
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ars magna) AND creator:(Cardano) AND mediatype:texts,200,1,first=arsmagnaorruleso0000card
+archive.org,https://archive.org/advancedsearch.php?q=title:(Astronomia nova) AND mediatype:texts,200,14,first=a-os-20-conglomerado-s-galactico-s-interestelare-s-em-minha-representac-ao-a-uto_20241217_1907
+archive.org,https://archive.org/advancedsearch.php?q=title:(Epitome of the Almagest) AND mediatype:texts,200,4,first=bwb_C0-ACL-950_16
+archive.org,https://archive.org/advancedsearch.php?q=title:(Methodus incrementorum) AND mediatype:texts,200,4,first=UFIE003454_TO0324_PNI-2529_000000
+archive.org,https://archive.org/advancedsearch.php?q=title:(Arithmetica infinitorum) AND mediatype:texts,200,1,first=ArithmeticaInfinitorum
+archive.org,https://archive.org/advancedsearch.php?q=title:(Varia opera) AND creator:(Fermat) AND mediatype:texts,200,6,first=bub_gb_6hYOAAAAQAAJ
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cours d'analyse) AND creator:(Cauchy) AND mediatype:texts,200,3,first=coursdanalysedel00cauc
+archive.org,https://archive.org/advancedsearch.php?q=title:(Nouvelles methodes pour la determination des orbites) AND mediatype:texts,200,7,first=nouvellesmthode00legegoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Tabulae alphonsinae) AND mediatype:texts,200,1,first=CFIE011642_TO0324_PNI-17329_000000
+archive.org,https://archive.org/advancedsearch.php?q=title:(Book of fixed stars) AND mediatype:texts,200,4,first=tapas-io-133158-book-of-fixed-stars
+archive.org,https://archive.org/advancedsearch.php?q=title:(Al-Battani) AND mediatype:texts,200,1,first=AlBattani
+archive.org,https://archive.org/advancedsearch.php?q=title:(Port Royal logic) AND mediatype:texts,200,9,first=cihm_06396
+archive.org,https://archive.org/advancedsearch.php?q=title:(Art of thinking) AND creator:(Arnauld) AND mediatype:texts,200,11,first=logicorartofthin00arna
+archive.org,https://archive.org/advancedsearch.php?q=title:(Summa logicae) AND creator:(Ockham) AND mediatype:texts,200,6,first=ockhamstheoryoft0000will_x6f5
+archive.org,https://archive.org/advancedsearch.php?q=title:(Summulae logicales) AND mediatype:texts,200,24,first=bub_gb_Qjg8AAAAcAAJ
+archive.org,https://archive.org/advancedsearch.php?q=title:(De institutione arithmetica) AND mediatype:texts,200,9,first=DeInstitutioneArithmeticaLibriDuoDeInstitutioneMusicaLibriQuinque
+archive.org,https://archive.org/advancedsearch.php?q=title:(Iamblichus) AND title:(arithmetic) AND mediatype:texts,200,3,first=theology-arithmetic-iamblichus-berserker-books
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sextus Empiricus) AND mediatype:texts,200,53,first=in.ernet.dli.2015.183448
+archive.org,https://archive.org/advancedsearch.php?q=title:(Institutio logica) AND creator:(Galen) AND mediatype:texts,200,1,first=eisaggdialektik00kalbgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Martianus Capella) AND mediatype:texts,200,19,first=ned-kbn-all-00004630-001
+archive.org,https://archive.org/advancedsearch.php?q=title:(De temporum ratione) AND mediatype:texts,200,15,first=fthmmamachiadjo00mamagoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Vitruvius) AND title:(architecture) AND mediatype:texts,200,70,first=bwb_S0-ATG-230
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ten books on architecture) AND mediatype:texts,200,20,first=vitruviustenbook00vitr
+archive.org,https://archive.org/advancedsearch.php?q=title:(Clavis mathematicae) AND mediatype:texts,200,4,first=bim_early-english-books-1641-1700_clavis-mathematic-_oughtred-william_1693
+archive.org,https://archive.org/advancedsearch.php?q=title:(Essay d'analyse sur les jeux de hazard) AND mediatype:texts,200,2,first=ldpd_6444894_000
+archive.org,https://archive.org/advancedsearch.php?q=title:(Harmonices mundi) AND mediatype:texts,200,2,first=den-kbd-pil-22002200031E-001
+archive.org,https://archive.org/advancedsearch.php?q=title:(Mysterium cosmographicum) AND mediatype:texts,200,2,first=ioanniskepplerih00kepl
+archive.org,https://archive.org/advancedsearch.php?q=title:(Tetrabiblos) AND mediatype:texts,200,20,first=L350ManethoHistoryOfEgyptPtolemyTetrabiblos_201312
+archive.org,https://archive.org/advancedsearch.php?q=title:(Handy tables) AND creator:(Ptolemy) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Conics) AND creator:(Apollonius) AND mediatype:texts,200,2,first=conicsbooksiivon0000apol
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sphaerica) AND creator:(Menelaus) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Phaenomena) AND creator:(Aratus) AND mediatype:texts,200,13,first=bub_gb_mFAUAAAAYAAJ
+archive.org,https://archive.org/advancedsearch.php?q=title:(Commentary on Aratus) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Data) AND creator:(Euclid) AND mediatype:texts,200,21,first=ita-bnc-mag-00000822-001
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sand-reckoner) AND mediatype:texts,200,3,first=archimedessandreckonervardi
+archive.org,https://archive.org/advancedsearch.php?q=title:(Prior analytics) AND mediatype:texts,200,16,first=L325AristotleIPriorAnalytics
+archive.org,https://archive.org/advancedsearch.php?q=title:(Organon) AND creator:(Aristotle) AND mediatype:texts,200,38,first=selectionsfromor00aris
+archive.org,https://archive.org/advancedsearch.php?q=title:(Topics) AND creator:(Aristotle) AND mediatype:texts,200,2,first=g.-e.-l.-owen-ed.-aristotle-on-dialectic.-the-topics.-proceedings-of-the-third-s
+archive.org,https://archive.org/advancedsearch.php?q=title:(De revolutionibus) AND mediatype:texts,200,21,first=jbc.bj.uj.edu.pl.NDIGSTDR095415
+archive.org,https://archive.org/advancedsearch.php?q=title:(Prutenic tables) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Historia coelestis) AND creator:(Flamsteed) AND mediatype:texts,200,5,first=historia-coelestis-britannica-vol.-1
+archive.org,https://archive.org/advancedsearch.php?q=title:(Theoria motus corporum coelestium) AND mediatype:texts,200,3,first=ldpd_9098047_000
+archive.org,https://archive.org/advancedsearch.php?q=title:(Mecanique analytique) AND mediatype:texts,200,31,first=seminairedemecan0000maur
+archive.org,https://archive.org/advancedsearch.php?q=title:(Traite de mecanique celeste) AND mediatype:texts,200,31,first=traitlmentaired01rsgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Was sind und was sollen die Zahlen) AND mediatype:texts,200,6,first=wassindundwasso00dedegoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Studies in logic) AND creator:(Peirce) AND mediatype:texts,200,4,first=studiesinlogic00peiruoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Symbolic logic) AND creator:(Dodgson) AND mediatype:texts,200,1,first=dodgson-venn-symbolic-logic
+archive.org,https://archive.org/advancedsearch.php?q=title:(Pure logic) AND creator:(Jevons) AND mediatype:texts,200,5,first=purelogicorlogi00jevogoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Principles of science) AND creator:(Jevons) AND mediatype:texts,200,34,first=theprinciplesofs00jevoiala
+archive.org,https://archive.org/advancedsearch.php?q=title:(Laws of thought) AND mediatype:texts,200,117,first=treatiseonlogico0000bowe
+archive.org,https://archive.org/advancedsearch.php?q=title:(Elements of quaternions) AND mediatype:texts,200,32,first=elementsofquater01hami
+archive.org,https://archive.org/advancedsearch.php?q=title:(Lectures on quaternions) AND mediatype:texts,200,9,first=lecturesonquate01hamigoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Vorlesungen uber die Algebra der Logik) AND mediatype:texts,200,7,first=vorlesungenberd01mlgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Formulaire de mathematiques) AND mediatype:texts,200,11,first=rcin.org.pl.WA35_115313_6452_Additions_88574
+archive.org,https://archive.org/advancedsearch.php?q=title:(General trattato) AND creator:(Tartaglia) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Liber de ludo aleae) AND mediatype:texts,200,1,first=bookongamesofcha00card
+archive.org,https://archive.org/advancedsearch.php?q=title:(Doctrine of chances) AND mediatype:texts,200,31,first=jstor-105741
+archive.org,https://archive.org/advancedsearch.php?q=title:(Lady's diary) AND Kirkman AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cambridge and Dublin mathematical journal) AND mediatype:texts,200,42,first=sim_cambridge-and-dublin-mathematical-journal_1848_7_index
+archive.org,https://archive.org/advancedsearch.php?q=title:(Systematische Entwicklung) AND creator:(Steiner) AND mediatype:texts,200,5,first=systematischeen00steigoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Recherches sur une nouvelle espece de carres magiques) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Solutio problematis ad geometriam situs) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Commentationes) AND creator:(Euler) AND mediatype:texts,200,1,first=bub_gb_K2JDAAAAcAAJ
+archive.org,https://archive.org/advancedsearch.php?q=title:(Nine chapters on the mathematical art) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sea island mathematical manual) AND mediatype:texts,200,1,first=isbn_2083776009956
+archive.org,https://archive.org/advancedsearch.php?q=title:(Zhoubi) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Chou pei) AND mediatype:texts,200,8,first=gaohunlidiansuan0000jian
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sun Tzu suan ching) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Algebra of Omar Khayyam) AND mediatype:texts,200,2,first=bwb_C0-DAL-760
+archive.org,https://archive.org/advancedsearch.php?q=title:(Miftah al-hisab) AND mediatype:texts,200,2,first=al-kashis-miftah-al-hisab-volume-ii-geometry-translation-and-commentary-1st-ed-9
+archive.org,https://archive.org/advancedsearch.php?q=title:(Book of the fixed stars) AND creator:(Sufi) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Toledan tables) AND mediatype:texts,200,1,first=DOP30_05_Lapithes_and_Pingree
+archive.org,https://archive.org/advancedsearch.php?q=title:(Alfonsine tables) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Epitome in Almagestum) AND mediatype:texts,200,2,first=ARes10419
+archive.org,https://archive.org/advancedsearch.php?q=title:(Theoricae novae planetarum) AND mediatype:texts,200,14,first=ita-bnc-in1-00000266-001
+archive.org,https://archive.org/advancedsearch.php?q=title:(De sphaera) AND creator:(Sacrobosco) AND mediatype:texts,200,19,first=bub_gb_xCgWSi-PwPwC
+archive.org,https://archive.org/advancedsearch.php?q=title:(Computus) AND creator:(Bede) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(De temporibus) AND creator:(Bede) AND mediatype:texts,200,1,first=venerabilisbedae00bede_0
+archive.org,https://archive.org/advancedsearch.php?q=title:(On the sphere and cylinder) AND mediatype:texts,200,7,first=worksarchimedes00archgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Measurement of a circle) AND mediatype:texts,200,2,first=ERIC_ED606937
+archive.org,https://archive.org/advancedsearch.php?q=title:(Quadrature of the parabola) AND mediatype:texts,200,2,first=jstor-2971913
+archive.org,https://archive.org/advancedsearch.php?q=title:(Method) AND creator:(Archimedes) AND title:(Heath) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cattle problem) AND Archimedes AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Introduction to the phenomena) AND creator:(Geminus) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cleomedes) AND mediatype:texts,200,3,first=ita-bnc-in2-00001713-002
+archive.org,https://archive.org/advancedsearch.php?q=title:(Hypotyposis) AND mediatype:texts,200,25,first=lutheranismi-hypotyposis-opera-omnia-vol.-ii-pars-ii-s.-laurentii-a-brundusio-3-16
+archive.org,https://archive.org/advancedsearch.php?q=title:(Almagest) AND creator:(Toomer) AND mediatype:texts,200,1,first=ptolemys-almagest-toomer
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ptolemy's Almagest) AND mediatype:texts,200,10,first=ptolemys-almagest-toomer
+archive.org,https://archive.org/advancedsearch.php?q=title:(Astronomical cuneiform texts) AND creator:(Neugebauer) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Exact sciences in antiquity) AND creator:(Neugebauer) AND mediatype:texts,200,9,first=bwb_P9-EAT-197
+archive.org,https://archive.org/advancedsearch.php?q=title:(Babylonian astronomical diaries) AND mediatype:texts,200,2,first=NewInformationOnAntiochusIvFromBabylonianAstronomicalDiaries
+archive.org,https://archive.org/advancedsearch.php?q=title:(MUL.APIN) AND mediatype:texts,200,1,first=IA41536527_0081
+archive.org,https://archive.org/advancedsearch.php?q=title:(Venus tablets of Ammisaduqa) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Rhind mathematical papyrus) AND mediatype:texts,200,6,first=rhindmathematica0000robi_h8l4
+archive.org,https://archive.org/advancedsearch.php?q=title:(Moscow mathematical papyrus) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Plimpton 322) AND mediatype:texts,200,2,first=arxiv-1004.0025
+archive.org,https://archive.org/advancedsearch.php?q=title:(Antikythera) AND mediatype:texts,200,12,first=manualzilla-id-6507866
+archive.org,https://archive.org/advancedsearch.php?q=title:(Dresden codex) AND mediatype:texts,200,14,first=commentary-of-dresden-codex
+archive.org,https://archive.org/advancedsearch.php?q=title:(Codex Dresdensis) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Paris codex maya) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Pingala) AND mediatype:texts,200,41,first=lvdl-chhandah-sutram-the-prosody-of-pingala-by-pingala-
+archive.org,https://archive.org/advancedsearch.php?q=title:(Chandahsutra) AND mediatype:texts,200,1,first=etnz_chandahsutra-of-pingalacharyawithcommentary-of-halayudha-visvanathasastri-1874-b
+archive.org,https://archive.org/advancedsearch.php?q=title:(Vedic metre) AND mediatype:texts,200,5,first=VedicMetreItsHistoricDevelopment-E.VernonArnold
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ashtadhyayi) AND mediatype:texts,200,235,first=FrjW_ashtadhyayi-prakashika-compiled-by-yudhisthir-mimasak-annotted-by-dev-prakash-pa
+archive.org,https://archive.org/advancedsearch.php?q=title:(Nyaya sutra) AND mediatype:texts,200,44,first=ZQpv_nyaya-sutra-with-vatsyayana-and-nyaya-vartika-and-tatparya-tika-commentary-ed-by
+archive.org,https://archive.org/advancedsearch.php?q=title:(Prior Analytics) AND creator:(Aristotle) AND mediatype:texts,200,3,first=aristotleorganon0000aris
+archive.org,https://archive.org/advancedsearch.php?q=title:(Boethius) AND title:(arithmetic) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Fibonacci's Liber abaci) AND mediatype:texts,200,1,first=laurence-sigler-fibonaccis-liber-abaci-2003
+archive.org,https://archive.org/advancedsearch.php?q=title:(Liber quadratorum) AND mediatype:texts,200,1,first=jstor-2974039
+archive.org,https://archive.org/advancedsearch.php?q=title:(De numeris datis) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Algorismus) AND creator:(Sacrobosco) AND mediatype:texts,200,4,first=PlimptonMS185_20
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ground of artes) AND mediatype:texts,200,3,first=bim_early-english-books-1475-1640_the-ground-of-artes-tea_record-robert_1558
+archive.org,https://archive.org/advancedsearch.php?q=title:(Record's) AND arithmetic AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Bachet) AND mediatype:texts,200,9,first=Herbier-Vassal_220MTP1
+archive.org,https://archive.org/advancedsearch.php?q=title:(Recreations mathematiques) AND mediatype:texts,200,61,first=rcrationsmathma09lucagoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Problemes plaisants et delectables) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Lady's and gentleman's diary) AND mediatype:texts,200,10,first=2565085R.nlm.nih.gov
+archive.org,https://archive.org/advancedsearch.php?q=title:(Kirkman) AND schoolgirls AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Euler) AND title:(bridge) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Konigsberg) AND mediatype:texts,200,592,first=bub_gb_sg5PAAAAcAAJ
+archive.org,https://archive.org/advancedsearch.php?q=title:(Latin squares) AND Euler AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Derangements) AND mediatype:texts,200,196,first=arxiv-math0510132
+archive.org,https://archive.org/advancedsearch.php?q=title:(Montmort) AND mediatype:texts,200,2,first=IA41546022_0068
+archive.org,https://archive.org/advancedsearch.php?q=title:(Bernoulli) AND title:(Ars) AND mediatype:texts,200,5,first=jacobibernoullia0000unse
+archive.org,https://archive.org/advancedsearch.php?q=title:(Laplace) AND title:(Essai philosophique) AND mediatype:texts,200,2,first=bub_gb_wAdmU2e2unAC
+archive.org,https://archive.org/advancedsearch.php?q=title:(Essai philosophique sur les probabilites) AND mediatype:texts,200,13,first=essaiphilosophiq00lapluoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Theorie analytique des probabilites) AND mediatype:texts,200,4,first=theorieanaldepro00laplrich
+archive.org,https://archive.org/advancedsearch.php?q=title:(Legendre) AND title:(least squares) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Nouvelles methodes) AND Legendre AND mediatype:texts,200,7,first=nouvellesmthode00legegoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Gauss) AND title:(least squares) AND mediatype:texts,200,3,first=DTIC_ADA139080
+archive.org,https://archive.org/advancedsearch.php?q=title:(Theoria combinationis) AND mediatype:texts,200,3,first=theoriacombinat00gausgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Method of least squares) AND mediatype:texts,200,164,first=adjustmentobser01hayfgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Newton) AND title:(Methodus fluxionum) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Method of fluxions) AND mediatype:texts,200,28,first=philtrans04393408
+archive.org,https://archive.org/advancedsearch.php?q=title:(Treatise of fluxions) AND creator:(Maclaurin) AND mediatype:texts,200,5,first=10053650bsb
+archive.org,https://archive.org/advancedsearch.php?q=title:(Taylor) AND title:(incrementorum) AND mediatype:texts,200,3,first=UFIE003454_TO0324_PNI-2529_000000
+archive.org,https://archive.org/advancedsearch.php?q=title:(Methodus differentialis) AND mediatype:texts,200,10,first=10053880bsb
+archive.org,https://archive.org/advancedsearch.php?q=title:(Wallis) AND title:(Arithmetica infinitorum) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Oughtred) AND mediatype:texts,200,12,first=bim_early-english-books-1641-1700_guilelmi-oughtred-_oughtred-william_1677
+archive.org,https://archive.org/advancedsearch.php?q=title:(Stevin) AND title:(decimal) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Disme) AND Stevin AND mediatype:texts,200,2,first=bim_early-english-books-1475-1640_disme-the-art-of-tenths_stevin-simon_1608
+archive.org,https://archive.org/advancedsearch.php?q=title:(La Disme) AND mediatype:texts,200,4,first=arrestsnotablesd00fran
+archive.org,https://archive.org/advancedsearch.php?q=title:(Bombelli) AND algebra AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cardan) AND title:(Ars magna) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Tartaglia) AND mediatype:texts,200,55,first=gov.uscourts.cand.306442
+archive.org,https://archive.org/advancedsearch.php?q=title:(Quesiti) AND Tartaglia AND mediatype:texts,200,1,first=bub_gb_1Z5k28O8RBcC
+archive.org,https://archive.org/advancedsearch.php?q=title:(Pacioli) AND mediatype:texts,200,10,first=pacioli-luca.-la-divina-proporcion-ocr-1509-1946
+archive.org,https://archive.org/advancedsearch.php?q=title:(Summa) AND Pacioli AND mediatype:texts,200,1,first=summa-de-arithmetica-geometria-proportioni-et-proportionalita
+archive.org,https://archive.org/advancedsearch.php?q=title:(Fibonacci) AND title:(abaci) AND mediatype:texts,200,3,first=liber-abaci-o-livro-do-calculo-leonardo-fibonacci
+archive.org,https://archive.org/advancedsearch.php?q=title:(Scritti di Leonardo Pisano) AND mediatype:texts,200,7,first=sopratrescritti00genogoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Khayyam) AND algebra AND mediatype:texts,200,3,first=bwb_S0-AYG-042
+archive.org,https://archive.org/advancedsearch.php?q=title:(Omar Khayyam) AND mediatype:texts,200,420,first=20260925_20260925_0859
+archive.org,https://archive.org/advancedsearch.php?q=title:(Al-Khwarizmi) AND mediatype:texts,200,18,first=al-khwarizmi-ice-em-mathematics-year-8-third-edition
+archive.org,https://archive.org/advancedsearch.php?q=title:(Robert of Chester) AND algebra AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Colebrooke) AND Brahmagupta AND mediatype:texts,200,3,first=1817-henry-colebrooke-algebra-with-arithmetic-and-mensuration-from-the-sanskrit-of-br
+archive.org,https://archive.org/advancedsearch.php?q=title:(Bhaskara) AND mediatype:texts,200,265,first=revishnubhaskara00tuka
+archive.org,https://archive.org/advancedsearch.php?q=title:(Surya siddhanta) AND mediatype:texts,200,90,first=GrWm_surya-siddhanta-purvottar-khand-samagra-with-gudartha-prakasha-sanskrit-and-hind
+archive.org,https://archive.org/advancedsearch.php?q=title:(Suryasiddhanta) AND mediatype:texts,200,7,first=suryasiddhantawithcommentaryjivanandvidyasagara1891319320344_202003_16_x
+archive.org,https://archive.org/advancedsearch.php?q=title:(Pancasiddhantika) AND mediatype:texts,200,1,first=pancasiddhantika1_1970
+archive.org,https://archive.org/advancedsearch.php?q=title:(Almagest) AND Greek AND mediatype:texts,200,26,first=December71972
+archive.org,https://archive.org/advancedsearch.php?q=title:(Heiberg) AND Almagest AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Syntaxis mathematica) AND mediatype:texts,200,2,first=bwb_T5-ARH-826
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ptolemaeus) AND mediatype:texts,200,33,first=IA41546008_0001
+archive.org,https://archive.org/advancedsearch.php?q=title:(Copernicus) AND revolutionibus AND mediatype:texts,200,11,first=uncenteringearth0000voll_f2t2
+archive.org,https://archive.org/advancedsearch.php?q=title:(Kepler) AND title:(Astronomia nova) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Kepler) AND title:(Harmonice) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Kepler) AND Rudolphine AND mediatype:texts,200,1,first=kepleruniverseho0000love
+archive.org,https://archive.org/advancedsearch.php?q=title:(Reinhold) AND Prutenicae AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Flamsteed) AND mediatype:texts,200,63,first=bub_gb_0h45L_66bcYC
+archive.org,https://archive.org/advancedsearch.php?q=title:(Halley) AND astronomical AND mediatype:texts,200,26,first=NASA_NTRS_Archive_19830027693
+archive.org,https://archive.org/advancedsearch.php?q=title:(Bradley) AND aberration AND mediatype:texts,200,5,first=reductionobserv00bradgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Mayer) AND lunar AND tables AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Bessel) AND mediatype:texts,200,687,first=bwb_S0-BKW-784
+archive.org,https://archive.org/advancedsearch.php?q=title:(Leverrier) AND mediatype:texts,200,5,first=jstor-1005267
+archive.org,https://archive.org/advancedsearch.php?q=title:(Newcomb) AND tables AND mediatype:texts,200,1,first=paper-doi-10_1093_mnras_51_3_110
+archive.org,https://archive.org/advancedsearch.php?q=title:(Peurbach) AND mediatype:texts,200,3,first=11708335bsb
+archive.org,https://archive.org/advancedsearch.php?q=title:(Regiomontanus) AND mediatype:texts,200,17,first=ita-bnc-in1-00000266-001
+archive.org,https://archive.org/advancedsearch.php?q=title:(Epytoma) AND Almagest AND mediatype:texts,200,1,first=EpytomaIoannisd00Regi
+archive.org,https://archive.org/advancedsearch.php?q=title:(Alphonsine) AND mediatype:texts,200,31,first=alphonsineoulate00servuoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Alfonsi) AND tabulae AND mediatype:texts,200,3,first=Alfonso1524
+archive.org,https://archive.org/advancedsearch.php?q=title:(Toledo) AND astronomical AND tables AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Zarqali) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Azarquiel) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Battani) AND mediatype:texts,200,17,first=gov.uscourts.cacd.664212
+archive.org,https://archive.org/advancedsearch.php?q=title:(Albategnius) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Biruni) AND mediatype:texts,200,34,first=ceXB_al-biruni-his-times-life-and-works-by-hakim-said-and-dr.-a.-zahid-venus-publishing-house-sringa
+archive.org,https://archive.org/advancedsearch.php?q=title:(Alberuni) AND mediatype:texts,200,14,first=KitabiAlberuniFiTahqeeqMaaLilHindArabicI000269
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sufi) AND stars AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ulugh) AND mediatype:texts,200,10,first=paper-doi-10_1038_100185a0
+archive.org,https://archive.org/advancedsearch.php?q=title:(Nasir) AND Tusi AND mediatype:texts,200,6,first=ERIC_EJ1116020
+archive.org,https://archive.org/advancedsearch.php?q=title:(Kashi) AND mediatype:texts,200,2311,first=iycz_263-shuka-ashtakam-devanagari-kashi-maharani-manuscript-collection
+archive.org,https://archive.org/advancedsearch.php?q=title:(Chaucer) AND astrolabe AND mediatype:texts,200,46,first=completeworksge01unkngoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Astrolabe) AND mediatype:texts,200,72,first=planisphericastr0000vari
+archive.org,https://archive.org/advancedsearch.php?q=title:(Planisphaerium) AND mediatype:texts,200,9,first=bub_gb_gpY6frtXgMkC
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sacrobosco) AND mediatype:texts,200,20,first=lasferadimesserg00sacr
+archive.org,https://archive.org/advancedsearch.php?q=title:(Bede) AND reckoning AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Censorinus) AND mediatype:texts,200,14,first=bim_early-english-books-1641-1700_censorinus-de-die-natal_1695
+archive.org,https://archive.org/advancedsearch.php?q=title:(Macrobius) AND mediatype:texts,200,25,first=macrobiusfrancis00macruoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Capella) AND mediatype:texts,200,446,first=isbn_9780536956224
+archive.org,https://archive.org/advancedsearch.php?q=title:(Geminus) AND mediatype:texts,200,37,first=zootaxa-305-001-001
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cleomedes) AND mediatype:texts,200,3,first=ita-bnc-in2-00001713-002
+archive.org,https://archive.org/advancedsearch.php?q=title:(Theon of Smyrna) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Theon of Alexandria) AND mediatype:texts,200,1,first=historical_biography_theon_of_alexandria
+archive.org,https://archive.org/advancedsearch.php?q=title:(Proclus) AND mediatype:texts,200,121,first=jstor-2369752
+archive.org,https://archive.org/advancedsearch.php?q=title:(Nicomachus) AND mediatype:texts,200,28,first=euclidarchimedes0000vari
+archive.org,https://archive.org/advancedsearch.php?q=title:(Iamblichus) AND mediatype:texts,200,50,first=dillon-in-platonis-dialogorum-fragmenta-gr-en-1973
+archive.org,https://archive.org/advancedsearch.php?q=title:(Boethius) AND mediatype:texts,200,251,first=historyofliterat0000unse
+archive.org,https://archive.org/advancedsearch.php?q=title:(Diophantus) AND mediatype:texts,200,18,first=diophantusdiopha0000bash_f6v7
+archive.org,https://archive.org/advancedsearch.php?q=title:(Apollonius of Perga) AND mediatype:texts,200,9,first=bwb_Y0-CIC-207_2
+archive.org,https://archive.org/advancedsearch.php?q=title:(Aristarchus) AND mediatype:texts,200,45,first=NASA_NTRS_Archive_20110002762
+archive.org,https://archive.org/advancedsearch.php?q=title:(On the sizes and distances) AND mediatype:texts,200,5,first=aristarchusofsam00heatuoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Eratosthenes) AND mediatype:texts,200,49,first=geschichtedergr01schagoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sieve) AND Eratosthenes AND mediatype:texts,200,17,first=Sieve_of_Eratosthenes_2001-04-01_Wada_Eiiti
+archive.org,https://archive.org/advancedsearch.php?q=title:(Euclid) AND Heath AND volume AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Elements of Euclid) AND mediatype:texts,200,246,first=cihm_64917
+archive.org,https://archive.org/advancedsearch.php?q=title:(Byrne) AND Euclid AND mediatype:texts,200,1,first=ByrneOFirstSixBooksOfTheElementsOfEuclid1847
+archive.org,https://archive.org/advancedsearch.php?q=title:(Barrow) AND Euclid AND mediatype:texts,200,5,first=bim_eighteenth-century_elements-english-eucl_euclid_1714
+archive.org,https://archive.org/advancedsearch.php?q=title:(Billingsley) AND Euclid AND mediatype:texts,200,1,first=svg-euclid-1570-billingsley-and-1928-heath
+archive.org,https://archive.org/advancedsearch.php?q=title:(Commandino) AND Euclid AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Adelard) AND Euclid AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Aristotle) AND analytics AND mediatype:texts,200,30,first=alexanderofaphro0000unse
+archive.org,https://archive.org/advancedsearch.php?q=title:(Aristotle) AND sophistical AND mediatype:texts,200,8,first=aristotleonsophi0000aris
+archive.org,https://archive.org/advancedsearch.php?q=title:(Aristotle) AND interpretation AND mediatype:texts,200,42,first=rightpracticalre0000west
+archive.org,https://archive.org/advancedsearch.php?q=title:(Aristotle) AND categories AND mediatype:texts,200,39,first=porphyry-on-aristotle-categories
+archive.org,https://archive.org/advancedsearch.php?q=title:(Posterior analytics) AND mediatype:texts,200,26,first=aristotleposteri0000hugh
+archive.org,https://archive.org/advancedsearch.php?q=title:(Diogenes Laertius) AND mediatype:texts,200,43,first=L184DiogenesLaertiusLivesOfEminentPhilosophersII610
+archive.org,https://archive.org/advancedsearch.php?q=title:(Galen) AND logic AND mediatype:texts,200,1,first=pubmed-PMC3678808
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cicero) AND topica AND mediatype:texts,200,2,first=cicero-in-28-volumes.-vol.-2-loeb-386
+archive.org,https://archive.org/advancedsearch.php?q=title:(Aulus Gellius) AND mediatype:texts,200,82,first=atticnightsofaul0003aulu
+archive.org,https://archive.org/advancedsearch.php?q=title:(Attic nights) AND mediatype:texts,200,55,first=bwb_P9-AFO-017
+archive.org,https://archive.org/advancedsearch.php?q=title:(Peter of Spain) AND mediatype:texts,200,7,first=cihm_62262
+archive.org,https://archive.org/advancedsearch.php?q=title:(William of Sherwood) AND mediatype:texts,200,12,first=pianomasterytalk00brow
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ockham) AND logic AND mediatype:texts,200,17,first=the-cambridge-companion-to-ockham-by-paul-vincent-spade
+archive.org,https://archive.org/advancedsearch.php?q=title:(Port-Royal) AND logic AND mediatype:texts,200,13,first=artofthinkingpor0000arna
+archive.org,https://archive.org/advancedsearch.php?q=title:(Arnauld) AND logic AND mediatype:texts,200,2,first=logiquedeportroy00arnauoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Nicole) AND logic AND mediatype:texts,200,4,first=logiquedeportroy00arnauoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Leibniz) AND combinatoria AND mediatype:texts,200,3,first=leibniz-escritos-filosoficos-edicion-critica
+archive.org,https://archive.org/advancedsearch.php?q=title:(Leibniz) AND binary AND mediatype:texts,200,303,first=leibniz00sawr
+archive.org,https://archive.org/advancedsearch.php?q=title:(Explication de l'arithmetique binaire) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Boole) AND mediatype:texts,200,54,first=arxiv-quant-ph0406004
+archive.org,https://archive.org/advancedsearch.php?q=title:(De Morgan) AND logic AND mediatype:texts,200,10,first=interactivelogic0000vanb
+archive.org,https://archive.org/advancedsearch.php?q=title:(Venn) AND logic AND mediatype:texts,200,9,first=DTIC_ADA640827
+archive.org,https://archive.org/advancedsearch.php?q=title:(Jevons) AND logic AND mediatype:texts,200,1,first=studiesindeduct02jevogoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Peirce) AND logic AND mediatype:texts,200,107,first=collected-papers-of-charles-sanders-peirce-volumes-v-and-vi-pragmatism-and-pragmatism
+archive.org,https://archive.org/advancedsearch.php?q=title:(Frege) AND mediatype:texts,200,108,first=studyoffrege00walk
+archive.org,https://archive.org/advancedsearch.php?q=title:(Carroll) AND symbolic logic AND mediatype:texts,200,3,first=symboliclogicgam0000lewi
+archive.org,https://archive.org/advancedsearch.php?q=title:(Dodgson) AND mediatype:texts,200,52,first=P002333
+archive.org,https://archive.org/advancedsearch.php?q=title:(Schroder) AND logic AND mediatype:texts,200,1,first=richard-richie-schroeder-interview-series-richie-schroder-and-russ-earl
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ladd-Franklin) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Hamilton) AND quaternions AND mediatype:texts,200,23,first=lifeofsirwilliam0002grav
+archive.org,https://archive.org/advancedsearch.php?q=title:(Grassmann) AND Ausdehnungslehre AND mediatype:texts,200,6,first=anwendungderline00niem
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cantor) AND Mannigfaltigkeit AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Dedekind) AND Zahlen AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Peano) AND mediatype:texts,200,53,first=selectedworksofg0000pean
+archive.org,https://archive.org/advancedsearch.php?q=title:(Hilbert) AND Grundlagen AND mediatype:texts,200,3,first=clasicos-de-la-matematica-fundamentos-de-la-geometria-david-hilbert
+archive.org,https://archive.org/advancedsearch.php?q=title:(Rhind) AND papyrus AND mediatype:texts,200,12,first=lesprtendusprob00rodegoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Chace) AND Rhind AND mediatype:texts,200,1,first=arnoldbuffumchaceludlowbullhenryparkermanningtherhindmathematicalpapyrus.volumei
+archive.org,https://archive.org/advancedsearch.php?q=title:(Peet) AND Rhind AND mediatype:texts,200,1,first=Peet_1923
+archive.org,https://archive.org/advancedsearch.php?q=title:(Eisenlohr) AND papyrus AND mediatype:texts,200,2,first=corpuspapyorumae1231revi
+archive.org,https://archive.org/advancedsearch.php?q=title:(Moscow papyrus) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Struve) AND papyrus AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Mathematical cuneiform texts) AND mediatype:texts,200,2,first=mathematicalcune0000neug
+archive.org,https://archive.org/advancedsearch.php?q=title:(Neugebauer) AND mathematical AND cuneiform AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(MCT) AND Neugebauer AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Sachs) AND mathematical AND cuneiform AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Thureau-Dangin) AND mediatype:texts,200,2,first=rituelsaccadiens00thuruoft_202104
+archive.org,https://archive.org/advancedsearch.php?q=title:(Textes mathematiques babyloniens) AND mediatype:texts,200,1,first=textesmathmatiqu0000unse
+archive.org,https://archive.org/advancedsearch.php?q=title:(BM 13901) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(YBC 7289) AND mediatype:texts,200,1,first=18YBC7289
+archive.org,https://archive.org/advancedsearch.php?q=title:(Plimpton) AND mediatype:texts,200,395,first=PlimptonMS293_20
+archive.org,https://archive.org/advancedsearch.php?q=title:(Maya) AND Dresden AND mediatype:texts,200,13,first=trent_0199900055401
+archive.org,https://archive.org/advancedsearch.php?q=title:(Forstemann) AND Dresden AND mediatype:texts,200,1,first=the-complete-forstemann-version-of-the-dresden-codex
+archive.org,https://archive.org/advancedsearch.php?q=title:(Antikythera mechanism) AND mediatype:texts,200,8,first=pubmed-PMC4116162
+archive.org,https://archive.org/advancedsearch.php?q=title:(Price) AND gears AND Greeks AND mediatype:texts,200,1,first=de-solla-price-derek-gears-from-the-greeks
+archive.org,https://archive.org/advancedsearch.php?q=title:(Benedict) AND rule AND mediatype:texts,200,110,first=bim_early-english-books-1475-1640_the-rule-of-the-most-bli_benedict-saint-abbot_1632
+archive.org,https://archive.org/advancedsearch.php?q=title:(Horologium) AND mediatype:texts,200,68,first=10464576bsb
+archive.org,https://archive.org/advancedsearch.php?q=title:(Clepsydra) AND mediatype:texts,200,10,first=jstor-104800
+archive.org,https://archive.org/advancedsearch.php?q=title:(Water clocks) AND mediatype:texts,200,3,first=pubmed-PMC4059754
+archive.org,https://archive.org/advancedsearch.php?q=title:(Vitruvius) AND Morgan AND mediatype:texts,200,12,first=jstor-20022412
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ten books) AND Vitruvius AND mediatype:texts,200,25,first=vitruviustenbook00vitr
+archive.org,https://archive.org/advancedsearch.php?q=title:(Fasti) AND Roman AND calendar AND mediatype:texts,200,5,first=poemstranslation00tayluoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Ovid) AND Fasti AND mediatype:texts,200,39,first=fastiofovid0001jame
+archive.org,https://archive.org/advancedsearch.php?q=title:(Censorinus) AND birthday AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Geminos) AND mediatype:texts,200,7,first=geminos-introduction-to-the-phenomena
+archive.org,https://archive.org/advancedsearch.php?q=title:(Parapegma) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Meton) AND mediatype:texts,200,3,first=LatimDoClassicoEDoVestibularPorMetonDeAlencar
+archive.org,https://archive.org/advancedsearch.php?q=title:(Callippus) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Hipparchus) AND mediatype:texts,200,19,first=bub_gb_2MRQ_Nj1wJwC
+archive.org,https://archive.org/advancedsearch.php?q=title:(Precession) AND Hipparchus AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(On sizes and distances of the sun) AND mediatype:texts,200,4,first=aristarchusofsam00heatuoft
+archive.org,https://archive.org/advancedsearch.php?q=title:(Aristarchus of Samos) AND mediatype:texts,200,11,first=jstor-289285
+archive.org,https://archive.org/advancedsearch.php?q=title:(Heath) AND Aristarchus AND mediatype:texts,200,1,first=aristarchusofsam0000thom
+archive.org,https://archive.org/advancedsearch.php?q=title:(Greek astronomy) AND Heath AND mediatype:texts,200,5,first=aristarchusofsam00heat
+archive.org,https://archive.org/advancedsearch.php?q=title:(History of Greek mathematics) AND Heath AND mediatype:texts,200,16,first=ahistorygreekma00heatgoog
+archive.org,https://archive.org/advancedsearch.php?q=title:(Manual of Greek mathematics) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cantor) AND Vorlesungen AND Geschichte AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Tropfke) AND Geschichte AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cajori) AND history of mathematics AND mediatype:texts,200,2,first=FlorianCajori1915ZenosParadoxesTheoryOfLimitsIX
+archive.org,https://archive.org/advancedsearch.php?q=title:(Smith) AND history of mathematics AND mediatype:texts,200,5,first=mesamaryperry00smitrich
+archive.org,https://archive.org/advancedsearch.php?q=title:(Datta) AND history of Hindu mathematics AND mediatype:texts,200,6,first=historyofhindumathematicsbhibutibhushandattaavadeshnarayansinghvol1_343_D
+archive.org,https://archive.org/advancedsearch.php?q=title:(Needham) AND science and civilisation AND mediatype:texts,200,2,first=bombbookcompassj0000winc
+archive.org,https://archive.org/advancedsearch.php?q=title:(Mikami) AND mathematics in China AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Libbrecht) AND Chinese mathematics AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Shen Kua) AND mediatype:texts,200,5,first=kuashijicaitusha0004wang
+archive.org,https://archive.org/advancedsearch.php?q=title:(Dream pool essays) AND mediatype:texts,200,1,first=shen_kuo_dream_pool_essays_1095_chinese_trad
+archive.org,https://archive.org/advancedsearch.php?q=title:(Nine chapters) AND Shen AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Chemla) AND nine chapters AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Kangshen) AND nine chapters AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Lam Lay Yong) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Jiu zhang suan shu) AND mediatype:texts,200,1,first=jiuzhangsuanshu0000zeng
+archive.org,https://archive.org/advancedsearch.php?q=title:(Suan shu shu) AND mediatype:texts,200,145,first=jisuanjiruanjian0000unse_g8q0
+archive.org,https://archive.org/advancedsearch.php?q=title:(Zhangjiashan) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Cullen) AND suan AND mediatype:texts,200,2,first=astronomyandmathematicsinancientchinathezhoubisuanjingchristophercullen_909_B
+archive.org,https://archive.org/advancedsearch.php?q=title:(Astronomy and mathematics in ancient China) AND mediatype:texts,200,4,first=india.history.resource.91374
+archive.org,https://archive.org/advancedsearch.php?q=title:(Granting the seasons) AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Shoushi) AND calendar AND mediatype:texts,200,0,first=
+archive.org,https://archive.org/advancedsearch.php?q=title:(Yuan shih) AND calendar AND mediatype:texts,200,0,first=
+ia-metadata,https://archive.org/metadata/euclid-the-thirteen-books-of-the-elements-vol.-2/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/thirteenbooksofe00eucl/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/worksofarchimede0000tlhe/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/almagest00ptol/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/disquisitionesa00gaus/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/TO0E039714_TO0324_PNI-1692_000000/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bub_gb_HscAAAAAMAAJ/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/in.ernet.dli.2015.46372/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/symboliclogic0000venn/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/lilavatiofbhakaracharyaatreatiseonmensurationed.sudhakaradvivedichowkambhams_552_I/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/algebrawitharith00brahuoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/summa-de-arithmetica-geometria-proportioni-et-proportionalita/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ita-bnc-in1-00000266-001/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/geometryofrenede0000davi/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bim_early-english-books-1475-1640_arithmetica-logarithmica_briggs-h_1624/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/mirificilogarit00napi/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ruleofstbenedict0000bene_h9w2/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/opticksortreatis0000newt_r9k6/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ita-bnc-mag-00000844-001/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bub_gb_ryM0Kh6yLkwC/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/theoryofmotionof00gausuoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/1342TheAlgebraOfMohammedBenMusaAlKwarizmiInArabic/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/expoundingmathematicalseedtransofbhaskaraionmathematicalchapteraryabhatiyaagathekellervol2_473_j/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/varahamihiras-brihat-samhita-by-v-subrahmanya-sastri/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/biruni-1879-sachau-chronology-ancient-nations/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/MSEng0920_2/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/saturnaliaappara0001macr/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bim_early-english-books-1641-1700_censorinus-de-die-natal_1695/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/nicomachus-introduction-to-arithmetic/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/16990817/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/PappusDAlexandrieEd.PaulVerEeckeLaCollectionMathmatique/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/lalgebra00bomb/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/TheWhetstoneOfWitte/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/LiberAbaci/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/arsmagnaorruleso0000card/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/UFIE003454_TO0324_PNI-2529_000000/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ArithmeticaInfinitorum/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bub_gb_6hYOAAAAQAAJ/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/coursdanalysedel00cauc/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/nouvellesmthode00legegoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/CFIE011642_TO0324_PNI-17329_000000/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/tapas-io-133158-book-of-fixed-stars/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/AlBattani/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/logicorartofthin00arna/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ockhamstheoryoft0000will_x6f5/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bub_gb_Qjg8AAAAcAAJ/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/DeInstitutioneArithmeticaLibriDuoDeInstitutioneMusicaLibriQuinque/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/theology-arithmetic-iamblichus-berserker-books/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/in.ernet.dli.2015.183448/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/eisaggdialektik00kalbgoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ned-kbn-all-00004630-001/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/vitruviustenbook00vitr/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bim_early-english-books-1641-1700_clavis-mathematic-_oughtred-william_1693/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ldpd_6444894_000/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/den-kbd-pil-22002200031E-001/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ioanniskepplerih00kepl/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/L350ManethoHistoryOfEgyptPtolemyTetrabiblos_201312/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/conicsbooksiivon0000apol/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bub_gb_mFAUAAAAYAAJ/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ita-bnc-mag-00000822-001/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/archimedessandreckonervardi/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/L325AristotleIPriorAnalytics/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/jbc.bj.uj.edu.pl.NDIGSTDR095415/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/historia-coelestis-britannica-vol.-1/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/wassindundwasso00dedegoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/studiesinlogic00peiruoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/purelogicorlogi00jevogoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/theprinciplesofs00jevoiala/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/elementsofquater01hami/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/lecturesonquate01hamigoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/vorlesungenberd01mlgoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bookongamesofcha00card/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/Peet_1923/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/arnoldbuffumchaceludlowbullhenryparkermanningtherhindmathematicalpapyrus.volumei/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/mathematicalcune0000neug/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/textesmathmatiqu0000unse/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/18YBC7289/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/the-complete-forstemann-version-of-the-dresden-codex/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/de-solla-price-derek-gears-from-the-greeks/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/geminos-introduction-to-the-phenomena/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/aristarchusofsam00heatuoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ahistorygreekma00heatgoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/historyofhindumathematicsbhibutibhushandattaavadeshnarayansinghvol1_343_D/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/shen_kuo_dream_pool_essays_1095_chinese_trad/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/jiuzhangsuanshu0000zeng/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/astronomyandmathematicsinancientchinathezhoubisuanjingchristophercullen_909_B/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ByrneOFirstSixBooksOfTheElementsOfEuclid1847/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/svg-euclid-1570-billingsley-and-1928-heath/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/fastiofovid0001jame/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/lasferadimesserg00sacr/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/planisphericastr0000vari/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/KitabiAlberuniFiTahqeeqMaaLilHindArabicI000269/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/tabulaerudolphin00kepl/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/sphaeramundi00sacr/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/josephuswithengl02joseuoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/philosophiaenat00newt/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/summadearithmeti00paci/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/lilavati00bhas/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/geometryofrene00desc/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/arithmeticalogar00brig/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/ruleofstbenedict00bene/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/doctrineofchance00moiv/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/formallogicorthe00demouoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/investigationofl00bool/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/symboliclogic00venn/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/selectionsfromor00aris/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/aristotleposteri0000hugh/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/porphyry-on-aristotle-categories/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/L184DiogenesLaertiusLivesOfEminentPhilosophersII610/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/cicero-in-28-volumes.-vol.-2-loeb-386/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/atticnightsofaul0003aulu/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/artofthinkingpor0000arna/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/logiquedeportroy00arnauoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/dodgson-venn-symbolic-logic/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/symboliclogicgam0000lewi/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/studiesindeduct02jevogoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/anwendungderline00niem/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/clasicos-de-la-matematica-fundamentos-de-la-geometria-david-hilbert/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/lesprtendusprob00rodegoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/corpuspapyorumae1231revi/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/rituelsaccadiens00thuruoft_202104/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/jstor-104800/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/poemstranslation00tayluoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/historical_biography_theon_of_alexandria/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bub_gb_gpY6frtXgMkC/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/paper-doi-10_1038_100185a0/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/euclidarchimedes0000vari/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bwb_Y0-CIC-207_2/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bim_eighteenth-century_elements-english-eucl_euclid_1714/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/aristotleonsophi0000aris/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/traitlmentaired01rsgoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/rcin.org.pl.WA35_115313_6452_Additions_88574/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/jbc.bj.uj.edu.pl.NDIGSTDR081751/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/doctrinepermuta00newtgoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bub_gb_2MRQ_Nj1wJwC/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/geschichtedergr01schagoog/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/FlorianCajori1915ZenosParadoxesTheoryOfLimitsIX/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bim_early-english-books-1475-1640_the-rule-of-the-most-bli_benedict-saint-abbot_1632/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/bwb_S0-ATG-230/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/macrobiusfrancis00macruoft/metadata,200,1,"curated metadata re-verify, no error key"
+ia-metadata,https://archive.org/metadata/completeworksge01unkngoog/metadata,200,1,"curated metadata re-verify, no error key"
+archive.org,"https://archive.org/advancedsearch.php?q=title:(""Astronomical Cuneiform"")",200,0,edition hunt
+archive.org,"https://archive.org/advancedsearch.php?q=title:(""History of Ancient Mathematical Astronomy"")",200,4,edition hunt
+archive.org,"https://archive.org/advancedsearch.php?q=neugebauer ""exact sciences""",200,14,edition hunt
+archive.org,"https://archive.org/advancedsearch.php?q=title:(""Exact Sciences in Antiquity"")",200,11,edition hunt
+archive.org,https://archive.org/advancedsearch.php?q=title:(Lilavati) AND mediatype:texts,200,155,edition hunt
+archive.org,"https://archive.org/advancedsearch.php?q=title:(""Brahmasphutasiddhanta"")",200,9,edition hunt

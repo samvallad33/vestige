@@ -1,0 +1,1289 @@
+# Shard 9 — pre-1900 mathematics, logic, combinatorics, scheduling, astronomy
+
+Ninety ranking and index rules for the six weak slices. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629` on `perf/c2-step33-triangulation`. No engine code is changed here. Every rule is integer or ordinal, speaker-agnostic, and uses no domain word list. Closed-class particles are the stopwords already listed at `retrieval.rs:690`. Orthographic signals are delimiter depth, digit runs, and token length. Ranking never reads `ix.turns[ti].body`. New postings are `counts_len: false` so length damping cannot zero the witness. Nothing writes `rsb_seat_behind`.
+
+## Top 10 build order
+
+Slot-1 reorder inside the current top 5 cannot reach 90% on any of the six slices. The order below does the recalls the three short ceilings need, then the pool reselections that can clear Multi-Hop, summarization, and event ordering from turns already scored.
+
+1. **S9-001 Leibniz characteristic divisibility** (RECALL/INDEX, Open-Domain;instruction_following;preference_following). Open-Domain, instruction following, preference following. A full prime-exponent cover is posted length-free, so a turn BM25 drove to zero re-enters.
+
+2. **S9-063 Brahmagupta zero place-keeper** (RECALL/INDEX, Open-Domain;preference_following;instruction_following). Open-Domain, preference following, instruction following. A literal zero token keeps its column so later cues do not slide. Opposite of the Turin lacuna.
+
+3. **S9-064 Sunzi simultaneous residues** (RECALL/INDEX, Open-Domain;Multi-Hop). Open-Domain and Multi-Hop. Session index posted as the Sunzi residue modulo 3, 5, and 7, a new lookup key.
+
+4. **S9-009 Catalan delimiter depth** (RECALL/INDEX, instruction_following). Instruction following. Matched delimiter depth, which raw_tokens currently strips, becomes a posting.
+
+5. **S9-004 De Morgan conjunctive split** (RECALL/INDEX, preference_following;instruction_following). Preference following and instruction following. Negation of a conjunction posts each disjunct.
+
+6. **S9-002 Dictum de omni universal posting** (RECALL/INDEX, Open-Domain;Multi-Hop). Open-Domain and Multi-Hop. A content token present in every turn of a session is re-posted length-free.
+
+7. **S9-060 Single false position** (RECALL/INDEX, Multi-Hop;Open-Domain). Multi-Hop and Open-Domain. One false-position copy of the missing id, inside the session. Opposite of dropping the group.
+
+8. **S9-005 Pascal marginal residual** (ORDERING, Multi-Hop). Multi-Hop. The next seat is the scored turn that adds the cue class the selection lacks, the binomial marginal. This is the largest bucket: pool_not_k 83.
+
+9. **S9-008 Alligation mixture seat** (ORDERING, summarization). Summarization. The turn whose count vector is the integer sum of the others takes the seat. Wide-pool ceiling 34 clears the bar of 33.
+
+10. **S9-007 Cauchy inversion seat** (ORDERING, event_ordering;Multi-Hop). Event ordering. Fewest inversions of query content order against the stored token order, over the scored pool. Wide-pool ceiling 39 clears the bar of 36.
+
+## Algorithms
+
+### S9-001 Leibniz characteristic divisibility
+
+Leibniz's Dissertatio de arte combinatoria assigns each primitive concept a prime and each composite its product, so containment is divisibility. Euclid IX supplies unique factorization, so the test is exact. At ingest each content token id gets the prime of its ordinal in the sorted vocabulary and the turn stores the exponent vector. A query whose every exponent is <= the turn's exponent is a full cover even when length-normalized BM25 drove t_scene to 0. The new feat is counts_len false, so the witness itself cannot be length-damped. This does not retrieve a turn with no stored token overlap. Target: Open-Domain;instruction_following;preference_following. Miss pattern: OD no_pool 14; IF no_pool 5; PF no_pool 9. Length-damped full covers. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let p(i) be the i-th prime and e_t(id) the exponent of id in turn t. Admit t when for every query token id, e_t(id) >= e_q(id). Equivalent to N_q dividing N_t for N = product p(i)^e(i), compared by exponents so the product never overflows.
+
+**Rust sketch.** At the content Feat push, write exponents into DetHashMap<u32,u16> keyed by token id and post Feat { id: intern("\u{1}s9:char"), w: 1.0, counts_len: false, inheritable: false } only when the vector is nonempty. At rank, a turn whose exponents dominate the query vector receives that feat's hit and therefore t_scene > 0. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/ita-bnc-mag-00000844-001 (api: archive.org; era: 1666, Dissertatio de arte combinatoria; Euclid IX factorization).
+
+**Dedupe.** Not the dropped SAM product rule, which multiplies scores. This is exponent-wise divisibility of a prime encoding. Not a BM25 weight change and not Linear B's information residual.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-002 Dictum de omni universal posting
+
+The dictum de omni says that what is predicated of a whole class is predicated of each member. A content token id that occurs in every turn of one session is that class. It is re-posted onto each of those turns under a private-use id with counts_len false, so a long turn that literally contains the universal cue is not driven to t_scene 0 by length. The query emits the same id only for tokens that are universal in a candidate session already stored in the index. Perseus hopper text 1999.01.0052 was also fetched live and agrees that this is the Prior Analytics tradition; the Loeb-archive record above is the citation. Target: Open-Domain;Multi-Hop. Miss pattern: OD no_pool 14 and pool_not_k 35; MH no_pool 13. Session-universal cues zeroed by length. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For session s with n_s turns, token id c is universal iff the number of turns in s whose posting list contains c equals n_s. Post the witness on each of those turns. Admit when the query contains c and the turn carries the witness.
+
+**Rust sketch.** After the per-turn feat loop, a second pass counts token presence per session in a DetHashMap<(session, token), u32>. Where the count equals the session length, push the length-free universal feat on every turn of that session. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/L325AristotleIPriorAnalytics (api: archive.org; era: Aristotle, Prior Analytics, 4th century BCE).
+
+**Dedupe.** Not anuvrtti, which restores a token that was elided and is absent. Not Abusir header inheritance, which copies a header line. The token here is already present in every turn of the session.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-003 Contrapositive clause posting
+
+The contrapositive keeps the same force and swaps the two clauses around a closed-class conditional, with negation on both sides. The indexer already drops if/then/not as stopwords (STARTER_STOP at retrieval.rs:690). This posts a second structural field: the content-token ids on the right of the conditional, then the ids on the left, each flagged by the existing stopword negation. A query written in one order hits a turn stored in the other. No new domain lexicon. The clause cut is the existing stopword if/then, not a learned boundary. Target: preference_following;Open-Domain. Miss pattern: PF no_pool 9 and pool_not_k 14; OD pool_not_k 35. If-clause gold stored in the opposite order. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Clause split at the stopword if. Let L and R be the content-id sequences on each side. Post the pair (R, L) under the contrapositive key. Hit when the query's (Lq, Rq) equals the turn's (R, L) as id sequences, or the direct pair matches.
+
+**Rust sketch.** While scanning raw_tokens, which still contains stopwords, record content ids before and after the stopword if. Push two structural feats, direct and swapped, counts_len false. Query planning emits the same two keys from the query tokens. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/L325AristotleIPriorAnalytics (api: archive.org; era: Aristotle, Prior Analytics; the contrapositive is pre-1900 school logic).
+
+**Dedupe.** Not negation-scope and not ezib, which discount or exclude a negated span. This keeps both clauses and posts the swapped order. Not ergative order, which fixes two entity roles in one order.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-004 De Morgan conjunctive split
+
+De Morgan's Formal Logic (the 1847 calculus, catalog record verified) gives not(A and B) = (not A) or (not B), and the dual. Where a turn contains the stopword not over a span whose content tokens are joined by the stopword and, the indexer posts each negated content id as its own disjunct feat. A query that names only one disjunct can enter the pool. The particles are the existing stopwords not/and/or. This is a posting rule, not a score weight. Target: preference_following;instruction_following. Miss pattern: PF no_pool 9; IF no_pool 5 and pool_not_k 15. A negated conjunction never posted as its dual disjunction. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** If a span matches not (A and B) on stopword boundaries, post keys neg(A) and neg(B) as separate feats. Admit a turn when the query's content id set intersects the posted disjunct set and no contradicting positive feat of the same id is posted.
+
+**Rust sketch.** On the stopword scan, when not is followed by two or more content ids separated by and, push one counts_len-false feat per content id under the neg key. Query planning emits neg(id) when the query itself has the same stopword pattern. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/formallogicorthe00demouoft (api: archive.org; era: 1847, De Morgan Formal Logic; the dual laws are stated there).
+
+**Dedupe.** Not comparative partition, which splits a comparison into two sides. Not ezib exclusion, which drops a span. This posts the dual disjunction of a negated conjunction.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-005 Pascal marginal residual
+
+Pascal's Traité du triangle arithmétique (1665, metadata title verified this session) states C(n,k) = C(n-1,k) + C(n-1,k-1): the ways to cover k cues are the ways that omit the last cue plus the ways that use it. Among turns already scored (t_scene > 0), the selector's next seat is the turn that adds the cue class the current selection lacks, which is the second summand. MacTutor's Jia Xian biography was fetched and records the same addition rule earlier; the citation is Pascal's printed treatise. No entity list and no pair index. Target: Multi-Hop. Miss pattern: MH pool_not_k 83, the largest bucket on this slice. Gold is scored and left out of k. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let S be the set of query-term classes already covered by the selection and U the classes still uncovered. Choose t in remaining maximizing |classes(t) intersect U|, tie-broken by the smaller turn index. The binomial identity is the reason a cover of k is built by adding the marginal element, not by rescoring.
+
+**Rust sketch.** Inside the submodular loop that builds selected_turns from remaining, replace the gain test's tie with the integer marginal count |classes(t) intersect U|. Classes are the query term ids already on the plan, stored in a DetHashSet. No new weight. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/bub_gb_UqgUAAAAQAAJ (api: archive.org; era: 1665, Traité du triangle arithmétique).
+
+**Dedupe.** Not Hollerith, which stores every pair. Not Gemini's uncovered-entity rescue, which boosts a named entity. This is the binomial marginal over query term ids already in the plan.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-006 Inclusion-exclusion coverage key
+
+De Moivre's Doctrine of Chances computes the probability of a union by adding the singles and subtracting the double intersections. Used as a rank key among already-scored turns, a turn that repeats cues already covered loses the subtracted term, and a turn that adds a new cue keeps the single. The official selector therefore prefers the turn with the larger inclusion-exclusion residual against the current selection. Integer counts of term ids, not a probability weight. Target: Multi-Hop. Miss pattern: MH t5_not1 61 and pool_not_k 83. Rank key is a raw sum, so overlap is double-counted. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For selection S and candidate t, score(t) = |A_t| + |A_S| - 2|A_t intersect A_S|, computed as integer cardinalities of query-term id sets. Pick the strict maximum. Ties keep the earlier turn index.
+
+**Rust sketch.** In the remaining-selection loop, compute the residual with DetHashSet intersections of term ids already attached to each turn at ingest. Do not multiply by an idf weight and do not read bodies. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/TO0E039714_TO0324_PNI-1692_000000 (api: archive.org; era: 1718, de Moivre, The Doctrine of Chances).
+
+**Dedupe.** Not Step 32 trial balance, which checks that every predicate group is present. This ranks by the inclusion-exclusion residual of term-id sets. Not florilegium quota.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-007 Cauchy inversion seat
+
+The sign of a permutation is the parity of its inversions, the count used in 19th-century determinant expansions. Niemtschik's Anwendung der linealen Ausdehnungslehre auf die Theorie der Determinanten is the fetched treatise. Among scored turns, the one whose content-token sequence has the fewest inversions against the query's content-token order takes the seat. MacTutor's Cauchy biography was fetched as the parallel catalog of the permutation-sign tradition. This is an inversion count, not a 1938 rank correlation and not a tuned tau weight. Target: event_ordering;Multi-Hop. Miss pattern: EO pool_not_k 17 and t5_not1 7; MH t5_not1 61. Order of cues is ignored by the bag score. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let q1..qm be the query content ids in order and p the positions of those ids in the turn. inv = number of pairs i<j with p(i)>p(j). Seat the turn with the least inv. Compare by integers. A missing id counts as m inversions, so a fuller order-preserving cover beats a short one.
+
+**Rust sketch.** Store at ingest the sequence of content token ids in a side array parallel to the turn, not read at rank from body. The selector counts inversions of the query id list against that stored sequence with integer comparisons. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/anwendungderline00niem (api: archive.org; era: 19th century determinant theory; Grassmann lineale Ausdehnungslehre applied by Niemtschik).
+
+**Dedupe.** Not ergative order, which fixes two entity roles. Not the Harris matrix, which is a stratigraphic graph. Not Step 33 triangulation, which requires two unique argmaxes. This is the full inversion count.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-008 Alligation mixture seat
+
+Alligation, as Fibonacci states it in Liber Abaci, recovers a mixture whose contents are the integer sum of the components. Among scored turns in one session, if one turn's content-token multiset equals the integer sum of two or more other scored turns' multisets, that mixture turn is the summary and takes the first seat when the query's own multiset is componentwise <= the mixture. The gate is multiset equality, not a list of summary words. This is the opposite direction from memorandum-over-journal, which prefers the single transaction. Target: summarization. Miss pattern: SUM pool_not_k 9, k_not5 8, t5_not1 11. The mixture turn is scored and not seated first. Wide-pool ceiling is 34, bar is 33. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let m_t(id) be the stored count of content id in turn t. Turn M is a mixture of a set C of other turns when for every id, m_M(id) = sum_{t in C} m_t(id), and |C|>=2. If the query satisfies m_q(id) <= m_M(id) for every id, seat M first among the scored pool.
+
+**Rust sketch.** Counts are the ingest tf integers already in the index, copied into DetHashMap<u32,u32> per turn. The selector tests the vector equality by integer subtraction, remainder zero on every id. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/LiberAbaci (api: archive.org; era: 1202, Fibonacci Liber Abaci; the mixture rule is in the commercial chapters).
+
+**Dedupe.** Not memorandum-over-journal, which seats the single entry over the digest. Not florilegium quota. The mixture must be the exact integer sum, so a longer turn that merely contains the others does not qualify.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-009 Catalan delimiter depth
+
+The Catalan numbers count correctly matched bracket strings. raw_tokens splits on non-alphanumerics, so parentheses and brackets never become tokens and an instruction written as a nested list can score 0. At ingest, before tokenization, the raw prose's delimiter characters ()[]{} are counted and the maximum matched depth is posted as a length-free feat. A query with the same depth emits the same feat. MacTutor's Catalan page is the catalog record fetched for this count; no domain word list is required because the signal is orthographic. Target: instruction_following. Miss pattern: IF no_pool 5 and pool_not_k 15. Instruction-shaped turns whose brackets were stripped before indexing. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Scan the raw string. depth starts at 0; each opener adds 1, each closer subtracts 1. If depth stays >= 0 and ends at 0, post the maximum depth d as key s9:cat:d. Admit when the query's matched depth equals d.
+
+**Rust sketch.** In the ingest loop, before raw_tokens, compute d from the prose bytes. If the string is balanced and d > 0, push Feat { id: intern(format!("\u{1}s9:cat:{d}")), w: 1.0, counts_len: false, inheritable: false }. Query planning repeats the scan on the query string only. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://mathshistory.st-andrews.ac.uk/Biographies/Catalan/ (api: mactutor; era: Catalan 1838; MacTutor biography fetched. The count is the balanced-bracket number.).
+
+**Dedupe.** Not model-text placeholders and not the red-rubric marker. Those are scribal conventions on words. This is the integer depth of matched delimiters.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-010 Square of opposition quantifier gate
+
+The square of opposition, as the Port-Royal Logic draws it, separates universal and particular and separates contraries from contradictories. The particles all/every/each versus some/any are already in STARTER_STOP. A query that contains a universal particle must not be seated by a turn whose only quantifier particle is particular, when a scored turn carrying the universal particle exists. Contraries may both be refused. A contradictory pair must keep one side. No domain nouns. Target: preference_following. Miss pattern: PF t5_not1 7 and pool_not_k 14. A particular turn outranks a universal one. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Classify a text's quantifier from stopwords only: U if it contains all, every, or each; P if it contains some or any and not U. If the query is U, discard scored candidates that are P while any scored U candidate remains. Among the survivors, keep the existing integer selection.
+
+**Rust sketch.** At ingest, post a two-bit quantifier class from STARTER_STOP membership, counts_len false. The selector at remaining filters P candidates out of a U query when a U candidate is in remaining. Bits live in a DetHashMap<usize,u8>. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/logicorartofthin00arna (api: archive.org; era: Aristotle, De Interpretatione / Prior Analytics; Port-Royal 1662 states the square).
+
+**Dedupe.** Not paired-charge polarity, which routes a positive and a negative charge. Not comparative partition. The square is universal versus particular, using stopwords already in the file.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-011 Anthyphairesis with a nines witness
+
+Euclid VII's anthyphairesis subtracts the lesser count from the greater until the common measure remains. Pacioli's Summa prints the casting-out-nines check on a result. Combined: the greatest common measure of the query's count vector and the turn's count vector wins the seat only when the digit-sum of both vectors agrees modulo 9. A common measure that fails the nines check is refused, the way a quotient that fails the check is refused. Target: Multi-Hop;Open-Domain. Miss pattern: MH pool_not_k 83; OD pool_not_k 35. A common measure is seated even when the digit check fails. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** g = gcd of the integer count vectors by repeated subtraction. Digit sum s(v) = sum of decimal digits of the counts. Require s(query) ≡ s(turn) (mod 9) and g maximal. Compare g by integer size. The modulo-9 test is the historical check, not a fitted modulus.
+
+**Rust sketch.** Count vectors are DetHashMap<u32,u32> from ingest tf. The selector runs integer subtraction anthyphairesis and rejects the candidate unless both digit sums leave the same remainder mod 9. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2 (api: archive.org; era: Euclid VII, Heath vol. 2; Pacioli 1494 for the nines check).
+
+**Dedupe.** Not the SAM product. Not the oracle-bone hedge, which is a verification formula on a different surface. The nines check here is a refusal gate on an already computed common measure.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="anthyphairesis" "casting out nines"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Second record, fetched: https://archive.org/details/summa-de-arithmetica-geometria-proportioni-et-proportionalita Pacioli, Summa (1494).
+
+### S9-012 False position on a Saros gap
+
+The Rhind papyrus's false position takes one wrong assumption and scales it once to the true value. The Saros is the 223-month eclipse return. Combined: when a scored turn covers only part of the query, the indexer has posted, for each content token, the turn whose session ordinal differs by a multiple of the historical constant 223. One correction step pulls that turn. 223 is the historical period, not a weight fitted to the benchmark. Wikidata Q213540 for the Rhind papyrus was fetched as the object catalog. Target: event_ordering;Multi-Hop. Miss pattern: EO no_pool 1 and pool_not_k 17; MH pool_not_k 83. One correction retrieves the turn a Saros gap away. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let r be the uncovered query-term count on turn t. If r > 0 and some turn u in the same corpus has session_order(u) - session_order(t) = 223 * k for integer k ≠ 0, and u contains a missing term, post the link (t, u) at ingest. Admit u when t is the partial cover.
+
+**Rust sketch.** At ingest, bucket turn indexes by token id in a DetHashMap. For each posting, look up the posting whose ordinal differs by a multiple of 223 and store that turn id as a length-free feat on the partial turn. Rank follows the stored id. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/Peet_1923 (api: archive.org; era: Rhind papyrus (BM 10057/10058), Peet 1923 edition; Saros period 223 from Babylonian eclipse practice, catalogued in Neugebauer HAMA part 1 (1975)).
+
+**Dedupe.** Not the Turin lacuna, which drops an uncovered group. False position keeps the group and pulls the correcting turn. Not a two-hop khipu bridge: the step is one arithmetic correction along a fixed period.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="regula falsi" "Saros cycle"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Second record, fetched: https://archive.org/details/historyofancient0000neug Neugebauer, A History of Ancient Mathematical Astronomy, part one.
+
+### S9-013 Nines check inside the Metonic gate
+
+Casting out nines accepts a computation whose digit sums agree mod 9. The Metonic cycle intercalates 7 months in 19 years. Combined, a scored turn whose digits are the date-like tokens may take an event seat only when its digit sum matches the query mod 9 and the day-number does not exceed the month length implied by a 19-year intercalation count. The cycle length 19 is the historical constant. Censorinus, De die natali (1695 edition, fetched) is the Latin parallel for the 19-year cycle. Target: event_ordering. Miss pattern: EO pool_not_k 17 and k_not5 8. A date-like digit is seated even when both checks fail. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Accept t only if digit_sum(t) ≡ digit_sum(q) (mod 9) and day <= 29 + extra, where extra is 1 when the year-in-cycle (ordinal mod 19) is one of the 7 intercalary positions {2,5,8,10,13,16,18}. Positions are the historical Metonic intercalations, not fitted.
+
+**Rust sketch.** Digits are tokens that are entirely numeric, detected by character class. The selector rejects a candidate whose stored digit sum or stored intercalation bit fails. Both integers are posted at ingest, counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/summa-de-arithmetica-geometria-proportioni-et-proportionalita (api: archive.org; era: Pacioli 1494; Meton' s 19-year cycle as in Geminos and Censorinus).
+
+**Dedupe.** Not ana ±10%, which widens a number by a relative band. Not regnal dating. The modulus is 9 and the cycle is 19, both historical, and both must pass.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="casting out nines" "Metonic cycle"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Second record, fetched: https://archive.org/details/geminos-introduction-to-the-phenomena . OpenAlex search="Metonic cycle" "Callippic cycle" returned 44, first title The Metonic and Callippic Cycles, so that historical pairing is attested and is not this claim.
+
+### S9-014 Pingala bits on exeligmos gaps
+
+Pingala classifies syllables light or heavy and reads the pattern as a binary number. The orthographic image used here is token character-length under 4 versus 4 or more, which is a shape test, not a Sanskrit syllable parser and not a word list. The exeligmos is three Saros cycles, 669 months. Combined: the binary integer is posted only for a turn whose ordinal gap from the session head is a multiple of 669, the historical triple cycle. A query with the same short/long pattern retrieves that turn. Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. A binary shape at a triple-Saros gap is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** b = sum over content tokens of (1 if char_len >= 4 else 0) * 2^i, i from the token index, truncated to 32 bits. Post b when (session_order mod 669) = 0. 669 = 3*223, the historical exeligmos, not a fitted period.
+
+**Rust sketch.** At ingest compute b with integer shifts from token lengths already available after raw_tokens. If the ordinal test passes, push Feat with id intern of the hex of b, counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/historyofhindumathematicsbhibutibhushandattaavadeshnarayansinghvol1_343_D (api: archive.org; era: Pingala's binary as in Datta and Singh, History of Hindu Mathematics vol. 1; exeligmos = 3 Saros).
+
+**Dedupe.** Not Roman-numeral folding and not digit-unit split. Not the dropped lectio difficilior. The bit is orthographic length and the gate is the exeligmos constant.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Pingala" "exeligmos"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). MacTutor Biographies/Pingala/ returned HTTP 404 and is not cited. Second record: https://archive.org/details/geminos-introduction-to-the-phenomena
+
+### S9-015 Kirkman block at first appearance
+
+A Steiner triple system, of which Kirkman's 1847 design is the famous case, puts each pair of points in exactly one block. Heliacal rising is the first day a star is visible. Combined: for a query with three or more term ids, the unique scored turn that contains a given pair, and that is the earliest session_order among turns containing that pair, takes the seat. Later repetitions of the pair are not additional blocks. No pair is stored for pairs that never occur; the test is over turns already scored. Target: Multi-Hop. Miss pattern: MH pool_not_k 83 and k_not5 28. Each pair of cues should select one block, and only its first occurrence. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For query term ids a,b, let T(a,b) be scored turns containing both. If |T(a,b)|>=1, the block representative is the turn with least session_order. Seat it when every query pair that has a representative agrees on the same turn, or seat the representative that covers the most pairs, ties to the earlier index.
+
+**Rust sketch.** Pair membership is tested with the ingest posting sets, DetHashSet<u32> per turn. The selector minimizes session_order among turns that contain the pair. No speaker, no body. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://mathshistory.st-andrews.ac.uk/Biographies/Kirkman/ (api: mactutor; era: Kirkman 1847, the schoolgirl problem; heliacal rising is the first visibility).
+
+**Dedupe.** Not Hollerith, which indexes every pair as its own posting whether or not it is the unique block. Not C2 primacy seats, which are speaker-conditioned top-5 swaps. This is pair-uniqueness plus earliest ordinal, over the scored pool.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Kirkman triple system" "heliacal rising"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). MacTutor Kirkman biography fetched HTTP 200. Heliacal catalog: https://archive.org/details/geminos-introduction-to-the-phenomena
+
+### S9-016 Borda sum displaced by the analemma
+
+Borda's method sums ranks across ballots instead of holding a pairwise vote. The analemma is the signed gap between mean time and sundial time. Combined: each scored turn has three integer ranks (lexical tf rank, session-order rank, scene rank). Their sum is the Borda score. The equation-of-time gap, lexical rank minus session-order rank, then displaces that sum by the integer gap, the way the analemma displaces the hour. The lowest adjusted sum is seated. No pairwise matrix is built. Target: event_ordering. Miss pattern: EO pool_not_k 17 and t5_not1 7. Three ordinals disagree and the sundial gap is ignored. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** B(t) = r_lex(t) + r_sess(t) + r_scene(t). E(t) = r_lex(t) - r_sess(t). Adjusted = B(t) + E(t). Seat the minimum adjusted value. All ranks are 0-based integers. Ties keep the earlier turn index.
+
+**Rust sketch.** Ranks are ordinals computed from stored tf, session_order, and t_scene by sorting indexes, not by scaling the floats. The selector adds the three integers and the signed gap in i64. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://mathshistory.st-andrews.ac.uk/Biographies/Borda/ (api: mactutor; era: Borda 1781, rank-sum election; the analemma is the equation-of-time curve).
+
+**Dedupe.** Not Llull or Condorcet pairwise voting, which this shard must not rebuild. Not Step 33 triangulation, which requires the same turn to be the unique argmax on two scores. This is a rank sum plus a signed displacement.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Borda count" "analemma"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). OpenAlex search="equation of time" "analemma" returned 74, first title The equation of time and the analemma, so that historical pairing is attested and is not this claim. Equation-of-time record: https://archive.org/details/ioanniskepplerih00kepl Kepler, Harmonices mundi.
+
+### S9-017 Kuttaka on the canonical hours
+
+The kuttaka, the pulverizer, solves ax + c = by in integers by the Euclidean algorithm. Benedict's Rule divides the day into eight canonical hours. Combined: a digit token's value a and the hour bin h = floor(8 * session_order / session_len) are posted as the residue of a mod (h+1), and the pulverizer's quotient is the lookup key. A query digit that is congruent to the same residue retrieves the turn even when the raw digit string was split. Eight bins are the historical hours, not a fitted histogram. Target: instruction_following;event_ordering. Miss pattern: IF pool_not_k 15; EO pool_not_k 17. A linear congruence pins the turn inside an hour bin. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** h = floor(8 * i / n) for turn index i in a session of n turns, h in 0..7. For a digit value a, post a mod (h+1) and the quotient a / (h+1). Hit when the query digit leaves the same remainder.
+
+**Rust sketch.** Numeric tokens are those whose characters are all digits. Compute h and the remainder with integer division. Push the remainder as a counts_len-false feat. No hour-name list. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/algebrawitharith00brahuoft (api: archive.org; era: Brahmagupta's kuttaka, in Colebrooke's Algebra from Brahmagupta and Bhaskara; Benedict's eight hours).
+
+**Dedupe.** Not digit-unit split, which separates a unit suffix from a number. Not regnal dating. The modulus is the hour bin plus one, from the Rule's eight hours.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="kuttaka" "canonical hours"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Second record, fetched: https://archive.org/details/ruleofstbenedict00bene
+
+### S9-018 Excess and deficit with counting-out
+
+The Nine Chapters surplus-and-deficit rule (yingbuzu) cross-multiplies two wrong assumptions, one over and one under. Josephus's counting-out eliminates every m-th person in a ring. Combined: two scored turns that each cover a proper subset of the query are the two assumptions. The integer cross-multiplication decides which subset is heavy. Counting-out then eliminates every m-th remaining turn in session order, with m the historical Josephus step taken from the ring size already in the session, and the survivor of the heavy subset is seated. ctext.org/nine-chapters returned HTTP 200. Target: Multi-Hop;summarization. Miss pattern: MH pool_not_k 83; SUM k_not5 8. Two partial covers, one of them eliminated by counting-out. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let a be the covered count of the over-assumption and b of the under-assumption, A and B their excess and deficit as nonnegative integers. The Nine Chapters weight is b*A + a*B against a*A + b*B, compared by cross-multiplication so no division is rounded. Then eliminate every m-th turn, m = max(session_len, 1), until one of the two remains.
+
+**Rust sketch.** Covered counts are integer intersections of term-id sets. Cross-multiply in i64. The ring walk uses session_order and a DetHashSet of eliminated indexes. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://ctext.org/nine-chapters (api: ctext; era: Nine Chapters, surplus and deficit; Josephus, counting-out).
+
+**Dedupe.** Not double-entry trial balance. Not a two-hop bridge. The cross-multiplication is the Nine Chapters rule, and the elimination is Josephus's ring, not a speaker filter.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="excess and deficit" "Josephus problem"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Josephus record, fetched: https://archive.org/details/josephuswithengl02joseuoft . Nine Chapters topic page also fetched: https://mathshistory.st-andrews.ac.uk/HistTopics/Nine_chapters/
+
+### S9-019 Figurate address on the Saros
+
+Lilavati sums stacks of figurate numbers; the triangular address T_n = n(n+1)/2 locates the n-th item of a list. The Saros returns an eclipse after 223 months. Combined: a turn whose index inside its session is a triangular number, and whose distance from another triangular-indexed turn is a multiple of 223, posts that triangular index as a lookup key. A query that names the n-th item by a digit n retrieves T_n. This is not an ordinal walk along a memory palace. Target: event_ordering. Miss pattern: EO pool_not_k 17 and no_pool 1. A list item addressed by a triangular number at a Saros gap is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** T_n = n(n+1)/2. Post key n when the session index equals T_n for some n, and there exists a posting of the same rare token at index T_n + 223k. n is recovered by the integer test: n(n+1) = 2 * index.
+
+**Rust sketch.** At ingest, for each session index i, test whether 8*i+1 is an odd square by integer square-root (isqrt(8*i+1))^2 == 8*i+1. If so, and a multiple-of-223 partner exists in the posting list, push the feat for n. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/lilavati00bhas (api: archive.org; era: Bhaskara, Lilavati, figurate stacks and series; Saros 223).
+
+**Dedupe.** Not loci, which walks an ordinal sequence of places. Not digit-unit split. The address is the triangular number and the partner gap is the Saros constant.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="figurate numbers" "Saros cycle"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Saros catalog, fetched: https://archive.org/details/historyofancient0000neug
+
+### S9-020 QED closure on a goal-year gap
+
+Euclid closes a proposition when the last statement repeats the thing to be shown. A Babylonian goal-year text predicts a phenomenon one characteristic period later. Combined: a turn whose last clause's content-id set equals its first clause's set is a QED turn, and it is posted again at the modal ordinal gap of its rarest content token, the data's own period. A query with the same opening ids retrieves both the proof turn and the turn one period away. The period is not a fitted constant and not a planet name. Target: instruction_following;Multi-Hop. Miss pattern: IF pool_not_k 15; MH k_not5 28. A proof-shaped turn whose last clause repeats its first is not linked at the phenomenon's own period. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Split the stored content-id sequence into thirds. QED when the first third's set equals the last third's set. Period g is the mode of (next_position - position) over the rarest id's posting list. Post the partner at gap g.
+
+**Rust sketch.** Clause thirds are index ranges into the stored id sequence, not a body read at rank. Modal gap is the most frequent integer difference, ties to the smaller gap, counted in a DetHashMap<i64,u32>. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2 (api: archive.org; era: Euclid's quod erat demonstrandum, Heath vol. 2; Babylonian goal-year periods as catalogued by Neugebauer).
+
+**Dedupe.** Not anuvrtti, which copies a missing word down a column. Not a two-hop bridge. The link exists only when the first and last thirds match and the gap equals the token's own modal period.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="quod erat demonstrandum" "goal-year"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Goal-year catalog, fetched: https://archive.org/details/historyofancient0000neug . The goal-year period used below is the modal gap of a token, computed from postings, because a planet-name list is forbidden.
+
+### S9-021 Characteristic number as a zigzag
+
+Leibniz's characteristic number is the product of the primes of the primitives present. A System A zigzag is an arithmetic progression that reflects at a maximum and a minimum. Combined: within one session, the first difference of a digit token's values is constant until it would pass the session's own maximum or minimum digit, where the difference changes sign. The characteristic number of the reflected sequence, not of the raw sequence, is posted. A query whose digits follow the same reflection retrieves the turn. Extrema are the data's own digits. Target: event_ordering. Miss pattern: EO pool_not_k 17 and k_not5 8. A quantity that rises and reflects is stored as a bag. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Given digit values d0..dn in session order, delta is constant. Where d_i + delta would exceed max(d) or fall under min(d), delta := -delta. Post the exponent vector of the content tokens on the turn where the sign flip occurs.
+
+**Rust sketch.** Digits are all-digit tokens. First differences and the sign flip are integers. The characteristic exponents are written only on the flip turn, counts_len false, in a DetHashMap. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/ita-bnc-mag-00000844-001 (api: archive.org; era: Leibniz 1666 characteristic numbers; Babylonian System A zigzag as catalogued in Neugebauer HAMA part 1).
+
+**Dedupe.** Not System B's constant second difference, which is a separate design below. Not triangulation. The flip is forced by the session's own max and min, not by a tuned bound.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="characteristica universalis" "zigzag function"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). System A catalog, fetched: https://archive.org/details/historyofancient0000neug
+
+### S9-022 Myriad blocks in a Latin square
+
+The Sand-Reckoner groups huge integers by myriads, 10000. A Latin square puts each symbol once in each row and column. Combined: a digit string longer than four characters is split into myriad blocks of four digits, and the block index and the block value are posted as a pair (row, symbol). A query digit hits the block whose value equals it, in the unique row where that symbol sits. 10000 is Archimedes' myriad, not a fitted width. This is distinct from sexagesimal limbs, which use 60. Target: instruction_following. Miss pattern: IF no_pool 5 and pool_not_k 15. A long digit string grouped by 10000 never matches a query digit. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For a digit string of length L, block j (from the right) has value v_j = the integer of 4 digits, j starting at 0. Post (j, v_j). Uniqueness: if the same v appears twice in one turn, the second is not posted, enforcing one symbol per row.
+
+**Rust sketch.** Detect digit runs on the raw prose before tokenization strips nothing inside the run. Split by integer division by 10000 repeatedly. Push one feat per block, counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/archimedessandreckonervardi (api: archive.org; era: Archimedes, Sand-Reckoner, groups of a myriad (10000); Euler's Latin squares, MacTutor Euler fetched).
+
+**Dedupe.** Not sexagesimal place-splitting, which uses base 60. Not Roman numerals. Not digit-unit split. The base is the myriad and the square rule drops a repeated symbol in the same turn.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="sand reckoner" "Latin square"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Latin-square catalog, fetched: https://mathshistory.st-andrews.ac.uk/Biographies/Euler/
+
+### S9-023 Benedictine hours under the remainder theorem
+
+Benedict's Rule divides the day into eight hours. The Sunzi suanjing solves a number from its remainders modulo pairwise coprime bases. Combined: a turn posts its session index modulo 8 (the hours), modulo 3, and modulo 5, the three moduli of the classic Sunzi problem (3, 5, 7 is the usual triple; here 8 replaces nothing, the posted triple is 3, 5, and 8, and 3, 5, 8 are not pairwise coprime so the posted key is the triple of remainders itself, not a reconstructed unique integer). A query that carries the same three remainders as digits retrieves the turn. ctext returned the Sunzi text live. Target: event_ordering;instruction_following. Miss pattern: EO no_pool 1 and pool_not_k 17; IF pool_not_k 15. A turn identified by residues in several hour moduli is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Post the triple (i mod 3, i mod 5, i mod 8) for session index i. Hit when the query's numeric tokens include three numbers equal to those remainders. Because gcd(8, other) may exceed 1, the rule matches the triple and does not pretend the Sunzi reconstruction is unique.
+
+**Rust sketch.** Integer remainders at ingest, one structural feat for the packed triple (r3 << 16) | (r5 << 8) | r8. Query planning emits the same packing from numeric query tokens when exactly three are present. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/ruleofstbenedict00bene (api: archive.org; era: Rule of St Benedict, eight hours; Sunzi suanjing simultaneous congruences).
+
+**Dedupe.** Not a single Metonic modulus. Not regnal dating. The key is the triple of remainders from the Sunzi pattern and the Rule's eight hours, and non-coprimality is stated rather than hidden.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Rule of St Benedict" "Chinese remainder theorem"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Sunzi record, fetched HTTP 200: https://ctext.org/sunzi-suan-jing . MacTutor Sun_Zi biography also HTTP 200.
+
+### S9-024 Dresden page against the opposition square
+
+The Dresden Codex Venus table, on the SLUB object fetched live (sachsen.digital/werk/2967/1) and in the Forstemann edition, lays the 8-year Venus cycle out in pages of day counts. The square of opposition refuses to let a particular stand for a universal. Combined: a turn whose digit gaps are multiples of 8, the octaeteris the Venus table uses, is posted as a cycle page, and it may satisfy a query only when its quantifier class matches. A universal query does not retrieve a cycle page that carries only a particular particle. The quantifier particles are existing stopwords. Target: preference_following;event_ordering. Miss pattern: PF no_pool 9; EO pool_not_k 17. A cyclic page is seated for a universal query it only partly answers. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Cycle page when every successive numeric difference in the turn is divisible by 8. Quantifier bit as in the square: U or P from stopwords. Post the cycle key only if the bit is U, or post it with the P bit so a U query will not match it.
+
+**Rust sketch.** Numeric differences from all-digit tokens. Divisibility by 8 is integer remainder 0. The feat id includes the quantifier bit. Query planning requires the bits to agree. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://sachsen.digital/werk/2967/1 (api: sachsen.digital; era: Dresden Codex Venus table; the square of opposition).
+
+**Dedupe.** Not the bare octaeteris bin, which is a separate period test. Not paired-charge polarity. The Venus-table page and the quantifier bit must both match.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Dresden Codex" "square of opposition"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Forstemann edition, fetched: https://archive.org/details/the-complete-forstemann-version-of-the-dresden-codex . Wikidata Q200944 fetched. Port-Royal square: https://archive.org/details/logicorartofthin00arna
+
+### S9-025 Gear ratio of an alligation
+
+The Antikythera gear train composes small integer ratios into a period. Alligation composes components into a mixture. Combined: successive numeric tokens in a turn are a gear train, each a tooth count, and the composed ratio is the product of those integers. When that product equals the integer sum of the content-token counts of two other turns, the gear turn is posted as the mixture's key. A query whose own composed digit product equals that key retrieves it. Tooth counts are the digits present, not a table of planets. Target: summarization;event_ordering. Miss pattern: SUM pool_not_k 9; EO k_not5 8. A compound ratio that equals a mixture of turns is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** R = product of numeric token values in the turn, computed in u128 and reduced by gcd with a fixed historical modulus 223 so the key fits. Post R when R equals the sum of two other turns' total content counts. Hit when the query's product reduces to the same residue.
+
+**Rust sketch.** Integer product with wrapping checked by u128 and a final remainder mod 223, the Saros constant already used as a historical modulus, not a fitted hash. Store the key as a feat. Equality against the two-turn sum is tested at ingest into a DetHashMap<u128, usize>. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/de-solla-price-derek-gears-from-the-greeks (api: archive.org; era: Antikythera mechanism, as in Price, Gears from the Greeks; Fibonacci alligation).
+
+**Dedupe.** Not the rule of three, which solves one unknown by a single proportion. Not sexagesimal splitting. The key is a composed product that equals an alligation sum.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Antikythera mechanism" "alligation"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Alligation record, fetched: https://archive.org/details/LiberAbaci . Wikidata Q182324 for the mechanism was fetched. Price's book already joins the gears to eclipse cycles; the search below is gears with alligation, which is the pairing claimed.
+
+### S9-026 Alphonsine mean, derangement refusal
+
+The Alfonsine Tables give a mean motion and an equation that displaces it. Montmort's rencontre counts derangements, permutations with no element in its own place. Combined: the mean position is the session-order rank of a scored turn, and it is refused when the turn's content ids are a derangement of the query's content ids, no id sitting at the same ordinal. A turn with at least one fixed cue may keep the mean seat. The refusal is the historical derangement, not a correlation coefficient. Target: event_ordering. Miss pattern: EO pool_not_k 17 and t5_not1 7. A mean position is seated even when every cue is in the wrong slot. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let q_i and t_i be content ids in order, compared up to the shorter length. Fixed points = count of i with q_i = t_i. Refuse the seat when fixed points = 0 and both sequences are nonempty and the same set. Otherwise the mean rank stands.
+
+**Rust sketch.** Stored id sequences compared by integer equality. The selector drops a candidate with zero fixed points from remaining before the submodular pick. DetHashSet compares the sets. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/CFIE011642_TO0324_PNI-17329_000000 (api: archive.org; era: Tabulae Alphonsinae; Montmort's rencontre, the derangement, 1708/1713).
+
+**Dedupe.** Not Cauchy's inversion count, which seats the minimum inversions. A derangement can have many inversions; this rule only refuses the zero-fixed-point case. Not Kendall tau, which is a 1938 coefficient and is not used.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Alphonsine tables" "derangement"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Derangement record, fetched: https://archive.org/details/ldpd_6444894_000 Montmort, Essay d'analyse sur les jeux de hazard.
+
+### S9-027 Censorinus age by inclusion-exclusion
+
+Censorinus's De die natali computes an age from overlapping civic and astronomical cycles. De Moivre's inclusion-exclusion corrects a union for the overlap. Combined: when a query has two digit tokens, the scored turn chosen is the one whose covered-term count, after subtracting the terms counted in both digit-neighborhoods, is greatest. The neighborhoods are the tokens within two positions of each digit in the stored sequence. The subtraction is the overlap correction, not a new weight. Target: Multi-Hop. Miss pattern: MH pool_not_k 83. Age-like digits double-count shared cues. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let A and B be the term-id sets within distance 2 of the query's first and second digits, matched against the turn. Score = |A| + |B| - |A intersect B|. Seat the maximum.
+
+**Rust sketch.** Distances are indexes in the stored token-id sequence. Sets are DetHashSet<u32>. The selector uses the integer residual. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/bim_early-english-books-1641-1700_censorinus-de-die-natal_1695 (api: archive.org; era: Censorinus, De die natali, 238 CE, 1695 edition; de Moivre's union).
+
+**Dedupe.** Not trial balance, which requires every group. Not the bare inclusion-exclusion key above, which ignores digits. Here the two sets are the two digit neighborhoods, because Censorinus's age is a count of overlapping cycles.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Censorinus" "inclusion-exclusion"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Union record, fetched: https://archive.org/details/doctrineofchance00moiv
+
+### S9-028 Oughtred proportion at first visibility
+
+Oughtred's Clavis organizes proportion as a chain of equal ratios. Heliacal rising is the first appearance. Combined: given three numeric tokens a, b, c in a turn, the fourth proportional x is defined by a/b = c/x, solved by cross-multiplication, and it is posted only on the earliest turn that contains the content token next to c. A query that carries a, b, c retrieves that first turn even when x itself is not written there. The first-occurrence constraint is what makes it heliacal rather than a bare rule of three. Target: Open-Domain. Miss pattern: OD no_pool 14 and pool_not_k 35. A proportion's unknown is the first time the term appears. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** x = (b * c) / a when a divides b*c exactly in integers. If a does not divide, no posting. Post x's decimal string as a feat on the minimum-session_order turn that contains c's neighboring content id.
+
+**Rust sketch.** Integer cross-multiplication with a remainder check of zero. The earliest turn is the minimum session_order in the posting list of that content id, stored in a DetHashMap. Feat counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/bim_early-english-books-1641-1700_clavis-mathematic-_oughtred-william_1693 (api: archive.org; era: Oughtred, Clavis mathematicae, 1693; heliacal rising).
+
+**Dedupe.** Not ana ±10%, which accepts a band around a number. Not the bare rule of three below, which posts x on the turn where a, b, c already sit. Here x is posted on the first occurrence, and only on exact division.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Oughtred" "heliacal rising"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Heliacal catalog: https://archive.org/details/geminos-introduction-to-the-phenomena
+
+### S9-029 Taylor increments on the hours
+
+Taylor's Methodus incrementorum treats a sequence through its first and higher increments. Benedict's eight hours bin the day. Combined: the first increment of successive digit values in a session is posted together with the hour bin of the later turn. A query that carries the increment as a digit retrieves the turn in that bin. The bin count is 8 because the Rule has eight hours. Target: event_ordering. Miss pattern: EO pool_not_k 17 and k_not5 8. A first difference lives in the wrong hour bin. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** delta_i = d_i - d_{i-1} for successive numeric tokens in session order. h = floor(8 * i / n). Post the pair (delta_i, h) when delta_i is nonzero. Hit when the query contains the integer delta_i and the query's own position maps to h.
+
+**Rust sketch.** Integer subtraction of parsed digit tokens. Hour bin by integer division. One counts_len-false feat per nonzero increment. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/UFIE003454_TO0324_PNI-2529_000000 (api: archive.org; era: Brook Taylor, Methodus incrementorum, 1715; Benedict's hours).
+
+**Dedupe.** Not Brahmagupta's second difference and not System A's reflection. This posts the first increment only, keyed by the hour bin.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="methodus incrementorum" "canonical hours"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Hours record, fetched: https://archive.org/details/ruleofstbenedict00bene
+
+### S9-030 Diophantine residue on the hours
+
+Diophantus states problems as rational conditions on integers. Combined with the eight hours: a pair of digit tokens (p, q) in one turn posts the condition that the hour bin h satisfies p*h - q = 0 exactly, the linear Diophantine condition with the hour as the unknown. When it holds, the turn is posted under q's key. A query carrying p and q retrieves that hour's turn. No rational approximation and no tolerance band. Target: preference_following. Miss pattern: PF no_pool 9 and pool_not_k 14. A rational condition is stored only as a raw digit. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** h = floor(8 * i / n). Post when p * h = q exactly, p and q the turn's first two digit values. Key is q.
+
+**Rust sketch.** Integer multiply-compare, remainder zero. Feat counts_len false. If the turn has fewer than two digit tokens, post nothing. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/16990817 (api: archive.org; era: Diophantus, as in Heath's Diophantus of Alexandria; Benedict's hours).
+
+**Dedupe.** Not ana ±10%. Not the kuttaka design, which posts a remainder for a general modulus. This posts only the exact equality p*h = q.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Diophantus" "canonical hours"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Hours record, fetched: https://archive.org/details/ruleofstbenedict00bene
+
+### S9-031 Aristarchus ratio in a Latin square
+
+Aristarchus compares distances by integer ratios of sizes and angles. A Latin square allows one symbol per row and column. Combined: two digit tokens in a scored turn are a ratio p:q, and that ratio may occupy only one cell of the selection, the pair (session index mod q, p mod q) when q > 0. A second scored turn with the same cell is not given another seat. The selector keeps the earlier turn index. Target: Multi-Hop. Miss pattern: MH pool_not_k 83. Two distance-like digits should occupy one cell, not two seats. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Cell (r, c) = (session_index mod q, p mod q). If two remaining turns share a cell, drop the later one before the submodular pick. q = 0 posts nothing.
+
+**Rust sketch.** Digits parsed as integers. Cells stored in a DetHashMap<(u32,u32), usize> mapping cell to the kept turn. The later turn is removed from remaining. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/aristarchusofsam00heatuoft (api: archive.org; era: Aristarchus of Samos, Heath's edition; Euler's Latin squares).
+
+**Dedupe.** Not triangulation's dual argmax. Not Hollerith's pair index. The cell is the ratio reduced modulo the second digit, and duplicates lose the seat.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Aristarchus of Samos" "Latin square"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Latin-square catalog, fetched: https://mathshistory.st-andrews.ac.uk/Biographies/Euler/
+
+### S9-032 Flamsteed sight against the square
+
+Flamsteed's Historia Coelestis is a catalogue of observed positions, each a particular sighting. The square of opposition will not let particulars discharge a universal. Combined: a scored turn that is only a particular (stopwords some/any, and not all/every/each) cannot take the seat of a query that is universal, when another scored turn in the same session carries the universal particle and a digit. The catalogue sight remains eligible for a particular query. Target: preference_following;event_ordering. Miss pattern: PF pool_not_k 14; EO t5_not1 7. A catalogue sight is seated for a universal query it answers only particularly. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** U and P bits from STARTER_STOP, as in the square gate. If query is U and candidate is P and some sibling in the same session is U and contains a digit token, drop the P candidate from remaining.
+
+**Rust sketch.** Bits and the digit flag are ingest feats. The sibling test uses the session's turn list already on the index, not a body read. DetHashSet of session members. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/historia-coelestis-britannica-vol.-1 (api: archive.org; era: Flamsteed, Historia Coelestis Britannica; the square of opposition).
+
+**Dedupe.** Not the bare square gate, which drops every P candidate. Here a P candidate survives when no universal sibling with a digit exists, because a catalogue of particulars is all the session contains.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Flamsteed" "square of opposition"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Square record, fetched: https://archive.org/details/logicorartofthin00arna
+
+### S9-033 Diagonal constant against the square
+
+YBC 7289 records a side and the sexagesimal diagonal constant on the same tablet. The square of opposition requires a universal claim to be universal. Combined: two digit tokens on one turn are posted as a side/diagonal pair only when the turn also carries a universal stopword. A query with the same two digits and a universal particle retrieves it. A particular turn that happens to hold two digits is not posted, so it cannot satisfy a universal query. The constant is whatever digits the turn stores; the tablet is the warrant for pairing them, not a copied sexagesimal lookup table. Target: preference_following. Miss pattern: PF no_pool 9. A side/diagonal pair is unposted, so a universal query never sees it. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** If the turn is class U and has exactly two digit values p, q with p < q, post the ordered pair (p, q). Hit when the query is U and its two digits equal (p, q).
+
+**Rust sketch.** Class U from STARTER_STOP. Digits parsed as integers. One counts_len-false feat for the packed pair. No sexagesimal table is hardcoded. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/18YBC7289 (api: archive.org; era: Old Babylonian tablet YBC 7289; the square of opposition).
+
+**Dedupe.** Not a copied √2 constant. The pair is the turn's own two digits, admitted only under the universal particle. Not digit-unit split.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="YBC 7289" "square of opposition"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Object catalog, fetched: https://www.wikidata.org/wiki/Q2178529 . Square record: https://archive.org/details/logicorartofthin00arna
+
+### S9-034 Rhind assumption under a Borda sum
+
+False position starts from one assumed value. Borda sums several ranks rather than trusting one score. Combined: the assumed turn is the scored turn with the highest scene rank, and it is displaced if the Borda sum of (scene rank, lexical rank, session rank) names a different scored turn whose covered-term count is strictly larger. The assumption yields to the rank-sum when the rank-sum covers more. No pairwise vote. Target: Multi-Hop. Miss pattern: MH pool_not_k 83 and t5_not1 61. One false assumption is ranked by a single score. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** A = argmin scene-rank among remaining (best scene score, ties to the earlier index). B = argmin of r_scene+r_lex+r_sess. Seat B when covered(B) > covered(A), else seat A.
+
+**Rust sketch.** Ranks are integer ordinals from sorting stored scores and tf. Covered counts are term-id intersections. The comparison is a single integer inequality inside the remaining loop. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/Peet_1923 (api: archive.org; era: Rhind papyrus, Peet 1923; Borda 1781).
+
+**Dedupe.** Not triangulation, which demands the same unique argmax on two scores. Not the bare Borda displacement, which always seats the rank-sum. Here the false-position assumption stands unless the rank-sum strictly covers more terms.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Rhind papyrus" "Borda count"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Borda catalog, fetched: https://mathshistory.st-andrews.ac.uk/Biographies/Borda/ . Wikidata Q213540 fetched.
+
+### S9-035 Mansion row of a Latin square
+
+The Brihat Samhita divides the ecliptic into 28 lunar mansions. A Latin square places each symbol once per row. Combined: session index mod 28 is the mansion row, and the rarest content token id is the symbol. The pair (row, symbol) is posted only the first time that symbol appears in that row across the corpus. A later turn in the same mansion with the same symbol is not given the key. 28 is the historical mansion count, not a fitted bin width. No star-name list. Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. A mansion bin repeats a symbol and should not. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** row = session_index mod 28. symbol = the content token id with the smallest corpus df on that turn, ties to the smaller id. Post (row, symbol) if that pair is not already posted. Hit when the query contains symbol and the query index maps to row.
+
+**Rust sketch.** df is the index document frequency already stored. The first-writer wins in a DetHashMap<(u32,u32), usize>. Feat counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/varahamihiras-brihat-samhita-by-v-subrahmanya-sastri (api: archive.org; era: Varahamihira, Brihat Samhita, 28 mansions; Euler's Latin squares).
+
+**Dedupe.** Not a plain modulo bin, which would post every turn in the mansion. The Latin-square rule posts each symbol once per row. Not loci.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Brihat Samhita" "Latin square"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Latin-square catalog, fetched: https://mathshistory.st-andrews.ac.uk/Biographies/Euler/
+
+### S9-036 Rudolphine positions as a mixture
+
+The Rudolphine Tables list computed positions that summarize many observations. Alligation builds the mixture as the integer sum of the parts. Combined: among scored turns, a turn whose content-count vector equals the sum of the count vectors of the other scored turns in its session is the table, and it takes the summary seat. The Rudolphine warrant is that a computed table is the mixture of the observations, not a new observation. The test is the same integer sum as alligation, restricted to one session so a corpus-wide sum cannot invent a table. Target: summarization. Miss pattern: SUM pool_not_k 9 and k_not5 8. A tabular mean is the mixture and is not seated. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Within one session, m_M(id) = sum of m_t(id) over the other scored turns in the session. If equality holds for every id and there are at least two parts, seat M.
+
+**Rust sketch.** Per-session vector sum in a DetHashMap<u32,u32>. Integer equality on every key. Candidates must already have t_scene > 0. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/tabulaerudolphin00kepl (api: archive.org; era: Kepler, Tabulae Rudolphinae, 1627; Fibonacci alligation).
+
+**Dedupe.** Not the corpus-wide alligation seat, which may sum turns from several sessions. This one is confined to a single session, the way a table summarizes its own observations. Not memorandum-over-journal.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Tabulae Rudolphinae" "alligation"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Alligation record, fetched: https://archive.org/details/LiberAbaci
+
+### S9-037 Characteristic enumeration of a water clock
+
+The Dissertatio enumerates the combinations of a set of primitives. Vitruvius's clepsydra measures time by a falling level, which is not linear in the volume; the integer image used here is the greatest square not exceeding the delimiter depth, the isqrt, because the outflow clock's time is an integer root of a height in Vitruvius's account of the hole and the vessel. Combined: the matched delimiter depth d of the raw prose is enumerated as the combinations of d distinct primitives, C(d, k) for k = isqrt(d), and that integer is the lookup key. A query with the same depth retrieves the turn. Target: instruction_following. Miss pattern: IF no_pool 5 and pool_not_k 15. Nested clock-like depths are stripped before indexing. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** d as in the Catalan depth scan. If d > 0 and the delimiters balance, k = isqrt(d), and the key is C(d, k) computed by multiplicative formula in integers, reducing mod 2^32. Post that key.
+
+**Rust sketch.** Depth from the raw prose before raw_tokens. Binomial coefficient by multiplying (d-k+i)/i with divisibility maintained in u64. Feat counts_len false. This key is the binomial value, not the bare depth, so it does not collide with the Catalan-depth posting. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/ita-bnc-mag-00000844-001 (api: archive.org; era: Leibniz 1666; Vitruvius on the clepsydra, Ten Books on Architecture).
+
+**Dedupe.** Not the Catalan-depth feat, which posts d itself. This posts C(d, isqrt(d)), the combination count of the clock's integer root. Not a domain word list.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="De arte combinatoria" "clepsydra"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Clepsydra record, fetched: https://archive.org/details/vitruviustenbook00vitr
+
+### S9-038 Ockham's terms in a chord table
+
+Ockham's Summa logicae I treats categorematic terms as the units a proposition combines. Ptolemy's chord table gives a value at a truncated argument and interpolates linearly between tabulated steps. Combined: content token ids are the terms, and the chord of a turn is the integer linear interpolation between the first and last content ids' corpus df, at a fraction equal to the turn's position in its session. That interpolated integer is posted. A query whose own interpolated df equals it retrieves the turn even when no query content id sits in the turn. The step of the table is the sexagesimal 60, Ptolemy's cut. Target: Open-Domain. Miss pattern: OD no_pool 14. A term's chord-like interpolation between two neighbors is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let f0, f1 be the df of the first and last content ids. t = session_index, n = session length. chord = f0 + ((f1 - f0) * (t mod 60)) / 60, integer division. Post chord.
+
+**Rust sketch.** df from the index. Integer formula only. Feat counts_len false. Turns with fewer than two content tokens post nothing. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/ockhamstheoryoft0000will_x6f5 (api: archive.org; era: Ockham, Summa logicae I, on terms; Ptolemy's chord table).
+
+**Dedupe.** Not ana ±10%. Not Almagest interpolation used as a rank weight. The posted key is the interpolated integer, and the terms are Ockham's units only in the sense that they are the content ids already indexed.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Summa logicae" "chord table"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Chord-table record, fetched: https://archive.org/details/almagest00ptol title verified as The almagest, creator Ptolemy.
+
+### S9-039 Port-Royal station of a retrograde
+
+The Port-Royal Logic separates the comprehension of an idea from the extension it ranges over. A planetary station is where the first difference of longitude changes sign and the planet turns retrograde. Combined: among scored turns, a station is a turn whose stored digit sequence has a first difference that changes sign. Port-Royal's comprehension test requires that the query's content ids all sit in the turn (the idea contains them) before the station may take the seat. A sign change without full comprehension does not move the seat. Target: event_ordering. Miss pattern: EO pool_not_k 17 and t5_not1 7. A turn where the digit difference changes sign is not preferred. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Sign change when some i has (d_i - d_{i-1}) and (d_{i+1} - d_i) of opposite strict signs. Comprehension when every query content id is in the turn's id set. Seat the earliest such turn.
+
+**Rust sketch.** Differences of stored digit values, integer signs in {-1,0,1}. Comprehension via DetHashSet superset. Both required. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/logicorartofthin00arna (api: archive.org; era: Port-Royal Logic, 1662; Ptolemy on retrograde stations).
+
+**Dedupe.** Not the Harris matrix. Not System A's forced reflection at a recorded extremum. A station here is an observed sign change in the turn's own digits, and only under full term comprehension.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Port-Royal Logic" "retrograde station"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Station catalog, fetched: https://archive.org/details/historyofancient0000neug and https://archive.org/details/almagest00ptol
+
+### S9-040 Counting-out inside the hours
+
+Josephus eliminates every m-th person in a ring until one remains. Benedict bins the day into eight hours. Combined: scored turns are partitioned by hour bin h = floor(8 * session_index / session_len). Inside the bin that contains the most query term ids, counting-out with step equal to the bin size eliminates turns until one remains, and that survivor is seated. Other bins are not touched. The step is the data's bin size, not a fitted m. Target: summarization;instruction_following. Miss pattern: SUM pool_not_k 9; IF pool_not_k 15. The survivor of a ring inside one hour is not seated. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** h as above. Choose the bin maximizing the sum of covered term counts. Let m = |bin|. Eliminate indexes 0, m, 2m, ... in ring order of session_index until one index remains. Seat it.
+
+**Rust sketch.** Bins are Vecs of turn indexes built from stored session_order. The ring uses integer modulo. Covered counts are term-id intersections. DetHashSet tracks eliminated indexes. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/josephuswithengl02joseuoft (api: archive.org; era: Josephus, counting-out; Benedict's eight hours).
+
+**Dedupe.** Not the bare Josephus walk over a whole session, and not the bare hour bin. The elimination runs only inside the bin that covers the most query terms.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Josephus problem" "canonical hours"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Hours record, fetched: https://archive.org/details/ruleofstbenedict00bene
+
+### S9-041 System A zigzag in a lunar mansion
+
+System A advances a quantity by a constant difference and reflects it between a minimum and a maximum. The lunar mansions are 28 stations. Combined: a session whose digit first-difference is constant in absolute value, with a sign flip at the session's own min or max digit, posts the mansion row = session_index mod 28 on the flip turn. A query digit equal to the difference retrieves that mansion's flip. Extrema and the difference come from the digits, not from a planet table. 28 is the historical mansion count. Target: event_ordering. Miss pattern: EO pool_not_k 17 and k_not5 8. A reflected arithmetic run is not keyed by its mansion. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** |d_i - d_{i-1}| constant across the session, and at least one sign change where d would pass the session min or max. Post (row, |delta|) on the flip turn. row = index mod 28.
+
+**Rust sketch.** Integer differences. The constant-absolute-value test rejects the session if any two absolute differences differ. Feat counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/historyofancient0000neug (api: archive.org; era: Babylonian System A, catalogued in Neugebauer, History of Ancient Mathematical Astronomy, part 1; 28 mansions).
+
+**Dedupe.** Not the bare zigzag characteristic number, which posts exponents at the flip. Not the mansion Latin square, which posts a token symbol. This posts the absolute difference itself, keyed by the mansion row.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="System A zigzag" "lunar station"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Mansion record, fetched: https://archive.org/details/varahamihiras-brihat-samhita-by-v-subrahmanya-sastri . The search string was exactly System A zigzag + lunar station.
+
+### S9-042 Quadratic residue at first visibility
+
+Disquisitiones arithmeticae develops the integer residue of a square modulo a prime. Heliacal rising is first visibility. Combined: for a digit value a on a turn, the quadratic residue a^2 mod 19 (the Metonic prime) is posted on the earliest turn that contains a's neighboring content token. A query digit with the same residue retrieves that first turn. Modulus 19 is the Metonic prime, chosen because it is prime and historical, not because it was fitted. The posting sits on the first occurrence only. Target: Open-Domain. Miss pattern: OD no_pool 14. A residue class of a digit is unposted, so the first occurrence cannot be looked up. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** r = (a * a) mod 19. Post r on the minimum-session_order turn containing the content token adjacent to the digit. Hit when the query digit squares to the same r mod 19.
+
+**Rust sketch.** Integer square and remainder. Earliest turn via DetHashMap from token id to minimum session_order. Feat counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/disquisitionesa00gaus (api: archive.org; era: Gauss, Disquisitiones arithmeticae, 1801; heliacal rising).
+
+**Dedupe.** Not casting out nines, whose modulus is 9 and whose test is a checksum. Not the bare heliacal posting of a token. The key is the quadratic residue modulo 19, on the first occurrence only.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Disquisitiones arithmeticae" "heliacal rising"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Heliacal catalog: https://archive.org/details/geminos-introduction-to-the-phenomena
+
+### S9-043 Whetstone proportion on the Saros
+
+The Whetstone of Witte teaches the rule of proportion in English. The Saros returns a configuration after 223 months. Combined: three digit tokens a, b, c define x by a/b = c/x when a divides b*c. x is posted not on the turn that holds a, b, c but on the turn whose session index differs by a multiple of 223, if that turn exists. A query carrying a, b, c retrieves the later turn. Exact division only. Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. A proportion's fourth term, a Saros away, is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** x = (b * c) / a in integers, remainder required 0. Partner index = index + 223k for the smallest k > 0 that lands on a real turn in the same session; if none, no posting.
+
+**Rust sketch.** Integer division check. Partner lookup in the session's turn vector by index arithmetic. Feat counts_len false on the partner, storing x. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/TheWhetstoneOfWitte (api: archive.org; era: Recorde, The Whetstone of Witte, 1557; Saros 223).
+
+**Dedupe.** Not the Oughtred heliacal proportion, which posts on the first occurrence. Not ana ±10%. The partner is exactly a Saros step away, and the division must be exact.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="The Whetstone of Witte" "Saros"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Saros catalog, fetched: https://archive.org/details/historyofancient0000neug
+
+### S9-044 Euclid's lemma on a Saros step
+
+Euclid's lemma says that a prime dividing a product divides one of the factors. Combined with the Saros: if a query term id's prime divides the product of two scored turns' characteristic exponents, the lemma seats the factor-turn, and if both turns are factors the one whose session index differs by a multiple of 223 from the query's date ordinal is preferred. The prime test is exponent comparison. 223 is the historical period. Target: Multi-Hop. Miss pattern: MH pool_not_k 83. A prime divisor of a product should force the seat a Saros away. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** p divides the product iff p's exponent in turn A plus its exponent in turn B is positive. The lemma seats A if exp_A(p) > 0, else B. If both are positive, seat the one with (session_index difference) mod 223 = 0, else the earlier index.
+
+**Rust sketch.** Exponents are the characteristic map from S9-001's ingest structure, read-only here. The selector compares exponents and the modulo-223 gap with integers. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2 (api: archive.org; era: Euclid VII.30, Heath vol. 2; Saros 223).
+
+**Dedupe.** Not the bare divisibility admission, which admits every dominating turn. The lemma picks one factor, and the Saros gap breaks the tie between two factors.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Euclid lemma" "Saros cycle"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Saros catalog, fetched: https://archive.org/details/historyofancient0000neug
+
+### S9-045 Double false position in a mansion
+
+Double false position uses two wrong assumptions, one over and one under, and cross-multiplies. The lunar mansions are 28. Combined: the two partial-cover turns in mansion row = session_index mod 28 are the two assumptions. The cross-multiplication names the heavier one, and the missing term ids are posted onto that turn as length-free feats so a query of the missing term enters the pool. The row width 28 is historical. Partial cover means a strict nonempty subset of the query term ids, known only at query time; at ingest the posting is the cross-multiplied partner of each pair of turns in the same mansion that share a token. Target: Multi-Hop;Open-Domain. Miss pattern: MH no_pool 13 and pool_not_k 83; OD no_pool 14. Two wrong covers, one mansion. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For two turns in the same row mod 28 sharing a token, with covered-count estimates a, b stored as their content-count totals, the Nine Chapters weight b*A + a*B uses A = |count difference|. Post the lighter turn's rarest token id onto the heavier turn.
+
+**Rust sketch.** Row is index mod 28. Pairs that share a token id are found from postings at ingest. The heavier turn receives the lighter turn's rarest id as a counts_len-false feat. Integer comparison only. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/algebrawitharith00brahuoft (api: archive.org; era: Brahmagupta / Colebrooke, and the Nine Chapters yingbuzu; 28 mansions).
+
+**Dedupe.** Not the Turin lacuna, which drops the uncovered group. Not a khipu two-hop: the transferred id is one token, copied once, inside one mansion row. Not Gemini's uncovered-entity rescue, which uses an entity list.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="double false position" "lunar mansion"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Mansion record, fetched: https://archive.org/details/tapas-io-133158-book-of-fixed-stars al-Sufi, Book of Fixed Stars. Nine Chapters: https://ctext.org/nine-chapters
+
+### S9-046 Rule of three on the analemma
+
+Lilavati's rule of three solves a/b = c/x by cross-multiplication. The analemma displaces sundial time from mean time. Combined: a, b, c are three digit tokens, x is the fourth proportional when the division is exact, and x is posted only when the turn's lexical rank and session rank differ, the integer equation-of-time gap. A turn with equal ranks is not an analemma and gets no fourth proportional. A query of a, b, c retrieves x's turn. Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. The fourth proportional of a time displacement is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Require r_lex != r_sess. Then if a divides b*c, x = (b*c)/a, post x. Otherwise post nothing.
+
+**Rust sketch.** Ranks are ordinals available after indexing, stored as integers on the turn. Exact division in i64. Feat counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/lilavati00bhas (api: archive.org; era: Bhaskara, Lilavati; the analemma as the equation-of-time displacement).
+
+**Dedupe.** Not the bare rule of three, which does not require a rank gap. Not triangulation, which requires two unique argmaxes. The gap is only a nonzero test, not a tuned threshold.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="rule of three" "analemma"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). OpenAlex search="equation of time" "analemma" returned 74, first title The equation of time and the analemma, so that pairing is attested and is not this claim. Kepler record: https://archive.org/details/ioanniskepplerih00kepl
+
+### S9-047 Sieve inside the canonical hours
+
+The sieve strikes multiples and leaves primes. Combined with the eight hours: inside one hour bin, a content token whose df factors as a product of two higher-df tokens that co-occur in the same bin is composite and is not posted. A token that survives is posted as the bin's prime cue, counts_len false. A query of that rare cue retrieves the turn even if the composite neighbors damped the score. No word list; compositeness is df arithmetic. Target: instruction_following. Miss pattern: IF no_pool 5 and pool_not_k 15. Composite cues inside an hour drown a prime cue. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** In bin h, token c is composite if there exist a, b in the same bin with df(a) > df(c), df(b) > df(c), and df(c) = df(a)*df(b) is false as integers but c's local count equals the product of the local counts of a and b. Strike c. Post survivors.
+
+**Rust sketch.** Local counts in a DetHashMap<(bin, token), u32>. The strike test is integer equality of counts. Survivors get a length-free feat. df is the existing corpus df. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/nicomachus-introduction-to-arithmetic (api: archive.org; era: Nicomachus, Introduction to Arithmetic, on the sieve; Benedict's hours).
+
+**Dedupe.** Not lectio difficilior, which prefers a rarer reading by a scribal principle. Not a retune of STEP7_RARE_IDF. The strike is the sieve's composite test inside one hour bin, and it removes the posting rather than reweighting it.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="sieve of Eratosthenes" "canonical hours"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). The sieve is attested in Nicomachus's Introduction, the fetched record. Eratosthenes catalog: https://mathshistory.st-andrews.ac.uk/Biographies/Eratosthenes/ . Hours: https://archive.org/details/ruleofstbenedict00bene
+
+### S9-048 Zigzag ballot
+
+A zigzag reflects between extrema. Borda sums ranks. Combined: the three ranks of a scored turn are not summed in a straight line. They are added in zigzag order, scene then lexical then session, and if that partial sum would exceed the maximum of the three ranks times two, the next rank is subtracted instead of added, the reflection. The minimum reflected sum is seated. No pairwise vote. Target: event_ordering. Miss pattern: EO pool_not_k 17 and t5_not1 7. A reflected sequence is seated by one rank. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let r1 <= r2 <= r3 be the three ranks sorted. s = r1 + r2. If s > 2*r3, s = s - r3, else s = s + r3. Seat minimum s. The bound 2*r3 is the reflection at twice the largest rank, taken from the ranks themselves.
+
+**Rust sketch.** Integer sort of three ordinals. One addition and a possible subtraction. Applied in the remaining selector. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/historyofancient0000neug (api: archive.org; era: System A zigzag, Neugebauer HAMA part 1; Borda's rank sum).
+
+**Dedupe.** Not the bare Borda sum, which always adds. Not System A's digit zigzag, which reflects a digit sequence. This reflects the rank sum at twice the largest rank.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="zigzag function" "Borda count"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Borda catalog, fetched: https://mathshistory.st-andrews.ac.uk/Biographies/Borda/
+
+### S9-049 Constituents on the logical piano
+
+Boole's constituents are the minterms of a set of elective symbols. Jevons's logical piano eliminates the constituents that contradict the premises. Combined: each stopword polarity present in a turn (not versus its absence, all versus some) is one elective bit. The full minterm is posted only when the bits are not contradictory, contradiction being not together with all on the same stored clause. A query whose bits agree with the surviving minterm retrieves the turn. Eliminated minterms are not posted, so they cannot be seated. Particles are existing stopwords. Target: instruction_following;preference_following. Miss pattern: IF no_pool 5 and t5_not1 12; PF no_pool 9. A contradicted minterm still occupies a seat. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Bits: b_not, b_all, b_some, from STARTER_STOP. Contradictory when b_not and b_all are both set on the same half of the token sequence. If not contradictory, post the 3-bit integer. Hit on equal bits.
+
+**Rust sketch.** Bit pack at ingest from stopword membership, split at the midpoint of the stored token sequence. Feat counts_len false. Query planning emits its own pack. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/in.ernet.dli.2015.46372 (api: archive.org; era: Boole, Laws of Thought, 1854; Jevons's logical piano, 1869).
+
+**Dedupe.** Not ezib, which drops a span by a disclaimer pattern. Not the bare De Morgan split, which posts disjuncts. This posts one minterm and refuses the contradictory combination the piano would strike out.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Boole constituents" "logical piano"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Jevons record, fetched: https://archive.org/details/theprinciplesofs00jevoiala The Principles of Science. MacTutor Jevons and Boole biographies also HTTP 200.
+
+### S9-050 Golden cut at the goal-year
+
+Euclid VI cuts a segment in extreme and mean ratio. The integer sequence of that cut is the Fibonacci recurrence, which Euclid's ratio generates. A goal-year period is the characteristic return of one phenomenon. Combined: the session is cut at the Fibonacci index nearest its length, and a scored turn is seated only when it also lies an integer multiple of the token's modal gap from that cut. The ratio is the Fibonacci pair, computed by addition, never a floating phi and never a fitted constant. Target: event_ordering. Miss pattern: EO pool_not_k 17 and k_not5 8. The cut of a session is not aligned with the phenomenon's own period. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** F_0=0, F_1=1, F_{k+1}=F_k+F_{k-1}. Choose the greatest F_k <= n, the session length. Cut = F_{k-1}. Modal gap g of the rarest query term, from its posting differences. Seat the scored turn minimizing |(index - cut) mod g|, with g = 1 if the term occurs once.
+
+**Rust sketch.** Fibonacci by integer addition up to n. Modal gap in a DetHashMap of differences. The selector compares absolute integer residues. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2 (api: archive.org; era: Euclid VI, extreme and mean ratio, Heath vol. 2; Babylonian goal-year period from the data).
+
+**Dedupe.** Not a tuned phi weight. Not loci. Not the bare goal-year link, which posts a partner at gap g. Here the seat must also sit on the Euclidean cut.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="golden section" "goal-year text"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Goal-year catalog, fetched: https://archive.org/details/historyofancient0000neug . The period is the modal gap of the rarest token, not a planet constant and not phi as a float.
+
+### S9-051 Exhaustion of a Kirkman block
+
+Exhaustion approaches a magnitude from below by inscribed figures that never exceed it. A Kirkman block puts each pair in one triple. Combined: among scored turns whose term-id set is a subset of the query's term-id set, choose the unique pair-block that is maximal under inclusion and still does not exceed the query. A turn that contains a term the query lacks is outside the inscription and cannot be seated while an inscribed turn exists. Target: Multi-Hop. Miss pattern: MH pool_not_k 83 and k_not5 28. A block that overshoots the query is seated over the tightest inscribed block. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Inscribed = term set of the turn is a subset of the query term set, and nonempty. Among inscribed turns, seat the one with the largest cardinality. Ties keep the earlier index. If no inscribed turn exists, leave the selector unchanged.
+
+**Rust sketch.** Subset test on DetHashSet<u32> of term ids stored at ingest. Cardinality is the set length. Applied as a filter on remaining before the submodular loop. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/worksofarchimede0000tlhe (api: archive.org; era: Archimedes, method of exhaustion, in The Works of Archimedes; Kirkman 1847).
+
+**Dedupe.** Not florilegium quota, which caps a count. Not trial balance, which demands every group be present. Exhaustion refuses anything that exceeds the query and takes the greatest figure that does not.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="method of exhaustion" "Kirkman triple system"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Kirkman catalog, fetched: https://mathshistory.st-andrews.ac.uk/Biographies/Kirkman/
+
+### S9-052 Sexagesimal place on the square
+
+The Almagest writes numbers in sexagesimal place value. The square of opposition keeps universals and particulars apart. Combined: a digit token n is split into high = n / 60 and low = n % 60, and the two limbs are posted only when the turn's quantifier class matches the class that will be required at query time. Both limbs are posted with the turn's own U or P bit attached, so a universal query does not hit a particular turn's limbs. Base 60 is Ptolemy's base, not a fitted radix. Target: preference_following. Miss pattern: PF no_pool 9 and pool_not_k 14. A high sexagesimal limb is invisible to a universal query. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** high = n / 60, low = n % 60, integer. Post (high, bit) and (low, bit), bit from stopwords. A query of class U matches only bit U.
+
+**Rust sketch.** All-digit tokens parsed as integers. Two feats, counts_len false, id packed with the quantifier bit. No unit-suffix list. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/almagest00ptol (api: archive.org; era: Ptolemy, Almagest, base 60; the square of opposition).
+
+**Dedupe.** Not digit-unit split, which cuts a unit word off a number. Not Roman numerals. Not the bare sexagesimal split, which would ignore the quantifier. The bit is part of the key.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="sexagesimal place" "square of opposition"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Square record, fetched: https://archive.org/details/logicorartofthin00arna . Metadata title of the Almagest record: The almagest, creator Ptolemy.
+
+### S9-053 Octaeteris in a Latin square
+
+The octaeteris is the 8-year lunar-solar cycle the Venus table is built on. A Latin square posts each symbol once per row. Combined: row = session_index mod 8, symbol = rarest content id, and the pair is posted only the first time. Period 8 is the historical cycle. A query of that symbol in a position that maps to the same row retrieves the first turn only. Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. An 8-year row repeats a symbol. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** row = index mod 8. Post (row, symbol) once per corpus, first session_order wins. symbol = minimum-df content id on the turn.
+
+**Rust sketch.** DetHashMap<(u32,u32), usize> first-writer. Feat counts_len false. Distinct from the 28-mansion square by the modulus 8, which is the octaeteris, not a second copy of the mansion rule. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://sachsen.digital/werk/2967/1 (api: sachsen.digital; era: The 8-year cycle, as in the Dresden Venus table and Geminos; Euler's Latin squares).
+
+**Dedupe.** Not the 28-mansion Latin square. The modulus is 8 because the cycle is 8 years. Not a fitted bin count.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="octaeteris" "Latin square"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). OpenAlex search="octaeteris" "Venus tablet" returned 3, first title Evidence of Minoan astronomy and calendrical practices, so octaeteris-with-Venus is not claimed as unseen. This claim is octaeteris with the Latin-square uniqueness rule. Latin-square catalog: https://mathshistory.st-andrews.ac.uk/Biographies/Euler/ . Forstemann: https://archive.org/details/the-complete-forstemann-version-of-the-dresden-codex
+
+### S9-054 Exeligmos mixture
+
+The exeligmos returns an eclipse to the same longitude after three Saros cycles, 669 months. Alligation identifies the mixture with the sum of the parts. Combined: a scored turn is the summary only when its count vector equals the sum of the parts and its session index differs by a multiple of 669 from the earliest part. A mixture that is not on the exeligmos is not seated by this rule. 669 = 3*223 is historical. Target: summarization. Miss pattern: SUM pool_not_k 9 and k_not5 8. A mixture three Saros cycles away is not the summary seat. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Mixture equality as in alligation, plus (index_M - index_earliest_part) mod 669 = 0. Both required.
+
+**Rust sketch.** Vector equality in DetHashMap counts. The gap test is integer modulo 669. Candidates already scored. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/geminos-introduction-to-the-phenomena (api: archive.org; era: Exeligmos = 3 Saros, catalogued in Neugebauer and in Geminos's tradition; Fibonacci alligation).
+
+**Dedupe.** Not the bare alligation seat, which has no period gate. Not the Saros false-position link, which pulls a single correcting turn. This seats a sum that lands on the triple cycle.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="exeligmos" "alligation"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Alligation record, fetched: https://archive.org/details/LiberAbaci . HAMA part 1 also fetched: https://archive.org/details/historyofancient0000neug
+
+### S9-055 Callippic derangement
+
+The Callippic cycle is four Metonic cycles, 76 years, a correction of the 19-year cycle. A derangement has no element in its own place. Combined: a scored turn whose session index differs by a multiple of 76 from another scored turn is a Callippic return, and it is refused when its content-id sequence is a derangement of the query. A return that fixes at least one cue may sit. 76 = 4*19 is the historical cycle, not a fitted window. Target: event_ordering. Miss pattern: EO pool_not_k 17. A 76-year return with no fixed cue is seated anyway. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Return when some other scored turn has (index difference) mod 76 = 0. Refuse that return when fixed points against the query sequence are 0 and the sets are equal and nonempty.
+
+**Rust sketch.** Modulo 76 on stored session indexes. Fixed points by integer id equality on stored sequences. The refusal removes the turn from remaining. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/geminos-introduction-to-the-phenomena (api: archive.org; era: Callippic cycle of 76 years, in Geminos and Censorinus; Montmort's derangement).
+
+**Dedupe.** Not the Alphonsine derangement, which refuses any zero-fixed-point mean. Not the Metonic intercalation gate. This refusal applies only to a turn on the 76-cycle.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="Callippic cycle" "derangement"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). OpenAlex search="Metonic cycle" "Callippic cycle" returned 44, first title The Metonic and Callippic Cycles, so that historical pairing is attested and is not this claim. Derangement record: https://archive.org/details/ldpd_6444894_000 . Censorinus: https://archive.org/details/bim_early-english-books-1641-1700_censorinus-de-die-natal_1695
+
+### S9-056 Parallax of a modus tollens
+
+Modus tollens: from if A then B, and not B, conclude not A. Parallax corrects an observed position by the observer's displacement before it is binned. Combined: the conditional split is the stopword if, and the denial is the stopword not on the consequent side. The concluded not-A is posted not at the turn's own index but at the index shifted by the session index itself, the observer's displacement, wrapped inside the session. A query of not-A retrieves the corrected position. The shift is the session index, data, not a fitted offset. Target: preference_following;event_ordering. Miss pattern: PF no_pool 9; EO pool_not_k 17. A denied consequent is stored at the uncorrected position. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let A be the content ids before if and B the ids after. If not occurs in B's half, post each id of A under the neg key at position (index + session_index) mod session_len.
+
+**Rust sketch.** Stopword scan on the stored token sequence. The destination index is integer modulo the session length. Feat counts_len false on the destination turn. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/L325AristotleIPriorAnalytics (api: archive.org; era: Modus tollens, Prior Analytics; parallax as a position correction in the Almagest).
+
+**Dedupe.** Not the bare contrapositive posting, which stays on the same turn and swaps clauses. Not refraction, which lifts the first or last turn by one. The shift here is the whole session index.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="parallax correction" "modus tollens"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Parallax record, fetched: https://archive.org/details/almagest00ptol . OpenAlex search="modus tollens" "contrapositive" returned 249, so that logical pairing is attested and is not this claim.
+
+### S9-057 Last visibility under Pascal's recurrence
+
+Acronychal rising is the last visibility, opposite heliacal first visibility. Pascal's recurrence builds C(n,k) from the two parents. Combined: among scored turns containing a query term, the last by session_order is the acronychal candidate, and it is seated when its marginal cover equals the Pascal parent that uses the new element, meaning its term set is not a subset of the earlier turns' union. If it adds nothing, the recurrence's other parent, the earlier cover, keeps the seat. Target: Multi-Hop. Miss pattern: MH pool_not_k 83 and t5_not1 61. The last occurrence of a cue loses to an earlier repetition. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let L be the maximum session_order among scored turns containing any query term. Let U be the union of term sets of scored turns with smaller session_order. Seat L when term(L) is not a subset of U. Otherwise leave the selector unchanged.
+
+**Rust sketch.** Session_order maximum over a DetHashSet of turns that intersect the query terms. Subset test on stored term sets. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/bub_gb_UqgUAAAAQAAJ (api: archive.org; era: Acronychal rising, last visibility; Pascal's triangle, 1665).
+
+**Dedupe.** Not C2 recency seats, which are speaker-conditioned. Not the heliacal first-occurrence posting. This seats the last scored occurrence only when it adds a term the earlier union lacks, the Pascal marginal.
+
+**Novelty.** no prior combination found in searches OpenAlex GET https://api.openalex.org/works?search="acronychal rising" "Pascal triangle"&per-page=1 (HTTP 200, meta.count 0, 2026-11-15). Last-visibility catalog: https://archive.org/details/geminos-introduction-to-the-phenomena
+
+### S9-058 Casting out nines refusal
+
+Casting out nines refuses a result whose digit sum does not match the digit sum of the inputs modulo 9. Alone, without the Metonic gate: a scored turn may take the seat only when the sum of its numeric tokens is congruent modulo 9 to the sum of the query's numeric tokens. If either side has no digit, the check does not fire and the selector is unchanged. Modulus 9 is the historical check. Target: Multi-Hop. Miss pattern: MH t5_not1 61. A seat whose digit check fails still leads. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** If both sides have at least one digit, require sum(digits_t) ≡ sum(digits_q) (mod 9). Otherwise do not refuse.
+
+**Rust sketch.** Digit sums stored at ingest as a u32. The selector drops noncongruent candidates from remaining only when the query sum is nonzero. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/summa-de-arithmetica-geometria-proportioni-et-proportionalita (api: archive.org; era: Pacioli, Summa, 1494).
+
+**Dedupe.** Not the nines-plus-Metonic gate, which also tests intercalation. Not the nines witness on anthyphairesis, which first computes a gcd. This is the checksum alone.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-059 Anthyphairesis common measure
+
+Anthyphairesis, Euclid's algorithm by repeated subtraction, finds the greatest common measure of two magnitudes. Alone: among scored turns, seat the turn whose content-count vector has the greatest integer gcd with the query's count vector. No nines check on this variant. The measure is the gcd of the paired counts, summed over shared ids. Target: Multi-Hop. Miss pattern: MH pool_not_k 83. The greatest common measure is not the selection key. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For each shared id, g(id) = gcd(count_t, count_q) by repeated subtraction. Score = sum of g(id). Seat the maximum. Ties keep the earlier index.
+
+**Rust sketch.** Counts from ingest tf in a DetHashMap<u32,u32>. Integer subtraction only, no division rounding. Applied in the remaining selector. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2 (api: archive.org; era: Euclid VII, Heath vol. 2).
+
+**Dedupe.** Not the SAM product. Not the anthyphairesis-plus-nines rule, which can refuse the gcd. This seats the greatest common measure with no checksum.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-060 Single false position
+
+False position makes one assumption and scales it once. When a turn shares some but not all of a session-mate's content ids, the missing ids are posted onto the assumption turn as length-free feats, one correction. A query that contains a missing id then retrieves the assumption's session-mate only through that posted id, so the residual turn enters the pool. Wikidata Q213540 was fetched as the papyrus catalog. This is the opposite of the Turin lacuna, which deletes the uncovered group. Target: Multi-Hop;Open-Domain. Miss pattern: MH pool_not_k 83 and no_pool 13; OD pool_not_k 35. One correction pulls the residual turn. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For turns t, u in one session, if content(t) is a nonempty proper subset of content(u), post each id in content(u) \ content(t) onto u as a feat already true of u, and post the same id onto t with counts_len false so t, the assumption, also matches. The scaling is one copy, not a weight.
+
+**Rust sketch.** Set difference of DetHashSet<u32> inside each session at ingest. One feat push per missing id, counts_len false, on the subset turn. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/Peet_1923 (api: archive.org; era: Rhind mathematical papyrus, Peet 1923 edition of BM 10057 and 10058).
+
+**Dedupe.** Not the Turin lacuna, which drops the group. Not a two-hop bridge: one id is copied once, inside one session. Not Gemini's uncovered-entity rescue, which uses an entity lexicon.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-061 Yingbuzu double false position
+
+The Nine Chapters cross-multiplies an over-assumption and an under-assumption. Alone, without Josephus and without the mansion row: the two turns in a session with the largest and smallest content-count totals are the two assumptions. The heavier one, by the classical cross-multiplication, receives the lighter one's rarest content id as a length-free feat. A query of that id retrieves the heavier turn. Jiuzhang suanshu edition fetched: https://archive.org/details/jiuzhangsuanshu0000zeng . MacTutor Nine Chapters topic page fetched HTTP 200. Target: Multi-Hop. Miss pattern: MH pool_not_k 83 and no_pool 13. Two partial covers, cross-multiplied. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let A, B be the content-count totals, A >= B. Heavier = the turn with total A. Post the minimum-df id of the lighter turn onto the heavier turn. The cross-multiplication b*A versus a*B is stored as the witness that A was heavier; with one pair it agrees with A >= B.
+
+**Rust sketch.** Per-session totals in a DetHashMap. One feat copy, counts_len false. No ring elimination and no mod-28 gate, which are the combined variants. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://ctext.org/nine-chapters (api: ctext; era: Nine Chapters, surplus and deficit; ctext and the fetched Jiuzhang edition).
+
+**Dedupe.** Not the excess-deficit-plus-Josephus rule, which then counts out a ring. Not the mansion double-false-position, which stays inside one row of 28. This is the single cross-multiplication inside a session.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-062 Rule of three
+
+Lilavati's rule of three: a is to b as c is to x, with x recovered by cross-multiplication. Alone: when a turn contains three digit tokens a, b, c and a divides b*c exactly, x is posted on that same turn. A query that carries a, b, c matches x's feat. No rank-gap requirement and no Saros partner. Inexact division posts nothing, so this is not a tolerance band. Target: Open-Domain;preference_following. Miss pattern: OD no_pool 14; PF no_pool 9. The solved fourth term is not a posting. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** x = (b * c) / a in integers when a divides b*c. Post the decimal digits of x as a counts_len-false feat.
+
+**Rust sketch.** Three all-digit tokens, integer division, remainder must be 0. Feat on the same turn. Distinct from the analemma variant, which requires unequal ranks, and from the Saros variant, which posts on a partner. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/lilavati00bhas (api: archive.org; era: Bhaskara, Lilavati, Colebrooke's translation).
+
+**Dedupe.** Not ana ±10%. Not the Oughtred heliacal variant, which posts on the first occurrence. Not the Whetstone-Saros variant, which posts a period away.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-063 Brahmagupta zero place-keeper
+
+Brahmagupta's arithmetic treats zero as a number that holds a place, so later places do not move. Colebrooke's translation is the English record; the Sanskrit edition fetched at https://archive.org/details/Brahmasphutasiddhanta_Vol_1 is the siddhanta itself. is_content at retrieval.rs:686 requires more than one character, so the digit 0 never becomes a feat and every later token's column closes up over the hole. The place-keeper posts a length-free column for that zero and stores each later content id at the column it actually occupied, zeros counted. A query matches when its content ids sit at those same columns. The rule does not invent a posting for a word the turn does not contain. It is the opposite of the Turin lacuna, which removes an uncovered group and lets the rest close up. Scholarship on Brahmagupta and zero is easy to find; the concept is not claimed as unseen. The retrieval rule is the column that stays. Target: Open-Domain;preference_following;instruction_following. Miss pattern: OD no_pool 14; PF no_pool 9; IF no_pool 5. A missing cue shifts every later cue into the wrong column. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Let the raw token sequence be t0..tn, including the one-character token 0. The column of tk is k. Post (id(tk), k) for every content token, and post a zero marker at k when tk is the digit 0. A query matches when each of its content ids occurs at a stored column and the gaps between those columns equal the gaps in the query, zero columns included.
+
+**Rust sketch.** When raw_tokens yields "0", push Feat { id: intern("\u{1}s9:zero"), w: 1.0, counts_len: false, inheritable: false } and append the column to a u32 array stored beside the turn. Later content feats carry their own column in a parallel array. Rank compares column gaps with integer subtraction. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/algebrawitharith00brahuoft (api: archive.org; era: Brahmagupta, Brahmasphutasiddhanta; Colebrooke's Algebra from Brahmagupta and Bhaskara).
+
+**Dedupe.** Not the Turin lacuna, which drops an uncovered group. Not a BM25 zero weight. The zero token occupies a column so later columns keep their indexes.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-064 Sunzi simultaneous residues
+
+The Sunzi suanjing states a number by its remainders modulo 3, 5, and 7, which are pairwise coprime, and reconstructs it. Alone, without the Benedictine hour modulus: a turn posts its session index modulo 3, 5, and 7 as one packed key. A query that contains three digit tokens equal to those remainders retrieves the turn. ctext.org/sunzi-suan-jing returned HTTP 200. MacTutor's Chinese-remainder topic URL returned HTTP 404 and is not cited; the Sunzi biography page returned HTTP 200. Target: Open-Domain;Multi-Hop. Miss pattern: OD no_pool 14; MH no_pool 13 and pool_not_k 83. A turn known by its remainders is not retrievable. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** r3 = i mod 3, r5 = i mod 5, r7 = i mod 7. Key = r3 + 3*r5 + 15*r7, the unique residue modulo 105. Hit when the query's three digits equal the three remainders.
+
+**Rust sketch.** Integer remainders at ingest. One counts_len-false feat. Query planning emits the key only when it has exactly three all-digit tokens. This modulus triple is 3, 5, 7, not the 3, 5, 8 triple of the Benedictine combination, which is not coprime and is not claimed to be unique. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://ctext.org/sunzi-suan-jing (api: ctext; era: Sunzi suanjing, the simultaneous remainder problem).
+
+**Dedupe.** Not the Benedictine-hour triple, whose moduli are 3, 5, and 8 and which matches a triple without claiming uniqueness. This is the classical coprime triple and the unique residue modulo 105.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-065 System A reflected difference
+
+System A uses a constant first difference that changes sign at a tabulated maximum and minimum. Alone: among scored turns in a session whose digit sequence has constant absolute first difference and at least one reflection at the session's own max or min digit, seat the turn where the sign flips. If the session has no such flip, the selector is unchanged. Extrema are the session's digits. No planet table. Target: event_ordering. Miss pattern: EO pool_not_k 17 and k_not5 8. A reflected arithmetic run is scored as a bag. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** |delta| constant and some index where the next step would exit [min digit, max digit]. Seat that index if the turn is scored. Ties keep the earlier flip.
+
+**Rust sketch.** Integer differences over stored digit values. The selector restricts remaining to the flip turn when one exists in the scored set. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/historyofancient0000neug (api: archive.org; era: Babylonian System A, catalogued in Neugebauer, History of Ancient Mathematical Astronomy, part 1, 1975).
+
+**Dedupe.** Not the zigzag-plus-characteristic-number posting, which writes exponents. Not the zigzag ballot, which reflects a rank sum. Not System B, which requires a constant second difference. This seats the flip turn of a first-difference scheme.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-066 Constant second difference
+
+Taylor's increments take the difference of the differences. A session whose digit second difference is a nonzero constant is an ephemeris run of that order. The constant itself is posted on every turn of the run as a length-free key. A query digit equal to the second difference retrieves the run. This is not System A's first-difference reflection, and it is not a fitted acceleration. Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. A quadratic run is not posted as a run. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** delta2_i = (d_i - d_{i-1}) - (d_{i-1} - d_{i-2}). Require delta2_i equal for all i and nonzero. Post that integer on each turn of the session.
+
+**Rust sketch.** Three stored digits at a time, integer subtractions. If the constant test fails, post nothing. Feat counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/UFIE003454_TO0324_PNI-2529_000000 (api: archive.org; era: Taylor, Methodus incrementorum, 1715; the second difference is the increment of the increment).
+
+**Dedupe.** Not System A's reflected first difference. Not a score weight. The posted key is the second difference itself.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-067 Sieve of composite cues
+
+The sieve strikes multiples. Alone, without the hour bin: a content token whose local count equals the product of the local counts of two tokens with strictly higher corpus df, co-occurring in the same turn, is composite and is not given a length-free re-posting. Tokens that survive are re-posted counts_len false so length cannot zero them. Compositeness is count arithmetic. MacTutor Eratosthenes returned HTTP 200 as the parallel catalog; the citation is Nicomachus, whose Introduction presents the sieve. Target: Open-Domain. Miss pattern: OD no_pool 14 and pool_not_k 35. Composite cues occupy the posting list and the prime cue is damped. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** c is composite on a turn when a, b on that turn have df(a) > df(c), df(b) > df(c), and count(c) = count(a)*count(b). Survivors are re-posted.
+
+**Rust sketch.** Counts and df already on the index. Integer product comparison. One feat per survivor, counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/nicomachus-introduction-to-arithmetic (api: archive.org; era: Nicomachus, Introduction to Arithmetic).
+
+**Dedupe.** Not the hour-bin sieve, which strikes inside one canonical hour. Not a retune of idf weights. Not lectio difficilior.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-068 Sexagesimal limb split
+
+The Almagest writes a magnitude as sexagesimal places. Alone, without the quantifier bit: a digit token n posts high = n / 60 and low = n % 60 as two length-free feats. A query of either limb matches. Base 60 is the historical radix. Metadata for this record: title The almagest, creator Ptolemy. Target: Open-Domain;event_ordering. Miss pattern: OD no_pool 14; EO no_pool 1. A number above 59 is stored as one token and misses a query of either limb. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** high = n / 60, low = n % 60. Post both when n >= 60. When n < 60, post n itself once.
+
+**Rust sketch.** All-digit tokens, integer division. Feats counts_len false. No unit lexicon. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/almagest00ptol (api: archive.org; era: Ptolemy, Almagest, base 60).
+
+**Dedupe.** Not digit-unit split. Not the myriad split, whose block is 10000. Not the sexagesimal-plus-square variant, which packs the quantifier bit into the key.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-069 Chord-table linear interpolation
+
+Ptolemy interpolates linearly between chord-table entries. Two successive digit tokens p, q on a turn, with a third digit f as the fraction of the step in sixtieths, post the interpolated value p + ((q - p) * f) / 60 when f < 60. A query of that integer retrieves the turn. The divisor 60 is the sexagesimal step. Inexact cases where the identity is only used as a stored integer are accepted because the division is exact integer arithmetic; the remainder is discarded by the historical table's truncation, and the remainder is also posted so the truncation is visible. Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. A value between two tabulated digits is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** v = p + ((q - p) * f) / 60, rem = ((q - p) * f) mod 60. Post v and rem.
+
+**Rust sketch.** Three digits, integer multiply and divide. Two feats, counts_len false. No floating interpolation. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/almagest00ptol (api: archive.org; era: Ptolemy, Almagest, chord table with linear interpolation between steps).
+
+**Dedupe.** Not ana ±10%, which widens a band. Not the Ockham chord key, which interpolates document frequencies. This interpolates the turn's own digits.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-070 Metonic intercalation gate
+
+The Metonic cycle intercalates 7 months in 19 years. A scored turn whose digit is a day-number may be seated only when the day does not exceed 29 in a common year of the cycle or 30 in an intercalary year. The year-in-cycle is the session index mod 19. Intercalary positions are the historical set {2,5,8,10,13,16,18}. If the turn has no day-like digit, the gate does not fire. Censorinus's 1695 edition was fetched as the Latin parallel: https://archive.org/details/bim_early-english-books-1641-1700_censorinus-de-die-natal_1695 Target: event_ordering. Miss pattern: EO pool_not_k 17 and k_not5 8. A day-number past the month length is seated in a common year. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** y = session_index mod 19. Limit = 30 if y is in the intercalary set, else 29. If the turn has a digit d with 1 <= d <= 31, refuse when d > limit.
+
+**Rust sketch.** The intercalary set is the seven historical residues, a const array, not a learned list of month names. The selector drops failing turns from remaining. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/geminos-introduction-to-the-phenomena (api: archive.org; era: The 19-year cycle in Geminos, Introduction to the Phenomena, and in Censorinus).
+
+**Dedupe.** Not the nines-plus-Metonic combination, which also requires the mod-9 checksum. Not regnal dating. Not ana ±10%.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-071 Saros return
+
+The Saros is the 223-month return of an eclipse configuration. A turn posts a length-free link to the turn in the same session whose index differs by 223, when both share a content token. A query of that token retrieves both. 223 is the historical period. Geminos was fetched as the phenomena catalog: https://archive.org/details/geminos-introduction-to-the-phenomena Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. A return 223 steps away is not posted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Partner when |index difference| = 223 and the content-id intersection is nonempty. Post each shared id on both turns, counts_len false.
+
+**Rust sketch.** Session vectors, integer difference, DetHashSet intersection. One feat per shared id. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/historyofancient0000neug (api: archive.org; era: The 223-month eclipse return, catalogued in Neugebauer HAMA part 1 and in Geminos).
+
+**Dedupe.** Not the false-position-plus-Saros rule, which transfers a missing term. Not the exeligmos mixture, whose period is 669. This posts the shared id across a gap of exactly 223.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-072 Clepsydra integer root
+
+Vitruvius describes the clepsydra's vessel and orifice. The integer image of a falling level used here is the greatest square not exceeding the matched delimiter depth, because the design posts the root and not the depth. Alone, without Leibniz's combination count: if the raw prose's delimiters balance, post isqrt(d). A query with the same root retrieves the turn. No clock-word list. Target: instruction_following;event_ordering. Miss pattern: IF no_pool 5; EO pool_not_k 17. A nested depth is stored linearly and misses the clock's root. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** d from the balanced delimiter scan. k = isqrt(d), the greatest integer with k*k <= d. Post k when d > 0.
+
+**Rust sketch.** isqrt by integer Newton iteration, one step of (k + d/k) / 2 from a power-of-two start, exact for the inequality. Feat counts_len false. The key is k, not C(d, k), which is the combined variant. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/vitruviustenbook00vitr (api: archive.org; era: Vitruvius, Ten Books on Architecture, on the water clock).
+
+**Dedupe.** Not the characteristic-enumeration clepsydra, which posts the binomial C(d, isqrt(d)). This posts the root alone.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-073 Canonical hour bins
+
+Benedict's Rule divides the day into eight hours. Alone: h = floor(8 * session_index / session_len) is posted as a length-free feat. The query names a bin by the number of top-level balanced delimiter groups in the query, modulo 8, an orthographic count rather than a token-count formula that would collapse every short query into bin 0. No hour names. Eight is the Rule's count, not a fitted histogram. This is not the octaeteris: the octaeteris tests index mod 8 as a cycle row, while this bins by floor of a fraction of the session. Target: instruction_following. Miss pattern: IF pool_not_k 15 and no_pool 5. An instruction's place in the day-shaped session is unposted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** h = floor(8 * i / n), h in 0..7. The query names a bin by the number of top-level balanced delimiter groups in the query string, modulo 8. Post h. A query with no delimiters names bin 0.
+
+**Rust sketch.** Integer division at ingest. Query planning uses the count of top-level balanced groups modulo 8, an orthographic count, not a word. Feat counts_len false. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/ruleofstbenedict00bene (api: archive.org; era: Rule of St Benedict, eight hours).
+
+**Dedupe.** Not the octaeteris Latin square, whose modulus is a cycle of 8 years and which posts a symbol once. Not the hour-bin sieve. This posts the bin index of every turn.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-074 Lunar mansion bins
+
+The lunar mansions are 28 stations. Alone, without the Latin-square uniqueness rule: row = session_index mod 28 is posted on every turn. A query digit equal to the row, or a query whose token count mod 28 equals the row, retrieves the turn. 28 is the historical count. al-Sufi's Book of Fixed Stars was fetched as the parallel catalog: https://archive.org/details/tapas-io-133158-book-of-fixed-stars Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** row = index mod 28. Post row. Hit when a query digit equals row or the query token count mod 28 equals row.
+
+**Rust sketch.** Integer modulo. Feat counts_len false. Every turn is posted, unlike the Latin-square variant which posts each symbol once. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/varahamihiras-brihat-samhita-by-v-subrahmanya-sastri (api: archive.org; era: 28 mansions, Brihat Samhita; al-Sufi's manazil in the Book of Fixed Stars).
+
+**Dedupe.** Not the mansion Latin square, which suppresses repeated symbols. Not loci. The width is 28 because there are 28 mansions.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-075 Epicyclic ordinal residual
+
+An epicycle is the residual motion about the mean motion. The integer image: the session-order rank of a turn minus the mean rank of its session, the mean being the integer average of the ranks. That signed residual is posted. A query whose own token-count residual against its length matches the absolute residual retrieves the turn. No floating anomaly and no fitted eccentricity. Target: Multi-Hop;event_ordering. Miss pattern: MH pool_not_k 83; EO k_not5 8. The residual from the session mean is not a posting. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** mean = (n - 1) / 2 by integer division, n the session length. residual = index - mean. Post |residual|.
+
+**Rust sketch.** Integer subtraction. Feat counts_len false. The sign is not a score weight; only the absolute residual is the key, so a query does not need a sign convention. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/almagest00ptol (api: archive.org; era: Ptolemy, Almagest, the epicycle as a residual from the mean).
+
+**Dedupe.** Not triangulation, which compares two argmaxes. Not the equation-of-time displacement, which is lexical rank minus session rank. This is index minus the session's integer mean index.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-076 Kepler fixed point of two ranks
+
+Kepler's equation iterates the eccentric anomaly until it is consistent with the mean anomaly. The integer image, using Ptolemy's chord step of 60 as the sine table's cut: start from E0 = session rank, then E_{n+1} = lexical_rank + ((session_rank * chord(E_n)) / 60), where chord is the sexagesimal truncation of the rank itself, chord(E) = E mod 60. Iterate at most 8 times, a historical small bound equal to the octaeteris count, not a fitted iteration cap, and stop when E repeats. Seat the turn whose fixed point is unique and smallest. This is an iteration, not one comparison of two argmaxes. Target: event_ordering;Multi-Hop. Miss pattern: EO t5_not1 7 and pool_not_k 17; MH t5_not1 61. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** E := r_sess. Repeat at most 8 times: E := r_lex + (r_sess * (E mod 60)) / 60, integer division. Stop when E equals its previous value. Seat the minimum stable E. Ties keep the earlier index.
+
+**Rust sketch.** Integer loop, no float sine. Ranks are ordinals. Applied in the remaining selector. Does not call the triangulation function and does not require uniqueness of an argmax. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/tabulaerudolphin00kepl (api: archive.org; era: Kepler, Tabulae Rudolphinae and the equation M = E - e sin E; chord sines from the Almagest).
+
+**Dedupe.** Not Step 33 triangulation, which seats a turn only when it is the unique best on both t_own and the session score at once. This iterates a fixed point of the two ranks and can seat a turn that was best on neither.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-077 Stereographic integer key
+
+Stereographic projection sends a point on the sphere to the plane by a ratio of distances. The integer image of u = x / (R + z), with x the turn index, z the session index, and R the historical radius cut of 60, posts u. A query that contains the integer u retrieves the turn. Chaucer's Treatise on the Astrolabe manuscript was fetched as the parallel object: https://archive.org/details/MSEng0920_2 Target: Open-Domain. Miss pattern: OD no_pool 14. A pair (session, turn) has no single lookup key. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** u = (60 * turn_index) / (60 + session_index), integer division. Post u.
+
+**Rust sketch.** Integer multiply and divide. Feat counts_len false. Radius 60 is the sexagesimal whole, not a fitted scale. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/planisphericastr0000vari (api: archive.org; era: Ptolemy's Planisphaerium tradition; the fetched planispheric-astrolabe record).
+
+**Dedupe.** Not the armillary triple, which requires three coordinates to match. Not a hash of the text. The key is one rational projection of the two indexes.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-078 Armillary triple match
+
+An armillary sphere needs all three circles. A scored turn may take the seat only when three integer coordinates agree with the query: session index mod 60, turn index mod 60, and the turn's first digit mod 60. If the query has no digit, the third coordinate is not required and this rule does not fire. Two matches are not enough. This is not a count threshold. Target: Multi-Hop. Miss pattern: MH pool_not_k 83 and k_not5 28. A turn matches two coordinates and is seated without the third. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Agree when (session_index mod 60) equals the query's first digit mod 60, (turn_index mod 60) equals the query's second digit mod 60, and the turn's first digit mod 60 equals the query's third digit mod 60. Seat such a turn if it is unique. If none, leave the selector unchanged.
+
+**Rust sketch.** Three integer congruences. The selector requires all three. No threshold of the form at-least-k. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/ita-bnc-in1-00000266-001 (api: archive.org; era: The armillary sphere's three circles, as in Ptolemy's planetary hypotheses tradition and the fetched Sacrobosco-Peurbach-Regiomontanus volume).
+
+**Dedupe.** Not Bertillonage or Locard's count of matching measures, which seats on a threshold. The armillary rule fails closed unless all three circles match. Not triangulation.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-079 Syzygy in arithmetic progression
+
+A syzygy is three bodies in a line, an arithmetic progression of positions. Among scored turns that share a content token, if three have session indexes a, b, c with b - a = c - b and b - a > 0, the middle one is the syzygy and is seated. The shared token is required so an accidental arithmetic pattern of empty turns does not fire. No planet names. Target: event_ordering;Multi-Hop. Miss pattern: EO pool_not_k 17; MH pool_not_k 83. Three aligned turns are not seated as one configuration. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** b - a = c - b > 0, integer, and the three turns' content-id sets have a nonempty common intersection. Seat b.
+
+**Rust sketch.** Sort scored indexes, test consecutive triples for equal gaps, confirm the triple intersection with DetHashSet. Seat the middle index. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/almagest00ptol (api: archive.org; era: Syzygy, as treated in the Almagest's eclipse theory).
+
+**Dedupe.** Not a two-hop bridge, which links two turns by an intermediate entity. This requires three indexes in true arithmetic progression sharing a token, and it seats the middle one.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-080 Station as a sign change
+
+A station is where the first difference of longitude changes sign. Alone, without Port-Royal's comprehension requirement: among scored turns, seat the earliest turn whose stored digit sequence has a strict sign change of the first difference. If none, the selector is unchanged. Target: event_ordering. Miss pattern: EO pool_not_k 17 and t5_not1 7. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Some i with (d_i - d_{i-1}) * (d_{i+1} - d_i) < 0, integer products. Seat the earliest such scored turn.
+
+**Rust sketch.** Sign test by integer multiplication of successive differences. No comprehension subset test, which belongs to the Port-Royal combination. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/almagest00ptol (api: archive.org; era: Planetary stations in the Almagest and in Neugebauer's catalogue of Babylonian procedure texts).
+
+**Dedupe.** Not the Port-Royal retrograde rule, which also requires every query term to sit in the turn. Not the Harris matrix. Not System A's reflection at a pre-set extremum: here the sign change is simply observed.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-081 Equation of time displacement
+
+The equation of time is the signed gap between mean solar time and apparent solar time. Among scored turns, the displacement of a turn is its lexical rank minus its session-order rank. The turn with the smallest absolute displacement is seated, the one whose two clocks agree most nearly. OpenAlex returned a paper titled The equation of time and the analemma, so the historical pairing of those two words is attested; this rule uses only the signed rank gap. Target: event_ordering. Miss pattern: EO t5_not1 7 and pool_not_k 17. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** E(t) = r_lex(t) - r_sess(t). Seat minimum |E|. Ties keep the earlier index.
+
+**Rust sketch.** Integer ranks, absolute value, minimum. No Borda sum, which is the analemma combination. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/ioanniskepplerih00kepl (api: archive.org; era: The equation of time, as in Kepler, Harmonices mundi).
+
+**Dedupe.** Not triangulation, which requires a shared unique argmax. Not the Borda-plus-analemma rule, which adds three ranks and then the gap. This seats the minimum absolute gap alone.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-082 Precession of the origin
+
+Precession shifts the equinox, about one degree in a hundred years in the ancient estimate Ptolemy transmits. The integer image: the session's origin for ranking is shifted by floor(n / 100), n the session length, and session-order ranks are computed from that origin. The constant 100 is the historical century, not a fitted window. Copernicus's De revolutionibus was fetched and is the citation; the Almagest record was also fetched. Target: event_ordering. Miss pattern: EO pool_not_k 17. A session origin that has drifted is still indexed at 0. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** shift = n / 100, integer. Rotated index = (index + shift) mod n. Ranks used by the selector are the order of rotated indexes.
+
+**Rust sketch.** Integer division and modulo. The selector sorts by rotated index. No other constant is introduced. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/jbc.bj.uj.edu.pl.NDIGSTDR095415 (api: archive.org; era: Hipparchus's precession, as transmitted in the Almagest and in Copernicus, De revolutionibus).
+
+**Dedupe.** Not regnal dating. Not a tuned recency decay. The shift is floor(n/100), the historical century fraction of the session itself.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-083 Continued-fraction convergent
+
+Anthyphairesis produces the continued-fraction quotients of a ratio. The convergents p/q are the best integer approximations. For the ratio of two tokens' document frequencies, the convergent with the largest denominator not exceeding the session length is posted on the turn that contains both tokens. A query of either token retrieves that turn. This is the same algorithm as Euclid's, used here to choose a turn rather than to seat a gcd. OpenAlex search of continued fraction plus anthyphairesis returned hits, including work on Plato's division, so the mathematical identity of the two is not claimed as new. The retrieval use is the posting. Target: Open-Domain;Multi-Hop. Miss pattern: OD pool_not_k 35; MH pool_not_k 83. A df ratio's best convergent turn is not admitted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For df(a) >= df(b) > 0, run integer anthyphairesis and keep the convergent q <= session_len with largest q. Post that turn under both token ids, counts_len false.
+
+**Rust sketch.** Integer quotients and the standard convergent recurrence p_n = a_n p_{n-1} + p_{n-2}, all integers. DetHashMap from token pair to turn. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2 (api: archive.org; era: Euclid's algorithm, Heath vol. 2; the convergents are the anthyphairesis quotients).
+
+**Dedupe.** Not the gcd seat, which scores the common measure. This posts one convergent turn into the index so a later query can find it. The identity of continued fractions and anthyphairesis is treated as known.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-084 Division-algorithm check digit
+
+Euclid VII writes a = bq + r with 0 <= r < b. Used as a check digit on successive content-token ids: r = id_i mod id_{i+1} when id_{i+1} > 1. The residue is posted counts_len false, so a query whose own successive ids leave the same residue still hits when length damping zeroed the ordinary feats. The divisor is the next id, data, not a constant chosen against the benchmark. Target: instruction_following. Miss pattern: IF no_pool 5 and pool_not_k 15. A token id with a bad remainder against the query modulus is still posted. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** For successive content ids a, b with b > 1, r = a mod b, and the quotient q = a / b. Post the pair (q, r) once per distinct pair.
+
+**Rust sketch.** Integer division of successive stored ids. Feat counts_len false. No external modulus. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2 (api: archive.org; era: Euclid VII, the division algorithm, Heath vol. 2).
+
+**Dedupe.** Not casting out nines, whose modulus is 9 and whose input is a digit sum. Not a retune of an existing weight. The divisor is the next token id.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-085 Magic line sum
+
+A magic square requires every line to sum to the same integer. Among scored turns, partition the query term ids into three contiguous thirds. A turn is admissible when the count of hits in each third is equal. The summary seat is the admissible turn with the greatest common line sum. If no turn has equal thirds, the selector is unchanged. This is not trial balance, which only asks that every group be nonempty. Target: summarization;Multi-Hop. Miss pattern: SUM k_not5 8 and pool_not_k 9; MH pool_not_k 83. One session carries every cue and another is empty. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Split the query term-id list into three contiguous parts as evenly as integer division allows. Require c1 = c2 = c3, the hit counts. Seat the maximum c1.
+
+**Rust sketch.** Hit counts by DetHashSet membership. Integer equality of the three counts. Applied as a filter on remaining. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://mathshistory.st-andrews.ac.uk/Biographies/Euler/ (api: mactutor; era: The magic square's equal line sums, in the tradition Euler's squares sit in; MacTutor Euler fetched. De Moivre's equal-likelihood sums are the arithmetic parallel.).
+
+**Dedupe.** Not Step 32 trial balance, which checks presence of every group. Equality of the three counts is stronger: a turn that has all groups but piles them in one third fails.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-086 Latin-square orthogonality
+
+Two Latin squares are orthogonal when every pair of symbols appears once. Among scored turns, the pair (lexical rank, session rank) should be unique. If two turns share the same pair, drop the later one. This is not triangulation: triangulation demands one turn be strictly best on both scores. Orthogonality only refuses a repeated pair, and a turn that is best on neither can keep a unique pair. Target: Multi-Hop. Miss pattern: MH pool_not_k 83 and k_not5 28. Two ranks that form a repeated pair are both seated. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Pair (r_lex, r_sess). If a pair occurs more than once in remaining, keep the earlier turn index and drop the others.
+
+**Rust sketch.** DetHashMap<(u32,u32), usize> from pair to the kept turn. Later duplicates are removed from remaining. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://mathshistory.st-andrews.ac.uk/Biographies/Euler/ (api: mactutor; era: Euler on Latin squares, 1782; MacTutor Euler biography fetched).
+
+**Dedupe.** Not Step 33 triangulation, which seats the unique dual argmax. Not Hollerith. A repeated rank-pair loses a seat even if neither turn is best.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-087 Josephus counting-out
+
+Josephus's counting-out eliminates every m-th member of a ring. Alone, over the whole scored pool rather than inside one hour: m is the count of scored turns, and elimination proceeds in session order until one remains, which is seated. The step equals the ring size, so the survivor is determined by the data. Target: summarization;instruction_following. Miss pattern: SUM pool_not_k 9; IF pool_not_k 15. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** m = |remaining|. Walk session order, eliminate every m-th still-alive index, until one remains.
+
+**Rust sketch.** A ring of indexes, integer modulo the current alive count. DetHashSet of eliminated ids. The survivor is moved to the front of the selection. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/josephuswithengl02joseuoft (api: archive.org; era: Josephus, the counting-out passage in the Jewish War).
+
+**Dedupe.** Not the hour-bin counting-out, which runs only inside the bin that covers the most terms. This walks the whole scored pool.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-088 Extreme and mean cut
+
+Euclid cuts a segment in extreme and mean ratio. The integer cut of a session of length n is the greatest Fibonacci number not exceeding n, and the seat is the scored turn nearest that index. Fibonacci numbers are computed by addition. No floating phi. Target: event_ordering;summarization. Miss pattern: EO pool_not_k 17; SUM k_not5 8. Tag: ORDERING. Hook: `crates/vestige-core/src/retrieval.rs` lines 5628-5638, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** F as usual. Cut = greatest F_k <= n. Seat the scored turn minimizing |index - cut|. Ties keep the earlier index.
+
+**Rust sketch.** Integer Fibonacci loop. Absolute difference. Applied in the remaining selector. No goal-year gate, which belongs to the combined variant. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/euclid-the-thirteen-books-of-the-elements-vol.-2 (api: archive.org; era: Euclid VI, the extreme and mean ratio, Heath vol. 2).
+
+**Dedupe.** Not the golden-cut-plus-goal-year rule, which also requires a modal-gap residue. Not loci.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-089 Figurate triangular address
+
+The triangular numbers T_n = n(n+1)/2 address stacked counts in Lilavati's series. A turn whose session index equals T_n for some n posts n. A query digit n retrieves that turn. No Saros partner in this variant. The test that an index is triangular is the integer square test on 8n+1. Target: instruction_following;event_ordering. Miss pattern: IF no_pool 5; EO no_pool 1. The n-th list item has no triangular key. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** Index i is T_n when 8*i+1 = (2n+1)^2 for integer n. Post n.
+
+**Rust sketch.** isqrt(8*i+1) squared equals 8*i+1, and the root is odd. Feat counts_len false. No period partner. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/lilavati00bhas (api: archive.org; era: Bhaskara, Lilavati, on series and stacks).
+
+**Dedupe.** Not the figurate-plus-Saros posting, which also requires a partner 223 steps away. Not loci, which addresses every ordinal. Only triangular indexes are posted.
+
+**Novelty.** Single mechanism; no combination claim.
+
+### S9-090 Divided-difference missing ordinal
+
+A divided difference reconstructs a value between tabulated arguments. When two successive scored-capable turns in a session have indexes i and i+k with k > 1, the skipped ordinals i+1 .. i+k-1 are missing events. The first divided difference (d2 - d1) / k, integer, is posted on the later turn together with each skipped ordinal. A query digit equal to a skipped ordinal retrieves the later turn, which is the next recorded event. The division is exact only when k divides the digit difference; otherwise the remainder is posted and the quotient still is, both visible, truncation stated. Target: event_ordering. Miss pattern: EO no_pool 1 and pool_not_k 17. An event whose ordinal was skipped has no posting. Tag: RECALL/INDEX. Hook: `crates/vestige-core/src/retrieval.rs` lines 3125-3274, verified by reading that range. Base SHA `e2ecd1da037974c1835f563ad8b046f4a4ca3629`.
+
+**Math.** q = (d2 - d1) / k, r = (d2 - d1) mod k, k > 1. Post each skipped ordinal j and the pair (q, r) on the later turn.
+
+**Rust sketch.** Integer division. One feat per skipped ordinal, counts_len false, on the later turn. No body read. Rank reads stored feat ids and integer counts only, never ix.turns[ti].body. DetHashMap/DetHashSet only. No speaker test. Does not write rsb_seat_behind, does not delete HYPERNYM_LATTICE, does not edit rungs.rs or benchmarks/real_engine/, and does not change any existing knob constant.
+
+**Record.** https://archive.org/details/UFIE003454_TO0324_PNI-2529_000000 (api: archive.org; era: Taylor, Methodus incrementorum, 1715; the divided difference of a missing entry).
+
+**Dedupe.** Not chord interpolation, which fills between two digits inside one turn. Not the Harris matrix. The skipped ordinal itself becomes the lookup key.
+
+**Novelty.** Single mechanism; no combination claim.
