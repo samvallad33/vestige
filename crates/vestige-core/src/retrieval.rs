@@ -6336,6 +6336,18 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &mut final_turn_indices,
         &t_own,
     );
+    // Buried lexical peak. After Bertillonage. A unique named-speaker
+    // declarative whose own score beats the entire scene pool takes the
+    // lowest-own question seat inside slots 1..4. Slot 0 and the session
+    // list stay. Does not touch rsb_seat_behind.
+    apply_c2_buried_lexical_peak(
+        ix,
+        &mut final_turn_indices,
+        &t_scene,
+        &t_own,
+        &turn_ts,
+        k,
+    );
     maybe_dump_replay(
         ix,
         q,
@@ -7657,6 +7669,65 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         }
     }
 
+
+    // Dump-only compact scores for every turn and session. Bit layout of `flags`:
+    // 0 question, 1 digit form, 2 clock form, 3 midcap, 4 numeric, 5 temporal,
+    // 6 anaphoric, 7 short reply, 8 answers a question, 9 backchannel.
+    let score_rows: Vec<Value> = (0..ix.turns.len())
+        .map(|ti| {
+            let t = &ix.turns[ti];
+            let mut flags = 0u16;
+            if t.is_question {
+                flags |= 1;
+            }
+            if t.form_digit {
+                flags |= 1 << 1;
+            }
+            if t.form_clock {
+                flags |= 1 << 2;
+            }
+            if t.form_midcap {
+                flags |= 1 << 3;
+            }
+            if t.has_numeric {
+                flags |= 1 << 4;
+            }
+            if t.has_temporal {
+                flags |= 1 << 5;
+            }
+            if t.anaphoric {
+                flags |= 1 << 6;
+            }
+            if t.is_short_reply {
+                flags |= 1 << 7;
+            }
+            if t.answers_question {
+                flags |= 1 << 8;
+            }
+            if t.is_backchannel {
+                flags |= 1 << 9;
+            }
+            json!([
+                t.id,
+                ix.session_ids.get(t.session).cloned().unwrap_or_default(),
+                turn_pos(ix, ti).unwrap_or(0),
+                snap.t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+                snap.t_own.get(ti).copied().unwrap_or(0.0).to_bits(),
+                snap.t_turn_raw.get(ti).copied().unwrap_or(0.0).to_bits(),
+                flags,
+            ])
+        })
+        .collect();
+    let session_rows: Vec<Value> = (0..ix.session_ids.len())
+        .map(|si| {
+            json!([
+                ix.session_ids[si],
+                snap.s_score.get(si).copied().unwrap_or(0.0).to_bits(),
+                snap.bridge_boost.get(si).copied().unwrap_or(0.0).to_bits(),
+            ])
+        })
+        .collect();
+
     let query_ts = parse_date(&snap.query_date);
     let slots = wh_slots(&snap.query_text);
     let rec = json!({
@@ -7682,6 +7753,10 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         "query_tokens": qtoks,
         "candidates": cands,
         "session_turns": session_turns,
+        // Dump-only. Every indexed turn and session, so a gold absent from
+        // `pre_ids` can be staged. Ranking never reads this object.
+        "score_rows": score_rows,
+        "session_rows": session_rows,
     });
     let _ = writeln!(file, "{rec}");
 }
