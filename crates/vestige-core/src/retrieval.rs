@@ -5202,6 +5202,15 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &mut t_scene,
     );
     apply_step14_bipartite_pref_boost(ix, &q.text, &plan, pref_on, it, &t_own, &mut t_scene);
+    apply_step15_comparative_dual_slot_scores(
+        ix,
+        &q.text,
+        &plan,
+        it,
+        &t_own,
+        &t_exact_mask[..],
+        &mut t_scene,
+    );
 
     let k = top_k.max(1);
 
@@ -5916,6 +5925,18 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             gl,
             &floored,
             k,
+            &mut final_turn_indices,
+        );
+        apply_step15_comparative_dual_slot_seat(
+            ix,
+            &q.text,
+            &plan,
+            &it,
+            &t_own,
+            &t_exact_mask,
+            &floored,
+            k,
+            &mut t_scene,
             &mut final_turn_indices,
         );
     }
