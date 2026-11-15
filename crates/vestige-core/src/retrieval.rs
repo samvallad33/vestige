@@ -6159,6 +6159,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 // to the same session's user opener already in the top 5.
                 // Skipped on preference and on summary requests.
                 apply_c2_same_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Queried-speaker reply: in a named-speaker dialogue, an
+                // unmentioned speaker's question yields to the next
+                // same-session turn by a speaker the query names, already
+                // in the top 5. Skipped on preference.
+                apply_c2_queried_speaker_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
             }
         }
         // Preference source: ReplySource is skipped on assistant_attribution,
