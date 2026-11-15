@@ -6190,6 +6190,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         // official k can still enter the top 5. After #32, last
         // ranking change. Skipped on preference.
         apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+        // Late opener T@5 entry: a user opener already in official k,
+        // from a session already in the top 5, swaps with the last
+        // top-5 assistant of any session. After #33, last ranking
+        // change, so it sees openers the pool T@10 entry (#30) seated.
+        // Skipped on preference.
+        apply_c2_late_opener_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     }
     maybe_dump_replay(ix, q, k, &it, &t_scene, &final_turn_indices, &final_session_indices);
     let turns = final_turn_indices
