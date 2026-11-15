@@ -4829,6 +4829,85 @@ fn apply_c2_anaphoric_tail(ix: &Index, list: &mut Vec<usize>, t_own: &[f32]) -> 
     true
 }
 
+/// Unseated session peak. A declarative outside the returned list whose own
+/// score strictly beats every returned turn, when it is the only such turn and
+/// its session has no turn in the top 5, takes the lowest-own question seat in
+/// slots 1..4. The displaced question stays in the list. Named-speaker
+/// sessions only. Slot 0 stays. Does not read turn text and does not touch
+/// `rsb_seat_behind` or the session list.
+fn apply_c2_unseated_session_peak(
+    ix: &Index,
+    list: &mut Vec<usize>,
+    t_own: &[f32],
+    k: usize,
+) -> bool {
+    if list.len() < 5 || k == 0 {
+        return false;
+    }
+    let mut cap = f32::MIN;
+    for &ti in list.iter() {
+        let own = t_own.get(ti).copied().unwrap_or(0.0);
+        if own > cap {
+            cap = own;
+        }
+    }
+    let mut peak: Option<usize> = None;
+    for ti in 0..ix.turns.len() {
+        if list.contains(&ti) || ix.turns[ti].is_question || !c2_named_session(ix, ti) {
+            continue;
+        }
+        let own = t_own.get(ti).copied().unwrap_or(0.0);
+        if own <= cap {
+            continue;
+        }
+        if peak.is_some() {
+            return false;
+        }
+        peak = Some(ti);
+    }
+    let Some(best) = peak else {
+        return false;
+    };
+    let sess = ix.turns[best].session;
+    let top = 5.min(list.len());
+    if list[..top].iter().any(|&ti| ix.turns[ti].session == sess) {
+        return false;
+    }
+    let mut victim: Option<usize> = None;
+    for slot in 1..top {
+        let ti = list[slot];
+        if !ix.turns[ti].is_question {
+            continue;
+        }
+        let own = t_own.get(ti).copied().unwrap_or(0.0);
+        let take = match victim {
+            None => true,
+            Some(vslot) => {
+                let vow = t_own.get(list[vslot]).copied().unwrap_or(0.0);
+                own < vow || (own == vow && slot < vslot)
+            }
+        };
+        if take {
+            victim = Some(slot);
+        }
+    }
+    let Some(slot) = victim else {
+        return false;
+    };
+    let displaced = list[slot];
+    list[slot] = best;
+    if !list.contains(&displaced) {
+        if list.len() < k {
+            list.push(displaced);
+        } else if !list.is_empty() {
+            let last = list.len() - 1;
+            list[last] = displaced;
+        }
+    }
+    true
+}
+
+
 
 #[cfg(test)]
 mod algos_c2_tests {
@@ -9649,5 +9728,110 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 2, 3, 4, 5];
         assert!(!apply_c2_anaphoric_tail(&ix, &mut list, &own));
         assert_eq!(list, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn unseated_session_peak_seats_the_unique_outsider_from_a_missing_session() {
+        let ix = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("mel", "The shop opened beside the river."),
+                        ("jon", "When did the shop open?"),
+                        ("mel", "The counter faces the window."),
+                        ("jon", "The awning is green."),
+                        ("mel", "The bell is on the door."),
+                    ],
+                ),
+                sess("D2", &[("jon", "The mill kept its own ledger.")]),
+            ],
+            &Params::default(),
+        );
+        assert!(ix.turns[1].is_question);
+        assert!(!ix.turns[5].is_question);
+        assert_ne!(ix.turns[5].session, ix.turns[0].session);
+        assert!(c2_named_session(&ix, 5));
+        let mut own = vec![0.4f32; ix.turns.len()];
+        own[0] = 1.0;
+        own[1] = 0.2;
+        own[5] = 4.0;
+        let mut list = vec![0usize, 1, 2, 3, 4];
+        assert!(apply_c2_unseated_session_peak(&ix, &mut list, &own, 10));
+        assert_eq!(list, vec![0, 5, 2, 3, 4, 1]);
+
+        // Same-session outsider, even above the cap, is not a missing session.
+        let ix = build_index(
+            &[sess(
+                "D1",
+                &[
+                    ("mel", "The shop opened beside the river."),
+                    ("jon", "When did the shop open?"),
+                    ("mel", "The counter faces the window."),
+                    ("jon", "The awning is green."),
+                    ("mel", "The bell is on the door."),
+                    ("jon", "The mill kept its own ledger."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let mut own = vec![0.4f32; ix.turns.len()];
+        own[0] = 1.0;
+        own[1] = 0.2;
+        own[5] = 9.0;
+        let mut list = vec![0usize, 1, 2, 3, 4];
+        assert!(!apply_c2_unseated_session_peak(&ix, &mut list, &own, 10));
+        assert_eq!(list, vec![0, 1, 2, 3, 4]);
+
+        // Two outsiders above the returned maximum. Not unique.
+        let ix = build_index(
+            &[
+                sess(
+                    "D1",
+                    &[
+                        ("mel", "The shop opened beside the river."),
+                        ("jon", "When did the shop open?"),
+                        ("mel", "The counter faces the window."),
+                        ("jon", "The awning is green."),
+                        ("mel", "The bell is on the door."),
+                    ],
+                ),
+                sess("D2", &[("jon", "The mill kept its own ledger.")]),
+                sess("D3", &[("mel", "The dock kept a second ledger.")]),
+            ],
+            &Params::default(),
+        );
+        let mut own = vec![0.4f32; ix.turns.len()];
+        own[0] = 1.0;
+        own[1] = 0.2;
+        own[5] = 4.0;
+        own[6] = 3.0;
+        let mut list = vec![0usize, 1, 2, 3, 4];
+        assert!(!apply_c2_unseated_session_peak(&ix, &mut list, &own, 10));
+        assert_eq!(list, vec![0, 1, 2, 3, 4]);
+
+        // User/assistant transcripts are not named-speaker sessions.
+        let ix = build_index(
+            &[
+                sess(
+                    "s",
+                    &[
+                        ("user", "The shop opened beside the river."),
+                        ("assistant", "When did the shop open?"),
+                        ("user", "The counter faces the window."),
+                        ("assistant", "The awning is green."),
+                        ("user", "The bell is on the door."),
+                    ],
+                ),
+                sess("t", &[("assistant", "The mill kept its own ledger.")]),
+            ],
+            &Params::default(),
+        );
+        let mut own = vec![0.4f32; ix.turns.len()];
+        own[1] = 0.2;
+        own[5] = 9.0;
+        let mut list = vec![0usize, 1, 2, 3, 4];
+        assert!(!apply_c2_unseated_session_peak(&ix, &mut list, &own, 10));
+        assert_eq!(list, vec![0, 1, 2, 3, 4]);
     }
 }
