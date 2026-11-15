@@ -1307,8 +1307,8 @@ fn apply_c2_solo_earlier_opener_seat(
 /// comparison #12 and #21 use. Skipped on summary requests (existing
 /// `summary_hold` shape), preference, temporal, and WH-person questions,
 /// event sequences and assistant-attribution (caller), and named-speaker
-/// sessions. Invoked after the gatekeeper, after #29, as the last
-/// ranking change.
+/// sessions. Invoked after the gatekeeper, after #29. A later
+/// post-gatekeeper C2 seat may still run after this pass.
 fn apply_c2_pool_opener_t10_entry(
     ix: &Index,
     plan: &QueryPlan,
@@ -1387,6 +1387,92 @@ fn apply_c2_pool_opener_t10_entry(
         return true;
     }
     false
+}
+
+
+/// Same-session opener T@5 entry. A user session opener already in the
+/// official k but outside the top 5, from a session already represented
+/// in the top 5 by an assistant, swaps into the top 5 in place of the
+/// last same-session assistant in the top 5. The victim stays in the
+/// official k, so T@10 cannot drop. The swap is refused when it would
+/// push any session out of the first 5 unique-session slots, so S@5
+/// cannot drop. Distinct from #20, which also promotes a later
+/// non-opener user from a top-5 session and evicts the last assistant
+/// of any session: that later-user clause is what would unseat a
+/// sitting gold assistant (the ac031881 shape). The opener-only,
+/// same-session-assistant victim cut is the structure. Skipped on
+/// summary requests (existing `summary_hold` shape), preference,
+/// temporal, and WH-person questions, event sequences and
+/// assistant-attribution (caller), and named-speaker sessions. No new
+/// constant. Invoked after the gatekeeper, after #30, as the last
+/// ranking change, so it can see openers that the pool T@10 entry just
+/// seated into official k.
+fn apply_c2_same_session_opener_t5_entry(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> bool {
+    if list.len() < 6
+        || c2_text_preference(query)
+        || plan.intent.temporal
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return false;
+    }
+    let top = list[0];
+    let head_sp = ix.turns[top].speaker.as_str();
+    if (head_sp != "user" && head_sp != "assistant") || c2_named_session(ix, top) {
+        return false;
+    }
+    let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
+    if sc_top <= 0.0 {
+        return false;
+    }
+    let window = list.len().min(C2_BULLAE_WINDOW);
+    let mut top5_sessions = Vec::new();
+    for &tid in &list[..window] {
+        let s = ix.turns[tid].session;
+        if !top5_sessions.contains(&s) {
+            top5_sessions.push(s);
+        }
+    }
+    let mut cand_slot = None;
+    for i in window..list.len() {
+        let cand = list[i];
+        let t = &ix.turns[cand];
+        if t.speaker != "user"
+            || c2_named_session(ix, cand)
+            || c2_session_pos(ix, cand) != 0
+            || !top5_sessions.contains(&t.session)
+            || t_scene.get(cand).copied().unwrap_or(0.0) <= 0.0
+        {
+            continue;
+        }
+        cand_slot = Some(i);
+        break;
+    }
+    let Some(ci) = cand_slot else {
+        return false;
+    };
+    let cand_sess = ix.turns[list[ci]].session;
+    let mut vs = None;
+    for (i, &tid) in list[..window].iter().enumerate() {
+        if ix.turns[tid].speaker != "assistant" || ix.turns[tid].session != cand_sess {
+            continue;
+        }
+        vs = Some(i);
+    }
+    let Some(vs) = vs else {
+        return false;
+    };
+    if !c2_s5_membership_preserved(ix, list, vs, ci) {
+        return false;
+    }
+    list.swap(vs, ci);
+    true
 }
 
 
@@ -3960,6 +4046,111 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 1, 2, 3, 5, 6, 8, 4, 7, 9];
         assert!(!apply_c2_pool_opener_t10_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 1, 2, 3, 5, 6, 8, 4, 7, 9]);
+    }
+
+    #[test]
+
+    fn same_session_opener_t5_entry_swaps_opener_for_same_session_top5_assistant() {
+        // 41698283 / 80ec1f4f shape: a user opener already in official k
+        // but outside the top 5, from a session already represented in
+        // the top 5 by an assistant, swaps with the last same-session
+        // assistant in the top 5. The victim stays in official k.
+        let ix = build_index(
+            &[
+                sess("s0", &[("user", "I am starting a new practice project this month."), ("assistant", "Noted, I will keep that in mind.")]),
+                sess(
+                    "s1",
+                    &[
+                        ("user", "Always confirm typical REST API errors when I build an application."),
+                        ("assistant", "Timeouts, 404s, and 500s are typical."),
+                    ],
+                ),
+                sess("s2", &[("user", "A third note is already in the log."), ("assistant", "The third note is stored.")]),
+            ],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What typical errors should I be prepared to handle with a REST API?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &Params::default());
+        assert!(!c2_text_preference(&q.text));
+        assert!(!plan.intent.temporal);
+        assert_eq!(wh_slots(&q.text) & WH_PERSON, 0);
+        // Turns: 0-1 s0, 2-3 s1 (opener 2, assistant 3), 4-5 s2.
+        // Official k of 6; s1 assistant is in the top 5, s1 opener is not.
+        let mut list = vec![0usize, 1, 4, 5, 3, 2];
+        let t_scene = vec![1.0f32, 0.9, 0.7, 0.8, 0.6, 0.5];
+        assert!(apply_c2_same_session_opener_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 5, 2, 3]);
+        // Later same-session user (not an opener) is not seated: that
+        // is the #20 clause this structure drops.
+        let ix_l = build_index(
+            &[
+                sess("s0", &[("user", "I am starting a new practice project this month."), ("assistant", "Noted, I will keep that in mind.")]),
+                sess(
+                    "s1",
+                    &[
+                        ("user", "I opened a log of API errors last month."),
+                        ("assistant", "I recorded that log."),
+                        ("user", "I later listed timeouts, 404s, and 500s as typical REST API errors."),
+                    ],
+                ),
+                sess("s2", &[("user", "A third note is already in the log."), ("assistant", "The third note is stored.")]),
+            ],
+            &Params::default(),
+        );
+        let plan_l = plan_query(&ix_l, &q, &Params::default());
+        // Turns: 0-1 s0, 2-4 s1 (opener 2, asst 3, later user 4), 5-6 s2.
+        // Top 5 has s1 assistant 3; official-k slot 6 is later user 4, not the opener.
+        let mut list = vec![0usize, 1, 5, 6, 3, 4];
+        let t_scene_l = vec![1.0f32, 0.9, 0.5, 0.8, 0.7, 0.6, 0.4];
+        assert!(!apply_c2_same_session_opener_t5_entry(&ix_l, &plan_l, &q.text, &mut list, &t_scene_l));
+        assert_eq!(list, vec![0, 1, 5, 6, 3, 4]);
+        // No same-session assistant in the top 5: no entry.
+        let mut list = vec![0usize, 1, 4, 5, 2, 3];
+        assert!(!apply_c2_same_session_opener_t5_entry(&ix, &plan, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 5, 2, 3]);
+        // Preference questions are skipped.
+        let pq = Query { text: "What is my favorite way to handle REST API errors?".into(), date: String::new() };
+        let pplan = plan_query(&ix, &pq, &Params::default());
+        assert!(c2_text_preference(&pq.text));
+        let mut list = vec![0usize, 1, 4, 5, 3, 2];
+        assert!(!apply_c2_same_session_opener_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 5, 3, 2]);
+        // Temporal questions keep the timeline path.
+        let tq = Query { text: "When do I handle REST API errors?".into(), date: String::new() };
+        let tplan = plan_query(&ix, &tq, &Params::default());
+        assert!(tplan.intent.temporal);
+        let mut list = vec![0usize, 1, 4, 5, 3, 2];
+        assert!(!apply_c2_same_session_opener_t5_entry(&ix, &tplan, &tq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 5, 3, 2]);
+        // WH-person questions are left to the existing midcap path.
+        let wq = Query { text: "Who handled the REST API errors?".into(), date: String::new() };
+        let wplan = plan_query(&ix, &wq, &Params::default());
+        assert_ne!(wh_slots(&wq.text) & WH_PERSON, 0);
+        let mut list = vec![0usize, 1, 4, 5, 3, 2];
+        assert!(!apply_c2_same_session_opener_t5_entry(&ix, &wplan, &wq.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 5, 3, 2]);
+        // Named-speaker sessions are left alone.
+        let ixn = build_index(
+            &[
+                sess("D0", &[("caroline", "I am starting a new practice project this month."), ("melanie", "Noted, I will keep that in mind.")]),
+                sess(
+                    "D1",
+                    &[
+                        ("caroline", "Always confirm typical REST API errors when I build an application."),
+                        ("melanie", "Timeouts, 404s, and 500s are typical."),
+                    ],
+                ),
+                sess("D2", &[("caroline", "A third note is already in the log."), ("melanie", "The third note is stored.")]),
+            ],
+            &Params::default(),
+        );
+        let plann = plan_query(&ixn, &q, &Params::default());
+        let mut list = vec![0usize, 1, 4, 5, 3, 2];
+        assert!(!apply_c2_same_session_opener_t5_entry(&ixn, &plann, &q.text, &mut list, &t_scene));
+        assert_eq!(list, vec![0, 1, 4, 5, 3, 2]);
     }
 
     #[test]
