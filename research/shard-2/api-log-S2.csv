@@ -1,0 +1,410 @@
+api,endpoint,http_status,result_count,note
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/4/744.xml,200,1,bytes 4279
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/119.xml,200,1,bytes 3681
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/34.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/37.xml,200,1,bytes 2659
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/40.xml,200,1,bytes 3157
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/43.xml,200,1,bytes 6168
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/99.xml,200,1,bytes 4032
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/105.xml,200,1,bytes 5020
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/2/237.xml,200,1,bytes 3961
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/2/246.xml,200,1,bytes 3744
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/2/253.xml,200,1,bytes 3589
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/2/255.xml,200,1,bytes 4515
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/3/471.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/3/496.xml,200,1,bytes 4193
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/4/705.xml,200,1,bytes 3922
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/6/905.xml,200,1,bytes 3659
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/6/907.xml,200,1,bytes 3592
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/7/1021.xml,200,1,bytes 5073
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/9/1204.xml,200,1,bytes 11127
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/12/1452.xml,200,1,bytes 3528
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/14/1631.xml,200,1,bytes 18411
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/16/1911.xml,200,1,bytes 83133
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/17/2105.xml,200,1,bytes 5277
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/18/2190.xml,200,1,bytes 2661
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.eleph/1.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.eleph/2.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.hal/1.xml,200,1,bytes 4574
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/40.xml,200,1,bytes 19668
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/2/121r.xml,200,1,bytes 4659
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/2/123.xml,200,1,bytes 4493
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/5/238.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.tebt/1/5.xml,200,1,bytes 5383
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.tebt/1/61.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.hib/1/84.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/upz/1/1.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/upz/1/77.xml,200,1,bytes 11418
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59001.xml,200,1,bytes 4195
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59015r.xml,200,1,bytes 29110
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59015v.xml,200,1,bytes 19510
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/1.xml,200,1,bytes 8646
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/2.xml,200,1,bytes 6947
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/15.xml,200,1,bytes 20602
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/16.xml,200,1,bytes 10707
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/18.xml,200,1,bytes 3848
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/20.xml,200,1,bytes 17855
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/21.xml,200,1,bytes 9794
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/22.xml,200,1,bytes 4400
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.dura/54.xml,200,1,bytes 2700
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.dura/100.xml,200,1,bytes 2711
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.dura/101.xml,200,1,bytes 2708
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/291.xml,200,1,bytes 5178
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/154.xml,200,1,bytes 6582
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/234.xml,200,1,bytes 3737
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.claud/1/1.xml,200,1,bytes 3958
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.claud/1/2.xml,200,1,bytes 3878
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.bu.njem/1.xml,200,1,bytes 5501
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.bu.njem/2.xml,200,1,bytes 5339
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/rom.mil.rec/1/1.xml,200,1,bytes 304903
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/rom.mil.rec/1/63.xml,200,1,bytes 23417
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.rev/pg1.xml,200,1,bytes 10515
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.kellis/1/1.xml,200,1,bytes 5781
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/chla/3/204.xml,200,1,bytes 2657
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.fam.tebt/15.xml,200,1,bytes 55798
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.fam.tebt/24.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.ryl/2/125.xml,200,1,bytes 7253
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.paris/10.xml,200,1,bytes 2694
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/bgu/1/1.xml,200,1,bytes 10793
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.lond/1/1.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.lond.lit/131.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.lond.lit/108.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.herm/1.xml,200,1,bytes 5059
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.col/3/1.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.lips/1/10.xml,200,1,bytes 10301
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mert/1/1.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.flor/1/61.xml,200,1,bytes 2664
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/HGV_meta_EpiDoc/HGV20/20442.xml,404,0,bytes 0
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/HGV_meta_EpiDoc/HGV1/1.xml,200,1,bytes 4628
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/bgu/1/2.xml,200,1,"bytes 4371 letters 21 tm 8961,8961"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/bgu/1/3.xml,200,1,"bytes 4701 letters 11 tm 41053,41053"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/bgu/1/4.xml,200,1,"bytes 3444 letters 16 tm 9088,9088"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/bgu/1/5.xml,200,1,"bytes 4658 letters 11 tm 20190,20190"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/bgu/1/6.xml,200,1,"bytes 2917 letters 11 tm 9103,9103"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/bgu/1/7.xml,200,1,"bytes 4735 letters 11 tm 9114,9114"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/bgu/1/8.xml,200,1,"bytes 3655 letters 22 tm 9122,9122"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.bu.njem/3.xml,200,1,"bytes 4472 letters 202 tm 73153,73153"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.bu.njem/4.xml,200,1,"bytes 5008 letters 109 tm 73154,73154"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.bu.njem/5.xml,200,1,"bytes 4416 letters 248 tm 73155,73155"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.bu.njem/6.xml,200,1,"bytes 4252 letters 126 tm 73156,73156"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.bu.njem/7.xml,200,1,"bytes 4682 letters 214 tm 73157,73157"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.bu.njem/8.xml,200,1,"bytes 4597 letters 273 tm 73158,73158"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.claud/1/3.xml,200,1,"bytes 3807 letters 136 tm 24016,24016"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.claud/1/4.xml,200,1,"bytes 4199 letters 162 tm 24017,24017"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.claud/1/5.xml,200,1,"bytes 4345 letters 179 tm 24018,24018"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.claud/1/6.xml,200,1,"bytes 3153 letters 75 tm 24019,24019"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.claud/1/7.xml,200,1,"bytes 3666 letters 156 tm 24020,24020"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/o.claud/1/8.xml,200,1,"bytes 3382 letters 105 tm 24021,24021"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/11.xml,200,1,"bytes 19693 letters 2393 tm 23489,23489"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/12.xml,200,1,"bytes 6387 letters 530 tm 23490,23490"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/13.xml,200,1,"bytes 18580 letters 775 tm 23491,23491"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/14.xml,200,1,"bytes 15827 letters 1307 tm 23492,23492"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/17.xml,200,1,"bytes 15102 letters 2210 tm 23497,23497"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/19.xml,200,1,"bytes 16109 letters 1425 tm 23499,23499"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.babatha/5.xml,200,1,"bytes 3669 letters 7 tm 23488,23488"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59002.xml,200,1,"bytes 3852 letters 288 tm 2293,2293"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59003.xml,200,1,"bytes 8358 letters 1102 tm 665,665"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59004.xml,200,1,"bytes 16053 letters 1466 tm 666,666"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59005.xml,200,1,"bytes 4598 letters 163 tm 667,667"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59006.xml,200,1,"bytes 9751 letters 742 tm 668,668"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59008.xml,200,1,"bytes 12506 letters 1110 tm 669,669"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59009.xml,200,1,bytes 9038 letters 405 tm 670
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59010.xml,200,1,"bytes 10078 letters 766 tm 671,671"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59011.xml,200,1,"bytes 12073 letters 609 tm 672,672"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59012.xml,200,1,"bytes 3977 letters 23 tm 673,673"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.cair.zen/1/59013.xml,200,1,"bytes 4387 letters 20 tm 674,674"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.col/4/60.xml,200,1,"bytes 3489 letters 97 tm 1776,1776"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.col/4/61.xml,200,1,"bytes 2662 letters 27 tm 1863,1863"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.col/4/62.xml,200,1,"bytes 5350 letters 221 tm 1777,1777"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.col/4/63.xml,200,1,bytes 25806 letters 2587 tm 1727
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.eleph/10.xml,200,1,"bytes 5305 letters 507 tm 5844,5844"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.eleph/5.xml,200,1,"bytes 3831 letters 13 tm 5840,5840"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.eleph/6.xml,200,1,"bytes 3063 letters 13 tm 43412,43412"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.eleph/7.xml,200,1,"bytes 2975 letters 13 tm 5841,5841"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.eleph/8.xml,200,1,"bytes 3498 letters 13 tm 5842,5842"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.eleph/9.xml,200,1,"bytes 3367 letters 13 tm 5843,5843"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/10.xml,200,1,"bytes 6159 letters 559 tm 3287,3287"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/11.xml,200,1,"bytes 6928 letters 697 tm 3288,3288"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/12.xml,200,1,"bytes 4914 letters 8 tm 3289,3289"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/13.xml,200,1,"bytes 6206 letters 827 tm 3290,3290"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/3.xml,200,1,"bytes 6587 letters 553 tm 3281,3281"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/5.xml,200,1,"bytes 2651 letters 10 tm 2548,2548"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/6.xml,200,1,"bytes 4280 letters 15 tm 3283,3283"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/7.xml,200,1,"bytes 5522 letters 303 tm 3284,3284"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/8.xml,200,1,"bytes 13401 letters 1705 tm 3285,3285"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.enteux/9.xml,200,1,"bytes 8831 letters 963 tm 3286,3286"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.fam.tebt/1.xml,200,1,"bytes 17445 letters 1484 tm 10726,10726"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.fam.tebt/2.xml,200,1,"bytes 12976 letters 1633 tm 10737,10737"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.fam.tebt/3.xml,200,1,"bytes 10309 letters 1403 tm 10748,10748"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.fam.tebt/4.xml,200,1,"bytes 12438 letters 1354 tm 10751,10751"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.fam.tebt/5.xml,200,1,"bytes 12494 letters 1224 tm 10757,10757"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.fam.tebt/6.xml,200,1,"bytes 7603 letters 664 tm 10763,10763"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.flor/1/1.xml,200,1,"bytes 6383 letters 28 tm 23525,23525"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.flor/1/3.xml,200,1,"bytes 3597 letters 29 tm 23537,23537"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.flor/1/4.xml,200,1,"bytes 2756 letters 40 tm 23539,23539"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.flor/1/5.xml,200,1,"bytes 3133 letters 49 tm 10958,10958"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/2.xml,200,1,"bytes 4306 letters 12 tm 2796,2796"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/3.xml,200,1,"bytes 1722 letters 0 tm 63479,63479"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/4.xml,200,1,"bytes 3839 letters 37 tm 19404,19404"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/5.xml,200,1,"bytes 7453 letters 551 tm 19405,19405"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/7.xml,200,1,"bytes 8775 letters 735 tm 19409,19409"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/8.xml,200,1,"bytes 6809 letters 629 tm 19410,19410"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/9.xml,200,1,"bytes 8354 letters 610 tm 19411,19411"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.giss/1/r.xml,200,1,"bytes 2651 letters 17 tm 18369,18369"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.herm/2.xml,200,1,"bytes 4745 letters 21 tm 21121,21121"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.herm/3.xml,200,1,"bytes 7346 letters 527 tm 21122,21122"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.herm/4.xml,200,1,"bytes 3976 letters 363 tm 21123,21123"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.herm/5.xml,200,1,"bytes 7511 letters 823 tm 21124,21124"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.herm/6.xml,200,1,"bytes 3732 letters 21 tm 21125,21125"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.kellis/1/2.xml,200,1,"bytes 7524 letters 545 tm 20273,20273"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.kellis/1/3.xml,200,1,"bytes 10802 letters 1058 tm 33296,33296"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.kellis/1/4.xml,200,1,"bytes 7896 letters 560 tm 20274,20274"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.kellis/1/5.xml,200,1,"bytes 7060 letters 568 tm 33297,33297"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.kellis/1/6.xml,200,1,"bytes 3794 letters 10 tm 33298,33298"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.lips/1/1.xml,200,1,bytes 3416 letters 18 tm
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.lips/1/2.xml,200,1,bytes 4406 letters 10 tm
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.lips/1/3.xml,200,1,"bytes 2661 letters 20 tm 22324,22324"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.lips/1/4.xml,200,1,"bytes 2664 letters 20 tm 22325,22325"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/3/131.xml,200,1,"bytes 5705 letters 44 tm 62011,62011,3170"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/3/132.xml,200,1,"bytes 5378 letters 43 tm 62083,62083,3243"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/3/133.xml,200,1,"bytes 6702 letters 51 tm 61984,61984,3143"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/3/134.xml,200,1,"bytes 6488 letters 56 tm 62047,62047,3206"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/8/464.xml,200,1,"bytes 4414 letters 9 tm 17238,17238"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/8/465.xml,200,1,"bytes 12855 letters 1369 tm 17239,17239"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/8/466.xml,200,1,"bytes 12029 letters 1716 tm 17240,17240"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.mich/8/467.xml,200,1,"bytes 2683 letters 26 tm 27080,27080"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/1.xml,200,1,"bytes 6519 letters 281 tm 62838,62838,4028"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/2.xml,200,1,"bytes 4089 letters 233 tm 61787,61787,2940"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/3.xml,200,1,"bytes 3469 letters 55 tm 61761,61761,2913"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/1/4.xml,200,1,"bytes 2697 letters 4 tm 64286,64286,5506"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/14/1626.xml,200,1,"bytes 7174 letters 1039 tm 21939,21939"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/14/1627.xml,200,1,"bytes 7310 letters 895 tm 21940,21940"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/14/1628.xml,200,1,"bytes 8503 letters 1036 tm 5254,5254"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/14/1629.xml,200,1,"bytes 5528 letters 565 tm 5255,5255"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/14/1630.xml,200,1,"bytes 11422 letters 1291 tm 21941,21941"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/14/1632.xml,200,1,"bytes 7807 letters 746 tm 21944,21944"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/14/1633.xml,200,1,"bytes 10864 letters 1035 tm 21945,21945"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/16/1829.xml,200,1,"bytes 4298 letters 15 tm 22007,22007"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/16/1830.xml,200,1,"bytes 10539 letters 825 tm 37843,37843"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/16/1831.xml,200,1,"bytes 9961 letters 870 tm 35593,35593"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/16/1832.xml,200,1,"bytes 6294 letters 547 tm 35594,35594"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/16/1833.xml,200,1,"bytes 5719 letters 522 tm 35595,35595"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/16/1834.xml,200,1,"bytes 5931 letters 635 tm 35596,35596"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/7/1007.xml,200,1,"bytes 3718 letters 45 tm 61956,61956,3113"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/7/1010.xml,200,1,"bytes 3578 letters 35 tm 62022,62022,3181"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/7/1011.xml,200,1,"bytes 4337 letters 78 tm 59415,59415,514"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/7/1012.xml,200,1,"bytes 4124 letters 38 tm 64229,64229,5448"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/7/1013.xml,200,1,"bytes 3288 letters 55 tm 61571,61571,2720"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/7/1014.xml,200,1,"bytes 3672 letters 147 tm 58912,58912"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/9/1166.xml,200,1,"bytes 3789 letters 85 tm 61957,61957,3114"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/9/1167.xml,200,1,"bytes 3187 letters 38 tm 62027,62027,3186"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/9/1168.xml,200,1,"bytes 3425 letters 36 tm 62025,62025,3184"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/9/1169.xml,200,1,"bytes 6669 letters 57 tm 61804,61804,2958"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/9/1170.xml,200,1,"bytes 3493 letters 61 tm 61798,61798,2951"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.oxy/9/1171.xml,200,1,"bytes 4167 letters 190 tm 61618,61618,2768"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.paris/1.xml,200,1,"bytes 4377 letters 248 tm 59770,59770,874"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.paris/4.xml,200,1,"bytes 1719 letters 0 tm 65635,65635"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.paris/5.xml,200,1,"bytes 2566 letters 4 tm 3582,3582"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.paris/6.xml,200,1,"bytes 2564 letters 3 tm 3589,3589"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.ryl/2/62.xml,200,1,"bytes 2754 letters 6 tm 62332,62332,3496"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.ryl/2/63.xml,200,1,"bytes 3910 letters 36 tm 62568,62568,3751"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.ryl/2/64.xml,200,1,"bytes 2752 letters 10 tm 64584,64584,5814"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.ryl/2/65.xml,200,1,"bytes 3581 letters 13 tm 5284,5284"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.ryl/2/67.xml,200,1,"bytes 2652 letters 20 tm 286,286"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/p.ryl/2/68.xml,200,1,"bytes 4824 letters 18 tm 5286,5286"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/rom.mil.rec/1/2.xml,200,1,"bytes 212555 letters 15188 tm 44833,44833"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/rom.mil.rec/1/3.xml,200,1,"bytes 9274 letters 139 tm 44836,44836"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/rom.mil.rec/1/4.xml,200,1,"bytes 2652 letters 10 tm 44837,44837"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/sb/1/1.xml,200,1,"bytes 10483 letters 1341 tm 32064,32064"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/sb/1/2.xml,200,1,"bytes 2620 letters 9 tm 3529,3529"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/sb/1/3.xml,200,1,"bytes 3249 letters 9 tm 3520,3520"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/sb/1/4.xml,200,1,"bytes 2630 letters 11 tm 44209,44209"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/127.xml,200,1,"bytes 4444 letters 163 tm 114831,114831"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/128.xml,200,1,"bytes 3167 letters 88 tm 114395,114395"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/129.xml,200,1,"bytes 2916 letters 43 tm 114396,114396"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/130.xml,200,1,"bytes 4380 letters 129 tm 114397,114397"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/131.xml,200,1,"bytes 2968 letters 34 tm 114398,114398"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/132.xml,200,1,"bytes 3036 letters 48 tm 114399,114399"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/133.xml,200,1,"bytes 3114 letters 38 tm 114400,114400"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/t.vindol/2/134.xml,200,1,"bytes 3541 letters 91 tm 114401,114401"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/upz/1/2.xml,200,1,"bytes 4983 letters 23 tm 3393,3393"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/upz/1/3.xml,200,1,"bytes 7091 letters 633 tm 3394,3394"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/upz/1/4.xml,200,1,"bytes 11379 letters 589 tm 3395,3395"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/upz/1/5.xml,200,1,"bytes 5353 letters 15 tm 3396,3396"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/upz/1/6.xml,200,1,"bytes 4643 letters 15 tm 3397,3397"
+github-raw-idp.data,GET https://raw.githubusercontent.com/papyri/idp.data/master/Historical/upz/1/7.xml,200,1,"bytes 4941 letters 20 tm 3398,3398"
+pleiades,GET https://pleiades.stoa.org/places/89313/json,200,1,Vindolanda -> Vindolanda
+pleiades,GET https://pleiades.stoa.org/places/736983/json,200,1,Oxyrhynchus -> Oxyrhynchus/Pemje
+pleiades,GET https://pleiades.stoa.org/places/737072/json,200,1,Tebtynis/Theodosioupolis? -> Tebtynis/Theodosioupolis?
+pleiades,GET https://pleiades.stoa.org/places/786021/json,200,1,Elephantine -> Elephantine
+pleiades,GET https://pleiades.stoa.org/places/776189/json,200,1,Kellis -> Kellis
+eagle,GET https://www.eagle-network.eu/ (followed),302,0,final https://www.eagle-network.eu/ bytes 154
+archive.org,GET advancedsearch q=oxyrhynchus papyri,200,230,oxyrhynchuspapyr0000elob_c6f2; oxyrhynchuspapy01huntgoog; greekhistoricald0000lobe
+zenodo,GET /api/records?q=trismegistos&size=1,200,30,12600423 Of Gods and Men: Theophoric Names in the Intersection of TM People and TM Gods
+figshare,POST /v2/articles/search search_for=oxyrhynchus papyri,200,2,Declaration of sheep and goats
+crossref,GET /works?query.bibliographic=Oxyrhynchus Papyri,200,5948,10.1515/ebr.oxyrhynchuspapyri
+openalex,GET /works search=scriptura interior duplicate copy retrieval ranking,200,0,
+openalex,GET /works search=syngraphophylax witness-list document ranking,200,0,
+openalex,GET /works search=grapheion register total-line information retrieval,200,3,"The use of Demotic in the Ptolemaic administration | The Chester Beatty Biblical Papyri at Ninety: Literature, Papyrology, Ethics | Pudu Jail's Graffiti: Beyond the Prison Cells"
+openalex,GET /works search=Simonides banquet seat name recovery retrieval,200,9,"The poetics, politics and writing of memory | Theseus, the Hephaisteion and the temple of Poseidon at Sounion. A case of bipolarity in Athens of the fifth Century BC. | What Eros and Anamnesis Can Tell Us About Knowledge"
+openalex,GET /works search=Quintilian loci imagines retrieval ranking,200,3,Cerberus Amator: Underworld Imagery in the Elegies of Tibullus and Propertius | Switches of Memory. Remarks on historiography | Running Rome and its Empire: The Places of Roman Governance
+openalex,GET /works search=partitio narratio confirmatio summary quota,200,0,
+openalex,GET /works search=nilometer cubit sum document ranking,200,5,"Confluent Waters, Fragmented Powers: Social Geographies of Water in Late Medieval Cairo | Revolt on the Nile: Economic Shocks, Religion and Political Influence | Plague Depopulation and Irrigation Decay in Medieval Egypt"
+openalex,GET /works search=pridianum strength residual retrieval,200,0,
+openalex,GET /works search=census return collation copy ranking,200,305,"School census 2016 to 2017: business and technical specification, version 1.3 | School census 2016 to 2017: Business and technical specification, version 1.4: September 2016 | School census 2016 to 2017. Business and tec"
+openalex,GET /works search=cheirographon property register duplicate sale,200,3,Sales in early Roman Tebtunis: the case of the grapheion Archive of Kronion | Some Insights into Egypt’s History under the Reign of Maximinus Thrax (Mid-March / 25 March AD 235 – 10 May AD 238) | Deictic Shifting in Gree
+openalex,GET /works search=epitaph filiation dedicator ranking,200,22,DYING GREEK IN ROME: GREEK FUNERARY EPIGRAMS FROM IMPERIAL ROME | Definitions and connotations of latin terms of relationship | A Life Unlived: The Roman Funerary Commemoration of Children From the First Century BC to th
+openalex,GET /works search=tomos synkollesimos pasted roll section retrieval,200,1,"Medium, Procedures and Conventions A Framework for Analyzing the Materiality of Documents on Papyrus"
+openalex,GET /works search=incubation dream header papyrus ranking,200,0,
+openalex,GET /works search=Constitutio Antoniniana edict retrieval,200,3,Augustine’s Theologization of Migration: Rethinking the Roman Legal Category of Peregrinatio | Kourion's hinterland in late antiquity and the findings of the Sotira Archaeological Project's 1997 and 2007 seasons | Godišn
+openalex,GET /works search=military roster century block retrieval,200,221,Retrieval Lost to Time: A Typology of Structural Erasure in Intellectual and Political Memory | Retrieval Lost to Time: A Typology of Structural Erasure in Intellectual and Political Memory | Contemporary Canadian Milita
+openalex,GET /works search=enteuxis petition request clause ranking,200,1,Greek Petitions by Egyptians in 3rd-century BC Egypt
+openalex,GET /works search=signalment scar age contract retrieval,200,1531,A bio-functional polymer that prevents retinal scarring through modulation of NRF2 signalling pathway | Skin Regeneration in Adult Axolotls: A Blueprint for Scar-Free Healing in Vertebrates | Retrieval of old memories: t
+openalex,GET /works search=opus doliare brick stamp maker retrieval,200,0,
+openalex,GET /works search=patron client inscription two faces,200,4295,Divine Aggression in Psalms and Inscriptions: Vengeful Gods and Loyal Kings | The Epistle to the Hebrews and Patron-Client Relationships: Toward a Missiological Appropriation | A. Major Inscriptions | Hybrid Patron-Clien
+openalex,GET /works search=Aristotle prothesis pistis epilogue reminder ranking,200,0,
+openalex,GET /works search=Cicero memoria custos partitio summarization,200,1,"Alcuin's Disputatio de rhetorica:A critical edition with studies of aspects of the text, the stemma codicum, the didactic diagrams and a reinterpretation of sources for the problem of the duality of the dialogue"
+openalex,GET /works search=Vindolanda strength report absentes praesentes,200,1,"The Vindolanda Writing-Tablets ( Tabulae Vindolandenses IV, Part 1)"
+openalex,GET /works search=Babatha archive double document ranking,200,8,"Military Forces in Judaea 6–130 ce: The status quaestionis and Relevance for New Testament Studies | People and identities in Nessana | Conclusions | Win, Lose, or Draw: Roman Provincial Administration and Resistance in"
+openalex,GET /works search=sitologos granary receipt name digit retrieval,200,0,
+pleiades,GET https://pleiades.stoa.org/places/736963/json,200,1,Memphis
+pleiades,GET https://pleiades.stoa.org/search_rss?SearchableText=Vindolanda&portal_type=Place,200,4,Pleiades; Military Bath House at Vindolanda; Vindolanda; Barcombe Hill Roman Signal Station
+pleiades,GET https://pleiades.stoa.org/search_rss?SearchableText=Tebtynis&portal_type=Place,200,1,Pleiades; Tebtynis/Theodosioupolis?
+pleiades,GET https://pleiades.stoa.org/search_rss?SearchableText=Dura-Europos&portal_type=Place,200,100,Pleiades; Small Temple of Bel; Chreophylakeion; House M7-A
+pleiades,GET https://pleiades.stoa.org/search_rss?SearchableText=Elephantine&portal_type=Place,200,8,Pleiades; Sanctuary of Kalabsha (Elephantine); Sanctuary of Heqaib (Elephantine); Elephantine
+pleiades,GET https://pleiades.stoa.org/search_rss?SearchableText=Kellis&portal_type=Place,200,4,Pleiades; Deir Abu Matta; Ain el-Sabil; Ain el-Gedida
+trismegistos,GET https://www.trismegistos.org/text/20442,403,1,"<!doctype html> <html lang=""en""> <head> <meta charset=""utf-8""> <title>Security Check</tit"
+trismegistos,GET https://www.trismegistos.org/tm/detail.php?quick=20442,403,1,"<!doctype html> <html lang=""en""> <head> <meta charset=""utf-8""> <title>Security Check</tit"
+eagle,GET https://www.eagle-network.eu/,302,1,"<html> <head><title>302 Found</title></head> <body bgcolor=""white""> <center><h1>302 Found</h1></c"
+wikidata,GET https://query.wikidata.org/sparql?query=SELECT%20%3Fitem%20WHERE%20%7B%20%3Fitem%20wdt%3AP528%20%22P.Oxy.%204%20744%22%20%7D%20LIMIT%205&format=json,200,1,"{ ""head"" : { ""vars"" : [ ""item"" ] }, ""results"" : { ""bindings"" : [ ] } }"
+semantic-scholar,GET https://api.semanticscholar.org/graph/v1/paper/search?query=Simonides%20method%20of%20loci%20retrieval&limit=5,429,0,Too Many Requests. Please wait and try again or apply for a key for higher rate limits. https://www.
+openlibrary,GET https://openlibrary.org/search.json?q=oxyrhynchus+papyri&limit=3,200,264,"{""numFound"":264,""start"":0,""numFoundExact"":true,""num_found"":264,""documentation_url"":""https://openlibr"
+archive.org,GET https://archive.org/advancedsearch.php?q=identifier%3Aoxyrhynchuspapyri&fl[]=identifier&output=json&rows=3,200,0,"{""responseHeader"":{""status"":0,""QTime"":160,""params"":{""query"":""identifier:oxyrhynchuspapyri"",""qin"":""id"
+zenodo,GET https://zenodo.org/api/records?q=trismegistos&size=2,200,30,"{""hits"": {""hits"": [{""created"": ""2024-06-30T16:59:15.484000+00:00"", ""modified"": ""2024-06-30T17:37:10."
+figshare,GET https://api.figshare.com/v2/articles/search?search_for=oxyrhynchus,404,1,<html> <head> <title>404 Not Found</title> </head> <body> <h1>404 Not Found</h1> The resour
+github-search,GET https://api.github.com/search/code?q=repo:papyri/idp.data+744,401,0,Requires authentication
+github-search,GET https://api.github.com/search/repositories?q=ddbdp+papyri,200,0,"{""total_count"":0,""incomplete_results"":false,""items"":[]}"
+papyri-solr,GET https://papyri.info/solr/select?q=744&rows=1,404,1,"<!DOCTYPE HTML PUBLIC ""-//W3C//DTD HTML 4.01//EN"" ""http://www.w3.org/TR/html4/strict.dtd""> <html><he"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetValidReff&urn=urn:cts:latinLit:phi1002.phi00111.perseus-lat1&level=1,200,0,"Expression output is undefined on line 1, column 3 in ctsGetCapabilities.ftl. The problematic instruction: ---------"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi1002.phi00111.perseus-lat1:2,200,14127,"GetPassage urn:cts:latinLit:phi1002.phi00111.perseus-lat1:2 2 urn:cts:latinLit:phi1002.phi00111.perseus-lat1 Quintilian Institutio Oratoria,"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetValidReff&urn=urn:cts:latinLit:phi0474.phi037.perseus-lat1&level=1,200,862,urn:cts:latinLit:phi0474.phi037.perseus-lat1:1.1 .. urn:cts:latinLit:phi0474.phi037.perseus-
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi037.perseus-lat1:2.86,200,483,GetPassage urn:cts:latinLit:phi0474.phi037.perseus-lat1:2.86 2.86 urn:cts:latinLit:phi0474.phi037.perseus-lat1 M. Tullius Cicero On Oratory
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetValidReff&urn=urn:cts:latinLit:phi0474.phi038.perseus-lat1&level=1,500,0,"<!DOCTYPE html PUBLIC ""-//W3C//DTD XHTML 1.0 Transitional//EN"" ""http://www.w3.org/TR/xhtml1/DTD/xhtml1-trans"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi038.perseus-lat1:1,200,1191,GetPassage urn:cts:latinLit:phi0474.phi038.perseus-lat1:1 1 urn:cts:latinLit:phi0474.phi038.perseus-lat1 M. Tullius Cicero Partitiones Orato
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetValidReff&urn=urn:cts:latinLit:phi0474.phi036.perseus-lat1&level=1,200,0,"Expression output is undefined on line 1, column 3 in ctsGetCapabilities.ftl. The problematic instruction: ---------"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi036.perseus-lat1:1.19,200,1324,GetPassage urn:cts:latinLit:phi0474.phi036.perseus-lat1:1.19 1.19 urn:cts:latinLit:phi0474.phi036.perseus-lat1 M. Tullius Cicero De Inventio
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetValidReff&urn=urn:cts:greekLit:tlg0086.tlg038.perseus-grc1&level=1,200,886,urn:cts:greekLit:tlg0086.tlg038.perseus-grc1:1.1.1 .. urn:cts:greekLit:tlg0086.tlg038.perseus-
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:greekLit:tlg0086.tlg038.perseus-grc1:3.13,200,1160,GetPassage urn:cts:greekLit:tlg0086.tlg038.perseus-grc1:3.13 3.13 urn:cts:greekLit:tlg0086.tlg038.perseus-grc1 Aristotle Rhetoric Rhetoric P
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetValidReff&urn=urn:cts:latinLit:phi0474.phi040.perseus-lat1&level=1,200,239,urn:cts:latinLit:phi0474.phi040.perseus-lat1:1.1 .. urn:cts:latinLit:phi0474.phi040.perseus-
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi040.perseus-lat1:1,200,1606,GetPassage urn:cts:latinLit:phi0474.phi040.perseus-lat1:1 1 urn:cts:latinLit:phi0474.phi040.perseus-lat1 M. Tullius Cicero Orator Orator Per
+scaife,GET https://scaife-cts.perseus.org/api/cts?request=GetPassage&urn=urn:cts:greekLit:tlg0012.tlg001.perseus-grc2:1.1,URLError,0,
+scaife,GET https://scaife.perseus.org/api/cts/?request=GetCapabilities,200,3544,"<!DOCTYPE html> <html lang=""en""> <head> <meta charset=""utf-8"" />"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000001,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000010,500,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Oh noes!</title><link rel=""styleshee"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000025,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000100,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000500,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD001000,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD005000,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD010000,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD020000,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD032230,200,0,"no challenge parseable; head <!doctype html><html lang=""en""><head><title>Making sure you&#39;re not a bot!</t"
+openalex,GET https://api.openalex.org/works?search=date protocol party name after regnal year retrieval,200,17,The Imperial Qín Dynasty: Elements of Governance as Reflected in the Lǐyē 里耶 Manuscripts; Record-Making and Record-Keeping in Early Societies; Tracing the spatiotemporal diffusion of cross-strait Mazu culture: a knowledge graph-driven analysis
+openalex,GET https://api.openalex.org/works?search=shorter sealed copy versus exterior duplicate ranking,200,314,DETERMINATION OF THE DESIGN PARAMETERS OF SEALS WITH REQUIRED PROPERTIES; COMPREHENSIVE DIAGNOSTIC AND IMPROVEMENT TOOLS FOR HVAC-SYSTEM INSTALLATIONS IN LIGHT COMMERCIAL BUILDINGS; The desert woodrat (Neotoma lepida) induces a diversity of biotransformation genes in response to creosote bush resin
+openalex,GET https://api.openalex.org/works?search=witness list tail not the contracting party retrieval,200,815,Retrieval-Augmented Generation for AI-Generated Content: A Survey; Automating construction contract review using knowledge graph-enhanced large language models; Contracts for First-Class Classes
+openalex,GET https://api.openalex.org/works?search=sixth witness contract keeper retrieval,200,141,Computer Retrieval of Case Law; A computerized interactive system for the retrieval of case law.; The Role of Identification in Law Enforcement: An Historical Adventure
+openalex,GET https://api.openalex.org/works?search=household census age line member retrieval,200,4497,Measures of Household Wealth for Australia; An autonomous GIS agent framework for geospatial data retrieval; Building a large synthetic population from Australian census data
+openalex,GET https://api.openalex.org/works?search=loan principal larger than interest denomination retrieval,200,266,Defining an EU indexing system to standardize retrieval in the CH domain; Innovation Pattern Heterogeneity: Data-Driven Retrieval of Firms’ Approaches to Innovation; Credit management policy of Mutual Trust Bank Limited
+openalex,GET https://api.openalex.org/works?search=hypothec pledge named after the sum retrieval,200,2,"Mortgage foreclosure under the constitution : property, housing and the National Credit Act; The shipyard's right of retention - an analytical study of the extent it provides security for the repair shipyard"
+openalex,GET https://api.openalex.org/works?search=orphan guardian summons tribunal retrieval,200,4,The Juvenile Laws of Iowa : Compilation and Analysis; Anti-Systemic Departures in Lebanese-Canadian Writing: Mouawad and Hage; A weaver in wartime: a biographical study and the letters of Paisley weaver-poet Robert Tannahill (1774-1810)
+openalex,GET https://api.openalex.org/works?search=daybook entry digit equals following total retrieval,200,4,Assessing preservation needs: a collection condition survey of bound manuscript volumes; Digital visual documentation and communication of greek maritime heritage: the creation of a thesaurus; Digital (In)Humanities: Re-reading Digital Archives as a Form of Cultural Expression
+openalex,GET https://api.openalex.org/works?search=pasted roll sheet split at date header retrieval,200,28,"SheetCopilot: Bringing Software Productivity to the Next Level through Large Language Models; Protocol for contactless electric current sensing, processing, and storage using a drone-integrable sensor; ASIL: Replacing Screenshot-and-Click with Structured State and Semantic Actions"
+openalex,GET https://api.openalex.org/works?search=petition narrative versus final request clause retrieval,200,331,"Finding the Plea: Evaluating the Ability of LLMs to Identify Rhetorical Structure in Swedish and English Historical Petitions; Responsible Freedom Under the Religion Clauses: Exemptions, Legal Pluralism, and the Common Good; The First Amendment and the Internet: The Press Clause Protects the Interne"
+openalex,GET https://api.openalex.org/works?search=letter address line addressee not subject retrieval,200,1342,Anaphora Resolution and Text Retrieval: A Linguistic Analysis of Hypertexts; Epistolary Encounters : Diary and Letter Pastiche in Neo-Victorian Fiction.; Grammaticalization parameters and the retrieval of alternatives: Latin nec from discourse connector to uninterpretable feature
+openalex,GET https://api.openalex.org/works?search=autograph sale second registry filing retrieval,200,15,"Proceedings: Second Wetlands Conference; The history of the court archive of the Bukhara Khanate (later Emirate) in Central Asia; MLA in Washington, DC"
+openalex,GET https://api.openalex.org/works?search=dream text header dreamer separated from narrative retrieval,200,9,Phantom Physicalizations Reinterpreting Dreams Through Physical Representation; Prospective Role of Foundation Models in Advancing Autonomous Vehicles; Putting Tamar in her Place
+openalex,GET https://api.openalex.org/works?search=petition continuation verso shares two names retrieval,200,12,"Goodnight Colston. Mourning Slavery: Death Rites and Duppy Conquering in a Circum‐Atlantic City; Ways of remembering: law, cinema and collective memory in the new India; Taxes and Authority in the Late Antique Countryside: The Reach of the State and the Pagarchs of Byzantine Egypt (284–642 CE)"
+openalex,GET https://api.openalex.org/works?search=nile letter digit sum cubits and fingers retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=two village names rarer place is the event retrieval,200,5259,EventSocraticKG: Event-Centric Knowledge Graph Construction for Narrative Retrieval-Augmented Generation; Enhancing information retrieval in folksonomies using ontology of place constructed from Gazetteer information; Question Retrieval based on Community Question Answering: Baseline Selection among
+openalex,GET https://api.openalex.org/works?search=labor lease task clauses after the term retrieval,200,540,"A Statutory Article Retrieval Dataset in French; Boilerplate Collusion: Clause Aggregation, Antitrust Law, & Contract Governance; QueryBuilder: Human-in-the-Loop Query Development for Information Retrieval"
+openalex,GET https://api.openalex.org/works?search=association count equals listed member names retrieval,200,33269,Introduction to information retrieval; Term Association Modelling in Information Retrieval; Counting and rapid naming predict the fluency of arithmetic and reading skills
+openalex,GET https://api.openalex.org/works?search=strength report absentees plus present equals total retrieval,200,97,"Annual Report of the Town of Wiscasset, Maine, 2012; Delays in Nuclear Power Plant Construction - Final Report - Vol 1; 2011 Bar Harbor Maine Annual Town Report"
+openalex,GET https://api.openalex.org/works?search=invitation date sender before greeting body host retrieval,200,45,PiMRef: Deducing Ever-evolving Spear-phishing Emails with Knowledge Base Invariants; The Interaction Engine: Language in Social Life and Human Evolution; E-Mail as a Communication Medium: Practices and Purposes of Use
+openalex,GET https://api.openalex.org/works?search=short undated note loses to digit letter retrieval,200,27,"An Evaluation of the Effectiveness of the Verbal Chaining Element of ""Autopilot"", a Rote Learning Programme Used by Teachers of Yr. 1-3 Students; ‘Nothing is the same as something else’: significant properties and notions of identity and originality; Creating a Nationally Representative Individual a"
+openalex,GET https://api.openalex.org/works?search=roster names grouped between consul date headers retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=pridianum remainder equals strength minus absent retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=found token reward one line digit retrieval,200,1433,"One Token to Fool LLM-as-a-Judge; Phase-Conditioned Reward Shaping for Token-Efficient LLM Reasoning; A Systematic Literature Review of Retrieval-Augmented Generation: Techniques, Metrics, and Challenges"
+openalex,GET https://api.openalex.org/works?search=water level letter one claim retrieval,200,13271,PET studies of encoding and retrieval: The HERA model; Retrieval interference and semantic interpretation; Instructions for using the punch-card system for the storage retrieval of ground-water data
+openalex,GET https://api.openalex.org/works?search=morning report role counts sum to first numeral retrieval,200,282,"Targeted Retrieval, Compact Representations: How CoT Reasoning Improves Long-Context Counting; Establishing a Foundation for Tetun Ad-Hoc Text Retrieval: Stemming, Indexing, Retrieval, and Ranking; Improving Recall of Browsing Sets in Image Retrieval from a Semiotics Perspective"
+openalex,GET https://api.openalex.org/works?search=two dates in one report earlier year is the deposit retrieval,200,8907,Deposit Insurance around the World: A Comprehensive Database; Why the Nebra Sky Disc Dates to the Early Bronze Age. An Overview of the Interdisciplinary Results; Retrieval and analysis of orthopaedic implants
+openalex,GET https://api.openalex.org/works?search=letter of introduction second name is the bearer retrieval,200,1396,The Responsibility Anchor Why AI Law Needs a Bearer before it needs a Person; Knowledge-based query formulation in information retrieval; The Electronic “Scarlet Letter”: Criminal Backgrounding and a Perpetual Spoiled Identity
+openalex,GET https://api.openalex.org/works?search=health wish opening stripped before the news sentence retrieval,200,595,"AutismCarebot: An Empathy-Enhanced and Retrieval-Augmented Chatbot for Autistic Users; What did they cover? : a cluster analysis of news stories published in the Botswana Daily News, January – December 2004; English-Greek news creating narratives"
+openalex,GET https://api.openalex.org/works?search=epitaph dedicator named after the deceased retrieval,200,23,Partakers in Paideia: Representations of Literacy in the Epigraphy of Christians in Central Asia Minor; Preparing for Life Events through Library Employee Self-Selected Group Development Activities; Lady Bedford and the scribal publication of funerary verse
+openalex,GET https://api.openalex.org/works?search=slave altar owner genitive before dedicant retrieval,200,1,Musical Instruments as Votive Gifts in the Ancient World
+openalex,GET https://api.openalex.org/works?search=bodyguard nation second name retrieval,200,135,Overview of the third message understanding evaluation and conference; Unpacking the Sin of Gender; Hughes Research Laboratories: description of the Trainable Text Skimmer used for MUC-4
+openalex,GET https://api.openalex.org/works?search=joint purchasers two names one verb retrieval,200,119,"The Commercial Tax: Rent-vs-Own Blind Spots in Multi-Hop Retrieval Benchmarks; CHAPTER 13 An Empire of One’s Own: Individualism and Domestic Built Form in Twenty-First-Century Jamaica; An investigation into the value of product names, their impact on consumer behaviour and subsequent marketing tacti"
+openalex,GET https://api.openalex.org/works?search=age years months days three small integers retrieval,200,3314,Survey of Temporal Information Retrieval and Related Applications; Retrieval augmented generation for large language models in healthcare: A systematic review; Semantic Component Retrieval in Software Engineering
+openalex,GET https://api.openalex.org/works?search=brick stamp maker shorter than the building text retrieval,200,254,Another brick in the wall:responses of the State to workplace fatalities in the New South Wales construction industry; Items to be Included in a Food Safety Handbook for Artisan Cheese Makers; Writing Alexandra Palace: plurivocity as a methods of cultural recovery of buildings
+openalex,GET https://api.openalex.org/works?search=century mark heads the following soldier name retrieval,200,3161,"Information retrieval and the philosophy of language; Soldiers, Martyrs, and Criminals: Utilitarian Theory and the Problem of Crime Control; British soldiers of the First World War: Creation of a representative sample"
+openalex,GET https://api.openalex.org/works?search=praetorian filiation tribe then cohort retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=patron on one face client on the other retrieval,200,2950,Selection of Software for Patron Use in Libraries; Retrieval-guided Counterfactual Generation for QA; Constrained Retrieval in Children and Young Adults
+openalex,GET https://api.openalex.org/works?search=acclamation one word not a summary seat retrieval,200,35,"The Shapeliness of the Shekinah: Structural Unity in the Thought of Peter Steele SJ; Ritual, Memory and Writing in Early Christianity; Report of the XVIIth General Assembly of the International Astronomical Union"
+openalex,GET https://api.openalex.org/works?search=memory deposits a found point while speech continues retrieval,200,3221,Gestures and Free Recall: The Embodied Nature of Verbal Memory Retrieval; Information retrieval and the philosophy of language; Embodied memories: Reviewing the role of the body in memory processes
+openalex,GET https://api.openalex.org/works?search=opponent points reseated off spoken order retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=images as letters places as wax index retrieval,200,985,3D multiscale imaging of human vocal folds using synchrotron X-ray microtomography in phase retrieval mode; Displays of paternal mouse pup retrieval following communicative interaction with maternal mates; Propagation phasor approach for holographic image reconstruction
+openalex,GET https://api.openalex.org/works?search=four speech parts teaching pair versus moving pair retrieval,200,6981,Introduction to information retrieval; The Application of Lexical Retrieval Training in Tablet-Based Speech-Language Intervention; A Survey of Code-switched Speech and Language Processing
+openalex,GET https://api.openalex.org/works?search=narratio is the seat of belief not the exordium retrieval,200,5,The Unifying Theme of the Mind of Christ in Philippians Demonstrated by Paul's Use of Rhetorical and Linguistic Devices in an Oral/Aural Culture; The function of APORIAE in John 21 : a media-rhetorical analysis; Major Theories of Teaching Writing: An Overview
+openalex,GET https://api.openalex.org/works?search=six speech parts ordered after the judgment point retrieval,200,4079,"Introduction to information retrieval; Effects of Inconsistent Relevance Judgments on Information Retrieval Test Results: A Historical Perspective; An integrative review of sensory marketing: Engaging the senses to affect perception, judgment and behavior"
+openalex,GET https://api.openalex.org/works?search=only prothesis and pistis are necessary parts retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=epideictic narrative by parts not one continuous story retrieval,200,42,The Temporalities of Constitutive Rhetoric: “Europe is a State of Mind”; The function of APORIAE in John 21 : a media-rhetorical analysis; A Rhetorical analysis of the polular society addresses of Thermidor
+openalex,GET https://api.openalex.org/works?search=prefect edict games date window retrieval,200,5,"The Republic in Danger: Drusus Libo and the Succession of Tiberius; Body, town planning, and participation : the roles of young people and sport; The Silk and the Blood. Images of Authority in Byzantine Art and Archaeology"
+openalex,GET https://api.openalex.org/works?search=granary monthly account separate from yearly total retrieval,200,10,Evaluation of Fengyun-3C Soil Moisture Products Using In-Situ Data from the Chinese Automatic Soil Moisture Observation Stations: A Case Study in Henan Province; Analysis on Cost and Profit in Farming Activity in Malaysia; Relative effects of open biomass burning and open crop straw burning on haze 
+openalex,GET https://api.openalex.org/works?search=receipt count corrected by the word only retrieval,200,3971,Word Retrieval After the 80s: Evidence From Specific and Multiple Words Naming Tasks; Retrieval-Augmented Generation for Large Language Models: A Survey; From document retrieval to question answering
+openalex,GET https://api.openalex.org/works?search=signalment age and scar are not two persons retrieval,200,3356,Person retrieval in surveillance using textual query: a review; Retrieval of old memories: the temporofrontal hypothesis; A Methylome and Transcriptome Analysis of Normal Human Scar Cells Reveals a Role for FOXF2 in Scar Maintenance
+openalex,GET https://api.openalex.org/works?search=citizenship edict grants a status not a list of names retrieval,200,98,Spaces for Jihād: Indian Muslims and Conceptions of Citizenship; Accessing Manitoba's archives: exploring the status and response to freedom of information and protection of privacy rights at the archives of manitoba; Tablets and Temples: Documents in Republican Rome
+openalex,GET https://api.openalex.org/works?search=land survey aroura figures under one village header retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=soldier letter names the carrier of the unanswered letter retrieval,200,37,Does motivation moderate the effectiveness of retrieval as a learning intervention; The Birth of a Drone Nation: American Unmanned Aerial Vehicles Since 1917; Is It Legal?
+openalex,GET https://api.openalex.org/works?search=expense account running items then a sum retrieval,200,6001,Item content versus contextual strengthening following retrieval; Interactive information retrieval; An axiomatic theory for information retrieval
+openalex,GET https://api.openalex.org/works?search=marriage contract ages and scars before the dowry retrieval,200,30,"Patriarchy, Christianity, and the African HIV/AIDS Epidemic: Rethinking Christian Marriage in Light of the Experiences of HIV Positive Women in Tanzania; The Global Traffic in Human Organs; Gold jewellery in Ptolemaic, Roman and Byzantine Egypt"
+openalex,GET https://api.openalex.org/works?search=public rolls pasted and the cover letter quotes the order retrieval,200,70,"Hallucination is the last thing you need; The museums of a local, national and supranational hero: Hugh Miller's collections over the decades; Registers of Artefacts of Creation—From the Late Medieval Period to the 19th Century"
+openalex,GET https://api.openalex.org/works?search=consular date and provincial era are two clocks retrieval,200,2,The Aesthetics Of Evidence: Crime And Conspiracy In Thailand'S Popular Press; Peacemaking and religious tolerance in the Valentinois-Diois during the French Wars of Religion (c. 1560-1600)
+openalex,GET https://api.openalex.org/works?search=place name high document frequency person name low retrieval,200,49220,Identifying Origins of Place Names via Retrieval Augmented Generation; Retrieval of similar travel routes using GPS tracklog place names; An evaluation of retrieval effectiveness for a full-text document-retrieval system
+openalex,GET https://api.openalex.org/works?search=wine jars loaded by ship ledger retrieval,200,4,"Granaries in North Africa During the Roman Period: The Province of Numidia as a Case Study; Seizing Civilization: Antiquities in Shanghai's Custody, 1949 – 1996; A Very Capable Life: The Autobiography of Zarah Petri"
+openalex,GET https://api.openalex.org/works?search=citizenship edict status not the emperor name retrieval,200,49,"After Justinian: foreign policy in the Byzantine Empire during the reigns of Justin II and Tiberius II Constantine (565-582); Becoming Christian, Becoming Roman: Conversion to Christianity and Ethnic Identification Process in Late Antiquity; The empress in late antiquity and the Roman origins of the"
+openalex,GET https://api.openalex.org/works?search=consularis curavit building inscription name versus rank retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=Simonides half fee digression retrieval,200,3,"Aristotle’s On Memory and Recollection:Concepts, Sources, and Innovations of Aristotle’sAccount of Mnemonic Capacities and Activities; Emergent Genre: Innovation and Experimentation in the Victory Odes of Pindar and Bacchylides; Private passions:"
+openalex,GET https://api.openalex.org/works?search=Metrodorus three hundred sixty loci cap retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=thesaurus exempla leges responsa separate stores retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=military record room one sheet per cohort retrieval,200,546,Mentally Disordered or Culturally Displaced? How the PTSD Label Transforms Personhood in US Military Veterans; An exploratory case study of the effects of gender related combat stress on adult learning in a military academic environment; The use of visual search tasks to determine the effects of sle
+openalex,GET https://api.openalex.org/works?search=prefect named after consular date retrieval,200,12,A Visa for Schengen's Europe: Consular practices and regular migration from Senegal to Italy; Ordering divine knowledge in late Roman legal discourse; Running Rome and its Empire: The Places of Roman Governance
+openalex,GET https://api.openalex.org/works?search=memoriae aeternae year span epitaph retrieval,200,0,
+openalex,GET https://api.openalex.org/works?search=conjectural issue factum est both sides retrieval,200,2,John Milbank and the mystery of the supernatural : his postmodern engagement with Henri de Lubac; A poetics of dwelling : the prose work of Botho Strauß and late thought of Martin Heidegger
+openalex,GET https://api.openalex.org/works?search=several constitutions one seat each retrieval,200,3350,"A Comprehensive Survey on Cross-modal Retrieval; Loops, constitution, and cognitive extension; Optimizing retrieval as a learning event: When and why expanding retrieval practice enhances long-term retention"
+openalex,GET https://api.openalex.org/works?search=law without a name versus deed with a number retrieval,200,5091,"Safe-DEED Deliverable D3.5 - Teaching syllabus on data marketplaces & law; A Survey of Model Architectures in Information Retrieval; Of Words, Bloody Deeds, and Bestial Oblivion: Hamlet and Elektra"
+openalex,GET https://api.openalex.org/works?search=appeal quotes the nomination it challenges retrieval,200,560,Academic Freedom: The Global Challenge; Evidence-based toxicology for the 21st century: Opportunities and challenges; Federal Statistical Confidentiality and Business Data: Twentieth Century Challenges and Continuing Issues
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000001,200,1,second fetch after Anubis. Transcription : D(is) M(anibus) / Noniae P(ubli) f(iliae) Optatae / et C(aio) Iulio Artemoni / parentibus / libertis libertabusque / posteri
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000004,200,1,second fetch after Anubis. Transcription : [---?]AV(?)S(?)[---]L(?)L(?)A / M(arci) Porci Nigri ser(va) / dominae Veneri / aram posuit Majuscle : [ ]AVS[ ]LLA M PORCI N
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000011,200,1,second fetch after Anubis. Transcription : Vetus / Neronis Claud(i) / Caesar(is) Aug(usti) / corp(oris) cus(tos) n[atione] / Ba[ta(v)us ---] / [------ Majuscle : VETVS
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000020,200,1,second fetch after Anubis. Transcription : [---] Picae Majuscle : [ ] PICAE Transcription Majuscle [---] Picae [ ] PICAE Chronological Data : 70 BC &ndash; 1 BC Litera
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000048,200,1,"second fetch after Anubis. Transcription : Vivant Majuscle : VIVANT Transcription Majuscle Vivant VIVANT Chronological Data : 1 AD &ndash; 300 AD Literature : AE 1983,"
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000077,200,1,second fetch after Anubis. Transcription : Mer[c]/uri[o] / [------ Majuscle : MER[ ] VRI[ ] [ Transcription Majuscle Mer[c]- MER[ ] uri[o] VRI[ ] [------ [ Chronologic
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000123,200,1,second fetch after Anubis. Transcription : Q(uintus) Babul[lius] / Asclepiu[s et] / Caecilia Syntro[phia] / comparaverunt [sibi et] / suis lib(ertis) libert[ab(us)] /
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000256,200,1,second fetch after Anubis. Transcription : D(is) M(anibus) / Felicitati / q(uae) v(ixit) a(nnos) IIII / m(enses) IIII d(ies) II / Obsitia Leu/ca filiae / suae dul/ciss
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD000777,200,1,second fetch after Anubis. Transcription : Sabidia / an(norum) LV / h(ic) s(ita) e(st) s(it) t(ibi) t(erra) l(evis) Majuscle : SABIDIA AN LV H S E S T T L Transcriptio
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD001234,200,1,second fetch after Anubis. Transcription : Ulpi Obsequentis Ulpi Valentin(i?) / opus doliari(!) ex Aug(usti praediis?) Majuscle : VLPI OBSEQVENTIS VLPI VALENTIN OPVS D
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD002468,200,1,second fetch after Anubis. Transcription : D(is) M(anibus) / Reginus Ciniuc/nati Majuscle : D M REGINVS CINIVC NATI Transcription Majuscle D(is) M(anibus) D M Reginus
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD004321,200,1,second fetch after Anubis. Transcription : [V]irius Lupus / Victorius v(ir) c(larissimus) / cons(ularis) Camp(aniae) / curavit Majuscle : [ ]IRIVS LVPVS VICTORIVS V C
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD011111,200,1,second fetch after Anubis. Transcription : [D(is)] M(anibus) / [et memoriae aet]ernae / [---]ae Cassi/[us --- B]arcianen(s)is / [cum quo vixit an]nis XXVI / [mensibus
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD018000,200,1,second fetch after Anubis. Transcription : |(centuria) Atisi / [------ Majuscle : | ATISI [ Transcription Majuscle |(centuria) Atisi | ATISI [------ [ Chronological Da
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD025000,200,1,second fetch after Anubis. Transcription : L(ucius) Avaenius L(uci) f(ilius) Ouf(entina) / Pas(s)er miles c(o)hor(tis) / prima(e) praetoria(e) / c[e]nturia Q(uinti) Ma
+edh,GET https://edh.ub.uni-heidelberg.de/edh/inschrift/HD030000,200,1,second fetch after Anubis. Transcription : C(aio) L(---) Severo patrono // Mo//des(tus?) Majuscle : C L SEVERO PATRONO MO DES Transcription Majuscle C(aio) L(---) Seve
+papyri.info,GET https://papyri.info/editions/p.giss/1/40,200,1,"edition HTML after the Anubis fast proof-of-work, bytes 44096"
+papyri.info,GET https://papyri.info/ (Anubis challenge page),200,0,"one saved body is the Anubis challenge, not an edition. Edition texts for the other cited papyri are the GitHub raw EpiDoc rows"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi037.perseus-lat1:2.351,200,1,"GetPassage body saved as 2_351.xml, bytes 1475"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi037.perseus-lat1:2.352,200,1,"GetPassage body saved as 2_352.xml, bytes 1485"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi037.perseus-lat1:2.353,200,1,"GetPassage body saved as 2_353.xml, bytes 1652"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi037.perseus-lat1:2.354,200,1,"GetPassage body saved as 2_354.xml, bytes 1376"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:latinLit:phi0474.phi038.perseus-lat1:9,200,1,"GetPassage body saved as 9.xml, bytes 2843"
+perseus-cts,GET https://www.perseus.tufts.edu/hopper/CTS?request=GetPassage&urn=urn:cts:greekLit:tlg0086.tlg038.perseus-grc1:3.16,200,1,"GetPassage body saved as 3_16.xml, bytes 12622"
+pleiades,GET https://pleiades.stoa.org/search_rss?SearchableText=Dura-Europos&portal_type=Place#45230554,200,1,RSS item https://pleiades.stoa.org/places/45230554 title Chreophylakeion. The place page was not requested separately
+pleiades,GET https://pleiades.stoa.org/search_rss?SearchableText=Dura-Europos&portal_type=Place#977420437,200,1,RSS item https://pleiades.stoa.org/places/977420437 title Room W13. The place page was not requested separately
