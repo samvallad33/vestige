@@ -6348,6 +6348,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &turn_ts,
         k,
     );
+    // Anaphoric tail. After the buried peak. The strongest anaphoric
+    // declarative in ranks 5..9 swaps with the lowest-own question in slots
+    // 1..4 when its own score beats the whole top 5. Slot 0 and the session
+    // list stay. Does not touch rsb_seat_behind.
+    apply_c2_anaphoric_tail(ix, &mut final_turn_indices, &t_own);
     maybe_dump_replay(
         ix,
         q,
