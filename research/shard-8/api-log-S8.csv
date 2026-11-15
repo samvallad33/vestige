@@ -1,0 +1,749 @@
+api,endpoint,http_status,result_count,notes
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Catalan%20Atlas",200,3,coll=maps q='Catalan Atlas' page=3 of=3
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Selden%20map",200,1,coll=maps q='Selden map' page=1 of=1
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Tabula%20Peutingeriana",200,1,coll=maps q='Tabula Peutingeriana' page=1 of=1
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Ordnance%20Survey",200,3,coll=maps q='Ordnance Survey' page=3 of=26
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Mercator",200,3,coll=maps q='Mercator' page=3 of=206
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=cadastral",200,3,coll=maps q='cadastral' page=3 of=1672
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=township%20plat",200,3,coll=maps q='township plat' page=3 of=106
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=portolan%20chart",0,0,The read operation timed out
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Ptolemy",200,3,coll=maps q='Ptolemy' page=3 of=35
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Coast%20Survey%20chart",0,0,The read operation timed out
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=tithe%20map",200,1,coll=maps q='tithe map' page=1 of=1
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=rhumb",200,3,coll=maps q='rhumb' page=3 of=21
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Kangnido",200,0,coll=maps q='Kangnido' page=0 of=0
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=soundings",200,3,coll=maps q='soundings' page=3 of=1321
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=American%20Practical%20Navigator",200,3,coll=books q='American Practical Navigator' page=3 of=9648
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Domesday",200,3,coll=books q='Domesday' page=3 of=1508
+loc,"https://www.loc.gov/maps/?fo=json&c=3&at=results,pagination&q=Zheng%20He",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Dialogue%20of%20the%20Exchequer",200,3,coll=books q='Dialogue of the Exchequer' page=3 of=3473
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Pacioli",200,3,coll=books q='Pacioli' page=3 of=65
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=pipe%20roll",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=John%20Graunt",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Political%20Arithmetick",200,3,coll=books q='Political Arithmetick' page=3 of=297
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Liber%20abaci",200,3,coll=books q='Liber abaci' page=3 of=116
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=surveying%20instructions",200,3,coll=books q='surveying instructions' page=3 of=60166
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=hundred%20rolls",200,3,coll=books q='hundred rolls' page=3 of=49400
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Nautical%20Almanac",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Periplus",200,3,coll=books q='Periplus' page=3 of=492
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=hearth%20tax",200,3,coll=books q='hearth tax' page=3 of=18924
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Valor%20Ecclesiasticus",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=feet%20of%20fines",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=census%201790",200,3,coll=books q='census 1790' page=3 of=12315
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=parish%20register",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Matthew%20Fontaine%20Maury",200,3,coll=books q='Matthew Fontaine Maury' page=3 of=2991
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=James%20Cook",200,3,coll=books q='James Cook' page=3 of=56638
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=William%20Bligh",200,3,coll=books q='William Bligh' page=3 of=1759
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Stevin",200,3,coll=books q='Stevin' page=3 of=326
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Savary",200,3,coll=books q='Savary' page=3 of=1674
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Black%20Book%20of%20the%20Exchequer",200,3,coll=books q='Black Book of the Exchequer' page=3 of=8996
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Columbus%20journal",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Maskelyne",200,3,coll=books q='Maskelyne' page=3 of=576
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Idrisi",200,3,coll=books q='Idrisi' page=3 of=98
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=inquisition%20post%20mortem",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=manorial%20accounts",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Sumner",200,3,coll=books q='Sumner' page=3 of=22070
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Fasti",200,3,coll=books q='Fasti' page=3 of=1900
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Notitia%20Dignitatum",200,3,coll=books q='Notitia Dignitatum' page=3 of=111
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=nilometer",200,3,coll=books q='nilometer' page=3 of=442
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Wilbour",200,3,coll=books q='Wilbour' page=3 of=492
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=frankpledge",200,3,coll=books q='frankpledge' page=3 of=244
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Ibn%20Majid",200,3,coll=books q='Ibn Majid' page=3 of=263
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=quo%20warranto",200,3,coll=books q='quo warranto' page=3 of=1839
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=window%20tax",200,3,coll=books q='window tax' page=3 of=48418
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=tally",200,3,coll=books q='tally' page=3 of=24110
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=coroner",200,3,coll=books q='coroner' page=3 of=11239
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=poll%20tax",200,3,coll=books q='poll tax' page=3 of=22667
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=indenture",200,3,coll=books q='indenture' page=3 of=7244
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=chirograph",200,3,coll=books q='chirograph' page=3 of=90
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=ship%20money",200,3,coll=books q='ship money' page=3 of=103630
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=close%20rolls",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Gunter",200,3,coll=books q='Gunter' page=3 of=5775
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=plane%20table",200,3,coll=books q='plane table' page=3 of=51891
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=charge%20and%20discharge",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=chronometer",200,3,coll=books q='chronometer' page=3 of=4551
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=waste%20book",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=dead%20reckoning",200,3,coll=books q='dead reckoning' page=3 of=21773
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=cadastre",200,3,coll=books q='cadastre' page=3 of=352
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=lunar%20distance",200,3,coll=books q='lunar distance' page=3 of=7769
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=tahrir",200,3,coll=books q='tahrir' page=3 of=160
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=baojia",200,3,coll=books q='baojia' page=3 of=4
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Hyginus",200,3,coll=books q='Hyginus' page=3 of=487
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Pei%20Xiu",200,3,coll=books q='Pei Xiu' page=3 of=574
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=tide%20table",200,3,coll=books q='tide table' page=3 of=68658
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=agrimensor",200,3,coll=books q='agrimensor' page=3 of=136
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=compass%20variation",200,3,coll=books q='compass variation' page=3 of=22452
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Pigafetta",200,3,coll=books q='Pigafetta' page=3 of=277
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Itinerarium",200,3,coll=books q='Itinerarium' page=3 of=398
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Vancouver",200,3,coll=books q='Vancouver' page=3 of=9883
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Hakluyt",200,3,coll=books q='Hakluyt' page=3 of=2057
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=chip%20log",200,3,coll=books q='chip log' page=3 of=18971
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=bills%20of%20mortality",200,3,coll=books q='bills of mortality' page=3 of=15754
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=parish%20registers%20Cromwell",200,3,coll=books q='parish registers Cromwell' page=3 of=11300
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Board%20of%20Longitude",200,3,coll=books q='Board of Longitude' page=3 of=13865
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=log-book",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=proof%20of%20age",200,3,coll=books q='proof of age' page=3 of=105262
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=charter%20rolls",200,3,coll=books q='charter rolls' page=3 of=22267
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=liberate%20rolls",200,3,coll=books q='liberate rolls' page=3 of=10233
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=glebe%20terrier",200,3,coll=books q='glebe terrier' page=3 of=914
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=lay%20subsidy",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=Red%20Book%20of%20the%20Exchequer",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=enclosure",200,3,coll=books q='enclosure' page=3 of=26253
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=metes%20and%20bounds",200,3,coll=books q='metes and bounds' page=3 of=18789
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=bishop%20transcripts",200,3,coll=books q='bishop transcripts' page=3 of=10313
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=population%20schedule",200,3,coll=books q='population schedule' page=3 of=18709
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=mortality%20schedule",200,3,coll=books q='mortality schedule' page=3 of=5992
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=ship%27s%20log",200,3,"coll=manuscripts q=""ship's log"" page=3 of=1706"
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=Exchequer",200,3,coll=manuscripts q='Exchequer' page=3 of=233
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=log%20book",200,3,coll=manuscripts q='log book' page=3 of=2130
+loc,"https://www.loc.gov/books/?fo=json&c=3&at=results,pagination&q=General%20Land%20Office",0,0,The read operation timed out
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=ledger",200,3,coll=manuscripts q='ledger' page=3 of=813
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=field%20notes%20survey",200,3,coll=manuscripts q='field notes survey' page=3 of=2323
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=census",200,3,coll=manuscripts q='census' page=3 of=1724
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=parish%20register",200,3,coll=manuscripts q='parish register' page=3 of=957
+loc,"https://www.loc.gov/photos/?fo=json&c=3&at=results,pagination&q=census%20schedule",200,3,coll=photos q='census schedule' page=3 of=6
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=Domesday",200,3,coll=manuscripts q='Domesday' page=3 of=6
+loc,"https://www.loc.gov/photos/?fo=json&c=3&at=results,pagination&q=portolan",200,0,coll=photos q='portolan' page=0 of=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22American%20Practical%20Navigator%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,63,"q='title:(""American Practical Navigator"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Summa%20de%20arithmetica%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,"q='title:(""Summa de arithmetica"") AND mediatype:texts' page=1"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Domesday%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,362,q='title:(Domesday) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Dialogue%20of%20the%20Exchequer%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""Dialogue of the Exchequer"") AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Liber%20abaci%22%20OR%20%22Liber%20Abaci%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,7,"q='title:(""Liber abaci"" OR ""Liber Abaci"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Graunt%29%20AND%20mortality%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,12,q='title:(Graunt) AND mortality AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Political%20Arithmetick%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,20,"q='title:(""Political Arithmetick"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Nautical%20Almanac%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,399,"q='title:(""Nautical Almanac"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22survey%20of%20the%20public%20lands%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,21,"q='title:(""survey of the public lands"") AND mediatype:texts' page=3"
+loc,"https://www.loc.gov/photos/?fo=json&c=3&at=results,pagination&q=tally%20stick",200,3,coll=photos q='tally stick' page=3 of=9
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28pipe%29%20AND%20%28roll%29%20AND%20exchequer%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,30,q='title:(pipe) AND (roll) AND exchequer AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Periplus%29%20AND%20Erythraean%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,22,q='title:(Periplus) AND Erythraean AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22hundred%20rolls%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,8,"q='title:(""hundred rolls"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Valor%20Ecclesiasticus%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,14,"q='title:(""Valor Ecclesiasticus"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22feet%20of%20fines%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,50,"q='title:(""feet of fines"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28hearth%29%20AND%20tax%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,18,q='title:(hearth) AND tax AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Le%20parfait%20negociant%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,6,"q='title:(""Le parfait negociant"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Bowditch%29%20AND%20navigator%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,15,q='title:(Bowditch) AND navigator AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22log%20book%22%20OR%20logbook%29%20AND%20ship%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1436,"q='title:(""log book"" OR logbook) AND ship AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Bligh%29%20AND%20%28Bounty%20OR%20log%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,59,q='title:(Bligh) AND (Bounty OR log) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Cook%29%20AND%20%28Endeavour%20OR%20voyage%29%20AND%20journal%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,43,q='title:(Cook) AND (Endeavour OR voyage) AND journal AND mediatype:texts' page=3
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=account%20book",0,0,The read operation timed out
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Maskelyne%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,280,q='title:(Maskelyne) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=creator%3A%28Maury%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1329,q='creator:(Maury) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Ptolemy%29%20AND%20%28Geography%20OR%20Geographia%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,9,q='title:(Ptolemy) AND (Geography OR Geographia) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Peutinger%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,15,q='title:(Peutinger) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Itinerarium%20Antonini%22%20OR%20%22Antonine%20Itinerary%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,14,"q='title:(""Itinerarium Antonini"" OR ""Antonine Itinerary"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Notitia%20Dignitatum%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,46,"q='title:(""Notitia Dignitatum"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28nilometer%20OR%20Nilometer%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,4,q='title:(nilometer OR Nilometer) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Wilbour%29%20AND%20papyrus%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,4,q='title:(Wilbour) AND papyrus AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22inquisition%20post%20mortem%22%20OR%20%22inquisitions%20post%20mortem%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,49,"q='title:(""inquisition post mortem"" OR ""inquisitions post mortem"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28frankpledge%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,15,q='title:(frankpledge) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22quo%20warranto%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,71,"q='title:(""quo warranto"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22close%20rolls%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,111,"q='title:(""close rolls"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22poll%20tax%22%29%20AND%20%281377%20OR%201379%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,"q='title:(""poll tax"") AND (1377 OR 1379) AND mediatype:texts' page=1"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22ship%20money%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,22,"q='title:(""ship money"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22window%20tax%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,8,"q='title:(""window tax"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22manorial%20accounts%22%20OR%20compotus%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,21,"q='title:(""manorial accounts"" OR compotus) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28coroner%29%20AND%20%28rolls%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,3,q='title:(coroner) AND (rolls) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Black%20Book%20of%20the%20Exchequer%22%20OR%20%22Dialogus%20de%20Scaccario%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,6,"q='title:(""Black Book of the Exchequer"" OR ""Dialogus de Scaccario"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Stevin%29%20AND%20%28bookkeeping%20OR%20Disme%20OR%20decimal%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,3,q='title:(Stevin) AND (bookkeeping OR Disme OR decimal) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22dead%20reckoning%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,120,"q='title:(""dead reckoning"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22lunar%20distances%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,11,"q='title:(""lunar distances"") AND mediatype:texts' page=3"
+loc,"https://www.loc.gov/manuscripts/?fo=json&c=3&at=results,pagination&q=indenture",0,0,The read operation timed out
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28chronometer%29%20AND%20longitude%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,8,q='title:(chronometer) AND longitude AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22plane%20table%22%29%20AND%20survey%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,6,"q='title:(""plane table"") AND survey AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22compass%20variation%22%20OR%20%22variation%20of%20the%20compass%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,40,"q='title:(""compass variation"" OR ""variation of the compass"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22tide%20tables%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,87,"q='title:(""tide tables"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22metes%20and%20bounds%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,12,"q='title:(""metes and bounds"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28cadastre%20OR%20cadastral%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,116,q='title:(cadastre OR cadastral) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Gunter%29%20AND%20chain%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,q='title:(Gunter) AND chain AND mediatype:texts' page=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Idrisi%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,13,q='title:(Idrisi) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Hakluyt%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,84,q='title:(Hakluyt) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Ibn%20Majid%22%20OR%20Majid%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,371,"q='title:(""Ibn Majid"" OR Majid) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Pigafetta%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,40,q='title:(Pigafetta) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Vancouver%29%20AND%20voyage%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,55,q='title:(Vancouver) AND voyage AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22parish%20registers%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,496,"q='title:(""parish registers"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22lay%20subsidy%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,21,"q='title:(""lay subsidy"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22bills%20of%20mortality%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,163,"q='title:(""bills of mortality"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Board%20of%20Longitude%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,17,"q='title:(""Board of Longitude"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22proof%20of%20age%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,2,"q='title:(""proof of age"") AND mediatype:texts' page=2"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22glebe%20terrier%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""glebe terrier"") AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28enclosure%29%20AND%20award%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,q='title:(enclosure) AND award AND mediatype:texts' page=1
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22liberate%20rolls%22%20OR%20%22charter%20rolls%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,23,"q='title:(""liberate rolls"" OR ""charter rolls"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22General%20Land%20Office%22%20OR%20%22public%20lands%22%29%20AND%20instructions%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,37,"q='title:(""General Land Office"" OR ""public lands"") AND instructions AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Coast%20and%20Geodetic%22%20OR%20%22Coast%20Survey%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,288,"q='title:(""Coast and Geodetic"" OR ""Coast Survey"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22charge%20and%20discharge%22%20OR%20compotus%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,25,"q='title:(""charge and discharge"" OR compotus) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Sumner%29%20AND%20%28navigation%20OR%20position%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,11,q='title:(Sumner) AND (navigation OR position) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Cassini%29%20AND%20%28triangulation%20OR%20carte%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,q='title:(Cassini) AND (triangulation OR carte) AND mediatype:texts' page=1
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28indenture%29%20AND%20%28counterpart%20OR%20lease%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,11,q='title:(indenture) AND (counterpart OR lease) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Ordnance%20Survey%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,195,"q='title:(""Ordnance Survey"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22waste%20book%22%29%20AND%20bookkeeping%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""waste book"") AND bookkeeping AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Tabula%20Heracleensis%22%20OR%20Heracleensis%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,3,"q='title:(""Tabula Heracleensis"" OR Heracleensis) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28tally%29%20AND%20exchequer%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,q='title:(tally) AND exchequer AND mediatype:texts' page=1
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28agrimensor%20OR%20gromatic%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,4,q='title:(agrimensor OR gromatic) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28tahrir%20OR%20defter%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,196,q='title:(tahrir OR defter) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28baojia%20OR%20%22tithing%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,96,"q='title:(baojia OR ""tithing"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22census%22%20AND%201790%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,132,"q='title:(""census"" AND 1790) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=creator%3A%28%22Luca%20Pacioli%22%20OR%20Pacioli%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,26,"q='creator:(""Luca Pacioli"" OR Pacioli) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Fibonacci%29%20AND%20%28abaci%20OR%20arithmetic%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,12,q='title:(Fibonacci) AND (abaci OR arithmetic) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22De%20Thiende%22%20OR%20Disme%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,8,"q='title:(""De Thiende"" OR Disme) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22chip%20log%22%20OR%20%22log-line%22%20OR%20%22log%20line%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,2,"q='title:(""chip log"" OR ""log-line"" OR ""log line"") AND mediatype:texts' page=2"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22population%20schedule%22%20OR%20%22census%20instructions%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,15,"q='title:(""population schedule"" OR ""census instructions"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22lead%20line%22%20OR%20%22sounding%20line%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,11,"q='title:(""lead line"" OR ""sounding line"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22rhumb%22%20OR%20loxodrome%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,16,"q='title:(""rhumb"" OR loxodrome) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Mercator%29%20AND%20%28chart%20OR%20map%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,21,q='title:(Mercator) AND (chart OR map) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Stadiasmus%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,q='title:(Stadiasmus) AND mediatype:texts' page=1
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Itinerarium%20Burdigalense%22%20OR%20Bordeaux%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1770,"q='title:(""Itinerarium Burdigalense"" OR Bordeaux) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Yu%20Ji%20Tu%22%20OR%20%22Yujitu%22%20OR%20%22Pei%20Xiu%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""Yu Ji Tu"" OR ""Yujitu"" OR ""Pei Xiu"") AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Selden%20map%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,"q='title:(""Selden map"") AND mediatype:texts' page=1"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Kangnido%20OR%20%22Kangnido%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(Kangnido OR ""Kangnido"") AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Mao%20Kun%22%20OR%20%22Wubei%20Zhi%22%20OR%20%22Zheng%20He%22%29%20AND%20map%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""Mao Kun"" OR ""Wubei Zhi"" OR ""Zheng He"") AND map AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22portolan%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,51,"q='title:(""portolan"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Catalan%20Atlas%22%20OR%20Cresques%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,3,"q='title:(""Catalan Atlas"" OR Cresques) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22four%20column%22%20OR%20%22si%20zhu%22%20OR%20longmen%29%20AND%20accounting%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""four column"" OR ""si zhu"" OR longmen) AND accounting AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28hundi%20OR%20%22bahi%20khata%22%20OR%20%22jama%20kharch%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,40,"q='title:(hundi OR ""bahi khata"" OR ""jama kharch"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22double%20entry%22%20OR%20bookkeeping%29%20AND%20%28Pacioli%20OR%20journal%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,50,"q='title:(""double entry"" OR bookkeeping) AND (Pacioli OR journal) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22imprest%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,164,"q='title:(""imprest"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22casting%20out%20nines%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""casting out nines"") AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28chirograph%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,3,q='title:(chirograph) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22control%20account%22%20OR%20%22subsidiary%20ledger%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,5,"q='title:(""control account"" OR ""subsidiary ledger"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22nautical%20day%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""nautical day"") AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22tessera%20hospitalis%22%20OR%20symbolon%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,2,"q='title:(""tessera hospitalis"" OR symbolon) AND mediatype:texts' page=2"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22watch%20bill%22%20OR%20%22eight%20bells%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,45,"q='title:(""watch bill"" OR ""eight bells"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22remark%20book%22%29%20AND%20log%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""remark book"") AND log AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Fasti%29%20AND%20%28consulares%20OR%20Capitolini%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,59,q='title:(Fasti) AND (consulares OR Capitolini) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22variation%20of%20the%20compass%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,39,"q='title:(""variation of the compass"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Snellius%20OR%20Snell%29%20AND%20triangulation%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,q='title:(Snellius OR Snell) AND triangulation AND mediatype:texts' page=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Hounslow%22%29%20AND%20baseline%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""Hounslow"") AND baseline AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22line%20of%20position%22%20OR%20%22Sumner%20line%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,4,"q='title:(""line of position"" OR ""Sumner line"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22triangle%20of%20error%22%20OR%20resection%29%20AND%20survey%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,"q='title:(""triangle of error"" OR resection) AND survey AND mediatype:texts' page=1"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28meander%29%20AND%20%28survey%20OR%20river%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,13,q='title:(meander) AND (survey OR river) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22witness%20tree%22%20OR%20%22bearing%20tree%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,22,"q='title:(""witness tree"" OR ""bearing tree"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22slave%20schedule%22%29%20AND%20census%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""slave schedule"") AND census AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22enumeration%20district%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,6,"q='title:(""enumeration district"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22mortality%20schedule%22%29%20AND%20census%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,"q='title:(""mortality schedule"") AND census AND mediatype:texts' page=1"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22agricultural%20schedule%22%29%20AND%20census%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""agricultural schedule"") AND census AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22bishops%20transcripts%22%20OR%20%22bishop%20transcripts%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,3,"q='title:(""bishops transcripts"" OR ""bishop transcripts"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28superplusagium%20OR%20arrears%29%20AND%20%28pipe%20OR%20compotus%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,q='title:(superplusagium OR arrears) AND (pipe OR compotus) AND mediatype:texts' page=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22court%20leet%22%20OR%20essoin%20OR%20amercement%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,94,"q='title:(""court leet"" OR essoin OR amercement) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22et%20quietus%22%20OR%20quietus%29%20AND%20exchequer%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""et quietus"" OR quietus) AND exchequer AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22originalia%22%20OR%20estreat%29%20AND%20exchequer%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,3,"q='title:(""originalia"" OR estreat) AND exchequer AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22year%20books%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,100,"q='title:(""year books"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28kalends%29%20AND%20%28ides%20OR%20nones%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,q='title:(kalends) AND (ides OR nones) AND mediatype:texts' page=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22plea%20rolls%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,5,"q='title:(""plea rolls"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22memoranda%20rolls%22%20OR%20%22memoranda%20roll%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,3,"q='title:(""memoranda rolls"" OR ""memoranda roll"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28indiction%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,10,q='title:(indiction) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28centuriation%20OR%20%22limitatio%22%29%20AND%20roman%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(centuriation OR ""limitatio"") AND roman AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22forma%20urbis%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,6,"q='title:(""forma urbis"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28limmu%20OR%20eponym%29%20AND%20assyrian%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,4,q='title:(limmu OR eponym) AND assyrian AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Tabula%20Heracleensis%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""Tabula Heracleensis"") AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28hojok%20OR%20ninzetsu%29%20AND%20census%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,q='title:(hojok OR ninzetsu) AND census AND mediatype:texts' page=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22cadastre%20parcellaire%22%20OR%20%22cadastre%20napoleon%22%20OR%20%22ancien%20cadastre%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""cadastre parcellaire"" OR ""cadastre napoleon"" OR ""ancien cadastre"") AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22huangce%22%20OR%20%22yellow%20registers%22%20OR%20%22fish-scale%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,10,"q='title:(""huangce"" OR ""yellow registers"" OR ""fish-scale"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22m%C3%BChimme%22%20OR%20muhimme%20OR%20sijill%20OR%20sicil%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,23,"q='title:(""mühimme"" OR muhimme OR sijill OR sicil) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28praktikon%20OR%20prakticon%29%20AND%20byzantine%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,q='title:(praktikon OR prakticon) AND byzantine AND mediatype:texts' page=1
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22voyage%20account%22%20OR%20%22East%20India%22%29%20AND%20%28ledger%20OR%20journal%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,167,"q='title:(""voyage account"" OR ""East India"") AND (ledger OR journal) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28consignment%29%20AND%20%28account%20OR%20ledger%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,q='title:(consignment) AND (account OR ledger) AND mediatype:texts' page=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22folio%22%20AND%20ledger%29%20AND%20bookkeeping%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""folio"" AND ledger) AND bookkeeping AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28contra%29%20AND%20%28entry%20OR%20ledger%29%20AND%20bookkeeping%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,q='title:(contra) AND (entry OR ledger) AND bookkeeping AND mediatype:texts' page=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22three%20column%22%20OR%20%22cash%20book%22%29%20AND%20bookkeeping%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,"q='title:(""three column"" OR ""cash book"") AND bookkeeping AND mediatype:texts' page=1"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22day%20book%22%20OR%20daybook%29%20AND%20%28merchant%20OR%20ledger%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,7,"q='title:(""day book"" OR daybook) AND (merchant OR ledger) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22stock%20taking%22%20OR%20stocktaking%20OR%20inventory%29%20AND%20%28account%20OR%20ledger%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,156,"q='title:(""stock taking"" OR stocktaking OR inventory) AND (account OR ledger) AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28suspense%29%20AND%20account%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,9,q='title:(suspense) AND account AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22opening%20balance%22%20OR%20%22brought%20forward%22%29%20AND%20account%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""opening balance"" OR ""brought forward"") AND account AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22De%20Thiende%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,"q='title:(""De Thiende"") AND mediatype:texts' page=1"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Red%20Book%20of%20the%20Exchequer%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,13,"q='title:(""Red Book of the Exchequer"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22La%20pratica%20della%20mercatura%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,1,"q='title:(""La pratica della mercatura"") AND mediatype:texts' page=1"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Dialogus%20de%20Scaccario%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,6,"q='title:(""Dialogus de Scaccario"") AND mediatype:texts' page=3"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Datini%22%29%20AND%20%28account%20OR%20ledger%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""Datini"") AND (account OR ledger) AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Pegolotti%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,6,q='title:(Pegolotti) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Medici%29%20AND%20%28ledger%20OR%20account%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,21,q='title:(Medici) AND (ledger OR account) AND mediatype:texts' page=3
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Genoese%22%20OR%20Genoa%29%20AND%20%28cartulary%20OR%20ledger%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""Genoese"" OR Genoa) AND (cartulary OR ledger) AND mediatype:texts' page=0"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22massari%22%20OR%20massaria%29%20AND%20%28account%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=3,200,0,"q='title:(""massari"" OR massaria) AND (account) AND mediatype:texts' page=0"
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Dialogus%20de%20Scaccario,200,14,q='Dialogus de Scaccario'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=American%20Practical%20Navigator%20Bowditch,200,34,q='American Practical Navigator Bowditch'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Natural%20and%20Political%20Observations%20Graunt,200,15,q='Natural and Political Observations Graunt'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Liber%20abaci,200,15,q='Liber abaci'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Political%20Arithmetick%20Petty,200,24,q='Political Arithmetick Petty'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Summa%20de%20arithmetica%20Pacioli,200,15,q='Summa de arithmetica Pacioli'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Le%20parfait%20negociant,200,31,q='Le parfait negociant'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Domesday%20book,200,728,q='Domesday book'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Nautical%20Almanac,200,1071,q='Nautical Almanac'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Instructions%20for%20the%20survey%20of%20the%20public%20lands,200,87,q='Instructions for the survey of the public lands'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Periplus%20of%20the%20Erythraean%20Sea,200,35,q='Periplus of the Erythraean Sea'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=De%20Thiende%20Stevin,200,3,q='De Thiende Stevin'
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Hundred%20Rolls,200,272,q='Hundred Rolls'
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Domesday%20Book,200,1,q='Domesday Book' Q19867
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tabula%20Peutingeriana,200,1,q='Tabula Peutingeriana' Q12767
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Periplus%20of%20the%20Erythraean%20Sea,200,1,q='Periplus of the Erythraean Sea' Q664162
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Cantino%20planisphere,200,1,q='Cantino planisphere' Q568009
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Summa%20de%20arithmetica,200,1,q='Summa de arithmetica' Q19321855
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Dialogus%20de%20Scaccario,200,1,q='Dialogus de Scaccario' Q3026041
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Pipe%20rolls,200,1,q='Pipe rolls' Q614407
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Fasti%20Capitolini,200,1,q='Fasti Capitolini' Q1397785
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Wilbour%20Papyrus,200,1,q='Wilbour Papyrus' Q2051127
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Itinerarium%20Antonini,200,1,q='Itinerarium Antonini' Q512256
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Notitia%20Dignitatum,200,1,q='Notitia Dignitatum' Q641178
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Selden%20Map,200,1,q='Selden Map' Q17018443
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Catalan%20Atlas,200,1,q='Catalan Atlas' Q1356297
+openlibrary,https://openlibrary.org/search.json?limit=1&q=Valor%20Ecclesiasticus,200,13,q='Valor Ecclesiasticus'
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Valor%20Ecclesiasticus,200,1,q='Valor Ecclesiasticus' Q7912537
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Hundred%20Rolls,200,1,q='Hundred Rolls' Q5942259
+openlibrary,https://openlibrary.org/search.json?limit=1&q=pipe%20roll,200,374,q='pipe roll'
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Corpus%20Agrimensorum%20Romanorum,200,1,q='Corpus Agrimensorum Romanorum' Q5172622
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tabula%20Heracleensis,200,0,q='Tabula Heracleensis' 
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Nilometer,200,1,q='Nilometer' Q1340071
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Pei%20Xiu,200,1,q='Pei Xiu' Q703639
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Yu%20Ji%20Tu,200,1,q='Yu Ji Tu' Q50578738
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Kangnido,200,1,q='Kangnido' Q126951
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Feet%20of%20fines,200,1,q='Feet of fines' Q5441472
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Book%20of%20the%20Sea%20Ibn%20Majid,200,0,q='Book of the Sea Ibn Majid' 
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Exchequer%20of%20Pleas,200,1,q='Exchequer of Pleas' Q1137765
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Mao%20Kun%20map,200,1,q='Mao Kun map' Q4216116
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Hearth%20tax,200,1,q='Hearth tax' Q2361901
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Bills%20of%20mortality,200,1,q='Bills of mortality' Q4912039
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Frankpledge,200,1,q='Frankpledge' Q5492235
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Mercator%201569%20world%20map,200,1,q='Mercator 1569 world map' Q6818052
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Gunter%27s%20chain,200,1,"q=""Gunter's chain"" Q552299"
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Inquisition%20post%20mortem,200,1,q='Inquisition post mortem' Q6036904
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Board%20of%20Longitude,200,1,q='Board of Longitude' Q1365673
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=General%20Land%20Office,200,1,q='General Land Office' Q3217020
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tahrir,200,1,q='Tahrir' Q133305679
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Cadastre,200,1,q='Cadastre' Q191072
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Baojia%20system,200,1,q='Baojia system' Q704587
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Chirograph,200,1,q='Chirograph' Q1067768
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tessera%20hospitalis,200,1,q='Tessera hospitalis' Q3985004
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=William%20Petty,200,1,q='William Petty' Q278699
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=John%20Graunt,200,1,q='John Graunt' Q454938
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Liber%20Abaci,200,1,q='Liber Abaci' Q2044496
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Nathaniel%20Bowditch,200,1,q='Nathaniel Bowditch' Q1356911
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Nevil%20Maskelyne,200,1,q='Nevil Maskelyne' Q450757
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Thomas%20Hubbard%20Sumner,200,1,q='Thomas Hubbard Sumner' Q1893979
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Luca%20Pacioli,200,1,q='Luca Pacioli' Q87620
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Matthew%20Fontaine%20Maury,200,1,q='Matthew Fontaine Maury' Q114385
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Jacques%20Savary,200,1,q='Jacques Savary' Q1964905
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Simon%20Stevin,200,1,q='Simon Stevin' Q23696
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Richard%20FitzNeal,200,1,q='Richard FitzNeal' Q3431390
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Itinerarium%20Burdigalense,200,1,q='Itinerarium Burdigalense' Q776772
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Forma%20Urbis%20Romae,200,1,q='Forma Urbis Romae' Q1437391
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Stadiasmus%20Maris%20Magni,200,1,q='Stadiasmus Maris Magni' Q16330401
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Hyginus%20Gromaticus,200,1,q='Hyginus Gromaticus' Q221223
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Limmu,200,1,q='Limmu' Q1074760
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Huangce,200,0,q='Huangce' 
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Pei%20Xiu%20six%20principles,200,0,q='Pei Xiu six principles' 
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=M%C3%BChimme%20Defteri,200,1,q='Mühimme Defteri' Q136098618
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Fish-scale%20registers,200,0,q='Fish-scale registers' 
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Parish%20register,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Poll%20tax,200,1,q='Poll tax' Q721368
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Napoleonic%20cadastre,200,1,q='Napoleonic cadastre' Q2932600
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Lay%20subsidy,200,0,q='Lay subsidy' 
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Window%20tax,200,1,q='Window tax' Q480310
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Court%20leet,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Quo%20warranto,200,1,q='Quo warranto' Q3724781
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Ship%20money,200,1,q='Ship money' Q1405064
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Coroner,200,1,q='Coroner' Q1134614
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Liberate%20roll,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Charter%20roll,200,1,q='Charter roll' Q5086747
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Close%20roll,200,1,q='Close roll' Q5135224
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Memoranda%20roll,200,0,q='Memoranda roll' 
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Black%20Book%20of%20the%20Exchequer,200,1,q='Black Book of the Exchequer' Q135910317
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Imprest%20system,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tally%20stick,200,1,q='Tally stick' Q933008
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Red%20Book%20of%20the%20Exchequer,200,1,q='Red Book of the Exchequer' Q7303779
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Double-entry%20bookkeeping,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Waste%20book,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Charge%20and%20discharge,200,1,q='Charge and discharge' Q122802228
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Bahi%20khata,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Longmen%20account%20book,200,0,q='Longmen account book' 
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Four-pillar%20accounting,200,1,q='Four-pillar accounting' Q137324813
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Regnal%20year,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Hundi,200,1,q='Hundi' Q627437
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Portolan%20chart,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Centuriation,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Dead%20reckoning,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Indiction,200,1,q='Indiction' Q1339127
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Marine%20chronometer,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Rhumb%20line,200,1,q='Rhumb line' Q215169
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Lead%20line,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Triangulation,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Chip%20log,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Sumner%20line,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Lunar%20distance,200,1,q='Lunar distance' Q94921
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Nautical%20day,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Metes%20and%20bounds,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Plane%20table,200,1,q='Plane table' Q633685
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Public%20Land%20Survey%20System,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Witness%20tree,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tithe%20map,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Enumeration%20district,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Bishop%27s%20transcript,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Enclosure,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=United%20States%20census,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Glebe%20terrier,200,1,q='Glebe terrier' Q5567448
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Ottoman%20tahrir%20defters,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Pegolotti,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Praktikon,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Medici%20Bank,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Francesco%20Datini,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=De%20Thiende,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Counterpart%20lease,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Proof%20of%20age,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=La%20pratica%20della%20mercatura,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Casting%20out%20nines,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Final%20concord,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Assyrian%20eponym,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Diocletian%20indiction,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Chinese%20sexagenary%20cycle,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Ptolemy%20Geography,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Al-Idrisi,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Antonine%20Itinerary,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Kalends,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Zheng%20He%20navigation%20chart,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Principal%20Triangulation%20of%20Great%20Britain,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Cassini%20map,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Snellius,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=United%20States%20Coast%20Survey,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Gemma%20Frisius,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Resection,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Chart%20datum,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Danger%20bearing,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Magnetic%20declination,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Traverse%20board,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Baseline,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Remark%20book,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Watch%20system,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Voyage%20accounting,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Fair%20log,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Control%20account,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Consignment,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Suspense%20account,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Contra%20account,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Daybook,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Subsidiary%20ledger,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Opening%20balance,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Quietus,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Originalia%20roll,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Arrears,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Folio,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Amercement,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Nova%20oblata,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Essoin,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Hue%20and%20cry,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Estreat,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Hundred,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Carucage,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Danegeld,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Scutage,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=View%20of%20frankpledge,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Wardship,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Primer%20seisin,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Escheat,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Manorial%20court,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Extent,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Compotus,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Reeve,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Stock%20and%20foil,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Superplusagium,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Proffer,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Exchequer%20tallies,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Summons%20of%20the%20Pipe,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Foreign%20accounts,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Plea%20rolls,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Year%20Books,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=King%27s%20Remembrancer,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Court%20of%20Common%20Pleas,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Lord%20Treasurer%27s%20Remembrancer,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Auditors%20of%20the%20Imprests,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Declared%20account,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Pell%20of%20issue,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Pell%20of%20receipt,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Clerk%20of%20the%20Pells,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tellership,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Cartulary,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Scriptorium,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Custumal,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Terrier,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Halmote,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Extent%20of%20the%20manor,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Rental,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Custumal%20of%20the%20manor,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Presentment,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Court%20baron,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Affeerors,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Pain%20of%20the%20court,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Muster%20roll,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Constable%27s%20return,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Hearth%20tax%20return,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Ship%20money%20writ,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Land%20tax%20assessment,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Window%20tax%20assessment,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Poor%20rate,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Church%20rate,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Commutation,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tithe%20apportionment,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Enclosure%20award,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Inclosure%20commissioner,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Admittance,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Copyhold,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Heriot,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Surrender,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Merchet,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Relief,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tallage,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Scutage%20roll,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Chevage,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Aid,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Wardrobe%20account,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Carter%27s%20accounts,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Chancellor%27s%20roll,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Great%20Roll%20of%20the%20Pipe,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Original%20writ,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Memoranda%20roll,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Sheriff%27s%20account,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Return%20of%20writ,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Corpus%20comitatus,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Farm%20of%20the%20county,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Donum,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Terrae%20datae,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Tallagium,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Auxilium,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Oblata,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Nova%20placita,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=De%20oblatis,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Fines%20and%20amercements,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Exannual%20roll,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Utlagati,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Et%20quietus%20est,429,0,You are making too many requests to the API. Please follow the best practices at
+wikidata,https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=Nihil,429,0,You are making too many requests to the API. Please follow the best practices at
+chronicling_america,"https://www.loc.gov/collections/chronicling-america/?dl=page&fo=json&c=1&at=results,pagination&qs=ledger%20account",200,1,q='ledger account' of=23852658
+chronicling_america,"https://www.loc.gov/collections/chronicling-america/?dl=page&fo=json&c=1&at=results,pagination&qs=tax%20assessment",200,1,q='tax assessment' of=23852658
+chronicling_america,"https://www.loc.gov/collections/chronicling-america/?dl=page&fo=json&c=1&at=results,pagination&qs=ship%20log",200,1,q='ship log' of=23852658
+chronicling_america,"https://www.loc.gov/collections/chronicling-america/?dl=page&fo=json&c=1&at=results,pagination&qs=log%20book",200,1,q='log book' of=23852658
+chronicling_america,"https://www.loc.gov/collections/chronicling-america/?dl=page&fo=json&c=1&at=results,pagination&qs=census%20enumerator",200,1,q='census enumerator' of=23852658
+chronicling_america,"https://www.loc.gov/collections/chronicling-america/?dl=page&fo=json&c=1&at=results,pagination&qs=surveyor%20field%20notes",200,1,q='surveyor field notes' of=23852658
+chronicling_america,"https://www.loc.gov/collections/chronicling-america/?dl=page&fo=json&c=1&at=results,pagination&qs=bookkeeping",200,1,q='bookkeeping' of=23852658
+datagov,https://api.gsa.gov/technology/datagov/v4/search?per_page=1&q=census%20of%20population%20schedules,200,0,q='census of population schedules'
+datagov,https://api.gsa.gov/technology/datagov/v4/search?per_page=1&q=general%20land%20office,200,1,q='general land office'
+datagov,https://api.gsa.gov/technology/datagov/v4/search?per_page=1&q=coastal%20nautical%20chart,200,1,q='coastal nautical chart'
+datagov,https://api.gsa.gov/technology/datagov/v4/search?per_page=1&q=mortality%20census,200,1,q='mortality census'
+datagov,https://api.gsa.gov/technology/datagov/v4/search?per_page=1&q=public%20land%20survey,200,1,q='public land survey'
+datagov,https://api.gsa.gov/technology/datagov/v4/search?per_page=1&q=enumeration%20district,200,1,q='enumeration district'
+datagov_ckan,https://catalog.data.gov/api/3/action/package_search?q=census&rows=1,404,0,"{""detail"":{},""message"":""Not Found""} "
+nara,https://catalog.archives.gov/api/v2/records/search?q=ship%20logbook&limit=1,200,0,"HTML shell, zero JSON hits; v2 requires x-api-key, none requested"
+loc_global_search,https://www.loc.gov/search/?fo=json&c=1&at=results&q=Domesday,200,0,"{""results"": [{""access_restricted"": false, ""aka"": [""http://lccn.loc.gov/21002799"""
+nara,https://catalog.archives.gov/api/v2/records/search?q=census%20schedule&limit=1&availableOnline=true,200,0,"HTML shell, zero JSON hits"
+datagov_ckan,https://catalog.data.gov/api/3/action/package_search?q=land%20survey&rows=1,404,0,"{""detail"":{},""message"":""Not Found""} "
+chronicling_america,"https://www.loc.gov/collections/chronicling-america/?dl=page&fo=json&c=1&at=results,pagination&qs=land%20office",200,1,q='land office' of=23851387
+hathitrust,https://catalog.hathitrust.org/api/volumes/brief/oclc/1.json,200,0,oclc=1 records=0
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Gunter%27s%20chain%22%20OR%20%22Gunters%20chain%22%20OR%20%22Gunter%20chain%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,1,"gap q='title:(""Gunter\'s chain"" OR ""Gunters chain"" OR ""Gunter chain"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Sumner%22%20AND%20%28%22line%20of%20position%22%20OR%20navigation%29%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""Sumner"" AND (""line of position"" OR navigation)) AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22waste%20book%22%20OR%20%22waste-book%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""waste book"" OR ""waste-book"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28quietus%29%20AND%20%28exchequer%20OR%20compotus%20OR%20pipe%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,0,gap q='title:(quietus) AND (exchequer OR compotus OR pipe) AND mediatype:texts'
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22meander%22%20AND%20%28survey%20OR%20%22land%20office%22%20OR%20plat%29%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,1,"gap q='title:(""meander"" AND (survey OR ""land office"" OR plat)) AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Cassini%29%20AND%20%28triangulation%20OR%20%22carte%20de%20France%22%20OR%20meridian%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(Cassini) AND (triangulation OR ""carte de France"" OR meridian) AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22tithe%20map%22%20OR%20%22tithe%20apportionment%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,0,"gap q='title:(""tithe map"" OR ""tithe apportionment"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22liberate%20roll%22%20OR%20%22liberate%20rolls%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""liberate roll"" OR ""liberate rolls"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22chip%20log%22%20OR%20%22common%20log%22%20OR%20%22log-line%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""chip log"" OR ""common log"" OR ""log-line"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22nautical%20day%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,0,"gap q='title:(""nautical day"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22bearing%20tree%22%20OR%20%22witness%20trees%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""bearing tree"" OR ""witness trees"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22coroner%27s%20rolls%22%20OR%20%22coroners%20rolls%22%20OR%20%22coroners%27%20rolls%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""coroner\'s rolls"" OR ""coroners rolls"" OR ""coroners\' rolls"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22day-book%22%20OR%20%22daybook%22%29%20AND%20%28merchant%20OR%20ledger%20OR%20bookkeeping%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""day-book"" OR ""daybook"") AND (merchant OR ledger OR bookkeeping) AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22brought%20forward%22%29%20AND%20%28ledger%20OR%20account%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,0,"gap q='title:(""brought forward"") AND (ledger OR account) AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28centuriation%20OR%20limitatio%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,0,gap q='title:(centuriation OR limitatio) AND mediatype:texts'
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Hounslow%22%29%20AND%20%28baseline%20OR%20triangulation%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,0,"gap q='title:(""Hounslow"") AND (baseline OR triangulation) AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28Snellius%20OR%20%22Willebrord%20Snell%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(Snellius OR ""Willebrord Snell"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22slave%20schedule%22%20OR%20%22slave%20schedules%22%29%20AND%20census%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""slave schedule"" OR ""slave schedules"") AND census AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22agricultural%20schedule%22%29%20AND%20census%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,0,"gap q='title:(""agricultural schedule"") AND census AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28compotus%20OR%20%22charge%20and%20discharge%22%29%20AND%20%28account%20OR%20manorial%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(compotus OR ""charge and discharge"") AND (account OR manorial) AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22pipe%20roll%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""pipe roll"") AND mediatype:texts'"
+internet_archive,https://archive.org/advancedsearch.php?q=title%3A%28%22Dialogus%20de%20Scaccario%22%29%20AND%20mediatype%3Atexts&fl[]=identifier&fl[]=title&fl[]=year&output=json&rows=2,200,2,"gap q='title:(""Dialogus de Scaccario"") AND mediatype:texts'"
+internet_archive_metadata,https://archive.org/metadata/ancientdoubleent00geij,200,1,ident=ancientdoubleent00geij oclc=1459552
+hathitrust,https://catalog.hathitrust.org/api/volumes/brief/oclc/1459552.json,200,4,oclc=1459552 from ancientdoubleent00geij recordURL=None
+internet_archive_metadata,https://archive.org/metadata/denecessariisob00fitzgoog,200,1,ident=denecessariisob00fitzgoog oclc=2710400
+hathitrust,https://catalog.hathitrust.org/api/volumes/brief/oclc/2710400.json,200,3,oclc=2710400 from denecessariisob00fitzgoog recordURL=None
+internet_archive_metadata,https://archive.org/metadata/compotusrollsofp00worc,200,1,ident=compotusrollsofp00worc oclc=5821790
+hathitrust,https://catalog.hathitrust.org/api/volumes/brief/oclc/5821790.json,200,3,oclc=5821790 from compotusrollsofp00worc recordURL=None
+internet_archive_metadata,https://archive.org/metadata/bowditch-1943-new-american-practical-navigator,200,0,ident=bowditch-1943-new-american-practical-navigator oclc=None
+loc,"https://www.loc.gov/maps/?fo=json&c=2&at=results,pagination&q=tithe%20map",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=2&at=results,pagination&q=Gunter%20chain",0,0,The read operation timed out
+loc,"https://www.loc.gov/books/?fo=json&c=2&at=results,pagination&q=liberate%20rolls",200,2,gap coll=books q='liberate rolls'
+loc,"https://www.loc.gov/books/?fo=json&c=2&at=results,pagination&q=coroner%20rolls",200,2,gap coll=books q='coroner rolls'
+loc,"https://www.loc.gov/books/?fo=json&c=2&at=results,pagination&q=waste%20book",200,2,gap coll=books q='waste book'
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=compotus%20residue%20portolan%20rhumb,200,54604,q='compotus residue portolan rhumb'
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Acompotus%20residue%20portolan%20rhumb,200,0,q='compotus residue'+'portolan rhumb' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=storno%20contra%20entry%20meander%20line,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Astorno%20contra%20entry%20meander%20line,200,0,q='storno contra entry'+'meander line' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=tally%20stock%20foil%20lunar%20distance,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Atally%20stock%20foil%20lunar%20distance,200,0,q='tally stock foil'+'lunar distance' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=four%20column%20bookkeeping%20nautical%20day,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Afour%20column%20bookkeeping%20nautical%20day,200,0,q='four column bookkeeping'+'nautical day' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=imprest%20account%20witness%20tree,200,352899,q='imprest account witness tree'
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aimprest%20account%20witness%20tree,200,0,q='imprest account'+'witness tree' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=casting%20out%20nines%20indiction%20cycle,200,715324,q='casting out nines indiction cycle'
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Acasting%20out%20nines%20indiction%20cycle,200,0,q='casting out nines'+'indiction cycle' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=exchequer%20quietus%20traverse%20board,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aexchequer%20quietus%20traverse%20board,200,0,q='exchequer quietus'+'traverse board' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=pipe%20roll%20arrears%20baojia,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Apipe%20roll%20arrears%20baojia,200,0,q='pipe roll arrears'+'baojia' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=feet%20of%20fines%20Sumner%20line%20of%20position,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Afeet%20of%20fines%20Sumner%20line%20of%20position,200,0,q='feet of fines'+'Sumner line of position' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=originalia%20estreat%20Gunter%20chain%20offset,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aoriginalia%20estreat%20Gunter%20chain%20offset,200,0,q='originalia estreat'+'Gunter chain offset' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=charter%20roll%20witness%20chip%20log,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Acharter%20roll%20witness%20chip%20log,200,0,q='charter roll witness'+'chip log' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=charge%20and%20discharge%20enumeration%20district,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Acharge%20and%20discharge%20enumeration%20district,200,0,q='charge and discharge'+'enumeration district' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=proof%20of%20age%20cadastral%20parcel,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aproof%20of%20age%20cadastral%20parcel,200,0,q='proof of age'+'cadastral parcel' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=coroner%20inquest%20household%20census%20schedule,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Acoroner%20inquest%20household%20census%20schedule,200,0,q='coroner inquest'+'household census schedule' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=nautical%20day%20Roman%20indiction,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Anautical%20day%20Roman%20indiction,200,0,q='nautical day'+'Roman indiction' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=stock%20and%20foil%20pipe%20quietus,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Astock%20and%20foil%20pipe%20quietus,200,0,q='stock and foil'+'pipe quietus' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Cassini%20baseline%20pipe%20roll%20arrears,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3ACassini%20baseline%20pipe%20roll%20arrears,200,0,q='Cassini baseline'+'pipe roll arrears' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=rhumb%20line%20intersection%20census%20household%20schedule,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Arhumb%20line%20intersection%20census%20household%20schedule,200,0,q='rhumb line intersection'+'census household schedule' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=dead%20reckoning%20leg%20estreat,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Adead%20reckoning%20leg%20estreat,200,0,q='dead reckoning leg'+'estreat' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=watch%20bell%20segment%20four%20column%20ledger,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Awatch%20bell%20segment%20four%20column%20ledger,200,0,q='watch bell segment'+'four column ledger' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=bearing%20tree%20feet%20of%20fines,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Abearing%20tree%20feet%20of%20fines,200,0,q='bearing tree'+'feet of fines' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=mortality%20schedule%20storno,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Amortality%20schedule%20storno,200,0,q='mortality schedule'+'storno' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=lead%20line%20sounding%20tally%20foil,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Alead%20line%20sounding%20tally%20foil,200,0,q='lead line sounding'+'tally foil' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=plane%20table%20resection%20compotus,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aplane%20table%20resection%20compotus,200,0,q='plane table resection'+'compotus' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=enumeration%20district%20Cassini%20triangulation,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aenumeration%20district%20Cassini%20triangulation,200,0,q='enumeration district'+'Cassini triangulation' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=window%20tax%20openings%20casting%20out%20nines,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Awindow%20tax%20openings%20casting%20out%20nines,200,0,q='window tax openings'+'casting out nines' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=slave%20schedule%20digit%20list%20imprest,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aslave%20schedule%20digit%20list%20imprest,200,0,q='slave schedule digit list'+'imprest' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=hearth%20tax%20rate%20compass%20variation,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Ahearth%20tax%20rate%20compass%20variation,200,0,q='hearth tax rate'+'compass variation' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Notitia%20Dignitatum%20baojia%20decad,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3ANotitia%20Dignitatum%20baojia%20decad,200,0,q='Notitia Dignitatum'+'baojia decad' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Wilbour%20papyrus%20plot%20agricultural%20census%20schedule,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3AWilbour%20papyrus%20plot%20agricultural%20census%20schedule,200,0,q='Wilbour papyrus plot'+'agricultural census schedule' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Fasti%20Capitolini%20nautical%20day,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3AFasti%20Capitolini%20nautical%20day,200,0,q='Fasti Capitolini'+'nautical day' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=close%20roll%20delivery%20waste%20book%20posting,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aclose%20roll%20delivery%20waste%20book%20posting,200,0,q='close roll delivery'+'waste book posting' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=quo%20warranto%20inquest%20completeness,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aquo%20warranto%20inquest%20completeness,200,0,q='quo warranto'+'inquest completeness' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=hundred%20rolls%20verdict%20cadastral%20disjoint,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Ahundred%20rolls%20verdict%20cadastral%20disjoint,200,0,q='hundred rolls verdict'+'cadastral disjoint' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=frankpledge%20tithing%20baojia,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Afrankpledge%20tithing%20baojia,200,0,q='frankpledge tithing'+'baojia' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Valor%20Ecclesiasticus%20charge%20residue,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3AValor%20Ecclesiasticus%20charge%20residue,200,0,q='Valor Ecclesiasticus'+'charge residue' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=poll%20tax%20list%20household%20schedule,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Apoll%20tax%20list%20household%20schedule,200,0,q='poll tax list'+'household schedule' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=ship%20money%20assessment%20quietus,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aship%20money%20assessment%20quietus,200,0,q='ship money assessment'+'quietus' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=coroner%20roll%20mortality%20schedule,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Acoroner%20roll%20mortality%20schedule,200,0,q='coroner roll'+'mortality schedule' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=glebe%20terrier%20four%20column%20occupancy,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aglebe%20terrier%20four%20column%20occupancy,200,0,q='glebe terrier'+'four column occupancy' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=tithe%20apportionment%20imprest%20advance,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Atithe%20apportionment%20imprest%20advance,200,0,q='tithe apportionment'+'imprest advance' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=enclosure%20award%20meander%20station,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aenclosure%20award%20meander%20station,200,0,q='enclosure award'+'meander station' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=bishop%20transcript%20chirograph%20indenture,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Abishop%20transcript%20chirograph%20indenture,200,0,q='bishop transcript'+'chirograph indenture' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=township%20plat%20watch%20segment,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Atownship%20plat%20watch%20segment,200,0,q='township plat'+'watch segment' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Periplus%20Erythraean%20dead%20reckoning,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3APeriplus%20Erythraean%20dead%20reckoning,200,0,q='Periplus Erythraean'+'dead reckoning' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=sounding%20lead%20lunar%20distance,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Asounding%20lead%20lunar%20distance,200,0,q='sounding lead'+'lunar distance' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Pegolotti%20pratica%20nautical%20day,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3APegolotti%20pratica%20nautical%20day,200,0,q='Pegolotti pratica'+'nautical day' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Antonine%20Itinerary%20leg%20sum,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3AAntonine%20Itinerary%20leg%20sum,200,0,q='Antonine Itinerary'+'leg sum' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=limmu%20eponym%20noon%20sight,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Alimmu%20eponym%20noon%20sight,200,0,q='limmu eponym'+'noon sight' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Maury%20abstract%20log%20bills%20of%20mortality,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3AMaury%20abstract%20log%20bills%20of%20mortality,200,0,q='Maury abstract log'+'bills of mortality' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Forma%20Urbis%20fragments%20cadastral%20bound,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3AForma%20Urbis%20fragments%20cadastral%20bound,200,0,q='Forma Urbis fragments'+'cadastral bound' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=muhimme%20defteri%20estreat,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Amuhimme%20defteri%20estreat,200,0,q='muhimme defteri'+'estreat' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=praktikon%20register%20pipe%20arrears,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Apraktikon%20register%20pipe%20arrears,200,0,q='praktikon register'+'pipe arrears' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=hundi%20bill%20tally%20foil,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Ahundi%20bill%20tally%20foil,200,0,q='hundi bill'+'tally foil' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=centuriation%20limitatio%20enumeration%20district,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Acenturiation%20limitatio%20enumeration%20district,200,0,q='centuriation limitatio'+'enumeration district' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=day%20book%20posting%20Sumner%20line,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aday%20book%20posting%20Sumner%20line,200,0,q='day book posting'+'Sumner line' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=nilometer%20reading%20casting%20out%20nines,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Anilometer%20reading%20casting%20out%20nines,200,0,q='nilometer reading'+'casting out nines' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=tessera%20hospitalis%20feet%20of%20fines,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Atessera%20hospitalis%20feet%20of%20fines,200,0,q='tessera hospitalis'+'feet of fines' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Kangnido%20rhumb%20intersection,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3AKangnido%20rhumb%20intersection,200,0,q='Kangnido'+'rhumb intersection' top=None
+crossref,https://api.crossref.org/works?rows=0&query.bibliographic=Yujitu%20grid%20Gunter%20offset,0,0,HTTP Error 429: Too Many Requests
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3AYujitu%20grid%20Gunter%20offset,200,0,q='Yujitu grid'+'Gunter offset' top=None
+hathitrust,https://catalog.hathitrust.org/api/volumes/brief/oclc/1459552.json,200,1,oclc=1459552 recordURL=https://catalog.hathitrust.org/Record/001125021 title=Ancient double-entry bookkeeping. Lucas Pacioli's treatise (A. D. 1494--the earliest known writer on bookkeeping) reproduced and translated 
+hathitrust,https://catalog.hathitrust.org/api/volumes/brief/oclc/2710400.json,200,1,"oclc=2710400 recordURL=https://catalog.hathitrust.org/Record/006565280 title=De necessariis observantiis scaccarii dialogus, commonly called Dialogus de scaccario"
+hathitrust,https://catalog.hathitrust.org/api/volumes/brief/oclc/5821790.json,200,1,"oclc=5821790 recordURL=https://catalog.hathitrust.org/Record/000156458 title=Compotus rolls of the Priory of Worcester, of the XIVth and XVth centuries"
+openalex,https://api.openalex.org/works?per-page=1&filter=title.search%3Aimprest+advance+tide+table,200,0,q='imprest advance tide table' top=None
+record_url_recheck,https://archive.org/details/acpl_slavecensus_03_reel03rs,200,1,cited record https://archive.org/details/acpl_slavecensus_03_reel03rs via HEAD
+record_url_recheck,https://archive.org/details/1940-census-enumeration-district-ed-map-nansemond-county-virginia-ed-62-1-to-ed-62-20,200,1,cited record https://archive.org/details/1940-census-enumeration-district-ed-map-nansemond-county-virginia-ed-62-1-to-ed-62-20 via HEAD
+record_url_recheck,https://archive.org/details/2018.41,200,1,cited record https://archive.org/details/2018.41 via HEAD
+record_url_recheck,https://archive.org/details/alabamamortality0000bare,200,1,cited record https://archive.org/details/alabamamortality0000bare via HEAD
+record_url_recheck,https://archive.org/details/NotitiaDignitatumEd.OttoSeeck,200,1,cited record https://archive.org/details/NotitiaDignitatumEd.OttoSeeck via HEAD
+record_url_recheck,https://archive.org/details/LiberAbaci,200,1,cited record https://archive.org/details/LiberAbaci via HEAD
+record_url_recheck,https://archive.org/details/THEWILBOURPAPYRUSVolumeII,200,1,cited record https://archive.org/details/THEWILBOURPAPYRUSVolumeII via HEAD
+record_url_recheck,https://archive.org/details/american-ephemeris-nautical-almanac-1907-barnard,200,1,cited record https://archive.org/details/american-ephemeris-nautical-almanac-1907-barnard via HEAD
+record_url_recheck,https://archive.org/details/b30451942,200,1,cited record https://archive.org/details/b30451942 via HEAD
+record_url_recheck,https://archive.org/details/bwb_S0-DRZ-150,200,1,cited record https://archive.org/details/bwb_S0-DRZ-150 via HEAD
+record_url_recheck,https://archive.org/details/bub_gb_ai1KkAeeezAC,200,1,cited record https://archive.org/details/bub_gb_ai1KkAeeezAC via HEAD
+record_url_recheck,https://archive.org/details/calendarofcorone00shariala,200,1,cited record https://archive.org/details/calendarofcorone00shariala via HEAD
+record_url_recheck,https://archive.org/details/bub_gb_IRIxirmx9JAC,200,1,cited record https://archive.org/details/bub_gb_IRIxirmx9JAC via HEAD
+record_url_recheck,https://archive.org/details/calendarofcloser0005henr,200,1,cited record https://archive.org/details/calendarofcloser0005henr via HEAD
+record_url_recheck,https://archive.org/details/bowditch-1943-new-american-practical-navigator,200,1,cited record https://archive.org/details/bowditch-1943-new-american-practical-navigator via HEAD
+record_url_recheck,https://archive.org/details/calendarofcharte01grea,200,1,cited record https://archive.org/details/calendarofcharte01grea via HEAD
+record_url_recheck,https://archive.org/details/case_frc_13685,200,1,cited record https://archive.org/details/case_frc_13685 via HEAD
+record_url_recheck,https://archive.org/details/compotusrollsofp00worc,200,1,cited record https://archive.org/details/compotusrollsofp00worc via HEAD
+record_url_recheck,https://archive.org/details/geographyofptole00rylauoft,200,1,cited record https://archive.org/details/geographyofptole00rylauoft via HEAD
+record_url_recheck,https://archive.org/details/cu31924099427845,200,1,cited record https://archive.org/details/cu31924099427845 via HEAD
+record_url_recheck,https://archive.org/details/dorsethearthtaxa0000cafm,200,1,cited record https://archive.org/details/dorsethearthtaxa0000cafm via HEAD
+record_url_recheck,https://archive.org/details/elementarysurve00jackgoog,200,1,cited record https://archive.org/details/elementarysurve00jackgoog via HEAD
+record_url_recheck,https://archive.org/details/philtrans07236405,200,1,cited record https://archive.org/details/philtrans07236405 via HEAD
+record_url_recheck,https://archive.org/details/pugsleysdeadrec00pugsgoog,200,1,cited record https://archive.org/details/pugsleysdeadrec00pugsgoog via HEAD
+record_url_recheck,https://catalog.hathitrust.org/api/volumes/brief/oclc/5821790.json,200,1,cited record https://catalog.hathitrust.org/Record/000156458 via hathi-brief
+record_url_recheck,https://archive.org/details/publicationsofpi23pipe,200,1,cited record https://archive.org/details/publicationsofpi23pipe via HEAD
+record_url_recheck,https://archive.org/details/jstor-1272047,200,1,cited record https://archive.org/details/jstor-1272047 via HEAD
+record_url_recheck,https://archive.org/details/lineofpositionna0000vanv,200,1,cited record https://archive.org/details/lineofpositionna0000vanv via HEAD
+record_url_recheck,https://catalog.hathitrust.org/api/volumes/brief/oclc/1459552.json,200,1,cited record https://catalog.hathitrust.org/Record/001125021 via hathi-brief
+record_url_recheck,https://www.wikidata.org/wiki/Q1074760,200,1,cited record https://www.wikidata.org/wiki/Q1074760 via HEAD
+record_url_recheck,https://www.arcgis.com/home/item.html?id=80e5daa9fd2c47839e4f393d7aa0bb05,200,1,cited record https://www.arcgis.com/home/item.html?id=80e5daa9fd2c47839e4f393d7aa0bb05 via HEAD
+record_url_recheck,https://archive.org/details/tidetablesforye02survgoog,200,1,cited record https://archive.org/details/tidetablesforye02survgoog via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q137324813,200,1,cited record https://www.wikidata.org/wiki/Q137324813 via HEAD
+record_url_recheck,https://archive.org/details/summa-de-arithmetica-geometria-proportioni-et-proportionalita,200,1,cited record https://archive.org/details/summa-de-arithmetica-geometria-proportioni-et-proportionalita via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q1397785,200,1,cited record https://www.wikidata.org/wiki/Q1397785 via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q1339127,200,1,cited record https://www.wikidata.org/wiki/Q1339127 via HEAD
+record_url_recheck,https://archive.org/details/valor-ecclesiasticus-vol-1,200,1,cited record https://archive.org/details/valor-ecclesiasticus-vol-1 via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q512256,200,1,cited record https://www.wikidata.org/wiki/Q512256 via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q5567448,200,1,cited record https://www.wikidata.org/wiki/Q5567448 via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q480310,200,1,cited record https://www.wikidata.org/wiki/Q480310 via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q1405064,200,1,cited record https://www.wikidata.org/wiki/Q1405064 via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q664162,200,1,cited record https://www.wikidata.org/wiki/Q664162 via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q933008,200,1,cited record https://www.wikidata.org/wiki/Q933008 via HEAD
+record_url_recheck,https://www.wikidata.org/wiki/Q704587,200,1,cited record https://www.wikidata.org/wiki/Q704587 via HEAD
+record_url_recheck,https://archive.org/details/pedesfiniumcomm03pleagoog,200,1,cited record https://archive.org/details/pedesfiniumcomm03pleagoog via HEAD
+record_url_recheck,"https://www.loc.gov/item/07035273/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/07035273/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/10020854/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/10020854/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/15016914/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/15016914/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/16024255/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/16024255/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/2005634035/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/2005634035/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/2007633510/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/2007633510/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/2024683744/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/2024683744/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/2024879911/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/2024879911/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/30008010/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/30008010/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/77692984/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/77692984/ via loc-item-json
+record_url_recheck,"https://www.loc.gov/item/wright002780/?fo=json&at=item.title,item.id",200,1,cited record http://www.loc.gov/item/wright002780/ via loc-item-json
