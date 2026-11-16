@@ -28,3 +28,11 @@ Monotonic Zero-Regression Gate tracking across Steps 0–4.
   - **BEAM-100K (`355/400`)**: `Sess Any@1/5/10=37.46%/70.14%/77.46% All@5=38.59% Capped-All@5=51.36% | Turn @1/5/10=46.20%/67.89%/76.62% All@5=35.21% Capped-All@5=48.38% All@10=41.13%` (0-diff parity)
 - **Gate Verdict**: **ACCEPTED** (`NoLiMa 32K +79.31% R@1 / +93.10% R@5`, `LoCoMo +0.26%`, zero regressions).
 
+
+## Self-statement channel + association walk (`feat/self-statement-channel`)
+- **Mechanism**: two sidecar channels next to `turns`, siblings of `standing_rules`. `self_statements` (up to 3): user statements the assistant only acknowledged (role, dialogue position, reply not a question and no longer than the corpus's own lower-quartile assistant turn), ordered by mean IDF then recency. `graph_walk` / `graph_walk_topk` (up to 3): two-hop spreading activation (mass x0.5 per hop, split over degree) over existing reply, RSB, policy-backlink and supersession links. Zero word lists; `turns` and `sessions` byte-identical to main on every bench.
+- **Lines Touched**: `crates/vestige-core/src/retrieval/self_statement.rs` (new), `crates/vestige-core/src/retrieval/graph_walk.rs` (new), `crates/vestige-core/src/retrieval.rs` (module decls, three `RankResult` fields, two `Index` fields, ingest wiring, sidecar assembly at the end of `rank_one`).
+- **Scoring**: `raw` = top-k plus every sidecar item (free extra slots); `honest` = exactly k items, `[turns[0]] + sidecar + turns[1:]`, so sidecar items consume slots and @1 is always the engine's own top-1.
+- **InMind indirect, target user turn (n=125)**: main `0.8/2.4/3.2` (@1/@5/@10) -> +channel raw `90.4/90.4/91.2`, honest `0.8/90.4/90.4`. Target inside the channel for 113/125 queries.
+- **Honest regressions** (channel slots cost episodic slots): LME-S turn @5 `83.19 -> 65.32` (+channel), `-> 71.28` (+walk); BEAM-100K turn @5 `56.62 -> 43.66` (+channel); LoCoMo QA turn @5 `71.16 -> 60.68` (+walk). Raw scoring: no regressions anywhere. Full tables in the PR.
+- **Gate Verdict**: **DRAFT** (InMind improves; honest-scoring regressions on LME-S, BEAM-100K, LoCoMo).
