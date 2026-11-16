@@ -605,15 +605,15 @@ mod tests {
         assert!(!phrase("Bangkok Gardens", "Bangkok Garden"));
         assert!(entity_matches_prompt(
             "What recipe did I try?",
-            "symbol:lme:recipe"
+            "symbol:demo:recipe"
         ));
         assert!(entity_matches_prompt(
             "How is Tokyo transit?",
-            "symbol:lme:tokyo~transit"
+            "symbol:demo:tokyo~transit"
         ));
         assert!(!entity_matches_prompt(
             "What recipe did I try?",
-            "symbol:lme:garden"
+            "symbol:demo:garden"
         ));
     }
 

@@ -867,6 +867,7 @@ fn resolve_import(target: &str, kind: ImportKind, files: &[String]) -> Option<St
 /// `@@ -1,2 +3,4 @@ fn write_file(x: u8)` -> `write_file`,
 /// `@@ ... @@ def save(self)` -> `save`.
 fn leading_identifier(ctx: &str) -> Option<String> {
+    // hardcode-scan: protocol (programming-language keywords)
     const KEYWORDS: &[&str] = &[
         "fn",
         "def",
@@ -916,6 +917,7 @@ fn leading_identifier(ctx: &str) -> Option<String> {
     }
     // value-taking keywords ("return None;", "return true") hand us a VALUE,
     // not a declaration name; language literals are never hunk symbols
+    // hardcode-scan: protocol (programming-language literals)
     const JUNK: &[&str] = &[
         "none",
         "some",

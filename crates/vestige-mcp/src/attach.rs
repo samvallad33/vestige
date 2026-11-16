@@ -1350,6 +1350,7 @@ async fn call_over(attachment: Attachment, name: &str, arguments: Value) -> io::
         mut writer,
         ..
     } = attachment;
+    // hardcode-scan: protocol (JSON-RPC / JSON-schema keys)
     let requests = [
         json!({
             "jsonrpc": "2.0",

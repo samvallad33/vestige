@@ -13,75 +13,6 @@
 //! two call sites is how each establishes that the two texts are *about the
 //! same subject*, which [`SubjectIdentity`] names explicitly.
 
-/// Explicit polarity flips: one text takes the negative stance AND the other
-/// text takes the paired positive one. Both sides are required.
-///
-/// The pairing is load-bearing, not decorative. An earlier revision scanned
-/// for the asymmetric PRESENCE of the negative term alone, and on real memory
-/// content that misread ordinary prose as contradiction: measured against a
-/// 2,929-memory store, bare asymmetric presence fired on 64% of same-subject
-/// pairs (any long note saying "never", "wrong" or "removed" that its
-/// neighbour happened not to), and blocked reinforcement of 84% of
-/// near-identical pairs — recreating, at the shared detector, the exact
-/// defect the write path's pre-unification comment warned about. Requiring
-/// the paired positive term on the opposite side drops that to 6% while
-/// still detecting every measured correction shape.
-///
-/// Bare triggers with no paired positive term ("not ", "instead of", "rather
-/// than") are deliberately absent for the same reason, and ("don't", "do")
-/// was removed because "do" is too common a word for its presence to carry
-/// any signal.
-const NEGATION_PAIRS: &[(&str, &str)] = &[
-    ("don't use", "use"),
-    ("never", "always"),
-    ("avoid", "use"),
-    ("wrong", "right"),
-    ("incorrect", "correct"),
-    ("deprecated", "recommended"),
-    ("outdated", "current"),
-    ("removed", "added"),
-    ("disabled", "enabled"),
-];
-
-/// Opposite-direction claims with NO negation word in either text.
-///
-/// Requiring both sides to be present, in opposite texts, is a far stricter
-/// test than asymmetric presence, and it catches the class the negation scan
-/// structurally cannot: "prompt diversity HURTS accuracy" against "prompt
-/// diversity IMPROVES accuracy" contains no negation at all.
-const ANTONYM_PAIRS: &[(&str, &str)] = &[
-    ("hurts", "improves"),
-    ("hurt", "improved"),
-    ("degrades", "enhances"),
-    ("decreases", "increases"),
-    ("reduces", "raises"),
-    ("worse", "better"),
-    ("slower", "faster"),
-    ("fails", "succeeds"),
-    ("breaks", "fixes"),
-    ("unsafe", "safe"),
-    ("unstable", "stable"),
-    ("unsupported", "supported"),
-];
-
-/// Phrases that mark one text as explicitly revising the other.
-const CORRECTION_SIGNALS: &[&str] = &[
-    "actually",
-    "correction",
-    "update:",
-    "updated:",
-    "fixed",
-    "was wrong",
-    "changed to",
-    "now uses",
-    "replaced by",
-    "superseded",
-    "no longer",
-    "instead of",
-    "switched to",
-    "migrated to",
-];
-
 /// How the caller has established that two texts are about the same subject.
 ///
 /// This is the *only* thing that legitimately differs between the write path
@@ -113,27 +44,6 @@ impl SubjectIdentity {
 
 fn substantive_words(lowered: &str) -> std::collections::HashSet<&str> {
     lowered.split_whitespace().filter(|w| w.len() > 3).collect()
-}
-
-/// Every word as a whole token, punctuation trimmed from the ends, SHORT WORDS
-/// KEPT. Used for the negation-pair test, where the paired positive term is
-/// often short ("use", "added") and substring matching would find it inside
-/// unrelated words ("because", "loaded").
-fn all_words(lowered: &str) -> std::collections::HashSet<&str> {
-    lowered
-        .split_whitespace()
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
-        .filter(|w| !w.is_empty())
-        .collect()
-}
-
-/// Whole-word match for single terms, substring match for phrases.
-fn has_term(lowered: &str, words: &std::collections::HashSet<&str>, term: &str) -> bool {
-    if term.contains(' ') {
-        lowered.contains(term)
-    } else {
-        words.contains(term)
-    }
 }
 
 /// Tokens used for the divergence test.
@@ -169,38 +79,8 @@ pub fn appears_contradictory(a: &str, b: &str, identity: SubjectIdentity) -> boo
         return false;
     }
 
-    // Polarity flip: one side carries the negative stance AND the other side
-    // carries the paired positive one, with neither side carrying both. When
-    // the negative term textually contains its positive ("don't use" contains
-    // "use"), the firing side necessarily carries the positive too, so that
-    // side is exempt from the both-terms exclusion.
-    let a_all = all_words(&a_lower);
-    let b_all = all_words(&b_lower);
-    for (neg, opp) in NEGATION_PAIRS {
-        let a_neg = has_term(&a_lower, &a_all, neg);
-        let b_neg = has_term(&b_lower, &b_all, neg);
-        let a_opp = has_term(&a_lower, &a_all, opp);
-        let b_opp = has_term(&b_lower, &b_all, opp);
-        let neg_carries_opp = neg.contains(opp);
-        if (a_neg && b_opp && !b_neg && (neg_carries_opp || !a_opp))
-            || (b_neg && a_opp && !a_neg && (neg_carries_opp || !b_opp))
-        {
-            return true;
-        }
-    }
-
-    // Opposite directions, no negation in either.
-    for (neg, opp) in ANTONYM_PAIRS {
-        let a_neg = a_lower.contains(neg);
-        let b_neg = b_lower.contains(neg);
-        let a_opp = a_lower.contains(opp);
-        let b_opp = b_lower.contains(opp);
-        if (a_neg && b_opp && !b_neg && !a_opp) || (b_neg && a_opp && !a_neg && !b_opp) {
-            return true;
-        }
-    }
-
-    // Mutually exclusive VALUES for the same attribute — the most common
+    // Mutually exclusive VALUES for the same attribute. The signal is token
+    // divergence of the two texts, not an antonym or negation list.
     // real-world contradiction, which neither test above can see. "Priya holds
     // a Bachelor degree" against "Priya holds a Master of Science degree"
     // contains no negation and no antonym, yet both cannot be true.
@@ -230,24 +110,6 @@ pub fn appears_contradictory(a: &str, b: &str, identity: SubjectIdentity) -> boo
         let small_divergence = (a_only + b_only) <= shared;
         if overlap >= 0.6 && diverges && small_divergence {
             return true;
-        }
-    }
-
-    // Explicit revision marker, present in exactly one side — but only when
-    // token overlap proves the two texts share a subject. These phrases
-    // ("fixed", "actually", "no longer") occur constantly in memories that
-    // revise nothing; a shared-word COUNT was measured to be no defence on
-    // real content, because paragraph-length memories trivially share 6+
-    // words with any same-topic neighbour. The overlap RATIO is the defence:
-    // at >= 0.5 the marker adds zero false positives on a 2,929-memory store
-    // while still catching the short reworded correction ("Actually, the
-    // correct approach is Redis" against "The approach is Redis" sits at
-    // exactly 0.5).
-    if overlap >= 0.5 {
-        for signal in CORRECTION_SIGNALS {
-            if a_lower.contains(signal) != b_lower.contains(signal) {
-                return true;
-            }
         }
     }
 
@@ -340,17 +202,14 @@ mod tests {
     /// write path has that from the embedding gate and must not re-require it.
     #[test]
     fn subject_identity_gate_differs_between_the_two_call_sites() {
-        let short_correction = (
-            "Actually, the correct approach is Redis",
-            "The approach is Redis",
-        );
+        let short_correction = ("The cache uses Redis 7", "The cache uses Redis 6");
         assert!(
             appears_contradictory(
                 short_correction.0,
                 short_correction.1,
                 SubjectIdentity::AlreadyEstablished
             ),
-            "write path: embedding already established subject identity"
+            "write path: digit divergence on an already-established subject"
         );
         assert!(
             !appears_contradictory(
@@ -374,8 +233,8 @@ mod tests {
         );
         for (x, y) in [pair, (pair.1, pair.0)] {
             assert!(
-                appears_contradictory(x, y, SubjectIdentity::AlreadyEstablished),
-                "write path must catch the phrasal don't-use correction"
+                !appears_contradictory(x, y, SubjectIdentity::AlreadyEstablished),
+                "phrasal don't-use is not a contradiction without a word list: {x:?}"
             );
         }
     }

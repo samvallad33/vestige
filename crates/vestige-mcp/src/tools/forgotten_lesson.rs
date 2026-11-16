@@ -34,57 +34,14 @@ use vestige_core::fsrs::retrievability;
 /// 0.5 is the midpoint of the FSRS probability-of-recall scale.
 pub const FORGOTTEN_THRESHOLD: f64 = 0.5;
 
-/// Exact tag tokens (case-insensitive equality, whole tag) that mark a memory
-/// as a recorded lesson/fix. Not substring matches: a `prefix-fix` tag is a
-/// different tag.
-const LESSON_TAGS: &[&str] = &["fix", "fixed", "lesson", "lessons", "resolved", "learned"];
-
-/// Exact past-tense fix markers searched in content with word boundaries, so
-/// "fixed" never matches "unfixed" or "prefix-fixed".
-const FIX_MARKERS: &[&str] = &[
-    "fixed",
-    "resolved",
-    "solved",
-    "patched",
-    "mitigated",
-    "repaired",
-    "reverted",
-];
-
-/// Whole-word marker match on already-lowercased text (same boundary rule as
-/// the core `contains_marker_word`: alphanumeric or `_` on either side means
-/// the match is embedded in a larger identifier and does not count).
-fn contains_marker_word(hay: &str, marker: &str) -> bool {
-    let mut from = 0usize;
-    while let Some(pos) = hay[from..].find(marker) {
-        let start = from + pos;
-        let end = start + marker.len();
-        let before_ok = hay[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        let after_ok = hay[end..]
-            .chars()
-            .next()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        if before_ok && after_ok {
-            return true;
-        }
-        from = start + 1;
-    }
-    false
-}
-
-/// Does this tag set carry an exact lesson/fix tag?
+/// Does this tag set carry the explicit `lesson` label (case-insensitive,
+/// whole tag, or `lesson:<detail>`)? One recorded label, no synonym list; a
+/// `prefix-lesson` tag is a different tag.
 pub fn lesson_tagged(tags: &[String]) -> bool {
-    tags.iter()
-        .any(|t| LESSON_TAGS.contains(&t.trim().to_lowercase().as_str()))
-}
-
-/// Does this content carry an exact past-tense fix marker (whole word)?
-pub fn has_fix_marker(content: &str) -> bool {
-    let hay = content.to_lowercase();
-    FIX_MARKERS.iter().any(|m| contains_marker_word(&hay, m))
+    tags.iter().any(|t| {
+        let t = t.trim();
+        t.eq_ignore_ascii_case("lesson") || t.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("lesson:"))
+    })
 }
 
 /// One detected forgotten lesson.
@@ -110,8 +67,8 @@ pub fn detect_lesson(
     failure_anchors: &HashSet<String>,
     failure_at: chrono::DateTime<chrono::Utc>,
 ) -> Option<ForgottenLesson> {
-    // Lesson-shaped: exact lesson tag OR exact past-tense fix marker.
-    if !lesson_tagged(&node.tags) && !has_fix_marker(&node.content) {
+    // Lesson-shaped: a recorded lesson tag. Content words are never scanned.
+    if !lesson_tagged(&node.tags) {
         return None;
     }
     // Anchor-set intersection: >= 1 EXACT anchor (normalized entity string).

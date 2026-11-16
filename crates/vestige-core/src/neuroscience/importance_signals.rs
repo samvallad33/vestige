@@ -638,71 +638,11 @@ impl ArousalSignal {
         }
     }
 
+    /// No built-in keyword lexicon. Arousal from text is punctuation and
+    /// capitalization shape only; a caller may add its own keywords with
+    /// [`ArousalSignal::with_keywords`], but none ship in the engine.
     fn default_intensity_keywords() -> HashSet<String> {
-        [
-            // Urgency
-            "urgent",
-            "critical",
-            "emergency",
-            "immediately",
-            "asap",
-            "now",
-            "deadline",
-            "priority",
-            "important",
-            "crucial",
-            "vital",
-            // Negative intensity
-            "error",
-            "failed",
-            "failure",
-            "crash",
-            "broken",
-            "bug",
-            "issue",
-            "problem",
-            "wrong",
-            "bad",
-            "terrible",
-            "disaster",
-            "catastrophe",
-            "panic",
-            "crisis",
-            "alert",
-            "warning",
-            "danger",
-            "risk",
-            // Positive intensity
-            "amazing",
-            "incredible",
-            "awesome",
-            "excellent",
-            "perfect",
-            "brilliant",
-            "breakthrough",
-            "success",
-            "solved",
-            "fixed",
-            "working",
-            "victory",
-            "achievement",
-            "milestone",
-            "celebration",
-            // Technical urgency
-            "production",
-            "outage",
-            "downtime",
-            "security",
-            "vulnerability",
-            "exploit",
-            "breach",
-            "data loss",
-            "corruption",
-            "rollback",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+        HashSet::new()
     }
 
     fn compute_keyword_intensity(&self, content: &str) -> f64 {
@@ -908,88 +848,14 @@ impl SentimentAnalyzer {
         }
     }
 
+    /// No built-in sentiment lexicon ships in the engine.
     fn default_positive_words() -> HashMap<String, f64> {
-        [
-            ("good", 0.5),
-            ("great", 0.7),
-            ("excellent", 0.9),
-            ("amazing", 0.9),
-            ("wonderful", 0.8),
-            ("fantastic", 0.8),
-            ("awesome", 0.8),
-            ("brilliant", 0.8),
-            ("perfect", 0.9),
-            ("love", 0.8),
-            ("happy", 0.6),
-            ("pleased", 0.5),
-            ("successful", 0.7),
-            ("success", 0.7),
-            ("solved", 0.6),
-            ("fixed", 0.5),
-            ("working", 0.4),
-            ("works", 0.4),
-            ("better", 0.5),
-            ("best", 0.7),
-            ("helpful", 0.5),
-            ("useful", 0.5),
-            ("efficient", 0.5),
-            ("effective", 0.5),
-            ("impressive", 0.7),
-            ("outstanding", 0.8),
-            ("superb", 0.8),
-            ("remarkable", 0.7),
-            ("thanks", 0.5),
-            ("thank", 0.5),
-            ("appreciate", 0.6),
-            ("grateful", 0.6),
-        ]
-        .iter()
-        .map(|(k, v)| (k.to_string(), *v))
-        .collect()
+        HashMap::new()
     }
 
+    /// No built-in sentiment lexicon ships in the engine.
     fn default_negative_words() -> HashMap<String, f64> {
-        [
-            ("bad", 0.5),
-            ("terrible", 0.9),
-            ("horrible", 0.9),
-            ("awful", 0.8),
-            ("poor", 0.5),
-            ("wrong", 0.5),
-            ("error", 0.6),
-            ("fail", 0.7),
-            ("failed", 0.7),
-            ("failure", 0.8),
-            ("broken", 0.7),
-            ("bug", 0.5),
-            ("crash", 0.8),
-            ("crashed", 0.8),
-            ("problem", 0.5),
-            ("issue", 0.4),
-            ("hate", 0.8),
-            ("angry", 0.7),
-            ("frustrated", 0.6),
-            ("annoyed", 0.5),
-            ("disappointed", 0.6),
-            ("confusing", 0.5),
-            ("confused", 0.5),
-            ("difficult", 0.4),
-            ("hard", 0.3),
-            ("impossible", 0.7),
-            ("slow", 0.4),
-            ("ugly", 0.5),
-            ("useless", 0.7),
-            ("waste", 0.6),
-            ("pain", 0.5),
-            ("painful", 0.6),
-            ("nightmare", 0.8),
-            ("disaster", 0.9),
-            ("catastrophe", 0.9),
-            ("crisis", 0.7),
-        ]
-        .iter()
-        .map(|(k, v)| (k.to_string(), *v))
-        .collect()
+        HashMap::new()
     }
 
     fn default_negation_words() -> HashSet<String> {
@@ -2183,10 +2049,6 @@ mod tests {
             emotional_score > neutral_score,
             "Emotional content should have higher arousal"
         );
-        assert!(
-            emotional_score > 0.6,
-            "Highly emotional content should score high"
-        );
     }
 
     #[test]
@@ -2196,10 +2058,12 @@ mod tests {
 
         assert!(!markers.is_empty(), "Should detect emotional markers");
 
-        let has_keyword = markers
-            .iter()
-            .any(|m| m.marker_type == MarkerType::IntensityKeyword);
-        assert!(has_keyword, "Should detect intensity keyword");
+        // No built-in keyword lexicon: markers come from punctuation shape.
+        assert!(markers.iter().any(|m| m.marker_type == MarkerType::PunctuationEmphasis));
+        assert!(!markers.iter().any(|m| m.marker_type == MarkerType::IntensityKeyword));
+        let custom = ArousalSignal::new().with_keywords(["urgent"]);
+        let markers = custom.detect_emotional_markers("URGENT: Critical failure!!!");
+        assert!(markers.iter().any(|m| m.marker_type == MarkerType::IntensityKeyword));
     }
 
     #[test]
@@ -2313,15 +2177,12 @@ mod tests {
     fn test_sentiment_analyzer() {
         let analyzer = SentimentAnalyzer::new();
 
-        let positive = analyzer.analyze("This is amazing and wonderful!");
-        assert!(positive.polarity > 0.0, "Should detect positive sentiment");
-
-        let negative = analyzer.analyze("This is terrible and broken.");
-        assert!(negative.polarity < 0.0, "Should detect negative sentiment");
-
-        let negated = analyzer.analyze("This is not bad at all.");
-        // Negation should flip sentiment
-        assert!(negated.polarity >= 0.0, "Negation should flip sentiment");
+        // No built-in sentiment lexicon ships: every text is neutral.
+        for text in ["This is amazing and wonderful!", "This is terrible and broken.", "This is not bad at all."] {
+            let r = analyzer.analyze(text);
+            assert_eq!(r.polarity, 0.0, "{text}");
+            assert!(r.contributing_words.is_empty(), "{text}");
+        }
     }
 
     #[test]
