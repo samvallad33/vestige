@@ -763,7 +763,7 @@ fn truncate_to(path: &Path, len: u64) -> Result<(), StrataError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{payload_blake3, Frame, SegmentTrailer};
+    use crate::format::{payload_blake3, SegmentTrailer};
     use crate::StrataLog;
     use ed25519_dalek::SigningKey;
 
