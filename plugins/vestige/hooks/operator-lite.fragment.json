@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$HOME/.operator/gate/operator-gate.py\" ]; then python3 \"$HOME/.operator/gate/operator-gate.py\" hook --source claude; else exit 0; fi",
+            "timeout": 12
+          }
+        ]
+      }
+    ]
+  }
+}

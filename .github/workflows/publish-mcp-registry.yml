@@ -11,14 +11,21 @@
 # github.com/modelcontextprotocol/registry/cmd/publisher@v1.8.1` produces a
 # binary named `publisher`; CI uses the documented release tarball instead.
 #
-# npm is NOT published by this repo's CI. The official registry validates the
+# npm is NOT published by this workflow. The official registry validates the
 # published vestige-mcp-server package (mcpName + version), so this job fails
-# if that version is missing on npm. Publish npm first, then create the GitHub
-# Release — or re-run this workflow after npm is up.
+# if that version is missing on npm. Publish npm first (release.yml), then
+# create the GitHub Release — or re-run this workflow after npm is up.
 #
-# Merging this workflow does not publish anything. 2.3.0 is already listed
-# (isLatest) and must not be republished; this is for the next tag. Re-runs of
-# an already-listed version skip publish.
+# Measured 2026-11-16, before this workflow is allowed to publish again:
+#   MCP registry latest (isLatest): 4.2.0
+#   npm vestige-mcp-server and @vestige/init latest: 5.0.1
+#   repo, server.json, and both package.json files: 6.2.2
+# A release whose tag matches server.json publishes that version. 4.2.0 and
+# every other already-listed version is left as-is. Merging this file does
+# not publish anything. workflow_dispatch defaults to dry_run.
+#
+# registry-lag runs only after a real release publish and fails when the
+# registry's latest version is older than the tag, or the tag is not listed.
 
 name: Publish MCP Registry
 
@@ -35,7 +42,7 @@ on:
         description: 'Validate server.json and authenticate with GitHub OIDC; do not publish'
         required: false
         type: boolean
-        default: false
+        default: true
 
 # Least privilege at workflow scope; the job grants id-token: write for OIDC.
 permissions: {}
@@ -57,9 +64,10 @@ env:
 jobs:
   publish:
     name: Publish server.json
-    # npm account suspended; re-enable after restore
-    if: false
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     permissions:
       id-token: write
       contents: read
@@ -161,7 +169,7 @@ jobs:
             "${MCP_REGISTRY_URL}/v0.1/servers/${encoded_name}/versions/${RELEASE_VERSION}")"
           if [ "${registry_status}" = "200" ]; then
             echo "MCP Registry already lists ${MCP_SERVER_NAME}@${RELEASE_VERSION}; skipping publish."
-            echo "Refusing to republish (2.3.0 and any later listed version stay as-is)."
+            echo "Refusing to republish an already-listed version."
             exit 0
           fi
           if [ "${registry_status}" != "404" ]; then
@@ -221,3 +229,98 @@ jobs:
 
           ./mcp-publisher publish ./server.json
           echo "Published ${MCP_SERVER_NAME}@${RELEASE_VERSION} to ${MCP_REGISTRY_URL}"
+
+  registry-lag:
+    name: Fail when the registry lags the tag
+    needs: publish
+    if: >-
+      always() &&
+      needs.publish.result == 'success' &&
+      github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require the registry latest to cover the release tag
+        env:
+          RELEASE_VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          expected = os.environ["RELEASE_VERSION"]
+          name = os.environ["MCP_SERVER_NAME"]
+          base = os.environ["MCP_REGISTRY_URL"].rstrip("/")
+          encoded = urllib.parse.quote(name, safe="")
+
+          def parse(version):
+              parts = []
+              for part in version.split("."):
+                  if not part.isdigit():
+                      raise SystemExit(f"Not a numeric version: {version}")
+                  parts.append(int(part))
+              return tuple(parts)
+
+          expected_parts = parse(expected)
+          version_url = f"{base}/v0.1/servers/{encoded}/versions/{expected}"
+          list_url = f"{base}/v0.1/servers/{encoded}/versions"
+          last_error = "registry lookup did not run"
+
+          for attempt in range(1, 7):
+              try:
+                  with urllib.request.urlopen(version_url, timeout=30) as response:
+                      listed = json.load(response)
+                  with urllib.request.urlopen(list_url, timeout=30) as response:
+                      catalog = json.load(response)
+              except urllib.error.HTTPError as error:
+                  last_error = f"HTTP {error.code} for {version_url}"
+                  if error.code != 404:
+                      raise SystemExit(last_error)
+              except urllib.error.URLError as error:
+                  last_error = str(error.reason)
+              else:
+                  latest = None
+                  for entry in catalog.get("servers") or []:
+                      official = (entry.get("_meta") or {}).get(
+                          "io.modelcontextprotocol.registry/official"
+                      ) or {}
+                      if official.get("isLatest") is True:
+                          latest = (entry.get("server") or {}).get("version")
+                          break
+                  if latest is None:
+                      raise SystemExit(
+                          f"{name} has no isLatest version after publishing {expected}"
+                      )
+                  listed_version = (listed.get("server") or {}).get("version")
+                  if listed_version != expected:
+                      raise SystemExit(
+                          f"registry listed version {listed_version} does not match {expected}"
+                      )
+                  if parse(latest) < expected_parts:
+                      raise SystemExit(
+                          f"MCP registry lags the tag: latest is {latest}, "
+                          f"release is {expected}. {name}@{expected} is listed "
+                          "but is not the latest."
+                      )
+                  print(
+                      f"registry latest {latest} covers {name}@{expected} "
+                      f"(isLatest={latest == expected})"
+                  )
+                  break
+              print(
+                  f"registry {name}@{expected} not confirmed ({last_error}); "
+                  f"attempt {attempt}/6",
+              )
+              if attempt == 6:
+                  raise SystemExit(
+                      f"MCP registry lags the tag: {name}@{expected} is not listed "
+                      f"({last_error}). Latest before this release was behind {expected}."
+                  )
+              time.sleep(20)
+          PY

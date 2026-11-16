@@ -1,0 +1,23 @@
+{
+  "name": "vestige",
+  "displayName": "Vestige",
+  "version": "6.2.2",
+  "description": "Causal Proof Engine for Claude Code. Starts the Vestige MCP server and loads the Reflex hook fragments plus the Operator Lite gate.",
+  "author": {
+    "name": "Sam Valladares",
+    "email": "samvalladares21@gmail.com",
+    "url": "https://github.com/samvallad33"
+  },
+  "homepage": "https://github.com/samvallad33/vestige",
+  "repository": "https://github.com/samvallad33/vestige",
+  "license": "AGPL-3.0-only",
+  "keywords": ["vestige", "mcp", "memory", "strata", "reflex", "operator"],
+  "hooks": [
+    "./hooks/settings.rules.fragment.json",
+    "./hooks/settings.stop-memory.fragment.json",
+    "./hooks/settings.preflight.fragment.json",
+    "./hooks/settings.sanhedrin.fragment.json",
+    "./hooks/operator-lite.fragment.json"
+  ],
+  "mcpServers": "./mcp/vestige.json"
+}

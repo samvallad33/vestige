@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/veto-detector.sh", "timeout": 6 },
+          { "type": "command", "command": "VESTIGE_SANHEDRIN_ENABLED=1 $HOME/.claude/hooks/sanhedrin.sh", "timeout": 70 },
+          { "type": "command", "command": "$HOME/.claude/hooks/synthesis-stop-validator.sh", "timeout": 6 }
+        ]
+      }
+    ]
+  }
+}
