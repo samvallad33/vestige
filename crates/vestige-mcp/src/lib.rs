@@ -16,6 +16,7 @@ pub mod autopilot;
 pub mod cognitive;
 pub mod dashboard;
 pub mod intake;
+pub mod mesh;
 mod intention_graph_log;
 pub mod protocol;
 #[cfg(test)]
