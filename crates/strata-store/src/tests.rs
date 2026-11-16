@@ -1089,6 +1089,48 @@ fn retention_of_unreviewed_node_ignores_unrelated_writes() {
 }
 
 #[test]
+fn retrievability_read_follows_the_log_head_not_the_wall() {
+    let dir = temp_dir("head-clock-read");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let id = store
+        .ingest(input("written once, then left alone", &[]))
+        .expect("ingest");
+    let head = store.head_clock_ms();
+    let created = store.get_node(&id).expect("node").created_at_ms;
+    assert_eq!(head, created);
+
+    let first = store.retrievability(&id).unwrap().unwrap();
+    let second = store.retrievability(&id).unwrap().unwrap();
+    assert_eq!(first, second, "two reads of one head must match");
+    assert_eq!(first, store.retrievability_at(&id, head).unwrap().unwrap());
+    assert_eq!(first, 1.0, "at the head clock nothing has elapsed");
+
+    // The ingest clock is 2023-11-14. This process runs later. A read that
+    // still called the wall clock would score that later instant.
+    let day = 86_400_000i64;
+    let mut crossed = None;
+    for days in [30i64, 90, 400, 2000] {
+        let later = store.retrievability_at(&id, head + days * day).unwrap().unwrap();
+        let bucket = (later * 10.0).floor() as i32;
+        if bucket != 9 || later < 0.3 {
+            crossed = Some((days, later, bucket));
+            break;
+        }
+    }
+    let (days, later, bucket) = crossed.expect("a later clock must cross a print boundary");
+    assert!(later < first);
+    assert_ne!(bucket, 9);
+    assert_eq!(store.retrievability(&id).unwrap().unwrap(), first);
+    let _ = days;
+
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(reopened.head_clock_ms(), head);
+    assert_eq!(reopened.retrievability(&id).unwrap().unwrap(), first);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn review_without_clock_replays_as_unset() {
     let dir = temp_dir("review-unset");
     let mut store = StrataStore::open(&dir).expect("open");
