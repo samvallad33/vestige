@@ -125,6 +125,7 @@ pub mod neuroscience;
 /// Audited on LongMemEval_S (98.60% R@5) and LoCoMo-10 (91.93% Session R@5 / 75.46% Turn Soft R@5).
 #[allow(clippy::all)]
 pub mod retrieval;
+pub(crate) mod zero_overlap;
 
 // ============================================================================
 // PUBLIC API RE-EXPORTS
