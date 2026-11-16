@@ -118,6 +118,7 @@ fn event_budget(event: &str) -> usize {
     match event {
         "UserPromptSubmit" | "SessionStart" => 2000,
         "SubagentStart" => 1500,
+        "Stop" | "SubagentStop" => 600,
         "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch" => 600,
         _ => 0,
     }
@@ -2904,6 +2905,16 @@ pub async fn execute_with(
     let paired = pairing::on_event(&global, &ctx, &inp).await;
     let witnessed = witness::on_event(&global, &ctx, &inp).await;
     let (compacted, restored) = compaction::on_event(&global, &ctx, &inp).await;
+    // GhostLink is part of the hook, not a tool the model has to remember.
+    // UserPromptSubmit and SessionStart name one never-composed pair.
+    // Stop names one hypothesis weave has not closed. A miss here is silence.
+    // The walk runs before the reflex lock so a large log cannot stall the ledger.
+    // A compaction restart is not a new session: the restore owns that firing.
+    let ghost = if inp.event == "SessionStart" && inp.source == "compact" {
+        None
+    } else {
+        crate::strata_memory::ghostlink::reflex_line(storage.as_ref(), &inp.event)
+    };
     let (text, decision, overdue) = {
         let mut g = global.lock().map_err(|e| e.to_string())?;
         let mut wrote = Vec::new();
@@ -2920,8 +2931,9 @@ pub async fn execute_with(
         } else {
             enforce::observe(&mut g, &inp, storage)
         };
-        let lead: Vec<String> = restored
+        let lead: Vec<String> = ghost
             .into_iter()
+            .chain(restored)
             .chain(paired.tell)
             .chain(witnessed.tell)
             .chain(lead_extra)
