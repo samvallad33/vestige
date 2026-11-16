@@ -2717,17 +2717,131 @@ fn c2_speaker_conjoined(query: &str, speaker: &str) -> bool {
     padded.contains(&format!(" {sp} and ")) || padded.contains(&format!(" and {sp} "))
 }
 
-/// Queried-speaker reply seat. In a named-speaker dialogue, an unmentioned
-/// speaker's question at slot 1 is often the prompt; the immediately
-/// following same-session turn, by a speaker the query names, already in
-/// the top 5, is that speaker's reply and takes slot 1. Top-5 membership
-/// never changes. Skipped when the query conjoins the named speaker with
-/// someone else ("X and Y": the answer is often a third-party report),
-/// on WH-person questions (existing `wh_slots`, so this does not compete
-/// with Gemini Step 11), preference and temporal questions, summary
-/// requests, event sequences and assistant-attribution (caller). Does
-/// not fire on user/assistant chats. Runs after the same-session opener
-/// seat, before RSB. Slot 1 is then frozen by rank1_gatekeeper_keep_rsb_head.
+/// The one mouth the query is asking to hear.
+///
+/// A named participant is whoever's own speaker label appears as a whole
+/// token (no name list). A user/assistant transcript has no such label;
+/// the existing initiative and assistant-attribution cues name that role.
+/// Both mouths at once is the conjunction case: the answer is often a
+/// third party's report, so nobody is "the" queried speaker.
+fn c2_queried_role(query: &str) -> Option<&'static str> {
+    let padded = word_padded(query);
+    let user = has_any(&padded, USER_INITIATIVE_CUES);
+    let assistant = has_any(&padded, ASSISTANT_ATTRIBUTION_CUES);
+    match (user, assistant) {
+        (true, false) => Some("user"),
+        (false, true) => Some("assistant"),
+        _ => None,
+    }
+}
+
+/// True when this turn is spoken by the participant the query asked about.
+fn c2_speaker_is_queried(query: &str, speaker: &str) -> bool {
+    if speaker.is_empty() {
+        return false;
+    }
+    if speaker == "user" || speaker == "assistant" {
+        return c2_queried_role(query) == Some(speaker);
+    }
+    c2_query_mentions_speaker(query, speaker) && !c2_speaker_conjoined(query, speaker)
+}
+
+/// Query content terms a turn attests from its own content or features.
+/// Speaker-identity marks and calendar machinery (`__DATE__` and kin) are
+/// not the fact. Two terms stay two marks: this is not a group collapse.
+fn c2_query_content_terms(ix: &Index, plan: &QueryPlan, ti: usize) -> DetHashSet<u32> {
+    let names = session_speaker_names(ix, &ix.session_turns[ix.turns[ti].session]);
+    let mut hit = c2_term_ids(ix, plan, ti);
+    hit.retain(|id| {
+        if is_speaker_term(ix, *id, &names) {
+            return false;
+        }
+        match ix.vocab.names.get(*id as usize) {
+            Some(name) if name.starts_with("__") => false,
+            _ => true,
+        }
+    });
+    hit
+}
+
+/// True when the declarative head already attests every query content term
+/// the challenger attests. An empty challenger mark is covered: a reply
+/// that adds no fact does not displace the head.
+fn c2_head_covers_challenger(ix: &Index, plan: &QueryPlan, head: usize, cand: usize) -> bool {
+    let head_hit = c2_query_content_terms(ix, plan, head);
+    let cand_hit = c2_query_content_terms(ix, plan, cand);
+    cand_hit.iter().all(|id| head_hit.contains(id))
+}
+
+fn c2_date_digit_feat(ix: &Index, id: u32) -> bool {
+    let Some(name) = ix.vocab.names.get(id as usize) else {
+        return false;
+    };
+    if name.starts_with("__DATE__")
+        || name.starts_with("__YEAR__")
+        || name.starts_with("__MONTH__")
+        || name.starts_with("__YM__")
+        || name.starts_with("__MD__")
+        || name.starts_with("__SEASON__")
+        || name.starts_with("__SY__")
+        || name.starts_with("__EARLY__")
+        || name.starts_with("__LATE__")
+        || name.starts_with("__MID__")
+    {
+        return true;
+    }
+    name.chars().any(|c| c.is_ascii_digit())
+}
+
+/// True when the challenger carries a date or digit index feature the head
+/// does not. Session-level calendar tokens sit on every turn of that
+/// session, so only a token the head lacks counts. Does not read turn body.
+fn c2_novel_date_digit(ix: &Index, head: usize, cand: usize) -> bool {
+    let mut head_ids: DetHashSet<u32> = DetHashSet::default();
+    for f in ix.turns[head].feats.iter().chain(ix.turns[head].blip_feats.iter()) {
+        if c2_date_digit_feat(ix, f.id) {
+            head_ids.insert(f.id);
+        }
+    }
+    ix.turns[cand]
+        .feats
+        .iter()
+        .chain(ix.turns[cand].blip_feats.iter())
+        .any(|f| c2_date_digit_feat(ix, f.id) && !head_ids.contains(&f.id))
+}
+
+thread_local! {
+    static QUERIED_SPEAKER_FIRES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+fn reset_queried_speaker_fires() {
+    QUERIED_SPEAKER_FIRES.with(|c| c.set(0));
+}
+
+fn note_queried_speaker_fire() {
+    QUERIED_SPEAKER_FIRES.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+fn queried_speaker_fires() -> u32 {
+    QUERIED_SPEAKER_FIRES.with(|c| c.get())
+}
+
+/// Queried-speaker reply seat. The query points at one participant's mouth.
+/// The turn at slot 1 is often the other participant's prompt. The next
+/// same-session turn by the asked-about participant, already in the top 5,
+/// is that reply and takes slot 1. Top-5 membership never changes, so
+/// session @5 cannot drop by construction.
+///
+/// A question head is a prompt and yields. A declarative head yields only
+/// when it does not already attest every query content term the reply
+/// attests (strict term cover): the other speaker already reported the
+/// fact, and the reply adds nothing. A time question stays put unless the
+/// reply carries a date or digit feature the head lacks. Conjunction
+/// (two mouths, or "X and Y"), WH-person, summary, and preference stay
+/// put. Role labels user/assistant are matched only through the existing
+/// initiative and assistant-attribution cues. Runs after the same-session
+/// opener, before RSB, and once more after the rank-1 gatekeeper so a
+/// tail reorder cannot put the prompt back in front.
 fn apply_c2_queried_speaker_seat(
     ix: &Index,
     plan: &QueryPlan,
@@ -2737,7 +2851,6 @@ fn apply_c2_queried_speaker_seat(
 ) -> bool {
     if list.len() < 2
         || c2_text_preference(query)
-        || plan.intent.temporal
         || c2_summary_request(query)
         || (wh_slots(query) & WH_PERSON) != 0
     {
@@ -2745,12 +2858,7 @@ fn apply_c2_queried_speaker_seat(
     }
     let top = list[0];
     let head_sp = ix.turns[top].speaker.as_str();
-    if head_sp.is_empty()
-        || head_sp == "user"
-        || head_sp == "assistant"
-        || !ix.turns[top].is_question
-        || c2_query_mentions_speaker(query, head_sp)
-    {
+    if head_sp.is_empty() || c2_speaker_is_queried(query, head_sp) {
         return false;
     }
     let sc_top = t_scene.get(top).copied().unwrap_or(0.0);
@@ -2766,8 +2874,13 @@ fn apply_c2_queried_speaker_seat(
     let Some(&cand) = members.get(pos + 1) else {
         return false;
     };
-    let csp = ix.turns[cand].speaker.as_str();
-    if !c2_query_mentions_speaker(query, csp) || c2_speaker_conjoined(query, csp) {
+    if !c2_speaker_is_queried(query, ix.turns[cand].speaker.as_str()) {
+        return false;
+    }
+    if plan.intent.temporal && !c2_novel_date_digit(ix, top, cand) {
+        return false;
+    }
+    if !ix.turns[top].is_question && c2_head_covers_challenger(ix, plan, top, cand) {
         return false;
     }
     let window = list.len().min(C2_BULLAE_WINDOW);
@@ -2779,6 +2892,7 @@ fn apply_c2_queried_speaker_seat(
     }
     list.remove(slot);
     list.insert(0, cand);
+    note_queried_speaker_fire();
     true
 }
 
@@ -5708,8 +5822,13 @@ mod algos_c2_tests {
             &Params::default(),
         );
         assert!(!ixd.turns[0].is_question);
+        // Reply attests none of the query's content terms, so the declarative
+        // head already covers it and stays. Plan on this index: term ids are
+        // not comparable across indexes.
+        let dplan = plan_query(&ixd, &q, &Params::default());
+        assert!(c2_head_covers_challenger(&ixd, &dplan, 0, 1));
         let mut list = vec![0usize, 1];
-        assert!(!apply_c2_queried_speaker_seat(&ixd, &plan, &q.text, &mut list, &[1.0, 0.8]));
+        assert!(!apply_c2_queried_speaker_seat(&ixd, &dplan, &q.text, &mut list, &[1.0, 0.8]));
         assert_eq!(list, vec![0, 1]);
         // Head speaker is already named in the query: no seat.
         let hq = Query { text: "What did Caroline ask about Melanie's pets?".into(), date: String::new() };
@@ -5761,6 +5880,149 @@ mod algos_c2_tests {
         let mut list = vec![0usize, 2];
         assert!(!apply_c2_queried_speaker_seat(&ix, &plan, &q.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 2]);
+    }
+
+    #[test]
+    fn queried_speaker_declarative_yields_only_when_it_lacks_a_reply_term() {
+        let promote = build_index(
+            &[sess(
+                "D4",
+                &[
+                    ("caroline", "That sounds like a nice afternoon."),
+                    ("melanie", "The pottery class starts on Tuesday and I already signed up."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let q = Query {
+            text: "What did Melanie say about the pottery class?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&promote, &q, &Params::default());
+        assert!(!promote.turns[0].is_question);
+        assert!(!c2_head_covers_challenger(&promote, &plan, 0, 1));
+        let mut list = vec![0usize, 1];
+        assert!(apply_c2_queried_speaker_seat(&promote, &plan, &q.text, &mut list, &[1.0, 0.8]));
+        assert_eq!(list, vec![1, 0]);
+
+        let hold = build_index(
+            &[sess(
+                "D4",
+                &[
+                    ("caroline", "Melanie told me the pottery class starts on Tuesday."),
+                    ("melanie", "The pottery class starts on Tuesday."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let hplan = plan_query(&hold, &q, &Params::default());
+        assert!(c2_head_covers_challenger(&hold, &hplan, 0, 1));
+        let mut list = vec![0usize, 1];
+        assert!(!apply_c2_queried_speaker_seat(&hold, &hplan, &q.text, &mut list, &[1.0, 0.8]));
+        assert_eq!(list, vec![0, 1]);
+    }
+
+    #[test]
+    fn queried_speaker_opens_temporal_only_with_a_new_date_digit() {
+        let q = Query {
+            text: "When did Melanie adopt her puppy?".into(),
+            date: String::new(),
+        };
+        let bare = build_index(
+            &[sess(
+                "D9",
+                &[
+                    ("caroline", "Did you get a pet?"),
+                    ("melanie", "I adopted the puppy yesterday."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let bplan = plan_query(&bare, &q, &Params::default());
+        assert!(bplan.intent.temporal);
+        assert!(!c2_novel_date_digit(&bare, 0, 1));
+        let mut list = vec![0usize, 1];
+        assert!(!apply_c2_queried_speaker_seat(&bare, &bplan, &q.text, &mut list, &[1.0, 0.8]));
+        assert_eq!(list, vec![0, 1]);
+
+        let dated = build_index(
+            &[sess(
+                "D9",
+                &[
+                    ("caroline", "Did you get a pet?"),
+                    ("melanie", "I adopted the puppy on 3 May 2022."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let dplan = plan_query(&dated, &q, &Params::default());
+        assert!(dplan.intent.temporal);
+        assert!(c2_novel_date_digit(&dated, 0, 1));
+        let mut list = vec![0usize, 1];
+        assert!(apply_c2_queried_speaker_seat(&dated, &dplan, &q.text, &mut list, &[1.0, 0.8]));
+        assert_eq!(list, vec![1, 0]);
+    }
+
+    #[test]
+    fn queried_speaker_role_reply_follows_the_asked_mouth() {
+        let user_ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("assistant", "Did you finish the pottery class registration?"),
+                    ("user", "I finished the pottery class registration this morning."),
+                    ("assistant", "Great, that is one less task."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let uq = Query {
+            text: "What did I say about the pottery class?".into(),
+            date: String::new(),
+        };
+        let uplan = plan_query(&user_ix, &uq, &Params::default());
+        assert_eq!(c2_queried_role(&uq.text), Some("user"));
+        let mut list = vec![0usize, 1, 2];
+        assert!(apply_c2_queried_speaker_seat(&user_ix, &uplan, &uq.text, &mut list, &[1.0, 0.9, 0.2]));
+        assert_eq!(list, vec![1, 0, 2]);
+
+        let asst_ix = build_index(
+            &[sess(
+                "s",
+                &[
+                    ("user", "Can you explain the pottery class schedule?"),
+                    ("assistant", "The pottery class meets on Tuesday evenings."),
+                ],
+            )],
+            &Params::default(),
+        );
+        let aq = Query {
+            text: "What did you say about the pottery class?".into(),
+            date: String::new(),
+        };
+        let aplan = plan_query(&asst_ix, &aq, &Params::default());
+        assert_eq!(c2_queried_role(&aq.text), Some("assistant"));
+        let mut list = vec![0usize, 1];
+        assert!(apply_c2_queried_speaker_seat(&asst_ix, &aplan, &aq.text, &mut list, &[1.0, 0.8]));
+        assert_eq!(list, vec![1, 0]);
+
+        // Both mouths: not one reply.
+        let both = "What did I say and what did you say about the pottery class?";
+        assert_eq!(c2_queried_role(both), None);
+        let mut list = vec![0usize, 1];
+        assert!(!apply_c2_queried_speaker_seat(&user_ix, &uplan, both, &mut list, &[1.0, 0.9, 0.2]));
+        assert_eq!(list, vec![0, 1]);
+
+        // Who-questions stay with the person seat.
+        let who = Query {
+            text: "Who did I tell about the pottery class?".into(),
+            date: String::new(),
+        };
+        assert!(wh_slots(&who.text) & WH_PERSON != 0);
+        let wplan = plan_query(&user_ix, &who, &Params::default());
+        let mut list = vec![0usize, 1, 2];
+        assert!(!apply_c2_queried_speaker_seat(&user_ix, &wplan, &who.text, &mut list, &[1.0, 0.9, 0.2]));
+        assert_eq!(list, vec![0, 1, 2]);
     }
 
     #[test]

@@ -4772,6 +4772,7 @@ fn carry_mode_is_parity() -> bool {
 }
 
 fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+    reset_queried_speaker_fires();
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
     let pref_on = p.enable_preference && it.preference;
@@ -6545,10 +6546,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 // to the same session's user opener already in the top 5.
                 // Skipped on preference and on summary requests.
                 apply_c2_same_opener_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
-                // Queried-speaker reply: in a named-speaker dialogue, an
-                // unmentioned speaker's question yields to the next
-                // same-session turn by a speaker the query names, already
-                // in the top 5. Skipped on preference.
+                // Queried-speaker reply: the other participant's prompt at
+                // slot 1 yields to the next same-session turn by the
+                // participant the query asked about, already in the top 5.
+                // A declarative prompt that already states the reply's
+                // facts stays. Skipped on preference.
                 apply_c2_queried_speaker_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
                 // Queried-speaker previous: in a named-speaker dialogue, an
                 // unmentioned speaker's declarative comment yields to the
@@ -6568,6 +6570,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 // on preference.
                 apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
             }
+        }
+        // Queried-speaker reply for "what did you say" questions. The block
+        // above skips assistant-attribution so an assistant's own words stay
+        // put for the other seats. This seat is the exception: the query
+        // asked for the assistant's mouth, and the next assistant turn is
+        // that reply. Same witnesses as the call above.
+        if it.assistant_attribution && !c2_text_preference(&q.text) {
+            apply_c2_queried_speaker_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
         }
         // Preference source: ReplySource is skipped on assistant_attribution,
         // but "can you recommend..." is tagged that way by a present-tense cue.
@@ -6595,6 +6605,14 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     } else {
         Vec::new()
     };
+    // Queried-speaker reply, after the gatekeeper. The pre-RSB pass can be
+    // undone by a later pre-RSB seat or by the gatekeeper's tail reorder
+    // putting a different prompt at slot 1. Re-applying here keeps the
+    // asked-about reply in front. Top-5 membership stays unchanged.
+    // Later post-gatekeeper seats may still run after this pass.
+    if !it.is_event_sequence && !c2_text_preference(&q.text) {
+        apply_c2_queried_speaker_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+    }
     // Queried-speaker T@5 entry, after the gatekeeper. The pre-RSB pass
     // (#17) is often undone when the gatekeeper Kemeny-reorders the tail
     // (slots 2..k). Re-applying the same membership-preserving swap here
@@ -7918,6 +7936,9 @@ struct FunnelSnap {
     final_session_ids: Vec<String>,
     corpus_turns: usize,
     corpus_sessions: usize,
+    /// How many times the queried-speaker reply seat swapped on this query.
+    /// Measurement only. Ranking does not read it.
+    queried_speaker_fires: u32,
 }
 
 thread_local! {
@@ -7954,6 +7975,7 @@ fn maybe_dump_funnel(
             final_session_ids: funnel_session_ids(ix, final_sessions),
             corpus_turns: ix.turns.len(),
             corpus_sessions: ix.session_ids.len(),
+            queried_speaker_fires: queried_speaker_fires(),
         });
     });
 }
@@ -7984,6 +8006,7 @@ fn flush_funnel_dumps(_ix: &Index) {
             "final_session_ids": snap.final_session_ids,
             "corpus_turns": snap.corpus_turns,
             "corpus_sessions": snap.corpus_sessions,
+            "queried_speaker_fires": snap.queried_speaker_fires,
         });
         let _ = writeln!(file, "{rec}");
     }
