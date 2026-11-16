@@ -712,6 +712,125 @@ enum Commands {
 
     /// Consolidation. On a Strata log this is a no-op and changes nothing.
     Consolidate,
+
+    /// Replicate per-writer chains between this store and a paired device.
+    ///
+    /// Pairing, unpairing and fork-identity write a grant or a new writer and
+    /// run only in the process that holds the log. `status` and `sync` also
+    /// run through a server that already holds it. An unpaired store opens no
+    /// socket.
+    Mesh {
+        #[command(subcommand)]
+        command: MeshCommands,
+    },
+
+    /// Quarantine an orphan memory, or append the anchor frame that frees it.
+    ///
+    /// The quarantine body stays in the log. `status` reads that projection
+    /// and the mesh digest. It opens no socket.
+    Provenance {
+        #[command(subcommand)]
+        command: ProvenanceCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum MeshCommands {
+    /// Show a ticket and wait for the other device.
+    Pair {
+        /// Low-entropy code typed on both devices.
+        #[arg(long)]
+        code: String,
+        /// Bind address. Default is `127.0.0.1:0`, then the saved port.
+        #[arg(long)]
+        bind: Option<String>,
+        /// Write the ticket here before waiting.
+        #[arg(long)]
+        ticket_file: Option<PathBuf>,
+        /// Read the other device's response ticket from this file.
+        #[arg(long)]
+        wait_file: Option<PathBuf>,
+        /// The human compared the authentication strings.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Admit the pairing ticket and answer it.
+    Join {
+        /// The same code typed on the pairing device.
+        #[arg(long)]
+        code: String,
+        /// Ticket text. Otherwise `--ticket-file`.
+        #[arg(long)]
+        ticket: Option<String>,
+        /// Read the ticket from this file, waiting until it appears.
+        #[arg(long)]
+        ticket_file: Option<PathBuf>,
+        /// Write this device's response ticket here.
+        #[arg(long)]
+        response_file: Option<PathBuf>,
+        /// Bind address. Default is `127.0.0.1:0`, then the saved port.
+        #[arg(long)]
+        bind: Option<String>,
+        /// The human compared the authentication strings.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Frontiers, merge receipts, digest, relay mode. Opens no socket.
+    Status,
+    /// Exchange chains with paired peers.
+    Sync {
+        /// Accept a peer instead of dialing.
+        #[arg(long)]
+        listen: bool,
+        /// Accept one connection.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Sync, counting `handle` as demand. Admission is unchanged.
+    Pull {
+        /// Qualified handle.
+        handle: String,
+    },
+    /// Drop a peer from the local list. The grant stays in the log.
+    Unpair {
+        /// Peer did:key.
+        did: String,
+    },
+    /// Start a new writer chain that records the current fork point.
+    ForkIdentity,
+    /// Copy this writer's segments and public manifest. Does not copy strata.key.
+    ExportChain {
+        /// Destination directory.
+        dir: PathBuf,
+    },
+    /// Verify a chain directory and fold it.
+    ImportChain {
+        /// Source directory.
+        dir: PathBuf,
+        /// The human is confirming a new writer grant.
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProvenanceCommands {
+    /// Record an orphan memory under a MissingProvenanceReceipt.
+    Quarantine {
+        /// Single-line memory text, with no session, file, or link anchor.
+        summary: String,
+    },
+    /// Append an anchor frame. The quarantine record is not removed.
+    Release {
+        /// Hex digest of the MissingProvenanceReceipt.
+        #[arg(long)]
+        receipt: String,
+        /// Hex digest of the anchor that frees the memory.
+        #[arg(long)]
+        anchor: String,
+    },
+    /// Quarantined receipts, release frames, and the mesh digest.
+    Status,
 }
 
 /// Zero-lock command router: dispatches over reflex.sock / attach IPC if a server
@@ -776,6 +895,8 @@ fn main() -> anyhow::Result<()> {
             yes,
         } => run_gc(min_retention, max_age_days, dry_run, yes),
         Commands::Consolidate => run_consolidate(),
+        Commands::Mesh { command } => run_mesh(command),
+        Commands::Provenance { command } => run_provenance(command),
         Commands::Restore { file } => run_restore(file),
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
@@ -2922,6 +3043,22 @@ fn run_migrate_to_strata_linked(
     Ok(())
 }
 
+fn run_provenance(command: ProvenanceCommands) -> anyhow::Result<()> {
+    let storage = open_storage()?;
+    let value = match command {
+        ProvenanceCommands::Quarantine { summary } => {
+            vestige_mcp::provenance_log::quarantine(storage.as_ref(), &summary)
+        }
+        ProvenanceCommands::Release { receipt, anchor } => {
+            vestige_mcp::provenance_log::release(storage.as_ref(), &receipt, &anchor)
+        }
+        ProvenanceCommands::Status => vestige_mcp::provenance_log::status(storage.as_ref()),
+    }
+    .map_err(|err| anyhow::anyhow!(err))?;
+    println!("{value}");
+    Ok(())
+}
+
 fn open_storage() -> anyhow::Result<std::sync::Arc<Storage>> {
     let dir = cli_data_dir()?;
     // Same check `vestige-mcp` runs before stdio. `vestige.db` is not opened.
@@ -3709,8 +3846,14 @@ fn run_sync_file(archive: PathBuf) -> anyhow::Result<()> {
 #[allow(dead_code)]
 fn refuse_sync_on_strata(storage: &Arc<Storage>) -> anyhow::Result<()> {
     if is_strata(storage) {
+        let paired = mesh_peers_present();
+        if paired {
+            anyhow::bail!(
+                "this store is paired. Run `vestige mesh sync`. Portable archive sync stays unavailable_in_4_0 on Strata: a Strata log does not write or read a portable archive. Nothing was read or written."
+            );
+        }
         anyhow::bail!(
-            "unavailable_in_4_0: sync is not available on Strata in Vestige 4.0: sync merges portable archives, which a Strata log does not write or read yet. Nothing was read or written. {STRATA_PORTABLE_ALTERNATIVES}"
+            "unavailable_in_4_0: sync is not available on Strata in Vestige 4.0: sync merges portable archives, which a Strata log does not write or read yet. Nothing was read or written. Run `vestige mesh sync` after `vestige mesh pair`. {STRATA_PORTABLE_ALTERNATIVES}"
         );
     }
     Ok(())
@@ -3718,7 +3861,132 @@ fn refuse_sync_on_strata(storage: &Arc<Storage>) -> anyhow::Result<()> {
 
 /// What works on a Strata log in place of a portable archive.
 #[allow(dead_code)]
-const STRATA_PORTABLE_ALTERNATIVES: &str = "Use `vestige export <file> --format json` (or jsonl) for the memories, or `vestige backup <dir>` for an exact copy of the log.";
+const STRATA_PORTABLE_ALTERNATIVES: &str = "Use `vestige export <file> --format json` (or jsonl) for the memories, or `vestige backup <dir>` for an exact copy of the log. For another device, use `vestige mesh sync`.";
+
+fn mesh_peers_present() -> bool {
+    let Ok(dir) = cli_data_dir() else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(dir.join("mesh/peers.json")) else {
+        return false;
+    };
+    serde_json::from_slice::<Vec<serde_json::Value>>(&bytes)
+        .ok()
+        .is_some_and(|peers| !peers.is_empty())
+}
+
+fn run_mesh(command: MeshCommands) -> anyhow::Result<()> {
+    let dir = cli_data_dir()?;
+    let (action, args) = mesh_args(command);
+    if matches!(action, "status" | "sync" | "pull")
+        && vestige_mcp::attach::probe_owner_blocking(&dir).is_some()
+    {
+        let response = vestige_mcp::attach::call_tool_blocking(
+            &dir,
+            "maintain",
+            mesh_maintain_args(action, &args),
+        )?;
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    if !take_cli_lock(&dir)? {
+        anyhow::bail!(
+            "{} holds this store. Pairing, unpair, fork, export and import write the log, so they run only while no server holds it. `vestige mesh status` and `vestige mesh sync` run through the server.",
+            store_holder(&dir)
+        );
+    }
+    let storage = open_storage()?;
+    if !is_strata(&storage) {
+        anyhow::bail!("vestige mesh runs on a Strata log");
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let response = rt
+        .block_on(vestige_mcp::mesh::dispatch(&storage, &args))
+        .map_err(|err| anyhow::anyhow!(err))?;
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn mesh_maintain_args(action: &str, args: &serde_json::Value) -> serde_json::Value {
+    match action {
+        "status" => serde_json::json!({"action": "mesh_status"}),
+        "pull" => serde_json::json!({
+            "action": "mesh_sync",
+            "handle": args.get("handle"),
+        }),
+        _ => serde_json::json!({
+            "action": "mesh_sync",
+            "listen": args.get("listen").and_then(|value| value.as_bool()).unwrap_or(false),
+            "once": args.get("once").and_then(|value| value.as_bool()).unwrap_or(false),
+            "handle": args.get("handle"),
+        }),
+    }
+}
+
+fn mesh_args(command: MeshCommands) -> (&'static str, serde_json::Value) {
+    match command {
+        MeshCommands::Pair {
+            code,
+            bind,
+            ticket_file,
+            wait_file,
+            confirm,
+        } => (
+            "pair",
+            serde_json::json!({
+                "action": "pair",
+                "code": code,
+                "bind": bind,
+                "ticket_file": ticket_file,
+                "wait_file": wait_file,
+                "confirm": confirm,
+            }),
+        ),
+        MeshCommands::Join {
+            code,
+            ticket,
+            ticket_file,
+            response_file,
+            bind,
+            confirm,
+        } => (
+            "join",
+            serde_json::json!({
+                "action": "join",
+                "code": code,
+                "ticket": ticket,
+                "ticket_file": ticket_file,
+                "response_file": response_file,
+                "bind": bind,
+                "confirm": confirm,
+            }),
+        ),
+        MeshCommands::Status => ("status", serde_json::json!({"action": "status"})),
+        MeshCommands::Sync { listen, once } => (
+            "sync",
+            serde_json::json!({"action": "sync", "listen": listen, "once": once}),
+        ),
+        MeshCommands::Pull { handle } => (
+            "pull",
+            serde_json::json!({"action": "pull", "handle": handle}),
+        ),
+        MeshCommands::Unpair { did } => (
+            "unpair",
+            serde_json::json!({"action": "unpair", "did": did}),
+        ),
+        MeshCommands::ForkIdentity => ("fork", serde_json::json!({"action": "fork"})),
+        MeshCommands::ExportChain { dir } => (
+            "export",
+            serde_json::json!({"action": "export", "dir": dir}),
+        ),
+        MeshCommands::ImportChain { dir, confirm } => (
+            "import",
+            serde_json::json!({"action": "import", "dir": dir, "confirm": confirm}),
+        ),
+    }
+}
 
 #[cfg(feature = "cloud-sync")]
 fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
