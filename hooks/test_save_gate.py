@@ -159,5 +159,104 @@ class TestSaveGateHooks(unittest.TestCase):
                     self.assertIsNone(parsed)
 
 
+    def test_directive_and_missing_sha_block_stop_until_cleared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, "VESTIGE_REFLEX_DIR": tmp}
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "lib.rs").write_text("fn add() {}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "first"], cwd=repo, check=True)
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            sid = "cite-session"
+            prompt = run_hook_json(
+                "UserPromptSubmit",
+                {
+                    "session_id": sid,
+                    "cwd": str(repo),
+                    "prompt": "from now on never edit benchmarks/real_engine",
+                },
+                env,
+            )
+            self.assertIn("from now on", prompt["hookSpecificOutput"]["additionalContext"])
+            self.assertNotIn("[REQUIRED]", prompt["hookSpecificOutput"]["additionalContext"])
+            blocked = run_hook_json(
+                "Stop",
+                {
+                    "session_id": sid,
+                    "cwd": str(repo),
+                    "stop_hook_active": False,
+                    "last_assistant_message": "shipped commit:deadbeefdeadbeef and `src/missing.rs`",
+                },
+                env,
+            )
+            reason = blocked["reason"]
+            self.assertEqual(blocked["decision"], "block")
+            self.assertIn("from now on", reason)
+            self.assertIn("deadbeefdeadbeef", reason)
+            self.assertIn("src/missing.rs", reason)
+            self.assertIsNone(
+                run_hook_json(
+                    "PostToolUse",
+                    {
+                        "session_id": sid,
+                        "cwd": str(repo),
+                        "tool_name": "remember",
+                        "tool_input": {"action": "save", "content": "recorded"},
+                        "tool_response": {"ok": True},
+                    },
+                    env,
+                )
+            )
+            real = run_hook_json(
+                "Stop",
+                {
+                    "session_id": sid,
+                    "cwd": str(repo),
+                    "stop_hook_active": True,
+                    "last_assistant_message": f"shipped `{head}` and `./lib.rs`",
+                },
+                env,
+            )
+            self.assertIsNone(real)
+
+    def test_worktree_remove_exits_2_while_dirty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, "VESTIGE_REFLEX_DIR": tmp}
+            repo = Path(tmp) / "wt"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "lib.rs").write_text("fn add() {}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "first"], cwd=repo, check=True)
+            (repo / "dirty.rs").write_text("x\n", encoding="utf-8")
+            rc, _parsed = run_hook(
+                "WorktreeRemove",
+                json.dumps({"session_id": "wt", "worktree_path": str(repo)}),
+                env,
+            )
+            self.assertEqual(rc, 2)
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "clean"], cwd=repo, check=True)
+            rc, parsed = run_hook(
+                "WorktreeRemove",
+                json.dumps({"session_id": "wt", "worktree_path": str(repo)}),
+                env,
+            )
+            self.assertEqual(rc, 0)
+            self.assertIsNone(parsed)
+
+
 if __name__ == "__main__":
     unittest.main()
