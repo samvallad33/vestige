@@ -1,0 +1,48 @@
+== 894c7d44
++++ b/EXPERIMENT_LOG.md
+@@ -0,0 +1,14 @@
++++ b/benchmarks/run_stage1_retrieval.mjs
+@@ -213,2 +213,2 @@ async function runLongMemEval(params, quiet = false) {
+@@ -227,0 +228 @@ async function runLongMemEval(params, quiet = false) {
+@@ -232 +233,2 @@ async function runLongMemEval(params, quiet = false) {
+@@ -236 +238 @@ async function runLongMemEval(params, quiet = false) {
+@@ -238 +240 @@ async function runLongMemEval(params, quiet = false) {
+@@ -245,0 +248 @@ async function runLongMemEval(params, quiet = false) {
+@@ -253 +256 @@ async function runLongMemEval(params, quiet = false) {
+@@ -257 +260 @@ async function runLongMemEval(params, quiet = false) {
+@@ -266,0 +270 @@ async function runLongMemEval(params, quiet = false) {
++++ b/crates/vestige-core/src/retrieval.rs
+@@ -6442,4 +6441,0 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -6475,5 +6470,0 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+== 45fa0769
++++ b/EXPERIMENT_LOG.md
+@@ -14,0 +15,12 @@ Monotonic Zero-Regression Gate tracking across Steps 0–4.
++++ b/crates/vestige-core/src/retrieval.rs
+@@ -1989,0 +1990,176 @@ struct Index {
+@@ -3832,0 +4009,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
+@@ -3862,0 +4046,6 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
+@@ -4264,4 +4453,8 @@ struct Fields {
+@@ -4270 +4463 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
+@@ -4272,5 +4465,9 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
+@@ -4277,0 +4475,23 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
+@@ -4300,7 +4520,4 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
+@@ -4310,0 +4528,6 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
+@@ -4581,2 +4804,3 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -4589,2 +4813,4 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -4715 +4941,3 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -4717,2 +4945,2 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+== e81a99b2
++++ b/EXPERIMENT_LOG.md
+@@ -5,10 +5,6 @@ Monotonic Zero-Regression Gate tracking across Steps 0–4.
+@@ -16,10 +12,18 @@ Monotonic Zero-Regression Gate tracking across Steps 0–4.
++++ b/crates/vestige-core/src/lib.rs
+@@ -122,0 +123 @@ pub mod retrieval;
++++ b/crates/vestige-core/src/retrieval.rs
+@@ -2001,0 +2002,3 @@ struct Index {
+@@ -3181,0 +3185,2 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
+@@ -3525,0 +3531,5 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
+@@ -4051,0 +4062,2 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
+@@ -5033,0 +5046,112 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -6704,0 +6829,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
++++ b/crates/vestige-core/src/zero_overlap.rs
+@@ -0,0 +1,463 @@

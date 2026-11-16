@@ -6062,6 +6062,22 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         step10_florilegium_floors(strong_top_sessions);
 
     let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
+    // RULE 1 measurement only. Off unless VESTIGE_FUNNEL_DUMP is set.
+    // These copies are never read by a seat. `scene_pool50` / `session_pool50`
+    // run before submodular selection, so pool@50 is the pre-selection head,
+    // not the seated list padded out to 50 (that older dump made pre_rank@5
+    // identical to final@5 by construction).
+    let funnel_on = funnel_dump_path().is_some();
+    let funnel_pool50: Vec<usize> = if funnel_on {
+        scene_pool50(&t_scene, &turn_ts)
+    } else {
+        Vec::new()
+    };
+    let funnel_session_pool50: Vec<usize> = if funnel_on {
+        session_pool50(&s_score, &bridge_boost, &ix.session_ts)
+    } else {
+        Vec::new()
+    };
     let mut final_turn_indices: Vec<usize> = if p.enable_submodular {
         let mut selected_turns: Vec<usize> = Vec::with_capacity(k);
         let mut covered_query_terms: u64 = 0;
@@ -6476,6 +6492,13 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     session_opener_lift_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
     // Hearsay runs after SessionOpenerLift, on the same final list (one path for live and bench).
     hearsay_with_plan(ix, &q_cues, &mut final_turn_indices, Some(&cue_guard));
+    // RULE 1 pre_rank: the turn list immediately before Step 11 Kemeny-Young.
+    // pre_rank@5 is the first five ids. Not read by ranking.
+    let funnel_pre_rank: Vec<usize> = if funnel_on {
+        final_turn_indices.clone()
+    } else {
+        Vec::new()
+    };
     // Step 11: Kemeny-Young Condorcet QA-Slot Agreement Voter runs before RSB so
     // `rsb_seat_behind` and `rank1_gatekeeper_keep_rsb_head` stay 100% untouched.
     if !it.is_event_sequence && !pref_on {
@@ -6554,6 +6577,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // same Kemeny-Young order as PR 710, computed on that window with the head
     // removed. No new constant: the frozen slot is position 0 of this window.
     rank1_gatekeeper_keep_rsb_head(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // RULE 1 post_kemeny: the turn list immediately after the gatekeeper's
+    // Kemeny-Young tail reorder (and after Step 11, when that voter ran).
+    // Later C2 seats are not in this snapshot. post_kemeny@5 is the first five.
+    // Not read by ranking. Session pre_rank@5 and session post_kemeny@5 are
+    // not separate lists: `final_session_indices` is immutable after
+    // construction and no seat takes `&mut` of it, so both equal its top 5.
+    let funnel_post_kemeny: Vec<usize> = if funnel_on {
+        final_turn_indices.clone()
+    } else {
+        Vec::new()
+    };
     // Queried-speaker T@5 entry, after the gatekeeper. The pre-RSB pass
     // (#17) is often undone when the gatekeeper Kemeny-reorders the tail
     // (slots 2..k). Re-applying the same membership-preserving swap here
@@ -6837,6 +6871,15 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             final_turn_indices.truncate(k);
         }
     }
+    maybe_dump_funnel(
+        ix,
+        &funnel_pool50,
+        &funnel_session_pool50,
+        &funnel_pre_rank,
+        &funnel_post_kemeny,
+        &final_turn_indices,
+        &final_session_indices,
+    );
     maybe_dump_replay(
         ix,
         q,
@@ -7791,6 +7834,152 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
 
 
 // =========================================================================
+// RULE 1 FUNNEL DUMP (off unless VESTIGE_FUNNEL_DUMP is set; never changes ranking)
+//
+// Field contract, written here and checked by tools/c2_bench.py:
+//   pool50_ids           scene_pool50(t_scene) immediately before submodular
+//                        turn selection. Gold-in-pool@50 reads this list.
+//   session_pool50_ids   session_pool50(s_score, bridge) at the same moment.
+//   pre_rank_ids         final_turn_indices cloned immediately before
+//                        apply_step11_kemeny_wh_slot_voter. pre_rank@5 = [:5].
+//   post_kemeny_ids      final_turn_indices cloned immediately after
+//                        rank1_gatekeeper_keep_rsb_head. post_kemeny@5 = [:5].
+//   final_ids            the list copied into RankResult.turns. @1 = [0].
+//                        The harness aborts if this diverges from the response.
+//   final_session_ids    final_session_indices. Session pre_rank@5,
+//                        post_kemeny@5, and final session @5 are this list's
+//                        top 5. They are identical because the binding is
+//                        immutable and no seat mutates it.
+//   corpus_turns/sessions  index sizes. Gold-in-corpus is the harness check
+//                        that every gold id was one it ingested (the ranker
+//                        never sees labels). These counts must match the
+//                        request the harness sent.
+// =========================================================================
+
+fn funnel_dump_path() -> Option<String> {
+    match std::env::var("VESTIGE_FUNNEL_DUMP") {
+        Ok(p) if !p.is_empty() => Some(p),
+        _ => None,
+    }
+}
+
+/// Turn pool@50. Descending `t_scene`, then later timestamp, then lower index.
+/// Non-positive scene scores are excluded. Capped at 50. Pure.
+fn scene_pool50(t_scene: &[f32], turn_ts: &[i64]) -> Vec<usize> {
+    let mut pool = Vec::new();
+    for ti in order(t_scene, turn_ts) {
+        if t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
+            break;
+        }
+        pool.push(ti);
+        if pool.len() >= 50 {
+            break;
+        }
+    }
+    pool
+}
+
+/// Session pool@50. Same order key as session ranking (`order` on `s_score`),
+/// keeping a session the selector itself would keep: positive score or a
+/// positive bridge boost. Capped at 50. Pure.
+fn session_pool50(s_score: &[f32], bridge: &[f32], ts: &[i64]) -> Vec<usize> {
+    let mut pool = Vec::new();
+    for si in order(s_score, ts) {
+        let sc = s_score.get(si).copied().unwrap_or(0.0);
+        let br = bridge.get(si).copied().unwrap_or(0.0);
+        if sc <= 0.0 && br <= 0.0 {
+            continue;
+        }
+        pool.push(si);
+        if pool.len() >= 50 {
+            break;
+        }
+    }
+    pool
+}
+
+struct FunnelSnap {
+    pool50_ids: Vec<String>,
+    session_pool50_ids: Vec<String>,
+    pre_rank_ids: Vec<String>,
+    post_kemeny_ids: Vec<String>,
+    final_ids: Vec<String>,
+    final_session_ids: Vec<String>,
+    corpus_turns: usize,
+    corpus_sessions: usize,
+}
+
+thread_local! {
+    static FUNNEL_SNAPS: std::cell::RefCell<Vec<FunnelSnap>> = std::cell::RefCell::new(Vec::new());
+}
+
+fn funnel_turn_ids(ix: &Index, idxs: &[usize]) -> Vec<String> {
+    idxs.iter().filter_map(|&ti| ix.turns.get(ti).map(|t| t.id.clone())).collect()
+}
+
+fn funnel_session_ids(ix: &Index, idxs: &[usize]) -> Vec<String> {
+    idxs.iter().filter_map(|&si| ix.session_ids.get(si).cloned()).collect()
+}
+
+fn maybe_dump_funnel(
+    ix: &Index,
+    pool50: &[usize],
+    session_pool50: &[usize],
+    pre_rank: &[usize],
+    post_kemeny: &[usize],
+    final_turns: &[usize],
+    final_sessions: &[usize],
+) {
+    if funnel_dump_path().is_none() {
+        return;
+    }
+    FUNNEL_SNAPS.with(|slot| {
+        slot.borrow_mut().push(FunnelSnap {
+            pool50_ids: funnel_turn_ids(ix, pool50),
+            session_pool50_ids: funnel_session_ids(ix, session_pool50),
+            pre_rank_ids: funnel_turn_ids(ix, pre_rank),
+            post_kemeny_ids: funnel_turn_ids(ix, post_kemeny),
+            final_ids: funnel_turn_ids(ix, final_turns),
+            final_session_ids: funnel_session_ids(ix, final_sessions),
+            corpus_turns: ix.turns.len(),
+            corpus_sessions: ix.session_ids.len(),
+        });
+    });
+}
+
+fn flush_funnel_dumps(_ix: &Index) {
+    let Some(path) = funnel_dump_path() else {
+        FUNNEL_SNAPS.with(|slot| slot.borrow_mut().clear());
+        return;
+    };
+    let snaps = FUNNEL_SNAPS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+    if snaps.is_empty() {
+        return;
+    }
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => std::io::BufWriter::new(f),
+        Err(e) => {
+            eprintln!("VESTIGE_FUNNEL_DUMP open failed: {e}");
+            return;
+        }
+    };
+    for snap in snaps {
+        let rec = json!({
+            "pool50_ids": snap.pool50_ids,
+            "session_pool50_ids": snap.session_pool50_ids,
+            "pre_rank_ids": snap.pre_rank_ids,
+            "post_kemeny_ids": snap.post_kemeny_ids,
+            "final_ids": snap.final_ids,
+            "final_session_ids": snap.final_session_ids,
+            "corpus_turns": snap.corpus_turns,
+            "corpus_sessions": snap.corpus_sessions,
+        });
+        let _ = writeln!(file, "{rec}");
+    }
+    let _ = file.flush();
+}
+
+// =========================================================================
 // REPLAY DUMP (off unless VESTIGE_REPLAY_DUMP is set; never changes ranking)
 // =========================================================================
 
@@ -8255,6 +8444,7 @@ pub fn rank(req: &RankRequest) -> RankResponse {
     let ix = build_index(&req.sessions, &req.params);
     let results = req.queries.iter().map(|q| rank_one(&ix, q, &req.params, req.top_k)).collect();
     flush_replay_dumps(&ix);
+    flush_funnel_dumps(&ix);
     RankResponse {
         engine: ENGINE,
         sessions_indexed: ix.session_ids.len(),
@@ -8282,6 +8472,34 @@ mod tests {
         assert!(serde_json::from_str::<RankRequest>(leaky).is_err());
         let leaky_q = r#"{"sessions":[],"queries":[{"text":"x","question_type":"knowledge-update"}]}"#;
         assert!(serde_json::from_str::<RankRequest>(leaky_q).is_err());
+    }
+
+    #[test]
+    fn scene_pool50_is_the_preselection_head_not_the_seated_list() {
+        // Higher score, then later timestamp, then lower index. Non-positive
+        // scores stop the head. The cap is 50. This is the pool@50 the funnel
+        // dump writes; it does not start from a seated ranking.
+        let scores = vec![0.0f32, 3.0, 1.0, 2.0, 0.0];
+        let ts = vec![0i64, 10, 10, 5, 100];
+        assert_eq!(scene_pool50(&scores, &ts), vec![1, 3, 2]);
+
+        let scores = vec![1.0f32, 1.0, 1.0, 0.0];
+        let ts = vec![5i64, 9, 9, 100];
+        assert_eq!(scene_pool50(&scores, &ts), vec![1, 2, 0]);
+
+        let scores: Vec<f32> = (0..60).map(|i| (60 - i) as f32).collect();
+        let ts = vec![0i64; 60];
+        let pool = scene_pool50(&scores, &ts);
+        assert_eq!(pool.len(), 50);
+        assert_eq!(pool[0], 0);
+        assert_eq!(pool[49], 49);
+
+        let s_score = vec![0.0f32, 0.4, 0.0, 0.9];
+        let bridge = vec![0.0f32, 0.0, 0.2, 0.0];
+        let sts = vec![1i64, 1, 8, 3];
+        // order by s_score: idx3 (0.9), idx1 (0.4), then zeros. idx2 stays
+        // because its bridge is positive; idx0 does not.
+        assert_eq!(session_pool50(&s_score, &bridge, &sts), vec![3, 1, 2]);
     }
 
     #[test]

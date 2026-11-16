@@ -28,3 +28,31 @@ Monotonic Zero-Regression Gate tracking across Steps 0–4.
   - **BEAM-100K (`355/400`)**: `Sess Any@1/5/10=37.46%/70.14%/77.46% All@5=38.59% Capped-All@5=51.36% | Turn @1/5/10=46.20%/67.89%/76.62% All@5=35.21% Capped-All@5=48.38% All@10=41.13%` (0-diff parity)
 - **Gate Verdict**: **ACCEPTED** (`NoLiMa 32K +79.31% R@1 / +93.10% R@5`, `LoCoMo +0.26%`, zero regressions).
 
+## RULE 1 funnel backfill
+
+`tools/c2_bench.py` drives `retrieval_bench --worker` with `VESTIGE_FUNNEL_DUMP` set. The dump is not read by any seat. Each cell is any-gold on the gate questions: LME_S n=470 non-abstention, LoCoMo n=1536 (category 1–4 with evidence), BEAM-100K n=355 (non-empty `source_chat_ids`).
+
+`pool@50` is `scene_pool50` immediately before submodular selection. `pre_rank@5` is the turn list cloned immediately before `apply_step11_kemeny_wh_slot_voter`. `post_kemeny@5` is the turn list cloned immediately after `rank1_gatekeeper_keep_rsb_head`. `@1` is `final_ids[0]`. Session `pre_rank@5` and session `post_kemeny@5` are `final_session_indices[:5]`: that binding is immutable, and the harness aborts if `&mut final_session_indices` appears.
+
+One LoCoMo evidence id never enters the corpus, on every commit measured here. `conv-50:69` cites `D30:05` and the dialogue id is `D30:5`. Gold-in-corpus is 1535/1536. The evidence regex was not loosened.
+
+Capped-All, NDCG, NoLiMa, and the logged BEAM session All@5 were not recomputed by this harness. The percentages below are this harness only.
+
+### Pre-flight `894c7d44` and Step 0 `45fa0769`
+
+`c2_bench.py --diff` across the combined runs: 2361 gate questions, losses=0, gains=0. Step 0 is an exact 0-diff of pre-flight under this harness. Both binaries were the historical commit plus the measurement dump and nothing else.
+
+LME_S n=470. Turn any-gold: corpus 470/470, pool@50 464/470, pre_rank@5 406/470, post_kemeny@5 415/470, @1 360/470. Session any-gold: corpus 470/470, pool@50 470/470, pre_rank@5 463/470, post_kemeny@5 463/470, @1 430/470. Scoreboard turn any@1/@5/@10 all@5 = 360/428/441/323. Session any@1/@5/@10 all@5/all@10 = 430/463/469/422/446 (91.49% / 98.51% / 99.79% / 89.79% / 94.89%).
+
+LoCoMo n=1536. Turn any-gold: corpus 1535/1536, pool@50 1422/1536, pre_rank@5 1037/1536, post_kemeny@5 1098/1536, @1 809/1536. Session any-gold: corpus 1536/1536, pool@50 1536/1536, pre_rank@5 1420/1536, post_kemeny@5 1420/1536, @1 1133/1536. Turn any@1/@5/@10 = 809/1128/1234. Session any@1/@5 = 1133/1420 (73.76% / 92.45%).
+
+BEAM n=355. Turn any-gold: corpus 355/355, pool@50 327/355, pre_rank@5 229/355, post_kemeny@5 234/355, @1 164/355. Session any-gold: corpus 355/355, pool@50 341/355, pre_rank@5 249/355, post_kemeny@5 249/355, @1 133/355. Turn any@1/@5/@10 all@5/all@10 = 164/241/272/125/146 (46.20% / 67.89% / 76.62% / 35.21% / 41.13%). Session any@1/@5/@10 = 133/249/275 (37.46% / 70.14% / 77.46%).
+
+### Step 1 `e81a99b2`
+
+Same dump, ranker unchanged. LME (470) and BEAM (355) are a 0-diff of Step 0, funnel counts included. LoCoMo losses=0, 13 hit-flags gained, four questions: `conv-47:29` (cat 2) turn @1/@5/@10 and session @1/@5; `conv-47:31` (cat 2) turn @1 and session @1/@5; `conv-48:19` (cat 1) turn @1/@5/@10 and session @1; `conv-48:68` (cat 2) session @1.
+
+LoCoMo turn any@1/@5/@10 = 812/1130/1236 (52.86% / 73.57% / 80.47%). Session any@1/@5 = 1137/1422 (74.02% / 92.58%). That is the logged Step 1 CORE: session @1 1133→1137 (+0.26%), turn @1 809→812 (+0.19%), turn @5/@10 and session @5 each +2 (+0.13%).
+
+LoCoMo turn any-gold: corpus 1535/1536, pool@50 1424/1536, pre_rank@5 1039/1536, post_kemeny@5 1100/1536, @1 812/1536. Session any-gold: corpus 1536/1536, pool@50 1536/1536, pre_rank@5 1422/1536, post_kemeny@5 1422/1536, @1 1137/1536.
+
