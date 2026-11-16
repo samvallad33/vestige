@@ -465,6 +465,7 @@ fn bridge_excludes_woven_pairs_and_records_leave_the_pool() {
             &AdmissionContext {
                 rule_id: Some(RULE_SUPPRESS.to_string()),
                 confirm: false,
+                human_confirmed: false,
             },
         )
         .expect("suppress record");

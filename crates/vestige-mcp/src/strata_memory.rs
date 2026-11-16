@@ -135,6 +135,28 @@ pub fn reuse_duplicate_echo(
     })
 }
 
+/// Run `f` on the open Strata log. The lock is not held across an await.
+pub fn with_store<R>(
+    storage: &Storage,
+    f: impl FnOnce(&mut strata_store::StrataStore) -> R,
+) -> Result<R, String> {
+    let memory = live_memory(storage)
+        .ok_or_else(|| "strata log is not open in this process".to_string())?;
+    let mut guard = memory.lock();
+    Ok(f(&mut guard))
+}
+
+/// Read the open Strata log. `None` when this process is not holding one.
+/// The closure runs under the store lock and must not re-enter it.
+pub fn read_store<T>(
+    storage: &Storage,
+    f: impl FnOnce(&strata_store::StrataStore) -> T,
+) -> Option<T> {
+    let memory = live_memory(storage)?;
+    let store = memory.lock();
+    Some(f(&store))
+}
+
 fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
     if !is_strata_backend(storage) {
         return None;
@@ -883,6 +905,7 @@ fn retire_live(
     let ctx = strata_store::AdmissionContext {
         rule_id: Some(rule.to_string()),
         confirm,
+        human_confirmed: false,
     };
     let receipt = store.retire(id, &anchor, &ctx).map_err(map_store)?;
     if receipt.rule_id != Some(rule) {
@@ -944,10 +967,19 @@ pub enum DeclaredLink {
     /// `corrects` correction, the old memory is a full replacement, and the
     /// edge alone retires nothing — retiring stays a RETIRE.
     Supersedes,
+    /// The new memory is a later failure on the same exact handle after a
+    /// Failure Pairing close: `new -reopened-> fix`.
+    Reopened,
 }
 
 impl DeclaredLink {
-    pub const NAMES: [&'static str; 4] = ["derived_from", "evidence_of", "closes", "supersedes"];
+    pub const NAMES: [&'static str; 5] = [
+        "derived_from",
+        "evidence_of",
+        "closes",
+        "supersedes",
+        "reopened",
+    ];
 
     pub fn parse(kind: &str) -> Option<Self> {
         match kind {
@@ -955,6 +987,7 @@ impl DeclaredLink {
             "evidence_of" => Some(Self::EvidenceOf),
             "closes" => Some(Self::Closes),
             "supersedes" => Some(Self::Supersedes),
+            "reopened" => Some(Self::Reopened),
             _ => None,
         }
     }
@@ -965,6 +998,7 @@ impl DeclaredLink {
             Self::EvidenceOf => "evidence_of",
             Self::Closes => "closes",
             Self::Supersedes => "supersedes",
+            Self::Reopened => "reopened",
         }
     }
 
@@ -991,6 +1025,13 @@ impl DeclaredLink {
             // already walks for typed supersession hops.
             Self::Supersedes => (
                 strata_store::EdgeKind::Supersedes,
+                new_id.to_string(),
+                target.to_string(),
+            ),
+            // Later failure on the same handle after a close:
+            // `new -reopened-> fix`.
+            Self::Reopened => (
+                strata_store::EdgeKind::Reopened,
                 new_id.to_string(),
                 target.to_string(),
             ),
@@ -1146,6 +1187,17 @@ fn mutation_kind(proof: &strata_store::EffectProof) -> &'static str {
         (strata_store::EffectAction::AnchorVerdict, _) => "anchor_verified",
         (strata_store::EffectAction::Edge, _) => "edge_recorded",
         (strata_store::EffectAction::Backfill, _) => "salience_adjusted",
+        (strata_store::EffectAction::Grant, _) => "writer_granted",
+        (strata_store::EffectAction::Merge, _) => "chain_merged",
+        (strata_store::EffectAction::Conflict, _) => "claim_conflict",
+        (strata_store::EffectAction::Claim, _) => "claim_asserted",
+        (strata_store::EffectAction::Equivocation, _) => "writer_equivocated",
+        (strata_store::EffectAction::PolicyMismatch, _) => "policy_mismatch",
+        (strata_store::EffectAction::IndexMismatch, _) => "index_mismatch",
+        (strata_store::EffectAction::Tombstone, _) => "tombstone",
+        (strata_store::EffectAction::DenyRange, _) => "range_denied",
+        (strata_store::EffectAction::Fork, _) => "identity_forked",
+        (strata_store::EffectAction::Purge, _) => "purged",
     }
 }
 
@@ -1248,7 +1300,20 @@ fn listed_memory_effect(
                     .as_ref()
                     .is_none_or(|(target, _)| store.node_record(target).is_none_or(retrievable))
         }
-        EffectAction::Intention | EffectAction::Anchor | EffectAction::AnchorVerdict => false,
+        EffectAction::Intention
+        | EffectAction::Anchor
+        | EffectAction::AnchorVerdict
+        | EffectAction::Grant
+        | EffectAction::Merge
+        | EffectAction::Conflict
+        | EffectAction::Claim
+        | EffectAction::Equivocation
+        | EffectAction::PolicyMismatch
+        | EffectAction::IndexMismatch
+        | EffectAction::Tombstone
+        | EffectAction::DenyRange
+        | EffectAction::Fork
+        | EffectAction::Purge => false,
     }
 }
 
@@ -1698,7 +1763,10 @@ fn code_anchored(
     record: &strata_store::NodeRecord,
     linked: &BTreeSet<String>,
 ) -> bool {
-    record.tags.iter().any(|tag| tag.starts_with("file:") || tag.starts_with("symbol:"))
+    record
+        .tags
+        .iter()
+        .any(|tag| tag.starts_with("file:") || tag.starts_with("symbol:"))
         || linked.contains(&record.id)
         || !store.anchors_for(&record.id).is_empty()
 }
@@ -1742,7 +1810,9 @@ fn hygiene_access(
         return (false, false);
     }
     let window_ms = vestige_core::ACCESS_LOG_RETENTION_DAYS.saturating_mul(86_400_000);
-    let age_ms = Utc::now().timestamp_millis().saturating_sub(record.created_at_ms);
+    let age_ms = Utc::now()
+        .timestamp_millis()
+        .saturating_sub(record.created_at_ms);
     if age_ms <= window_ms {
         (true, false)
     } else {
@@ -2934,6 +3004,9 @@ impl MemoryStoreSend for StrataMemory {
         if live_digest != folded.state_digest {
             mismatches.push("state_digest".to_string());
         }
+        if store.mesh_digest() != folded.mesh_digest {
+            mismatches.push("mesh_digest".to_string());
+        }
         match (store.get_node(&node_id), folded.nodes.get(&node_id)) {
             (Some(live), Some(replayed)) => {
                 mismatches.extend(node_field_mismatches(&node_id, &live, replayed));
@@ -3635,7 +3708,10 @@ impl MemoryStoreSend for StrataMemory {
         let (newest_git_commit_record, newest_git_commit_record_age_days) = match newest_commit {
             Some(record) => (
                 Some(ms_to_dt(record.created_at_ms).to_rfc3339()),
-                Some(whole_days_since(record.created_at_ms, Utc::now().timestamp_millis())),
+                Some(whole_days_since(
+                    record.created_at_ms,
+                    Utc::now().timestamp_millis(),
+                )),
             ),
             None => (None, None),
         };
@@ -3661,7 +3737,12 @@ impl MemoryStoreSend for StrataMemory {
         let receipts = self.salience_receipts().unwrap_or_default();
         let undone: HashSet<String> = receipts
             .iter()
-            .filter_map(|r| r.get("undo_of").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string))
+            .filter_map(|r| {
+                r.get("undo_of")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
             .collect();
         let mut captured_by: std::collections::HashMap<String, (String, DateTime<Utc>)> =
             std::collections::HashMap::new();
@@ -3669,13 +3750,25 @@ impl MemoryStoreSend for StrataMemory {
             if row.get("undo_of").is_some_and(|v| !v.is_null()) {
                 continue;
             }
-            if row.get("receipt_id").and_then(Value::as_str).is_some_and(|rid| undone.contains(rid)) {
+            if row
+                .get("receipt_id")
+                .and_then(Value::as_str)
+                .is_some_and(|rid| undone.contains(rid))
+            {
                 continue;
             }
-            let Some(mem_id) = row.get("memory_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+            let Some(mem_id) = row
+                .get("memory_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            else {
                 continue;
             };
-            let Some(trig_id) = row.get("trigger_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+            let Some(trig_id) = row
+                .get("trigger_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            else {
                 continue;
             };
             let ts = row
@@ -3692,7 +3785,8 @@ impl MemoryStoreSend for StrataMemory {
             if retired.contains(&n.id) || n.created_at < cutoff {
                 continue;
             }
-            let elapsed_hours = ((now - n.created_at).num_milliseconds().max(0) as f64) / 3_600_000.0;
+            let elapsed_hours =
+                ((now - n.created_at).num_milliseconds().max(0) as f64) / 3_600_000.0;
             let strength = decay_fn.apply(1.0, elapsed_hours, 9.0);
             if strength < 0.05 {
                 continue;
@@ -3985,6 +4079,7 @@ impl MemoryStoreSend for StrataMemory {
                 &strata_store::AdmissionContext {
                     rule_id: Some(strata_store::RULE_EDIT.to_string()),
                     confirm: false,
+                    human_confirmed: false,
                 },
             )
             .map_err(map_store)?;
@@ -4272,6 +4367,9 @@ fn replay_edge_receipt(
     let live_digest = store.state_digest();
     if live_digest != folded.state_digest {
         mismatches.push("state_digest".to_string());
+    }
+    if store.mesh_digest() != folded.mesh_digest {
+        mismatches.push("mesh_digest".to_string());
     }
     let live = store.edges();
     let mut listed = Vec::with_capacity(edges.len());
@@ -4992,6 +5090,7 @@ mod tests {
                     &strata_store::AdmissionContext {
                         rule_id: Some(strata_store::RULE_SUPPRESS.to_string()),
                         confirm: false,
+                        human_confirmed: false,
                     },
                 )
                 .unwrap();

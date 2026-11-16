@@ -36,6 +36,7 @@ pub fn schema() -> Value {
         },
         "required": ["action"]
     });
+    // hardcode-scan: protocol (JSON-RPC / JSON-schema keys)
     schema["allOf"] = json!([
         {"if":{"properties":{"action":{"const":"memory"}},"required":["action"]},
          "then":{"properties":{"params":tools::session_unified::embedded_schema(tools::memory_unified::schema(), "/allOf/0/then/properties/params")},"required":["params"]}},

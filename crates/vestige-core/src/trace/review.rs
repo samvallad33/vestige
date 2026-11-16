@@ -173,41 +173,6 @@ pub struct WriteContext {
     pub strong_provenance: bool,
 }
 
-/// Sensitive topic substrings. A write whose content/tags/type mention any of
-/// these is treated as touching identity / preference / security / money /
-/// legal / workflow / positioning and is routed to review.
-const SENSITIVE_TOPICS: &[(&str, &str)] = &[
-    // identity & preference
-    ("identity", "identity fact"),
-    ("preference", "user preference"),
-    ("workflow", "workflow rule"),
-    ("positioning", "project positioning"),
-    ("persona", "agent persona"),
-    // permission / auth / security
-    ("permission", "tool permission"),
-    ("auth", "authentication / authorization"),
-    ("token", "credential / token"),
-    ("secret", "secret material"),
-    ("password", "credential"),
-    ("api key", "credential / API key"),
-    ("security", "security-relevant fact"),
-    ("vuln", "security vulnerability"),
-    ("vulnerability", "security vulnerability"),
-    ("credential", "credential material"),
-    ("credentials", "credential material"),
-    ("api key", "credential / API key"),
-    ("apikey", "credential / API key"),
-    // money / bounty / legal
-    ("money", "financial fact"),
-    ("payment", "financial fact"),
-    ("invoice", "financial fact"),
-    ("bounty", "bounty / payout"),
-    ("salary", "financial fact"),
-    ("license", "legal / license fact"),
-    ("legal", "legal-relevant fact"),
-    ("contract", "legal / contract fact"),
-];
-
 /// Node types that are intrinsically sensitive regardless of content.
 const SENSITIVE_NODE_TYPES: &[&str] = &[
     "identity",
@@ -295,8 +260,7 @@ fn collect_signals(ctx: &WriteContext) -> Vec<RiskSignal> {
         ));
     }
 
-    // 3. Sensitive node types & topics (identity / preference / workflow /
-    //    positioning / permission / auth / security / money / legal).
+    // 3. Sensitive node types, sensitive-type tags, credential-shaped values.
     let node_type_lc = ctx.node_type.to_ascii_lowercase();
     if SENSITIVE_NODE_TYPES.contains(&node_type_lc.as_str()) {
         signals.push(RiskSignal::new(
@@ -355,91 +319,23 @@ fn collect_signals(ctx: &WriteContext) -> Vec<RiskSignal> {
     signals
 }
 
-/// A write with at most this many words is short enough that any sensitive
-/// word in it is what the write is about.
-const SHORT_WRITE_WORDS: usize = 60;
-
-/// A sensitive word inside the leading run of this many words marks the topic
-/// of the write, however long the rest of it is.
-const LEADING_WORDS: usize = 12;
-
-/// Lowercase alphanumeric words of `text`, split on any other character.
-fn tokenize(text: &str) -> Vec<String> {
-    text.to_ascii_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-/// Decide whether a write is *about* a sensitive topic, and say why.
+/// Decide whether a write is sensitive from structure only, and say why.
 ///
-/// B6 made matching whole-word ("tokenizer" no longer trips "token"). This
-/// adds the second half of the fix: a single sensitive word buried deep in a
-/// long engineering note is a mention, not a subject, and must not hold the
-/// write. On the real store that incidental case produced most quarantines,
-/// and every held write is one the agent has to come back for.
-///
-/// The write is held when any of these is true:
-/// - a tag names a sensitive topic (a tag is a deliberate label),
-/// - a sensitive word sits next to a credential-shaped value,
-/// - the write is short (`SHORT_WRITE_WORDS` or fewer words),
-/// - a sensitive word appears in the first `LEADING_WORDS` words,
-/// - two or more distinct sensitive topics appear anywhere.
-///
-/// Multi-word needles (e.g. "api key") match a consecutive run of words.
+/// No topic word list: the write is held when a tag names one of the
+/// engine's own sensitive node types (a tag is a deliberate label), or when
+/// the content carries a credential-shaped value (format-based secret scan).
 fn sensitive_topic_reason(content: &str, tags: &[String]) -> Option<String> {
-    let tag_words: Vec<String> = tags.iter().flat_map(|t| tokenize(t)).collect();
-    if let Some((_, label)) = SENSITIVE_TOPICS
+    if let Some(tag) = tags
         .iter()
-        .find(|(needle, _)| matches_word_sequence(&tag_words, needle))
+        .map(|t| t.trim().to_ascii_lowercase())
+        .find(|t| SENSITIVE_NODE_TYPES.contains(&t.as_str()))
     {
-        return Some(format!("Tagged with a sensitive topic: {label}."));
+        return Some(format!("Tagged with a sensitive type: {tag}."));
     }
-
-    let words = tokenize(content);
-    let leading = &words[..words.len().min(LEADING_WORDS)];
-    let mut labels: Vec<&'static str> = Vec::new();
-    let mut leads_with_topic = false;
-    for (needle, label) in SENSITIVE_TOPICS {
-        if !matches_word_sequence(&words, needle) {
-            continue;
-        }
-        if !labels.contains(label) {
-            labels.push(label);
-        }
-        leads_with_topic |= matches_word_sequence(leading, needle);
-    }
-    let first = *labels.first()?;
-
     if !crate::security::scan_secrets(content).is_empty() {
-        return Some(format!(
-            "Touches a sensitive topic ({first}) next to a credential-shaped value."
-        ));
+        return Some("Carries a credential-shaped value.".to_string());
     }
-    if labels.len() >= 2 {
-        return Some(format!("Touches sensitive topics: {}.", labels.join(", ")));
-    }
-    if words.len() <= SHORT_WRITE_WORDS || leads_with_topic {
-        return Some(format!("Touches a sensitive topic: {first}."));
-    }
-    // One sensitive word deep inside a long note is incidental.
     None
-}
-
-/// Whether `needle` (one or more space-separated words) appears as a consecutive
-/// whole-word run in `words`.
-fn matches_word_sequence(words: &[String], needle: &str) -> bool {
-    let needle_words: Vec<&str> = needle.split_whitespace().collect();
-    if needle_words.is_empty() {
-        return false;
-    }
-    if needle_words.len() == 1 {
-        return words.iter().any(|w| w == needle_words[0]);
-    }
-    words
-        .windows(needle_words.len())
-        .any(|win| win.iter().zip(&needle_words).all(|(w, n)| w == n))
 }
 
 // ============================================================================
@@ -690,130 +586,35 @@ mod tests {
     }
 
     #[test]
-    fn sensitive_topics_gate() {
-        for topic in [
-            "remember my auth token is xyz",
+    fn topic_words_alone_do_not_gate() {
+        // No topic word list: ordinary prose that names a topic is not held.
+        for prose in [
             "Sam's salary is confidential",
             "the bounty payout terms",
-            "user preference: dark mode",
-            "this is a security vulnerability",
-        ] {
-            let mut ctx = ordinary();
-            ctx.content = topic.into();
-            let (class, signals) = classify_write(&ctx, ReviewMode::RiskGated);
-            assert_eq!(class, RiskClass::Review, "should gate: {topic}");
-            assert!(signals.iter().any(|s| s.code == "sensitive_topic"));
-        }
-    }
-
-    #[test]
-    fn sensitive_topic_word_boundary_no_false_positives_b6() {
-        // B6: these ordinary technical writes must NOT gate — they only CONTAIN
-        // a sensitive substring, they don't USE the sensitive word.
-        // These each only CONTAIN a sensitive substring; the word-boundary fix
-        // means they no longer gate. (Note: bare "license"/"contract"/"legal"
-        // ARE kept as gating words — a license/contract fact is legitimately
-        // legal-relevant — so they're intentionally not in this benign set.)
-        for benign in [
-            "The tokenizer converts input strings to embeddings.",
-            "The author of this module is documented in the header.",
-            "The secretary pattern coordinates the worker pool.",
-            "Contraction of the array happens during compaction.",
-            "The authority record links to the canonical node.",
-            "The authentication-free endpoint is for health checks.", // "authentication" != "auth"
-        ] {
-            let mut ctx = ordinary();
-            ctx.content = benign.into();
-            ctx.node_type = "fact".into();
-            ctx.tags = vec![];
-            let (class, _) = classify_write(&ctx, ReviewMode::RiskGated);
-            assert_eq!(
-                class,
-                RiskClass::AutoCommit,
-                "must NOT gate ordinary write: {benign}"
-            );
-        }
-    }
-
-    #[test]
-    fn sensitive_topic_word_boundary_still_catches_real_b6() {
-        // The real sensitive phrasings must still gate.
-        for risky in [
-            "store the auth token for the deploy",
             "this is a security vulnerability in the parser",
-            "the api key for the service",
-            "remember the user preference for dark mode",
-            "the bounty payout is configured",
+            "The tokenizer converts input strings to embeddings.",
         ] {
             let mut ctx = ordinary();
-            ctx.content = risky.into();
+            ctx.content = prose.into();
             ctx.node_type = "fact".into();
             ctx.tags = vec![];
             let (class, signals) = classify_write(&ctx, ReviewMode::RiskGated);
-            assert_eq!(class, RiskClass::Review, "must gate: {risky}");
-            assert!(signals.iter().any(|s| s.code == "sensitive_topic"));
+            assert_eq!(class, RiskClass::AutoCommit, "{prose}: {signals:?}");
         }
     }
 
-    /// A long engineering note that mentions one sensitive word once, deep in
-    /// the text, is about the engineering, not the word.
+    /// A long engineering note.
     fn long_note(tail: &str) -> String {
         let body = "The vector journal is trigger fed from embedding_profile_vectors and \
-each reader applies rows past its watermark before answering a query. Reconcile \
-runs when the journal was pruned under a reader or when the same seq shows up \
-twice, which only happens after a restore from backup. The prune keeps the newest \
-ten thousand rows and everything from the last seven days so a reader that was \
-offline over a weekend still catches up incrementally instead of rebuilding.";
-        assert!(
-            tokenize(body).len() > SHORT_WRITE_WORDS,
-            "fixture must be a long write"
-        );
+each reader applies rows past its watermark before answering a query.";
         format!("{body} {tail}")
     }
 
     #[test]
-    fn incidental_mention_deep_in_long_note_does_not_gate() {
+    fn sensitive_type_tag_gates() {
         let mut ctx = ordinary();
         ctx.node_type = "fact".into();
-        ctx.tags = vec![];
-        ctx.content = long_note("Each journal row costs about one token of context.");
-        let (class, signals) = classify_write(&ctx, ReviewMode::RiskGated);
-        assert_eq!(class, RiskClass::AutoCommit, "{signals:?}");
-    }
-
-    #[test]
-    fn long_note_that_leads_with_a_sensitive_topic_gates() {
-        let mut ctx = ordinary();
-        ctx.node_type = "fact".into();
-        ctx.tags = vec![];
-        ctx.content = format!("Security note. {}", long_note(""));
-        let (class, signals) = classify_write(&ctx, ReviewMode::RiskGated);
-        assert_eq!(class, RiskClass::Review);
-        assert!(signals.iter().any(|s| s.code == "sensitive_topic"));
-    }
-
-    #[test]
-    fn long_note_with_two_sensitive_topics_gates() {
-        let mut ctx = ordinary();
-        ctx.node_type = "fact".into();
-        ctx.tags = vec![];
-        ctx.content = long_note("The payment schedule is fixed by the contract.");
-        let (class, signals) = classify_write(&ctx, ReviewMode::RiskGated);
-        assert_eq!(class, RiskClass::Review);
-        let reason = &signals
-            .iter()
-            .find(|s| s.code == "sensitive_topic")
-            .expect("topic signal")
-            .detail;
-        assert!(reason.contains("financial fact"), "{reason}");
-        assert!(reason.contains("legal / contract fact"), "{reason}");
-    }
-
-    #[test]
-    fn sensitive_tag_gates_a_long_note() {
-        let mut ctx = ordinary();
-        ctx.node_type = "fact".into();
-        ctx.tags = vec!["security".into()];
+        ctx.tags = vec!["Security".into()];
         ctx.content = long_note("");
         let (class, signals) = classify_write(&ctx, ReviewMode::RiskGated);
         assert_eq!(class, RiskClass::Review);
@@ -826,7 +627,7 @@ offline over a weekend still catches up incrementally instead of rebuilding.";
     }
 
     #[test]
-    fn credential_shaped_value_in_a_long_note_gates() {
+    fn credential_shaped_value_gates() {
         let fake = format!("ghp_{}", "A".repeat(36));
         assert!(
             !crate::security::scan_secrets(&fake).is_empty(),
@@ -835,7 +636,7 @@ offline over a weekend still catches up incrementally instead of rebuilding.";
         let mut ctx = ordinary();
         ctx.node_type = "fact".into();
         ctx.tags = vec![];
-        ctx.content = long_note(&format!("The deploy token is {fake}."));
+        ctx.content = long_note(&format!("The deploy value is {fake}."));
         let (class, signals) = classify_write(&ctx, ReviewMode::RiskGated);
         assert_eq!(class, RiskClass::Review);
         let reason = &signals

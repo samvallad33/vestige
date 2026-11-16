@@ -477,6 +477,95 @@ pub fn hook_output(context: &str) -> Value {
     })
 }
 
+/// Rules files one repository may carry. The project tool writes the same
+/// fenced block into each of them.
+pub const RULES_FILENAMES: [&str; 4] = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules"];
+
+/// Flags for a missing path or a command whose recorded runs failed.
+/// `failed` pairs a command line with the memory id that recorded the failure.
+/// A path that exists, and a command with no failure record, stay quiet.
+pub fn rules_file_flags(cwd: &Path, failed: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in RULES_FILENAMES {
+        let path = cwd.join(name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        out.extend(flags_in(name, cwd, &text, failed));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn flags_in(name: &str, cwd: &Path, text: &str, failed: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut fenced = false;
+    for (number, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some((_, receipt)) = failed.iter().find(|(command, _)| command == trimmed) {
+                out.push(format!(
+                    "{name}:{} command `{trimmed}` failed, receipt `{receipt}`",
+                    number + 1
+                ));
+            }
+            continue;
+        }
+        for token in backtick_tokens(line) {
+            if !path_token(&token) {
+                continue;
+            }
+            let candidate = if Path::new(&token).is_absolute() {
+                PathBuf::from(&token)
+            } else {
+                cwd.join(&token)
+            };
+            if !candidate.exists() {
+                out.push(format!(
+                    "{name}:{} path `{token}` is not in the tree",
+                    number + 1
+                ));
+            }
+        }
+    }
+    out
+}
+
+fn backtick_tokens(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find('`') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('`') else {
+            break;
+        };
+        out.push(after[..end].to_string());
+        rest = &after[end + 1..];
+    }
+    out
+}
+
+fn path_token(token: &str) -> bool {
+    if token.is_empty()
+        || token.len() > 240
+        || token.contains([' ', '\t', ':', '*', '?', '`'])
+        || token.starts_with("http")
+        || token.starts_with("vst")
+        || token.starts_with('$')
+    {
+        return false;
+    }
+    token.contains('/') || token.contains('.')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,5 +828,29 @@ mod tests {
         assert_eq!(out["hookSpecificOutput"]["hookEventName"], "SessionStart");
         assert_eq!(out["hookSpecificOutput"]["additionalContext"], "ctx");
         assert_eq!(out.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_missing_path_and_a_failed_command_are_flagged_and_clean_lines_are_quiet() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "ok\n").unwrap();
+        std::fs::write(
+            dir.path().join("CLAUDE.md"),
+            "See `README.md` and `src/gone.rs`.\n\n```\ncargo test -p missing\ncargo test -p vestige-mcp\n```\n",
+        )
+        .unwrap();
+        let flags = rules_file_flags(
+            dir.path(),
+            &[(
+                "cargo test -p missing".into(),
+                "mem-00000000000000aa".into(),
+            )],
+        );
+        let text = flags.join("\n");
+        assert!(text.contains("src/gone.rs"), "{text}");
+        assert!(text.contains("cargo test -p missing"), "{text}");
+        assert!(text.contains("mem-00000000000000aa"), "{text}");
+        assert!(!text.contains("README.md"), "{text}");
+        assert!(!text.contains("vestige-mcp"), "{text}");
     }
 }

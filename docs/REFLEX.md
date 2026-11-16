@@ -40,7 +40,16 @@ slows a tool call.
 | `UserPromptSubmit` | The same, and the turn budget resets | 2,000 characters |
 | `SubagentStart` | The stops already told in this session, which hold for the subagent too | 1,500 characters |
 | `SessionStart` | The newest stops on this machine from the last seven days, each with the handle to recall it; after compaction, the stops this session was already told | 2,000 characters |
-| `Stop` and every other event | Nothing; Reflex records only | 0 |
+| `UserPromptSubmit` (directive) | When the prompt holds a literal directive phrase (`remember this`, `never`, `always`, `from now on`, `rule:`, `decision:`, ...; editable with `VESTIGE_DIRECTIVE_PHRASES`): one ledger line, `Vestige ledger: an owner directive ("<phrase>") is unsaved this turn; Stop will block until remember(...) records it.`, told once per session. The Hook Ledger gets a `pending_save` line with the turn and the matched phrase, never the prompt | inside the 2,000 |
+| `Stop`, `SubagentStop` | Nothing injected. Reflex **blocks** (`decision: "block"` with a reason naming the exact debt) while any of three invariants fails for this turn: an **unfulfilled directive** (a `pending_save` with no `remember`/`curate` receipt since), an **unpaired failure** (a non-zero exit with no passing rerun of the same command and no `causal_walk(action="prove")` card), an **unreceipted commit** (a `git commit` that moved HEAD, with no receipt naming its full SHA, every parent, the branch, the author, every changed file and every allowlisted gate command the turn ran). The third Stop on the same unpaid turn is allowed and writes an `OVERDUE` intention memory, so a user is never trapped. `SubagentStop` checks the subagent's own debts | 0 |
+| `PreToolUse` (decision) | A `git commit` while an edited file has no `remember` receipt this turn is denied with `permissionDecision: "deny"` | 0 |
+| `PermissionRequest` | A valid, unexpired, exact-command one-use permit returns `behavior: "allow"` for that call only, never with persistent rules, and is consumed | 0 |
+| Every other event | Nothing; Reflex records only | 0 |
+
+A commit receipt is either an agent's own `remember` call that names those facts, or one saved to the
+store and tagged `commit:<sha>`. The machine receipt the git hook writes (tagged `commit-receipt-auto`,
+see below) does not clear the Stop invariant on its own: only the agent knows the gate output.
+`--no-enforce` at install (or `enforce: "off"` in the hook input) keeps every record and returns no block.
 
 Each stop is told once per session. Every Vestige hook together adds at most 8,000 characters to a turn,
 and the memory hook leaves 1,500 of those for Reflex's notices.
@@ -115,6 +124,8 @@ Anything shaped like a credential is masked before the command is saved.
 | A `causal_walk` and a `forgotten_lesson` walk run off the hook's path, and a linked lesson below 50 percent retention is told at the next firing | Every recorded failure |
 
 A first-time failure puts nothing in front of the agent.
+
+When a later failure carries the same `fail-<signature>` handle after a recorded fix, Reflex saves a `reopened` edge from the new failure to that fix. `precedent(query='reopen_triangle', repository=…)` renders the chain-ladder triangle of those edges for a repository, with the expected reopen count and the handles most likely to reopen.
 
 Failure, fix, stop and resolution memories also carry `reflex-session-<session id>`, so one exact tag
 lists everything Reflex recorded for a session.
@@ -214,3 +225,22 @@ none, that hook works exactly as before.
 | `<data dir>/reflex/sessions.json` | What each agent of each recent session holds, so a resumed session gets no repeats after a server restart |
 | `<data dir>/reflex/ledger.jsonl` | The Hook Ledger; it rotates to `ledger.jsonl.1` past 8 MB |
 | `<data dir>/reflex/heartbeat` | The time of the last firing |
+
+## Git hooks backstop
+
+`vestige init --git-hooks` installs two hooks in the repository's hooks directory (`core.hooksPath` is
+respected). Installing twice changes nothing; a hook that is not Vestige's is refused unless `--force`,
+which moves it to `<name>.pre-vestige`.
+
+- `pre-commit` runs `vestige hook pre-commit` and refuses the commit (exit 1) on a staged secret (pattern
+  name and file only, never the value), an Operator STOP in this repository with no later ALLOW in the
+  last hour (`--stop-window`), or, when a witness allowlist is configured (`[witness]` in `vestige.toml`
+  or `.vestige/witness.toml`), no prove witness for the staged tree. A missing `vestige` binary refuses
+  the commit too. `git commit --no-verify` skips it.
+- `post-commit` runs `vestige hook post-commit`, which writes the commit receipt into Strata on every
+  commit: SHA, parent(s), branch, author, subject and every file with its `git diff -U0` new-side ranges,
+  plus the gate output from `--gate-output` / `$VESTIGE_GATE_OUTPUT_FILE` when given. It is tagged
+  `commit:<sha>`, `commit:<sha7>`, `commit-receipt`, `commit-receipt-auto` and `branch:<name>`, so
+  `recall(handle="commit:<sha>")` and `causal_walk(action="walk", from_handle="commit:<sha>")` find it. It
+  writes through the running server when one owns the store, else opens the log itself, and never fails
+  the commit.
