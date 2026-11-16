@@ -6396,6 +6396,18 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         let item = sessions.remove(pos);
         sessions.insert(0, item);
     }
+    // W2-006 witness-margin. After W2-001, so the session list it reads is
+    // the final one. Reorders only that list. Turn indices stay as they are.
+    if let Some(pos) = apply_c2_w2006_witness_margin(
+        ix,
+        q,
+        &final_turn_indices,
+        &mut final_session_indices,
+        &t_scene,
+    ) {
+        let item = sessions.remove(pos);
+        sessions.insert(0, item);
+    }
     maybe_dump_replay(
         ix,
         q,

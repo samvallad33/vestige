@@ -5461,6 +5461,128 @@ fn apply_c2_step40_cue_validity(
     true
 }
 
+fn w2006_named_session(ix: &Index, si: usize) -> bool {
+    let Some(members) = ix.session_turns.get(si) else {
+        return false;
+    };
+    members.iter().any(|&ti| {
+        let sp = ix.turns[ti].speaker.as_str();
+        !sp.is_empty() && sp != "user" && sp != "assistant"
+    })
+}
+
+/// Integer 5:4 margin. `challenger * 4 >= incumbent * 5`, widened through f64
+/// so every finite f32 multiplies exactly. Ties of the ratio qualify; a later
+/// equal best-score between two challengers stays.
+fn w2006_five_four(challenger: f32, incumbent: f32) -> bool {
+    let c = f64::from(challenger);
+    let i = f64::from(incumbent);
+    (c * 4.0).total_cmp(&(i * 5.0)) != std::cmp::Ordering::Less
+}
+
+fn w2006_top5(ix: &Index, turns: &[usize], si: usize) -> usize {
+    turns
+        .iter()
+        .take(5)
+        .filter(|&&ti| ix.turns.get(ti).is_some_and(|t| t.session == si))
+        .count()
+}
+
+/// Witness-margin session swap (W2-006).
+///
+/// Runs after W2-001. Reorders only the final session list. Turn indices are
+/// not written.
+///
+/// Arm A, sessions 2–3: the challenger whose best turn meets the integer
+/// margin `t_scene * 4 >= 5 * session-1's best turn` replaces session 1.
+/// Arm B, the same seats, user/assistant transcripts only: a strict 1:1
+/// margin (`best > incumbent`) when the challenger already holds at least as
+/// many top-5 turns and the incumbent does not already attest every query cue
+/// on the rank-1 turn.
+///
+/// On the combined pack-43 tip an unguarded margin demotes correct session
+/// heads in named-speaker transcripts (LoCoMo) and one LME knowledge-update
+/// whose incumbent peak is a question. Both arms therefore also require all
+/// of the following, each a structural fact rather than a tuned cutoff:
+/// - the incumbent session is user/assistant, the same dialogue-type flag the
+///   other seats use (`!c2_named_session`);
+/// - the challenger is the session of the already seated rank-1 turn, and it
+///   already sits in positions 2–3;
+/// - that challenger holds at least as many top-5 turns as the incumbent;
+/// - the incumbent's best turn is not a question.
+///
+/// Equal best scores stay. Two challengers with the same best score stay.
+/// Does not read `TurnIx.body` and does not touch `rsb_seat_behind`.
+fn apply_c2_w2006_witness_margin(
+    ix: &Index,
+    query: &Query,
+    turns: &[usize],
+    session_list: &mut Vec<usize>,
+    t_scene: &[f32],
+) -> Option<usize> {
+    if session_list.len() < 2 || turns.is_empty() {
+        return None;
+    }
+    let incumbent = session_list[0];
+    if w2006_named_session(ix, incumbent) {
+        return None;
+    }
+    let (inc_sc, inc_ti) = w2001_best_turn(ix, incumbent, t_scene)?;
+    if ix.turns.get(inc_ti).is_some_and(|t| t.is_question) {
+        return None;
+    }
+    let head = *turns.first()?;
+    let head_sess = ix.turns.get(head)?.session;
+    if head_sess == incumbent {
+        return None;
+    }
+    let q_cues = query_cues(ix, &query.text);
+    let head_c = turn_query_cues(ix, &q_cues, head);
+    let inc_union = w2001_cue_union(ix, &q_cues, incumbent);
+    let cue_ok = !head_c.is_empty() && !covers_cues(&inc_union, &head_c);
+    let inc_n = w2006_top5(ix, turns, incumbent);
+    let window = session_list.len().min(3);
+    let mut best: Option<(u32, usize)> = None;
+    let mut tied = false;
+    for pos in 1..window {
+        let si = session_list[pos];
+        if si != head_sess || w2006_named_session(ix, si) {
+            continue;
+        }
+        let Some((sc, _)) = w2001_best_turn(ix, si, t_scene) else {
+            continue;
+        };
+        if !w2001_gt(sc, inc_sc) {
+            continue;
+        }
+        if w2006_top5(ix, turns, si) < inc_n {
+            continue;
+        }
+        // Arm A is the 5:4 margin. Arm B is the strict 1:1 margin plus the
+        // cue witness. A 5:4 challenger does not also need the cue witness.
+        let arm_a = w2006_five_four(sc, inc_sc);
+        let arm_b = cue_ok;
+        if !(arm_a || arm_b) {
+            continue;
+        }
+        let bits = sc.to_bits();
+        match best {
+            None => best = Some((bits, pos)),
+            Some((prev, _)) if bits == prev => tied = true,
+            Some((prev, _)) if w2001_gt(sc, f32::from_bits(prev)) => {
+                best = Some((bits, pos));
+                tied = false;
+            }
+            _ => {}
+        }
+    }
+    if tied {
+        return None;
+    }
+    let si = session_list[best?.1];
+    w2001_take(session_list, si)
+}
+
 #[cfg(test)]
 mod algos_c2_tests {
     use super::*;
@@ -10631,5 +10753,79 @@ mod algos_c2_tests {
             &tied
         ));
         assert_eq!(list, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn w2006_witness_margin_promotes_the_rank1_session_and_refuses_the_guards() {
+        let ix = build_index(
+            &[
+                sess("a", &[("user", "The park was quiet today."), ("user", "We stayed an hour.")]),
+                sess("b", &[
+                    ("user", "I bought hiking boots in Denver."),
+                    ("assistant", "The boots were from Denver."),
+                ]),
+                sess("c", &[("user", "The weather was fine.")]),
+            ],
+            &Params::default(),
+        );
+        // Rank-1 turn is session b. Its best scene clears the 5:4 margin and
+        // it holds two of the top five turns, against one for the incumbent.
+        let q = Query { text: "Where did I buy hiking boots?".into(), date: String::new() };
+        let turns = vec![2usize, 3, 0, 1, 4];
+        let t_scene = vec![4.0f32, 1.0, 10.0, 3.0, 0.5];
+        let mut sessions = vec![0usize, 1, 2];
+        assert_eq!(
+            apply_c2_w2006_witness_margin(&ix, &q, &turns, &mut sessions, &t_scene),
+            Some(1)
+        );
+        assert_eq!(sessions, vec![1, 0, 2]);
+        assert_eq!(turns, vec![2, 3, 0, 1, 4]);
+
+        // Equal best scores are a tie. The head stays.
+        let mut sessions = vec![0usize, 1, 2];
+        let tied = vec![4.0f32, 1.0, 4.0, 1.0, 0.5];
+        assert_eq!(apply_c2_w2006_witness_margin(&ix, &q, &turns, &mut sessions, &tied), None);
+        assert_eq!(sessions, vec![0, 1, 2]);
+
+        // Session b clears the margin but the rank-1 turn lives in session c,
+        // outside the promotion: b is not the witness, so the head stays.
+        let turns_other = vec![4usize, 2, 3, 0, 1];
+        let mut sessions = vec![0usize, 1, 2];
+        assert_eq!(
+            apply_c2_w2006_witness_margin(&ix, &q, &turns_other, &mut sessions, &t_scene),
+            None
+        );
+        assert_eq!(sessions, vec![0, 1, 2]);
+
+        // Named-speaker transcripts are not reordered.
+        let named = build_index(
+            &[
+                sess("D1", &[("Caroline", "The park was quiet today.")]),
+                sess("D2", &[("Melanie", "I bought hiking boots in Denver.")]),
+            ],
+            &Params::default(),
+        );
+        let mut sessions = vec![0usize, 1];
+        assert_eq!(
+            apply_c2_w2006_witness_margin(&named, &q, &[1usize, 0], &mut sessions, &[4.0, 10.0]),
+            None
+        );
+        assert_eq!(sessions, vec![0, 1]);
+
+        // An incumbent whose best turn is a question keeps the seat.
+        let asked = build_index(
+            &[
+                sess("a", &[("user", "Where did I buy the boots?")]),
+                sess("b", &[("user", "I bought hiking boots in Denver.")]),
+            ],
+            &Params::default(),
+        );
+        assert!(asked.turns[0].is_question);
+        let mut sessions = vec![0usize, 1];
+        assert_eq!(
+            apply_c2_w2006_witness_margin(&asked, &q, &[1usize, 0], &mut sessions, &[4.0, 10.0]),
+            None
+        );
+        assert_eq!(sessions, vec![0, 1]);
     }
 }
