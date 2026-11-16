@@ -10387,6 +10387,51 @@ def redact(s):
     return SECRET_RE.sub("[REDACTED]", s or "")[:200]
 
 
+SECRET_ARG_RULES = {"OP-036", "OP-S13"}
+PATH_COMMAND_FIELDS = {"path", "command", "cmd", "file_path", "target_file", "filepath"}
+
+
+def value_is_secret(val):
+    """Secret-shaped argument values only. Keys are not a word list; the shape of the value is."""
+    if isinstance(val, str):
+        return bool(MCP_SECRET_ARG_RE.search(val) or SECRET_RE.search(val)
+                    or re.search(r"BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY", val))
+    if isinstance(val, dict):
+        return any(value_is_secret(v) for v in val.values())
+    if isinstance(val, list):
+        return any(value_is_secret(v) for v in val)
+    return False
+
+
+def secret_arg_rewrite(ti):
+    """Return (rewritten, stripped_fields) or (None, reason).
+
+    The rewritten object is the complete model object minus secret-shaped
+    fields. Dropping path or command, or omitting any other field the model
+    set, is a failure: the call stops instead.
+    """
+    if not isinstance(ti, dict):
+        return None, "input is not an object"
+    drop = [key for key, val in ti.items() if value_is_secret(val)]
+    if not drop:
+        return None, "no secret-shaped field"
+    if any(key in PATH_COMMAND_FIELDS for key in drop):
+        return None, "would drop path or command"
+    rewritten = {key: val for key, val in ti.items() if key not in drop}
+    if set(ti) - set(rewritten) != set(drop):
+        return None, "omitted a non-secret field"
+    if not rewritten:
+        return None, "nothing remains after stripping secrets"
+    return rewritten, drop
+
+
+def tool_input_of(payload):
+    if not isinstance(payload, dict):
+        return {}
+    ti = payload.get("tool_input") or payload.get("toolInput") or payload.get("input") or {}
+    return ti if isinstance(ti, dict) else {"command": ti}
+
+
 def ensure_dirs():
     for d in ("receipts", "permits", "state"):
         os.makedirs(pj(OP_HOME, d), mode=0o700, exist_ok=True)
@@ -11286,6 +11331,29 @@ def hook_main(argv):
         if loss:
             base_rec["loss"] = loss
         if enforce_hits:
+            only_secret = {h[0] for h in enforce_hits} <= SECRET_ARG_RULES
+            model_ti = tool_input_of(payload)
+            base_ti = meta.get("folded_input") if isinstance(meta.get("folded_input"), dict) else model_ti
+            rewritten, stripped = secret_arg_rewrite(base_ti) if only_secret else (None, None)
+            if only_secret and rewritten is not None:
+                # Keep every non-secret field the model set, even if the fold ran first.
+                for key, val in model_ti.items():
+                    if key not in stripped and key not in rewritten:
+                        rewritten, stripped = None, "omitted a non-secret field"
+                        break
+                    if key not in stripped and key in PATH_COMMAND_FIELDS and key not in rewritten:
+                        rewritten, stripped = None, "would drop path or command"
+                        break
+            if only_secret and isinstance(rewritten, dict) and isinstance(stripped, list):
+                emit_folded_input(source, rewritten)
+                write_receipt(dict(base_rec, decision="ALLOW", via="secret-redaction",
+                                   commitments=[h[0] for h in enforce_hits],
+                                   stripped_fields=list(stripped),
+                                   detail="stripped %s" % ", ".join(stripped)))
+                return 0
+            if only_secret and rewritten is None and gmode == "enforce":
+                # fall through to STOP: a rewrite that would drop path or command is rejected
+                meta["secret_rewrite"] = stripped
             floor = any(h[0] in FLOOR_RULES for h in enforce_hits)
             permit = None if floor else consume_permit(adigest, base_rec["session"])
             if permit:
