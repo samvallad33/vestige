@@ -7,6 +7,7 @@ members = [
     "crates/vestige-upgrade",
 ]
 exclude = [
+    "crates/vestige-h2sk-wasm",
     "fastembed-rs",
     # Strata Causal Proof Engine crates: standalone with empty [workspace]
     # tables by design (parallel-agent construction). Excluded so root members

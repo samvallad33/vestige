@@ -1,0 +1,24 @@
+// Same-source native/Wasm contract test. Synthetic records; no model/network.
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {initSync,compile_packet,admit_statement,verify_reply,reader_context} from '../crates/vestige-h2sk-wasm/pkg/vestige_h2sk_wasm.js';
+const binary=readFileSync(new URL('../crates/vestige-h2sk-wasm/pkg/vestige_h2sk_wasm_bg.wasm',import.meta.url));
+initSync({module:binary});
+const node=(id,seq,city)=>({id,seq,text:`Mia lives in ${city}.`,tags:['symbol:Mia','slot:Mia:residence',`lit:${city}`],source_date:`2023-03-0${seq}`,stability_q:4294967296});
+const prefix={offset:3,source_root:'a'.repeat(64),events:[node('A',1,'Austin'),node('B',2,'Denver')],edges:[{from:'B',to:'A',kind:'Corrects',seq:3}],previous_receipt_hash:null};
+const options={query:'Where does Mia live now?',symbols:['symbol:Mia'],today:'2023-03-25',bindings:{},view_ids:['A']};
+const receipt=JSON.parse(compile_packet(JSON.stringify({prefix,options})));
+assert.equal(receipt.currency[0].apex,'B');assert.equal(receipt.section.length,2);
+const gate=draft=>JSON.parse(verify_reply(JSON.stringify({receipt,options,input:{draft,expected_receipt_hash:receipt.hash}})));
+assert.deepEqual(gate('Mia lives in Austin.'),{StaleLiteral:{controlling:['B']}});
+assert.equal(gate('Mia lives in Denver.'),'Allow');
+const view=reader_context(JSON.stringify({receipt,options,input:{draft:''}}));assert.match(view,/CONTROLLING/);assert.match(view,/Denver/);
+const admitted=JSON.parse(admit_statement(JSON.stringify({event:{...node('C',4,'Boston'),text:'Mia moved to Boston.',tags:[]},prior:prefix.events,edges:prefix.edges})));
+assert.deepEqual(admitted.edges,[{from:'C',to:'B',kind:'Supersedes',seq:4}]);
+const native=process.env.H2SK_NATIVE_BIN??fileURLToPath(new URL(`../target/debug/h2sk-compile${process.platform==='win32'?'.exe':''}`,import.meta.url));
+const result=spawnSync(native,[],{input:JSON.stringify({prefix,options}),encoding:'utf8'});
+assert.equal(result.status,0,result.stderr??String(result.error));const nativeReceipt=JSON.parse(result.stdout);
+assert.equal(nativeReceipt.hash,receipt.hash,'native and Wasm compile the same exact receipt');
+console.log(JSON.stringify({wasmBytes:binary.length,hash:receipt.hash,nativeWasmMatch:true,staleGate:true,controllingSource:true}));

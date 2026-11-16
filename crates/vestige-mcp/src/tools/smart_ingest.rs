@@ -120,11 +120,11 @@ pub fn schema() -> Value {
             "links": {
                 "type": "array",
                 "maxItems": 16,
-                "description": "Typed links from this memory to existing memories in the same scope, each written through the gate with its own receipt. derived_from: this memory derives from it. evidence_of: this memory is evidence about it. closes: this memory closes it (an issue, a failure). supersedes: this memory fully replaces it (for corrections prefer the review-gated corrects path). Strata only.",
+                "description": "Typed links from this memory to existing memories in the same scope, each written through the gate with its own receipt. derived_from: this memory derives from it. evidence_of: this memory is evidence about it. closes: this memory closes it (an issue, a failure). supersedes: this memory fully replaces it. corrects: this memory names one distinct exact value on the same slot. Strata only.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "kind": {"type": "string", "enum": ["derived_from", "evidence_of", "closes", "supersedes"]},
+                        "kind": {"type": "string", "enum": ["derived_from", "evidence_of", "closes", "supersedes", "corrects"]},
                         "to": {"type": "string", "description": "Exact id of an existing memory"}
                     },
                     "required": ["kind", "to"]
@@ -209,6 +209,122 @@ pub fn schema() -> Value {
         s["properties"]["items"]["items"]["properties"][field] = property;
     }
     s
+}
+
+/// Run the one dataset-blind admitter before the first write. It may add an
+/// exact slot tag and one closed-vocabulary correction edge. It never reads a
+/// gold label, a relevance id, or a question type.
+fn h2sk_admission(storage: &Arc<Storage>, args: Option<Value>) -> Result<Option<Value>, String> {
+    use vestige_core::h2sk::{EdgeKind, LogEdge, LogEvent, admit::admit_statement};
+    fn one(storage: &Arc<Storage>, item: &mut Value, default_scope: &str) -> Result<(), String> {
+        let Some(content) = item["content"].as_str() else {
+            return Ok(());
+        };
+        let tags: Vec<String> = item["tags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        let source_date = tags.iter().find_map(|tag| {
+            tag.strip_prefix("date:")
+                .filter(|text| text.len() >= 10)
+                .and_then(|text| vestige_core::h2sk::pragmatics::date(&text[..10]))
+                .map(|date| date.to_string())
+        });
+        let source = LogEvent {
+            id: "pending".into(),
+            seq: u64::MAX,
+            text: content.to_string(),
+            tags,
+            source_date,
+            stability_q: None,
+        };
+        let (parsed, _) = admit_statement(source.clone(), &[], &[]);
+        let slots: Vec<_> = parsed
+            .tags
+            .iter()
+            .filter(|tag| tag.starts_with("slot:"))
+            .cloned()
+            .collect();
+        let scope = item["scope"].as_str().unwrap_or(default_scope);
+        let prior = if slots.is_empty() {
+            Vec::new()
+        } else {
+            storage
+                .get_all_nodes_in_scope(scope, 100_000, 0)
+                .map_err(|err| err.to_string())?
+                .into_iter()
+                .filter(|node| node.tags.iter().any(|tag| slots.contains(tag)))
+                .map(|node| LogEvent {
+                    id: node.id,
+                    seq: 0,
+                    text: node.content,
+                    tags: node.tags,
+                    source_date: None,
+                    stability_q: None,
+                })
+                .collect()
+        };
+        let prior_edges = if slots.is_empty() {
+            Vec::new()
+        } else {
+            storage
+                .get_all_connections()
+                .map_err(|err| err.to_string())?
+                .into_iter()
+                .filter_map(|edge| {
+                    let kind = match edge.link_type.as_str() {
+                        "supersedes" => EdgeKind::Supersedes,
+                        "corrects" => EdgeKind::Corrects,
+                        _ => return None,
+                    };
+                    Some(LogEdge {
+                        from: edge.source_id,
+                        to: edge.target_id,
+                        kind,
+                        seq: 0,
+                    })
+                })
+                .collect()
+        };
+        let (parsed, edges) = admit_statement(source, &prior, &prior_edges);
+        item["tags"] = serde_json::json!(parsed.tags);
+        if !edges.is_empty() {
+            let links = item
+                .as_object_mut()
+                .ok_or("ingest item must be an object")?
+                .entry("links")
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .ok_or("links must be an array")?;
+            for edge in edges {
+                let link = serde_json::json!({
+                    "kind": if edge.kind == EdgeKind::Corrects { "corrects" } else { "supersedes" },
+                    "to": edge.to,
+                });
+                if !links.contains(&link) {
+                    links.push(link);
+                }
+            }
+        }
+        Ok(())
+    }
+    let Some(mut args) = args else {
+        return Ok(None);
+    };
+    let scope = args["scope"]
+        .as_str()
+        .unwrap_or(DEFAULT_MEMORY_SCOPE)
+        .to_string();
+    one(storage, &mut args, &scope)?;
+    if let Some(items) = args.get_mut("items").and_then(Value::as_array_mut) {
+        for item in items {
+            one(storage, item, &scope)?;
+        }
+    }
+    Ok(Some(args))
 }
 
 /// Fold caller-declared identities and attributes into the existing exact tag
@@ -654,7 +770,7 @@ pub async fn execute(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
-    let args = personal_metadata(args)?;
+    let args = h2sk_admission(storage, personal_metadata(args)?)?;
     // Agents get the proof fields by default; `standard` and `full` add the
     // entities, importance and auto-connect detail on request.
     let compact_profile = args
@@ -723,6 +839,28 @@ fn take_links(
             .and_then(|i| args["items"][i].get("scope").and_then(Value::as_str))
             .unwrap_or(&default_scope);
         strata_memory::check_links(storage.as_ref(), scope, links)?;
+        let source = match *index {
+            Some(i) => &args["items"][i],
+            None => &args,
+        };
+        let tags: Vec<String> = source["tags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        for (kind, target) in links {
+            if matches!(kind, strata_memory::DeclaredLink::ExactCorrection) {
+                strata_memory::check_exact_correction_input(
+                    storage.as_ref(),
+                    scope,
+                    source["content"].as_str().unwrap_or_default(),
+                    &tags,
+                    target,
+                )?;
+            }
+        }
     }
     Ok((Some(args), pending))
 }

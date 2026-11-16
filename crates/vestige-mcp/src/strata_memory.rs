@@ -103,6 +103,197 @@ pub fn is_strata_backend(storage: &Storage) -> bool {
     storage.is_strata() || storage.is_strata_log()
 }
 
+/// Compile from admitted data frames at an exact log offset. Reads append no
+/// receipt, salience change or source rewrite. Present suppression is honored
+/// even when an older prefix is requested.
+type CompileCacheKey = (PathBuf, String, u64, u64);
+static COMPILE_PREFIXES: Mutex<Vec<(CompileCacheKey, Arc<vestige_core::h2sk::LogPrefix>)>> =
+    Mutex::new(Vec::new());
+
+pub fn compile_memory_receipt(
+    storage: &Storage,
+    scope: &str,
+    offset: Option<u64>,
+    options: &vestige_core::h2sk::CompileOptions,
+) -> Result<vestige_core::h2sk::Receipt, String> {
+    use borsh::BorshDeserialize;
+    use strata_store::StoreOp;
+    use vestige_core::h2sk::{EdgeKind, LogEdge, LogEvent, LogPrefix, compile_log_prefix};
+    let memory = live_memory(storage).ok_or("compile_receipt_requires_open_strata_log")?;
+    let store = memory.lock();
+    let head = store.log().head().last_acked_seq;
+    let offset = offset.unwrap_or(head);
+    if offset > head {
+        return Err("compile_offset_beyond_log_head".into());
+    }
+    let cache_key = (memory.log_dir.clone(), scope.to_string(), offset, head);
+    let cached = COMPILE_PREFIXES
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .iter()
+        .find(|(key, _)| key == &cache_key)
+        .map(|(_, prefix)| prefix.clone());
+    if let Some(prefix) = cached {
+        drop(store);
+        return compile_log_prefix(&prefix, options);
+    }
+    let proofs: std::collections::BTreeMap<u64, [u8; 32]> = store
+        .indexed_effects()
+        .map_err(|err| err.to_string())?
+        .filter(|(proof, _)| proof.data_seq <= offset)
+        .map(|(proof, _)| (proof.data_seq, proof.payload_digest))
+        .collect();
+    let mut records = std::collections::BTreeMap::new();
+    let mut edges = Vec::new();
+    let mut supersessions = Vec::new();
+    let mut root = String::new();
+    let edge_kind = |name: &str| match name {
+        "touched" => Some(EdgeKind::Touched),
+        "supersedes" => Some(EdgeKind::Supersedes),
+        "corrects" => Some(EdgeKind::Corrects),
+        _ => None,
+    };
+    for frame in store
+        .log()
+        .read_frames(1)
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .take_while(|frame| frame.seq <= offset)
+    {
+        root = frame
+            .frame_hash
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if frame.kind != strata_store::KIND_STORE_WRITE
+            || proofs.get(&frame.seq) != Some(blake3::hash(&frame.payload).as_bytes())
+        {
+            continue;
+        }
+        let op: StoreOp = StoreOp::try_from_slice(&frame.payload)
+            .map_err(|err| format!("compile_decode:{err}"))?;
+        let mut append_edge = |edge: strata_store::ConnectionRecord| {
+            if let Some(kind) = edge_kind(&edge.link_type) {
+                edges.push(LogEdge {
+                    from: edge.source_id,
+                    to: edge.target_id,
+                    kind,
+                    seq: frame.seq,
+                });
+            }
+        };
+        match op {
+            StoreOp::UpsertNode { record } => {
+                if record.scope == scope && !prefix_hidden(&store, &record.id) {
+                    let source_date = record
+                        .tags
+                        .iter()
+                        .find_map(|tag| {
+                            tag.strip_prefix("date:")
+                                .filter(|text| text.len() >= 10)
+                                .and_then(|text| vestige_core::h2sk::pragmatics::date(&text[..10]))
+                                .map(|date| date.to_string())
+                        })
+                        .or_else(|| {
+                            (record.created_at_ms > 0)
+                                .then(|| ms_to_dt(record.created_at_ms).date_naive().to_string())
+                        });
+                    let origin = records
+                        .get(&record.id)
+                        .map(|event: &LogEvent| event.seq)
+                        .unwrap_or(frame.seq);
+                    records.insert(
+                        record.id.clone(),
+                        LogEvent {
+                            id: record.id,
+                            seq: origin,
+                            text: record.content,
+                            tags: record.tags,
+                            source_date,
+                            stability_q: None,
+                        },
+                    );
+                }
+            }
+            StoreOp::SaveEdge { edge } => append_edge(edge),
+            StoreOp::SaveEdges { edges: batch } => {
+                for edge in batch {
+                    append_edge(edge);
+                }
+            }
+            StoreOp::SupersedeNode { id, superseded_by } => {
+                supersessions.push((superseded_by, id, frame.seq));
+            }
+            StoreOp::AdjustSalience { adjustment, .. } => {
+                if let Some(record) = records.get_mut(&adjustment.memory_id) {
+                    record.stability_q = Some(adjustment.new_stability_q);
+                }
+            }
+            _ => {}
+        }
+    }
+    for (from, to, seq) in supersessions {
+        if let (Some(successor), Some(predecessor)) = (records.get(&from), records.get(&to))
+            && successor
+                .tags
+                .iter()
+                .any(|tag| tag.starts_with("slot:") && predecessor.tags.contains(tag))
+            && !edges
+                .iter()
+                .any(|edge| edge.kind.currency() && edge.from == from && edge.to == to)
+        {
+            let seq = seq.max(successor.seq).max(predecessor.seq);
+            edges.push(LogEdge {
+                from,
+                to,
+                kind: EdgeKind::Supersedes,
+                seq,
+            });
+        }
+    }
+    // Artifact edges and hidden endpoints are not evidence in a memory-only
+    // slice. A native edge without exact slot/value evidence stays outside the
+    // compiler rather than manufacturing a new value or edge kind.
+    edges.retain(|edge| records.contains_key(&edge.from) && records.contains_key(&edge.to));
+    let prefix = Arc::new(LogPrefix {
+        offset,
+        source_root: root,
+        events: records.into_values().collect(),
+        edges,
+        previous_receipt_hash: None,
+    });
+    drop(store);
+    {
+        let mut cache = COMPILE_PREFIXES
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if cache.len() >= 4 {
+            cache.remove(0);
+        }
+        cache.push((cache_key, prefix.clone()));
+    }
+    compile_log_prefix(&prefix, options)
+}
+
+/// A suppressed or cyclic supersession chain is hidden. A live successor keeps
+/// the historical record in the prefix so a recorded spine can still cite it.
+fn prefix_hidden(store: &strata_store::StrataStore, id: &str) -> bool {
+    let mut cursor = id.to_string();
+    let mut seen = BTreeSet::new();
+    loop {
+        if !seen.insert(cursor.clone()) {
+            return true;
+        }
+        let Some(current) = store.node_record(&cursor) else {
+            return true;
+        };
+        match current.superseded_by.clone() {
+            Some(next) => cursor = next,
+            None => return false,
+        }
+    }
+}
+
 /// Open (or create) a Strata log under `dir`. Creates no SQLite file.
 pub fn open(dir: impl AsRef<Path>) -> Result<Arc<Storage>, StorageError> {
     let memory = Arc::new(StrataMemory::open(dir)?);
@@ -927,12 +1118,16 @@ fn q32(q: i64) -> f64 {
 
 /// A link a caller declares when it saves a memory, named from the new
 /// memory's side. `supersedes` is caller-declarable on Strata (INGEST V5):
-/// it records a full-replacement trail — for a correction that keeps the
-/// old memory in play, use `corrects` via the review path instead. The
-/// remaining provenance kinds stay closed: `touched` / `anchored_to` /
-/// `projected_to` are recorded by the code and projection paths themselves.
+/// it records a full-replacement trail. `corrects` is also caller-declarable,
+/// and only when the new source is an explicit correction of one exact value
+/// on the same slot; the edge does not retire either memory. The remaining
+/// provenance kinds stay closed: `touched` / `anchored_to` / `projected_to`
+/// are recorded by the code and projection paths themselves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclaredLink {
+    /// Exact same-slot correction declared in the new source text.
+    /// Checked again at admission; it never retires a node by itself.
+    ExactCorrection,
     /// The new memory derives from the target: `new -derived_from-> target`.
     DerivedFrom,
     /// The new memory is evidence about the target: `new -evidence_of-> target`.
@@ -940,17 +1135,24 @@ pub enum DeclaredLink {
     /// The new memory closes the target: `target -closed_by-> new`.
     Closes,
     /// The new memory fully replaces the target:
-    /// `new -supersedes-> target`. Caller-declared; unlike a review-gated
-    /// `corrects` correction, the old memory is a full replacement, and the
-    /// edge alone retires nothing — retiring stays a RETIRE.
+    /// `new -supersedes-> target`. Caller-declared; unlike `corrects`, the
+    /// old memory is a full replacement, and the edge alone retires nothing —
+    /// retiring stays a RETIRE.
     Supersedes,
 }
 
 impl DeclaredLink {
-    pub const NAMES: [&'static str; 4] = ["derived_from", "evidence_of", "closes", "supersedes"];
+    pub const NAMES: [&'static str; 5] = [
+        "derived_from",
+        "evidence_of",
+        "closes",
+        "supersedes",
+        "corrects",
+    ];
 
     pub fn parse(kind: &str) -> Option<Self> {
         match kind {
+            "corrects" => Some(Self::ExactCorrection),
             "derived_from" => Some(Self::DerivedFrom),
             "evidence_of" => Some(Self::EvidenceOf),
             "closes" => Some(Self::Closes),
@@ -961,6 +1163,7 @@ impl DeclaredLink {
 
     fn as_str(self) -> &'static str {
         match self {
+            Self::ExactCorrection => "corrects",
             Self::DerivedFrom => "derived_from",
             Self::EvidenceOf => "evidence_of",
             Self::Closes => "closes",
@@ -971,6 +1174,11 @@ impl DeclaredLink {
     /// The recorded edge kind and its direction for a link from `new_id`.
     fn edge(self, new_id: &str, target: &str) -> (strata_store::EdgeKind, String, String) {
         match self {
+            Self::ExactCorrection => (
+                strata_store::EdgeKind::Corrects,
+                new_id.to_string(),
+                target.to_string(),
+            ),
             Self::DerivedFrom => (
                 strata_store::EdgeKind::DerivedFrom,
                 new_id.to_string(),
@@ -1034,6 +1242,57 @@ pub fn check_links(
     Ok(())
 }
 
+fn exact_values(tags: &[String]) -> BTreeSet<String> {
+    tags.iter()
+        .filter(|tag| {
+            ["lit:", "num:", "date:", "id:"]
+                .iter()
+                .any(|prefix| tag.starts_with(prefix))
+        })
+        .cloned()
+        .collect()
+}
+
+fn exact_correction_fields(content: &str, tags: &[String], old_tags: &[String]) -> bool {
+    let explicit = content.trim().to_ascii_lowercase();
+    let slots = tags
+        .iter()
+        .any(|tag| tag.starts_with("slot:") && old_tags.contains(tag));
+    let new_values = exact_values(tags);
+    let old_values = exact_values(old_tags);
+    (explicit.starts_with("correction:") || explicit.starts_with("actually,"))
+        && slots
+        && !new_values.is_empty()
+        && !old_values.is_empty()
+        && new_values != old_values
+}
+
+/// Refuse a `corrects` link unless both scoped endpoints carry a distinct
+/// exact value on one shared slot and the new text is an explicit correction.
+pub fn check_exact_correction_input(
+    storage: &Storage,
+    scope: &str,
+    content: &str,
+    tags: &[String],
+    target: &str,
+) -> Result<(), String> {
+    let memory = live_memory(storage).ok_or("correction requires an open Strata log")?;
+    let store = memory.lock();
+    let old = store
+        .get_node(target)
+        .ok_or("correction target is missing")?;
+    if old.scope != scope
+        || !retrievable(&old)
+        || !exact_correction_fields(content, tags, &old.tags)
+    {
+        return Err(
+            "corrects requires an explicit source correction and distinct exact values on the same scoped slot"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Write declared links from the memory `new_id`, each through the gate with
 /// its own receipt. Call [`check_links`] first; a link that is refused here is
 /// reported with the receipts of the links already written.
@@ -1050,6 +1309,24 @@ pub fn save_links(
     for (kind, target) in links {
         if target == new_id {
             return Err(format!("{new_id} cannot link to itself"));
+        }
+        if matches!(kind, DeclaredLink::ExactCorrection) {
+            let new = store
+                .get_node(new_id)
+                .ok_or("correction source is missing")?;
+            let old = store
+                .get_node(target)
+                .ok_or("correction target is missing")?;
+            if new.scope != old.scope
+                || !retrievable(&new)
+                || !retrievable(&old)
+                || !exact_correction_fields(&new.content, &new.tags, &old.tags)
+            {
+                return Err(
+                    "corrects requires an explicit source correction and two distinct exact values on the same scoped slot"
+                        .into(),
+                );
+            }
         }
         let (edge_kind, source_id, target_id) = kind.edge(new_id, target);
         let edge = strata_store::ConnectionRecord {

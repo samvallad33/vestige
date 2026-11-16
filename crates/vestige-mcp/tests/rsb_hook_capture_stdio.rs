@@ -507,3 +507,98 @@ fn hook_capture_backfill_preview_writes_nothing_and_undo_restores_exact_stabilit
         "undo restores the exact stability"
     );
 }
+
+#[test]
+fn h2sk_packet_compiles_exact_currency_and_replays_without_a_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Server::open(dir.path(), "off");
+    let old = s.hook(hook_fact(
+        "Mia lives in Austin.",
+        json!(["person:Mia"]),
+        json!([]),
+        json!([]),
+    ));
+    let current = s.hook(hook_fact(
+        "Correction: Mia lives in Denver.",
+        json!(["person:Mia"]),
+        json!([]),
+        json!([]),
+    ));
+    let before = s.tool("backfill", json!({"action":"receipts"}));
+    let packet = s.tool(
+        "session",
+        json!({"action":"start","memory_hook":{"prompt":"Where does Mia live now?","symbols":["symbol:Mia"],"today":"2026-11-06","limit":5}}),
+    );
+    assert!(packet["compile_receipt"]["hash"].is_string(), "{packet}");
+    assert!(
+        packet["compile_receipt"]["impulse"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()),
+        "{packet}"
+    );
+    assert!(
+        packet["compile_receipt"]["hologram"].is_object(),
+        "{packet}"
+    );
+    assert!(
+        packet["reader_context"]
+            .as_str()
+            .unwrap()
+            .contains("CONTROLLING"),
+        "{packet}"
+    );
+    let options = packet["compile_options"].clone();
+    let offset = packet["compile_receipt"]["offset"].clone();
+    let replay = s.tool(
+        "precedent",
+        json!({"query":"compile_receipt","log_offset":offset,"compile_options":options}),
+    );
+    assert_eq!(replay["hash"], packet["compile_receipt"]["hash"]);
+    let row = replay["currency"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["slot"] == "slot:Mia:residence")
+        .unwrap();
+    assert_eq!(row["apex"], current);
+    assert!(row["horosphere"].as_array().unwrap().contains(&json!(old)));
+    let gate = s.tool(
+        "precedent",
+        json!({"query":"compile_receipt","log_offset":offset,"compile_options":options,"expected_receipt_hash":replay["hash"],"draft":"Mia lives in Austin."}),
+    );
+    assert!(gate["verdict"].get("StaleLiteral").is_some(), "{gate}");
+    let again = s.tool(
+        "precedent",
+        json!({"query":"compile_receipt","compile_options":options}),
+    );
+    assert_eq!(
+        again["offset"], offset,
+        "packet, replay and gate append no frames"
+    );
+    assert_eq!(s.tool("backfill", json!({"action":"receipts"})), before);
+}
+
+#[test]
+fn h2sk_unresolved_values_do_not_gain_an_apex_from_recency() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Server::open(dir.path(), "off");
+    let first = s.hook(hook_fact(
+        "Mia lives in Austin.",
+        json!(["person:Mia"]),
+        json!([]),
+        json!([]),
+    ));
+    let second = s.hook(hook_fact(
+        "Mia lives in Denver.",
+        json!(["person:Mia"]),
+        json!([]),
+        json!([]),
+    ));
+    let receipt = s.tool("precedent", json!({"query":"compile_receipt"}));
+    let row = &receipt["currency"][0];
+    assert_eq!(row["status"], "NoUniqueApex");
+    assert!(row["apex"].is_null());
+    let contenders = row["contenders"].as_array().unwrap();
+    assert!(contenders.contains(&json!(first)));
+    assert!(contenders.contains(&json!(second)));
+}

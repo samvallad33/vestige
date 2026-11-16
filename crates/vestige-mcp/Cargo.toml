@@ -72,6 +72,7 @@ strata-store = { path = "../strata-store" }
 # Gate policy type for projection admission. No SQLite.
 strata-gate = { path = "../strata-gate" }
 blake3 = "1"
+borsh = { version = "1", features = ["derive"] }
 
 # ============================================================================
 # MCP Server Dependencies

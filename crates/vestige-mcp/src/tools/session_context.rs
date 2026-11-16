@@ -21,9 +21,11 @@ pub fn schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "memory_hook": {"type":"object", "description":"Read-only hook packet: exact-token BM25 full records, about 3000 tokens.",
+            "memory_hook": {"type":"object", "description":"Read-only hook packet: exact-token BM25 full records, about 3000 tokens. The packet compiles the H²SK receipt from the recorded log while it is built.",
                 "properties":{"prompt":{"type":"string","maxLength":65536},"limit":{"type":"integer","minimum":1,"maximum":24},
-                    "trigger":{"type":"object"}}},
+                    "trigger":{"type":"object"},
+                    "symbols":{"type":"array","items":{"type":"string"},"description":"Exact symbol: tags the question names. An unmatched tag abstains."},
+                    "today":{"type":"string","description":"Source-time date YYYY-MM-DD used only for recorded deltas."}}},
             "queries": {
                 "type": "array",
                 "items": { "type": "string" },

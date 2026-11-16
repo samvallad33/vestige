@@ -51,6 +51,8 @@ tracing = "0.1"
 trait-variant = "0.1"
 blake3 = "1"
 sha2 = "0.11"
+# Pure libm so impulse and hologram rows hash the same on every host.
+libm = "0.2"
 
 # ============================================================================
 # OPTIONAL: External-source connectors (#57)

@@ -109,6 +109,9 @@ pub mod advanced;
 pub mod codebase;
 pub mod projection;
 
+/// Discrete H²SK receipt compiler: exact slots, the closed edge vocabulary,
+/// and the impulse, hologram, and gate rows derived from a recorded log prefix.
+pub mod h2sk;
 /// Neuroscience-inspired memory mechanisms
 ///
 /// Implements cutting-edge neuroscience findings including:
