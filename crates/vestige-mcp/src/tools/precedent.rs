@@ -27,9 +27,9 @@ pub fn schema() -> Value {
         "properties": {
             "query": {
                 "type": "string",
-                "enum": ["stops", "receipt", "replay", "prove", "forgotten_lesson", "verify_log", "scan_secrets", "selftest"],
+                "enum": ["stops", "receipt", "replay", "prove", "forgotten_lesson", "verify_log", "scan_secrets", "selftest", "reopen_triangle"],
                 "default": "stops",
-                "description": "'stops': Operator gate history; 'receipt'/'replay': inspect or re-derive a write receipt; 'verify_log': run live cryptographic log verification; 'scan_secrets': scan memories for secret patterns; 'selftest': run planted-cause self-calibration."
+                "description": "'stops': Operator gate history; 'receipt'/'replay': inspect or re-derive a write receipt; 'verify_log': run live cryptographic log verification; 'scan_secrets': scan memories for secret patterns; 'selftest': run planted-cause self-calibration; 'reopen_triangle': chain-ladder reopen triangle for a repository."
             },
             "receipt_id": {"type": "string", "description": "For 'receipt' or 'replay': receipt ID."},
             "since": {"type": "string", "default": "24h", "description": "Window, e.g. 30m, 24h, 7d."},
@@ -38,7 +38,9 @@ pub fn schema() -> Value {
             "session": {"type": "string", "description": "Exact session id."},
             "rule": {"type": "string", "description": "Commitment or rule id/name, e.g. OP-011."},
             "decision": {"type": "string", "description": "STOP, ALLOW, SHADOW_STOP, PASS, another recorded decision, or all. Default: STOP plus ALLOW."},
-            "limit": {"type": "integer", "default": 10, "description": "1 to 50, newest records first."}
+            "limit": {"type": "integer", "default": 10, "description": "1 to 50, newest records first."},
+            "repository": {"type": "string", "description": "For 'reopen_triangle': git root, path prefix, or repo: tag of the repository to render."},
+            "agent": {"type": "string", "description": "For 'reopen_triangle': optional agent: tag. When set, only that agent's closes and reopens are counted."}
         }
     });
     for native in [
@@ -819,6 +821,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             let q = parse_query(Some(raw))?;
             run(&operator_home(), &q)
         }
+        "reopen_triangle" => crate::tools::reopen_triangle::execute(storage, Some(raw)),
         other => Err(format!("unknown precedent query '{other}'")),
     }
 }
