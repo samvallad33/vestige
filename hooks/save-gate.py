@@ -26,6 +26,19 @@ from pathlib import Path
 from typing import Any
 
 MAX_STOP_BLOCKS_PER_TURN = 2
+# Literal directive markers. Same set Reflex uses: contains(), token boundary,
+# no regex. Editable by replacing this tuple; it is not a domain word list.
+DIRECTIVE_PHRASES = (
+    "remember this",
+    "remember that",
+    "never",
+    "always",
+    "rule:",
+    "from now on",
+    "going forward",
+    "don't ever",
+    "decision:",
+)
 GIT_COMMIT_RE = re.compile(
     r"(?:^|[;&|]\s*|&&\s*)git"
     r"(?:\s+-C\s+\S+|\s+--git-dir(?:=|\s+)\S+|\s+--work-tree(?:=|\s+)\S+)*"
@@ -96,6 +109,7 @@ def load_state(session_id: str) -> dict[str, Any]:
         "resolved_pairs": [],
         "anchor_events": [],
         "stop_blocks_in_turn": 0,
+        "pending_directives": [],
     }
 
 
@@ -182,10 +196,148 @@ def format_save_gate_reason(missing_files: list[str], resolved_errors: list[str]
     files_str = ", ".join(missing_files) if missing_files else "none"
     err_str = ", ".join(resolved_errors) if resolved_errors else "none"
     return (
-        f"You modified [{files_str}] / resolved [{err_str}] without anchoring a "
-        "remember(action='save', files=..., links=...) receipt in Strata. "
-        "Call remember before ending your turn."
+        f"Vestige ledger: files [{files_str}] and resolved errors [{err_str}] "
+        "have no remember(action='save') receipt this turn."
     )
+
+
+def contains_phrase(text: str, phrase: str) -> bool:
+    """Token-boundary contains, case-insensitive, no regex."""
+    if not phrase:
+        return False
+    hay = text.lower()
+    needle = phrase.lower()
+    start = 0
+    while True:
+        at = hay.find(needle, start)
+        if at < 0:
+            return False
+        before = at == 0 or not (hay[at - 1].isalnum() or hay[at - 1] == "_")
+        after_at = at + len(needle)
+        after = after_at >= len(hay) or not (hay[after_at].isalnum() or hay[after_at] == "_")
+        if before and after:
+            return True
+        start = at + 1
+
+
+def matched_directives(prompt: str) -> list[str]:
+    return [phrase for phrase in DIRECTIVE_PHRASES if contains_phrase(prompt, phrase)]
+
+
+def backtick_spans(text: str) -> list[str]:
+    out: list[str] = []
+    rest = text
+    while True:
+        i = rest.find("`")
+        if i < 0:
+            break
+        rest = rest[i + 1 :]
+        j = rest.find("`")
+        if j < 0:
+            break
+        inner = rest[:j]
+        if inner and "\n" not in inner and len(inner) <= 300:
+            out.append(inner)
+        rest = rest[j + 1 :]
+    return out
+
+
+def cited_shas(text: str) -> list[str]:
+    found: list[str] = []
+    lower = text.lower()
+    marker = "commit:"
+    start = 0
+    while True:
+        at = lower.find(marker, start)
+        if at < 0:
+            break
+        run = []
+        for ch in lower[at + len(marker) :]:
+            if ch in "0123456789abcdef":
+                run.append(ch)
+            else:
+                break
+        sha = "".join(run)
+        if 7 <= len(sha) <= 40:
+            found.append(sha)
+        start = at + len(marker)
+    for inner in backtick_spans(text):
+        token = inner.lower()
+        if 7 <= len(token) <= 40 and all(c in "0123456789abcdef" for c in token):
+            found.append(token)
+    uniq: list[str] = []
+    for sha in found:
+        if sha not in uniq:
+            uniq.append(sha)
+    return uniq
+
+
+def cited_files(text: str) -> list[str]:
+    out: list[str] = []
+    for inner in backtick_spans(text):
+        if "/" in inner and " " not in inner and "://" not in inner and not inner.startswith("$"):
+            if inner not in out:
+                out.append(inner)
+    return out
+
+
+def sha_exists(cwd: str | None, sha: str) -> bool:
+    if not cwd:
+        return False
+    try:
+        res = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            timeout=1.5,
+            check=False,
+        )
+    except Exception:
+        return False
+    return res.returncode == 0
+
+
+def file_exists(cwd: str | None, path: str) -> bool:
+    if not cwd or "\x00" in path:
+        return False
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path(cwd) / candidate
+    return candidate.is_file()
+
+
+def citation_reasons(payload: dict[str, Any]) -> list[str]:
+    text = str(payload.get("last_assistant_message") or "")
+    if not text:
+        return []
+    cwd = payload.get("cwd")
+    cwd_str = str(cwd) if isinstance(cwd, str) else None
+    reasons: list[str] = []
+    for sha in cited_shas(text):
+        if not sha_exists(cwd_str, sha):
+            reasons.append(f"Turn blocked: commit {sha} is not in this repository.")
+    for path in cited_files(text):
+        if not file_exists(cwd_str, path):
+            reasons.append(f"Turn blocked: file {path} is not on disk.")
+    return reasons
+
+
+def dirty_worktree(path: str) -> bool:
+    if not path or not Path(path).is_dir():
+        return False
+    try:
+        res = subprocess.run(
+            ["git", "-C", path, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=1.5,
+            check=False,
+        )
+    except Exception:
+        return False
+    if res.returncode == 0:
+        return bool(res.stdout.strip())
+    return any(Path(path).rglob("*"))
 
 
 def handle_user_prompt_submit(payload: dict[str, Any], state: dict[str, Any]) -> int:
@@ -196,7 +348,29 @@ def handle_user_prompt_submit(payload: dict[str, Any], state: dict[str, Any]) ->
     state["prompt_hash"] = digest_hex(b"strata.prompt.v1\0", prompt.encode("utf-8"))
     state["git_head_sha"] = current_git_head_sha(cwd_str)
     state["stop_blocks_in_turn"] = 0
+    state["pending_directives"] = matched_directives(prompt)
     save_state(state["session_id"], state)
+    phrases = state["pending_directives"]
+    if phrases:
+        # Factual, and kept under the host's 10_000-character additionalContext cap.
+        lines = [
+            (
+                f'Vestige ledger: an owner directive ("{phrase}") is unsaved this turn; '
+                "Stop will block until remember(...) records it."
+            )
+            for phrase in phrases
+        ]
+        text = "\n".join(lines)[:10000]
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": text,
+                    }
+                }
+            )
+        )
     return 0
 
 
@@ -371,6 +545,7 @@ def handle_post_tool_use(payload: dict[str, Any], state: dict[str, Any]) -> int:
             for pair in state.get("resolved_pairs", []):
                 pair["anchored_by_remember"] = True
             state["stop_blocks_in_turn"] = 0
+            state["pending_directives"] = []
             append_event_receipt(
                 state,
                 {
@@ -451,10 +626,23 @@ def handle_pre_tool_use(payload: dict[str, Any], state: dict[str, Any]) -> int:
     return 0
 
 
-def handle_stop(payload: dict[str, Any], state: dict[str, Any]) -> int:
+def stop_reasons(payload: dict[str, Any], state: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
     missing_files = unsaved_files(state)
     resolved_errors = unanchored_resolved_errors(state)
-    if not missing_files and not resolved_errors:
+    if missing_files or resolved_errors:
+        reasons.append(format_save_gate_reason(missing_files, resolved_errors))
+    for phrase in state.get("pending_directives", []):
+        reasons.append(
+            f'Turn blocked: owner directive "{phrase}" not saved. Call remember(...).'
+        )
+    reasons.extend(citation_reasons(payload))
+    return reasons
+
+
+def handle_stop(payload: dict[str, Any], state: dict[str, Any]) -> int:
+    reasons = stop_reasons(payload, state)
+    if not reasons:
         return 0
 
     if (
@@ -464,7 +652,9 @@ def handle_stop(payload: dict[str, Any], state: dict[str, Any]) -> int:
         return 0
 
     state["stop_blocks_in_turn"] = int(state.get("stop_blocks_in_turn", 0)) + 1
-    reason = format_save_gate_reason(missing_files, resolved_errors)
+    missing_files = unsaved_files(state)
+    resolved_errors = unanchored_resolved_errors(state)
+    reason = " ".join(reasons)[:10000]
 
     append_event_receipt(
         state,
@@ -494,12 +684,33 @@ def handle_stop(payload: dict[str, Any], state: dict[str, Any]) -> int:
     return 0
 
 
+def handle_worktree_remove(payload: dict[str, Any]) -> int:
+    """Command-hook path. Claude Code discards JSON on WorktreeRemove
+    (verified 2026-11-16); a non-zero exit fails removal while the directory
+    still exists. Whether an MCP tool error maps to that exit is unverified.
+    """
+    path = payload.get("worktree_path")
+    if not isinstance(path, str) or not dirty_worktree(path):
+        return 0
+    print(
+        f"Vestige ledger: worktree {path} has uncommitted changes.",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def main() -> int:
     try:
         parser = argparse.ArgumentParser()
         parser.add_argument(
             "--event",
-            choices=["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"],
+            choices=[
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+                "Stop",
+                "WorktreeRemove",
+            ],
             required=True,
         )
         args = parser.parse_args()
@@ -524,6 +735,8 @@ def main() -> int:
             return handle_pre_tool_use(payload, state)
         if args.event == "Stop":
             return handle_stop(payload, state)
+        if args.event == "WorktreeRemove":
+            return handle_worktree_remove(payload)
         return 0
     except Exception:
         return 0
