@@ -1,0 +1,28 @@
+{
+  "name": "vestige",
+  "description": "Vestige marketplace. One plugin installs the Causal Proof Engine MCP server, the Reflex hook fragments, and the Operator Lite gate.",
+  "version": "6.2.2",
+  "owner": {
+    "name": "Sam Valladares",
+    "email": "samvalladares21@gmail.com",
+    "url": "https://github.com/samvallad33"
+  },
+  "plugins": [
+    {
+      "name": "vestige",
+      "source": "./plugins/vestige",
+      "description": "Vestige for Claude Code: Strata MCP server, Reflex hooks, and the Operator Lite gate.",
+      "author": {
+        "name": "Sam Valladares",
+        "email": "samvalladares21@gmail.com",
+        "url": "https://github.com/samvallad33"
+      },
+      "homepage": "https://github.com/samvallad33/vestige",
+      "repository": "https://github.com/samvallad33/vestige",
+      "license": "AGPL-3.0-only",
+      "keywords": ["vestige", "mcp", "memory", "strata", "reflex"],
+      "category": "development",
+      "strict": true
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "vestige": {
+      "source": {
+        "source": "github",
+        "repo": "samvallad33/vestige"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "vestige@vestige": true
+  }
+}
