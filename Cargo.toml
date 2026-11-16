@@ -5,6 +5,8 @@ members = [
     "crates/vestige-mcp",
     "crates/vestige-proof",
     "crates/vestige-upgrade",
+    "crates/vestige-fmindex",
+    "crates/vestige-codegraph",
 ]
 exclude = [
     "fastembed-rs",

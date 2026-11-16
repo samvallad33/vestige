@@ -1,0 +1,25 @@
+[package]
+name = "vestige-codegraph"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "AST-native code memory graph with pure-Rust gix git replay and deterministic congruence"
+
+[features]
+default = ["rust"]
+rust = []
+python = ["dep:tree-sitter-python"]
+typescript = ["dep:tree-sitter-typescript"]
+all-languages = ["rust", "python", "typescript"]
+
+[dependencies]
+blake3 = "1"
+gix = "0.87"
+serde = { version = "1", features = ["derive"] }
+tree-sitter = "0.25"
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = { version = "0.23", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

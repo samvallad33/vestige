@@ -1,0 +1,10 @@
+[package]
+name = "vestige-fmindex"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Deterministic Run-Length FM-Index with Wavelet Matrix and SA-IS for exact substring recall"
+
+[dependencies]
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
