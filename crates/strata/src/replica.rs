@@ -29,6 +29,10 @@ use crate::sync::{self, SyncPurpose};
 const WRITER_PUB: &str = "writer.pub";
 const KEY_FILE: &str = "strata.key";
 
+/// One bounded extension pass: frames added, the last acknowledged
+/// `(seq, hash)` if any frame landed, and whether the replica caught up.
+type ExtendStep = (u64, Option<(u64, [u8; 32])>, bool);
+
 /// One writer's chain, verified under a pinned public key.
 pub struct ReplicaLog {
     dir: PathBuf,
@@ -428,7 +432,7 @@ impl ReplicaLog {
         &mut self,
         incoming: &[u8],
         budget: u64,
-    ) -> Result<(u64, Option<(u64, [u8; 32])>, bool), StrataError> {
+    ) -> Result<ExtendStep, StrataError> {
         let header = parse_header(incoming).ok_or_else(|| {
             StrataError::Corrupt("replica extension header does not decode".into())
         })?;
