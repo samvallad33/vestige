@@ -1618,6 +1618,15 @@ struct Index {
     s_postings: Vec<Vec<u32>>,
     w_postings: Vec<Vec<u32>>,
     t_postings: Vec<Vec<u32>>,
+    /// Private vocabulary ID space for 1-hop ingest WordNet bridge lemmas so `ix.vocab`
+    /// and all primary BM25F token IDs remain 100% bit-for-bit identical to `main`.
+    bridge_vocab: Vocab,
+    /// 1-hop WordNet lemma IDs (in `bridge_vocab` ID space) indexed per turn.
+    turn_bridge_postings: Vec<Vec<u32>>,
+    /// Corpus-learned Positive PMI associations `(partner_id, weight)` over rare content tokens.
+    ppmi_neighbors: DetHashMap<u32, Vec<(u32, f32)>>,
+    /// O(1) precomputed supersession flag (`true` if any later turn supersedes `ti`).
+    turn_superseded: Vec<bool>,
     /// Burton Bloom 64-bit membership filters per session and per turn.
     #[allow(dead_code)]
     session_bloom: Vec<u64>,
@@ -2512,6 +2521,31 @@ fn closed_locative(w: &str) -> bool {
     matches!(w, "in" | "at" | "to" | "from" | "on" | "into" | "over" | "by")
 }
 
+/// Morphology-aware WordNet 1-hop expansion: checks exact word, singular `-s`/`-es` strip,
+/// and deterministic suffix `stem(&word)` so plural/inflected nouns ("macarons", "walnuts")
+/// resolve to their canonical WordNet synsets.
+fn wordnet_lemmas_with_morph(word: &str) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = crate::wordnet::expansion_lemmas(word).to_vec();
+    if let Some(sing) = word.strip_suffix("es").or_else(|| word.strip_suffix('s')) {
+        if sing.len() >= 3 {
+            for l in crate::wordnet::expansion_lemmas(sing) {
+                if !out.contains(&l) {
+                    out.push(l);
+                }
+            }
+        }
+    }
+    let st = stem(word);
+    if st != word && st.len() >= 3 {
+        for l in crate::wordnet::expansion_lemmas(&st) {
+            if !out.contains(&l) {
+                out.push(l);
+            }
+        }
+    }
+    out
+}
+
 fn build_index(sessions: &[Session], p: &Params) -> Index {
     let nicks = SpeakerNickIndex::build(sessions);
     let mut vocab = Vocab::default();
@@ -3297,6 +3331,105 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let session_bloom = build_session_bloom(&session_bags);
     let turn_meta = build_turn_meta(&turns, &turn_bloom);
 
+    let mut turn_superseded = vec![false; turns.len()];
+    for t in &turns {
+        for &old in &t.supersedes_turns {
+            if old < turn_superseded.len() {
+                turn_superseded[old] = true;
+            }
+        }
+    }
+
+    // 1-hop ingest WordNet bridge postings in private `bridge_vocab` (`ix.vocab` untouched!).
+    let n_turns_u32 = (t_own_stats.n as u32).max(1);
+    let max_rare_df = (n_turns_u32 / 8).max(4);
+    let mut bridge_vocab = Vocab::default();
+    let mut turn_bridge_sets: Vec<DetHashSet<u32>> = vec![DetHashSet::default(); turns.len()];
+    if p.enable_hypernyms {
+        for ti in 0..turns.len() {
+            if turns[ti].is_backchannel {
+                continue;
+            }
+            for &cid in &turns[ti].content {
+                let df = t_own_stats.df.get(&cid).copied().unwrap_or(0);
+                if df == 0 || df > max_rare_df {
+                    continue;
+                }
+                let word = &vocab.names[cid as usize];
+                for lemma in wordnet_lemmas_with_morph(word) {
+                    let lid = bridge_vocab.intern(lemma);
+                    turn_bridge_sets[ti].insert(lid);
+                    if p.enable_stemming {
+                        let sid = bridge_vocab.intern(&stem_term(&stem(lemma)));
+                        turn_bridge_sets[ti].insert(sid);
+                    }
+                }
+            }
+        }
+    }
+    let mut turn_bridge_postings = vec![Vec::new(); bridge_vocab.names.len()];
+    for (ti, bset) in turn_bridge_sets.iter().enumerate() {
+        for &bid in bset {
+            if let Some(list) = turn_bridge_postings.get_mut(bid as usize) {
+                list.push(ti as u32);
+            }
+        }
+    }
+
+    // Haystack Positive PMI associations over rare content tokens (`2 <= df <= max_rare_df`).
+    let mut pair_counts: DetHashMap<(u32, u32), u32> = DetHashMap::default();
+    for ti in 0..turns.len() {
+        let mut rare_toks: Vec<u32> = turns[ti]
+            .content
+            .iter()
+            .copied()
+            .filter(|id| {
+                let df = t_own_stats.df.get(id).copied().unwrap_or(0);
+                df >= 2 && df <= max_rare_df
+            })
+            .collect();
+        if let Some(ans_prev) = turns[ti].answers {
+            for &id in &turns[ans_prev].content {
+                let df = t_own_stats.df.get(&id).copied().unwrap_or(0);
+                if df >= 2 && df <= max_rare_df {
+                    rare_toks.push(id);
+                }
+            }
+        }
+        rare_toks.sort_unstable();
+        rare_toks.dedup();
+        if rare_toks.len() <= 24 {
+            for i in 0..rare_toks.len() {
+                for j in (i + 1)..rare_toks.len() {
+                    *pair_counts.entry((rare_toks[i], rare_toks[j])).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    let mut ppmi_neighbors: DetHashMap<u32, Vec<(u32, f32)>> = DetHashMap::default();
+    let n_f = t_own_stats.n.max(1.0);
+    for ((u, v), c_uv) in pair_counts {
+        if c_uv < 2 {
+            continue;
+        }
+        let df_u = t_own_stats.df.get(&u).copied().unwrap_or(1) as f32;
+        let df_v = t_own_stats.df.get(&v).copied().unwrap_or(1) as f32;
+        let ppmi = ((c_uv as f32 * n_f) / (df_u * df_v)).log2();
+        if ppmi >= 2.5 {
+            let w = (ppmi / 10.0).clamp(0.18, 0.45);
+            ppmi_neighbors.entry(u).or_default().push((v, w));
+            ppmi_neighbors.entry(v).or_default().push((u, w));
+        }
+    }
+    for list in ppmi_neighbors.values_mut() {
+        list.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        list.truncate(6);
+    }
+
     Index {
         vocab,
         session_ids,
@@ -3329,6 +3462,10 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         s_postings,
         w_postings,
         t_postings,
+        bridge_vocab,
+        turn_bridge_postings,
+        ppmi_neighbors,
+        turn_superseded,
         session_bloom,
         turn_bloom,
         turn_meta,
@@ -4652,6 +4789,136 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &mut t_scene,
     );
 
+    // On-topic supersession clamp: an older turn `old` is only damped when a newer turn `lat`
+    // that explicitly supersedes `old` ALSO matches the query (`t_exact_mask[lat] != 0`)
+    // with comparable or stronger lexical evidence (`t_own[lat] >= 0.55 * t_own[old]`).
+    if !it.temporal && !it.is_event_sequence {
+        for lat in 0..nt {
+            if ix.turns[lat].supersedes_turns.is_empty() || t_exact_mask[lat] == 0 || t_own[lat] <= 0.0 {
+                continue;
+            }
+            for &old in &ix.turns[lat].supersedes_turns {
+                if old < nt
+                    && t_scene[old] > 0.0
+                    && (t_exact_mask[lat] & t_exact_mask[old]) != 0
+                    && t_own[lat] >= 0.55 * t_own[old]
+                {
+                    t_scene[old] *= 0.20;
+                }
+            }
+        }
+    }
+
+    // Isolated 2-hop Meet-in-the-Middle WordNet + Haystack PPMI channel (`t_bridge`).
+    // Borrow-checker clean; never mutates `t_own`, `t_raw`, `t_scene`, or `s_score`.
+    let mut t_bridge = vec![0.0f32; nt];
+    let mut t_bridge_hits = vec![0u8; nt];
+    if p.enable_hypernyms {
+        let n_turns_u32 = (ix.t_own_stats.n as u32).max(1);
+        let max_seed_df = (n_turns_u32 / 8).max(3);
+        let max_bridge_hub_df = ((ix.t_own_stats.n as usize) / 16).clamp(2, 12);
+
+        let mut seeds: Vec<(u32, String)> = raw_tokens(&q.text)
+            .into_iter()
+            .filter(|w| is_content(w))
+            .map(|w| {
+                let df = ix.vocab.get(&w).and_then(|id| ix.t_own_stats.df.get(&id).copied()).unwrap_or(0);
+                (df, w)
+            })
+            .filter(|(df, _)| crate::zero_overlap::term_rarity_gate(*df, max_seed_df))
+            .collect();
+        seeds.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        seeds.dedup_by(|a, b| a.1 == b.1);
+        seeds.truncate(3);
+
+        let exact_q_ids: DetHashSet<u32> = plan.terms.iter().map(|qt| qt.id).collect();
+        let mut direct_bridge_terms: DetHashMap<u32, (f32, u8)> = DetHashMap::default();
+        let mut meet_bridge_terms: DetHashMap<u32, (f32, u8)> = DetHashMap::default();
+
+        for (s_idx, (_, w)) in seeds.iter().enumerate() {
+            let bit = 1u8 << (s_idx.min(7));
+            if let Some(qid) = ix.vocab.get(w) {
+                if let Some(ppmi_list) = ix.ppmi_neighbors.get(&qid) {
+                    for &(pid, pw) in ppmi_list {
+                        if !exact_q_ids.contains(&pid) {
+                            let entry = direct_bridge_terms.entry(pid).or_insert((0.0, 0));
+                            entry.0 = entry.0.max(pw);
+                            entry.1 |= bit;
+                        }
+                    }
+                }
+            }
+            for lemma in wordnet_lemmas_with_morph(w) {
+                let st_lemma = stem_term(&stem(lemma));
+                // 1. Direct corpus vocabulary (`ix.vocab`)
+                if let Some(lid) = ix.vocab.get(lemma) {
+                    if !exact_q_ids.contains(&lid) {
+                        let entry = direct_bridge_terms.entry(lid).or_insert((0.0, 0));
+                        entry.0 = entry.0.max(p.hypernym_weight);
+                        entry.1 |= bit;
+                    }
+                }
+                if p.enable_stemming {
+                    if let Some(sid) = ix.vocab.get(&st_lemma) {
+                        if !exact_q_ids.contains(&sid) {
+                            let entry = direct_bridge_terms.entry(sid).or_insert((0.0, 0));
+                            entry.0 = entry.0.max(p.hypernym_weight * 0.85);
+                            entry.1 |= bit;
+                        }
+                    }
+                }
+                // 2. Private ingest-bridge vocabulary (`ix.bridge_vocab`)
+                if let Some(blid) = ix.bridge_vocab.get(lemma) {
+                    let entry = meet_bridge_terms.entry(blid).or_insert((0.0, 0));
+                    entry.0 = entry.0.max(p.hypernym_weight);
+                    entry.1 |= bit;
+                }
+                if p.enable_stemming {
+                    if let Some(bsid) = ix.bridge_vocab.get(&st_lemma) {
+                        let entry = meet_bridge_terms.entry(bsid).or_insert((0.0, 0));
+                        entry.0 = entry.0.max(p.hypernym_weight * 0.85);
+                        entry.1 |= bit;
+                    }
+                }
+            }
+        }
+
+        let mut seed_mask_hit = vec![0u8; nt];
+        for (&bid, &(bw, s_bit)) in &direct_bridge_terms {
+            if let Some(list) = ix.t_postings.get(bid as usize) {
+                if !list.is_empty() && list.len() <= max_bridge_hub_df {
+                    let damp = ghostlink_hub_damp(list.len() as u32, 1);
+                    let idf = ((ix.t_own_stats.n + 1.0) / (list.len() as f32 + 1.0)).ln().max(0.5);
+                    for &doc in list {
+                        let ti = doc as usize;
+                        t_bridge[ti] += bw * idf * damp;
+                        seed_mask_hit[ti] |= s_bit;
+                    }
+                }
+            }
+        }
+        for (&bid, &(bw, s_bit)) in &meet_bridge_terms {
+            if let Some(blist) = ix.turn_bridge_postings.get(bid as usize) {
+                if !blist.is_empty() && blist.len() <= max_bridge_hub_df {
+                    let damp = ghostlink_hub_damp(blist.len() as u32, 1);
+                    let idf = ((ix.t_own_stats.n + 1.0) / (blist.len() as f32 + 1.0)).ln().max(0.5);
+                    for &doc in blist {
+                        let ti = doc as usize;
+                        t_bridge[ti] += 0.65 * bw * idf * damp;
+                        seed_mask_hit[ti] |= s_bit;
+                    }
+                }
+            }
+        }
+        for ti in 0..nt {
+            if t_bridge[ti] > 0.0 {
+                let len_norm = ((ix.turns[ti].content.len() + 6) as f32).sqrt();
+                t_bridge[ti] /= len_norm;
+                t_bridge_hits[ti] = seed_mask_hit[ti].count_ones() as u8;
+            }
+        }
+    }
+
     let k = top_k.max(1);
 
     // Frozen floors for this run (do not retune after BEAM): standing 0.68,
@@ -5903,6 +6170,45 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // session is absent from the top 5. Slot 0 and the session list stay.
     // Does not touch rsb_seat_behind.
     apply_c2_unseated_session_peak(ix, &mut final_turn_indices, &t_own, k);
+    // Post-Gatekeeper Sealed-Head Bridge Tail Admission:
+    // Slots `0..5` (`@1..@5`) stay 100% SEALED whenever exact matches fill them.
+    // Slot `k - 1` admits the top zero-exact-overlap `t_bridge` turn only when slot `k - 1`
+    // is a duplicate-session assistant echo or unfilled tail.
+    if p.enable_hypernyms && k >= 6 {
+        let best_bridge = (0..nt)
+            .filter(|&ti| {
+                t_bridge[ti] > 0.0
+                    && t_exact_mask[ti] == 0
+                    && ix.turns[ti].field == 0
+                    && !ix.turns[ti].is_question
+                    && !ix.turns[ti].is_backchannel
+                    && !turn_is_superseded(ix, ti)
+                    && !final_turn_indices.contains(&ti)
+            })
+            .max_by(|&a, &b| {
+                t_bridge_hits[a]
+                    .cmp(&t_bridge_hits[b])
+                    .then(t_bridge[a].partial_cmp(&t_bridge[b]).unwrap_or(std::cmp::Ordering::Equal))
+                    .then(b.cmp(&a))
+            });
+
+        if let Some(b_ti) = best_bridge {
+            if final_turn_indices.len() < k {
+                final_turn_indices.push(b_ti);
+            } else {
+                let last_slot = k - 1;
+                let vti = final_turn_indices[last_slot];
+                let v_sess = ix.turns[vti].session;
+                let dup_sess = final_turn_indices[..last_slot]
+                    .iter()
+                    .any(|&earlier| ix.turns[earlier].session == v_sess);
+                if (dup_sess && ix.turns[vti].field == 1) || t_scene[vti] <= 0.0 {
+                    final_turn_indices[last_slot] = b_ti;
+                }
+            }
+        }
+    }
+
     maybe_dump_replay(
         ix,
         q,
@@ -5922,7 +6228,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         .map(|i| RankedItem {
             id: ix.turns[i].id.clone(),
             session_id: ix.session_ids[ix.turns[i].session].clone(),
-            score: t_scene[i],
+            score: if t_scene[i] > 0.0 { t_scene[i] } else { t_bridge[i] },
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
@@ -6599,8 +6905,10 @@ fn pool_structural_degree(ix: &Index, pool: &[usize]) -> Vec<i64> {
     degree
 }
 
+#[inline]
 fn turn_is_superseded(ix: &Index, ti: usize) -> bool {
-    ix.turns.iter().any(|t| t.supersedes_turns.contains(&ti))
+    ix.turn_superseded.get(ti).copied().unwrap_or(false)
+        || ix.turns.iter().any(|t| t.supersedes_turns.contains(&ti))
 }
 
 fn kemeny_pair_score(order: &[usize], net: &[Vec<i64>]) -> i64 {

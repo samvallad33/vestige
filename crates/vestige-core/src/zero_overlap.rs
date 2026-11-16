@@ -18,6 +18,12 @@ pub(crate) fn ounis_zero_overlap_gate(query_term_dfs: impl IntoIterator<Item = u
     query_term_dfs.into_iter().all(|df| df == 0)
 }
 
+/// True when an individual query token is rare enough in the corpus
+/// (`df <= max_rare_df`) to seed the isolated bridge channel.
+pub(crate) fn term_rarity_gate(df: u32, max_rare_df: u32) -> bool {
+    df <= max_rare_df
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
