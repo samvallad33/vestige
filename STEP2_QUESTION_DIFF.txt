@@ -1,0 +1,38 @@
+===== LME_S step1 -> step2 =====
+compared_gate_questions=470
+losses=0 gains=0
+===== LoCoMo step1 -> step2 =====
+compared_gate_questions=1536
+losses=0 gains=4
+GAIN LoCoMo	conv-26:103	turn_hit	1	4
+GAIN LoCoMo	conv-30:57	turn_hit	1	4
+GAIN LoCoMo	conv-48:41	turn_hit	1	1
+GAIN LoCoMo	conv-49:131	turn_hit	1	4
+===== BEAM step1 -> step2 =====
+compared_gate_questions=355
+losses=0 gains=0
+===== preflight -> step0 =====
+compared_gate_questions=2361
+losses=0 gains=0
+===== step0 -> step1 LME =====
+compared_gate_questions=470
+losses=0 gains=0
+===== step0 -> step1 LoCoMo =====
+compared_gate_questions=1536
+losses=0 gains=13
+GAIN LoCoMo	conv-47:29	turn_hit	1	2
+GAIN LoCoMo	conv-47:29	turn_hit	5	2
+GAIN LoCoMo	conv-47:29	turn_hit	10	2
+GAIN LoCoMo	conv-47:29	sess_hit	1	2
+GAIN LoCoMo	conv-47:29	sess_hit	5	2
+GAIN LoCoMo	conv-47:31	turn_hit	1	2
+GAIN LoCoMo	conv-47:31	sess_hit	1	2
+GAIN LoCoMo	conv-47:31	sess_hit	5	2
+GAIN LoCoMo	conv-48:19	turn_hit	1	1
+GAIN LoCoMo	conv-48:19	turn_hit	5	1
+GAIN LoCoMo	conv-48:19	turn_hit	10	1
+GAIN LoCoMo	conv-48:19	sess_hit	1	1
+GAIN LoCoMo	conv-48:68	sess_hit	1	2
+===== step0 -> step1 BEAM =====
+compared_gate_questions=355
+losses=0 gains=0

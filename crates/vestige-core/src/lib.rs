@@ -121,6 +121,7 @@ pub mod neuroscience;
 #[allow(clippy::all)]
 pub mod retrieval;
 pub(crate) mod zero_overlap;
+pub(crate) mod multihop_overwrite;
 
 // ============================================================================
 // PUBLIC API RE-EXPORTS

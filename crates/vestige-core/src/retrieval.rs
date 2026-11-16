@@ -2002,6 +2002,8 @@ struct Index {
     /// Step 1: Zero-overlap Wilkins u64 + Mooers u128 Zatocode + Forbus SME turn signatures.
     turn_zero_overlap: Vec<crate::zero_overlap::ZeroOverlapSig>,
     zero_overlap_candidates: Vec<usize>,
+    /// Step 2: Blackburn nominal anchors and Wallace terminal-question flags.
+    multihop: crate::multihop_overwrite::MultiHopIndex,
 }
 
 /// Compact cache-aligned turn metadata (`<= 24 bytes`) for L3-resident linear scans.
@@ -3184,6 +3186,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut turn_cues: Vec<Vec<u32>> = Vec::new();
     let mut turn_zero_overlap: Vec<crate::zero_overlap::ZeroOverlapSig> = Vec::new();
     let mut zero_overlap_candidates: Vec<usize> = Vec::new();
+    let mut mh_terminal_q: Vec<bool> = Vec::new();
+    let mut mh_speaker: Vec<String> = Vec::new();
     let mut role_cues: DetHashSet<u32> = DetHashSet::default();
     let pref_set: DetHashSet<&str> = PREF_MARKERS.iter().copied().collect();
     let hard_constraint_set: DetHashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
@@ -3457,6 +3461,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
                 tech_handles.push(hid);
             }
             let (is_question, is_short_question) = detect_question(prose_body, raw.len());
+            mh_terminal_q.push(crate::multihop_overwrite::terminal_question(prose_body));
+            mh_speaker.push(speaker.clone());
             let qshape = analyze_question(&mut vocab, prose_body, is_question, p.enable_stemming, &speaker_names);
             let is_pure_info_question = qshape.is_pure;
             let anaphoric = raw.first().is_some_and(|w| CONTINUATIONS.contains(&w.as_str()))
@@ -4061,6 +4067,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         turn_meta,
         turn_zero_overlap,
         zero_overlap_candidates,
+        multihop: crate::multihop_overwrite::MultiHopIndex::new(mh_terminal_q, mh_speaker),
     }
 }
 
@@ -6871,6 +6878,10 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             final_turn_indices.truncate(k);
         }
     }
+    // Step 2 runs after every earlier seat, including the Step 1 zero-overlap
+    // promotion, so the nominal it sees is the final top 5. Top-5 membership
+    // is preserved. Session indices are not rewritten. Does not read turn body.
+    crate::multihop_overwrite::seat_nominal_terminal(&ix.multihop, &q.text, &mut final_turn_indices);
     maybe_dump_funnel(
         ix,
         &funnel_pool50,

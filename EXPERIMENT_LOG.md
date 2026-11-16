@@ -56,3 +56,17 @@ LoCoMo turn any@1/@5/@10 = 812/1130/1236 (52.86% / 73.57% / 80.47%). Session any
 
 LoCoMo turn any-gold: corpus 1535/1536, pool@50 1424/1536, pre_rank@5 1039/1536, post_kemeny@5 1100/1536, @1 812/1536. Session any-gold: corpus 1536/1536, pool@50 1536/1536, pre_rank@5 1422/1536, post_kemeny@5 1422/1536, @1 1137/1536.
 
+## Step 2 (`perf/step2-multihop-overwrite`): Nominal terminal promotion
+
+Blackburn nominal anchor plus Wallace terminal-hop promotion. The speaker field is copied at ingest. A turn is a terminal question when its prose, before a code fence, ends on `?`. After every earlier seat, including the Step 1 zero-overlap slot-0 insert, if slot 0 is a terminal question and exactly one of slots 1..4 is a non-question spoken by a different nominal the query names, that turn moves to slot 0. `user` and `assistant` are role labels, not nominals. Two competing nominals do not fire. Top-5 membership is unchanged. `final_session_indices` is not rewritten. `rsb_seat_behind` is not touched. The module has no floating-point values, no `HashMap`, and no domain word list. Ranking reads `ix.multihop` and the query, not turn body.
+
+The attached WIP was not landed. It used `std::collections::HashMap`, domain phrase tables, and floating-point score scalers. A numeric-overwrite simulation of that family on the Step 1 dump lost 5 BEAM questions and gained 0. A broader `is_question` flag lost `conv-49:141`. BEAM top-5 digit and overlap stumps lost questions. Those attempts are in `C2_STEP2_LOG.md`. They were not committed.
+
+Gate, `tools/c2_bench.py --diff` against the Step 1 dump above. LME 470 losses=0 gains=0. BEAM 355 losses=0 gains=0. LoCoMo 1536 losses=0 gains=4, all turn @1: `conv-26:103` (cat 4) `D6:9` → `D6:10`; `conv-30:57` (cat 4) `D7:4` → `D7:5`; `conv-48:41` (cat 1) `D11:6` → `D28:18`; `conv-49:131` (cat 4) `D18:7` → `D18:8`. Turn @5/@10 and every session metric stayed put. LME session had 0 drops.
+
+LoCoMo turn any@1 812/1536 → 816/1536 (52.86% → 53.12%). Turn @5/@10 stay 1130/1236. Session @1/@5 stay 1137/1422. LME and BEAM scoreboards and funnels stay on the Step 1 numbers. LoCoMo funnel stages above the seat are unchanged (pool@50 1424, pre_rank@5 1039, post_kemeny@5 1100). @1 is 816/1536.
+
+`cargo test -p vestige-core`: 586 passed, 0 failed. `cargo clippy -p vestige-core --all-targets -- -D warnings`: exit 0. `cargo check -p vestige-mcp`: exit 0. `tools/c2_hashcheck.py --n 500`: `hash-check 0/500`.
+
+**Gate Verdict**: **WIN**. One strict uplift (LoCoMo Turn@1), zero per-question losses on LME_S, LoCoMo, and BEAM-100K.
+

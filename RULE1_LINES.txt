@@ -46,3 +46,39 @@
 @@ -6704,0 +6829,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
 +++ b/crates/vestige-core/src/zero_overlap.rs
 @@ -0,0 +1,463 @@
+== 4214096c
++++ b/EXPERIMENT_LOG.md
+@@ -30,0 +31,28 @@ Monotonic Zero-Regression Gate tracking across Steps 0–4.
++++ b/RULE1_LINES.txt
+@@ -0,0 +1,48 @@
++++ b/crates/vestige-core/src/retrieval.rs
+@@ -6064,0 +6065,16 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -6478,0 +6495,7 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -6556,0 +6580,11 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -6839,0 +6874,9 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
+@@ -7792,0 +7836,146 @@ fn rank1_gatekeeper_keep_rsb_head(ix: &Index, query: &str, list: &mut Vec<usize>
+@@ -8257,0 +8447 @@ pub fn rank(req: &RankRequest) -> RankResponse {
+@@ -8286,0 +8477,28 @@ mod tests {
++++ b/tools/c2_bench.py
+@@ -0,0 +1,629 @@
++++ b/tools/c2_hashcheck.py
+@@ -0,0 +1,76 @@
+== step2
++++ b/C2_STEP2_LOG.md
+@@ -0,0 +1,39 @@
++++ b/EXPERIMENT_LOG.md
+@@ -58,0 +59,14 @@ LoCoMo turn any-gold: corpus 1535/1536, pool@50 1424/1536, pre_rank@5 1039/1536,
++++ b/SCOREBOARD_STEP2.md
+@@ -0,0 +1,67 @@
++++ b/STEP2_QUESTION_DIFF.txt
+@@ -0,0 +1,38 @@
++++ b/crates/vestige-core/src/lib.rs
+@@ -123,0 +124 @@ pub(crate) mod zero_overlap;
++++ b/crates/vestige-core/src/multihop_overwrite.rs
+@@ -0,0 +1,203 @@
++++ b/crates/vestige-core/src/retrieval.rs
+@@ -2004,0 +2005,2 @@ struct Index {
+@@ -3186,0 +3189,2 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
+@@ -3459,0 +3464,2 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
+@@ -4063,0 +4070 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
+@@ -6873,0 +6881,4 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
