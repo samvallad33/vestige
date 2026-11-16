@@ -317,6 +317,21 @@ def run_hook(payload, source="claude"):
     return code, err.getvalue()
 
 
+def run_hook_full(payload, source="claude"):
+    old_in, old_err, old_out = sys.stdin, sys.stderr, sys.stdout
+    sys.stdin = io.StringIO(json.dumps(payload))
+    err, out = io.StringIO(), io.StringIO()
+    sys.stderr, sys.stdout = err, out
+    try:
+        try:
+            code = g.hook_main(["--source", source])
+        except SystemExit as exc:
+            code = exc.code
+    finally:
+        sys.stdin, sys.stderr, sys.stdout = old_in, old_err, old_out
+    return code, err.getvalue(), out.getvalue()
+
+
 def stop_rows(rule=None):
     rows = [row for row in g.receipt_rows() if row.get("decision") == "STOP"]
     if rule:
@@ -594,6 +609,270 @@ def proof_kernel_checks(first_ms):
     return problems, measured
 
 
+def split_by_tags(text):
+    """Insert a Unicode tag character between every character, then match the unfold."""
+    tag = "\U000e0001"
+    return tag.join(text)
+
+
+def canonicalization_checks():
+    """Synthetic fixtures for #691: shared fold, promoted STOP rules, recovery, measured evidence."""
+    problems = []
+    measured = {"decision_ms": 0.0, "receipt_bytes": 0, "tool_process_created": False}
+
+    def check(ok, message):
+        if not ok:
+            problems.append(message)
+
+    unfolded = "git push --force origin main"
+    folded, kinds = g.fold_command(split_by_tags(unfolded))
+    check(kinds == ["tag"] and folded == unfolded, "tag fold produced %r kinds=%s" % (folded, kinds))
+    path = "/tmp/\u6587\u6863/ok.txt"
+    kept, kinds = g.fold_command("echo " + path)
+    check(kinds == [] and path in kept, "non-ASCII path was destroyed: %r" % kept)
+    zw = "git push\u200b --force origin main"
+    folded, kinds = g.fold_command(zw)
+    check("zero-width" in kinds and folded == unfolded, "zero-width fold produced %r kinds=%s" % (folded, kinds))
+    bidi = "git push \u202e--force origin main"
+    folded, kinds = g.fold_command(bidi)
+    check("bidi" in kinds and "push --force" in folded, "bidi fold produced %r kinds=%s" % (folded, kinds))
+
+    plain_hits = judge(shell(unfolded))
+    tag_hits = judge(shell(split_by_tags(unfolded)))
+    check("OP-004" in plain_hits and "OP-004" in tag_hits,
+          "tag-split force-push missed OP-004; plain=%s tagged=%s" % (plain_hits, tag_hits))
+    check("OP-S12" in tag_hits, "tag-split command did not fire OP-S12: %s" % tag_hits)
+    check("OP-S12" not in plain_hits, "plain force-push fired OP-S12: %s" % plain_hits)
+    check("OP-S12" not in judge(shell("echo " + path)), "legitimate non-ASCII path fired OP-S12")
+
+    pipe_cmd = "cat %s | sh" % (WORK / "fold-local.sh")
+    (WORK / "fold-local.sh").write_text("echo hi\n", encoding="utf-8")
+    pipe_hits = judge(shell(pipe_cmd))
+    check("OP-S06" in pipe_hits, "pipe-to-interpreter did not fire OP-S06: %s" % pipe_hits)
+    started = time.perf_counter()
+    code, err = run_hook(shell(pipe_cmd, session="s-fold-pipe"))
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    measured["decision_ms"] = elapsed_ms
+    check(code == 2 and "OP-S06" in err, "pipe-to-interpreter was not a STOP (%s) %s" % (code, (err or "")[:200]))
+    check("No action was taken" in err or "tool process was not created" in err or "OPERATOR: STOPPED" in err,
+          "pipe STOP did not say the process was held: %s" % (err or "")[:200])
+    rows = stop_rows()
+    if rows:
+        rec = rows[-1]
+        measured["receipt_bytes"] = len(json.dumps(rec, sort_keys=True).encode("utf-8"))
+        measured["tool_process_created"] = False
+
+    inv_hits = judge(shell("echo hello\u200b"))
+    check("OP-S12" in inv_hits, "invisible characters did not fire OP-S12: %s" % inv_hits)
+    code, err = run_hook(shell("echo hello\u200b", session="s-fold-inv"))
+    check(code == 2 and "OP-S12" in err, "invisible characters were not a STOP (%s) %s" % (code, err[:200]))
+
+    secret = {"api_key": "sk-abcdefghijklmnopqrst", "path": "/tmp/ok.txt"}
+    mcp_hits = judge(mcp("mcp__example__lookup", secret))
+    check("OP-S13" in mcp_hits and "OP-036" in mcp_hits, "MCP secret args missed OP-S13: %s" % mcp_hits)
+    # #680: a call that is a secret-arg only is rewritten, not stopped. classify still records the rule.
+    code, err = run_hook(mcp("mcp__example__lookup", secret, session="s-fold-mcp"))
+    check(code == 0, "MCP secret-only hook exited %s: %s" % (code, err[:200]))
+    tagged_secret = {"api_key": split_by_tags("sk-abcdefghijklmnopqrst"), "path": "/tmp/ok.txt"}
+    tagged_hits = judge(mcp("mcp__example__lookup", tagged_secret))
+    check("OP-S13" in tagged_hits or "OP-036" in tagged_hits,
+          "tag-split MCP secret evaded the rule: %s" % tagged_hits)
+
+    # Executor sees the same folded bytes on a shadow allow.
+    os.environ["OPERATOR_GATE_MODE"] = "shadow"
+    try:
+        code, err, out = run_hook_full(shell("echo hello\u200b", session="s-fold-rewrite"))
+    finally:
+        os.environ.pop("OPERATOR_GATE_MODE", None)
+    check(code == 0 and "Proof:" not in err, "shadow fold allow failed (%s) %s" % (code, err[:180]))
+    try:
+        body = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
+    except ValueError:
+        body = {}
+    spec = body.get("hookSpecificOutput") or {}
+    check(spec.get("hookEventName") == "PreToolUse" and "updatedInput" not in body and "permissionDecision" not in spec,
+          "claude rewrite must sit under hookSpecificOutput without a decision: %r" % body)
+    updated = spec.get("updatedInput") or {}
+    check(updated.get("command") == "echo hello",
+          "executor was not given the folded bytes: stdout=%r" % out[:240])
+    check(updated.get("command") == g.fold_command("echo hello\u200b")[0],
+          "updatedInput diverged from fold_command")
+
+    # Near-duplicates of a stopped command count toward the brake; many-shot padding does not.
+    os.environ["OPERATOR_BRAKE_AT"] = "3"
+    try:
+        for i, cmd in enumerate((unfolded, split_by_tags(unfolded), "git push\u200b --force origin main")):
+            code, err = run_hook(shell(cmd, session="s-fold-brake"))
+            check(code == 2, "near-dup stop %d exited %s: %s" % (i, code, err[:160]))
+        code, err = run_hook(shell("echo held > %s" % (WORK / "fold-brake.txt"), session="s-fold-brake"))
+        check(code == 2 and "OP-024" in err, "near-duplicate attempts did not trip the brake: %s" % err[:220])
+
+        pad = "echo hello  # " + ("example padding %d. " % 7) * 80
+        for i in range(8):
+            code, err = run_hook(shell(pad + str(i), session="s-fold-pad"))
+            check(code == 0, "many-shot padding was stopped (%s) %s" % (code, err[:160]))
+        code, err = run_hook(shell("echo pad-ok > %s" % (WORK / "fold-pad.txt"), session="s-fold-pad"))
+        check(code == 0 and "OP-024" not in err, "many-shot padding tripped the brake: %s" % err[:200])
+    finally:
+        os.environ.pop("OPERATOR_BRAKE_AT", None)
+
+    # Recovery: stale permit, second spelling, reopened session, compact, suppressed record.
+    recs = stop_rows("OP-004")
+    check(bool(recs), "no OP-004 receipt to recover against")
+    if recs:
+        rec = recs[-1]
+        handle = "op-receipt-" + rec["digest"][:16]
+        permit_dir = OP / "permits"
+        permit_dir.mkdir(parents=True, exist_ok=True)
+        stale = {"action_digest": rec["action_digest"], "granted": time.time(), "expires": time.time() - 10,
+                 "single_use": True, "by": "owner-tty", "stop_receipt": rec["digest"], "session": rec["session"]}
+        (permit_dir / (rec["action_digest"] + ".json")).write_text(json.dumps(stale), encoding="utf-8")
+        code, err = run_hook(shell(split_by_tags(unfolded), session=rec["session"]))
+        check(code == 2, "stale permit bypassed the folded stop (%s)" % code)
+
+        code, err = run_hook(shell("git push -f origin main", session="s-fold-spell"))
+        check(code == 2 and "OP-004" in err, "second spelling bypassed the folded verdict: %s" % err[:180])
+
+        code, err = run_hook(shell(split_by_tags(unfolded), session="s-fold-reopen"))
+        check(code == 2 and ("OP-004" in err or "OP-S12" in err),
+              "reopened session dropped the folded stop: %s" % err[:200])
+
+        turn = {"id": "fedcba9876543210", "holds": True, "acked": None, "sealed_t": time.time(),
+                "chit": {"session": "s-fold-compact", "sealed": "2026-11-16T00:00:00Z", "stops": [], "allowed": [], "permits": []}}
+        turn_dir = OP / "state" / "turnover"
+        turn_dir.mkdir(parents=True, exist_ok=True)
+        (turn_dir / "s-fold-compact.json").write_text(json.dumps(turn), encoding="utf-8")
+        code, err = run_hook(shell(split_by_tags(unfolded), session="s-fold-compact"))
+        check(code == 2, "compacted session bypassed the folded stop (%s) %s" % (code, err[:200]))
+
+        day = sorted(path for path in (OP / "receipts").glob("*.jsonl"))[-1]
+        original = day.read_bytes()
+        try:
+            text_lines = original.decode("utf-8").splitlines()
+            last = json.loads(text_lines[-1])
+            last["digest"] = "0" * 64
+            text_lines[-1] = json.dumps(last, sort_keys=True)
+            day.write_text("\n".join(text_lines) + "\n", encoding="utf-8")
+            code, err = run_hook(shell(split_by_tags(unfolded), session="s-fold-suppressed"))
+            check(code == 2 and "op-receipt-" + ("0" * 16) not in err,
+                  "suppressed receipt became an allow or a forged handle: %s %s" % (code, err[:220]))
+        finally:
+            day.write_bytes(original)
+
+    return problems, measured
+
+
+def redaction_checks():
+    """Synthetic fixtures for #680: secret-argument redaction, counterexample, recovery."""
+    problems = []
+    measured = {"decision_ms": 0.0, "receipt_bytes": 0, "tool_process_created": False}
+
+    def check(ok, message):
+        if not ok:
+            problems.append(message)
+
+    model = {"path": "/tmp/ok.txt", "api_key": "sk-abcdefghijklmnopqrst", "mode": "read", "limit": 10}
+    rewritten, fields = g.secret_arg_rewrite(model)
+    check(fields == ["api_key"] and rewritten == {"path": "/tmp/ok.txt", "mode": "read", "limit": 10},
+          "rewrite dropped a non-secret field: %r %r" % (rewritten, fields))
+    bad, reason = g.secret_arg_rewrite({"command": "echo sk-abcdefghijklmnopqrst", "path": "/tmp/ok.txt"})
+    check(bad is None and "path or command" in str(reason),
+          "command-held secret was rewritten: %r %r" % (bad, reason))
+
+    started = time.perf_counter()
+    code, err, out = run_hook_full(mcp("mcp__example__lookup", model, session="s-680-pos"))
+    measured["decision_ms"] = (time.perf_counter() - started) * 1000
+    check(code == 0 and "OPERATOR: STOPPED" not in err,
+          "secret-only MCP call was stopped (%s) %s" % (code, err[:200]))
+    try:
+        body = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
+    except ValueError:
+        body = {}
+    check("updatedInput" not in body, "claude rewrite was printed at the top level: %r" % body)
+    updated = (body.get("hookSpecificOutput") or {}).get("updatedInput") or {}
+    check(updated.get("path") == "/tmp/ok.txt" and updated.get("mode") == "read" and updated.get("limit") == 10,
+          "rewrite lost a model field: %r" % updated)
+    check("api_key" not in updated, "credential field was left in updatedInput: %r" % updated)
+    check(set(model) - set(updated) == {"api_key"}, "rewrite omitted more than the secret field")
+
+    rows = [row for row in g.receipt_rows() if row.get("via") == "secret-redaction"]
+    check(bool(rows), "no redaction receipt was written")
+    if rows:
+        rec = rows[-1]
+        measured["receipt_bytes"] = len(json.dumps(rec, sort_keys=True).encode("utf-8"))
+        measured["tool_process_created"] = True
+        check(rec.get("stripped_fields") == ["api_key"], "receipt did not name the stripped field: %s" % rec.get("stripped_fields"))
+        preview = json.dumps(rec)
+        check("sk-abcdefghijklmnopqrst" not in preview, "secret value leaked into the receipt")
+        check("api_key" in (rec.get("stripped_fields") or []) or "api_key" in (rec.get("detail") or ""),
+              "receipt did not record the field name")
+
+    # Cursor and Gemini host keys also return the complete object minus the secret.
+    for source, key in (("cursor", "updated_input"), ("gemini", "tool_input")):
+        code, err, out = run_hook_full(mcp("mcp__example__lookup", model, session="s-680-%s" % source), source)
+        try:
+            body = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
+        except ValueError:
+            body = {}
+        updated = body.get(key) or {}
+        check(code == 0 and updated.get("path") == "/tmp/ok.txt" and "api_key" not in updated and key in body,
+              "%s rewrite was wrong: code=%s body=%r" % (source, code, body))
+
+    # A rewrite that would drop command is rejected and the call stops.
+    counter = {"command": "sk-abcdefghijklmnopqrst", "path": "/tmp/ok.txt", "mode": "read"}
+    code, err, out = run_hook_full(mcp("mcp__example__lookup", counter, session="s-680-counter"))
+    check(code == 2 and "updatedInput" not in out and "OPERATOR: STOPPED" in err,
+          "command-held secret was rewritten into an allow (%s) %s %s" % (code, err[:160], out[:120]))
+
+    # A real STOP is not rewritten into an allow, even when a secret field sits beside the command.
+    mixed = shell("git push --force origin main", session="s-680-stop")
+    mixed["tool_input"]["api_key"] = "sk-abcdefghijklmnopqrst"
+    code, err, out = run_hook_full(mixed)
+    check(code == 2 and "OP-004" in err and "updatedInput" not in out,
+          "STOP was rewritten into an allow: %s %s %s" % (code, err[:180], out[:120]))
+
+    # Recovery: stale permit, second spelling, reopen, compact, suppressed record still stop a command-held secret.
+    recs = stop_rows()
+    check(bool(recs), "no STOP receipt for recovery")
+    if recs:
+        rec = recs[-1]
+        permit_dir = OP / "permits"
+        permit_dir.mkdir(parents=True, exist_ok=True)
+        stale = {"action_digest": rec["action_digest"], "granted": time.time(), "expires": time.time() - 10,
+                 "single_use": True, "by": "owner-tty", "stop_receipt": rec.get("digest") or "", "session": rec.get("session")}
+        if rec.get("action_digest"):
+            (permit_dir / (rec["action_digest"] + ".json")).write_text(json.dumps(stale), encoding="utf-8")
+            code, err = run_hook(mcp("mcp__example__lookup", counter, session=rec.get("session") or "s-680-stale"))
+            check(code == 2, "stale permit bypassed the redaction counterexample (%s)" % code)
+        spelled = {"cmd": "sk-abcdefghijklmnopqrst", "path": "/tmp/ok.txt", "mode": "read"}
+        code, err = run_hook(mcp("mcp__example__lookup", spelled, session="s-680-spell"))
+        check(code == 2, "second spelling bypassed the counterexample (%s) %s" % (code, err[:160]))
+        code, err = run_hook(mcp("mcp__example__lookup", counter, session="s-680-reopen"))
+        check(code == 2, "reopened session bypassed the counterexample (%s)" % code)
+        turn = {"id": "0123456789abcdef", "holds": True, "acked": None, "sealed_t": time.time(),
+                "chit": {"session": "s-680-compact", "sealed": "2026-11-16T00:00:00Z", "stops": [], "allowed": [], "permits": []}}
+        turn_dir = OP / "state" / "turnover"
+        turn_dir.mkdir(parents=True, exist_ok=True)
+        (turn_dir / "s-680-compact.json").write_text(json.dumps(turn), encoding="utf-8")
+        code, err = run_hook(mcp("mcp__example__lookup", counter, session="s-680-compact"))
+        check(code == 2, "compacted session bypassed the counterexample (%s) %s" % (code, err[:180]))
+        day = sorted(path for path in (OP / "receipts").glob("*.jsonl"))[-1]
+        original = day.read_bytes()
+        try:
+            lines = original.decode("utf-8").splitlines()
+            last = json.loads(lines[-1])
+            last["digest"] = "0" * 64
+            lines[-1] = json.dumps(last, sort_keys=True)
+            day.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            code, err = run_hook(mcp("mcp__example__lookup", counter, session="s-680-suppressed"))
+            check(code == 2 and "op-receipt-" + ("0" * 16) not in err,
+                  "suppressed receipt became an allow or a forged handle: %s %s" % (code, err[:200]))
+        finally:
+            day.write_bytes(original)
+
+    return problems, measured
+
+
 def main():
     rules = numbered()
     problems = []
@@ -643,6 +922,14 @@ def main():
             problems.append("first force-push quoted a forbids edge that did not exist yet")
     proof_problems, measured = proof_kernel_checks(elapsed_ms)
     problems.extend(proof_problems)
+    fold_problems, fold_measured = canonicalization_checks()
+    problems.extend(fold_problems)
+    if fold_measured.get("decision_ms"):
+        measured = fold_measured
+    redaction_problems, redaction_measured = redaction_checks()
+    problems.extend(redaction_problems)
+    if redaction_measured.get("decision_ms"):
+        measured = redaction_measured
     if failed or problems:
         for line in problems:
             print("FAIL " + line)

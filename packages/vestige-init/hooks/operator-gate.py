@@ -423,7 +423,7 @@ RULES = {
     "OP-S03": ("public-mutation", "SHADOW", "gh pr/issue/discussion mutation (claim-gate territory)."),
     "OP-S04": ("secret-shaped-write", "SHADOW", "Writing a credential-shaped string to disk."),
     "OP-S05": ("unresolved-delete", "SHADOW", "Delete whose targets cannot be resolved statically (xargs, inline code)."),
-    "OP-S06": ("pipe-to-interpreter", "SHADOW",
+    "OP-S06": ("pipe-to-interpreter", "STOP",
                "Piping fetched/encoded content straight into sh/python executes unreviewed code."),
     "OP-S07": ("persistence-write", "SHADOW",
                "cron/launchd/systemd/at/tmux -d writes schedule code to run outside every audit window."),
@@ -431,9 +431,9 @@ RULES = {
                "LD_PRELOAD/DYLD_*/NODE_OPTIONS/BASH_ENV/PATH= turn allow-listed binaries into arbitrary code."),
     "OP-S11": ("exfil-shape", "SHADOW",
                "Uploading/POSTing file contents (esp. credential-shaped paths) to the network."),
-    "OP-S12": ("invisible-characters", "SHADOW",
+    "OP-S12": ("invisible-characters", "STOP",
                "Zero-width/Bidi control characters in a command are visual deception (Trojan Source)."),
-    "OP-S13": ("mcp-argument-exfil", "SHADOW",
+    "OP-S13": ("mcp-argument-exfil", "STOP",
                "Secrets or sensitive files traveling through MCP tool arguments (the Invariant/postmark/Supabase pattern)."),
     "OP-S14": ("agent-config-write", "SHADOW",
                "Writing agent instruction/config files (CLAUDE.md, .cursorrules, .mcp.json) plants future instructions (Nx, CurXecute)."),
@@ -469,6 +469,86 @@ SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024
 PERSISTENCE_PROGS = {"crontab", "at", "batch", "launchctl", "systemctl", "tmux", "screen",
                      "anacron", "schtasks"}
 INVISIBLE_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u00ad]")
+# Shared fold used by the gate and by any executor rewrite (updatedInput / updated_input / tool_input).
+# Only Unicode Tags, bidi controls, and zero-width characters are stripped. Other non-ASCII is left intact.
+TAG_RE = re.compile(r"[\U000E0000-\U000E007F]")
+BIDI_RE = re.compile(r"[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]")
+ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200D\u2060\uFEFF\u00AD\u180E\u034F]")
+FOLD_STRIP_RE = re.compile(
+    r"[\U000E0000-\U000E007F\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF\u00AD\u180E\u034F\u061C]"
+)
+
+
+def fold_command(text):
+    """One canonicalization, then match. Returns (folded, kinds).
+
+    kinds lists what was stripped: 'tag', 'bidi', 'zero-width'. The folded
+    bytes are what the executor must see; a strip the executor does not share
+    is a failure. The fold does not decode tag letters into ASCII.
+    """
+    if text is None:
+        return text, []
+    s = text if isinstance(text, str) else str(text)
+    kinds = []
+    if TAG_RE.search(s):
+        kinds.append("tag")
+    if BIDI_RE.search(s):
+        kinds.append("bidi")
+    if ZERO_WIDTH_RE.search(s):
+        kinds.append("zero-width")
+    if not kinds:
+        return s, []
+    return FOLD_STRIP_RE.sub("", s), kinds
+
+
+def fold_value(obj, kinds=None):
+    """Fold every string value in a tool-input object. Keys stay as the model set them."""
+    found = kinds if kinds is not None else []
+    if isinstance(obj, str):
+        folded, hit = fold_command(obj)
+        for kind in hit:
+            if kind not in found:
+                found.append(kind)
+        return folded, found
+    if isinstance(obj, list):
+        return [fold_value(item, found)[0] for item in obj], found
+    if isinstance(obj, dict):
+        return {key: fold_value(val, found)[0] for key, val in obj.items()}, found
+    return obj, found
+
+
+def fold_key(text):
+    """Exact folded form used to count near-duplicate attempts. No fuzzy padding match."""
+    folded, _ = fold_command(text or "")
+    return " ".join(folded.split())
+
+
+def emit_folded_input(source, folded_ti):
+    """Hosts replace the whole object. Return the original schema with folded string values."""
+    if source == "cursor":
+        payload = {"updated_input": folded_ti}
+    elif source == "gemini":
+        payload = {"tool_input": folded_ti}
+    elif source in ("claude", "claude-code"):
+        # Claude Code reads a PreToolUse rewrite only inside hookSpecificOutput. No
+        # permissionDecision is sent, so the normal permission flow still applies.
+        payload = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": folded_ti}}
+    else:
+        payload = {"updatedInput": folded_ti}
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def finish_allow(source, payload, meta):
+    """On an allow, hand the executor the same folded bytes the gate matched."""
+    folded = meta.get("folded_input") if isinstance(meta, dict) else None
+    orig = None
+    if isinstance(payload, dict):
+        orig = payload.get("tool_input") or payload.get("toolInput") or payload.get("input")
+    if isinstance(folded, dict) and isinstance(orig, dict) and folded != orig:
+        emit_folded_input(source, folded)
+    return 0
+
 EXFIL_SECRET_PATH_RE = re.compile(r"\.(env|pem|key|p12|pfx|kdbx)$|id_rsa|credentials|\.aws[/\\]|\.netrc", re.I)
 MCP_SECRET_ARG_RE = re.compile(
     r"AKIA[0-9A-Z]{16}|sk-ant-\S{10,}|sk-proj-\S{10,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{16,}|"
@@ -5297,11 +5377,13 @@ def analyze(cmd, cwd, depth=0, vars_=None):
         DEFS_SEEN.clear()
     vars_ = dict(vars_) if vars_ is not None else {"HOME": HOME, "USERPROFILE": HOME}
     state = {"cwd": cwd}
-    if INVISIBLE_RE.search(cmd):
+    folded, fold_kinds = fold_command(cmd)
+    if fold_kinds:
         effects.append({"prog": "\u200b", "seg": cmd[:120], "targets": [], "recursive": False,
                         "kind": "invisible-chars", "filtered": False, "unresolved": False, "flags": [],
-                        "args": [], "cwd": state["cwd"] or UNKNOWN_CWD, "writes": [], "text": cmd[:120]})
-        cmd = INVISIBLE_RE.sub("", cmd)
+                        "args": [], "cwd": state["cwd"] or UNKNOWN_CWD, "writes": [], "text": cmd[:120],
+                        "fold_kinds": list(fold_kinds)})
+        cmd = folded
     cmd = decode_ansi_c_quotes(cmd)
     cmd, bodies = extract_heredocs(cmd)
     # $(( a / b )) and (( i++ )) hold numbers, not a command; a $(...) inside one still runs
@@ -10143,6 +10225,13 @@ def classify(payload, cfg):
     hits, previews = [], []
     meta = {"normalized": "", "transforms": []}
     effects_out = []
+    ti, fold_kinds = fold_value(ti)
+    if fold_kinds:
+        meta["transforms"].append("shared-fold")
+        meta["transforms"].extend("fold-%s" % kind for kind in fold_kinds)
+        meta["folded_input"] = ti
+        hits.append(("OP-S12", "zero-width/Bidi/tag characters in the tool input",
+                     "Legitimate commands never contain invisible characters; retype it plainly."))
     blob = json.dumps(ti, ensure_ascii=False)
 
     if "OPERATOR_CANARY_STOP_7f3a" in blob:
@@ -10238,9 +10327,13 @@ def classify(payload, cfg):
         if MCP_SECRET_ARG_RE.search(blob_l) or re.search(r"BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY", blob_l):
             hits.append(("OP-036", "%s carries a credential-shaped argument" % tool_raw,
                          "Secrets never belong in tool arguments; pass a file path the owner approved or nothing."))
+            hits.append(("OP-S13", "%s carries a credential-shaped argument" % tool_raw,
+                         "Secrets never belong in tool arguments; pass a file path the owner approved or nothing."))
         for m in re.finditer(r'(?:^|[,"{\s])((?:~|\$HOME|/Users/|/home/)[^"\',}\s]*)', blob_l):
             if MCP_SENSITIVE_PATH_RE.search(m.group(1)):
                 hits.append(("OP-036", "%s reads sensitive path %s" % (tool_raw, m.group(1)),
+                             "Ask the owner before tool calls that touch credentials or identity files."))
+                hits.append(("OP-S13", "%s reads sensitive path %s" % (tool_raw, m.group(1)),
                              "Ask the owner before tool calls that touch credentials or identity files."))
                 break
     elif tool in ("read", "read_file", "view_file", "grep", "search", "grep_search", "file_search") or "file_path" in ti:
@@ -10266,7 +10359,13 @@ def classify(payload, cfg):
                     if "xargs-substituted" not in meta["transforms"]:
                         meta["transforms"].append("xargs-substituted")
         # every protection Operator Lite has, Operator has: Lite judges the same call, and what it stops is added
-        l_hits, l_transforms, l_deletes, l_writes = guarded(lite_judgment, ([], [], [], []), payload)
+        lite_payload = payload
+        if fold_kinds:
+            lite_payload = dict(payload)
+            lite_payload["tool_input"] = ti
+            if "toolInput" in lite_payload:
+                lite_payload["toolInput"] = ti
+        l_hits, l_transforms, l_deletes, l_writes = guarded(lite_judgment, ([], [], [], []), lite_payload)
         have = {h[0] for h in hits}
         call_text = str(ti.get("command") or ti.get("cmd") or "")
         for h in l_hits:
@@ -10290,6 +10389,51 @@ SECRET_RE = re.compile(r"(sk_live_\S+|rk_live_\S+|sk-[A-Za-z0-9_\-]{16,}|ghp_[A-
 
 def redact(s):
     return SECRET_RE.sub("[REDACTED]", s or "")[:200]
+
+
+SECRET_ARG_RULES = {"OP-036", "OP-S13"}
+PATH_COMMAND_FIELDS = {"path", "command", "cmd", "file_path", "target_file", "filepath"}
+
+
+def value_is_secret(val):
+    """Secret-shaped argument values only. Keys are not a word list; the shape of the value is."""
+    if isinstance(val, str):
+        return bool(MCP_SECRET_ARG_RE.search(val) or SECRET_RE.search(val)
+                    or re.search(r"BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY", val))
+    if isinstance(val, dict):
+        return any(value_is_secret(v) for v in val.values())
+    if isinstance(val, list):
+        return any(value_is_secret(v) for v in val)
+    return False
+
+
+def secret_arg_rewrite(ti):
+    """Return (rewritten, stripped_fields) or (None, reason).
+
+    The rewritten object is the complete model object minus secret-shaped
+    fields. Dropping path or command, or omitting any other field the model
+    set, is a failure: the call stops instead.
+    """
+    if not isinstance(ti, dict):
+        return None, "input is not an object"
+    drop = [key for key, val in ti.items() if value_is_secret(val)]
+    if not drop:
+        return None, "no secret-shaped field"
+    if any(key in PATH_COMMAND_FIELDS for key in drop):
+        return None, "would drop path or command"
+    rewritten = {key: val for key, val in ti.items() if key not in drop}
+    if set(ti) - set(rewritten) != set(drop):
+        return None, "omitted a non-secret field"
+    if not rewritten:
+        return None, "nothing remains after stripping secrets"
+    return rewritten, drop
+
+
+def tool_input_of(payload):
+    if not isinstance(payload, dict):
+        return {}
+    ti = payload.get("tool_input") or payload.get("toolInput") or payload.get("input") or {}
+    return ti if isinstance(ti, dict) else {"command": ti}
 
 
 def ensure_dirs():
@@ -11142,7 +11286,7 @@ def hook_main(argv):
                                    **({"tests": True} if ran_tests else {}),
                                    **({"protected": list(PROTECTED_EVIDENCE)} if PROTECTED_EVIDENCE else {})))
                 rewind_note(kept)
-            return 0
+            return finish_allow(source, payload, meta)
 
         gmode = global_mode()
         enforce_hits, shadow_hits = [], []
@@ -11191,6 +11335,29 @@ def hook_main(argv):
         if loss:
             base_rec["loss"] = loss
         if enforce_hits:
+            only_secret = {h[0] for h in enforce_hits} <= SECRET_ARG_RULES
+            model_ti = tool_input_of(payload)
+            base_ti = meta.get("folded_input") if isinstance(meta.get("folded_input"), dict) else model_ti
+            rewritten, stripped = secret_arg_rewrite(base_ti) if only_secret else (None, None)
+            if only_secret and rewritten is not None:
+                # Keep every non-secret field the model set, even if the fold ran first.
+                for key, val in model_ti.items():
+                    if key not in stripped and key not in rewritten:
+                        rewritten, stripped = None, "omitted a non-secret field"
+                        break
+                    if key not in stripped and key in PATH_COMMAND_FIELDS and key not in rewritten:
+                        rewritten, stripped = None, "would drop path or command"
+                        break
+            if only_secret and isinstance(rewritten, dict) and isinstance(stripped, list):
+                emit_folded_input(source, rewritten)
+                write_receipt(dict(base_rec, decision="ALLOW", via="secret-redaction",
+                                   commitments=[h[0] for h in enforce_hits],
+                                   stripped_fields=list(stripped),
+                                   detail="stripped %s" % ", ".join(stripped)))
+                return 0
+            if only_secret and rewritten is None and gmode == "enforce":
+                # fall through to STOP: a rewrite that would drop path or command is rejected
+                meta["secret_rewrite"] = stripped
             floor = any(h[0] in FLOOR_RULES for h in enforce_hits)
             permit = None if floor else consume_permit(adigest, base_rec["session"])
             if permit:
@@ -11198,7 +11365,7 @@ def hook_main(argv):
                 write_receipt(dict(base_rec, decision="ALLOW", via="permit", commitments=[h[0] for h in enforce_hits],
                                    **({"rewind": kept} if kept else {})))
                 rewind_note(kept)
-                return 0
+                return finish_allow(source, payload, meta)
             top = enforce_hits[0]
             rd = write_receipt(dict(base_rec, decision="STOP", commitment=top[0], rule=top[1],
                                     commitments=[h[0] for h in enforce_hits], detail=redact(top[3]),
@@ -11244,13 +11411,13 @@ def hook_main(argv):
                 write_receipt(dict(base_rec, decision="ALLOW", via="permit", layer="taste", **({"rewind": kept} if kept else {}),
                                    commitment=c.get("commitment_id"), law_digest=law.get("law_digest", "")))
                 rewind_note(kept)
-                return 0
+                return finish_allow(source, payload, meta)
             if guarded(law_lift_take, False, c, base_rec["session"]):
                 # the law names a tool to ask first (recall); it was asked, so this one call runs
                 write_receipt(dict(base_rec, decision="ALLOW", via="law_lift", layer="taste",
                                    commitment=c.get("commitment_id"), law_digest=law.get("law_digest", ""),
                                    detail=redact("; ".join(t_stop["evidence"]))))
-                return 0
+                return finish_allow(source, payload, meta)
             rd = write_receipt(dict(base_rec, decision="STOP", layer="taste",
                                     reason_code="TASTE_VIOLATION", commitment=c.get("commitment_id"),
                                     governing_commitments=[{"id": c.get("commitment_id"), "version": c.get("version", 1)}],
@@ -11327,7 +11494,7 @@ def hook_main(argv):
         elif t_shadow:
             write_receipt(dict(base_rec, decision="SHADOW_TASTE_MULTI",
                                detail=redact("; ".join(ev for _, ev in t_shadow))))
-        return 0
+        return finish_allow(source, payload, meta)
     except SystemExit:
         raise
     except Exception as exc:  # gate defect: degrade, never brick
