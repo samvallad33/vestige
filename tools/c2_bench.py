@@ -280,7 +280,6 @@ def record(bench, qid, cat, gate, gold_turns, gold_sess, corpus_turns, corpus_se
         "pool_has_turn": any_at(gold_turns, dump["pool50_ids"], 50),
         "pre_has_turn": any_at(gold_turns, dump["pre_rank_ids"], 5),
         "post_has_turn": any_at(gold_turns, dump["post_kemeny_ids"], 5),
-        "seat_fires": int(dump.get("queried_speaker_fires") or 0),
     }
 
 
@@ -323,24 +322,6 @@ def fmt_counts(keys, bag, n):
     return " ".join(parts)
 
 
-def print_halves(rows):
-    """Even/odd gate index in harness order.
-
-    Frozen before any outcome was read: index 0, 2, 4... is the design half
-    and index 1, 3, 5... is the confirmation half. This is not a ranker input.
-    """
-    print("===== EVEN GATE INDEX (design) / ODD GATE INDEX (confirmation) =====")
-    print("split: 0-based index among gate rows in harness order, frozen before the run")
-    for bench in ("LME_S", "LoCoMo", "BEAM"):
-        gate = [r for r in rows if r["bench"] == bench and r["gate"]]
-        for name, half in (("even", gate[0::2]), ("odd", gate[1::2])):
-            n = len(half)
-            t1 = sum(r["turn_hit"].get("1", 0) for r in half)
-            fires = sum(int(r.get("seat_fires") or 0) for r in half)
-            fired = sum(1 for r in half if int(r.get("seat_fires") or 0) > 0)
-            print(f"  {bench} {name} n={n} turn@1={t1}/{n} swaps={fires} queries={fired}")
-
-
 def print_scoreboard(rows):
     print("===== RULE 1 / RULE 2 STAGE FUNNEL + C2 SCOREBOARD =====")
     print("session pre_rank@5 == session post_kemeny@5 == final_session_ids[:5]")
@@ -353,9 +334,6 @@ def print_scoreboard(rows):
         print("  SESS  " + fmt_counts(SESS_KEYS[bench], acc["sess"], n))
         print("  FUNNEL turn any-gold " + fmt_counts(FUNNEL_KEYS, acc["funnel_turn"], n))
         print("  FUNNEL sess any-gold " + fmt_counts(FUNNEL_KEYS, acc["funnel_sess"], n))
-        fires = sum(int(r.get("seat_fires") or 0) for r in gate)
-        fired = sum(1 for r in gate if int(r.get("seat_fires") or 0) > 0)
-        print(f"  queried_speaker_reply swaps={fires} queries={fired}/{n}")
         for cat, c in sorted(cats.items(), key=lambda kv: str(kv[0])):
             print(
                 f"    [{cat}] n={c['n']}  TURN {fmt_counts(TURN_KEYS[bench], c['turn'], c['n'])}"
@@ -631,7 +609,6 @@ def main():
         for r in rows:
             f.write(json.dumps(r, separators=(",", ":")) + "\n")
     print_scoreboard(rows)
-    print_halves(rows)
     summary = {}
     for bench in ("LME_S", "LoCoMo", "BEAM"):
         acc, cats = tally(rows, bench)
