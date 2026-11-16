@@ -4789,26 +4789,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &mut t_scene,
     );
 
-    // On-topic supersession clamp: an older turn `old` is only damped when a newer turn `lat`
-    // that explicitly supersedes `old` ALSO matches the query (`t_exact_mask[lat] != 0`)
-    // with comparable or stronger lexical evidence (`t_own[lat] >= 0.55 * t_own[old]`).
-    if !it.temporal && !it.is_event_sequence {
-        for lat in 0..nt {
-            if ix.turns[lat].supersedes_turns.is_empty() || t_exact_mask[lat] == 0 || t_own[lat] <= 0.0 {
-                continue;
-            }
-            for &old in &ix.turns[lat].supersedes_turns {
-                if old < nt
-                    && t_scene[old] > 0.0
-                    && (t_exact_mask[lat] & t_exact_mask[old]) != 0
-                    && t_own[lat] >= 0.55 * t_own[old]
-                {
-                    t_scene[old] *= 0.20;
-                }
-            }
-        }
-    }
-
     // Isolated 2-hop Meet-in-the-Middle WordNet + Haystack PPMI channel (`t_bridge`).
     // Borrow-checker clean; never mutates `t_own`, `t_raw`, `t_scene`, or `s_score`.
     let mut t_bridge = vec![0.0f32; nt];
