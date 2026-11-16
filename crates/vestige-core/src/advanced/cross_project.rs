@@ -659,6 +659,28 @@ pub struct MemoryForLearning {
     pub category: Option<PatternCategory>,
 }
 
+impl PatternCategory {
+    /// The category whose canonical name (see `category_to_string`) equals
+    /// `tag`, case-insensitively. A tag is an explicit label, not a keyword.
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        let t = tag.trim().to_ascii_lowercase();
+        [
+            Self::ErrorHandling,
+            Self::AsyncConcurrency,
+            Self::Testing,
+            Self::Architecture,
+            Self::Performance,
+            Self::Security,
+            Self::Debugging,
+            Self::Refactoring,
+            Self::Documentation,
+            Self::Tooling,
+        ]
+        .into_iter()
+        .find(|c| category_to_string(c) == t)
+    }
+}
+
 fn category_to_string(cat: &PatternCategory) -> &'static str {
     match cat {
         PatternCategory::ErrorHandling => "error-handling",

@@ -368,3 +368,46 @@ test('the reflex shim fails open when the server is missing', async () => {
   const out = await shim.run({ client: 'claude', configFile: config, input: { hook_event_name: 'PostToolUse', session_id: 's1' }, deadlineMs: 200 });
   assert.deepEqual(out, {});
 });
+test('enforcement is on by default: PermissionRequest blocks on failure, Cursor stop fails closed, recall stays open', () => {
+  const f = reflexFixture('6.2.0'); setup.apply(setup.plan({ ...f, platform: 'linux' }));
+  const claude = JSON.parse(fs.readFileSync(path.join(f.home, '.claude', 'settings.json'))).hooks;
+  const permit = claude.PermissionRequest.flatMap(g => g.hooks).find(h => h.type === 'mcp_tool');
+  assert(permit && permit.onFailure === 'block' && permit.input.action === 'reflex', 'one-use permit fails closed');
+  for (const event of ['Stop', 'StopFailure', 'PostToolBatch']) assert(claude[event].some(g => g.hooks.some(h => h.type === 'mcp_tool')), event);
+  const stopParams = claude.Stop.flatMap(g => g.hooks).find(h => h.type === 'mcp_tool').input.params;
+  assert.equal(stopParams.last_assistant_message, '${last_assistant_message}');
+  assert.equal(stopParams.enforce, undefined);
+  assert.equal(claude.UserPromptSubmit.flatMap(g => g.hooks).find(h => h.type === 'mcp_tool').input.params.prompt, '${prompt}');
+  const cursor = JSON.parse(fs.readFileSync(path.join(f.home, '.cursor', 'hooks.json'))).hooks;
+  assert(cursor.stop.some(h => h.command.includes('reflex.cjs') && h.failClosed === true), 'cursor stop fails closed');
+  assert(cursor.beforeSubmitPrompt.every(h => h.failClosed === false), 'prompt recall stays fail-open');
+  const config = JSON.parse(fs.readFileSync(path.join(f.home, '.vestige', 'memory', 'config.json')));
+  assert.equal(config.enforce, true);
+  assert.equal(setup.plan({ ...f, platform: 'linux' }).changes.length, 0, 'installing twice gives the same result');
+});
+test('--no-enforce keeps every record and drops every block', () => {
+  const f = reflexFixture('6.2.0'); setup.apply(setup.plan({ ...f, platform: 'linux', enforce: false }));
+  const claude = JSON.parse(fs.readFileSync(path.join(f.home, '.claude', 'settings.json'))).hooks;
+  assert.equal(claude.PermissionRequest, undefined);
+  assert.equal(claude.Stop.flatMap(g => g.hooks).find(h => h.type === 'mcp_tool').input.params.enforce, 'off');
+  const cursor = JSON.parse(fs.readFileSync(path.join(f.home, '.cursor', 'hooks.json'))).hooks;
+  assert(cursor.stop.every(h => h.failClosed === false));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, '.vestige', 'memory', 'config.json'))).enforce, false);
+});
+test('the reflex shim passes Reflex decisions through in each host shape', () => {
+  const shim = require('../hooks/reflex.cjs');
+  const block = { decision: 'block', reason: 'Turn blocked: git commit abc has no receipt naming that SHA.' };
+  assert.deepEqual(shim.hostOutput('codex', 'Stop', '', block), { decision: 'block', reason: block.reason });
+  assert.deepEqual(shim.hostOutput('cursor', 'stop', '', block), { followup_message: block.reason });
+  assert.deepEqual(shim.hostOutput('gemini', 'AfterAgent', '', block), { decision: 'block', reason: block.reason });
+  const deny = { permissionDecision: 'deny', permissionDecisionReason: 'Vestige ledger: files [a.rs] have no remember(...) receipt this turn.' };
+  assert.deepEqual(shim.hostOutput('codex', 'PreToolUse', '', deny), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: deny.permissionDecisionReason } });
+  assert.deepEqual(shim.hostOutput('cursor', 'preToolUse', '', deny), { permission: 'deny', user_message: deny.permissionDecisionReason, agent_message: deny.permissionDecisionReason });
+  assert.deepEqual(shim.hostOutput('codex', 'PostToolUse', '', block), {}, 'a block on a non-stop event is never invented');
+  const args = shim.argumentsFor('codex', 'Stop', { session_id: 's1', last_assistant_message: 'done', stop_hook_active: true });
+  assert.deepEqual([args.last_assistant_message, args.stop_hook_active], ['done', 'true']);
+  const prompt = shim.argumentsFor('cursor', 'beforeSubmitPrompt', { conversation_id: 'c1', prompt: 'from now on never X' });
+  assert.equal(prompt.prompt, 'from now on never X');
+  const saved = shim.argumentsFor('codex', 'PostToolUse', { session_id: 's1', tool_name: 'mcp__vestige__remember', tool_input: { content: 'x' }, tool_response: { nodeId: 'mem-00000000000000aa' } });
+  assert.deepEqual([saved.tool_input.content, saved.tool_response.nodeId], ['x', 'mem-00000000000000aa']);
+});

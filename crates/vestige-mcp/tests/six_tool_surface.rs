@@ -106,14 +106,14 @@ fn six_tool_surface_inline_receipts_stability_and_legacy_aliases() {
     assert!(guidance.contains("session(action='status', view='tools'"));
     assert!(!guidance.contains("memory_status"));
     assert!(guide["tools"][0]["inputSchema"]["properties"]["content"].is_object());
-    let first = s.tool("remember", json!({"content":"Tokyo transit uses a Suica card", "tags":["symbol:lme:tokyo"], "outputProfile":"compact"}));
+    let first = s.tool("remember", json!({"content":"Tokyo transit uses a Suica card", "tags":["symbol:demo:tokyo"], "outputProfile":"compact"}));
     let id = first["nodeId"].as_str().unwrap();
     let before =
         s.tool("recall", json!({"id":id, "detail_level":"brief"}))["nodes"][0]["stability"]
             .as_f64()
             .unwrap();
     std::thread::sleep(Duration::from_millis(3));
-    let second = s.tool("remember", json!({"content":"Tokyo transit directions updated", "tags":["symbol:lme:tokyo"], "outputProfile":"compact"}));
+    let second = s.tool("remember", json!({"content":"Tokyo transit directions updated", "tags":["symbol:demo:tokyo"], "outputProfile":"compact"}));
     assert_eq!(second["backfill_errors"], json!([]));
     let rows = second["backfill_receipts"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "{second}");
@@ -121,7 +121,7 @@ fn six_tool_surface_inline_receipts_stability_and_legacy_aliases() {
     assert_eq!(rows[0]["old_score"].as_f64().unwrap(), before);
     let after = s.tool(
         "recall",
-        json!({"handle":"symbol:lme:tokyo", "detail_level":"brief"}),
+        json!({"handle":"symbol:demo:tokyo", "detail_level":"brief"}),
     );
     let updated = after["nodes"]
         .as_array()
@@ -195,7 +195,7 @@ fn alias_tripwire_survives_restart_and_canonical_reflex_is_not_legacy() {
 fn oversized_trigger_skips_backfill_without_dropping_retrieval_handles() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Server::open(dir.path(), "on");
-    let mut tags: Vec<String> = (0..65).map(|i| format!("symbol:lme:topic{i}")).collect();
+    let mut tags: Vec<String> = (0..65).map(|i| format!("symbol:demo:topic{i}")).collect();
     tags.push("session:opaque".into());
     let saved = s.tool(
         "remember",
@@ -205,7 +205,7 @@ fn oversized_trigger_skips_backfill_without_dropping_retrieval_handles() {
     assert_eq!(saved["backfill_receipts"], json!([]));
     let got = s.tool(
         "recall",
-        json!({"handle":"symbol:lme:topic64", "detail_level":"full"}),
+        json!({"handle":"symbol:demo:topic64", "detail_level":"full"}),
     );
     assert_eq!(got["nodes"][0]["content"], "Whole dialogue round preserved");
     assert_eq!(got["nodes"][0]["tags"].as_array().unwrap().len(), 66);

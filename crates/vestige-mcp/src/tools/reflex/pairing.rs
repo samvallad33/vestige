@@ -257,6 +257,24 @@ pub(super) fn git_head(cwd: &str) -> Option<String> {
     None
 }
 
+/// The repository root for a working directory, read from git's own files.
+pub(super) fn git_root(cwd: &str) -> Option<String> {
+    if cwd.is_empty() {
+        return None;
+    }
+    let mut dir = PathBuf::from(cwd);
+    for _ in 0..12 {
+        let dotgit = dir.join(".git");
+        if dotgit.is_file() || dotgit.is_dir() {
+            return Some(dir.to_string_lossy().to_string());
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+    None
+}
+
 fn head_in(gitdir: &Path) -> Option<String> {
     let head = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
     let head = head.trim();
@@ -285,7 +303,31 @@ fn head_in(gitdir: &Path) -> Option<String> {
     (sha.len() >= 12 && is_hex(&sha)).then(|| sha[..12].to_string())
 }
 
-fn failure_item(inp: &Input, f: &Failure, last_write: Option<&str>) -> Value {
+fn pairing_tags(inp: &Input, kind: &str, sig: &str) -> Vec<String> {
+    let mut tags = vec![
+        format!("{kind}-{sig}"),
+        if kind == "fail" {
+            "reflex-failure".to_string()
+        } else {
+            "reflex-fix".to_string()
+        },
+        session_tag(&inp.session),
+    ];
+    if let Some(root) = git_root(&inp.cwd) {
+        tags.push(format!("repo:{root}"));
+    }
+    if !inp.agent.is_empty() {
+        tags.push(format!("agent:{}", inp.agent));
+    }
+    tags
+}
+
+fn failure_item(
+    inp: &Input,
+    f: &Failure,
+    last_write: Option<&str>,
+    reopen_of: Option<&str>,
+) -> Value {
     let mut content = format!(
         "TOOL FAILURE, recorded by Reflex. When: {} UTC. Session {}{}. Tool: {}. Ran: {}. \
          Error: {}. Exit code: {}. Working directory: {}. Git HEAD: {}. Call {}. Signature fail-{}: \
@@ -318,9 +360,16 @@ fn failure_item(inp: &Input, f: &Failure, last_write: Option<&str>) -> Value {
         ));
         links.push(json!({"kind": "derived_from", "to": w}));
     }
+    if let Some(fix) = reopen_of {
+        content.push_str(&format!(
+            " Reopened the fix {fix} on the same exact handle fail-{} after a later failure.",
+            f.sig
+        ));
+        links.push(json!({"kind": "reopened", "to": fix}));
+    }
     json!({
         "node_type": "event",
-        "tags": [format!("fail-{}", f.sig), "reflex-failure", session_tag(&inp.session)],
+        "tags": pairing_tags(inp, "fail", &f.sig),
         "source": format!("reflex {VERSION}, PostToolUseFailure {}", inp.call),
         "links": links,
         "content": content,
@@ -335,7 +384,7 @@ fn fix_item(inp: &Input, open: &OpenFailure) -> Value {
     };
     json!({
         "node_type": "event",
-        "tags": [format!("fix-{}", open.sig), "reflex-fix", session_tag(&inp.session)],
+        "tags": pairing_tags(inp, "fix", &open.sig),
         "source": format!("reflex {VERSION}, PostToolUse {}", inp.call),
         "links": [{"kind": "closes", "to": open.node}],
         "content": format!(
@@ -432,6 +481,7 @@ pub(super) async fn on_event(
                 )),
                 None => stored_fix(ctx, &f.sig).await,
             };
+            let reopen_of = earlier.as_ref().map(|(_, fix, _)| fix.clone());
             if let Some((failure, fix, how)) = earlier {
                 out.tell.push(format!(
                     "Reflex: this exact failure happened before (signature fail-{}). Failure {failure} was fixed, \
@@ -440,7 +490,12 @@ pub(super) async fn on_event(
                     how.trim_end_matches('.')
                 ));
             }
-            match ingest(ctx, failure_item(inp, &f, last_write.as_deref())).await {
+            match ingest(
+                ctx,
+                failure_item(inp, &f, last_write.as_deref(), reopen_of.as_deref()),
+            )
+            .await
+            {
                 Ok(node) => {
                     out.wrote.push(
                         json!({"kind": "failure", "memory": node, "signature": f.sig, "new": true}),
@@ -716,4 +771,370 @@ mod tests {
         assert_eq!(faded.len(), 1);
         assert_eq!(faded[0].0, "mem-0000000000000001");
     }
+
+    #[test]
+    fn a_later_failure_declares_a_reopened_link_to_the_fix() {
+        let inp = Input {
+            session: "sess-1".into(),
+            cwd: "/repo".into(),
+            call: "c1".into(),
+            command: "cargo test -p x".into(),
+            agent: "worker".into(),
+            ..Input::default()
+        };
+        let f = classify(
+            "Bash",
+            "cargo test -p x",
+            "Exit code 101\nerror[E0499]: cannot borrow",
+            false,
+        )
+        .unwrap();
+        let first = failure_item(&inp, &f, None, None);
+        let links = first["links"].as_array().unwrap();
+        assert!(
+            links.iter().all(|link| link["kind"] != "reopened"),
+            "{first}"
+        );
+        let later = failure_item(&inp, &f, None, Some("mem-0000000000000002"));
+        let links = later["links"].as_array().unwrap();
+        assert!(
+            links
+                .iter()
+                .any(|link| { link["kind"] == "reopened" && link["to"] == "mem-0000000000000002" }),
+            "{later}"
+        );
+        assert!(later["content"].as_str().unwrap().contains("fail-"));
+        let tags = later["tags"].as_array().unwrap();
+        assert!(
+            tags.iter()
+                .any(|tag| tag.as_str().unwrap().starts_with("fail-"))
+        );
+        assert!(tags.iter().any(|tag| tag == "agent:worker"));
+    }
 }
+
+/// Save-gate session (#774). Nested so `OpenFailure` here does not collide
+/// with the failure-pairing `OpenFailure` above (`sig`, `node`, `tool`,
+/// `words`, `agent`, `edited`).
+pub mod save_gate {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde::{Deserialize, Serialize};
+    use vestige_core::chain_fold::Hash32;
+    use vestige_core::provenance::{CausalEdge, TouchedFileHunk};
+
+    /// An active unclosed execution failure observed in the current session.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct OpenFailure {
+        pub failure_frame_digest: Hash32,
+        pub command: String,
+        pub error_sig: String,
+        pub exit_code: i32,
+        pub tool_call_digest: Hash32,
+        pub git_head_sha: String,
+        pub files: Vec<TouchedFileHunk>,
+        pub turn_seq: u64,
+        pub ts_ms: u64,
+    }
+
+    /// A failure paired with a subsequent passing command (`OpenFailure -> Fix`).
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ResolvedFailurePair {
+        pub failure: OpenFailure,
+        pub fix_command: String,
+        pub fix_frame_digest: Hash32,
+        pub resolved_turn_seq: u64,
+        pub resolved_ts_ms: u64,
+        pub anchored_by_remember: bool,
+    }
+
+    /// Lightweight event anchor captured unconditionally on every `Edit`/`Write` or `git commit`.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct FileAnchorEvent {
+        pub frame_digest: Hash32,
+        pub kind: String,
+        pub git_head_sha: String,
+        pub files: Vec<TouchedFileHunk>,
+        pub turn_seq: u64,
+        pub ts_ms: u64,
+    }
+
+    /// Result of checking whether a `Stop` or `PreToolUse(git commit)` must block for `remember`.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(tag = "decision", rename_all = "snake_case")]
+    pub enum SaveGateVerdict {
+        Allow,
+        Block {
+            missing_files: Vec<String>,
+            resolved_error_sigs: Vec<String>,
+            reason: String,
+        },
+    }
+
+    /// Auto-bind metadata returned to `vestige-mcp` (`remember(action="save")`) when `files` or
+    /// `links` are omitted by the calling agent (#774 / Wave 14M).
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RememberAutoBindContext {
+        pub session_id: String,
+        pub turn_seq: u64,
+        pub prompt_hash: Hash32,
+        pub git_head_sha: String,
+        pub bound_files: Vec<TouchedFileHunk>,
+        pub parent_frame_digest: Hash32,
+        pub causal_edge: CausalEdge,
+        pub resolved_error_sigs: Vec<String>,
+        pub rsb_target_digests: Vec<Hash32>,
+    }
+
+    /// Persistent per-session Reflex state.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ReflexSessionState {
+        pub session_id: String,
+        pub turn_seq: u64,
+        pub prompt_hash: Hash32,
+        pub git_head_sha: String,
+        pub last_frame_digest: Hash32,
+        pub edited_files_turn: BTreeMap<String, u64>,
+        pub saved_files_turn: BTreeMap<String, u64>,
+        pub edited_hunks: BTreeMap<String, TouchedFileHunk>,
+        pub open_failures: Vec<OpenFailure>,
+        pub resolved_pairs: Vec<ResolvedFailurePair>,
+        pub anchor_events: Vec<FileAnchorEvent>,
+        pub stop_blocks_in_turn: u32,
+    }
+
+    impl ReflexSessionState {
+        pub fn new(session_id: impl Into<String>) -> Self {
+            Self {
+                session_id: session_id.into(),
+                turn_seq: 0,
+                prompt_hash: [0u8; 32],
+                git_head_sha: String::new(),
+                last_frame_digest: [0u8; 32],
+                edited_files_turn: BTreeMap::new(),
+                saved_files_turn: BTreeMap::new(),
+                edited_hunks: BTreeMap::new(),
+                open_failures: Vec::new(),
+                resolved_pairs: Vec::new(),
+                anchor_events: Vec::new(),
+                stop_blocks_in_turn: 0,
+            }
+        }
+
+        pub fn on_user_prompt(&mut self, prompt_hash: Hash32, git_head_sha: impl Into<String>) {
+            self.turn_seq += 1;
+            self.prompt_hash = prompt_hash;
+            self.git_head_sha = git_head_sha.into();
+            self.stop_blocks_in_turn = 0;
+        }
+
+        pub fn record_file_anchor(
+            &mut self,
+            kind: impl Into<String>,
+            git_head_sha: impl Into<String>,
+            files: Vec<TouchedFileHunk>,
+            frame_digest: Hash32,
+            ts_ms: u64,
+        ) {
+            let kind = kind.into();
+            let git_head_sha = git_head_sha.into();
+            self.git_head_sha = git_head_sha.clone();
+            self.last_frame_digest = frame_digest;
+
+            if kind != "git_commit" {
+                for hunk in &files {
+                    self.edited_files_turn
+                        .insert(hunk.path.clone(), self.turn_seq);
+                    self.edited_hunks.insert(hunk.path.clone(), hunk.clone());
+                }
+            }
+
+            self.anchor_events.push(FileAnchorEvent {
+                frame_digest,
+                kind,
+                git_head_sha,
+                files,
+                turn_seq: self.turn_seq,
+                ts_ms,
+            });
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn record_command_outcome(
+            &mut self,
+            command: impl Into<String>,
+            exit_code: i32,
+            error_sig: Option<String>,
+            tool_call_digest: Hash32,
+            git_head_sha: impl Into<String>,
+            frame_digest: Hash32,
+            ts_ms: u64,
+        ) {
+            let command = command.into();
+            let git_head_sha = git_head_sha.into();
+            self.git_head_sha = git_head_sha.clone();
+            self.last_frame_digest = frame_digest;
+
+            if exit_code != 0 {
+                let files: Vec<TouchedFileHunk> = self.edited_hunks.values().cloned().collect();
+                self.open_failures.push(OpenFailure {
+                    failure_frame_digest: frame_digest,
+                    command,
+                    error_sig: error_sig.unwrap_or_else(|| format!("exit:{exit_code}")),
+                    exit_code,
+                    tool_call_digest,
+                    git_head_sha,
+                    files,
+                    turn_seq: self.turn_seq,
+                    ts_ms,
+                });
+            } else if !self.open_failures.is_empty() {
+                let drained = std::mem::take(&mut self.open_failures);
+                for failure in drained {
+                    self.resolved_pairs.push(ResolvedFailurePair {
+                        failure,
+                        fix_command: command.clone(),
+                        fix_frame_digest: frame_digest,
+                        resolved_turn_seq: self.turn_seq,
+                        resolved_ts_ms: ts_ms,
+                        anchored_by_remember: false,
+                    });
+                }
+            }
+        }
+
+        pub fn unsaved_edited_files(&self) -> Vec<String> {
+            self.edited_files_turn
+                .iter()
+                .filter(|(path, edited_turn)| {
+                    let saved_turn = self.saved_files_turn.get(*path).copied().unwrap_or(0);
+                    **edited_turn > saved_turn
+                })
+                .map(|(path, _)| (*path).clone())
+                .collect()
+        }
+
+        pub fn unanchored_resolved_errors(&self) -> Vec<String> {
+            let mut seen = BTreeSet::new();
+            for pair in &self.resolved_pairs {
+                if !pair.anchored_by_remember {
+                    seen.insert(pair.failure.error_sig.clone());
+                }
+            }
+            seen.into_iter().collect()
+        }
+
+        pub fn check_save_gate(&self) -> SaveGateVerdict {
+            let missing_files = self.unsaved_edited_files();
+            let resolved_error_sigs = self.unanchored_resolved_errors();
+
+            if missing_files.is_empty() && resolved_error_sigs.is_empty() {
+                return SaveGateVerdict::Allow;
+            }
+
+            let files_desc = if missing_files.is_empty() {
+                "none".to_owned()
+            } else {
+                missing_files.join(", ")
+            };
+            let errors_desc = if resolved_error_sigs.is_empty() {
+                "none".to_owned()
+            } else {
+                resolved_error_sigs.join(", ")
+            };
+
+            let reason = format!(
+                "You modified [{files_desc}] / resolved [{errors_desc}] without anchoring a \
+             remember(action='save', files=..., links=...) receipt in Strata. \
+             Call remember before ending your turn or committing."
+            );
+
+            SaveGateVerdict::Block {
+                missing_files,
+                resolved_error_sigs,
+                reason,
+            }
+        }
+
+        pub fn build_auto_bind_context(&self) -> RememberAutoBindContext {
+            let unsaved = self.unsaved_edited_files();
+            let bound_files: Vec<TouchedFileHunk> = unsaved
+                .iter()
+                .filter_map(|p| self.edited_hunks.get(p).cloned())
+                .collect();
+
+            let unanchored: Vec<&ResolvedFailurePair> = self
+                .resolved_pairs
+                .iter()
+                .filter(|p| !p.anchored_by_remember)
+                .collect();
+
+            let (parent_frame_digest, causal_edge, rsb_target_digests, resolved_error_sigs) =
+                if let Some(latest_pair) = unanchored.last() {
+                    let mut targets = Vec::new();
+                    let mut sigs = Vec::new();
+                    for pair in &unanchored {
+                        targets.push(pair.failure.failure_frame_digest);
+                        targets.push(pair.fix_frame_digest);
+                        sigs.push(pair.failure.error_sig.clone());
+                    }
+                    (
+                        latest_pair.failure.failure_frame_digest,
+                        CausalEdge::Closes,
+                        targets,
+                        sigs,
+                    )
+                } else if let Some(active_failure) = self.open_failures.last() {
+                    (
+                        active_failure.failure_frame_digest,
+                        CausalEdge::EvidenceOf,
+                        vec![active_failure.failure_frame_digest],
+                        vec![active_failure.error_sig.clone()],
+                    )
+                } else if let Some(latest_anchor) = self.anchor_events.last() {
+                    (
+                        latest_anchor.frame_digest,
+                        CausalEdge::DerivedFrom,
+                        vec![latest_anchor.frame_digest],
+                        Vec::new(),
+                    )
+                } else {
+                    (
+                        self.last_frame_digest,
+                        CausalEdge::Root,
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                };
+
+            RememberAutoBindContext {
+                session_id: self.session_id.clone(),
+                turn_seq: self.turn_seq,
+                prompt_hash: self.prompt_hash,
+                git_head_sha: self.git_head_sha.clone(),
+                bound_files,
+                parent_frame_digest,
+                causal_edge,
+                resolved_error_sigs,
+                rsb_target_digests,
+            }
+        }
+
+        pub fn mark_remember_saved(
+            &mut self,
+            covered_files: &[String],
+            remember_frame_digest: Hash32,
+        ) {
+            self.last_frame_digest = remember_frame_digest;
+            for path in covered_files {
+                self.saved_files_turn.insert(path.clone(), self.turn_seq);
+            }
+            for pair in &mut self.resolved_pairs {
+                pair.anchored_by_remember = true;
+            }
+            self.stop_blocks_in_turn = 0;
+        }
+    }
+}
+
+pub use save_gate::ReflexSessionState;

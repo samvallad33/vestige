@@ -148,65 +148,26 @@ impl DetectedIntent {
         }
     }
 
-    /// Get relevant tags for memory search
+    /// Tags for memory search, taken only from what the recorded actions
+    /// named (file, topic, system). No fixed tag vocabulary per intent.
     pub fn relevant_tags(&self) -> Vec<String> {
-        match self {
-            Self::Debugging { .. } => vec![
-                "debugging".to_string(),
-                "error".to_string(),
-                "troubleshooting".to_string(),
-                "fix".to_string(),
-            ],
-            Self::Refactoring { .. } => vec![
-                "refactoring".to_string(),
-                "architecture".to_string(),
-                "patterns".to_string(),
-                "clean-code".to_string(),
-            ],
-            Self::NewFeature { .. } => vec![
-                "feature".to_string(),
-                "implementation".to_string(),
-                "design".to_string(),
-            ],
-            Self::Learning { topic, .. } => vec![
-                "learning".to_string(),
-                "tutorial".to_string(),
-                topic.to_lowercase(),
-            ],
-            Self::Maintenance {
-                maintenance_type, ..
-            } => {
-                let mut tags = vec!["maintenance".to_string()];
-                match maintenance_type {
-                    MaintenanceType::DependencyUpdate => tags.push("dependencies".to_string()),
-                    MaintenanceType::SecurityPatch => tags.push("security".to_string()),
-                    MaintenanceType::Cleanup => tags.push("cleanup".to_string()),
-                    MaintenanceType::Configuration => tags.push("config".to_string()),
-                    MaintenanceType::Migration => tags.push("migration".to_string()),
-                }
-                tags
-            }
-            Self::CodeReview { .. } => vec!["review".to_string(), "code-quality".to_string()],
-            Self::Documentation { .. } => vec!["documentation".to_string(), "docs".to_string()],
-            Self::Optimization {
-                optimization_type, ..
-            } => {
-                let mut tags = vec!["optimization".to_string(), "performance".to_string()];
-                match optimization_type {
-                    OptimizationType::Speed => tags.push("speed".to_string()),
-                    OptimizationType::Memory => tags.push("memory".to_string()),
-                    OptimizationType::Size => tags.push("bundle-size".to_string()),
-                    OptimizationType::Startup => tags.push("startup".to_string()),
-                }
-                tags
-            }
-            Self::Integration { system } => vec![
-                "integration".to_string(),
-                "api".to_string(),
-                system.to_lowercase(),
-            ],
+        let named: Vec<&str> = match self {
+            Self::Debugging { suspected_area, .. } => vec![suspected_area.as_str()],
+            Self::Refactoring { target, .. } => vec![target.as_str()],
+            Self::NewFeature { feature_description, .. } => vec![feature_description.as_str()],
+            Self::Learning { topic, .. } => vec![topic.as_str()],
+            Self::Maintenance { target, .. } => target.iter().map(String::as_str).collect(),
+            Self::CodeReview { files, .. } => files.iter().map(String::as_str).collect(),
+            Self::Documentation { subject } => vec![subject.as_str()],
+            Self::Optimization { target, .. } => vec![target.as_str()],
+            Self::Integration { system } => vec![system.as_str()],
             Self::Unknown => vec![],
-        }
+        };
+        named
+            .into_iter()
+            .filter(|t| !t.is_empty())
+            .map(str::to_lowercase)
+            .collect()
     }
 }
 
@@ -546,20 +507,6 @@ impl IntentDetector {
                                 }
                             }
                             ActionType::DebugStarted => score += 0.4,
-                            ActionType::Search
-                                if action
-                                    .content
-                                    .as_ref()
-                                    .map(|c| c.to_lowercase())
-                                    .map(|c| {
-                                        c.contains("error")
-                                            || c.contains("bug")
-                                            || c.contains("fix")
-                                    })
-                                    .unwrap_or(false) =>
-                            {
-                                score += 0.2;
-                            }
                             ActionType::FileOpened | ActionType::FileEdited => {
                                 if let Some(file) = &action.file
                                     && let Some(name) = file.file_name()
@@ -601,27 +548,10 @@ impl IntentDetector {
                     }
 
                     for action in actions {
-                        match &action.action_type {
-                            ActionType::Search
-                                if action
-                                    .content
-                                    .as_ref()
-                                    .map(|c| c.to_lowercase())
-                                    .map(|c| {
-                                        c.contains("refactor")
-                                            || c.contains("rename")
-                                            || c.contains("extract")
-                                    })
-                                    .unwrap_or(false) =>
-                            {
-                                score += 0.3;
-                            }
-                            ActionType::FileEdited => {
-                                if let Some(file) = &action.file {
-                                    target = file.to_string_lossy().to_string();
-                                }
-                            }
-                            _ => {}
+                        if action.action_type == ActionType::FileEdited
+                            && let Some(file) = &action.file
+                        {
+                            target = file.to_string_lossy().to_string();
                         }
                     }
 
@@ -645,28 +575,11 @@ impl IntentDetector {
                     let mut topic = String::new();
 
                     for action in actions {
-                        match &action.action_type {
-                            ActionType::DocumentationViewed => {
-                                score += 0.3;
-                                if let Some(content) = &action.content {
-                                    topic = content.clone();
-                                }
+                        if action.action_type == ActionType::DocumentationViewed {
+                            score += 0.3;
+                            if let Some(content) = &action.content {
+                                topic = content.clone();
                             }
-                            ActionType::Search => {
-                                if let Some(query) = &action.content {
-                                    let lower = query.to_lowercase();
-                                    if lower.contains("how to")
-                                        || lower.contains("what is")
-                                        || lower.contains("tutorial")
-                                        || lower.contains("guide")
-                                        || lower.contains("example")
-                                    {
-                                        score += 0.25;
-                                        topic = query.clone();
-                                    }
-                                }
-                            }
-                            _ => {}
                         }
                     }
 
@@ -725,58 +638,6 @@ impl IntentDetector {
                             description
                         },
                         related_components: components,
-                    };
-
-                    (intent, score.min(1.0))
-                }),
-            },
-            // Maintenance pattern
-            IntentPattern {
-                name: "Maintenance".to_string(),
-                scorer: Box::new(|actions| {
-                    let mut score: f64 = 0.0;
-                    let mut maint_type = MaintenanceType::Cleanup;
-                    let mut target = None;
-
-                    for action in actions {
-                        match &action.action_type {
-                            ActionType::CommandExecuted => {
-                                if let Some(cmd) = &action.content {
-                                    let lower = cmd.to_lowercase();
-                                    if lower.contains("upgrade")
-                                        || lower.contains("update")
-                                        || lower.contains("npm")
-                                        || lower.contains("cargo update")
-                                    {
-                                        score += 0.4;
-                                        maint_type = MaintenanceType::DependencyUpdate;
-                                    }
-                                }
-                            }
-                            ActionType::FileEdited => {
-                                if let Some(file) = &action.file {
-                                    let name = file
-                                        .file_name()
-                                        .map(|n| n.to_string_lossy().to_lowercase())
-                                        .unwrap_or_default();
-
-                                    if name.contains("config")
-                                        || name == "cargo.toml"
-                                        || name == "package.json"
-                                    {
-                                        score += 0.2;
-                                        maint_type = MaintenanceType::Configuration;
-                                        target = Some(name);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    let intent = DetectedIntent::Maintenance {
-                        maintenance_type: maint_type,
-                        target,
                     };
 
                     (intent, score.min(1.0))
@@ -899,9 +760,8 @@ mod tests {
             symptoms: vec![],
         };
 
-        let tags = debugging.relevant_tags();
-        assert!(tags.contains(&"debugging".to_string()));
-        assert!(tags.contains(&"error".to_string()));
+        // Tags come from what the actions named, not a fixed vocabulary.
+        assert_eq!(debugging.relevant_tags(), vec!["auth".to_string()]);
     }
 
     #[test]

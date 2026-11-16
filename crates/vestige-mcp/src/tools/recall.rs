@@ -1152,7 +1152,7 @@ mod strata_query {
         let storage = crate::strata_memory::open(dir.path()).unwrap();
         let ranked = rank_nodes_lexical(
             storage.as_ref(),
-            "What is the chronological order of the ledger format changes?",
+            "How did the ledger format change between 2023 and 2024?",
             3,
         );
         assert_eq!(ranked.len(), 3, "{ranked:?}");

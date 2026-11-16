@@ -26,9 +26,9 @@ pub fn schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["preview", "write"],
+                "enum": ["preview", "write", "check"],
                 "default": "preview",
-                "description": "'preview' (default) renders and diffs, writes nothing. 'write' replaces the fenced region in 'path'; needs confirm=true."
+                "description": "'preview' (default) renders and diffs, writes nothing. 'write' replaces the fenced region in 'path' (or every file in 'files'); needs confirm=true. 'check' compares the fenced block across the repository's rules files and flags a missing path or a command with a recorded failure."
             },
             "format": {
                 "type": "string",
@@ -38,6 +38,12 @@ pub fn schema() -> Value {
             },
             "scope": { "type": "string", "description": "Project namespace to project (default 'user')." },
             "path": { "type": "string", "description": "Target file, relative to 'root'. Required for write; a preview diffs against it when given." },
+            "files": {
+                "type": "array",
+                "items": { "type": "string" },
+                "maxItems": 8,
+                "description": "Rules files that receive the same fenced block on write. check compares these, or CLAUDE.md, AGENTS.md, GEMINI.md and .cursorrules when omitted."
+            },
             "root": { "type": "string", "description": "Directory the target must stay inside (default: the server's working directory)." },
             "confirm": { "type": "boolean", "default": false, "description": "Required for write. Only the fenced region changes; the rest of the file is kept byte for byte." },
             "min_retention": { "type": "number", "default": 0.3, "minimum": 0, "maximum": 1, "description": "Leave out memories below this retention." },
@@ -54,6 +60,8 @@ struct ProjectArgs {
     format: String,
     scope: Option<String>,
     path: Option<String>,
+    #[serde(default)]
+    files: Option<Vec<String>>,
     root: Option<String>,
     #[serde(default)]
     confirm: bool,
@@ -164,6 +172,93 @@ fn read_target(path: &Path) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| format!("{} is not valid UTF-8 text", path.display()))
 }
 
+fn fence_body(text: &str) -> Option<String> {
+    let start = text.find(projection::BEGIN_MARKER)?;
+    let from = &text[start..];
+    let end = from.find(projection::END_MARKER)? + projection::END_MARKER.len();
+    Some(from[..end].to_string())
+}
+
+fn failed_runs(storage: &Storage) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut offset = 0i32;
+    while let Ok(batch) = storage.get_all_nodes(200, offset) {
+        if batch.is_empty() {
+            break;
+        }
+        let len = batch.len() as i32;
+        for node in batch {
+            if node
+                .tags
+                .iter()
+                .any(|tag| tag == crate::rulebook::RUN_FAILED_TAG)
+            {
+                out.push((node.content.trim().to_string(), node.id));
+            }
+        }
+        if len < 200 {
+            break;
+        }
+        offset += len;
+    }
+    out
+}
+
+fn check_rules(
+    storage: &Storage,
+    root: Option<&str>,
+    files: Option<&[String]>,
+    region: &str,
+) -> Result<Value, String> {
+    let root = match root {
+        Some(dir) => PathBuf::from(dir)
+            .canonicalize()
+            .map_err(|e| format!("root is not a readable directory: {e}"))?,
+        None => {
+            return Err("check needs root (the repository directory)".into());
+        }
+    };
+    let paths: Vec<PathBuf> = match files {
+        Some(files) => files.iter().map(|file| root.join(file)).collect(),
+        None => crate::rules_hook::RULES_FILENAMES
+            .iter()
+            .map(|name| root.join(name))
+            .filter(|path| path.is_file())
+            .collect(),
+    };
+    let mut fences: Vec<(String, Option<String>)> = Vec::new();
+    for path in &paths {
+        if !path.is_file() {
+            continue;
+        }
+        let text = read_target(path)?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("rules")
+            .to_string();
+        fences.push((name, fence_body(&text)));
+    }
+    let mut differ = Vec::new();
+    if let Some((_, first)) = fences.iter().find(|(_, body)| body.is_some()) {
+        for (name, body) in &fences {
+            if body != first {
+                differ.push(name.clone());
+            }
+        }
+    }
+    let flags = crate::rules_hook::rules_file_flags(&root, &failed_runs(storage));
+    let ok = differ.is_empty() && flags.is_empty();
+    Ok(json!({
+        "action": "check",
+        "ok": ok,
+        "differ": differ,
+        "flags": flags,
+        "region": region,
+        "files": fences.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+    }))
+}
+
 fn gate_refused(err: &str) -> bool {
     err.contains("gate_denied") || err.contains("gate_held")
 }
@@ -192,6 +287,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             format: default_format(),
             scope: None,
             path: None,
+            files: None,
             root: None,
             confirm: false,
             min_retention: None,
@@ -223,6 +319,69 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     let new_text = projection::splice(existing.as_deref().unwrap_or(""), &projection.region);
     let diff = projection::line_diff(existing.as_deref().unwrap_or(""), &new_text);
     let (added, removed) = projection::diff_summary(&diff);
+
+    if args.action == "check" {
+        return check_rules(
+            storage.as_ref(),
+            args.root.as_deref(),
+            args.files.as_deref(),
+            &projection.region,
+        );
+    }
+
+    if args.action == "write" && args.files.is_some() {
+        if !args.confirm {
+            return Err(
+                "Preview first, then pass confirm=true to write. Only the fenced region changes."
+                    .to_string(),
+            );
+        }
+        let files = args.files.as_deref().unwrap_or(&[]);
+        let mut written = Vec::new();
+        for file in files {
+            let path = resolve_target(args.root.as_deref(), file)?;
+            let existing = if path.exists() {
+                Some(read_target(&path)?)
+            } else {
+                None
+            };
+            let text = projection::splice(existing.as_deref().unwrap_or(""), &projection.region);
+            if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+                let ids: Vec<String> = projection
+                    .items
+                    .iter()
+                    .map(|item| item.id.clone())
+                    .collect();
+                match storage.admit_projection(
+                    &ids,
+                    &path.display().to_string(),
+                    projection.region.as_bytes(),
+                ) {
+                    Ok(_) => {}
+                    Err(err) if gate_refused(&err.to_string()) => {
+                        return Ok(json!({
+                            "action": "write",
+                            "written": false,
+                            "refused": true,
+                            "path": path.display().to_string(),
+                            "note": "The gate refused this projection. The file was not changed.",
+                        }));
+                    }
+                    Err(err) => return Err(err.to_string()),
+                }
+            }
+            projection::write_projection(&path, existing.as_deref(), &text)
+                .map_err(|e| format!("cannot update projection: {e}"))?;
+            written.push(path.display().to_string());
+        }
+        return Ok(json!({
+            "action": "write",
+            "written": true,
+            "files": written,
+            "itemCount": projection.items.len(),
+            "note": "The same fenced region was written to every named rules file.",
+        }));
+    }
 
     match args.action.as_str() {
         "preview" => {
@@ -993,5 +1152,45 @@ mod strata_preview {
             .await
             .unwrap_err();
         assert!(err.contains("filesystem root"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn one_write_updates_every_rules_file_and_a_diverging_copy_fails_the_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "keep\n").unwrap();
+        std::fs::write(root.join("AGENTS.md"), "keep\n").unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let root_s = root.display().to_string();
+        let wrote = execute(
+            &storage,
+            Some(json!({
+                "action": "write",
+                "confirm": true,
+                "root": root_s,
+                "files": ["CLAUDE.md", "AGENTS.md"],
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(wrote["written"], json!(true), "{wrote}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("CLAUDE.md")).unwrap(),
+            std::fs::read_to_string(root.join("AGENTS.md")).unwrap()
+        );
+        let ok = execute(&storage, Some(json!({"action": "check", "root": root_s})))
+            .await
+            .unwrap();
+        assert_eq!(ok["ok"], json!(true), "{ok}");
+        let agents = std::fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        let agents = agents.replacen("vestige:projection:begin", "vestige:projection:edited", 1);
+        std::fs::write(root.join("AGENTS.md"), agents).unwrap();
+        let bad = execute(&storage, Some(json!({"action": "check", "root": root_s})))
+            .await
+            .unwrap();
+        assert_eq!(bad["ok"], json!(false), "{bad}");
+        let differ = bad["differ"].as_array().unwrap();
+        assert!(differ.iter().any(|name| name == "AGENTS.md"), "{bad}");
     }
 }

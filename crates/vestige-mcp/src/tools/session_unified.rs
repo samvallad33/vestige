@@ -94,6 +94,7 @@ pub fn schema() -> Value {
     for field in ["session", "host", "event", "source"] {
         schema["properties"]["memory_hook"]["properties"][field] = json!({"type":"string"});
     }
+    // hardcode-scan: protocol (JSON-RPC / JSON-schema keys)
     schema["allOf"] = json!([
         {"if":{"properties":{"action":{"const":"reflex"}},"required":["action"]},
          "then":{"properties":{"params":embedded_schema(tools::reflex::schema(), "/allOf/0/then/properties/params")},"required":["params"]}},

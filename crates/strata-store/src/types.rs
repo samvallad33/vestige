@@ -1,5 +1,5 @@
 //! Store-level data types: the node registry record, ingest input, the typed
-//! connection record, and the owner-approved 8-type edge vocabulary (same
+//! connection record, and the owner-approved 9-type edge vocabulary (same
 //! vocabulary as `vestige-core`'s V39 edges, re-declared so this crate stays
 //! standalone).
 //!
@@ -22,6 +22,7 @@ pub const TYPED_EDGE_VOCABULARY: &[&str] = &[
     "closed_by",
     "projected_to",
     "evidence_of",
+    "reopened",
 ];
 
 /// A typed edge kind from the owner-approved vocabulary.
@@ -43,11 +44,13 @@ pub enum EdgeKind {
     ProjectedTo,
     /// walk-trail evidence edge
     EvidenceOf,
+    /// later failure on the same exact handle after a closes edge
+    Reopened,
 }
 
 impl EdgeKind {
     /// Every vocabulary member, in [`TYPED_EDGE_VOCABULARY`] order.
-    pub const ALL: [EdgeKind; 8] = [
+    pub const ALL: [EdgeKind; 9] = [
         EdgeKind::Touched,
         EdgeKind::AnchoredTo,
         EdgeKind::DerivedFrom,
@@ -56,6 +59,7 @@ impl EdgeKind {
         EdgeKind::ClosedBy,
         EdgeKind::ProjectedTo,
         EdgeKind::EvidenceOf,
+        EdgeKind::Reopened,
     ];
 
     /// The canonical `link_type` string.
@@ -69,6 +73,7 @@ impl EdgeKind {
             EdgeKind::ClosedBy => "closed_by",
             EdgeKind::ProjectedTo => "projected_to",
             EdgeKind::EvidenceOf => "evidence_of",
+            EdgeKind::Reopened => "reopened",
         }
     }
 
@@ -319,103 +324,19 @@ pub struct AnchorRecord {
     pub last_status: Option<String>,
 }
 
-/// Whole-word failure markers, ported from vestige-core's
-/// `advanced::retroactive_backfill::FAILURE_MARKERS` (same list, same
-/// semantics: bare "500" and bare "pinned" stay removed).
-pub const FAILURE_MARKERS: &[&str] = &[
-    "error",
-    "bug",
-    "crash",
-    "crashed",
-    "regression",
-    "broke",
-    "broken",
-    "failure",
-    "failed",
-    "panic",
-    "exception",
-    "fault",
-    "outage",
-    "incident",
-    "timeout",
-    "deadlock",
-    "leak",
-    "corrupt",
-    "stack overflow",
-    "spiked",
-    "latency",
-    "degraded",
-    "slow",
-    "hang",
-    "hung",
-    "throttled",
-    "oom",
-    "502",
-    "503",
-    "504",
-    "rejected",
-    "denied",
-    "flaky",
-    "saturated",
-    "saturation",
-    "stalled",
-    "exhausted",
-    "exhaustion",
-    "overload",
-    "overloaded",
-    "backlog",
-    "fell behind",
-    "lag",
-    "lagging",
-    "unavailable",
-    "down",
-    "dropped",
-    "reset",
-    "refused",
-    "stampede",
-    "thrashing",
-    "starved",
-    "starvation",
-    "expired",
-    "expiry",
-    "overflow",
-];
-
-/// Whole-word (not substring) marker match, boundary-safe over UTF-8.
-fn contains_marker_word(hay: &str, marker: &str) -> bool {
-    let mut from = 0usize;
-    while let Some(pos) = hay[from..].find(marker) {
-        let start = from + pos;
-        let end = start + marker.len();
-        let before_ok = hay[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        let after_ok = hay[end..]
-            .chars()
-            .next()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        if before_ok && after_ok {
-            return true;
-        }
-        from = start + 1;
-    }
-    false
-}
-
-/// Does this content/tags pair read like a failure? Compatible with
-/// vestige-core's `looks_like_failure` so failure detection does not drift
-/// between the SQLite store and this store.
-pub fn looks_like_failure(content: &str, tags: &[String]) -> bool {
-    let hay = content.to_lowercase();
-    if FAILURE_MARKERS
-        .iter()
-        .any(|m| contains_marker_word(&hay, m))
-    {
-        return true;
-    }
+/// Does this memory carry a recorded failure label?
+///
+/// Failure is recorded structure, not a vocabulary guess: the writer tags the
+/// memory `failure` (case-insensitive, or a namespaced `failure:<detail>` tag).
+/// Content words are never scanned, so a quiet cause that happens to say
+/// "timeout" or "error" is not misread as the failure itself. Callers that hold
+/// a full node also honour `node_type == "failure"` and recorded
+/// `corrects`/`supersedes`/`closes` links.
+pub fn looks_like_failure(_content: &str, tags: &[String]) -> bool {
     tags.iter().any(|t| {
-        let tl = t.to_lowercase();
-        FAILURE_MARKERS.iter().any(|m| contains_marker_word(&tl, m))
+        let t = t.trim();
+        t.eq_ignore_ascii_case("failure")
+            || t.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("failure:"))
     })
 }
+

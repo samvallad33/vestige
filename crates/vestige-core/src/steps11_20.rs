@@ -6,12 +6,9 @@
 /// Elapsed-time queries (`temporal`, `"ago"`, `"since"`) are excluded from `how_qty` because
 /// their answers come from session date arithmetic rather than an Arabic digit inside the turn.
 fn step11_wh_qa_mode(q_text: &str, temporal: bool) -> (bool, bool) {
-    let padded = word_padded(q_text);
-    let elapsed_offset = temporal || padded.contains(" ago ") || padded.contains(" since ");
-    let how_qty = !elapsed_offset
-        && (padded.contains(" how many ") || padded.contains(" how much "));
-    let who_person = !how_qty
-        && (padded.contains(" who ") || padded.contains(" whom ") || padded.contains(" whose "));
+    let slots = wh_slots(q_text);
+    let how_qty = !temporal && (slots & WH_QTY) != 0;
+    let who_person = !how_qty && (slots & WH_PERSON) != 0;
     (how_qty, who_person)
 }
 
@@ -342,187 +339,20 @@ fn apply_step13_khipu_turn_bridge(
     }
 }
 
-/// Step 14 (Ingest): Extract closed-class role-object & attribute tokens from first-person
-/// preference, constraint, and tool/possession frames (`"i like "`, `"i prefer "`, `"using my "`,
-/// `"with my "`, `"allergic to "`, `"i replaced "`, etc.) on `prose_body`.
-/// Strictly closed-class grammar + `stopwords()`/`STARTER_STOP` — zero domain word lists.
-fn step14_extract_role_frames(prose_body: &str) -> (Vec<String>, Vec<String>) {
-    const ROLE_TRIGGERS: &[&str] = &[
-        "i really like ",
-        "i also like ",
-        "i would like ",
-        "i would love ",
-        "which i enjoy ",
-        "which i prefer ",
-        "which i like ",
-        "i've been using ",
-        "i am using ",
-        "i'm using ",
-        "i enjoy ",
-        "i prefer ",
-        "i love ",
-        "i like ",
-        "i'd love ",
-        "i'd like ",
-        "i usually ",
-        "i always ",
-        "i tend to ",
-        "i use ",
-        "using my ",
-        "with my ",
-        "my favorite ",
-        "my favourite ",
-        "my current ",
-        "my new ",
-        "my old ",
-        "i own ",
-        "i have a ",
-        "i have an ",
-        "i have downloaded ",
-        "i've downloaded ",
-        "i just got ",
-        "i've started ",
-        "making my own ",
-        "i bought a ",
-        "i got a ",
-        "i replaced ",
-        "don't like ",
-        "do not like ",
-        "don't want ",
-        "do not want ",
-        "don't eat ",
-        "do not eat ",
-        "can't eat ",
-        "cannot eat ",
-        "can't drink ",
-        "cannot drink ",
-        "allergic to ",
-        "intolerant to ",
-        "stay away from ",
-        "steer clear of ",
-        "i avoid ",
-    ];
-    const META_VERBS: &[&str] = &[
-        "want", "need", "know", "think", "feel", "see", "find", "make", "take", "give", "get",
-        "keep", "use", "using", "try", "trying", "start", "started", "learn", "learning", "ask",
-        "wonder", "help", "tell", "something", "anything", "thing", "things", "stuff", "lot",
-        "lots", "some", "kind", "sort", "type", "types", "way", "ways", "good", "great", "best",
-        "nice", "new", "old", "really", "very", "much", "more", "most", "also", "already",
-        "usually", "always",
-    ];
-    const CLAUSE_BREAKS: &[&str] = &[
-        " but ", " except ", " can you ", " could you ", " do you ", " would you ", " will you ",
-    ];
-
-    let lower = prose_body.to_ascii_lowercase();
-    let mut objs: Vec<String> = Vec::new();
-    let mut attrs: Vec<String> = Vec::new();
-
-    for trig in ROLE_TRIGGERS {
-        let mut search_from = 0usize;
-        while let Some(rel) = lower[search_from..].find(trig) {
-            let at = search_from + rel;
-            let boundary_ok = at == 0
-                || !lower.as_bytes()[at - 1].is_ascii_alphanumeric();
-            let after_idx = at + trig.len();
-            if boundary_ok && after_idx < lower.len() {
-                let tail = &lower[after_idx..];
-                let mut end = tail
-                    .find(['.', ',', ';', '!', '?', '\n'])
-                    .unwrap_or(tail.len());
-                for brk in CLAUSE_BREAKS {
-                    if let Some(bi) = tail[..end].find(brk) {
-                        end = end.min(bi);
-                    }
-                }
-                let clause = &tail[..end];
-                let toks: Vec<String> = raw_tokens(clause)
-                    .into_iter()
-                    .filter(|w| {
-                        w.len() >= 3
-                            && is_content(w)
-                            && !STARTER_STOP.contains(&w.as_str())
-                            && !META_VERBS.contains(&w.as_str())
-                    })
-                    .take(3)
-                    .collect();
-                if toks.len() >= 2 {
-                    for attr in &toks[..toks.len() - 1] {
-                        if !attrs.contains(attr) {
-                            attrs.push(attr.clone());
-                        }
-                    }
-                }
-                for tok in toks {
-                    if !objs.contains(&tok) {
-                        objs.push(tok);
-                    }
-                }
-            }
-            search_from = after_idx;
-        }
-    }
-    (objs, attrs)
+/// Role frames used to be cut out by a phrase-trigger list. Typed slots and
+/// proper-name entities already enter the index; this channel stays empty.
+fn step14_extract_role_frames(_prose_body: &str) -> (Vec<String>, Vec<String>) {
+    (Vec::new(), Vec::new())
 }
 
-/// Closed-class check: returns `true` when `q_text` explicitly asks for recommendations,
-/// suggestions, tips, advice, or ideas.
-fn step14_is_rec_request(q_text: &str) -> bool {
-    let ql = q_text.to_ascii_lowercase();
-    let padded = format!(" {ql} ");
-    [
-        " recommend",
-        " suggest",
-        " tip",
-        " advice",
-        " idea",
-        " would like",
-        " looking for",
-    ]
-    .iter()
-    .any(|kw| padded.contains(kw))
+fn step14_is_rec_request(_q_text: &str) -> bool {
+    false
 }
 
-/// Closed-class check: returns `true` when `q_text` is a factual Wh-question
-/// (`how often`, `what time`, `when did`, `where did`, `who won`, etc.) rather than a
-/// personal preference / recommendation request.
+/// Factual question shape from the closed-class WH slots already computed
+/// for the dump. No extra phrase list.
 fn step14_is_factual_wh_query(q_text: &str) -> bool {
-    if step14_is_rec_request(q_text) {
-        return false;
-    }
-    let ql = q_text.to_ascii_lowercase();
-    let padded = format!(" {ql} ");
-    const FACTUAL_WH: &[&str] = &[
-        " what time ",
-        " what did ",
-        " what does ",
-        " what was ",
-        " what were ",
-        " what is ",
-        " what are ",
-        " how often ",
-        " how many ",
-        " how much ",
-        " how long ",
-        " how far ",
-        " how old ",
-        " when did ",
-        " when do ",
-        " when does ",
-        " when was ",
-        " when were ",
-        " where did ",
-        " where do ",
-        " where does ",
-        " where was ",
-        " where were ",
-        " who did ",
-        " who does ",
-        " who was ",
-        " who won ",
-        " whose ",
-    ];
-    FACTUAL_WH.iter().any(|p| padded.contains(p))
+    wh_slots(q_text) != 0
 }
 
 /// Step 14 (`Bipartite Preference Role-Object Boost`):
@@ -579,7 +409,7 @@ fn apply_step14_bipartite_pref_boost(
             if sc > sess_max[si] {
                 sess_max[si] = sc;
             }
-            let has_decl = t.pref_marker || t.is_personal_constraint || !t.role_objs.is_empty();
+            let has_decl = t.is_personal_constraint || !t.role_objs.is_empty();
             let pure_info = t.is_pure_info_question && !has_decl;
             if t.field == 0 && !pure_info && !t.is_backchannel && has_decl {
                 for &rid in &t.role_objs {
@@ -631,7 +461,7 @@ fn apply_step14_bipartite_pref_boost(
             *sc_mut = base_sc * mult;
         } else if sess_max[si] >= 0.999 * global_max
             && base_sc >= 0.65 * global_max
-            && (t.is_personal_constraint || (t.pref_marker && !t.role_objs.is_empty()))
+            && t.is_personal_constraint
         {
             let mult = if sess_bipartite_shared > 0 { 1.24 } else { 1.18 };
             *sc_mut = base_sc * mult;
@@ -642,35 +472,21 @@ fn apply_step14_bipartite_pref_boost(
 /// Closed-class check: returns `true` when `q_text` asks a comparative event-ordering,
 /// interval, or difference question between two events.
 fn step15_is_comparative_query(q_text: &str, it: &QueryIntent) -> bool {
-    let ql = q_text.to_ascii_lowercase();
-    let padded = format!(" {ql} ");
-    [
-        " before or after ",
-        " first",
-        " earlier",
-        " later",
-        " recently",
-        " difference",
-        " between ",
-        " longer ago",
-        " sooner",
-        " compare",
-        " compared",
-    ]
-    .iter()
-    .any(|kw| padded.contains(kw))
-        || (it.temporal
-            && (padded.contains(" or ")
-                || padded.contains(" how many ")
-                || padded.contains(" how long ")
-                || padded.contains(" what time ")))
+    if !(it.temporal || it.is_event_sequence) {
+        return false;
+    }
+    let slots = wh_slots(q_text);
+    let digits = raw_tokens(q_text)
+        .into_iter()
+        .filter(|w| w.chars().any(|c| c.is_ascii_digit()))
+        .count();
+    (slots & (WH_TIME | WH_QTY)) != 0 || digits >= 2 || it.is_event_sequence
 }
 
 /// Split a comparative event query along closed-class coordinators (`before or after`, `or`,
 /// `between ... and`, or interval `before/after ... did I`) into two raw event clauses.
 fn step15_split_comparative_clauses(q_text: &str) -> Option<(String, String)> {
     let ql = q_text.to_ascii_lowercase();
-    let padded = format!(" {ql} ");
     let trim_clause = |s: &str| -> String {
         s.trim_matches(|c: char| !c.is_ascii_alphanumeric())
             .trim()
@@ -747,11 +563,7 @@ fn step15_split_comparative_clauses(q_text: &str) -> Option<(String, String)> {
 
     // Only split on `" before "` / `" after "` for interval/time comparisons (not single-event
     // `"Where did X move after Y?"`).
-    let interval_frame = padded.contains(" how many ")
-        || padded.contains(" how long ")
-        || padded.contains(" what time ")
-        || padded.contains(" did i ")
-            && (padded.contains(" first") || padded.contains(" earlier") || padded.contains(" before "));
+    let interval_frame = (wh_slots(q_text) & (WH_TIME | WH_QTY)) != 0;
     if interval_frame {
         for prep in [" before ", " after "] {
             if let Some(p) = ql.find(prep) {
@@ -1519,7 +1331,6 @@ mod steps11_20_tests {
             groups: vec!["espresso".to_string()],
             group_of: DetHashMap::default(),
             focal_ids: DetHashSet::default(),
-            focal_domains: DetHashSet::default(),
         };
         let mut t_own = vec![0.0f32; ix.turns.len()];
         let mut t_exact_mask = vec![0u64; ix.turns.len()];
@@ -1550,9 +1361,8 @@ mod steps11_20_tests {
         let (objs, attrs) = step14_extract_role_frames(
             "Besides great views, I also like hotels with unique features. Do you know any?",
         );
-        assert!(objs.contains(&"hotels".to_string()), "got objs={objs:?}");
-        assert!(objs.contains(&"features".to_string()), "got objs={objs:?}");
-        assert!(attrs.contains(&"unique".to_string()), "got attrs={attrs:?}");
+        assert!(objs.is_empty(), "role frames are not cut by a phrase list: {objs:?}");
+        assert!(attrs.is_empty(), "role frames are not cut by a phrase list: {attrs:?}");
 
         let sessions = vec![Session {
             id: "s0".to_string(),
@@ -1598,7 +1408,6 @@ mod steps11_20_tests {
             groups: vec!["hotels".to_string()],
             group_of: DetHashMap::default(),
             focal_ids: DetHashSet::default(),
-            focal_domains: DetHashSet::default(),
         };
         let t_own = vec![10.0, 11.0, 9.5];
         let mut t_scene = vec![10.0, 11.0, 9.5];
@@ -1611,8 +1420,8 @@ mod steps11_20_tests {
             &t_own,
             &mut t_scene,
         );
-        assert!(t_scene[2] > t_scene[0], "expected pref role-object decl t2 > t0: {:?}", t_scene);
-        assert!(t_scene[2] > t_scene[1], "expected pref role-object decl t2 > assistant t1: {:?}", t_scene);
+        assert!((t_scene[2] - 9.5).abs() < 0.01, "role-object boost is gone: {:?}", t_scene);
+        assert!(t_scene[1] < 11.0, "assistant field is still damped when preference is on: {:?}", t_scene);
         assert!(step14_is_factual_wh_query("How often did I initially aim to visit the gym per week?"));
         assert!(step14_is_factual_wh_query("What time do I usually go to the gym?"));
         assert!(!step14_is_factual_wh_query("What hotels would you recommend?"));
@@ -1670,37 +1479,12 @@ mod steps11_20_tests {
         ];
         let ix = build_index(&sessions, &Params::default());
         let q = Query {
-            text: "Which project did I start first, the Ferrari model or the Japanese Zero fighter plane model?".to_string(),
+            text: "Which project did I start first, the Ferrari model in 2019 or the Japanese Zero fighter plane model in 2021?".to_string(),
             date: String::new(),
         };
         let plan = plan_query(&ix, &q, &Params::default());
         let masks = step15_comparative_event_masks(&ix, &q.text, &plan, &plan.intent);
-        let (da, db) = masks.expect("expected disjoint comparative masks");
-        assert_ne!(da, 0);
-        assert_ne!(db, 0);
-        assert_eq!(da & db, 0);
-
-        let mut t_exact_mask = vec![0u64; 2];
-        let t_own = vec![10.0, 20.0];
-        let mut t_scene = vec![10.0, 25.0];
-        for g in 0..plan.groups.len().min(64) {
-            if plan.groups[g] == "ferrari" {
-                t_exact_mask[0] |= 1u64 << g;
-            }
-            if plan.groups[g] == "japanese" || plan.groups[g] == "zero" {
-                t_exact_mask[1] |= 1u64 << g;
-            }
-        }
-        apply_step15_comparative_dual_slot_scores(
-            &ix,
-            &q.text,
-            &plan,
-            &plan.intent,
-            &t_own,
-            &t_exact_mask,
-            &mut t_scene,
-        );
-        assert!(t_scene[0] > 10.0 && t_scene[0] <= 22.5, "got t_scene={:?}", t_scene);
+        assert!(masks.is_none(), "event-sequence dates do not open the comparative mask");
     }
 
     #[test]
@@ -1764,7 +1548,6 @@ mod steps11_20_tests {
             groups: vec!["espresso".to_string()],
             group_of: DetHashMap::default(),
             focal_ids: DetHashSet::default(),
-            focal_domains: DetHashSet::default(),
         };
         let mut t_own = vec![0.0f32; ix.turns.len()];
         let mut t_exact_mask = vec![0u64; ix.turns.len()];

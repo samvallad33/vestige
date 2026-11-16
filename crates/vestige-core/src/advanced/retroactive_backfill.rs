@@ -51,79 +51,6 @@ pub const DEFAULT_LOOKBACK_DAYS: i64 = 30;
 /// considered causally upstream (1 shared file/env-var/service is enough).
 pub const MIN_SHARED_ENTITIES: usize = 1;
 
-/// Words that mark a memory as a failure/"aversive" event when auto-detecting.
-/// Lowercased substring match against content + tags.
-pub const FAILURE_MARKERS: &[&str] = &[
-    "error",
-    "bug",
-    "crash",
-    "crashed",
-    "regression",
-    "broke",
-    "broken",
-    "failure",
-    "failed",
-    "panic",
-    "exception",
-    "fault",
-    "outage",
-    "incident",
-    // NOTE: bare "500" was removed — it matched benign content like "$500",
-    // "500 users", or "line 500" and wrongly flagged a quiet CAUSE memory as a
-    // failure, excluding it from the backward reach. The specific HTTP error
-    // codes 502/503/504 below stay; a genuine "HTTP 500" is still caught by
-    // "error"/"failed"/"exception" in any real incident note.
-    "timeout",
-    "deadlock",
-    "leak",
-    "corrupt",
-    "stack overflow",
-    // performance/degradation failures (an agent should backfill from these too)
-    "spiked",
-    "latency",
-    "degraded",
-    "slow",
-    "hang",
-    "hung",
-    "throttled",
-    "oom",
-    "502",
-    "503",
-    "504",
-    "rejected",
-    "denied",
-    "flaky",
-    // real-incident vocabulary (CauseBench found these missing — postmortems often
-    // describe failures without the classic crash words above)
-    // NOTE: bare "pinned" was removed — dependency pinning ("pinned rails to
-    // 5.2") is classic quiet-CAUSE vocabulary; flagging such notes as failures
-    // excludes them from the backward reach, the same failure mode that got
-    // bare "500" removed above.
-    "saturated",
-    "saturation",
-    "stalled",
-    "exhausted",
-    "exhaustion",
-    "overload",
-    "overloaded",
-    "backlog",
-    "fell behind",
-    "lag",
-    "lagging",
-    "unavailable",
-    "down",
-    "dropped",
-    "reset",
-    "refused",
-    "stampede",
-    "thrashing",
-    "starved",
-    "starvation",
-    "expired",
-    "expiry",
-    "overflow",
-];
-
 /// How strongly to promote the backfilled cause: multiply its stability by this
 /// (capped). v2.2.1 deliberately reduced the original 2.5 display factor to
 /// this bounded write factor, shared by automatic and manual backfill paths.
@@ -428,52 +355,19 @@ pub fn extract_entities(content: &str, tags: &[String]) -> Vec<String> {
     set.into_iter().collect()
 }
 
-/// Whole-word marker match: `marker` must appear bounded by non-alphanumeric
-/// chars, not embedded in a larger identifier. This is the difference between
-/// matching "timeout" in "a request timeout" (a real failure) and NOT matching it
-/// inside the config var `API_TIMEOUT` (a perfectly ordinary env var). Plain
-/// substring over-fires: "timeout" hits "API_TIMEOUT", "leak" hits "leaky", "500"
-/// hits "$500" — which wrongly flags a quiet CAUSE as a failure and excludes it
-/// from the backward reach.
-fn contains_marker_word(hay: &str, marker: &str) -> bool {
-    let mut from = 0usize;
-    while let Some(pos) = hay[from..].find(marker) {
-        let start = from + pos;
-        let end = start + marker.len();
-        // Inspect the actual char before/after the match, not a raw byte cast to
-        // char: for a multibyte UTF-8 boundary the raw byte is a continuation
-        // byte (0x80-0xBF), which `as char` misreads as a non-alphanumeric and
-        // wrongly passes the word-boundary check. char iteration is boundary-safe.
-        let before_ok = hay[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        let after_ok = hay[end..]
-            .chars()
-            .next()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        if before_ok && after_ok {
-            return true;
-        }
-        from = start + 1;
-    }
-    false
-}
-
-/// Does this content/tags pair read like a failure? Whole-word marker match over
-/// content + tags (see [`contains_marker_word`] for why whole-word, not substring).
-/// Shared by every caller so failure detection never drifts.
-pub fn looks_like_failure(content: &str, tags: &[String]) -> bool {
-    let hay = content.to_lowercase();
-    if FAILURE_MARKERS
-        .iter()
-        .any(|m| contains_marker_word(&hay, m))
-    {
-        return true;
-    }
+/// Does this memory carry a recorded failure label?
+///
+/// Failure is recorded structure, not a vocabulary guess: the writer tags the
+/// memory `failure` (case-insensitive, or a namespaced `failure:<detail>` tag).
+/// Content words are never scanned, so a quiet cause that happens to say
+/// "timeout" or "error" is not misread as the failure itself. Callers that hold
+/// a full node also honour `node_type == "failure"` and recorded
+/// `corrects`/`supersedes`/`closes` links.
+pub fn looks_like_failure(_content: &str, tags: &[String]) -> bool {
     tags.iter().any(|t| {
-        let tl = t.to_lowercase();
-        FAILURE_MARKERS.iter().any(|m| contains_marker_word(&tl, m))
+        let t = t.trim();
+        t.eq_ignore_ascii_case("failure")
+            || t.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("failure:"))
     })
 }
 
@@ -1217,7 +1111,7 @@ mod tests {
             id: "fail-wed".into(),
             content: "Service crashed: 500 Internal Server Error on the auth endpoint".into(),
             entities: vec!["auth-service".into(), "API_TIMEOUT".into()],
-            tags: vec![],
+            tags: vec!["failure".into()],
             prediction_error: 0.9,
             manual: false,
         }
@@ -1428,7 +1322,7 @@ mod tests {
             id: "fail".into(),
             content: "crash in events/local.py after upgrading".into(),
             entities: vec!["events/local.py".into(), "API_TIMEOUT".into()],
-            tags: vec![],
+            tags: vec!["failure".into()],
             prediction_error: 0.9,
             manual: false,
         }
@@ -1523,7 +1417,7 @@ mod tests {
             id: "fail".into(),
             content: "crash after upgrade: T1 T3 RARE_SETTING".into(),
             entities: vec!["T1".into(), "T3".into(), "RARE_SETTING".into()],
-            tags: vec![],
+            tags: vec!["failure".into()],
             prediction_error: 0.9,
             manual: false,
         };
@@ -1568,7 +1462,7 @@ mod tests {
             id: "fail".into(),
             content: "crash in local.py".into(),
             entities: vec!["local.py".into()],
-            tags: vec![],
+            tags: vec!["failure".into()],
             prediction_error: 0.9,
             manual: false,
         };
@@ -1606,7 +1500,7 @@ mod tests {
             id: "fail".into(),
             content: "crash T1 T2 RARE_X".into(),
             entities: vec!["T1".into(), "T2".into(), "RARE_X".into()],
-            tags: vec![],
+            tags: vec!["failure".into()],
             prediction_error: 0.9,
             manual: false,
         };
@@ -1662,7 +1556,7 @@ mod tests {
             id: "fail".into(),
             content: "crash in local.py".into(),
             entities: vec!["local.py".into()],
-            tags: vec![],
+            tags: vec!["failure".into()],
             prediction_error: 0.9,
             manual: false,
         };
@@ -1697,15 +1591,17 @@ mod tests {
     }
 
     #[test]
-    fn dependency_pinning_is_not_a_failure_marker() {
-        // "pinned" was removed from FAILURE_MARKERS: pinning a dependency is
-        // quiet-CAUSE vocabulary and must stay reachable by the backward reach.
+    fn failure_is_a_recorded_label_not_a_content_word() {
+        // Content words never mark a failure; a quiet cause stays reachable.
         assert!(!looks_like_failure(
             "pinned rails to 5.2 for the tz workaround",
             &[]
         ));
-        // real incident vocabulary still detected
-        assert!(looks_like_failure("connection pool saturated at 100%", &[]));
+        assert!(!looks_like_failure("connection pool saturated at 100%", &[]));
+        // The recorded label does.
+        assert!(looks_like_failure("connection pool saturated at 100%", &["failure".to_string()]));
+        assert!(looks_like_failure("deploy went fine", &["Failure:checkout".to_string()]));
+        assert!(!looks_like_failure("deploy went fine", &["failures-list".to_string()]));
     }
 
     #[test]

@@ -8,8 +8,8 @@ Compaction rewrites a Claude Code conversation into a summary. Whatever the summ
 drops is gone for the rest of the session, including the rules you told the agent to
 keep. `vestige hook session-start` is a plain command hook for Claude Code's
 `SessionStart` event. Claude Code runs it when a session starts, resumes, is cleared,
-and right after a compaction (`source: "compact"`). It prints your rules back into the
-context, each with its memory id.
+is forked, and right after a compaction (`source: "compact"`). It prints the default
+rulebook and your pinned rules back into the context, each rule with its memory id.
 
 ---
 
@@ -87,7 +87,7 @@ The `vestige` binary must be on the `PATH` Claude Code runs hooks with. Merge
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           { "type": "command", "command": "vestige hook session-start", "timeout": 10 }
         ]

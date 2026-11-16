@@ -81,6 +81,9 @@
 /// Actor provenance (#252 Phase A): process did:key identity, the
 /// operator-controlled versioned role policy, and neutral resolution.
 pub mod actor;
+/// Receipt-frame names (`SignedWriterFrame`, `fold_writer_chains`) the mesh
+/// fold in `strata-store` does not expose. See `chain_fold` module docs.
+pub mod chain_fold;
 // GhostLink composition arithmetic shared by every backend (no SQLite).
 pub mod composition;
 
@@ -108,6 +111,8 @@ pub mod advanced;
 /// Codebase memory - Vestige's killer differentiator for AI code understanding
 pub mod codebase;
 pub mod projection;
+/// Seven-field provenance receipts and `prove_causal_chain`.
+pub mod provenance;
 
 /// Neuroscience-inspired memory mechanisms
 ///
@@ -117,9 +122,11 @@ pub mod projection;
 /// - Spreading activation networks
 pub mod neuroscience;
 /// Zero-LLM, zero-vector, deterministic lexical retrieval engine (Total-Recall).
-/// Audited on LongMemEval_S (98.60% R@5) and LoCoMo-10 (91.93% Session R@5 / 75.46% Turn Soft R@5).
 #[allow(clippy::all)]
 pub mod retrieval;
+pub(crate) mod zero_overlap;
+/// Princeton WordNet 3.1 noun hypernyms (bundled data file, WordNet license).
+pub mod wordnet;
 
 // ============================================================================
 // PUBLIC API RE-EXPORTS

@@ -26,6 +26,7 @@ pub async fn read(storage: &Arc<Storage>, uri: &str) -> Result<String, String> {
         "due" => read_due(storage).await,
         "intentions" => read_intentions(storage).await,
         "intentions/due" => read_triggered_intentions(storage).await,
+        "proof-header" => crate::resources::proof_header::read(storage.as_ref()),
         "insights" => read_insights(storage).await,
         "consolidation-log" => read_consolidation_log(storage).await,
         _ => Err(format!("Unknown memory resource: {}", path)),

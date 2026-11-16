@@ -71,7 +71,22 @@ pub fn schema() -> Value {
                 "items": { "type": "string" },
                 "maxItems": 200,
                 "description": "Repository-relative paths changed in this working tree. On Strata, memories with an exact file:<path> handle, an exact path tag, a code anchor on that path, or a git-commit files: entry equal to the path are listed (failure, bug, and decision memories first). When none match, the response carries a notice. Absent = section skipped."
-            }
+            },
+            "format": {
+                "type": "string",
+                "enum": ["capsule"],
+                "description": "capsule: a byte-stable projection of the log head (exact handles only). Other calls omit this."
+            },
+            "source": {
+                "type": "string",
+                "enum": ["startup", "resume", "clear", "compact", "fork"],
+                "description": "Session boundary for format=capsule. Any other value yields an empty body."
+            },
+            "mode": {"type": "string", "description": "Work mode for format=capsule: normal, merge, rebase or bisect."},
+            "branch": {"type": "string"},
+            "head_commit": {"type": "string"},
+            "since": {"type": "integer", "description": "Log seq of the previous capsule head. resume and fork emit records created after it."},
+            "codebase": {"type": "string", "description": "Exact codebase:<name> tag filter for format=capsule."}
         }
     })
 }
@@ -120,6 +135,14 @@ pub async fn execute(
     output_config: &OutputConfig,
     args: Option<Value>,
 ) -> Result<Value, String> {
+    if args
+        .as_ref()
+        .and_then(|value| value.get("format"))
+        .and_then(Value::as_str)
+        == Some("capsule")
+    {
+        return crate::capsule::session_tool(storage.as_ref(), args.as_ref());
+    }
     let args: SessionContextArgs = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => SessionContextArgs::default(),
