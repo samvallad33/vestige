@@ -6052,6 +6052,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
                 // same-session turn by a speaker the query names, already
                 // in the top 5. Skipped on preference.
                 apply_c2_queried_speaker_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
+                // Step 41 queried-speaker reply, witness form. Same call site
+                // as #15. A declarative head yields only to a strictly
+                // term-richer named reply; temporal queries open only on a
+                // date/digit feature the head lacks. Question heads still yield.
+                apply_c2_step41_queried_speaker_seat(
+                    ix,
+                    &plan,
+                    &q.text,
+                    &mut final_turn_indices,
+                    &t_scene,
+                );
                 // Queried-speaker previous: in a named-speaker dialogue, an
                 // unmentioned speaker's declarative comment yields to the
                 // previous same-session statement by a speaker the query
@@ -6379,6 +6390,18 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // (posted in exactly one session) strictly outnumber slot 1's. Does not
     // touch rsb_seat_behind and does not rewrite the session list.
     apply_c2_step40_cue_validity(ix, &q.text, &mut final_turn_indices, &t_scene);
+    // Step 41 again, after every later turn seat and before W2-001, so the
+    // reply seat survives the gatekeeper and the post-gatekeeper reorders.
+    // Turn list only. W2-001 then aligns session #1 to this rank-1 turn.
+    if !it.is_event_sequence && !it.assistant_attribution {
+        apply_c2_step41_queried_speaker_seat(
+            ix,
+            &plan,
+            &q.text,
+            &mut final_turn_indices,
+            &t_scene,
+        );
+    }
     // W2-001 envelope-seal-calendar. The session list was already read by
     // turn selection. This reorders only the final session list so session #1
     // agrees with the rank-1 turn. Turn indices stay as they are. After every
