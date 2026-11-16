@@ -13,6 +13,7 @@ pub mod actor_surface;
 pub mod attach;
 pub mod auto_connect;
 pub mod autopilot;
+pub mod capsule;
 pub mod cognitive;
 pub mod dashboard;
 pub mod intake;
@@ -21,6 +22,7 @@ pub mod protocol;
 #[cfg(test)]
 mod protocol_stdio_store;
 pub mod resources;
+pub mod rulebook;
 pub mod rules_hook;
 pub mod server;
 pub mod strata_memory;

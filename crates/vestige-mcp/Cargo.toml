@@ -69,6 +69,8 @@ strata-verify = { path = "../strata-verify" }
 
 # Strata log the shipped MCP server boots. Workspace-excluded; path dep only.
 strata-store = { path = "../strata-store" }
+strata = { path = "../strata" }
+strata-kernel = { path = "../strata-kernel" }
 # Gate policy type for projection admission. No SQLite.
 strata-gate = { path = "../strata-gate" }
 blake3 = "1"

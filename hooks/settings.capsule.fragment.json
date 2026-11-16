@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vestige capsule --harness claude-code --event session-start",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}

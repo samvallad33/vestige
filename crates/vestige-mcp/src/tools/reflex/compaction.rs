@@ -32,6 +32,20 @@ pub(super) struct Checkpoint {
     /// next firing that can add context.
     #[serde(default)]
     pub ready: bool,
+    /// Finished edits and runs in this session, kept across the compaction
+    /// so the next session does not redo them.
+    #[serde(default)]
+    pub done: Vec<DoneEntry>,
+}
+
+/// One finished tool effect. The receipt is the compaction checkpoint or
+/// audit memory that lists it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct DoneEntry {
+    pub tool: String,
+    pub file: String,
+    pub command: String,
+    pub call: String,
 }
 
 /// Every exact memory id written in a text, in order, once each.
@@ -64,9 +78,16 @@ fn checkpoint_item(inp: &Input, ids: &[String]) -> Value {
 }
 
 fn audit_item(inp: &Input, checkpoint: &str, kept: &[String], dropped: &[String]) -> Value {
+    let mut tags = vec![
+        "reflex-compaction".to_string(),
+        "compaction-audit".to_string(),
+    ];
+    for id in dropped {
+        tags.push(format!("dropped:{id}"));
+    }
     json!({
         "node_type": "event",
-        "tags": ["reflex-compaction", "compaction-audit"],
+        "tags": tags,
         "source": format!("reflex {VERSION}, PostCompact"),
         "links": [{"kind": "derived_from", "to": checkpoint}],
         "content": format!(
@@ -177,6 +198,87 @@ async fn restore_lines(
 
 /// Compaction survival for one firing. Returns the ledger entries and the
 /// lines to tell the agent.
+fn note_done(global: &Arc<std::sync::Mutex<Global>>, inp: &Input) {
+    if inp.event != "PostToolUse" || inp.interrupt || !inp.error.is_empty() {
+        return;
+    }
+    if inp.file.is_empty() && inp.command.is_empty() {
+        return;
+    }
+    let entry = DoneEntry {
+        tool: inp.tool.clone(),
+        file: inp.file.clone(),
+        command: inp.command.clone(),
+        call: inp.call.clone(),
+    };
+    let Ok(mut g) = global.lock() else {
+        return;
+    };
+    let pushed = {
+        let session = g.session(&inp.session);
+        let checkpoint = session.checkpoint.get_or_insert_with(Checkpoint::default);
+        let duplicate =
+            !entry.call.is_empty() && checkpoint.done.iter().any(|done| done.call == entry.call);
+        if duplicate || checkpoint.done.len() >= 32 {
+            false
+        } else {
+            checkpoint.done.push(entry);
+            true
+        }
+    };
+    if pushed {
+        g.dirty = true;
+    }
+}
+
+fn redo_line(global: &Arc<std::sync::Mutex<Global>>, inp: &Input) -> Option<String> {
+    if inp.event != "PreToolUse" || inp.file.is_empty() {
+        return None;
+    }
+    let g = global.lock().ok()?;
+    let checkpoint = g.sessions.get(&inp.session)?.checkpoint.as_ref()?;
+    let hit = checkpoint.done.iter().find(|done| done.file == inp.file)?;
+    let receipt = checkpoint
+        .audit
+        .clone()
+        .or_else(|| checkpoint.node.clone())
+        .unwrap_or_else(|| "unreceipted".into());
+    Some(format!(
+        "Redo flagged: `{}` is already finished ({}, call {}). Receipt `{receipt}`.",
+        hit.file, hit.tool, hit.call
+    ))
+}
+
+fn ledger_lines(cp: &Checkpoint) -> Vec<String> {
+    if cp.done.is_empty() {
+        return Vec::new();
+    }
+    let receipt = cp
+        .audit
+        .clone()
+        .or_else(|| cp.node.clone())
+        .unwrap_or_else(|| "unreceipted".into());
+    let mut lines = vec![format!(
+        "Done ledger: {} finished effect{} in this session. Do not redo them. Receipt `{receipt}`.",
+        cp.done.len(),
+        if cp.done.len() == 1 { "" } else { "s" }
+    )];
+    for done in &cp.done {
+        if done.file.is_empty() {
+            lines.push(format!(
+                "- run `{}` tool {} call {}",
+                done.command, done.tool, done.call
+            ));
+        } else {
+            lines.push(format!(
+                "- edit `{}` tool {} call {}",
+                done.file, done.tool, done.call
+            ));
+        }
+    }
+    lines
+}
+
 pub(super) async fn on_event(
     global: &Arc<std::sync::Mutex<Global>>,
     ctx: &Ctx<'_>,
@@ -187,15 +289,20 @@ pub(super) async fn on_event(
     if inp.session.is_empty() {
         return (wrote, tell);
     }
+    if let Some(line) = redo_line(global, inp) {
+        tell.push(line);
+    }
+    note_done(global, inp);
     match inp.event.as_str() {
         "PreCompact" => {
-            let (ids, turn) = {
+            let (ids, turn, prior_done) = {
                 let Ok(mut g) = global.lock() else {
                     return (wrote, tell);
                 };
                 let s = g.session(&inp.session);
                 let ids = s.contexts.get("").map(Context::ids).unwrap_or_default();
-                (ids, s.turn)
+                let prior_done = s.checkpoint.clone().map(|cp| cp.done).unwrap_or_default();
+                (ids, s.turn, prior_done)
             };
             if ids.is_empty() {
                 return (wrote, tell);
@@ -209,6 +316,7 @@ pub(super) async fn on_event(
                     ids,
                     turn,
                     node,
+                    done: prior_done,
                     ..Checkpoint::default()
                 });
                 g.dirty = true;
@@ -270,6 +378,18 @@ pub(super) async fn on_event(
             };
             let (lines, told) = restore_lines(ctx, &cp, &retired).await;
             tell.extend(lines);
+            tell.extend(ledger_lines(&cp));
+            if !cp.done.is_empty()
+                && let Ok(mut g) = global.lock()
+            {
+                g.session(&inp.session).checkpoint = Some(Checkpoint {
+                    done: cp.done.clone(),
+                    node: cp.node.clone(),
+                    audit: cp.audit.clone(),
+                    ..Checkpoint::default()
+                });
+                g.dirty = true;
+            }
             wrote.push(json!({"kind": "compaction-restore", "told": told, "audit": cp.audit, "new": false}));
         }
         _ => {}
@@ -310,5 +430,58 @@ mod tests {
             None,
             "a suppressed memory does not come back"
         );
+    }
+
+    #[tokio::test]
+    async fn the_done_ledger_survives_compaction_and_a_redo_is_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let cog = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let oc = std::sync::Arc::new(vestige_core::OutputConfig::default());
+        let conn = super::super::new_connection();
+        let fire = |args: serde_json::Value| {
+            let storage = std::sync::Arc::clone(&storage);
+            let cog = std::sync::Arc::clone(&cog);
+            let oc = std::sync::Arc::clone(&oc);
+            let conn = std::sync::Arc::clone(&conn);
+            let home = home.path().to_path_buf();
+            async move {
+                super::super::execute_with(&storage, &cog, &oc, &conn, Some(args), &home)
+                    .await
+                    .expect("reflex answers")
+            }
+        };
+        fire(json!({
+            "event": "PostToolUse", "session": "s-done", "tool": "Edit",
+            "call": "c1", "file": "src/a.rs"
+        }))
+        .await;
+        fire(json!({
+            "event": "PostToolUse", "session": "s-done", "tool": "Bash",
+            "call": "c2", "command": "cargo test -p vestige-mcp"
+        }))
+        .await;
+        fire(json!({"event": "PreCompact", "session": "s-done", "trigger": "auto"})).await;
+        fire(json!({"event": "SessionStart", "session": "s-done", "source": "compact"})).await;
+        let restored = fire(json!({"event": "UserPromptSubmit", "session": "s-done"})).await;
+        let text = restored["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap_or("");
+        assert!(text.contains("Done ledger"), "{text}");
+        assert!(text.contains("src/a.rs"), "{text}");
+        assert!(text.contains("cargo test -p vestige-mcp"), "{text}");
+        let redo = fire(json!({
+            "event": "PreToolUse", "session": "s-done", "tool": "Edit",
+            "call": "c3", "file": "src/a.rs"
+        }))
+        .await;
+        let redo_text = redo["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap_or("");
+        assert!(redo_text.contains("Redo flagged"), "{redo_text}");
+        assert!(redo_text.contains("src/a.rs"), "{redo_text}");
     }
 }
