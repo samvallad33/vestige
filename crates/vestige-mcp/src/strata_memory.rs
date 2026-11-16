@@ -1709,10 +1709,7 @@ fn code_anchored(
     record: &strata_store::NodeRecord,
     linked: &BTreeSet<String>,
 ) -> bool {
-    record
-        .tags
-        .iter()
-        .any(|tag| tag.starts_with("file:") || tag.starts_with("symbol:"))
+    record.tags.iter().any(|tag| tag.starts_with("file:") || tag.starts_with("symbol:"))
         || linked.contains(&record.id)
         || !store.anchors_for(&record.id).is_empty()
 }
@@ -1756,9 +1753,7 @@ fn hygiene_access(
         return (false, false);
     }
     let window_ms = vestige_core::ACCESS_LOG_RETENTION_DAYS.saturating_mul(86_400_000);
-    let age_ms = Utc::now()
-        .timestamp_millis()
-        .saturating_sub(record.created_at_ms);
+    let age_ms = Utc::now().timestamp_millis().saturating_sub(record.created_at_ms);
     if age_ms <= window_ms {
         (true, false)
     } else {
@@ -3651,10 +3646,7 @@ impl MemoryStoreSend for StrataMemory {
         let (newest_git_commit_record, newest_git_commit_record_age_days) = match newest_commit {
             Some(record) => (
                 Some(ms_to_dt(record.created_at_ms).to_rfc3339()),
-                Some(whole_days_since(
-                    record.created_at_ms,
-                    Utc::now().timestamp_millis(),
-                )),
+                Some(whole_days_since(record.created_at_ms, Utc::now().timestamp_millis())),
             ),
             None => (None, None),
         };
@@ -3680,12 +3672,7 @@ impl MemoryStoreSend for StrataMemory {
         let receipts = self.salience_receipts().unwrap_or_default();
         let undone: HashSet<String> = receipts
             .iter()
-            .filter_map(|r| {
-                r.get("undo_of")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-            })
+            .filter_map(|r| r.get("undo_of").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string))
             .collect();
         let mut captured_by: std::collections::HashMap<String, (String, DateTime<Utc>)> =
             std::collections::HashMap::new();
@@ -3693,25 +3680,13 @@ impl MemoryStoreSend for StrataMemory {
             if row.get("undo_of").is_some_and(|v| !v.is_null()) {
                 continue;
             }
-            if row
-                .get("receipt_id")
-                .and_then(Value::as_str)
-                .is_some_and(|rid| undone.contains(rid))
-            {
+            if row.get("receipt_id").and_then(Value::as_str).is_some_and(|rid| undone.contains(rid)) {
                 continue;
             }
-            let Some(mem_id) = row
-                .get("memory_id")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-            else {
+            let Some(mem_id) = row.get("memory_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
                 continue;
             };
-            let Some(trig_id) = row
-                .get("trigger_id")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-            else {
+            let Some(trig_id) = row.get("trigger_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
                 continue;
             };
             let ts = row
@@ -3728,8 +3703,7 @@ impl MemoryStoreSend for StrataMemory {
             if retired.contains(&n.id) || n.created_at < cutoff {
                 continue;
             }
-            let elapsed_hours =
-                ((now - n.created_at).num_milliseconds().max(0) as f64) / 3_600_000.0;
+            let elapsed_hours = ((now - n.created_at).num_milliseconds().max(0) as f64) / 3_600_000.0;
             let strength = decay_fn.apply(1.0, elapsed_hours, 9.0);
             if strength < 0.05 {
                 continue;

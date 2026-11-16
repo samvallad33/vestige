@@ -303,7 +303,10 @@ pub async fn execute(
         &mut seen_ids,
     );
     if !changed_kept.is_empty() {
-        context_parts.push(format!("**Changed files:**\n{}", changed_kept.join("\n")));
+        context_parts.push(format!(
+            "**Changed files:**\n{}",
+            changed_kept.join("\n")
+        ));
     }
     let predicted_kept = budget_id_lines(
         prediction_hits,
@@ -715,10 +718,9 @@ fn content_names_file(content: &str, variants: &[String]) -> bool {
             if token.is_empty() {
                 continue;
             }
-            if variants
-                .iter()
-                .any(|variant| variant == &token || normalize_repo_path(variant) == token)
-            {
+            if variants.iter().any(|variant| {
+                variant == &token || normalize_repo_path(variant) == token
+            }) {
                 return true;
             }
         }
@@ -746,7 +748,9 @@ fn strata_node_selectable(
     if node.valid_from.is_some_and(|t| t > now) || node.valid_until.is_some_and(|t| t <= now) {
         return false;
     }
-    storage.node_is_in_scope(&node.id, scope).unwrap_or(false)
+    storage
+        .node_is_in_scope(&node.id, scope)
+        .unwrap_or(false)
 }
 
 fn file_hit_rank(node: &vestige_core::KnowledgeNode) -> u8 {
@@ -786,15 +790,15 @@ fn strata_changed_file_lines(
     cwd: Option<&str>,
     superseded: &HashSet<String>,
 ) -> Vec<(String, String)> {
-    let variants: Vec<String> = files.iter().flat_map(|file| path_variants(file, cwd)).fold(
-        Vec::new(),
-        |mut acc, variant| {
+    let variants: Vec<String> = files
+        .iter()
+        .flat_map(|file| path_variants(file, cwd))
+        .fold(Vec::new(), |mut acc, variant| {
             if !acc.iter().any(|kept: &String| kept == &variant) {
                 acc.push(variant);
             }
             acc
-        },
-    );
+        });
     if variants.is_empty() {
         return Vec::new();
     }
@@ -911,10 +915,7 @@ fn strata_prediction_lines(
             Ok(value) => value,
             Err(_) => continue,
         };
-        let Some(rows) = predicted
-            .get("predictions")
-            .and_then(|value| value.as_array())
-        else {
+        let Some(rows) = predicted.get("predictions").and_then(|value| value.as_array()) else {
             continue;
         };
         for row in rows {
@@ -945,7 +946,10 @@ fn strata_prediction_lines(
         }
     }
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    ranked.into_iter().map(|(_, id, line)| (id, line)).collect()
+    ranked
+        .into_iter()
+        .map(|(_, id, line)| (id, line))
+        .collect()
 }
 
 fn budget_id_lines(
