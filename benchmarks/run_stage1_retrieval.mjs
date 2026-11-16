@@ -210,8 +210,8 @@ async function runLongMemEval(params, quiet = false) {
   if (!LME_DATA) LME_DATA = JSON.parse(readFileSync('benchmarks/data/longmemeval_s_cleaned.json', 'utf8'));
   const data = LME_DATA.slice(0, LIMIT);
   const buckets = {};
-  const all = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 };
-  const nonAbs = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 };
+  const all = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, cappedAll5: 0, all10: 0, ndcg10: 0 };
+  const nonAbs = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, cappedAll5: 0, all10: 0, ndcg10: 0 };
   const lat = [];
   let sessionsSeen = 0, turnsSeen = 0;
   for (const item of data) {
@@ -225,17 +225,19 @@ async function runLongMemEval(params, quiet = false) {
     const gold = new Set(item.answer_session_ids || []);
     const type = item.question_type;
     const isAbs = String(item.question_id).endsWith('_abs');
+    const top5Set = new Set(ids.slice(0, 5));
     const m = {
       r1: ids.slice(0, 1).some(i => gold.has(i)),
       r5: ids.slice(0, 5).some(i => gold.has(i)),
       r10: ids.slice(0, 10).some(i => gold.has(i)),
-      all5: gold.size > 0 && [...gold].every(g => ids.slice(0, 5).includes(g)),
+      all5: gold.size > 0 && [...gold].every(g => top5Set.has(g)),
+      cappedAll5: gold.size > 0 ? [...gold].filter(g => top5Set.has(g)).length / Math.min(5, gold.size) : 0,
       all10: gold.size > 0 && [...gold].every(g => ids.slice(0, 10).includes(g)),
       ndcg10: ndcg(ids, gold, 10),
     };
-    for (const acc of [all, isAbs ? null : nonAbs, (buckets[type] ??= { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, all10: 0, ndcg10: 0 })]) {
+    for (const acc of [all, isAbs ? null : nonAbs, (buckets[type] ??= { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, cappedAll5: 0, all10: 0, ndcg10: 0 })]) {
       if (!acc) continue;
-      acc.n++; acc.r1 += m.r1; acc.r5 += m.r5; acc.r10 += m.r10; acc.all5 += m.all5; acc.all10 += m.all10; acc.ndcg10 += m.ndcg10;
+      acc.n++; acc.r1 += m.r1; acc.r5 += m.r5; acc.r10 += m.r10; acc.all5 += m.all5; acc.cappedAll5 += m.cappedAll5; acc.all10 += m.all10; acc.ndcg10 += m.ndcg10;
     }
   }
   if (!quiet) {
@@ -243,6 +245,7 @@ async function runLongMemEval(params, quiet = false) {
     console.log(`Questions: ${all.n} total (${nonAbs.n} non-abstention) | avg haystack: ${(sessionsSeen / all.n).toFixed(1)} sessions, ${(turnsSeen / all.n).toFixed(0)} turns per question`);
     console.log(`\n[Official LongMemEval Metric: 470 non-abstention questions]`);
     console.log(`  RecallAll@5:  ${pct(nonAbs.all5, nonAbs.n)}%`);
+    console.log(`  Capped-All@5: ${pct(nonAbs.cappedAll5, nonAbs.n)}%`);
     console.log(`  RecallAll@10: ${pct(nonAbs.all10, nonAbs.n)}%`);
     console.log(`  NDCG@10:      ${(nonAbs.ndcg10 / nonAbs.n).toFixed(4)}`);
     console.log(`  RecallAny@1:  ${pct(nonAbs.r1, nonAbs.n)}%`);
@@ -250,11 +253,11 @@ async function runLongMemEval(params, quiet = false) {
     console.log(`  RecallAny@10: ${pct(nonAbs.r10, nonAbs.n)}%`);
 
     console.log(`\n[All 500 questions (includes 30 abstentions, recall_any)]`);
-    console.log(`  RecallAny@1:  ${pct(all.r1, all.n)}% | RecallAny@5: ${pct(all.r5, all.n)}% | RecallAny@10: ${pct(all.r10, all.n)}% | RecallAll@5: ${pct(all.all5, all.n)}% | NDCG@10: ${(all.ndcg10 / all.n).toFixed(4)}`);
+    console.log(`  RecallAny@1:  ${pct(all.r1, all.n)}% | RecallAny@5: ${pct(all.r5, all.n)}% | RecallAny@10: ${pct(all.r10, all.n)}% | RecallAll@5: ${pct(all.all5, all.n)}% | Capped-All@5: ${pct(all.cappedAll5, all.n)}% | NDCG@10: ${(all.ndcg10 / all.n).toFixed(4)}`);
 
     console.log(`\nQuestion Type Breakdown (Non-Abstention at same k):`);
     for (const [t, s] of Object.entries(buckets)) {
-      console.log(`  ${t.padEnd(26)} R@5 ${pct(s.r5, s.n).padStart(6)}% | R@10 ${pct(s.r10, s.n).padStart(6)}% | RecallAll@5 ${pct(s.all5, s.n).padStart(6)}% | NDCG@10 ${(s.ndcg10 / s.n).toFixed(3)} (${s.n})`);
+      console.log(`  ${t.padEnd(26)} R@5 ${pct(s.r5, s.n).padStart(6)}% | R@10 ${pct(s.r10, s.n).padStart(6)}% | RecallAll@5 ${pct(s.all5, s.n).padStart(6)}% | Capped-All@5 ${pct(s.cappedAll5, s.n).padStart(6)}% | NDCG@10 ${(s.ndcg10 / s.n).toFixed(3)} (${s.n})`);
     }
     console.log(`\nLatency per question: avg ${(lat.reduce((a, b) => a + b, 0) / lat.length).toFixed(2)} ms | p50 ${pctile(lat, 0.5).toFixed(2)} ms | p95 ${pctile(lat, 0.95).toFixed(2)} ms`);
   }
@@ -264,6 +267,7 @@ async function runLongMemEval(params, quiet = false) {
     recall_any_r5: Number(pct(a.r5, a.n)),
     recall_any_r10: Number(pct(a.r10, a.n)),
     recall_all_r5: Number(pct(a.all5, a.n)),
+    capped_all_r5: Number(pct(a.cappedAll5, a.n)),
     recall_all_r10: Number(pct(a.all10, a.n)),
     ndcg_10: Number((a.ndcg10 / a.n).toFixed(4)),
   });

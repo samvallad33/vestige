@@ -6439,10 +6439,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // session is not in the top 5 takes a redundant assistant from a
     // non-dominant session. The dominant session stays. Slot 1 stays.
     apply_c2_pool_c_absent_session_key(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
-    // Absent session key. After the same-session yield. A user opener whose
-    // session is not in the top 5 takes a redundant assistant from a
-    // non-dominant session. The dominant session stays. Slot 1 stays.
-    apply_c2_pool_c_absent_session_key(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
     // Pool-B standing-rule seat. After Bertillonage, so a user question left
     // at slot 1 can still yield to the zero-lexical standing opener the
     // stratified channel already selected. Top-5 membership is unchanged.
@@ -6467,11 +6463,6 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &turn_ts,
         k,
     );
-    // Anaphoric tail. After the buried peak. The strongest anaphoric
-    // declarative in ranks 5..9 swaps with the lowest-own question in slots
-    // 1..4 when its own score beats the whole top 5. Slot 0 and the session
-    // list stay. Does not touch rsb_seat_behind.
-    apply_c2_anaphoric_tail(ix, &mut final_turn_indices, &t_own);
     // Anaphoric tail. After the buried peak. The strongest anaphoric
     // declarative in ranks 5..9 swaps with the lowest-own question in slots
     // 1..4 when its own score beats the whole top 5. Slot 0 and the session
