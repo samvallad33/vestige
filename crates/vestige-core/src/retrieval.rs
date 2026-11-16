@@ -1999,6 +1999,9 @@ struct Index {
     /// Cache-aligned `<= 24B` turn metadata (20,000 turns <= 480 KB, fits in Sandy Bridge L3).
     #[allow(dead_code)]
     turn_meta: Vec<TurnMeta>,
+    /// Step 1: Zero-overlap Wilkins u64 + Mooers u128 Zatocode + Forbus SME turn signatures.
+    turn_zero_overlap: Vec<crate::zero_overlap::ZeroOverlapSig>,
+    zero_overlap_candidates: Vec<usize>,
 }
 
 /// Compact cache-aligned turn metadata (`<= 24 bytes`) for L3-resident linear scans.
@@ -3179,6 +3182,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut turn_prose_cache: Vec<String> = Vec::new();
     let mut cue_vocab: DetHashMap<String, u32> = DetHashMap::default();
     let mut turn_cues: Vec<Vec<u32>> = Vec::new();
+    let mut turn_zero_overlap: Vec<crate::zero_overlap::ZeroOverlapSig> = Vec::new();
+    let mut zero_overlap_candidates: Vec<usize> = Vec::new();
     let mut role_cues: DetHashSet<u32> = DetHashSet::default();
     let pref_set: DetHashSet<&str> = PREF_MARKERS.iter().copied().collect();
     let hard_constraint_set: DetHashSet<&str> = HARD_CONSTRAINT_MARKERS.iter().copied().collect();
@@ -3523,6 +3528,11 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
             turn_tech_handles.push(tech_handles);
             turn_prose_cache.push(prose_body.to_string());
             turn_cues.push(intern_cues(&t.content, &mut cue_vocab));
+            let zo_sig = crate::zero_overlap::extract_turn_zero_overlap_sig(prose_body);
+            if zo_sig.zato != 0 || zo_sig.wilkins_primary != 0 {
+                zero_overlap_candidates.push(turn_idx);
+            }
+            turn_zero_overlap.push(zo_sig);
             role_cues.extend(intern_cues(&t.role, &mut cue_vocab));
             members.push(turn_idx);
             turns.push(TurnIx {
@@ -4049,6 +4059,8 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_bloom,
         turn_bloom,
         turn_meta,
+        turn_zero_overlap,
+        zero_overlap_candidates,
     }
 }
 
@@ -5029,6 +5041,118 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             &mut t_raw,
             &mut t_own,
         );
+    }
+
+    // Step 1: Ounis QPP-gated Wilkins + Zatocode + ConceptNet + Forbus SME zero-overlap bridge.
+    let mut step1_top_zero_overlap_turn: Option<usize> = None;
+    if !ix.zero_overlap_candidates.is_empty() {
+        let q_sig = crate::zero_overlap::extract_turn_zero_overlap_sig(&q.text);
+        if q_sig.zato != 0 || q_sig.wilkins_primary != 0 {
+            let has_rare_direct_hit = plan.terms.iter().any(|qt| {
+                let df = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(0);
+                (1..=3).contains(&df)
+                    && ix.t_postings.get(qt.id as usize).map_or(false, |l| {
+                        l.iter().any(|&ti| ix.turns[ti as usize].entities.contains(&qt.id))
+                    })
+            });
+            let mut direct_nonzero_docs = 0usize;
+            let mut max_cov_bits = 0u32;
+            let mut max_direct_t = 0.0f32;
+            let mut min_direct_t = f32::INFINITY;
+            let mut direct_concept_hit = has_rare_direct_hit;
+            for ti in 0..nt {
+                if t_turn_raw[ti] > 0.0 {
+                    direct_nonzero_docs += 1;
+                    let bits = t_mask[ti].count_ones();
+                    max_cov_bits = max_cov_bits.max(bits);
+                    if t_turn_raw[ti] > max_direct_t {
+                        max_direct_t = t_turn_raw[ti];
+                    }
+                    if t_turn_raw[ti] < min_direct_t {
+                        min_direct_t = t_turn_raw[ti];
+                    }
+                    let t_sig = &ix.turn_zero_overlap[ti];
+                    let wilkins_hit = q_sig.wilkins_primary != 0
+                        && (crate::zero_overlap::wilkins_shared_prefix(t_sig.wilkins_primary, q_sig.wilkins_primary) >= 40
+                            || crate::zero_overlap::wilkins_shared_prefix(t_sig.wilkins_secondary, q_sig.wilkins_primary) >= 40);
+                    let zato_hit = q_sig.zato != 0 && (t_sig.zato & q_sig.zato) != 0;
+                    if (wilkins_hit || zato_hit) && bits >= 2 {
+                        direct_concept_hit = true;
+                    }
+                }
+            }
+            let q_groups_len = plan.groups.len() as u32;
+            if !direct_concept_hit
+                && (direct_nonzero_docs == 0
+                    || max_cov_bits < q_groups_len
+                    || crate::zero_overlap::ounis_qpp_allows_bridge(&q_sig, direct_nonzero_docs, max_cov_bits, q_groups_len))
+            {
+                let q_lower = q.text.to_ascii_lowercase();
+                let mut hits: Vec<(usize, u32)> = Vec::new();
+                for &ti in &ix.zero_overlap_candidates {
+                    let b = crate::zero_overlap::score_zero_overlap_bridge(
+                        &q_sig,
+                        &q_lower,
+                        &ix.turn_zero_overlap[ti],
+                    );
+                    if b >= 75 {
+                        hits.push((ti, b));
+                    }
+                }
+                if !hits.is_empty() {
+                    hits.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                    hits.truncate(15);
+                    let max_b = hits[0].1.max(1) as f32;
+                    // Guardrail: if direct hits already cover >=2 query groups on a literal concept, stay below min_direct_t;
+                    // if Pass-1 has 0 multi-term hits on the query's taxonomic concept, lift bridge candidates above noise.
+                    let has_any_literal_concept = (0..nt).any(|ti| {
+                        t_turn_raw[ti] > 0.0
+                            && t_mask[ti].count_ones() >= 2
+                            && ((q_sig.wilkins_primary != 0
+                                && (crate::zero_overlap::wilkins_shared_prefix(ix.turn_zero_overlap[ti].wilkins_primary, q_sig.wilkins_primary) >= 40
+                                    || crate::zero_overlap::wilkins_shared_prefix(ix.turn_zero_overlap[ti].wilkins_secondary, q_sig.wilkins_primary) >= 40))
+                                || (q_sig.zato != 0 && (ix.turn_zero_overlap[ti].zato & q_sig.zato) != 0))
+                    });
+                    if !has_any_literal_concept {
+                        step1_top_zero_overlap_turn = Some(hits[0].0);
+                    }
+                    let ceiling = if has_any_literal_concept && min_direct_t.is_finite() {
+                        (min_direct_t * 0.90).max(0.05)
+                    } else if max_direct_t > 0.0 {
+                        max_direct_t + 8.0
+                    } else {
+                        4.0
+                    };
+                    let s_ceiling = if has_any_literal_concept {
+                        0.45
+                    } else {
+                        1.35
+                    };
+                    let all_q_mask = if q_groups_len >= 64 { u64::MAX } else { (1u64 << q_groups_len) - 1 };
+                    for &(ti, b) in &hits {
+                        let add = ceiling * (b as f32 / max_b);
+                        if t_own[ti] < add {
+                            t_own[ti] = add;
+                        }
+                        if t_raw[ti] < add {
+                            t_raw[ti] = add;
+                        }
+                        if t_turn_raw[ti] < add {
+                            t_turn_raw[ti] = add;
+                        }
+                        if !has_any_literal_concept && b == hits[0].1 {
+                            t_mask[ti] |= all_q_mask;
+                            t_exact_mask[ti] |= all_q_mask;
+                        }
+                        let si = ix.turns[ti].session;
+                        let s_add = s_ceiling * (b as f32 / max_b);
+                        if s_score[si] < s_add {
+                            s_score[si] = s_add;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Weapon 1: Bidirectional 3-Turn Scene Pooling.
@@ -6702,6 +6826,17 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     // session is absent from the top 5. Slot 0 and the session list stay.
     // Does not touch rsb_seat_behind.
     apply_c2_unseated_session_peak(ix, &mut final_turn_indices, &t_own, k);
+    if let Some(zo_ti) = step1_top_zero_overlap_turn {
+        if let Some(pos) = final_turn_indices.iter().position(|&t| t == zo_ti) {
+            if pos > 0 {
+                final_turn_indices.remove(pos);
+                final_turn_indices.insert(0, zo_ti);
+            }
+        } else if !final_turn_indices.is_empty() {
+            final_turn_indices.insert(0, zo_ti);
+            final_turn_indices.truncate(k);
+        }
+    }
     maybe_dump_replay(
         ix,
         q,
