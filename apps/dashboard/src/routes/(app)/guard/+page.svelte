@@ -24,7 +24,6 @@
 		prev?: string;
 		decision?: string;
 		rule?: string;
-		commitment?: string;
 		source?: string;
 		tool?: string;
 		session?: string;
@@ -36,7 +35,23 @@
 		gate_version?: string;
 		ts_utc?: string;
 		via?: string;
+		commitment?: string;
+		chain_break?: boolean;
+		proof_frame?: ProofFrame;
 		permit?: { status?: string; by?: string; granted?: number; expires?: number; single_use?: boolean; [k: string]: unknown };
+	}
+
+	interface ProofFrame {
+		stop?: boolean;
+		kind?: string;
+		decision?: string;
+		rule?: string;
+		proof_handle?: string | null;
+		receipt_digest?: string | null;
+		tool_process_created?: boolean;
+		chain_break?: boolean;
+		local?: boolean;
+		export_span?: boolean;
 	}
 
 	const WINDOWS = [
@@ -111,6 +126,7 @@
 	const byId = $derived(new Map(shown.map((s, i) => [idOf(s, i), s])));
 	const byDigest = $derived(new Map(stops.filter((s) => s.digest).map((s) => [s.digest!, s])));
 	const picked = $derived(pickedId ? (byId.get(pickedId) ?? null) : null);
+	const frame = $derived(picked ? proofFrame(picked) : null);
 
 	/** The picked receipt's chain links: the one it names, and the one naming it. */
 	const links = $derived.by<TraceLink[]>(() => {
@@ -182,6 +198,23 @@
 		const newest = river.at(-1)?.id;
 		return newest ? [newest] : [];
 	});
+
+	function proofFrame(stop: Stop): ProofFrame {
+		if (stop.proof_frame) return stop.proof_frame;
+		if (stop.decision !== 'STOP') return { stop: false, kind: 'not-stop', decision: stop.decision, local: true, export_span: false };
+		const digest = stop.digest && /^[0-9a-f]{64}$/i.test(stop.digest) ? stop.digest : '';
+		return {
+			stop: true,
+			kind: 'stop',
+			rule: stop.commitment || stop.rule || '',
+			proof_handle: digest ? `op-receipt-${digest.slice(0, 16)}` : null,
+			receipt_digest: digest || null,
+			tool_process_created: false,
+			chain_break: Boolean(stop.chain_break),
+			local: true,
+			export_span: false
+		};
+	}
 
 	function verb(decision?: string): string {
 		const k = kindOf(decision);
@@ -310,6 +343,19 @@
 			{/if}
 			{#if picked.cwd}<p class="tr-note">in {picked.cwd}</p>{/if}
 		</div>
+		{#if frame?.stop}
+			<div class="tr-block" data-cinema-frame="stop">
+				<p class="tr-proof-kicker">Proof frame</p>
+				<p class="tr-proof-line">{frame.rule || 'rule unavailable'}</p>
+				<p class="tr-id">{frame.proof_handle || 'receipt unavailable'}</p>
+				<p class="tr-note">{frame.receipt_digest || '—'}</p>
+				<p class="tr-note">The tool process was not created.</p>
+				{#if frame.chain_break}
+					<p class="tr-err">This step does not match the receipt before it.</p>
+				{/if}
+				<p class="tr-note">Local record. No span leaves this machine.</p>
+			</div>
+		{/if}
 		<div class="tr-actions">
 			<button type="button" class="tr-act quiet" onclick={() => (pickedId = null)}>Back to every rule</button>
 		</div>
