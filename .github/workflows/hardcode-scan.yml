@@ -1,0 +1,19 @@
+name: Hardcode scan
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  hardcode-scan:
+    name: hardcode-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Self-test (fake open-class list must fail the scan)
+        run: bash scripts/hardcode_scan_selftest.sh
+      - name: Scan engine code for hand-typed open-class lists
+        run: bash scripts/hardcode_scan.sh
