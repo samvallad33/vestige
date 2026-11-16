@@ -86,7 +86,7 @@ pub fn schema() -> Value {
             },
             "from_handle": {
                 "type": "string",
-                "description": "For walk: exact failure memory ID to walk backward from."
+                "description": "For walk: exact memory ID, or an exact handle such as commit:<sha>, to walk backward from."
             },
             "commit": {"type":"string", "description":"For prove: commit/ref to bundle (default HEAD)."},
             "repoPath": {"type":"string", "description":"For prove: absolute git checkout path."},
@@ -399,11 +399,50 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     }))
 }
 
+/// The original id a duplicate echo points at (`duplicate of <id>` on its
+/// first line, tagged `duplicate`), or `None` for any other memory.
+fn duplicate_echo_original(node: &vestige_core::KnowledgeNode) -> Option<String> {
+    if !node.tags.iter().any(|t| t == "duplicate") {
+        return None;
+    }
+    let first = node.content.lines().next()?;
+    let id = first.strip_prefix("duplicate of ")?.trim();
+    (!id.is_empty() && id != node.id).then(|| id.to_string())
+}
+
 fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    let args: Args = match args {
+    let mut args: Args = match args {
         Some(value) => serde_json::from_value(value).map_err(|err| err.to_string())?,
         None => Args::default(),
     };
+    // `from_handle` may be an exact handle such as `commit:<sha>`: resolve it
+    // to the newest memory that carries it. An id is used as given.
+    if let Some(handle) = args
+        .from_handle
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string)
+        && storage.get_node(&handle).ok().flatten().is_none()
+    {
+        // A re-saved identical memory leaves a duplicate echo that carries the
+        // same tags; walk from the original it points at, not from the echo.
+        let mut found: Vec<vestige_core::KnowledgeNode> = storage
+            .resolve_handle(&handle)
+            .ids
+            .iter()
+            .filter_map(|id| storage.get_node(id).ok().flatten())
+            .map(|node| {
+                duplicate_echo_original(&node)
+                    .and_then(|orig| storage.get_node(&orig).ok().flatten())
+                    .unwrap_or(node)
+            })
+            .collect();
+        found.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
+        if let Some(node) = found.first() {
+            args.from_handle = Some(node.id.clone());
+        }
+    }
     let scope = args.scope.as_deref().unwrap_or("user").trim();
     if scope.is_empty() {
         return Err("scope must not be empty".into());

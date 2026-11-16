@@ -399,7 +399,6 @@ pub fn read_head_state(dir: &Path) -> Result<Option<u64>, StrataError> {
 /// Atomic watermark replace: temp file + fsync + rename + dir fsync. The temp
 /// path is exclusive to the single writer; a leftover `head.state.tmp` after
 /// a crash is simply overwritten next time and ignored on open.
-#[cfg(test)]
 pub(crate) fn write_head_state(dir: &Path, seq: u64) -> io::Result<()> {
     stage_head_state(dir, seq)?;
     publish_head_state(dir)
@@ -546,7 +545,7 @@ fn truncate_segment(path: &Path, len: u64) -> Result<(), StrataError> {
     Ok(())
 }
 
-fn parse_header(bytes: &[u8]) -> Option<SegmentHeader> {
+pub(crate) fn parse_header(bytes: &[u8]) -> Option<SegmentHeader> {
     if bytes.len() < HEADER_WIRE_SIZE {
         return None;
     }
@@ -561,15 +560,15 @@ fn parse_header(bytes: &[u8]) -> Option<SegmentHeader> {
 // Recovery scan
 // ---------------------------------------------------------------------------
 
-struct ScanState {
-    frame_count: u64,
-    last_frame_hash: [u8; 32],
-    leaves: Vec<[u8; 32]>,
+pub(crate) struct ScanState {
+    pub(crate) frame_count: u64,
+    pub(crate) last_frame_hash: [u8; 32],
+    pub(crate) leaves: Vec<[u8; 32]>,
     /// End of the valid frame region (start of trailer / torn tail / EOF).
-    end_offset: usize,
+    pub(crate) end_offset: usize,
 }
 
-enum TailStop {
+pub(crate) enum TailStop {
     /// Frames run cleanly to EOF with no trailer.
     Clean,
     /// Exactly TRAILER_WIRE_SIZE bytes remain and they parse as a trailer.
@@ -578,10 +577,13 @@ enum TailStop {
         offset: usize,
     },
     /// First bad frame: torn, short, zero, blake3 mismatch, or chain break.
-    Torn { offset: usize, reason: String },
+    Torn {
+        offset: usize,
+        reason: String,
+    },
 }
 
-fn scan_frames(bytes: &[u8], header_hash: [u8; 32]) -> (TailStop, ScanState) {
+pub(crate) fn scan_frames(bytes: &[u8], header_hash: [u8; 32]) -> (TailStop, ScanState) {
     let mut st = ScanState {
         frame_count: 0,
         last_frame_hash: header_hash,
@@ -1144,6 +1146,48 @@ impl StrataLog {
     /// and the key file is missing, open fails instead of minting one.
     pub fn open_seeded(dir: impl AsRef<Path>, seed: [u8; 32]) -> Result<StrataLog, StrataError> {
         Self::open_inner(dir, Some(seed))
+    }
+
+    /// Open a replica of another writer's chain.
+    ///
+    /// The replica stores `writer_verifying_key` and never mints a signing
+    /// key. See [`crate::ReplicaLog`].
+    pub fn open_replica(
+        dir: impl AsRef<Path>,
+        writer_verifying_key: ed25519_dalek::VerifyingKey,
+    ) -> Result<crate::ReplicaLog, StrataError> {
+        crate::ReplicaLog::open(dir, writer_verifying_key)
+    }
+
+    /// Verifying half of this log's signing key.
+    pub fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.inner.signing.verifying_key()
+    }
+
+    /// Directory the log was opened from.
+    pub fn directory(&self) -> &Path {
+        &self.inner.dir
+    }
+
+    /// Sign `message` with this log's key. The seed stays inside the log.
+    pub fn sign_bytes(&self, message: &[u8]) -> [u8; 64] {
+        use ed25519_dalek::Signer;
+        self.inner.signing.sign(message).to_bytes()
+    }
+
+    /// Sign a mesh head over the acked frames. The signature uses this log's
+    /// existing key; the bytes are the head message in [`crate::mesh_head`].
+    pub fn sign_mesh_head(&self) -> Result<crate::SignedHead, StrataError> {
+        let frames = self.read_frames(1)?;
+        let hashes: Vec<[u8; 32]> = frames.iter().map(|frame| frame.payload_blake3).collect();
+        let seq = frames.last().map(|frame| frame.seq).unwrap_or(0);
+        let frame_hash = frames.last().map(|frame| frame.frame_hash).unwrap_or([0u8; 32]);
+        Ok(crate::mesh_head::sign_head(
+            &self.inner.signing,
+            seq,
+            frame_hash,
+            &hashes,
+        ))
     }
 
     fn open_inner(dir: impl AsRef<Path>, seed: Option<[u8; 32]>) -> Result<StrataLog, StrataError> {

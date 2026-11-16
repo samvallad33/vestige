@@ -295,6 +295,7 @@ fn stdio_allows_one_retire_and_holds_another_then_strata_verify() {
                 &AdmissionContext {
                     rule_id: Some(RULE_SUPPRESS.to_string()),
                     confirm: false,
+                    human_confirmed: false,
                 },
             )
             .expect("suppress rule allows the RETIRE");

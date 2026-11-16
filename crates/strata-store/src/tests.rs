@@ -679,6 +679,18 @@ fn replay_store_and_migration_frames_do_not_cross_classify() {
                 StoreOp::SaveEdges { .. } => {}
                 // Nor a salience adjustment.
                 StoreOp::AdjustSalience { .. } => {}
+                // Nor a mesh op. The arms keep the match exhaustive.
+                StoreOp::GrantWriter { .. }
+                | StoreOp::MergeChain { .. }
+                | StoreOp::ConflictRecord { .. }
+                | StoreOp::AssertClaim { .. }
+                | StoreOp::Equivocation { .. }
+                | StoreOp::PolicyMismatch { .. }
+                | StoreOp::IndexMismatch { .. }
+                | StoreOp::TombstoneReceipt { .. }
+                | StoreOp::DenyRange { .. }
+                | StoreOp::ForkGenesis { .. }
+                | StoreOp::PurgeTombstone { .. } => {}
             }
         } else if frame.kind == KIND_STORE_CHECKPOINT {
             store_checkpoints += 1;
@@ -1414,6 +1426,7 @@ fn edit_returns_successor_and_receipt_naming_edit() {
             &AdmissionContext {
                 rule_id: Some(RULE_EDIT.to_string()),
                 confirm: false,
+                human_confirmed: false,
             },
         )
         .expect("edit");
@@ -1502,6 +1515,7 @@ fn held_edit_without_rule_id_leaves_no_live_duplicate() {
             &AdmissionContext {
                 rule_id: Some("edited".into()),
                 confirm: true,
+                human_confirmed: false,
             },
         )
         .expect_err("unknown rule");
@@ -1514,6 +1528,7 @@ fn ctx(rule: Option<&str>, confirm: bool) -> AdmissionContext {
     AdmissionContext {
         rule_id: rule.map(str::to_string),
         confirm,
+        human_confirmed: false,
     }
 }
 
@@ -1630,7 +1645,7 @@ fn expect_allow(
 #[test]
 fn named_retire_rules_precede_the_catchall_hold() {
     let policy = default_policy();
-    assert_eq!(policy.rules.len(), 6);
+    assert_eq!(policy.rules.len(), 8);
     let ids = [RULE_EDIT, RULE_SUPPRESS, RULE_INTENTIONS, RULE_PURGE];
     let mut prefixes = Vec::new();
     for (rule, id) in policy.rules.iter().take(4).zip(ids) {
@@ -1648,8 +1663,13 @@ fn named_retire_rules_precede_the_catchall_hold() {
     assert_eq!(policy.rules[4].match_kind, action_kind::RETIRE);
     assert_eq!(policy.rules[4].verdict, Verdict::Hold);
     assert_eq!(policy.rules[4].match_params_hash_prefix, WILDCARD_PREFIX);
-    assert_eq!(policy.rules[5].match_kind, ANY_KIND);
+    assert_eq!(policy.rules[5].match_kind, action_kind::GRANT);
     assert_eq!(policy.rules[5].verdict, Verdict::Allow);
+    assert_ne!(policy.rules[5].match_params_hash_prefix, WILDCARD_PREFIX);
+    assert_eq!(policy.rules[6].match_kind, action_kind::GRANT);
+    assert_eq!(policy.rules[6].verdict, Verdict::Hold);
+    assert_eq!(policy.rules[7].match_kind, ANY_KIND);
+    assert_eq!(policy.rules[7].verdict, Verdict::Allow);
 }
 
 #[test]
@@ -1951,6 +1971,7 @@ fn edit_ctx() -> AdmissionContext {
     AdmissionContext {
         rule_id: Some(RULE_EDIT.to_string()),
         confirm: false,
+        human_confirmed: false,
     }
 }
 
@@ -2478,6 +2499,7 @@ fn anchors_of_a_retired_node_are_not_returned_or_written() {
             &AdmissionContext {
                 rule_id: Some(RULE_SUPPRESS.to_string()),
                 confirm: false,
+                human_confirmed: false,
             },
         )
         .expect("retire");

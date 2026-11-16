@@ -116,3 +116,34 @@ test('a huge stderr cannot become the whole prompt', () => {
   assert.match(body.agent_message, /op-receipt-0123456789abcdef/);
   assert.match(body.user_message, /op-rule-OP-004/);
 });
+
+test('an allow passes the gate rewrite through, so a stripped secret stays stripped', () => {
+  const key = 'sk-' + 'a1B2c3D4e5'.repeat(4);
+  const input = JSON.stringify({
+    hook_event_name: 'PreToolUse', cwd: '/tmp', session_id: 'guard-secret', tool_name: 'mcp__example__lookup',
+    tool_input: { path: '/tmp/ok.txt', mode: 'read', limit: 10, api_key: key },
+  });
+  const claude = run('claude', input);
+  assert.equal(claude.status, 0, claude.stderr);
+  assert.doesNotMatch(claude.stdout, new RegExp(key));
+  const body = JSON.parse(claude.stdout);
+  assert.equal(body.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.equal(body.hookSpecificOutput.permissionDecision, undefined);
+  assert.deepEqual(body.hookSpecificOutput.updatedInput, { path: '/tmp/ok.txt', mode: 'read', limit: 10 });
+  const cursor = run('cursor', input);
+  assert.equal(cursor.status, 0, cursor.stderr);
+  const cbody = JSON.parse(cursor.stdout);
+  assert.equal(cbody.permission, 'allow');
+  assert.deepEqual(cbody.updated_input, { path: '/tmp/ok.txt', mode: 'read', limit: 10 });
+  const plain = run('claude', JSON.stringify({ cwd: '/tmp', session_id: 'guard-plain', tool_name: 'Bash', tool_input: { command: 'echo hello' } }));
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.deepEqual(JSON.parse(plain.stdout), {});
+});
+
+test('an allow with unreadable gate stdout is a deny', () => {
+  const script = path.join(os.tmpdir(), `vestige-noisy-gate-${process.pid}.py`);
+  fs.writeFileSync(script, 'import sys\nsys.stdout.write("not json\\n")\nsys.exit(0)\n');
+  const noisy = run('claude', JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo hello' } }), { python: 'python3', gate: script });
+  assert.equal(noisy.status, 2);
+  assert.match(noisy.stderr, /could not read/);
+});

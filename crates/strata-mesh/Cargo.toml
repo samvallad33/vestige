@@ -1,0 +1,26 @@
+[package]
+name = "strata-mesh"
+version = "6.2.2"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Strata Mesh: peer-to-peer sync of per-writer chains over iroh"
+publish = false
+
+[dependencies]
+strata-store = { path = "../strata-store" }
+blake3 = "1"
+borsh = { version = "1", features = ["derive"] }
+ed25519-dalek = "3"
+iroh = "=1.4.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+spake2 = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+qrcode = "0.14"
+base64 = "0.22"
+rand = "0.10"
+
+[dev-dependencies]
+strata-store = { path = "../strata-store" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

@@ -14,7 +14,8 @@ env:
 jobs:
   hook-tests:
     name: Hook Tests
-    runs-on: ubuntu-latest
+    # setup-python has no 3.9 build for the ubuntu-latest image (26.04); pin to 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +34,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # setup-python has no 3.9 build for ubuntu-latest (26.04); pin to 24.04.
+          - os: ubuntu-24.04
             python: "3.9"
           - os: ubuntu-latest
             python: "3.12"

@@ -15,7 +15,7 @@ const { spawn, spawnSync } = require('child_process');
 const BINARIES = ['vestige-mcp', 'vestige', 'vestige-restore', 'vestige-upgrade'];
 
 // Claude Code runs a SessionStart command hook on these sources (hooks/settings.rules.fragment.json).
-const RULES_MATCHER = 'startup|resume|clear|compact';
+const RULES_MATCHER = 'startup|resume|clear|compact|fork';
 
 function exe(name, platform = os.platform()) {
   return platform === 'win32' ? `${name}.exe` : name;
