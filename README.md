@@ -1,20 +1,62 @@
 <div align="center">
 
-# Vestige
-### Memory and a safety gate for AI coding agents.
+# VESTIGE
+
+**/ˈvɛs.tɪdʒ/ · VESS-tij**
+
+*From the Latin **vestīgium**, a physical footprint pressed into the earth, and the direct root of **investigate** (**in-vestīgāre**: to follow the track backward).*
+
+### Deterministic, local-first memory and safety kernel for AI agents
+
+[![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://github.com/samvallad33/vestige)
+[![License: AGPL-3.0](https://img.shields.io/github/license/samvallad33/vestige)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/samvallad33/vestige)](https://github.com/samvallad33/vestige/releases)
+
+No embeddings, no LLMs, no GPU, and no API keys. It runs locally on CPU.
 
 </div>
 
 ---
 
-## What it does
+## Why Vestige?
 
-- **Remembers.** Agents keep what happened in earlier sessions and can trace a failure back to the change that caused it.
-- **Stops bad tool calls.** 102 fixed rules check every tool call before it runs and block things like recursive deletes and credential dumps.
-- **Asks again.** An earlier yes is not a yes now. A one-time owner permit lasts 15 minutes and then the agent has to ask again.
-- **Proves it.** Every write is signed and hash chained, so anyone can check the log offline.
+Roman trackers read *vestigia* in soil to reconstruct what passed through, how heavy it was, which way it moved, and how recently. Vestige does the same for agent memory. It records immutable footprints in an append-only log and walks the trail, instead of guessing meaning from a vector space.
 
-It runs on your machine on a plain CPU. No LLM, no GPU, no cloud calls.
+Human memory systems solved truth, order, and provenance under hard limits for 5,000 years: Pāṇini's *anuvṛtti* carry-forward registers, *isnād* witness chains, Andean *khipu* top-cord rollups, Torrens title curtains, and the archaeological Harris matrix. Vestige takes those structural ideas onto a local Rust kernel.
+
+---
+
+## Architecture
+
+- **Strata.** An append-only, hash-chained, signed log. Frames carry BLAKE3 payload digests and bi-temporal validity bounds (`valid_from_ms`, `valid_until_ms`). Admitted writes return receipts. Later claims supersede earlier ones; old facts stay on the log.
+- **FSRS-6.** Spaced-repetition scheduling that lets unused noise fade.
+- **RSB (Retroactive Salience Backfill).** The moat. *Cause never looks like the symptom.* A later turn can raise an earlier memory even when they share no words. Salience is set at write time, and new learning can raise or lower it later, a pattern described in Sheena Josselyn's engram research. In the birthday-dinner demo, a buried "felt off after Bangkok Garden" memory is raised once Maya's peanut allergy is recorded, so a later question about her birthday dinner can retrieve it.
+- **Backfill.** Upstream causal walks from a failure or a later fact back to the earlier turn that caused it.
+- **Rank-1 seating.** Deterministic slot-1 rules on the retrieved set, such as yielding an assistant reply to a covering user turn, with no vector index.
+- **GhostLink.** Pairs recorded memories, each with a proof.
+- **Operator hooks, one-use permits, and receipts.** `npx @vestige/init --guard` installs the Operator gate. A one-time owner permit lasts 15 minutes, is consumed once, and stops or allows write receipts.
+
+---
+
+## Benchmarks
+
+These numbers measure retrieval: whether the right memory landed in the top k. They do not measure answer accuracy. They are the latest scores merged to `main`, from [PR 709](https://github.com/samvallad33/vestige/pull/709) (RSB v4, commit `5fb269b0`). Runs used the local `retrieval_bench` binary on an Intel Core i5-2520M with 8 GB RAM, CPU only, with no embeddings, no LLM, no GPU, and no API keys.
+
+| Benchmark | Level | Metric | Score |
+| :--- | :--- | :--- | :--- |
+| **LoCoMo-10** CORE (1,536 questions) | Turn | Exact R@1 / R@5 | **736/1536 (47.92%)** / **1030/1536 (67.06%)** |
+| **LongMemEval-S** official (470 non-abstention) | Session | Any@1 / Any@5 / All@5 / NDCG@10 | **423/470 (90.00%)** / **458/470 (97.45%)** / **407/470 (86.60%)** / **0.9229** |
+| **LongMemEval-S** official (470 non-abstention) | Turn | Any@1 / Any@5 | **255/470 (54.26%)** / **364/470 (77.45%)** |
+| **BEAM 100K** (355 scored questions) | Turn | Any@5 / MRR | **203/355 (57.18%)** / **0.4563** |
+| **MemoryAgentBench** QA2 421K (100 questions) | Document | All@5 | **85/100 (85.00%)** |
+
+Reproduce:
+
+```bash
+bash benchmarks/run_all.sh
+```
+
+Full tables and method notes are in [benchmarks/README.md](benchmarks/README.md).
 
 ---
 
@@ -22,48 +64,36 @@ It runs on your machine on a plain CPU. No LLM, no GPU, no cloud calls.
 
 ```bash
 npx @vestige/init --guard
-vestige serve
 ```
 
----
+That sets up local binaries and an MCP connection for any AI agent. `--guard` adds the Operator gate. The MCP command is `vestige-mcp`:
 
-## Benchmarks
+```json
+{
+  "mcpServers": {
+    "vestige": { "command": "vestige-mcp" }
+  }
+}
+```
 
-These measure retrieval, meaning whether the right memory came back in the top 5. They do not measure answer accuracy. Every number is evaluated on 100% of the benchmark questions with zero embeddings, zero vectors, and zero cloud LLM calls ($0.00 spend).
-
-| Benchmark | Scale & Setting | Vestige v6.2.1 | Plain BM25 |
-| :--- | :--- | :--- | :--- |
-| **LongMemEval_S** | Official all gold sessions in top 5 (470 non-abs) | **91.28%** | 82.98% |
-| **LongMemEval_S** | Any gold session in top 5 (all 500 questions) | **98.60%** | 97.00% |
-| **LongMemEval_M** | Scaled haystack (~476 sessions, ~4,894 turns/Q; 470 non-abs) | **91.70%** Any@5 / **76.38%** All@5 | — |
-| **LoCoMo-10** | Full conversational dialogues, right session in top 5 (1,536 CORE Qs) | **92.25%** | 87.24% |
-| **LoCoMo-10** | Conversational turn-level soft recall in top 5 (1,536 CORE Qs) | **78.13%** | 69.99% |
-| **MemoryAgentBench** | Multi-hop reasoning, 421K distractor context (`ruler_qa2`, 100 Qs) | **98.00%** Any@5 / **93.00%** All@10 | — |
-| **MemoryAgentBench** | Needle retrieval in 197K context (`ruler_qa1`, 1,204 docs, 100 Qs) | **95.00%** R@5 / **99.00%** R@10 | — |
-| **MemoryAgentBench** | Merged 400K scenarios (`longmemeval_s*`, 5 sets, 287 non-abs) | **94.08%** Any@5 / **85.02%** All@5 | — |
-| **BEAM 100K** | 20 conversations, 2,127 sub-sessions, right session in top 5 (355 Qs) | **66.20%** Any@5 / **74.93%** Any@10 | — |
-| **BEAM 100K** | Turn exact ID recall in top 5 (355 scored questions) | **45.92%** Any@5 / **55.77%** Any@10 | — |
-
-This is the top retrieval result without embeddings we know of on LongMemEval_S. Settings were tuned on these datasets. As a blind split check, LoCoMo held-out conversations 6 to 10 score **91.75%** session recall at 5 and **76.03%** turn soft recall at 5.
-
-On a plain CPU with 8 GB of RAM, a LongMemEval question takes ~500 ms, a LoCoMo question ~7 ms, and a 5,000-turn LongMemEval_M haystack ~5 seconds, with peak RSS under 350 MB.
-
-Full tables, category breakdowns, and zero-leak disclosures are in [benchmarks/README.md](benchmarks/README.md).
+From source:
 
 ```bash
-bash benchmarks/fetch_data.sh && bash benchmarks/run_all.sh
+git clone https://github.com/samvallad33/vestige.git
+cd vestige
+cargo build --release --package vestige-mcp
 ```
 
----
-
-## Learn more
-
-- [Getting started](docs/GETTING-STARTED.md)
-- [Safety gate rules](operator/README.md)
-- [Storage and signed log](docs/STORAGE.md)
-- [Tool reference](docs/REFERENCE.md)
-- [FAQ](docs/FAQ.md)
+More in [Getting started](docs/GETTING-STARTED.md).
 
 ---
 
-Built in Rust by Sam Valladares. Licensed under AGPL-3.0.
+## License
+
+Built by [Sam Valladares](https://github.com/samvallad33) ([@samvallad33](https://github.com/samvallad33)). Licensed under [AGPL-3.0](LICENSE).
+
+<div align="center">
+
+*Follow the footprints.*
+
+</div>
