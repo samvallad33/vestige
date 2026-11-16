@@ -1,6 +1,6 @@
 {
   "name": "@vestige/init",
-  "version": "6.2.1",
+  "version": "6.2.2",
   "description": "Local memory setup for AI agents: merge MCP connections and memory hooks, with an optional Operator gate of 102 STOP rules",
   "bin": {
     "vestige-init": "bin/init.js"
@@ -34,11 +34,11 @@
     "operator-lite": "0.3.10"
   },
   "optionalDependencies": {
-    "@vestige/mcp-darwin-arm64": "6.2.1",
-    "@vestige/mcp-darwin-x64": "6.2.1",
-    "@vestige/mcp-linux-arm64": "6.2.1",
-    "@vestige/mcp-linux-x64": "6.2.1",
-    "@vestige/mcp-win32-x64": "6.2.1"
+    "@vestige/mcp-darwin-arm64": "6.2.2",
+    "@vestige/mcp-darwin-x64": "6.2.2",
+    "@vestige/mcp-linux-arm64": "6.2.2",
+    "@vestige/mcp-linux-x64": "6.2.2",
+    "@vestige/mcp-win32-x64": "6.2.2"
   },
   "files": [
     "bin",

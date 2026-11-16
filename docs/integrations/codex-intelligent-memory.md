@@ -55,7 +55,7 @@ If a record does not change the action, do not mention it. If it does, make the 
 
 ## 5. Know the limit
 
-Claude Code's Cognitive Sandwich uses `UserPromptSubmit` and `Stop` hooks, and most of its layers call v3 tools. See [COGNITIVE_SANDWICH.md](../COGNITIVE_SANDWICH.md). This repository ships no Codex hook adapter.
+Claude Code's Cognitive Sandwich uses `UserPromptSubmit` and `Stop` hooks, and most of its layers call v3 tools. See [COGNITIVE_SANDWICH.md](../COGNITIVE_SANDWICH.md). `npx @vestige/init` wires Codex too: it writes `~/.codex/hooks.json` with the memory hooks and the Reflex command shim on `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `SubagentStart`, `PreCompact` and `Stop`, so the Stop invariants block in Codex as well. Codex skips project hooks it has not trusted: review and trust them with `/hooks`. `vestige init --git-hooks` adds the git backstop for runs with no hooks at all.
 
 For Codex, the portable layer is:
 

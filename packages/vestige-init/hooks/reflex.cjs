@@ -52,13 +52,40 @@ function argumentsFor(client, event, input) {
     interrupted: response.interrupted === true ? 'true' : '',
     background: toolInput.run_in_background === true ? 'true' : '',
     exit_code: exitCode,
+    // Enforcement inputs. The prompt and final message are read for literal
+    // directive phrases and exact handles; Reflex never copies them into the ledger.
+    prompt: pick('prompt', 'user_prompt'),
+    last_assistant_message: pick('last_assistant_message', 'lastAssistantMessage'),
+    stop_hook_active: input.stop_hook_active === true ? 'true' : '',
+    tool_input: toolInput,
+    tool_response: input.tool_response === undefined ? null : input.tool_response,
   };
 }
 
-function hostOutput(client, event, context) {
-  if (!context) return {};
-  if (client === 'cursor') return CURSOR_CONTEXT.has(event) ? { additional_context: context } : {};
-  return { hookSpecificOutput: { hookEventName: event, additionalContext: context } };
+// The decision Reflex returned, in each host's own shape. A block or deny is
+// only ever passed through; the shim never invents one.
+function hostOutput(client, event, context, decision = {}) {
+  const canon = canonical(client, event);
+  const reason = typeof decision.reason === 'string' ? decision.reason : '';
+  const stopBlock = decision.decision === 'block' && reason && (canon === 'Stop' || canon === 'SubagentStop');
+  const deny = decision.permissionDecision === 'deny' && canon === 'PreToolUse';
+  const denyReason = typeof decision.permissionDecisionReason === 'string' ? decision.permissionDecisionReason : 'Vestige ledger denied this call.';
+  if (client === 'cursor') {
+    const out = context && CURSOR_CONTEXT.has(event) ? { additional_context: context } : {};
+    if (stopBlock) out.followup_message = reason;
+    if (deny) Object.assign(out, { permission: 'deny', user_message: denyReason, agent_message: denyReason });
+    return out;
+  }
+  if (client === 'gemini') {
+    const out = context ? { hookSpecificOutput: { hookEventName: event, additionalContext: context } } : {};
+    if (stopBlock) Object.assign(out, { decision: 'block', reason });
+    if (deny) Object.assign(out, { decision: 'deny', reason: denyReason });
+    return out;
+  }
+  const out = context ? { hookSpecificOutput: { hookEventName: event, additionalContext: context } } : {};
+  if (stopBlock) Object.assign(out, { decision: 'block', reason });
+  if (deny) out.hookSpecificOutput = { ...(out.hookSpecificOutput || { hookEventName: event }), permissionDecision: 'deny', permissionDecisionReason: denyReason };
+  return out;
 }
 
 async function run({ client, configFile, eventFlag, input, deadlineMs = 450 }) {
@@ -67,6 +94,7 @@ async function run({ client, configFile, eventFlag, input, deadlineMs = 450 }) {
     const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
     const event = (typeof input.hook_event_name === 'string' && input.hook_event_name) || eventFlag || '';
     const args = argumentsFor(client, event, input);
+    if (config.enforce === false) args.enforce = 'off';
     if (!args.event || !args.session) return {};
     transport = rpc(config.binary, config.binaryArgs || [], deadlineMs,
       { ...process.env, VESTIGE_HTTP_ENABLED: '0', VESTIGE_DASHBOARD_ENABLED: 'false', VESTIGE_AUTOPILOT_ENABLED: '0' });
@@ -83,7 +111,7 @@ async function run({ client, configFile, eventFlag, input, deadlineMs = 450 }) {
       }
     }
 
-    return hostOutput(client, event, context);
+    return hostOutput(client, event, context, answer || {});
   } catch {
     return {};
   } finally {

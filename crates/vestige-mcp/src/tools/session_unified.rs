@@ -82,8 +82,11 @@ pub fn schema() -> Value {
         }
     }
     if let Some(views) = schema["properties"]["view"]["enum"].as_array_mut() {
-        views.push(json!("system"));
-        views.push(json!("memory_prs"));
+        for view in ["system", "memory_prs"] {
+            if !views.iter().any(|existing| existing.as_str() == Some(view)) {
+                views.push(json!(view));
+            }
+        }
     }
     schema["properties"]["status"] =
         json!({"type":"string", "description":"For memory_prs: native review status filter."});
@@ -91,6 +94,7 @@ pub fn schema() -> Value {
     for field in ["session", "host", "event", "source"] {
         schema["properties"]["memory_hook"]["properties"][field] = json!({"type":"string"});
     }
+    // hardcode-scan: protocol (JSON-RPC / JSON-schema keys)
     schema["allOf"] = json!([
         {"if":{"properties":{"action":{"const":"reflex"}},"required":["action"]},
          "then":{"properties":{"params":embedded_schema(tools::reflex::schema(), "/allOf/0/then/properties/params")},"required":["params"]}},

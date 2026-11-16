@@ -184,7 +184,7 @@ async function beatDesk() {
   }
 }
 
-const RELEASES = ['v1.1.0', 'v1.4.0', 'v2.0.0', 'v2.5.0', 'v3.0.0', 'v3.5.0', 'v4.0.0', 'v4.1.1', 'v4.2.0'];
+const RELEASES = ['v1.1.0', 'v1.4.0', 'v2.0.0', 'v2.5.0', 'v3.0.0', 'v3.5.0', 'v4.0.0', 'v4.1.1', 'v4.2.0', 'v5.0.0', 'v6.0.0', 'v6.2.0', 'v6.2.2'];
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT'];
 
 async function beatGrind() {

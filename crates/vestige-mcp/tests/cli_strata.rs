@@ -487,6 +487,11 @@ fn portable_and_sync_refuse_and_write_nothing() {
         "{}",
         sync.text()
     );
+    assert!(
+        sync.stderr.contains("vestige mesh sync"),
+        "{}",
+        sync.text()
+    );
     assert!(!sync_file.exists(), "sync created the archive");
 
     let portable = out.path().join("portable.json");

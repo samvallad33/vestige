@@ -319,15 +319,53 @@ pub async fn execute(
 
     validate_source_args(&args)?;
     validate_scope(args.scope.as_deref())?;
-    let _valid_at = parse_valid_at(args.valid_at.as_deref())?;
+    let valid_at = parse_valid_at(args.valid_at.as_deref())?;
 
     let limit = args.limit.unwrap_or(10).clamp(1, 100);
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        let ranked = super::recall::rank_nodes_lexical(storage.as_ref(), &args.query, limit as usize);
+        let effective_scope = if args.include_cross_scope.unwrap_or(false) {
+            None
+        } else {
+            Some(args.scope.as_deref().unwrap_or(DEFAULT_MEMORY_SCOPE).trim())
+        };
+        let include_superseded = args.include_superseded.unwrap_or(false);
+        let pool = (limit as usize).saturating_mul(4).max(32);
+        let ranked = super::recall::rank_nodes_lexical_scoped(
+            storage.as_ref(),
+            effective_scope,
+            include_superseded,
+            valid_at,
+            &args.query,
+            pool,
+        );
+        let min_ret = args.min_retention.unwrap_or(0.0);
         let mut results = Vec::new();
         for (id, score) in ranked {
+            if results.len() >= limit as usize {
+                break;
+            }
             if let Ok(Some(node)) = storage.get_node(&id) {
-                let mut val = serde_json::to_value(&node).unwrap_or_default();
+                if node.retention_strength < min_ret {
+                    continue;
+                }
+                if let Some(inc) = args.include_types.as_ref()
+                    && !inc.is_empty()
+                    && !inc.iter().any(|t| t.eq_ignore_ascii_case(&node.node_type))
+                {
+                    continue;
+                }
+                if let Some(exc) = args.exclude_types.as_ref()
+                    && exc.iter().any(|t| t.eq_ignore_ascii_case(&node.node_type))
+                {
+                    continue;
+                }
+                if let Some(pref) = args.tag_prefix.as_deref()
+                    && !pref.is_empty()
+                    && !node.tags.iter().any(|t| t.starts_with(pref))
+                {
+                    continue;
+                }
+                let mut val = format_node(&node, detail_level);
                 if let Some(obj) = val.as_object_mut() {
                     obj.insert("score".to_string(), serde_json::json!(score));
                 }

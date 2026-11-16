@@ -58,7 +58,7 @@ pub(crate) fn config_for(data_dir: &Path, root: Option<&Path>) -> WitnessConfig 
 
 /// The repository root above `cwd`, found from git's own files without
 /// running git, so a call that is not witnessed costs no process.
-fn repo_root(cwd: &Path) -> Option<PathBuf> {
+pub(super) fn repo_root(cwd: &Path) -> Option<PathBuf> {
     let mut dir = cwd.to_path_buf();
     for _ in 0..64 {
         if dir.join(".git").exists() {

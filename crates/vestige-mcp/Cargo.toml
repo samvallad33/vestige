@@ -1,6 +1,6 @@
 [package]
 name = "vestige-mcp"
-version = "6.2.1"
+version = "6.2.2"
 edition = "2024"
 description = "Vestige MCP server: the Causal Proof Engine and operating system for AI agents (Strata signed log, causal walks, receipts, dashboard)"
 authors = ["samvallad33"]
@@ -20,6 +20,9 @@ v3-engine = []
 codebase-git = ["vestige-core/codebase-git"]
 connectors = ["vestige-core/connectors"]
 cloud-sync = ["vestige-core/cloud-sync"]
+# Peer-to-peer chain sync. Off by default: an unpaired store must not link a
+# socket into the boot path, and a build without the feature has no endpoint.
+mesh = ["dep:strata-mesh"]
 
 # Fails on targets without prebuilts (notably x86_64-apple-darwin).
 # Published linux-gnu binaries are built in Ubuntu 22.04 (glibc 2.35) so they
@@ -54,7 +57,7 @@ path = "src/bin/cli.rs"
 # `legacy-sqlite` feature so `--no-default-features` builds a sqlite-free
 # crate (build/t5-legacy-isolation). `embeddings` and `vector-search` are
 # always-off stubs (w1b).
-vestige-core = { version = "6.2.1", path = "../vestige-core", default-features = false }
+vestige-core = { version = "6.2.2", path = "../vestige-core", default-features = false }
 # Witness records, DSSE envelopes and tree hashes for proof-carrying PRs. The
 # same crate builds the standalone offline verifier.
 vestige-proof = { path = "../vestige-proof" }
@@ -69,6 +72,10 @@ strata-verify = { path = "../strata-verify" }
 
 # Strata log the shipped MCP server boots. Workspace-excluded; path dep only.
 strata-store = { path = "../strata-store" }
+# iroh transport. Only the `mesh` feature links it, so a default boot has no endpoint.
+strata-mesh = { path = "../strata-mesh", optional = true }
+strata = { path = "../strata" }
+strata-kernel = { path = "../strata-kernel" }
 # Gate policy type for projection admission. No SQLite.
 strata-gate = { path = "../strata-gate" }
 blake3 = "1"
@@ -170,5 +177,9 @@ required-features = ["migrate-to-strata"]
 [[test]]
 name = "retire_policy_stdio"
 required-features = ["migrate-to-strata"]
+
+[[test]]
+name = "mesh_sync"
+required-features = ["mesh"]
 
 [lints.rust]

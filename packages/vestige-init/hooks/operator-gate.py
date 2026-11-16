@@ -12,9 +12,11 @@ Protocol (identical in all three hosts):
 Boundary, stated once and honestly: the gate blocks actions that are routed
 through a hooked tool call and that its closed rule set recognises. It cannot
 block an action that bypasses the hooked tools, and shell obfuscation it does
-not parse is a residual gap. Receipts are hash-chained digests, NOT signatures
-(integrity = "reference_digest_not_signature"); do not describe them as signed
-or tamper-evident.
+not parse is a residual gap. Receipts are hash-chained digests
+(integrity = "reference_digest_not_signature") unless a non-exportable Secure
+Enclave or CNG key signs that digest. A key file is not a signature and it is
+not a TPM attestation. A signature is not evidence against the key holder, and
+a cut tail still verifies.
 
 Stdlib only, Python 3.9 compatible (macOS /usr/bin/python3).
 """
@@ -42,14 +44,14 @@ try:
 except ImportError:                                  # Windows: receipts lock through msvcrt instead
     fcntl = None
 
-VERSION = "6.2.1"
+VERSION = "6.2.2"
 INTEGRITY = "reference_digest_not_signature"
 # Operator is a strict superset of Operator Lite: the Lite gate ships beside this file, byte for byte,
 # and every call is also judged by it. A copy whose bytes differ from the pin is not loaded.
-# The pin is operator-lite/operator-gate.py in this repository (Operator Lite 6.2.1).
+# The pin is operator-lite/operator-gate.py in this repository (Operator Lite 6.2.2).
 LITE_CORE_FILE = "lite_core.py"
-LITE_CORE_VERSION = "6.2.1"
-LITE_CORE_SHA256 = "f42156e9c9c8c6e5f4f4cdc6c2a698f49925338306e741b6645cdf417fbf50a1"
+LITE_CORE_VERSION = "6.2.2"
+LITE_CORE_SHA256 = "9de59e80f5ffa1d8ce380351d950dd612660d998020f791e483b17493f95a63d"
 IS_WINDOWS = os.name == "nt"
 
 
@@ -421,7 +423,7 @@ RULES = {
     "OP-S03": ("public-mutation", "SHADOW", "gh pr/issue/discussion mutation (claim-gate territory)."),
     "OP-S04": ("secret-shaped-write", "SHADOW", "Writing a credential-shaped string to disk."),
     "OP-S05": ("unresolved-delete", "SHADOW", "Delete whose targets cannot be resolved statically (xargs, inline code)."),
-    "OP-S06": ("pipe-to-interpreter", "SHADOW",
+    "OP-S06": ("pipe-to-interpreter", "STOP",
                "Piping fetched/encoded content straight into sh/python executes unreviewed code."),
     "OP-S07": ("persistence-write", "SHADOW",
                "cron/launchd/systemd/at/tmux -d writes schedule code to run outside every audit window."),
@@ -429,9 +431,9 @@ RULES = {
                "LD_PRELOAD/DYLD_*/NODE_OPTIONS/BASH_ENV/PATH= turn allow-listed binaries into arbitrary code."),
     "OP-S11": ("exfil-shape", "SHADOW",
                "Uploading/POSTing file contents (esp. credential-shaped paths) to the network."),
-    "OP-S12": ("invisible-characters", "SHADOW",
+    "OP-S12": ("invisible-characters", "STOP",
                "Zero-width/Bidi control characters in a command are visual deception (Trojan Source)."),
-    "OP-S13": ("mcp-argument-exfil", "SHADOW",
+    "OP-S13": ("mcp-argument-exfil", "STOP",
                "Secrets or sensitive files traveling through MCP tool arguments (the Invariant/postmark/Supabase pattern)."),
     "OP-S14": ("agent-config-write", "SHADOW",
                "Writing agent instruction/config files (CLAUDE.md, .cursorrules, .mcp.json) plants future instructions (Nx, CurXecute)."),
@@ -467,6 +469,86 @@ SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024
 PERSISTENCE_PROGS = {"crontab", "at", "batch", "launchctl", "systemctl", "tmux", "screen",
                      "anacron", "schtasks"}
 INVISIBLE_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u00ad]")
+# Shared fold used by the gate and by any executor rewrite (updatedInput / updated_input / tool_input).
+# Only Unicode Tags, bidi controls, and zero-width characters are stripped. Other non-ASCII is left intact.
+TAG_RE = re.compile(r"[\U000E0000-\U000E007F]")
+BIDI_RE = re.compile(r"[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]")
+ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200D\u2060\uFEFF\u00AD\u180E\u034F]")
+FOLD_STRIP_RE = re.compile(
+    r"[\U000E0000-\U000E007F\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF\u00AD\u180E\u034F\u061C]"
+)
+
+
+def fold_command(text):
+    """One canonicalization, then match. Returns (folded, kinds).
+
+    kinds lists what was stripped: 'tag', 'bidi', 'zero-width'. The folded
+    bytes are what the executor must see; a strip the executor does not share
+    is a failure. The fold does not decode tag letters into ASCII.
+    """
+    if text is None:
+        return text, []
+    s = text if isinstance(text, str) else str(text)
+    kinds = []
+    if TAG_RE.search(s):
+        kinds.append("tag")
+    if BIDI_RE.search(s):
+        kinds.append("bidi")
+    if ZERO_WIDTH_RE.search(s):
+        kinds.append("zero-width")
+    if not kinds:
+        return s, []
+    return FOLD_STRIP_RE.sub("", s), kinds
+
+
+def fold_value(obj, kinds=None):
+    """Fold every string value in a tool-input object. Keys stay as the model set them."""
+    found = kinds if kinds is not None else []
+    if isinstance(obj, str):
+        folded, hit = fold_command(obj)
+        for kind in hit:
+            if kind not in found:
+                found.append(kind)
+        return folded, found
+    if isinstance(obj, list):
+        return [fold_value(item, found)[0] for item in obj], found
+    if isinstance(obj, dict):
+        return {key: fold_value(val, found)[0] for key, val in obj.items()}, found
+    return obj, found
+
+
+def fold_key(text):
+    """Exact folded form used to count near-duplicate attempts. No fuzzy padding match."""
+    folded, _ = fold_command(text or "")
+    return " ".join(folded.split())
+
+
+def emit_folded_input(source, folded_ti):
+    """Hosts replace the whole object. Return the original schema with folded string values."""
+    if source == "cursor":
+        payload = {"updated_input": folded_ti}
+    elif source == "gemini":
+        payload = {"tool_input": folded_ti}
+    elif source in ("claude", "claude-code"):
+        # Claude Code reads a PreToolUse rewrite only inside hookSpecificOutput. No
+        # permissionDecision is sent, so the normal permission flow still applies.
+        payload = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": folded_ti}}
+    else:
+        payload = {"updatedInput": folded_ti}
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def finish_allow(source, payload, meta):
+    """On an allow, hand the executor the same folded bytes the gate matched."""
+    folded = meta.get("folded_input") if isinstance(meta, dict) else None
+    orig = None
+    if isinstance(payload, dict):
+        orig = payload.get("tool_input") or payload.get("toolInput") or payload.get("input")
+    if isinstance(folded, dict) and isinstance(orig, dict) and folded != orig:
+        emit_folded_input(source, folded)
+    return 0
+
 EXFIL_SECRET_PATH_RE = re.compile(r"\.(env|pem|key|p12|pfx|kdbx)$|id_rsa|credentials|\.aws[/\\]|\.netrc", re.I)
 MCP_SECRET_ARG_RE = re.compile(
     r"AKIA[0-9A-Z]{16}|sk-ant-\S{10,}|sk-proj-\S{10,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{16,}|"
@@ -5295,11 +5377,13 @@ def analyze(cmd, cwd, depth=0, vars_=None):
         DEFS_SEEN.clear()
     vars_ = dict(vars_) if vars_ is not None else {"HOME": HOME, "USERPROFILE": HOME}
     state = {"cwd": cwd}
-    if INVISIBLE_RE.search(cmd):
+    folded, fold_kinds = fold_command(cmd)
+    if fold_kinds:
         effects.append({"prog": "\u200b", "seg": cmd[:120], "targets": [], "recursive": False,
                         "kind": "invisible-chars", "filtered": False, "unresolved": False, "flags": [],
-                        "args": [], "cwd": state["cwd"] or UNKNOWN_CWD, "writes": [], "text": cmd[:120]})
-        cmd = INVISIBLE_RE.sub("", cmd)
+                        "args": [], "cwd": state["cwd"] or UNKNOWN_CWD, "writes": [], "text": cmd[:120],
+                        "fold_kinds": list(fold_kinds)})
+        cmd = folded
     cmd = decode_ansi_c_quotes(cmd)
     cmd, bodies = extract_heredocs(cmd)
     # $(( a / b )) and (( i++ )) hold numbers, not a command; a $(...) inside one still runs
@@ -7746,14 +7830,18 @@ def rewind_hold(source, payload, cwd, tool, preview, meta, kept):
         write_receipt(dict(base_rec, decision="ALLOW", via="permit", commitments=[rid]))
         return True
     detail = "Rewind: " + rewind_miss_line(kept)
-    rd = write_receipt(dict(base_rec, decision="STOP", commitment=rid, rule=name, commitments=[rid], detail=redact(detail)))
+    shape = action_shape(tool, cwd, preview)
+    rd = write_receipt(dict(base_rec, decision="STOP", commitment=rid, rule=name, commitments=[rid],
+                            detail=redact(detail),
+                            forbids={"rule": rid, "action_digest": adigest, "shape": shape, "writer": "gate"}))
     stop(["OPERATOR: STOPPED (%s %s)" % (rid, name),
           "Why: %s -- Rewind keeps a copy before the gate lets a call destroy work, and this time %s." % (why, rewind_miss_line(kept)),
           "Compliant path: commit or stash the work first (`git stash -u`), or copy it somewhere safe.",
           "No action was taken. Do not retry this action or a variation of it.",
           "Only the owner can allow it once, from their own terminal: %s approve %s" % (self_cmd(), adigest),
           "Receipt: %s" % ((rd or "unavailable")[:16]),
-          "Operator receipt: %s" % (rd or "unavailable")])
+          "Operator receipt: %s" % (rd or "unavailable")]
+         + proof_lines(rd, rid) + forbids_lines(adigest, shape, rd))
 
 
 def rewind_note(kept):
@@ -10137,6 +10225,13 @@ def classify(payload, cfg):
     hits, previews = [], []
     meta = {"normalized": "", "transforms": []}
     effects_out = []
+    ti, fold_kinds = fold_value(ti)
+    if fold_kinds:
+        meta["transforms"].append("shared-fold")
+        meta["transforms"].extend("fold-%s" % kind for kind in fold_kinds)
+        meta["folded_input"] = ti
+        hits.append(("OP-S12", "zero-width/Bidi/tag characters in the tool input",
+                     "Legitimate commands never contain invisible characters; retype it plainly."))
     blob = json.dumps(ti, ensure_ascii=False)
 
     if "OPERATOR_CANARY_STOP_7f3a" in blob:
@@ -10232,9 +10327,13 @@ def classify(payload, cfg):
         if MCP_SECRET_ARG_RE.search(blob_l) or re.search(r"BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY", blob_l):
             hits.append(("OP-036", "%s carries a credential-shaped argument" % tool_raw,
                          "Secrets never belong in tool arguments; pass a file path the owner approved or nothing."))
+            hits.append(("OP-S13", "%s carries a credential-shaped argument" % tool_raw,
+                         "Secrets never belong in tool arguments; pass a file path the owner approved or nothing."))
         for m in re.finditer(r'(?:^|[,"{\s])((?:~|\$HOME|/Users/|/home/)[^"\',}\s]*)', blob_l):
             if MCP_SENSITIVE_PATH_RE.search(m.group(1)):
                 hits.append(("OP-036", "%s reads sensitive path %s" % (tool_raw, m.group(1)),
+                             "Ask the owner before tool calls that touch credentials or identity files."))
+                hits.append(("OP-S13", "%s reads sensitive path %s" % (tool_raw, m.group(1)),
                              "Ask the owner before tool calls that touch credentials or identity files."))
                 break
     elif tool in ("read", "read_file", "view_file", "grep", "search", "grep_search", "file_search") or "file_path" in ti:
@@ -10260,7 +10359,13 @@ def classify(payload, cfg):
                     if "xargs-substituted" not in meta["transforms"]:
                         meta["transforms"].append("xargs-substituted")
         # every protection Operator Lite has, Operator has: Lite judges the same call, and what it stops is added
-        l_hits, l_transforms, l_deletes, l_writes = guarded(lite_judgment, ([], [], [], []), payload)
+        lite_payload = payload
+        if fold_kinds:
+            lite_payload = dict(payload)
+            lite_payload["tool_input"] = ti
+            if "toolInput" in lite_payload:
+                lite_payload["toolInput"] = ti
+        l_hits, l_transforms, l_deletes, l_writes = guarded(lite_judgment, ([], [], [], []), lite_payload)
         have = {h[0] for h in hits}
         call_text = str(ti.get("command") or ti.get("cmd") or "")
         for h in l_hits:
@@ -10284,6 +10389,51 @@ SECRET_RE = re.compile(r"(sk_live_\S+|rk_live_\S+|sk-[A-Za-z0-9_\-]{16,}|ghp_[A-
 
 def redact(s):
     return SECRET_RE.sub("[REDACTED]", s or "")[:200]
+
+
+SECRET_ARG_RULES = {"OP-036", "OP-S13"}
+PATH_COMMAND_FIELDS = {"path", "command", "cmd", "file_path", "target_file", "filepath"}
+
+
+def value_is_secret(val):
+    """Secret-shaped argument values only. Keys are not a word list; the shape of the value is."""
+    if isinstance(val, str):
+        return bool(MCP_SECRET_ARG_RE.search(val) or SECRET_RE.search(val)
+                    or re.search(r"BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY", val))
+    if isinstance(val, dict):
+        return any(value_is_secret(v) for v in val.values())
+    if isinstance(val, list):
+        return any(value_is_secret(v) for v in val)
+    return False
+
+
+def secret_arg_rewrite(ti):
+    """Return (rewritten, stripped_fields) or (None, reason).
+
+    The rewritten object is the complete model object minus secret-shaped
+    fields. Dropping path or command, or omitting any other field the model
+    set, is a failure: the call stops instead.
+    """
+    if not isinstance(ti, dict):
+        return None, "input is not an object"
+    drop = [key for key, val in ti.items() if value_is_secret(val)]
+    if not drop:
+        return None, "no secret-shaped field"
+    if any(key in PATH_COMMAND_FIELDS for key in drop):
+        return None, "would drop path or command"
+    rewritten = {key: val for key, val in ti.items() if key not in drop}
+    if set(ti) - set(rewritten) != set(drop):
+        return None, "omitted a non-secret field"
+    if not rewritten:
+        return None, "nothing remains after stripping secrets"
+    return rewritten, drop
+
+
+def tool_input_of(payload):
+    if not isinstance(payload, dict):
+        return {}
+    ti = payload.get("tool_input") or payload.get("toolInput") or payload.get("input") or {}
+    return ti if isinstance(ti, dict) else {"command": ti}
 
 
 def ensure_dirs():
@@ -10343,6 +10493,404 @@ def receipt_tail_digest(rdir):
     return "0" * 64
 
 
+# --------------------------------------------------------------------------- #
+# proof kernel: the STOP names the recall handle, and only the gate writes a
+# forbids edge. The handle is derived from the digest. It is not a field of
+# the hashed receipt body.
+# --------------------------------------------------------------------------- #
+SIGNATURE_INTEGRITY = "non_exportable_signature"
+SIGNATURE_CAVEAT = ("A key holder can re-sign history. A cut tail still verifies. "
+                    "A signature is not evidence against the key holder and it does not detect a fork.")
+_SIGNER_PROBE = None
+_P = 2 ** 255 - 19
+_L = 2 ** 252 + 27742317777372353535851937790883648493
+_D = (-121665 * pow(121666, _P - 2, _P)) % _P
+_I = pow(2, (_P - 1) // 4, _P)
+
+
+def _ed_inv(x):
+    return pow(x, _P - 2, _P)
+
+
+def _ed_recover_x(y, sign):
+    y = y % _P
+    x2 = (y * y - 1) * _ed_inv(_D * y * y + 1) % _P
+    x = pow(x2, (_P + 3) // 8, _P)
+    if (x * x - x2) % _P != 0:
+        x = x * _I % _P
+    if x & 1 != sign:
+        x = _P - x
+    return x
+
+
+def _ed_on_curve(x, y):
+    return (-x * x + y * y - 1 - _D * x * x * y * y) % _P == 0
+
+
+def _ed_encode(point):
+    x, y = point
+    bits = bytearray(int(y % _P).to_bytes(32, "little"))
+    if x & 1:
+        bits[31] |= 0x80
+    return bytes(bits)
+
+
+def _ed_decode(raw):
+    if len(raw) != 32:
+        return None
+    y = int.from_bytes(raw, "little") & ((1 << 255) - 1)
+    sign = raw[31] >> 7
+    x = _ed_recover_x(y, sign)
+    if not _ed_on_curve(x, y):
+        return None
+    return (x % _P, y % _P)
+
+
+def _ed_add(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+    x3 = (x1 * y2 + y1 * x2) * _ed_inv(1 + _D * x1 * x2 * y1 * y2) % _P
+    y3 = (y1 * y2 + x1 * x2) * _ed_inv(1 - _D * x1 * x2 * y1 * y2) % _P
+    return (x3, y3)
+
+
+def _ed_scalarmult(k, point):
+    acc = (0, 1)
+    while k:
+        if k & 1:
+            acc = _ed_add(acc, point)
+        point = _ed_add(point, point)
+        k >>= 1
+    return acc
+
+
+def _ed_base():
+    y = (4 * _ed_inv(5)) % _P
+    return (_ed_recover_x(y, 0), y)
+
+
+_ED_B = _ed_base()
+
+
+def _ed_expand(sk):
+    h = hashlib.sha512(sk).digest()
+    a = int.from_bytes(h[:32], "little")
+    a &= (1 << 254) - 8
+    a |= 1 << 254
+    return a, h[32:]
+
+
+def ed25519_public(sk):
+    a, _prefix = _ed_expand(sk)
+    return _ed_encode(_ed_scalarmult(a, _ED_B))
+
+
+def ed25519_sign(sk, msg):
+    a, prefix = _ed_expand(sk)
+    public = _ed_encode(_ed_scalarmult(a, _ED_B))
+    r = int.from_bytes(hashlib.sha512(prefix + msg).digest(), "little") % _L
+    encoded_r = _ed_encode(_ed_scalarmult(r, _ED_B))
+    k = int.from_bytes(hashlib.sha512(encoded_r + public + msg).digest(), "little") % _L
+    s = (r + k * a) % _L
+    return encoded_r + s.to_bytes(32, "little")
+
+
+def ed25519_verify(public, msg, sig):
+    """Local verification. It does not contact a transparency log."""
+    if not isinstance(public, (bytes, bytearray)) or not isinstance(sig, (bytes, bytearray)):
+        return False
+    if len(sig) != 64 or len(public) != 32:
+        return False
+    point_r = _ed_decode(bytes(sig[:32]))
+    point_a = _ed_decode(bytes(public))
+    if point_r is None or point_a is None:
+        return False
+    s = int.from_bytes(sig[32:], "little")
+    if s >= _L:
+        return False
+    k = int.from_bytes(hashlib.sha512(bytes(sig[:32]) + bytes(public) + msg).digest(), "little") % _L
+    return _ed_scalarmult(s, _ED_B) == _ed_add(point_r, _ed_scalarmult(k, point_a))
+
+
+def proof_handle(digest):
+    if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
+        return "op-receipt-" + digest[:16]
+    return None
+
+
+def rule_handle(rule_id):
+    """A constitution rule id only. A taste commitment id is not an OP- rule."""
+    if isinstance(rule_id, str) and re.fullmatch(r"OP-\d+", rule_id):
+        return "op-rule-" + rule_id
+    return None
+
+
+def proof_lines(digest, rule_id=None):
+    """The lines a STOP prints. Derived here, never written into the hashed body."""
+    handle = proof_handle(digest)
+    lines = ['Proof: recall(handle="%s")' % handle] if handle else ["Proof: receipt unavailable"]
+    named = rule_handle(rule_id)
+    if named:
+        lines.append('Rule: recall(handle="%s")' % named)
+    return lines
+
+
+def action_shape(tool, cwd, preview):
+    return digest_of({"tool": tool, "cwd": cwd, "preview": preview})[:24]
+
+
+def stamp_forbids(rec):
+    """A STOP receipt is a forbids edge. The recall handle is not stored on it."""
+    if rec.get("decision") != "STOP":
+        rec.pop("forbids", None)
+        return
+    raw = rec.get("forbids") if isinstance(rec.get("forbids"), dict) else {}
+    writer = raw.get("writer") if raw.get("writer") in ("gate", "recorded-failure") else "gate"
+    rule = raw.get("rule") or rec.get("commitment") or ""
+    action = raw.get("action_digest") or rec.get("action_digest") or ""
+    if not rule or not action:
+        rec.pop("forbids", None)
+        return
+    edge = {"rule": str(rule), "action_digest": str(action), "writer": writer}
+    if raw.get("shape"):
+        edge["shape"] = str(raw["shape"])
+    rec["forbids"] = edge
+
+
+def forbids_edge_of(rec):
+    """An edge only when the receipt verifies and the gate, or a recorded failure, wrote it."""
+    if not isinstance(rec, dict) or rec.get("decision") != "STOP":
+        return None
+    digest = rec.get("digest")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return None
+    body = dict(rec)
+    body.pop("digest", None)
+    if digest_of(body) != digest:
+        return None
+    meta = rec.get("forbids") if isinstance(rec.get("forbids"), dict) else {}
+    writer = meta.get("writer") or "gate"
+    if writer not in ("gate", "recorded-failure"):
+        return None
+    rule = meta.get("rule") or rec.get("commitment") or ""
+    action = meta.get("action_digest") or rec.get("action_digest") or ""
+    if not rule or not action:
+        return None
+    return {"rule": str(rule), "action_digest": str(action), "shape": str(meta.get("shape") or ""),
+            "writer": writer, "digest": digest, "receipt_handle": "op-receipt-" + digest[:16]}
+
+
+def forbids_matching(action_digest, shape):
+    """Prior gate-written edges for this action. Tool output and model prose are not a source."""
+    rdir = pj(OP_HOME, "receipts")
+    try:
+        names = sorted(n for n in os.listdir(rdir) if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.jsonl", n))[-TOLD_DAYS:]
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        try:
+            with open(pj(rdir, name), encoding="utf-8") as handle:
+                for line in handle:
+                    if '"STOP"' not in line:
+                        continue
+                    if action_digest and shape and action_digest not in line and shape not in line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    edge = forbids_edge_of(rec)
+                    if not edge:
+                        continue
+                    same_action = bool(action_digest) and edge["action_digest"] == action_digest
+                    same_shape = bool(shape) and edge["shape"] and edge["shape"] == shape
+                    if same_action or same_shape:
+                        found.append(edge)
+        except OSError:
+            continue
+    return found
+
+
+def forbids_lines(action_digest, shape, current=None):
+    lines, seen = [], set()
+    for edge in forbids_matching(action_digest, shape):
+        if current and edge["digest"] == current:
+            continue
+        if edge["receipt_handle"] in seen:
+            continue
+        seen.add(edge["receipt_handle"])
+        lines.append('Forbids: recall(handle="%s") rule=%s action=%s' % (
+            edge["receipt_handle"], edge["rule"], edge["action_digest"]))
+        if len(lines) == 4:
+            break
+    return lines
+
+
+def accept_signer(signer):
+    """A signer whose private key leaves the process is not a signature."""
+    if signer is None or getattr(signer, "exportable", True):
+        return None
+    if getattr(signer, "origin", "") not in ("secure-enclave", "cng"):
+        return None
+    try:
+        leaked = signer.export_private()
+    except Exception:
+        leaked = None
+    if leaked:
+        return None
+    if not callable(getattr(signer, "public_key", None)) or not callable(getattr(signer, "sign", None)):
+        return None
+    return signer
+
+
+def probe_non_exportable_signer():
+    """Secure Enclave or CNG, and only when the key cannot be exported.
+
+    Uncertainty returns None. A file, an environment path, and a software key
+    are not signers. This probe does not open a network connection.
+    """
+    try:
+        if sys.platform == "darwin":
+            return _probe_secure_enclave()
+        if sys.platform == "win32":
+            return _probe_cng()
+    except Exception:
+        return None
+    return None
+
+
+def _probe_secure_enclave():
+    """No Secure Enclave signature unless the key refuses export in-process.
+
+    A keychain prompt or a key that can be exported is not this probe.
+    """
+    try:
+        import ctypes
+        ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+    except Exception:
+        return None
+    return None
+
+
+def _probe_cng():
+    """No CNG signature unless NCrypt reports the key as non-exportable and export fails."""
+    try:
+        import ctypes
+        ctypes.WinDLL("ncrypt")
+    except Exception:
+        return None
+    return None
+
+
+def active_signer():
+    try:
+        found = _SIGNER_PROBE() if _SIGNER_PROBE is not None else probe_non_exportable_signer()
+    except Exception:
+        return None
+    return accept_signer(found)
+
+
+def signature_payload(digest):
+    """The signed bytes: the receipt digest and the proof handle derived from it."""
+    return (digest + "\n" + (proof_handle(digest) or "")).encode("ascii")
+
+
+def signature_sidecar(digest):
+    return pj(OP_HOME, "receipts", "signatures", digest + ".json")
+
+
+def attach_signature(rec, signer):
+    """Sign after the digest exists. The signature is not part of the hashed body."""
+    digest = rec.get("digest")
+    if not proof_handle(digest):
+        return False
+    try:
+        payload = signature_payload(digest)
+        public = signer.public_key()
+        sig = signer.sign(payload)
+        if not ed25519_verify(public, payload, sig):
+            return False
+        path = signature_sidecar(digest)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump({"alg": "ed25519", "public_key": bytes(public).hex(), "signature": bytes(sig).hex(),
+                       "payload_digest": digest, "proof_handle": proof_handle(digest)}, handle, sort_keys=True)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
+
+
+def describe_key_material(path):
+    """A key file stays a digest. It is not described as a TPM attestation."""
+    if path and os.path.isfile(path):
+        return {"kind": "file", "integrity": INTEGRITY, "tpm_attestation": False,
+                "note": "A key file stays reference_digest_not_signature. It is not a TPM attestation."}
+    return {"kind": "missing", "integrity": INTEGRITY, "tpm_attestation": False,
+            "note": "A missing key does not turn a STOP into an allow."}
+
+
+def verify_receipt_signature(rec):
+    """Verify one receipt locally, against its own bytes and the public key beside it."""
+    body = dict(rec or {})
+    digest = body.pop("digest", None)
+    flag = body.get("integrity")
+    out = {"digest_ok": isinstance(digest, str) and digest_of(body) == digest, "integrity": flag,
+           "signed": False, "caveat": SIGNATURE_CAVEAT}
+    if flag in (None, INTEGRITY):
+        out["note"] = "reference digest, not a signature"
+        return out
+    if flag != SIGNATURE_INTEGRITY:
+        out["note"] = "unknown integrity flag"
+        return out
+    try:
+        with open(signature_sidecar(digest), encoding="utf-8") as handle:
+            side = json.load(handle)
+        public = bytes.fromhex(side.get("public_key") or "")
+        sig = bytes.fromhex(side.get("signature") or "")
+    except Exception:
+        out["note"] = "signed flag without a local signature"
+        return out
+    out["signed"] = bool(proof_handle(digest) and ed25519_verify(public, signature_payload(digest), sig))
+    out["note"] = "verified offline against the receipt and the public key" if out["signed"] else "signature did not verify"
+    return out
+
+
+def cinema_proof_frame(rec):
+    """One local frame. An ALLOW is not a STOP. Nothing here exports a span."""
+    if not isinstance(rec, dict) or rec.get("decision") != "STOP":
+        return {"kind": "not-stop", "stop": False, "decision": (rec or {}).get("decision") if isinstance(rec, dict) else None,
+                "local": True, "export_span": False}
+    digest = rec.get("digest") if proof_handle(rec.get("digest")) else ""
+    return {"kind": "stop", "stop": True, "rule": rec.get("commitment") or rec.get("rule") or "",
+            "proof_handle": proof_handle(digest) if digest else None, "receipt_digest": digest or None,
+            "tool_process_created": False, "local": True, "export_span": False}
+
+
+def cinema_scrub(rows):
+    """Each receipt against its predecessor. A break lights that step."""
+    prev, frames = "0" * 64, []
+    for rec in rows or []:
+        if not isinstance(rec, dict):
+            frames.append({"kind": "break", "stop": False, "break": True, "chain_ok": False,
+                           "local": True, "export_span": False})
+            prev = None
+            continue
+        body = dict(rec)
+        digest = body.pop("digest", None)
+        ok = (prev is not None and rec.get("prev") == prev and isinstance(digest, str)
+              and bool(proof_handle(digest)) and digest_of(body) == digest)
+        frame = cinema_proof_frame(rec)
+        frame["chain_ok"] = bool(ok)
+        frame["break"] = not ok
+        frames.append(frame)
+        prev = digest if ok else None
+    return frames
+
+
 def write_receipt(rec):
     """Append a hash-chained receipt. Never raises into the caller."""
     try:
@@ -10354,9 +10902,18 @@ def write_receipt(rec):
         try:
             prev = receipt_tail_digest(rdir)
             rec = dict(rec)
-            rec.update({"v": 1, "integrity": INTEGRITY, "gate_version": VERSION, "prev": prev,
+            rec.pop("proof_handle", None)
+            rec.pop("receipt_handle", None)
+            stamp_forbids(rec)
+            signer = active_signer()
+            rec.update({"v": 1, "integrity": SIGNATURE_INTEGRITY if signer else INTEGRITY,
+                        "gate_version": VERSION, "prev": prev,
                         "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"})
             rec["digest"] = digest_of(rec)
+            if signer and not attach_signature(rec, signer):
+                rec["integrity"] = INTEGRITY
+                rec.pop("digest", None)
+                rec["digest"] = digest_of(rec)
             day = time.strftime("%Y-%m-%d", time.gmtime())
             with open(pj(rdir, day + ".jsonl"), "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, sort_keys=True, ensure_ascii=False) + "\n")
@@ -10566,7 +11123,7 @@ def strict_stop(source, raw, why):
           "or ask the owner to run it.",
           "No action was taken.",
           "Receipt: %s" % ((rd or "unavailable")[:16]),
-          "Operator receipt: %s" % (rd or "unavailable")])
+          "Operator receipt: %s" % (rd or "unavailable")] + proof_lines(rd, None))
 
 
 def degraded_hit(raw):
@@ -10629,6 +11186,9 @@ def hook_main(argv):
             if cursor_forwards(payload):
                 return 0                     # cursor-hook.py judges this call once, so a permit is spent once
         cfg = load_config()
+        pin_hit = mcp_launch_block(payload) if isinstance(payload, dict) else None
+        if pin_hit and global_mode() == "enforce":
+            mcp_stop(source, payload, pin_hit)
         del DEFECTS[:]
         del PROTECTED_EVIDENCE[:]
         del LITE_DROPS[:]
@@ -10674,6 +11234,23 @@ def hook_main(argv):
         if strict and failed_readers and not hits:
             strict_stop(source, raw, "a reader inside the gate failed on this call (%s)" % ", ".join(failed_readers))
         if not hits and not t_stop and not t_shadow:
+            shape = action_shape(tool, cwd, preview)
+            if global_mode() == "enforce" and forbids_matching("", shape):
+                adigest = digest_of({"tool": tool, "cwd": cwd, "hits": [], "preview": preview})[:24]
+                if not consume_permit(adigest, session_of(payload)):
+                    prior = forbids_matching("", shape)
+                    edge = prior[-1]
+                    rd = write_receipt({"source": source, "session": session_of(payload), "call": call_of(payload),
+                                        "cwd": cwd, "tool": tool, "decision": "STOP", "commitment": edge["rule"],
+                                        "rule": edge["rule"], "action_digest": adigest, "action_preview": redact(preview),
+                                        "detail": "forbids edge %s" % edge["receipt_handle"],
+                                        "forbids": {"rule": edge["rule"], "action_digest": adigest, "shape": shape,
+                                                    "writer": "gate"}})
+                    stop(["OPERATOR: STOPPED (%s forbids)" % edge["rule"],
+                          "Why: a prior incident forbids this action.",
+                          "No action was taken. The tool process was not created.",
+                          "Only the owner can allow it once, from their own terminal: %s approve %s" % (self_cmd(), adigest)]
+                         + proof_lines(rd, edge["rule"]) + forbids_lines(adigest, shape, rd))
             # compliant-rewrite linkage: this call matches a rewrite the gate proposed
             linked = False
             try:
@@ -10709,7 +11286,7 @@ def hook_main(argv):
                                    **({"tests": True} if ran_tests else {}),
                                    **({"protected": list(PROTECTED_EVIDENCE)} if PROTECTED_EVIDENCE else {})))
                 rewind_note(kept)
-            return 0
+            return finish_allow(source, payload, meta)
 
         gmode = global_mode()
         enforce_hits, shadow_hits = [], []
@@ -10725,6 +11302,7 @@ def hook_main(argv):
         action = {"tool": tool, "source": source, "hits": sorted(set(h[0] for h in hits)),
                   "preview": redact(preview)}
         adigest = digest_of({"tool": tool, "cwd": cwd, "hits": action["hits"], "preview": preview})[:24]
+        shape = action_shape(tool, cwd, preview)
         base_rec = {"source": source, "session": session_of(payload), "call": call_of(payload),
                     "cwd": cwd, "tool": tool, "action_digest": adigest, "action_preview": action["preview"],
                     "normalized": redact(meta.get("normalized", "")),
@@ -10757,6 +11335,29 @@ def hook_main(argv):
         if loss:
             base_rec["loss"] = loss
         if enforce_hits:
+            only_secret = {h[0] for h in enforce_hits} <= SECRET_ARG_RULES
+            model_ti = tool_input_of(payload)
+            base_ti = meta.get("folded_input") if isinstance(meta.get("folded_input"), dict) else model_ti
+            rewritten, stripped = secret_arg_rewrite(base_ti) if only_secret else (None, None)
+            if only_secret and rewritten is not None:
+                # Keep every non-secret field the model set, even if the fold ran first.
+                for key, val in model_ti.items():
+                    if key not in stripped and key not in rewritten:
+                        rewritten, stripped = None, "omitted a non-secret field"
+                        break
+                    if key not in stripped and key in PATH_COMMAND_FIELDS and key not in rewritten:
+                        rewritten, stripped = None, "would drop path or command"
+                        break
+            if only_secret and isinstance(rewritten, dict) and isinstance(stripped, list):
+                emit_folded_input(source, rewritten)
+                write_receipt(dict(base_rec, decision="ALLOW", via="secret-redaction",
+                                   commitments=[h[0] for h in enforce_hits],
+                                   stripped_fields=list(stripped),
+                                   detail="stripped %s" % ", ".join(stripped)))
+                return 0
+            if only_secret and rewritten is None and gmode == "enforce":
+                # fall through to STOP: a rewrite that would drop path or command is rejected
+                meta["secret_rewrite"] = stripped
             floor = any(h[0] in FLOOR_RULES for h in enforce_hits)
             permit = None if floor else consume_permit(adigest, base_rec["session"])
             if permit:
@@ -10764,10 +11365,11 @@ def hook_main(argv):
                 write_receipt(dict(base_rec, decision="ALLOW", via="permit", commitments=[h[0] for h in enforce_hits],
                                    **({"rewind": kept} if kept else {})))
                 rewind_note(kept)
-                return 0
+                return finish_allow(source, payload, meta)
             top = enforce_hits[0]
             rd = write_receipt(dict(base_rec, decision="STOP", commitment=top[0], rule=top[1],
-                                    commitments=[h[0] for h in enforce_hits], detail=redact(top[3])))
+                                    commitments=[h[0] for h in enforce_hits], detail=redact(top[3]),
+                                    forbids={"rule": top[0], "action_digest": adigest, "shape": shape, "writer": "gate"}))
             hold = top[0] in HOLD_RULES                   # a hold on the session says nothing about the target
             meta["stop_rules"] = [h[0] for h in enforce_hits]
             if not hold:
@@ -10796,6 +11398,8 @@ def hook_main(argv):
                              % (brake_at(), BRAKE_WINDOW_S // 60, BRAKE_QUIET_S // 60))
             lines.append("Receipt: %s" % ((rd or "unavailable")[:16]))
             lines.append("Operator receipt: %s" % (rd or "unavailable"))
+            lines += proof_lines(rd, top[0])
+            lines += forbids_lines(adigest, shape, rd)
             stop(lines)
         # ---- taste layer: owner commitments as laws (reached only when the constitution allows) ---- #
         if law and taste_effects and law.get("laws") and t_stop and taste_enforcing:
@@ -10807,23 +11411,26 @@ def hook_main(argv):
                 write_receipt(dict(base_rec, decision="ALLOW", via="permit", layer="taste", **({"rewind": kept} if kept else {}),
                                    commitment=c.get("commitment_id"), law_digest=law.get("law_digest", "")))
                 rewind_note(kept)
-                return 0
+                return finish_allow(source, payload, meta)
             if guarded(law_lift_take, False, c, base_rec["session"]):
                 # the law names a tool to ask first (recall); it was asked, so this one call runs
                 write_receipt(dict(base_rec, decision="ALLOW", via="law_lift", layer="taste",
                                    commitment=c.get("commitment_id"), law_digest=law.get("law_digest", ""),
                                    detail=redact("; ".join(t_stop["evidence"]))))
-                return 0
+                return finish_allow(source, payload, meta)
             rd = write_receipt(dict(base_rec, decision="STOP", layer="taste",
                                     reason_code="TASTE_VIOLATION", commitment=c.get("commitment_id"),
                                     governing_commitments=[{"id": c.get("commitment_id"), "version": c.get("version", 1)}],
                                     candidate={"classes": t_cand.get("classes", []), "prod_shaped": t_cand.get("prod_shaped", False),
                                                "resolved": t_cand.get("resolved", True)},
-                                    law_digest=law.get("law_digest", ""), detail=redact("; ".join(t_stop["evidence"]))))
+                                    law_digest=law.get("law_digest", ""), detail=redact("; ".join(t_stop["evidence"])),
+                                    forbids={"rule": c.get("commitment_id"), "action_digest": adigest, "shape": shape,
+                                             "writer": "gate"}))
             guarded(chain_note_stop, None, base_rec["session"], fx_effects, meta, c.get("commitment_id"), rd)
             if rd is None:
                 stop(["OPERATOR: STOPPED (RECEIPT_WRITE_FAILED) -- the taste layer could not record this verdict.",
-                      "Fail-closed: fix ~/.operator and retry; nothing was executed."])
+                      "Fail-closed: fix ~/.operator and retry; nothing was executed.",
+                      "Proof: receipt unavailable"])
             if t_stop.get("rewrite"):
                 rewrite_count_bump(t_key)
                 try:
@@ -10862,6 +11469,9 @@ def hook_main(argv):
             lines += ["Only the owner can allow it once, from their own terminal: %s approve %s" % (self_cmd(), adigest),
                       "Receipt: %s   Law: %s" % ((rd or "unavailable")[:16], law.get("law_digest", "")[:12]),
                       "Operator receipt: %s" % rd]
+            # A taste commitment id is not an OP- rule, so no op-rule- handle is invented for it.
+            lines += proof_lines(rd, None)
+            lines += forbids_lines(adigest, shape, rd)
             stop(lines)
         # the call goes ahead: what it would destroy is kept first, so the owner can put it back
         kept = rewind_now(fx_effects, cwd, preview, tool)
@@ -10884,7 +11494,7 @@ def hook_main(argv):
         elif t_shadow:
             write_receipt(dict(base_rec, decision="SHADOW_TASTE_MULTI",
                                detail=redact("; ".join(ev for _, ev in t_shadow))))
-        return 0
+        return finish_allow(source, payload, meta)
     except SystemExit:
         raise
     except Exception as exc:  # gate defect: degrade, never brick
@@ -10893,12 +11503,12 @@ def hook_main(argv):
             seen = seen if isinstance(seen, dict) else {}
         except Exception:
             seen = {}
-        write_receipt({"source": source, "decision": "GATE_ERROR", "error": redact(repr(exc)),
-                       "session": session_of(seen), "call": call_of(seen),
-                       "action_preview": redact(raw[:300])})
+        rd = write_receipt({"source": source, "decision": "GATE_ERROR", "error": redact(repr(exc)),
+                            "session": session_of(seen), "call": call_of(seen),
+                            "action_preview": redact(raw[:300])})
         if degraded_hit(raw):
             stop(["OPERATOR: STOPPED (degraded) -- the gate hit an internal error and this call looks destructive.",
-                  "Ask the owner to review; the error is recorded in ~/.operator/receipts."])
+                  "Ask the owner to review; the error is recorded in ~/.operator/receipts."] + proof_lines(rd, None))
         try:
             strict = strict_on() and global_mode() == "enforce"
         except Exception:
@@ -10906,7 +11516,8 @@ def hook_main(argv):
         if strict:
             stop(["OPERATOR: STOPPED (OP-STRICT cannot-read-call)",
                   "Why: strict mode is on, and the gate hit an internal error while judging this call.",
-                  "No action was taken. Ask the owner to review; the error is recorded in ~/.operator/receipts."])
+                  "No action was taken. Ask the owner to review; the error is recorded in ~/.operator/receipts."]
+                 + proof_lines(rd, None))
         return 0
 
 
@@ -10995,20 +11606,29 @@ def cmd_approve(argv):
 
 def cmd_verify(argv):
     rdir = pj(OP_HOME, "receipts")
-    prev, n, bad = "0" * 64, 0, []
+    prev, n, bad, signed, sign_bad = "0" * 64, 0, [], 0, []
     files = sorted(f for f in os.listdir(rdir) if f.endswith(".jsonl")) if os.path.isdir(rdir) else []
     for fn in files:
         with open(pj(rdir, fn), encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 rec = json.loads(line)
+                checked = verify_receipt_signature(rec)
                 d = rec.pop("digest")
                 if rec.get("prev") != prev or digest_of(rec) != d:
                     bad.append("%s:%d" % (fn, i))
+                if rec.get("integrity") == SIGNATURE_INTEGRITY:
+                    signed += 1
+                    if not checked.get("signed"):
+                        sign_bad.append("%s:%d" % (fn, i))
                 prev = d
                 n += 1
-    print("receipts=%d chain=%s integrity=%s" % (n, "OK" if not bad else "BROKEN at " + ",".join(bad[:5]), INTEGRITY))
+    print("receipts=%d chain=%s integrity=%s signed=%d" % (
+        n, "OK" if not bad else "BROKEN at " + ",".join(bad[:5]), INTEGRITY, signed))
     print("note: a digest chain detects accidental edits; it is not a signature and proves no authorship.")
-    return 0 if not bad else 1
+    print(SIGNATURE_CAVEAT)
+    if sign_bad:
+        print("signature failed at %s" % ",".join(sign_bad[:5]))
+    return 0 if not bad and not sign_bad else 1
 
 
 def self_cmd():
@@ -12461,6 +13081,217 @@ def cmd_briefing(argv):
     return 0
 
 
+def mcp_pin_path():
+    return pj(OP_HOME, "state", "mcp-pins.json")
+
+
+def load_mcp_pins():
+    try:
+        with open(mcp_pin_path(), encoding="utf-8") as handle:
+            doc = json.load(handle)
+        pins = doc.get("pins") if isinstance(doc, dict) else None
+        return pins if isinstance(pins, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_mcp_pins(pins):
+    path = mcp_pin_path()
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump({"pins": pins}, handle, indent=1, sort_keys=True)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def mcp_schema_canon(tools):
+    if isinstance(tools, dict):
+        tools = tools.get("tools") or []
+    rows = []
+    for tool in tools or []:
+        if isinstance(tool, dict):
+            rows.append({"name": str(tool.get("name") or ""), "description": str(tool.get("description") or "")})
+    rows.sort(key=lambda row: (row["name"], row["description"]))
+    return rows
+
+
+def mcp_schema_hash(tools):
+    return digest_of(mcp_schema_canon(tools))
+
+
+def mcp_artifact_hash(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def mcp_foreign_names(server_id, tools, pins):
+    owned = {}
+    for other, pin in (pins or {}).items():
+        if other == server_id:
+            continue
+        for name in pin.get("tool_names") or []:
+            owned.setdefault(name, other)
+    return [(row["name"], owned[row["name"]]) for row in mcp_schema_canon(tools) if row["name"] in owned]
+
+
+def grant_mcp_pin(server_id, artifact_path, schema_path, egress=None):
+    """Owner approval stores the tool-list hash and the artifact hash. It does not start the server."""
+    if not server_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(server_id)):
+        return None, "server id must be a short name"
+    if not os.path.isfile(artifact_path) or not os.path.isfile(schema_path):
+        return None, "artifact and schema must be local files"
+    try:
+        with open(schema_path, encoding="utf-8") as handle:
+            schema = json.load(handle)
+    except (OSError, ValueError):
+        return None, "schema is not JSON"
+    pins = load_mcp_pins()
+    foreign = mcp_foreign_names(server_id, schema, pins)
+    if foreign:
+        name, other = foreign[0]
+        return None, "schema names %s, which belongs to server %s" % (name, other)
+    names = [row["name"] for row in mcp_schema_canon(schema) if row["name"]]
+    pin = {"id": server_id, "artifact_path": os.path.abspath(artifact_path),
+           "schema_path": os.path.abspath(schema_path), "artifact_hash": mcp_artifact_hash(artifact_path),
+           "schema_hash": mcp_schema_hash(schema), "tool_names": names,
+           "egress": [str(h) for h in (egress or [])], "approved": time.time()}
+    pins[server_id] = pin
+    save_mcp_pins(pins)
+    return pin, None
+
+
+def _payload_command(payload):
+    ti = payload.get("tool_input") or payload.get("toolInput") or payload.get("input") or {}
+    if not isinstance(ti, dict):
+        return str(ti or "")
+    cmd = ti.get("command") or ti.get("cmd") or ""
+    if isinstance(cmd, list):
+        cmd = " ".join(str(part) for part in cmd)
+    return str(cmd or "")
+
+
+def _command_launches(cmd, artifact):
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        tokens = cmd.split()
+    if not tokens or not artifact:
+        return False
+    prog = os.path.basename(tokens[0])
+    if os.path.abspath(tokens[0]) == os.path.abspath(artifact) or tokens[0] == artifact:
+        return True
+    if prog in ("node", "python", "python3", "deno", "bun") and artifact in tokens[1:]:
+        return True
+    return False
+
+
+def _hosts_in(cmd):
+    found = []
+    for netloc in re.findall(r"https?://([^/\s\"']+)", cmd or ""):
+        host = netloc.split("@")[-1]
+        if host.startswith("["):
+            host = host[1:].split("]")[0]
+        else:
+            host = host.split(":")[0]
+        if host:
+            found.append(host.lower())
+    return found
+
+
+def mcp_launch_block(payload):
+    """Refuse a pinned MCP server whose artifact or schema hash moved, or whose egress is not its own."""
+    cmd = _payload_command(payload)
+    if not cmd:
+        return None
+    pins = load_mcp_pins()
+    for pin in pins.values():
+        artifact = pin.get("artifact_path") or ""
+        if not _command_launches(cmd, artifact):
+            continue
+        try:
+            artifact_hash = mcp_artifact_hash(artifact)
+            with open(pin.get("schema_path") or "", encoding="utf-8") as handle:
+                schema_hash = mcp_schema_hash(json.load(handle))
+        except (OSError, ValueError):
+            return {"id": pin.get("id"), "detail": "MCP pin %s can no longer be read, so the server does not start" % pin.get("id"),
+                    "artifact_hash": pin.get("artifact_hash"), "schema_hash": pin.get("schema_hash")}
+        if artifact_hash != pin.get("artifact_hash") or schema_hash != pin.get("schema_hash"):
+            return {"id": pin.get("id"),
+                    "detail": "MCP pin %s artifact %s changed to %s; schema %s changed to %s. The owner reviews the diff before this server starts."
+                    % (pin.get("id"), pin.get("artifact_hash"), artifact_hash, pin.get("schema_hash"), schema_hash),
+                    "artifact_hash": artifact_hash, "schema_hash": schema_hash}
+        try:
+            with open(pin.get("schema_path") or "", encoding="utf-8") as handle:
+                foreign = mcp_foreign_names(pin.get("id"), json.load(handle), pins)
+        except (OSError, ValueError):
+            foreign = []
+        if foreign:
+            name, other = foreign[0]
+            return {"id": pin.get("id"),
+                    "detail": "MCP server %s names tool %s, which belongs to server %s" % (pin.get("id"), name, other),
+                    "artifact_hash": artifact_hash, "schema_hash": schema_hash}
+        allowed = {h.lower() for h in (pin.get("egress") or [])} | {"localhost", "127.0.0.1", "::1"}
+        blocked = [host for host in _hosts_in(cmd) if host not in allowed]
+        if blocked:
+            return {"id": pin.get("id"),
+                    "detail": "MCP egress refuses %s. This policy belongs to the MCP process and is separate from the agent's shell."
+                    % blocked[0],
+                    "artifact_hash": artifact_hash, "schema_hash": schema_hash}
+    return None
+
+
+def mcp_stop(source, payload, hit):
+    cmd = _payload_command(payload)
+    adigest = digest_of({"tool": "mcp-pin", "server": hit.get("id"), "preview": cmd})[:24]
+    rd = write_receipt({"source": source, "decision": "STOP", "commitment": "mcp-pin", "rule": "mcp-artifact-pin",
+                        "session": session_of(payload), "call": call_of(payload), "cwd": payload.get("cwd"),
+                        "tool": str(payload.get("tool_name") or payload.get("toolName") or ""),
+                        "action_digest": adigest, "action_preview": redact(cmd), "detail": redact(hit.get("detail")),
+                        "forbids": {"rule": "mcp-pin", "action_digest": adigest, "writer": "gate"}})
+    stop(["OPERATOR: STOPPED (mcp-pin)",
+          "Why: %s" % hit.get("detail"),
+          "No action was taken. The tool process was not created.",
+          "Only the owner can approve the new bytes, from their own terminal: %s mcp-pin approve %s" % (self_cmd(), hit.get("id"))]
+         + proof_lines(rd, None))
+
+
+def cmd_mcp_pin(argv):
+    """`mcp-pin approve` is the owner's. An agent shell cannot approve a server, including this one."""
+    if agent_session():
+        print("Refusing: MCP pin approval is the owner's call, so the owner runs it from their own terminal.")
+        return 3
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("Refusing: MCP pin approval needs an interactive terminal run by the owner.")
+        return 3
+    if argv[:1] != ["approve"] or len(argv) < 4:
+        print("usage: %s mcp-pin approve <server> --artifact <path> --schema <path> [--egress host]" % self_cmd())
+        return 2
+    server = argv[1]
+    artifact = schema = None
+    egress, i = [], 2
+    while i < len(argv):
+        if argv[i] == "--artifact" and i + 1 < len(argv):
+            artifact, i = argv[i + 1], i + 2
+        elif argv[i] == "--schema" and i + 1 < len(argv):
+            schema, i = argv[i + 1], i + 2
+        elif argv[i] == "--egress" and i + 1 < len(argv):
+            egress.append(argv[i + 1])
+            i += 2
+        else:
+            print("usage: %s mcp-pin approve <server> --artifact <path> --schema <path> [--egress host]" % self_cmd())
+            return 2
+    pin, err = grant_mcp_pin(server, artifact, schema, egress)
+    if err:
+        print("Not approved: %s" % err)
+        return 1
+    print("Pinned %s artifact %s schema %s." % (pin["id"], pin["artifact_hash"], pin["schema_hash"]))
+    return 0
+
+
 def main():
     utf8_streams()
     argv = sys.argv[1:]
@@ -12473,10 +13304,11 @@ def main():
            "onboard": cmd_onboard, "replay": cmd_replay, "mode": cmd_mode, "strict": cmd_strict,
            "check": cmd_check, "laws": cmd_laws, "upgrade": cmd_upgrade, "coverage": cmd_coverage,
            "rewind": cmd_rewind, "append": cmd_append, "protect": cmd_protect, "protected": cmd_protected,
-           "brake": cmd_brake, "turnover": cmd_turnover, "briefing": cmd_briefing}.get(argv[0])
+           "brake": cmd_brake, "turnover": cmd_turnover, "briefing": cmd_briefing,
+           "mcp-pin": cmd_mcp_pin}.get(argv[0])
     if not cmd:
         print("usage: operator-gate hook|check|approve|verify|status|corpus|install|uninstall|upgrade|"
-              "commitments|laws|briefing|coverage|rewind|append|protect|protected|brake|turnover|board|letter|almost-forgot|onboard|replay|mode|strict")
+              "commitments|laws|briefing|coverage|rewind|append|protect|protected|brake|turnover|mcp-pin|board|letter|almost-forgot|onboard|replay|mode|strict")
         sys.exit(2)
     sys.exit(cmd(argv[1:]))
 

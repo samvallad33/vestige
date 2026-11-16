@@ -898,6 +898,11 @@ def run(binary, output):
             started = tool("session_start", {"queries": [marker], "include_predictions": False, "include_intentions": False})
             assert started["notices"][0].startswith("queries ignored (1)"), started
             assert marker not in started["context"], started
+            capsule = tool("session_start", {"format": "capsule", "source": "startup", "scope": "user"})
+            assert capsule["format"] == "capsule", capsule
+            assert "vst:" in capsule["body"], capsule
+            assert isinstance(capsule["handles"], list), capsule
+            passed("session_start format=capsule is admitted")
             doomed_suppress = tool("smart_ingest", {"content": "STRATA_SUPPRESS_DOOMED", "forceCreate": True})
             suppress_id = doomed_suppress["nodeId"]
             typed("blast_radius", {"action": "retire", "ids": [suppress_id], "reason": "fixture"}, "unavailable_in_4_0")

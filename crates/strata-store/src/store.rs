@@ -32,6 +32,9 @@ use crate::types::{
     NodeRecord, VALID_FOREVER_MS,
 };
 
+#[path = "mesh.rs"]
+pub(crate) mod mesh;
+
 /// Subdirectory holding the durable log.
 const LOG_DIR: &str = "log";
 
@@ -429,16 +432,28 @@ pub const RULE_INTENTIONS: &str = "intentions";
 /// Named RETIRE rule: purge. Also requires [`AdmissionContext::confirm`].
 pub const RULE_PURGE: &str = "purge";
 
+/// Named GRANT rule. Only a human-confirmed CLI admission copies its hash
+/// into `params_hash`. Every other GRANT hits the hold that follows it.
+pub const RULE_MESH_GRANT: &str = "mesh-grant";
+
+/// Domain for [`RULE_MESH_GRANT`]. Separate from the retire domain so the
+/// eight-byte prefix cannot collide with `edit`, `suppress`, `intentions`,
+/// or `purge`.
+const MESH_GRANT_DOMAIN: &[u8] = b"strata.mesh.grant.v1\0";
+
 const NAMED_RETIRE_RULES: [&str; 4] = [RULE_EDIT, RULE_SUPPRESS, RULE_INTENTIONS, RULE_PURGE];
 
 /// What the caller claims about a RETIRE. The gate matches the rule id here,
 /// never node content or names.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AdmissionContext {
-    /// Exact rule id: `edit`, `suppress`, `intentions`, or `purge`.
+    /// Exact rule id: `edit`, `suppress`, `intentions`, `purge`, or `mesh-grant`.
     pub rule_id: Option<String>,
-    /// Required for `purge`. Ignored by the other three rules.
+    /// Required for `purge`. Ignored by the other three retire rules.
     pub confirm: bool,
+    /// Set only by the human-confirmed mesh CLI path. An MCP caller leaves
+    /// this false, so a GRANT it proposes is held.
+    pub human_confirmed: bool,
 }
 
 /// Receipt for an admitted RETIRE. `receipt_id` is `eff-` plus the effect seq.
@@ -496,6 +511,29 @@ fn named_retire_rule(
     }
 }
 
+fn mesh_grant_hash() -> [u8; 32] {
+    let mut body = Vec::with_capacity(MESH_GRANT_DOMAIN.len() + RULE_MESH_GRANT.len());
+    body.extend_from_slice(MESH_GRANT_DOMAIN);
+    body.extend_from_slice(RULE_MESH_GRANT.as_bytes());
+    hash32(&body)
+}
+
+fn mesh_grant_prefix() -> [u8; 8] {
+    let hash = mesh_grant_hash();
+    let mut prefix = [0u8; 8];
+    prefix.copy_from_slice(&hash[..8]);
+    prefix
+}
+
+/// `Some(hash)` only when the context is the human-confirmed mesh-grant path.
+pub(crate) fn mesh_grant_params(ctx: &AdmissionContext) -> Option<[u8; 32]> {
+    if ctx.human_confirmed && ctx.rule_id.as_deref() == Some(RULE_MESH_GRANT) {
+        Some(mesh_grant_hash())
+    } else {
+        None
+    }
+}
+
 fn retire_allow(rule_id: &str) -> Rule {
     Rule {
         match_kind: action_kind::RETIRE,
@@ -522,6 +560,22 @@ pub fn default_policy() -> Policy {
             retire_allow(RULE_PURGE),
             Rule {
                 match_kind: action_kind::RETIRE,
+                match_params_hash_prefix: WILDCARD_PREFIX,
+                max_blast_radius: u32::MAX,
+                forbid_forgotten_lessons: false,
+                require_human: false,
+                verdict: Verdict::Hold,
+            },
+            Rule {
+                match_kind: action_kind::GRANT,
+                match_params_hash_prefix: mesh_grant_prefix(),
+                max_blast_radius: 1,
+                forbid_forgotten_lessons: false,
+                require_human: false,
+                verdict: Verdict::Allow,
+            },
+            Rule {
+                match_kind: action_kind::GRANT,
                 match_params_hash_prefix: WILDCARD_PREFIX,
                 max_blast_radius: u32::MAX,
                 forbid_forgotten_lessons: false,
@@ -569,6 +623,28 @@ pub enum EffectAction {
     /// Exact stability adjustment or its compensating undo. Full before,
     /// after and entity evidence is in [`StrataStore::backfill_receipts`].
     Backfill,
+    /// A writer was granted under the mesh-grant rule.
+    Grant,
+    /// A range of a granted chain was admitted.
+    Merge,
+    /// A claim-slot contradiction was recorded.
+    Conflict,
+    /// A claim was asserted.
+    Claim,
+    /// A writer signed two heads at one position.
+    Equivocation,
+    /// A peer presented a different mesh policy hash.
+    PolicyMismatch,
+    /// A segment index hint did not match the segment bytes.
+    IndexMismatch,
+    /// A data key was destroyed.
+    Tombstone,
+    /// A peer range was refused as a whole.
+    DenyRange,
+    /// A new writer chain recorded where it forked from.
+    Fork,
+    /// A memory was purged.
+    Purge,
 }
 
 /// One node, intention or anchor effect proved from the log: covering
@@ -810,6 +886,37 @@ fn effect_proofs_for_op(
                 edge: Some((edge.target_id.clone(), edge.link_type.clone())),
             })
             .collect()),
+        StoreOp::GrantWriter { writer_did, .. } => {
+            single(writer_did.clone(), EffectAction::Grant, None, None)
+        }
+        StoreOp::MergeChain { writer_did, .. } => {
+            single(writer_did.clone(), EffectAction::Merge, None, None)
+        }
+        StoreOp::ConflictRecord { subject_id, .. } => {
+            single(subject_id.clone(), EffectAction::Conflict, None, None)
+        }
+        StoreOp::AssertClaim { subject_id, .. } => {
+            single(subject_id.clone(), EffectAction::Claim, None, None)
+        }
+        StoreOp::Equivocation { writer_did, .. } => {
+            single(writer_did.clone(), EffectAction::Equivocation, None, None)
+        }
+        StoreOp::PolicyMismatch { .. } => single(String::new(), EffectAction::PolicyMismatch, None, None),
+        StoreOp::IndexMismatch { handle, .. } => {
+            single(handle.clone(), EffectAction::IndexMismatch, None, None)
+        }
+        StoreOp::TombstoneReceipt { memory_id, .. } => {
+            single(memory_id.clone(), EffectAction::Tombstone, None, None)
+        }
+        StoreOp::DenyRange { writer_did, .. } => {
+            single(writer_did.clone(), EffectAction::DenyRange, None, None)
+        }
+        StoreOp::ForkGenesis {
+            derived_from_did, ..
+        } => single(derived_from_did.clone(), EffectAction::Fork, None, None),
+        StoreOp::PurgeTombstone { memory_id } => {
+            single(memory_id.clone(), EffectAction::Purge, None, None)
+        }
         StoreOp::SupersedeNode { .. } => Ok(Vec::new()),
     }
 }
@@ -831,7 +938,18 @@ fn op_clock_ms(op: &StoreOp) -> Option<i64> {
         StoreOp::SupersedeNode { .. }
         | StoreOp::UpsertIntentions { .. }
         | StoreOp::RecordAnchors { .. }
-        | StoreOp::ReplaceAnchors { .. } => None,
+        | StoreOp::ReplaceAnchors { .. }
+        | StoreOp::GrantWriter { .. }
+        | StoreOp::MergeChain { .. }
+        | StoreOp::ConflictRecord { .. }
+        | StoreOp::AssertClaim { .. }
+        | StoreOp::Equivocation { .. }
+        | StoreOp::PolicyMismatch { .. }
+        | StoreOp::IndexMismatch { .. }
+        | StoreOp::TombstoneReceipt { .. }
+        | StoreOp::DenyRange { .. }
+        | StoreOp::ForkGenesis { .. }
+        | StoreOp::PurgeTombstone { .. } => None,
     }
 }
 
@@ -1051,6 +1169,8 @@ pub struct StrataStore {
     backfill_history: Vec<(BackfillReceipt, u64)>,
     /// A pair remains used after undo, preventing re-run compounding.
     backfill_pairs: BTreeSet<(String, String)>,
+    /// Mesh grants and receipts. Rebuilt by replay. Omitted from `state_digest`.
+    mesh: mesh::MeshSide,
 }
 
 impl StrataStore {
@@ -1067,7 +1187,7 @@ impl StrataStore {
     /// admissions (and `rederive_verdicts`).
     pub fn open_with_policy(dir: impl AsRef<Path>, policy: Policy) -> Result<Self, StoreError> {
         let dir = dir.as_ref();
-        Self::open_log_with_policy(dir, dir.join(LOG_DIR), policy)
+        Self::open_log_with_policy(dir, mesh::active_log_dir(dir), policy)
     }
 
     /// Open a store whose log lives at `log_dir` instead of `<dir>/log`.
@@ -1119,6 +1239,7 @@ impl StrataStore {
             echo_index: BTreeMap::new(),
             backfill_history: Vec::new(),
             backfill_pairs: BTreeSet::new(),
+            mesh: mesh::MeshSide::default(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -1373,6 +1494,17 @@ impl StrataStore {
                 status,
                 checked_at_ms,
             } => self.anchors.verdict(anchor_id, status, *checked_at_ms),
+            StoreOp::GrantWriter { .. }
+            | StoreOp::MergeChain { .. }
+            | StoreOp::ConflictRecord { .. }
+            | StoreOp::AssertClaim { .. }
+            | StoreOp::Equivocation { .. }
+            | StoreOp::PolicyMismatch { .. }
+            | StoreOp::IndexMismatch { .. }
+            | StoreOp::TombstoneReceipt { .. }
+            | StoreOp::DenyRange { .. }
+            | StoreOp::ForkGenesis { .. }
+            | StoreOp::PurgeTombstone { .. } => self.mesh.observe(self.dir.as_path(), op),
         }
         Ok(())
     }
@@ -1593,7 +1725,7 @@ impl StrataStore {
     /// `params_hash` overrides the default (the op hash) when a named RETIRE
     /// rule authorized this admission. The override is the rule-id digest,
     /// never a digest of node content.
-    fn admit_write_with_params(
+    pub(crate) fn admit_write_with_params(
         &mut self,
         op: StoreOp,
         action_kind_code: u8,
@@ -2980,18 +3112,23 @@ impl StrataStore {
         self.fsrs.cards.get(&handle_of(id)).cloned()
     }
 
-    /// Retrievability of a node at the admission clock — derived on read,
+    /// Retrievability of a node at the log head clock — derived on read,
     /// never stored, and reads append nothing (v1).
+    ///
+    /// The clock is [`Self::head_clock_ms`]: the greatest `created_at_ms` or
+    /// explicit review clock on this head. It is not the process wall clock,
+    /// so an unchanged store returns the same value on a later day.
     ///
     /// An explicit review with `reviewed_at_ms` measures elapsed whole days
     /// from that timestamp; a card still at its ingest review measures from
     /// the node's creation time. Otherwise sequence distance from `last_seq`
-    /// to the log head is used.
+    /// to the log head is used. A caller with its own frame passes that
+    /// frame to [`Self::retrievability_at`].
     pub fn retrievability(&self, id: &str) -> Result<Option<f64>, StoreError> {
-        self.retrievability_at(id, admission_now_ms())
+        self.retrievability_at(id, self.head_clock_ms())
     }
 
-    /// [`Self::retrievability`] evaluated at `as_of_ms` instead of now.
+    /// [`Self::retrievability`] evaluated at `as_of_ms` instead of the head clock.
     pub fn retrievability_at(&self, id: &str, as_of_ms: i64) -> Result<Option<f64>, StoreError> {
         let handle = handle_of(id);
         let Some(card) = self.fsrs.cards.get(&handle) else {
@@ -3312,6 +3449,7 @@ impl StrataStore {
             echo_index: BTreeMap::new(),
             backfill_history: Vec::new(),
             backfill_pairs: BTreeSet::new(),
+            mesh: mesh::MeshSide::default(),
         };
         scratch.replay()?;
         let mut retrievability = BTreeMap::new();
@@ -3321,9 +3459,11 @@ impl StrataStore {
             }
         }
         let gaps = self.sweep().iter().map(gap_label).collect::<Vec<_>>();
+        let mesh_digest = scratch.mesh_digest();
         Ok(Refold {
             frames: frame_count,
             state_digest: scratch.state_digest(),
+            mesh_digest,
             nodes: scratch.nodes,
             origins: scratch.origins,
             retrievability,
@@ -3657,6 +3797,9 @@ pub struct Refold {
     pub frames: u64,
     /// State digest of the refolded copy.
     pub state_digest: [u8; 32],
+    /// Mesh digest of the refolded copy. Equal to the live mesh digest when
+    /// the merged fold is a pure function of the recorded chains.
+    pub mesh_digest: [u8; 32],
     /// Refolded node registry.
     pub nodes: BTreeMap<String, NodeRecord>,
     /// Refolded origin seq per node.

@@ -163,7 +163,7 @@ fn dashboard_port() -> u16 {
 /// `VESTIGE_SYSTEM_PROMPT_MODE=full`.
 ///
 /// Anything other than `full` falls back to minimal.
-fn build_instructions() -> String {
+pub(crate) fn static_instructions() -> String {
     let mode = std::env::var("VESTIGE_SYSTEM_PROMPT_MODE").unwrap_or_default();
     let mut instructions = if mode.eq_ignore_ascii_case("full") {
         "Vestige is the Causal Proof Engine and the operating system for AI agents: zero vectors, \
@@ -389,6 +389,7 @@ const STRATA_WITHHELD_TOOLS: &[&str] = &["purge", "delete_knowledge"];
 /// `(tool, action, why)` a Strata log cannot honor in 4.0. `None` is erasure
 /// (shared wording with the store). Each is dropped from the advertised
 /// schema and refused on call, so every advertised action works.
+// hardcode-scan: protocol (MCP tool/action names)
 const STRATA_WITHHELD_ACTIONS: &[(&str, &str, Option<&str>)] = &[
     ("memory", "purge", None),
     ("memory", "delete", None),
@@ -1125,7 +1126,7 @@ impl McpServer {
                 "resources": { "listChanged": false },
                 "logging": {},
             },
-            "instructions": build_instructions(),
+            "instructions": static_instructions(),
             "ttlMs": DISCOVER_TTL_MS,
             // Nothing here is caller-specific: revisions, capabilities and build
             // identity are the same for everyone, so a shared cache is fine.
@@ -1203,7 +1204,9 @@ impl McpServer {
                 prompts: None,
                 logging: Some(HashMap::new()),
             },
-            instructions: Some(build_instructions()),
+            instructions: Some(crate::resources::proof_header::connect_instructions(
+                self.storage.as_ref(),
+            )),
         };
 
         serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))
@@ -2797,6 +2800,12 @@ impl McpServer {
                 name: "Triggered Intentions".to_string(),
                 description: Some("Intentions that have been triggered or are overdue".to_string()),
                 mime_type: Some("application/json".to_string()),
+            },
+            ResourceDescription {
+                uri: "memory://proof-header".to_string(),
+                name: "Proof header".to_string(),
+                description: Some("The per-connect Strata head token, due count and verbatim-handle instruction. Same bytes as the initialize proof header.".to_string()),
+                mime_type: Some("text/plain".to_string()),
             },
         ];
 

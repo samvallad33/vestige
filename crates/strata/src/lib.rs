@@ -70,6 +70,8 @@ mod error;
 mod format;
 mod lockfile;
 mod log;
+mod mesh_head;
+mod replica;
 mod sync;
 
 #[cfg(test)]
@@ -77,13 +79,16 @@ mod tests;
 
 pub use error::{HaltDetail, StrataError};
 pub use format::{
-    frame_hash, header_hash, merkle_root, parse_frame, payload_blake3, signature_message, Frame,
-    FrameRecord, SegmentHeader, SegmentTrailer, FRAME_FIXED_WIRE_SIZE, GENESIS_PREV_SEGMENT_HASH,
-    HEADER_WIRE_SIZE, SEGMENT_MAGIC, SEGMENT_VERSION, TRAILER_WIRE_SIZE,
+    consistency_proof, frame_hash, header_hash, merkle_root, parse_frame, payload_blake3,
+    signature_message, verify_consistency, Frame, FrameRecord, SegmentHeader, SegmentTrailer,
+    FRAME_FIXED_WIRE_SIZE, GENESIS_PREV_SEGMENT_HASH, HEADER_WIRE_SIZE, SEGMENT_MAGIC,
+    SEGMENT_VERSION, TRAILER_WIRE_SIZE,
 };
 pub use log::{
     read_head_state, HeadInfo, LogReport, SealInfo, SeqAck, StrataLog, TailReport, TrailerCheck,
     GROUP_COMMIT_WINDOW_MS, MAX_BATCH_FRAMES,
 };
+pub use mesh_head::{head_message, sign_head, verify_head, SignedHead, MESH_HEAD_DOMAIN};
+pub use replica::{read_replica_frames, ReplicaLog, ReplicaStep};
 #[cfg(feature = "failpoints")]
 pub use sync::failpoints;

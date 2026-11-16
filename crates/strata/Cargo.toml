@@ -1,6 +1,6 @@
 [package]
 name = "strata"
-version = "6.2.1"
+version = "6.2.2"
 edition = "2021"
 description = "Strata: append-only, fail-stop write-ahead log with hash-chained, signed segments"
 license = "AGPL-3.0-only"

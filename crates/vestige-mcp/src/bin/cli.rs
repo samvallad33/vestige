@@ -79,6 +79,11 @@ struct SandwichInstallOptions {
     #[arg(long)]
     include_memory_loader: bool,
 
+    /// Append the SessionStart capsule command hook. A reinstall without this
+    /// flag removes only that command.
+    #[arg(long)]
+    enable_capsule: bool,
+
     /// OpenAI-compatible chat completions endpoint for optional Sanhedrin.
     #[arg(long, value_name = "URL")]
     sanhedrin_endpoint: Option<String>,
@@ -138,10 +143,48 @@ enum HookCommands {
         #[arg(long)]
         repo_tag: bool,
     },
+    /// git post-commit hook: write the commit receipt (SHA, parents, branch,
+    /// author, files with `git diff -U0` ranges) into Strata, tagged
+    /// `commit:<sha>`. Never fails the commit.
+    PostCommit {
+        /// Repository (default: the current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// File whose text is recorded as the receipt's gate output
+        /// (default: `$VESTIGE_GATE_OUTPUT_FILE`)
+        #[arg(long)]
+        gate_output: Option<PathBuf>,
+    },
+    /// git pre-commit hook: refuse the commit on a staged secret, an open
+    /// Operator stop, or (when a witness allowlist is configured) no prove
+    /// witness for the staged tree. Exit 1 refuses.
+    PreCommit {
+        /// Repository (default: the current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// How far back an unanswered Operator stop counts as open
+        #[arg(long, default_value = "1h")]
+        stop_window: String,
+    },
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Wire Vestige into a repository. `--git-hooks` installs
+    /// `.git/hooks/pre-commit` and `post-commit`, the backstop for agents and
+    /// runners with no prompt or stop hooks. Client hooks are installed by
+    /// `npx @vestige/init`.
+    Init {
+        /// Install the pre-commit and post-commit git hooks
+        #[arg(long)]
+        git_hooks: bool,
+        /// Repository (default: the current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Move a foreign hook aside to `<name>.pre-vestige` instead of refusing
+        #[arg(long)]
+        force: bool,
+    },
     /// Show store statistics
     Stats {
         /// Show tagging/retention distribution
@@ -210,6 +253,24 @@ enum Commands {
     Restore {
         /// Path to the JSON file
         file: PathBuf,
+    },
+
+    /// Session capsule: the log head, pinned decisions, due obligations and the
+    /// default rulebook, by exact handle.
+    ///
+    /// Reads the harness payload on stdin. With an owner running, the read goes
+    /// through that server and this process does not open the log. It fails
+    /// open: empty stdout and exit 0.
+    Capsule {
+        /// claude-code, codex, or plain
+        #[arg(long)]
+        harness: String,
+        /// session-start
+        #[arg(long, default_value = "session-start")]
+        event: String,
+        /// normal, merge, rebase, or bisect. Default: git's own state files.
+        #[arg(long)]
+        mode: Option<String>,
     },
 
     /// Back up the live store
@@ -712,6 +773,125 @@ enum Commands {
 
     /// Consolidation. On a Strata log this is a no-op and changes nothing.
     Consolidate,
+
+    /// Replicate per-writer chains between this store and a paired device.
+    ///
+    /// Pairing, unpairing and fork-identity write a grant or a new writer and
+    /// run only in the process that holds the log. `status` and `sync` also
+    /// run through a server that already holds it. An unpaired store opens no
+    /// socket.
+    Mesh {
+        #[command(subcommand)]
+        command: MeshCommands,
+    },
+
+    /// Quarantine an orphan memory, or append the anchor frame that frees it.
+    ///
+    /// The quarantine body stays in the log. `status` reads that projection
+    /// and the mesh digest. It opens no socket.
+    Provenance {
+        #[command(subcommand)]
+        command: ProvenanceCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum MeshCommands {
+    /// Show a ticket and wait for the other device.
+    Pair {
+        /// Low-entropy code typed on both devices.
+        #[arg(long)]
+        code: String,
+        /// Bind address. Default is `127.0.0.1:0`, then the saved port.
+        #[arg(long)]
+        bind: Option<String>,
+        /// Write the ticket here before waiting.
+        #[arg(long)]
+        ticket_file: Option<PathBuf>,
+        /// Read the other device's response ticket from this file.
+        #[arg(long)]
+        wait_file: Option<PathBuf>,
+        /// The human compared the authentication strings.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Admit the pairing ticket and answer it.
+    Join {
+        /// The same code typed on the pairing device.
+        #[arg(long)]
+        code: String,
+        /// Ticket text. Otherwise `--ticket-file`.
+        #[arg(long)]
+        ticket: Option<String>,
+        /// Read the ticket from this file, waiting until it appears.
+        #[arg(long)]
+        ticket_file: Option<PathBuf>,
+        /// Write this device's response ticket here.
+        #[arg(long)]
+        response_file: Option<PathBuf>,
+        /// Bind address. Default is `127.0.0.1:0`, then the saved port.
+        #[arg(long)]
+        bind: Option<String>,
+        /// The human compared the authentication strings.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Frontiers, merge receipts, digest, relay mode. Opens no socket.
+    Status,
+    /// Exchange chains with paired peers.
+    Sync {
+        /// Accept a peer instead of dialing.
+        #[arg(long)]
+        listen: bool,
+        /// Accept one connection.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Sync, counting `handle` as demand. Admission is unchanged.
+    Pull {
+        /// Qualified handle.
+        handle: String,
+    },
+    /// Drop a peer from the local list. The grant stays in the log.
+    Unpair {
+        /// Peer did:key.
+        did: String,
+    },
+    /// Start a new writer chain that records the current fork point.
+    ForkIdentity,
+    /// Copy this writer's segments and public manifest. Does not copy strata.key.
+    ExportChain {
+        /// Destination directory.
+        dir: PathBuf,
+    },
+    /// Verify a chain directory and fold it.
+    ImportChain {
+        /// Source directory.
+        dir: PathBuf,
+        /// The human is confirming a new writer grant.
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProvenanceCommands {
+    /// Record an orphan memory under a MissingProvenanceReceipt.
+    Quarantine {
+        /// Single-line memory text, with no session, file, or link anchor.
+        summary: String,
+    },
+    /// Append an anchor frame. The quarantine record is not removed.
+    Release {
+        /// Hex digest of the MissingProvenanceReceipt.
+        #[arg(long)]
+        receipt: String,
+        /// Hex digest of the anchor that frees the memory.
+        #[arg(long)]
+        anchor: String,
+    },
+    /// Quarantined receipts, release frames, and the mesh digest.
+    Status,
 }
 
 /// Zero-lock command router: dispatches over reflex.sock / attach IPC if a server
@@ -776,7 +956,23 @@ fn main() -> anyhow::Result<()> {
             yes,
         } => run_gc(min_retention, max_age_days, dry_run, yes),
         Commands::Consolidate => run_consolidate(),
+        Commands::Mesh { command } => run_mesh(command),
+        Commands::Provenance { command } => run_provenance(command),
         Commands::Restore { file } => run_restore(file),
+        Commands::Capsule {
+            harness,
+            event,
+            mode,
+        } => {
+            let dir = match cli_data_dir() {
+                Ok(dir) => dir,
+                Err(err) => {
+                    eprintln!("capsule: {err}");
+                    std::process::exit(0);
+                }
+            };
+            vestige_mcp::capsule::run_cli(&dir, &harness, &event, mode.as_deref())
+        }
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
             from,
@@ -893,7 +1089,16 @@ fn main() -> anyhow::Result<()> {
                 timeout_ms,
                 repo_tag,
             } => run_hook_session_start(max_items, max_bytes, timeout_ms, repo_tag),
+            HookCommands::PostCommit { repo, gate_output } => {
+                run_hook_post_commit(repo, gate_output)
+            }
+            HookCommands::PreCommit { repo, stop_window } => run_hook_pre_commit(repo, stop_window),
         },
+        Commands::Init {
+            git_hooks,
+            repo,
+            force,
+        } => run_init(git_hooks, repo, force),
         Commands::Compose {
             limit,
             lens,
@@ -1162,6 +1367,10 @@ fn home_dir() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("failed to locate home directory"))
 }
 
+fn is_scrubbed_hook_command(command: &str) -> bool {
+    is_vestige_hook_command(command) || vestige_mcp::capsule::is_capsule_command(command)
+}
+
 fn is_vestige_hook_command(command: &str) -> bool {
     const NEEDLES: &[&str] = &[
         "synthesis-preflight.sh",
@@ -1185,7 +1394,13 @@ fn scrub_vestige_hooks(settings: &mut serde_json::Value) {
         return;
     };
 
-    for event_name in ["UserPromptSubmit", "Stop"] {
+    for event_name in [
+        "UserPromptSubmit",
+        "Stop",
+        "SessionStart",
+        "PreCompact",
+        "PostCompact",
+    ] {
         let Some(groups) = hooks
             .get_mut(event_name)
             .and_then(|groups| groups.as_array_mut())
@@ -1202,7 +1417,7 @@ fn scrub_vestige_hooks(settings: &mut serde_json::Value) {
                     !hook
                         .get("command")
                         .and_then(|command| command.as_str())
-                        .is_some_and(is_vestige_hook_command)
+                        .is_some_and(is_scrubbed_hook_command)
                 });
             }
         }
@@ -1597,6 +1812,15 @@ fn install_sandwich_from_source(
                 .join("settings.sanhedrin.fragment.json"),
         )?;
     }
+    if options.enable_capsule {
+        let fragment = vestige_mcp::capsule::load_fragment(
+            &source_root
+                .join("hooks")
+                .join("settings.capsule.fragment.json"),
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        vestige_mcp::capsule::append_fragment(&mut settings, &fragment);
+    }
 
     let mut rendered = serde_json::to_vec_pretty(&settings)?;
     rendered.push(b'\n');
@@ -1648,7 +1872,8 @@ fn run_sandwich_install(
     let optional_layers_enabled = options.enable_preflight
         || options.enable_sandwich
         || options.enable_sanhedrin
-        || options.with_launchd;
+        || options.with_launchd
+        || options.enable_capsule;
     let message = if optional_layers_enabled {
         "Cognitive Sandwich files updated. Restart Claude Code to use enabled optional hooks."
     } else {
@@ -2922,6 +3147,22 @@ fn run_migrate_to_strata_linked(
     Ok(())
 }
 
+fn run_provenance(command: ProvenanceCommands) -> anyhow::Result<()> {
+    let storage = open_storage()?;
+    let value = match command {
+        ProvenanceCommands::Quarantine { summary } => {
+            vestige_mcp::provenance_log::quarantine(storage.as_ref(), &summary)
+        }
+        ProvenanceCommands::Release { receipt, anchor } => {
+            vestige_mcp::provenance_log::release(storage.as_ref(), &receipt, &anchor)
+        }
+        ProvenanceCommands::Status => vestige_mcp::provenance_log::status(storage.as_ref()),
+    }
+    .map_err(|err| anyhow::anyhow!(err))?;
+    println!("{value}");
+    Ok(())
+}
+
 fn open_storage() -> anyhow::Result<std::sync::Arc<Storage>> {
     let dir = cli_data_dir()?;
     // Same check `vestige-mcp` runs before stdio. `vestige.db` is not opened.
@@ -3709,8 +3950,14 @@ fn run_sync_file(archive: PathBuf) -> anyhow::Result<()> {
 #[allow(dead_code)]
 fn refuse_sync_on_strata(storage: &Arc<Storage>) -> anyhow::Result<()> {
     if is_strata(storage) {
+        let paired = mesh_peers_present();
+        if paired {
+            anyhow::bail!(
+                "this store is paired. Run `vestige mesh sync`. Portable archive sync stays unavailable_in_4_0 on Strata: a Strata log does not write or read a portable archive. Nothing was read or written."
+            );
+        }
         anyhow::bail!(
-            "unavailable_in_4_0: sync is not available on Strata in Vestige 4.0: sync merges portable archives, which a Strata log does not write or read yet. Nothing was read or written. {STRATA_PORTABLE_ALTERNATIVES}"
+            "unavailable_in_4_0: sync is not available on Strata in Vestige 4.0: sync merges portable archives, which a Strata log does not write or read yet. Nothing was read or written. Run `vestige mesh sync` after `vestige mesh pair`. {STRATA_PORTABLE_ALTERNATIVES}"
         );
     }
     Ok(())
@@ -3718,7 +3965,132 @@ fn refuse_sync_on_strata(storage: &Arc<Storage>) -> anyhow::Result<()> {
 
 /// What works on a Strata log in place of a portable archive.
 #[allow(dead_code)]
-const STRATA_PORTABLE_ALTERNATIVES: &str = "Use `vestige export <file> --format json` (or jsonl) for the memories, or `vestige backup <dir>` for an exact copy of the log.";
+const STRATA_PORTABLE_ALTERNATIVES: &str = "Use `vestige export <file> --format json` (or jsonl) for the memories, or `vestige backup <dir>` for an exact copy of the log. For another device, use `vestige mesh sync`.";
+
+fn mesh_peers_present() -> bool {
+    let Ok(dir) = cli_data_dir() else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(dir.join("mesh/peers.json")) else {
+        return false;
+    };
+    serde_json::from_slice::<Vec<serde_json::Value>>(&bytes)
+        .ok()
+        .is_some_and(|peers| !peers.is_empty())
+}
+
+fn run_mesh(command: MeshCommands) -> anyhow::Result<()> {
+    let dir = cli_data_dir()?;
+    let (action, args) = mesh_args(command);
+    if matches!(action, "status" | "sync" | "pull")
+        && vestige_mcp::attach::probe_owner_blocking(&dir).is_some()
+    {
+        let response = vestige_mcp::attach::call_tool_blocking(
+            &dir,
+            "maintain",
+            mesh_maintain_args(action, &args),
+        )?;
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    if !take_cli_lock(&dir)? {
+        anyhow::bail!(
+            "{} holds this store. Pairing, unpair, fork, export and import write the log, so they run only while no server holds it. `vestige mesh status` and `vestige mesh sync` run through the server.",
+            store_holder(&dir)
+        );
+    }
+    let storage = open_storage()?;
+    if !is_strata(&storage) {
+        anyhow::bail!("vestige mesh runs on a Strata log");
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let response = rt
+        .block_on(vestige_mcp::mesh::dispatch(&storage, &args))
+        .map_err(|err| anyhow::anyhow!(err))?;
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn mesh_maintain_args(action: &str, args: &serde_json::Value) -> serde_json::Value {
+    match action {
+        "status" => serde_json::json!({"action": "mesh_status"}),
+        "pull" => serde_json::json!({
+            "action": "mesh_sync",
+            "handle": args.get("handle"),
+        }),
+        _ => serde_json::json!({
+            "action": "mesh_sync",
+            "listen": args.get("listen").and_then(|value| value.as_bool()).unwrap_or(false),
+            "once": args.get("once").and_then(|value| value.as_bool()).unwrap_or(false),
+            "handle": args.get("handle"),
+        }),
+    }
+}
+
+fn mesh_args(command: MeshCommands) -> (&'static str, serde_json::Value) {
+    match command {
+        MeshCommands::Pair {
+            code,
+            bind,
+            ticket_file,
+            wait_file,
+            confirm,
+        } => (
+            "pair",
+            serde_json::json!({
+                "action": "pair",
+                "code": code,
+                "bind": bind,
+                "ticket_file": ticket_file,
+                "wait_file": wait_file,
+                "confirm": confirm,
+            }),
+        ),
+        MeshCommands::Join {
+            code,
+            ticket,
+            ticket_file,
+            response_file,
+            bind,
+            confirm,
+        } => (
+            "join",
+            serde_json::json!({
+                "action": "join",
+                "code": code,
+                "ticket": ticket,
+                "ticket_file": ticket_file,
+                "response_file": response_file,
+                "bind": bind,
+                "confirm": confirm,
+            }),
+        ),
+        MeshCommands::Status => ("status", serde_json::json!({"action": "status"})),
+        MeshCommands::Sync { listen, once } => (
+            "sync",
+            serde_json::json!({"action": "sync", "listen": listen, "once": once}),
+        ),
+        MeshCommands::Pull { handle } => (
+            "pull",
+            serde_json::json!({"action": "pull", "handle": handle}),
+        ),
+        MeshCommands::Unpair { did } => (
+            "unpair",
+            serde_json::json!({"action": "unpair", "did": did}),
+        ),
+        MeshCommands::ForkIdentity => ("fork", serde_json::json!({"action": "fork"})),
+        MeshCommands::ExportChain { dir } => (
+            "export",
+            serde_json::json!({"action": "export", "dir": dir}),
+        ),
+        MeshCommands::ImportChain { dir, confirm } => (
+            "import",
+            serde_json::json!({"action": "import", "dir": dir, "confirm": confirm}),
+        ),
+    }
+}
 
 #[cfg(feature = "cloud-sync")]
 fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
@@ -3995,6 +4367,88 @@ fn run_gc(
 
 /// Ingest a memory via CLI through `smart_ingest` (the duplicate gate, then
 /// auto-connect on a create).
+fn hook_repo(repo: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    let dir = match repo {
+        Some(p) => p,
+        None => env::current_dir()?,
+    };
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!("{} is not inside a git repository", dir.display());
+    }
+    Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
+/// The server that owns the store, else the log opened here.
+fn receipt_store() -> anyhow::Result<vestige_mcp::commit_receipt::ReceiptStore> {
+    let dir = cli_data_dir()?;
+    if vestige_mcp::attach::probe_owner_blocking(&dir).is_some() {
+        return Ok(vestige_mcp::commit_receipt::ReceiptStore::Owner(dir));
+    }
+    Ok(vestige_mcp::commit_receipt::ReceiptStore::Local(
+        open_storage()?,
+    ))
+}
+
+fn run_hook_post_commit(repo: Option<PathBuf>, gate_output: Option<PathBuf>) -> anyhow::Result<()> {
+    // A post-commit hook cannot undo the commit: report and exit 0.
+    let result = (|| -> anyhow::Result<(String, String)> {
+        let repo = hook_repo(repo)?;
+        let gate_file =
+            gate_output.or_else(|| env::var_os("VESTIGE_GATE_OUTPUT_FILE").map(PathBuf::from));
+        let gate = gate_file.and_then(|p| fs::read_to_string(p).ok());
+        let store = receipt_store()?;
+        let (facts, id) = vestige_mcp::commit_receipt::post_commit(&store, &repo, gate.as_deref())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        Ok((facts.sha, id))
+    })();
+    match result {
+        Ok((sha, id)) => {
+            eprintln!("vestige: commit receipt {id} for commit:{sha}");
+        }
+        Err(err) => eprintln!("vestige post-commit: no receipt written: {err}"),
+    }
+    Ok(())
+}
+
+fn run_hook_pre_commit(repo: Option<PathBuf>, stop_window: String) -> anyhow::Result<()> {
+    let repo = hook_repo(repo)?;
+    let dir = cli_data_dir()?;
+    let store = receipt_store().ok();
+    let problems =
+        vestige_mcp::commit_receipt::pre_commit(store.as_ref(), &dir, &repo, &stop_window);
+    if problems.is_empty() {
+        return Ok(());
+    }
+    eprintln!("vestige pre-commit: commit refused");
+    for p in &problems {
+        eprintln!("  - {p}");
+    }
+    eprintln!("  (git commit --no-verify skips this check)");
+    std::process::exit(1);
+}
+
+fn run_init(git_hooks: bool, repo: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
+    if !git_hooks {
+        println!(
+            "vestige init: pass --git-hooks to install the pre-commit and post-commit git hooks. Client hooks (Claude Code, Codex, Cursor, Gemini) are installed by `npx @vestige/init`."
+        );
+        return Ok(());
+    }
+    let repo = hook_repo(repo)?;
+    let exe = env::current_exe()?;
+    let lines = vestige_mcp::commit_receipt::install_git_hooks(&repo, &exe, force)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 fn run_ingest(
     content: String,
     tags: Option<String>,
@@ -5393,14 +5847,42 @@ fn session_start_output(
         .ok()?;
     let input = rules_hook::parse_input(&raw)?;
     let cwd = input.cwd.clone().or_else(|| env::current_dir().ok())?;
-    let tags = rules_hook::rule_tags(&cwd, repo_tag);
     let data_dir = cli_data_dir().ok()?;
     // Never create a store: no log, no rules.
     if !data_dir.join("log").is_dir() {
         return None;
     }
+    let mut tags = rules_hook::rule_tags(&cwd, repo_tag);
+    // The rule block lists only the session's rule tags. The two below feed
+    // the rulebook's owner sections and the rules-file flags; they are read
+    // in the same pass but are not rules to restate.
+    let rule_tag_count = tags.len();
+    for extra in [
+        vestige_mcp::rulebook::OWNER_TAG,
+        vestige_mcp::rulebook::RUN_FAILED_TAG,
+    ] {
+        if !tags.iter().any(|tag| tag == extra) {
+            tags.push(extra.to_string());
+        }
+    }
     let resolved = resolve_rule_tags(&data_dir, &tags, deadline)?;
-    let context = rules_hook::render_context(&resolved, &input.source, limits)?;
+    let owner: Vec<&str> = resolved
+        .iter()
+        .filter(|(tag, _)| tag == vestige_mcp::rulebook::OWNER_TAG)
+        .flat_map(|(_, nodes)| nodes.iter().map(|node| node.content.as_str()))
+        .collect();
+    let failed: Vec<(String, String)> = resolved
+        .iter()
+        .filter(|(tag, _)| tag == vestige_mcp::rulebook::RUN_FAILED_TAG)
+        .flat_map(|(_, nodes)| {
+            nodes
+                .iter()
+                .map(|node| (node.content.trim().to_string(), node.id.clone()))
+        })
+        .collect();
+    let rules = rules_hook::render_context(&resolved[..rule_tag_count], &input.source, limits);
+    let flags = rules_hook::rules_file_flags(&cwd, &failed);
+    let context = vestige_mcp::rulebook::inject(&owner, rules.as_deref(), &flags, limits.max_bytes);
     serde_json::to_string(&rules_hook::hook_output(&context)).ok()
 }
 

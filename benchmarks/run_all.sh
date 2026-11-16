@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vestige v6.2.1 Benchmark Runner: 100% reproducible and honest.
+# Vestige v6.2.2 Benchmark Runner: 100% reproducible and honest.
 # One command runs data verification, builds native Rust binary, executes baselines and full evaluations.
 set -euo pipefail
 
@@ -9,7 +9,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
 echo "================================================================================"
-echo "  VESTIGE v6.2.1 REPRODUCIBLE BENCHMARK RUNNER"
+echo "  VESTIGE v6.2.2 REPRODUCIBLE BENCHMARK RUNNER"
 echo "================================================================================"
 
 # 1. Fetch & verify public datasets
@@ -20,7 +20,7 @@ echo "=== Building Rust retrieval_bench binary ==="
 cargo build --release -p vestige-core --bin retrieval_bench
 
 # 3. Create results directory
-RESULTS_DIR="benchmarks/results/v6.2.1"
+RESULTS_DIR="benchmarks/results/v6.2.2"
 mkdir -p "${RESULTS_DIR}"
 
 # 4. Run Python BM25 baseline (rank_bm25)
@@ -39,9 +39,9 @@ node benchmarks/run_stage1_retrieval.mjs --baseline --json="${RESULTS_DIR}/basel
 echo "=== Running LoCoMo held-out evaluation ==="
 bash benchmarks/run_heldout.sh
 
-# 7. Run full Vestige v6.2.1 engine (official metric, all 500, per-category breakdown)
-echo "=== Running Vestige v6.2.1 full benchmark ==="
-node benchmarks/run_stage1_retrieval.mjs --json="${RESULTS_DIR}/vestige_v6.2.1_full.json"
+# 7. Run full Vestige v6.2.2 engine (official metric, all 500, per-category breakdown)
+echo "=== Running Vestige v6.2.2 full benchmark ==="
+node benchmarks/run_stage1_retrieval.mjs --json="${RESULTS_DIR}/vestige_v6.2.2_full.json"
 
 echo "================================================================================"
 echo "  ALL BENCHMARKS COMPLETED SUCCESSFULLY"

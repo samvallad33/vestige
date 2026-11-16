@@ -1,6 +1,6 @@
 [package]
 name = "vestige-core"
-version = "6.2.1"
+version = "6.2.2"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Vestige Team"]
@@ -73,6 +73,9 @@ getrandom = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# Integration tests under `tests/` sign receipts. The crate already depends
+# on ed25519-dalek 3; integration tests do not inherit normal dependencies.
+ed25519-dalek = "3"
 
 [lib]
 name = "vestige_core"

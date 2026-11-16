@@ -38,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `@vestige/init` hooks pass a shell call's output, its interrupted flag and its background flag to
   Reflex.
 
+## [6.2.2] - 2026-11-10
+
+### Retrieval
+
+- Flag imperative user turns as standing policies at ingest and boost them through scoring (2.5× on the turn, 1.8× on a window that contains one).
+- Treat chronological queries as event sequences: a repeated timestamp is down-weighted in session selection, and a repeated session is down-weighted in the top turns.
+- Score contrastive preferences (`solely`, `exclusively`, `switched to`, `too bitter`, and `only` used as a constraint) on the preference axis.
+- `remember` registers each standing rule as an active, idempotent plan on the intention graph.
+- Strata lexical recall keeps one session per UTC day, so those date and session penalties apply to stored memories.
+- Measured on `34c04ccb`: LongMemEval_S RecallAll@5 91.28% (470 non-abstention) and RecallAny@5 98.60% (500). LoCoMo-10 CORE session R@5 92.25%, turn soft R@5 77.93%. Held-out test (conversations 6–10) CORE session R@5 91.75%.
+
 ## [6.0.0] - 2026-10-28
 
 ### Reflex: every hook firing reaches Vestige

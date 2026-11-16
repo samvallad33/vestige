@@ -189,3 +189,133 @@ pub fn parse_frame(buf: &[u8]) -> io::Result<(Frame, usize)> {
     let consumed = buf.len() - cursor.len();
     Ok((frame, consumed))
 }
+
+/// RFC 9162 consistency proof from the first `old_len` leaves to the full
+/// list. Leaves are the frames' `payload_blake3` values, in chain order.
+/// The tree shape is the same one [`merkle_root`] uses. An empty proof means
+/// `old_len` is 0 or already the full list.
+pub fn consistency_proof(payload_hashes: &[[u8; 32]], old_len: usize) -> Vec<[u8; 32]> {
+    if old_len == 0 || old_len >= payload_hashes.len() {
+        return Vec::new();
+    }
+    let leaves: Vec<[u8; 32]> = payload_hashes.iter().map(leaf_hash).collect();
+    subproof(&leaves, old_len, true)
+}
+
+fn subproof(leaves: &[[u8; 32]], m: usize, complete: bool) -> Vec<[u8; 32]> {
+    let n = leaves.len();
+    if m == n {
+        if complete {
+            Vec::new()
+        } else {
+            vec![merkle_fold(leaves)]
+        }
+    } else {
+        let mut k = 1usize;
+        while k * 2 < n {
+            k *= 2;
+        }
+        if m <= k {
+            let mut proof = subproof(&leaves[..k], m, complete);
+            proof.push(merkle_fold(&leaves[k..]));
+            proof
+        } else {
+            let mut proof = subproof(&leaves[k..], m - k, false);
+            proof.push(merkle_fold(&leaves[..k]));
+            proof
+        }
+    }
+}
+
+fn is_pow2(n: usize) -> bool {
+    n != 0 && (n & (n - 1)) == 0
+}
+
+/// Verify a [`consistency_proof`] between two merkle roots of this log's tree.
+/// `first == second` is consistent only when the roots match and the proof is empty.
+pub fn verify_consistency(
+    first: usize,
+    second: usize,
+    first_hash: &[u8; 32],
+    second_hash: &[u8; 32],
+    proof: &[[u8; 32]],
+) -> bool {
+    if first > second {
+        return false;
+    }
+    if first == second {
+        return proof.is_empty() && first_hash == second_hash;
+    }
+    if first == 0 || proof.is_empty() {
+        return false;
+    }
+    let mut path = proof.to_vec();
+    if is_pow2(first) {
+        path.insert(0, *first_hash);
+    }
+    let mut fn_idx = first - 1;
+    let mut sn = second - 1;
+    while fn_idx & 1 == 1 {
+        fn_idx >>= 1;
+        sn >>= 1;
+    }
+    let mut nodes = path.into_iter();
+    let Some(seed) = nodes.next() else {
+        return false;
+    };
+    let mut fr = seed;
+    let mut sr = seed;
+    for node in nodes {
+        if sn == 0 {
+            return false;
+        }
+        if fn_idx & 1 == 1 || fn_idx == sn {
+            fr = node_hash(&node, &fr);
+            sr = node_hash(&node, &sr);
+            if fn_idx & 1 == 0 {
+                while fn_idx != 0 && fn_idx & 1 == 0 {
+                    fn_idx >>= 1;
+                    sn >>= 1;
+                }
+            }
+        } else {
+            sr = node_hash(&sr, &node);
+        }
+        fn_idx >>= 1;
+        sn >>= 1;
+    }
+    fr == *first_hash && sr == *second_hash && sn == 0
+}
+
+#[cfg(test)]
+mod consistency_tests {
+    use super::{consistency_proof, merkle_root, verify_consistency};
+
+    #[test]
+    fn consistency_proofs_hold_for_every_prefix_up_to_24_leaves() {
+        let leaves: Vec<[u8; 32]> = (0..24u8)
+            .map(|i| {
+                let mut leaf = [0u8; 32];
+                leaf[0] = i;
+                leaf[31] = i.wrapping_mul(3);
+                leaf
+            })
+            .collect();
+        for n in 1..=leaves.len() {
+            let new_root = merkle_root(&leaves[..n]);
+            for m in 1..n {
+                let old_root = merkle_root(&leaves[..m]);
+                let proof = consistency_proof(&leaves[..n], m);
+                assert!(
+                    verify_consistency(m, n, &old_root, &new_root, &proof),
+                    "proof failed for {m} -> {n} ({} nodes)",
+                    proof.len()
+                );
+                let mut bad = old_root;
+                bad[0] ^= 0xff;
+                assert!(!verify_consistency(m, n, &bad, &new_root, &proof));
+            }
+            assert!(verify_consistency(n, n, &new_root, &new_root, &[]));
+        }
+    }
+}

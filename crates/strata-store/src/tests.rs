@@ -562,29 +562,21 @@ fn reads_append_nothing() {
 }
 
 #[test]
-fn failure_marker_port_matches_vestige_semantics() {
-    // Same canary cases vestige-core tests for.
-    assert!(looks_like_failure("connection pool saturated at 100%", &[]));
+fn failure_label_matches_vestige_semantics() {
+    // Same canary cases vestige-core tests for: a recorded label, never a content word.
+    assert!(!looks_like_failure("connection pool saturated at 100%", &[]));
     assert!(!looks_like_failure(
         "pinned rails to 5.2 for the tz workaround",
         &[]
     ));
-    assert!(looks_like_failure(
-        "deploy went fine",
-        &["incident-postmortem".to_string()]
-    ));
-    assert!(!looks_like_failure("the migration added a column", &[]));
-    // Whole-word, not substring.
-    assert!(!looks_like_failure(
-        "slowly but surely the index warmed",
-        &[]
-    ));
-    assert!(looks_like_failure("the replica lag grew unbounded", &[]));
+    assert!(looks_like_failure("deploy went fine", &["failure".to_string()]));
+    assert!(looks_like_failure("deploy went fine", &["failure:postmortem".to_string()]));
+    assert!(!looks_like_failure("deploy went fine", &["incident-postmortem".to_string()]));
 
     let dir = temp_dir("failure");
     let mut store = StrataStore::open(&dir).expect("open");
     let f = store
-        .ingest(input("api returned 502 after the release", &[]))
+        .ingest(input("api returned 502 after the release", &["failure"]))
         .expect("f");
     let q = store
         .ingest(input("a quiet architectural note", &[]))
@@ -687,6 +679,18 @@ fn replay_store_and_migration_frames_do_not_cross_classify() {
                 StoreOp::SaveEdges { .. } => {}
                 // Nor a salience adjustment.
                 StoreOp::AdjustSalience { .. } => {}
+                // Nor a mesh op. The arms keep the match exhaustive.
+                StoreOp::GrantWriter { .. }
+                | StoreOp::MergeChain { .. }
+                | StoreOp::ConflictRecord { .. }
+                | StoreOp::AssertClaim { .. }
+                | StoreOp::Equivocation { .. }
+                | StoreOp::PolicyMismatch { .. }
+                | StoreOp::IndexMismatch { .. }
+                | StoreOp::TombstoneReceipt { .. }
+                | StoreOp::DenyRange { .. }
+                | StoreOp::ForkGenesis { .. }
+                | StoreOp::PurgeTombstone { .. } => {}
             }
         } else if frame.kind == KIND_STORE_CHECKPOINT {
             store_checkpoints += 1;
@@ -1089,6 +1093,48 @@ fn retention_of_unreviewed_node_ignores_unrelated_writes() {
 }
 
 #[test]
+fn retrievability_read_follows_the_log_head_not_the_wall() {
+    let dir = temp_dir("head-clock-read");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let id = store
+        .ingest(input("written once, then left alone", &[]))
+        .expect("ingest");
+    let head = store.head_clock_ms();
+    let created = store.get_node(&id).expect("node").created_at_ms;
+    assert_eq!(head, created);
+
+    let first = store.retrievability(&id).unwrap().unwrap();
+    let second = store.retrievability(&id).unwrap().unwrap();
+    assert_eq!(first, second, "two reads of one head must match");
+    assert_eq!(first, store.retrievability_at(&id, head).unwrap().unwrap());
+    assert_eq!(first, 1.0, "at the head clock nothing has elapsed");
+
+    // The ingest clock is 2023-11-14. This process runs later. A read that
+    // still called the wall clock would score that later instant.
+    let day = 86_400_000i64;
+    let mut crossed = None;
+    for days in [30i64, 90, 400, 2000] {
+        let later = store.retrievability_at(&id, head + days * day).unwrap().unwrap();
+        let bucket = (later * 10.0).floor() as i32;
+        if bucket != 9 || later < 0.3 {
+            crossed = Some((days, later, bucket));
+            break;
+        }
+    }
+    let (days, later, bucket) = crossed.expect("a later clock must cross a print boundary");
+    assert!(later < first);
+    assert_ne!(bucket, 9);
+    assert_eq!(store.retrievability(&id).unwrap().unwrap(), first);
+    let _ = days;
+
+    drop(store);
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(reopened.head_clock_ms(), head);
+    assert_eq!(reopened.retrievability(&id).unwrap().unwrap(), first);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn review_without_clock_replays_as_unset() {
     let dir = temp_dir("review-unset");
     let mut store = StrataStore::open(&dir).expect("open");
@@ -1380,6 +1426,7 @@ fn edit_returns_successor_and_receipt_naming_edit() {
             &AdmissionContext {
                 rule_id: Some(RULE_EDIT.to_string()),
                 confirm: false,
+                human_confirmed: false,
             },
         )
         .expect("edit");
@@ -1468,6 +1515,7 @@ fn held_edit_without_rule_id_leaves_no_live_duplicate() {
             &AdmissionContext {
                 rule_id: Some("edited".into()),
                 confirm: true,
+                human_confirmed: false,
             },
         )
         .expect_err("unknown rule");
@@ -1480,6 +1528,7 @@ fn ctx(rule: Option<&str>, confirm: bool) -> AdmissionContext {
     AdmissionContext {
         rule_id: rule.map(str::to_string),
         confirm,
+        human_confirmed: false,
     }
 }
 
@@ -1596,7 +1645,7 @@ fn expect_allow(
 #[test]
 fn named_retire_rules_precede_the_catchall_hold() {
     let policy = default_policy();
-    assert_eq!(policy.rules.len(), 6);
+    assert_eq!(policy.rules.len(), 8);
     let ids = [RULE_EDIT, RULE_SUPPRESS, RULE_INTENTIONS, RULE_PURGE];
     let mut prefixes = Vec::new();
     for (rule, id) in policy.rules.iter().take(4).zip(ids) {
@@ -1614,8 +1663,13 @@ fn named_retire_rules_precede_the_catchall_hold() {
     assert_eq!(policy.rules[4].match_kind, action_kind::RETIRE);
     assert_eq!(policy.rules[4].verdict, Verdict::Hold);
     assert_eq!(policy.rules[4].match_params_hash_prefix, WILDCARD_PREFIX);
-    assert_eq!(policy.rules[5].match_kind, ANY_KIND);
+    assert_eq!(policy.rules[5].match_kind, action_kind::GRANT);
     assert_eq!(policy.rules[5].verdict, Verdict::Allow);
+    assert_ne!(policy.rules[5].match_params_hash_prefix, WILDCARD_PREFIX);
+    assert_eq!(policy.rules[6].match_kind, action_kind::GRANT);
+    assert_eq!(policy.rules[6].verdict, Verdict::Hold);
+    assert_eq!(policy.rules[7].match_kind, ANY_KIND);
+    assert_eq!(policy.rules[7].verdict, Verdict::Allow);
 }
 
 #[test]
@@ -1917,6 +1971,7 @@ fn edit_ctx() -> AdmissionContext {
     AdmissionContext {
         rule_id: Some(RULE_EDIT.to_string()),
         confirm: false,
+        human_confirmed: false,
     }
 }
 
@@ -2444,6 +2499,7 @@ fn anchors_of_a_retired_node_are_not_returned_or_written() {
             &AdmissionContext {
                 rule_id: Some(RULE_SUPPRESS.to_string()),
                 confirm: false,
+                human_confirmed: false,
             },
         )
         .expect("retire");
