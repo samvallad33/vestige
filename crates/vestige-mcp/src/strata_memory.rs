@@ -135,6 +135,17 @@ pub fn reuse_duplicate_echo(
     })
 }
 
+/// Run `f` on the open Strata log. The lock is not held across an await.
+pub fn with_store<R>(
+    storage: &Storage,
+    f: impl FnOnce(&mut strata_store::StrataStore) -> R,
+) -> Result<R, String> {
+    let memory = live_memory(storage)
+        .ok_or_else(|| "strata log is not open in this process".to_string())?;
+    let mut guard = memory.lock();
+    Ok(f(&mut guard))
+}
+
 fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
     if !is_strata_backend(storage) {
         return None;
@@ -883,6 +894,7 @@ fn retire_live(
     let ctx = strata_store::AdmissionContext {
         rule_id: Some(rule.to_string()),
         confirm,
+        human_confirmed: false,
     };
     let receipt = store.retire(id, &anchor, &ctx).map_err(map_store)?;
     if receipt.rule_id != Some(rule) {
@@ -1146,6 +1158,17 @@ fn mutation_kind(proof: &strata_store::EffectProof) -> &'static str {
         (strata_store::EffectAction::AnchorVerdict, _) => "anchor_verified",
         (strata_store::EffectAction::Edge, _) => "edge_recorded",
         (strata_store::EffectAction::Backfill, _) => "salience_adjusted",
+        (strata_store::EffectAction::Grant, _) => "writer_granted",
+        (strata_store::EffectAction::Merge, _) => "chain_merged",
+        (strata_store::EffectAction::Conflict, _) => "claim_conflict",
+        (strata_store::EffectAction::Claim, _) => "claim_asserted",
+        (strata_store::EffectAction::Equivocation, _) => "writer_equivocated",
+        (strata_store::EffectAction::PolicyMismatch, _) => "policy_mismatch",
+        (strata_store::EffectAction::IndexMismatch, _) => "index_mismatch",
+        (strata_store::EffectAction::Tombstone, _) => "tombstone",
+        (strata_store::EffectAction::DenyRange, _) => "range_denied",
+        (strata_store::EffectAction::Fork, _) => "identity_forked",
+        (strata_store::EffectAction::Purge, _) => "purged",
     }
 }
 
@@ -1248,7 +1271,20 @@ fn listed_memory_effect(
                     .as_ref()
                     .is_none_or(|(target, _)| store.node_record(target).is_none_or(retrievable))
         }
-        EffectAction::Intention | EffectAction::Anchor | EffectAction::AnchorVerdict => false,
+        EffectAction::Intention
+        | EffectAction::Anchor
+        | EffectAction::AnchorVerdict
+        | EffectAction::Grant
+        | EffectAction::Merge
+        | EffectAction::Conflict
+        | EffectAction::Claim
+        | EffectAction::Equivocation
+        | EffectAction::PolicyMismatch
+        | EffectAction::IndexMismatch
+        | EffectAction::Tombstone
+        | EffectAction::DenyRange
+        | EffectAction::Fork
+        | EffectAction::Purge => false,
     }
 }
 
@@ -2934,6 +2970,9 @@ impl MemoryStoreSend for StrataMemory {
         if live_digest != folded.state_digest {
             mismatches.push("state_digest".to_string());
         }
+        if store.mesh_digest() != folded.mesh_digest {
+            mismatches.push("mesh_digest".to_string());
+        }
         match (store.get_node(&node_id), folded.nodes.get(&node_id)) {
             (Some(live), Some(replayed)) => {
                 mismatches.extend(node_field_mismatches(&node_id, &live, replayed));
@@ -3985,6 +4024,7 @@ impl MemoryStoreSend for StrataMemory {
                 &strata_store::AdmissionContext {
                     rule_id: Some(strata_store::RULE_EDIT.to_string()),
                     confirm: false,
+                    human_confirmed: false,
                 },
             )
             .map_err(map_store)?;
@@ -4272,6 +4312,9 @@ fn replay_edge_receipt(
     let live_digest = store.state_digest();
     if live_digest != folded.state_digest {
         mismatches.push("state_digest".to_string());
+    }
+    if store.mesh_digest() != folded.mesh_digest {
+        mismatches.push("mesh_digest".to_string());
     }
     let live = store.edges();
     let mut listed = Vec::with_capacity(edges.len());
@@ -4992,6 +5035,7 @@ mod tests {
                     &strata_store::AdmissionContext {
                         rule_id: Some(strata_store::RULE_SUPPRESS.to_string()),
                         confirm: false,
+                        human_confirmed: false,
                     },
                 )
                 .unwrap();

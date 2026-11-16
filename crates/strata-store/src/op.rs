@@ -114,4 +114,153 @@ pub enum StoreOp {
         /// Original effect receipt when this is an exact compensating undo.
         undo_of: Option<String>,
     },
+    /// Admit a remote writer. Discriminant 10, appended so earlier logs keep
+    /// their tags. The gate allows this only under the named mesh-grant rule.
+    GrantWriter {
+        /// did:key of the writer's log verifying key.
+        writer_did: String,
+        /// Pinned 32-byte ed25519 verifying key. Not a seed.
+        verifying_key: [u8; 32],
+        /// blake3 of the mesh policy this grant pins.
+        policy_hash: [u8; 32],
+        /// Scope names. Empty means the whole store.
+        scopes: Vec<String>,
+        /// Writer signature binding the log key to the transport endpoint id.
+        endpoint_binding: Vec<u8>,
+    },
+    /// One contiguous admitted range of a granted writer's chain.
+    MergeChain {
+        /// Writer whose frames `from_seq..=to_seq` were admitted.
+        writer_did: String,
+        /// First newly admitted frame seq.
+        from_seq: u64,
+        /// Last newly admitted frame seq.
+        to_seq: u64,
+        /// Borsh of the signed head the range was checked against.
+        signed_head: Vec<u8>,
+        /// blake3 of the concatenated consistency-proof nodes.
+        consistency_proof_hash: [u8; 32],
+        /// blake3 of the re-derived verdict list.
+        rederive_hash: [u8; 32],
+        /// Mesh digest after this range was folded.
+        mesh_digest_after: [u8; 32],
+        /// Claim pairs this range left in conflict.
+        conflicts: Vec<ClaimRef>,
+    },
+    /// A claim-slot contradiction. Both claims stay; this receipt names them.
+    ConflictRecord {
+        /// Subject the two claims share.
+        subject_id: String,
+        /// Field the two claims share.
+        field_id: String,
+        /// One side. Order is the lower frame hash first.
+        left: ClaimRef,
+        /// The other side.
+        right: ClaimRef,
+    },
+    /// A value asserted for one claim slot.
+    AssertClaim {
+        /// Subject handle the slot belongs to.
+        subject_id: String,
+        /// Field inside the subject.
+        field_id: String,
+        /// Canonical bytes of the asserted value.
+        value: Vec<u8>,
+        /// Validity start, unix milliseconds.
+        valid_from_ms: i64,
+        /// Validity end, unix milliseconds.
+        valid_until_ms: i64,
+    },
+    /// Two signed heads for one seq under one writer key.
+    Equivocation {
+        /// Writer that signed both heads.
+        writer_did: String,
+        /// First signed head, borsh.
+        head_a: Vec<u8>,
+        /// Second signed head, borsh.
+        head_b: Vec<u8>,
+    },
+    /// The peer's mesh policy hash is not the local one.
+    PolicyMismatch {
+        /// Local policy hash.
+        local_hash: [u8; 32],
+        /// Peer's policy hash.
+        peer_hash: [u8; 32],
+    },
+    /// A scheduling hint named a handle the segment bytes do not contain.
+    IndexMismatch {
+        /// Sender that offered the hint.
+        sender_did: String,
+        /// Segment the hint named.
+        segment: u64,
+        /// Handle the hint named.
+        handle: String,
+    },
+    /// Local proof that a memory's data key was destroyed.
+    TombstoneReceipt {
+        /// Memory whose key was destroyed.
+        memory_id: String,
+        /// Writer whose purge tombstone was folded, when this is a peer purge.
+        writer_did: String,
+        /// Peer's frame seq of the purge, or 0 for a local purge.
+        peer_seq: u64,
+    },
+    /// A whole peer range was refused. Nothing in the range was folded.
+    DenyRange {
+        /// Writer whose range was refused.
+        writer_did: String,
+        /// Each frame the re-derivation or the sweep rejected.
+        failures: Vec<FrameFail>,
+    },
+    /// Genesis of a writer chain forked off another device's key.
+    ForkGenesis {
+        /// Writer this chain was derived from.
+        derived_from_did: String,
+        /// That writer's seq at the fork point.
+        derived_from_seq: u64,
+        /// That writer's frame hash at the fork point.
+        derived_from_frame: [u8; 32],
+    },
+    /// A purge of one memory. Folding a peer's tombstone destroys the local key.
+    PurgeTombstone {
+        /// Memory being purged.
+        memory_id: String,
+    },
+}
+
+/// One side of a claim, named so two devices can cite the same frame.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ClaimRef {
+    /// Writer that recorded the claim.
+    pub writer_did: String,
+    /// Data-frame seq of the claim.
+    pub seq: u64,
+    /// Chain hash of that frame.
+    pub frame_hash: [u8; 32],
+}
+
+/// One frame a range denial names.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct FrameFail {
+    /// Writer of the failing frame.
+    pub writer_did: String,
+    /// Log seq of the failing frame.
+    pub seq: u64,
+}
+
+/// Ops that carry another writer's evidence and must not themselves produce
+/// a further merge receipt when a batch contains only these.
+pub fn is_mesh_receipt(op: &StoreOp) -> bool {
+    matches!(
+        op,
+        StoreOp::GrantWriter { .. }
+            | StoreOp::MergeChain { .. }
+            | StoreOp::ConflictRecord { .. }
+            | StoreOp::Equivocation { .. }
+            | StoreOp::PolicyMismatch { .. }
+            | StoreOp::IndexMismatch { .. }
+            | StoreOp::TombstoneReceipt { .. }
+            | StoreOp::DenyRange { .. }
+            | StoreOp::ForkGenesis { .. }
+    )
 }

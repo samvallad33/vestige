@@ -2212,6 +2212,7 @@ version = "6.2.2"
 dependencies = [
  "blake3",
  "borsh",
+ "ed25519-dalek",
  "strata",
  "strata-gate",
  "strata-kernel",
