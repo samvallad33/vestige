@@ -15,6 +15,7 @@ pub mod auto_connect;
 pub mod autopilot;
 pub mod capsule;
 pub mod cognitive;
+pub mod commit_receipt;
 pub mod dashboard;
 pub mod intake;
 pub mod mesh;

@@ -753,6 +753,69 @@ struct Input {
     worktree_path: String,
     /// Structural intention records supplied by the host or a prior tool.
     open_intentions: Value,
+    /// True when the install opted out with `--no-enforce`: Reflex records
+    /// and injects, and never returns a block or deny.
+    no_enforce: bool,
+}
+
+/// A JSON field that a host may send as an object, as a JSON string (a
+/// template substitution), or as MCP content blocks whose text is JSON.
+fn json_field(args: &Value, key: &str) -> Value {
+    let Some(v) = args.get(key) else {
+        return Value::Null;
+    };
+    decode_json(v, 0)
+}
+
+fn decode_json(v: &Value, depth: u8) -> Value {
+    if depth > 2 {
+        return v.clone();
+    }
+    match v {
+        Value::String(s) => {
+            let t = s.trim();
+            if t.starts_with("${") && t.ends_with('}') {
+                return Value::Null;
+            }
+            if (t.starts_with('{') || t.starts_with('['))
+                && t.len() <= 1 << 20
+                && let Ok(parsed) = serde_json::from_str::<Value>(t)
+            {
+                return decode_json(&parsed, depth + 1);
+            }
+            v.clone()
+        }
+        Value::Array(rows) => {
+            // MCP content blocks: [{"type": "text", "text": "{...}"}].
+            let texts: Vec<&str> = rows
+                .iter()
+                .filter(|r| r.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|r| r.get("text").and_then(Value::as_str))
+                .collect();
+            if texts.len() == 1 && texts.len() == rows.len() {
+                let parsed = decode_json(&Value::String(texts[0].to_string()), depth + 1);
+                if parsed.is_object() {
+                    return parsed;
+                }
+            }
+            v.clone()
+        }
+        Value::Object(map) => {
+            if let Some(inner) = map.get("structuredContent").filter(|x| x.is_object()) {
+                return inner.clone();
+            }
+            if let Some(content) = map.get("content").filter(|x| x.is_array())
+                && map.len() <= 2
+            {
+                let parsed = decode_json(content, depth + 1);
+                if parsed.is_object() {
+                    return parsed;
+                }
+            }
+            v.clone()
+        }
+        _ => v.clone(),
+    }
 }
 
 /// The exact text of one field, untrimmed and uncut: an absent field and a
@@ -787,7 +850,7 @@ impl Input {
     fn parse(args: Option<&Value>) -> Input {
         let empty = json!({});
         let a = args.unwrap_or(&empty);
-        let nested = a.get("tool_input").cloned().unwrap_or(Value::Null);
+        let nested = json_field(a, "tool_input");
         let mut command = field(a, &["command"]);
         if command.is_empty() {
             command = field(&nested, &["command", "cmd"]);
@@ -854,12 +917,14 @@ impl Input {
             stop_hook_active: matches!(a.get("stop_hook_active"), Some(Value::Bool(true)))
                 || field(a, &["stop_hook_active", "stopHookActive"]) == "true",
             tool_input: nested,
-            tool_response: a.get("tool_response").cloned().unwrap_or(Value::Null),
-            tool_calls: a.get("tool_calls").cloned().unwrap_or(Value::Null),
+            tool_response: json_field(a, "tool_response"),
+            tool_calls: json_field(a, "tool_calls"),
             from_model: field(a, &["from_model", "fromModel"]),
             to_model: field(a, &["to_model", "toModel"]),
             worktree_path: field(a, &["worktree_path", "worktreePath"]),
             open_intentions: a.get("open_intentions").cloned().unwrap_or(Value::Null),
+            no_enforce: matches!(a.get("enforce"), Some(Value::Bool(false)))
+                || matches!(field(a, &["enforce"]).as_str(), "off" | "false" | "0"),
         }
     }
 }
@@ -4715,10 +4780,95 @@ mod tests {
             "tool_response": {"nodeId": "mem-00000000000000bb", "sha": sha}
         }))
         .await;
+        // Naming the SHA alone is not a RULE 6 receipt.
+        let partial = fx
+            .fire(json!({"event": "Stop", "session": "s-commit", "stop_hook_active": true}))
+            .await;
+        assert_eq!(partial["decision"], "block", "{partial}");
+        let reason = partial["reason"].as_str().unwrap();
+        assert!(reason.contains("leaves out"), "{partial}");
+        assert!(reason.contains("branch main"), "{partial}");
+        assert!(reason.contains("file lib.rs"), "{partial}");
+        fx.fire(json!({
+            "event": "PostToolUse",
+            "session": "s-commit",
+            "tool": "mcp__vestige__remember",
+            "tool_input": {"action": "save", "content": format!(
+                "SHA {sha} parent none branch main author Test files lib.rs:1-1 gates none"
+            )},
+            // An MCP content block, as Claude Code echoes a tool result.
+            "tool_response": [{"type": "text", "text": "{\"nodeId\": \"mem-00000000000000bc\"}"}]
+        }))
+        .await;
         let allowed = fx
             .fire(json!({"event": "Stop", "session": "s-commit", "stop_hook_active": true}))
             .await;
         assert!(allowed.get("decision").is_none(), "{allowed}");
+    }
+
+    #[tokio::test]
+    async fn a_commit_receipt_must_carry_every_gate_the_turn_ran() {
+        let fx = Fixture::new();
+        allow(&fx, &["cargo test -p demo"]);
+        let repo = git_repo();
+        let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+        fx.fire(json!({"event": "UserPromptSubmit", "session": "s-gate", "prompt": "ship"}))
+            .await;
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-gate", "tool": "Bash",
+            "call": "toolu_g1", "command": "cargo test -p demo", "cwd": repo.path()}),
+        )
+        .await;
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-gate", "tool": "Bash",
+            "call": "toolu_g2", "command": "git commit -m ship", "cwd": repo.path()}),
+        )
+        .await;
+        let body = format!("SHA {sha} branch main author Test files lib.rs:1-1");
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-gate", "tool": "remember",
+            "tool_input": {"action": "save", "content": body},
+            "tool_response": "{\"nodeId\": \"mem-00000000000000cd\"}"}),
+        )
+        .await;
+        let blocked = fx.fire(json!({"event": "Stop", "session": "s-gate"})).await;
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        assert!(
+            blocked["reason"]
+                .as_str()
+                .unwrap()
+                .contains("gate `cargo test -p demo`"),
+            "{blocked}"
+        );
+        let body = format!(
+            "SHA {sha} branch main author Test files lib.rs:1-1 gate: cargo test -p demo ok"
+        );
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-gate", "tool": "remember",
+            "tool_input": {"action": "save", "content": body},
+            "tool_response": {"nodeId": "mem-00000000000000ce"}}),
+        )
+        .await;
+        let allowed = fx
+            .fire(json!({"event": "Stop", "session": "s-gate", "stop_hook_active": true}))
+            .await;
+        assert!(allowed.get("decision").is_none(), "{allowed}");
+    }
+
+    #[tokio::test]
+    async fn no_enforce_records_the_debt_and_never_blocks() {
+        let fx = Fixture::new();
+        let out = fx
+            .fire(
+                json!({"event": "UserPromptSubmit", "session": "s-off", "enforce": "off",
+                "prompt": "from now on never force-push"}),
+            )
+            .await;
+        assert!(out.to_string().contains("unsaved this turn"), "{out}");
+        let stop = fx
+            .fire(json!({"event": "Stop", "session": "s-off", "enforce": "off"}))
+            .await;
+        assert!(stop.get("decision").is_none(), "{stop}");
     }
 
     #[tokio::test]

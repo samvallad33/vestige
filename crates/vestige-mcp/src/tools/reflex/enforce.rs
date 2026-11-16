@@ -106,6 +106,16 @@ pub(super) struct TurnLedger {
     pub intentions: Vec<Intention>,
     pub stop_failure: Option<StopSnap>,
     pub unverified_told: Vec<String>,
+    /// Allowlisted witness commands that passed this turn: a commit receipt
+    /// must carry each one as its gate output.
+    #[serde(default)]
+    pub gates: Vec<String>,
+    /// What git says about each commit made this turn.
+    #[serde(default)]
+    pub commits: Vec<crate::commit_receipt::CommitFacts>,
+    /// A receipt named the SHA but left facts out: `(sha, missing)`.
+    #[serde(default)]
+    pub receipt_gaps: Vec<(String, Vec<String>)>,
 }
 
 impl TurnLedger {
@@ -116,6 +126,9 @@ impl TurnLedger {
         self.unpaired.clear();
         self.edited.clear();
         self.saved.clear();
+        self.gates.clear();
+        self.commits.clear();
+        self.receipt_gaps.clear();
     }
 }
 
@@ -154,6 +167,16 @@ pub(super) fn host_json(event: &str, format: &str, text: &str, d: &HostDecision)
             v.insert("event".into(), json!(event));
         }
         write_top_level(&mut v, event, d);
+        // The command shim maps these to each host's own deny shape.
+        if let Some(p) = &d.permission_decision {
+            v.insert("permissionDecision".into(), json!(p));
+            if let Some(r) = &d.permission_reason {
+                v.insert("permissionDecisionReason".into(), json!(r));
+            }
+        }
+        if let Some(b) = &d.permit_behavior {
+            v.insert("permitBehavior".into(), json!(b));
+        }
         return Value::Object(v);
     }
     write_top_level(&mut v, event, d);
@@ -296,7 +319,11 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
             lines.extend(resume_lines(g, inp));
         }
         "PreToolUse" => lines.extend(scope_lines(g, inp, storage)),
-        "PostToolUse" => note_success(g, inp),
+        "PostToolUse" => {
+            note_gate(g, inp, storage);
+            note_success(g, inp);
+            note_store_receipts(g, inp, storage);
+        }
         "PostToolUseFailure" => note_failure(g, inp),
         "StopFailure" => note_stop_failure(g, inp),
         "SubagentStart" => lines.extend(subagent_lines(g)),
@@ -313,6 +340,18 @@ pub(super) fn decide(
 ) -> HostDecision {
     let mut d = HostDecision::default();
     if inp.session.is_empty() {
+        return d;
+    }
+    if inp.event == "UserPromptSubmit" {
+        let s = g.session(&inp.session);
+        if !s.ledger.pending.is_empty() {
+            // The matched phrases only, never the prompt.
+            d.ledger =
+                json!({"pending_save": {"turn": s.turn, "phrases": s.ledger.pending.clone()}});
+        }
+    }
+    if inp.no_enforce {
+        mark_delivered(g, inp, delivered);
         return d;
     }
     match inp.event.as_str() {
@@ -573,22 +612,113 @@ fn note_success(g: &mut Global, inp: &Input) {
             .iter()
             .any(|x| x.eq_ignore_ascii_case(&sha))
     {
-        s.ledger.unreceipted.push(sha);
+        // The ledger keeps the full SHA git reports, so a receipt and the
+        // `commit:<sha>` tag match exactly.
+        let mut sha = sha;
+        if let Some(facts) = crate::commit_receipt::read(Path::new(&inp.cwd), &sha) {
+            sha = facts.sha.clone();
+            s.ledger.commits.retain(|c| c.sha != facts.sha);
+            s.ledger.commits.push(facts);
+        }
+        if !s
+            .ledger
+            .unreceipted
+            .iter()
+            .any(|x| x.eq_ignore_ascii_case(&sha))
+        {
+            s.ledger.unreceipted.push(sha);
+        }
     }
     if is_memory_write(inp) {
         let blob = format!("{}{}", inp.tool_response, inp.tool_input);
         s.ledger.pending.clear();
+        settle_receipts(&mut s.ledger, &blob);
         let edited = s.ledger.edited.clone();
         for path in edited {
             if !s.ledger.saved.iter().any(|p| p == &path) {
                 s.ledger.saved.push(path);
             }
         }
-        s.ledger.unreceipted.retain(|sha| {
-            !blob
-                .to_ascii_lowercase()
-                .contains(&sha.to_ascii_lowercase())
-        });
+    }
+}
+
+/// A memory write that names a commit's SHA settles that commit only when it
+/// also names every fact git reports (parents, branch, author, files) and
+/// every gate this turn ran. Otherwise the gap is recorded for the reason.
+fn settle_receipts(ledger: &mut TurnLedger, blob: &str) {
+    let lower = blob.to_ascii_lowercase();
+    let shas = ledger.unreceipted.clone();
+    for sha in shas {
+        if !lower.contains(&sha.to_ascii_lowercase()) {
+            continue;
+        }
+        let missing = ledger
+            .commits
+            .iter()
+            .find(|c| c.sha.eq_ignore_ascii_case(&sha))
+            .map(|c| c.missing_in(blob, &ledger.gates))
+            .unwrap_or_default();
+        ledger
+            .receipt_gaps
+            .retain(|(s, _)| !s.eq_ignore_ascii_case(&sha));
+        if missing.is_empty() {
+            ledger.unreceipted.retain(|x| !x.eq_ignore_ascii_case(&sha));
+        } else {
+            ledger.receipt_gaps.push((sha, missing));
+        }
+    }
+}
+
+/// An allowlisted witness command that passed is a gate this turn ran.
+fn note_gate(g: &mut Global, inp: &Input, storage: &Arc<Storage>) {
+    let command = inp.command.trim();
+    if command.is_empty() || inp.cwd.is_empty() || !pairing::is_shell(&inp.tool) {
+        return;
+    }
+    let Some(root) = witness::repo_root(Path::new(&inp.cwd)) else {
+        return;
+    };
+    if !witness::config_for(storage.data_dir(), Some(&root)).is_allowed(command) {
+        return;
+    }
+    let s = g.session(&inp.session);
+    if !s.ledger.gates.iter().any(|x| x == command) {
+        s.ledger.gates.push(command.to_string());
+    }
+}
+
+/// A receipt the host did not echo back (an MCP response the hook could not
+/// read) still counts when the store holds it: an agent receipt tagged
+/// `commit:<sha>` that is not the machine receipt.
+fn note_store_receipts(g: &mut Global, inp: &Input, storage: &Arc<Storage>) {
+    if !is_memory_write_tool(inp) {
+        return;
+    }
+    settle_from_store(g, &inp.session, storage);
+}
+
+fn settle_from_store(g: &mut Global, session: &str, storage: &Arc<Storage>) {
+    let shas = g.session(session).ledger.unreceipted.clone();
+    for sha in shas {
+        let ids = storage.resolve_handle(&format!("commit:{sha}")).ids;
+        let mut texts = Vec::new();
+        for id in ids.iter().take(16) {
+            if let Some(node) = storage.get_node(id).ok().flatten()
+                && !node
+                    .tags
+                    .iter()
+                    .any(|t| t == crate::commit_receipt::AUTO_TAG)
+            {
+                texts.push(node.content.clone());
+            }
+        }
+        if texts.is_empty() {
+            continue;
+        }
+        let s = g.session(session);
+        for text in texts {
+            settle_receipts(&mut s.ledger, &format!("{sha} {text}"));
+        }
     }
 }
 
@@ -797,11 +927,19 @@ fn debts(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Vec<String> {
             u.exit_code
         ));
     }
+    settle_from_store(g, &inp.session, storage);
     let shas = g.session(&inp.session).ledger.unreceipted.clone();
+    let gaps = g.session(&inp.session).ledger.receipt_gaps.clone();
     for sha in shas {
-        reasons.push(format!(
-            "Turn blocked: git commit {sha} has no receipt naming that SHA."
-        ));
+        match gaps.iter().find(|(s, _)| s.eq_ignore_ascii_case(&sha)) {
+            Some((_, missing)) => reasons.push(format!(
+                "Turn blocked: the receipt for git commit {sha} leaves out {}. Call remember(...) with them.",
+                missing.join(", ")
+            )),
+            None => reasons.push(format!(
+                "Turn blocked: git commit {sha} has no receipt naming that SHA (RULE 6: SHA, parent, branch, author, files with git diff -U0 ranges, gate output)."
+            )),
+        }
     }
     reasons.extend(citation_reasons(storage, g, inp));
     reasons
@@ -1039,6 +1177,10 @@ fn swap_replaced(inp: &Input, storage: &Arc<Storage>) -> Option<(Value, String)>
             swapped.join(", ")
         ),
     ))
+}
+
+fn is_memory_write_tool(inp: &Input) -> bool {
+    matches!(tool_leaf(&inp.tool), "remember" | "curate")
 }
 
 fn is_memory_write(inp: &Input) -> bool {

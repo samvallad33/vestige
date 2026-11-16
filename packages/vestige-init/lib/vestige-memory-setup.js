@@ -43,20 +43,32 @@ function reflexReady(binaryPath, env) {
 const REFLEX_INPUT = { event: '${hook_event_name}', session: '${session_id}', tool: '${tool_name}', call: '${tool_use_id}', agent: '${agent_id}', command: '${tool_input.command}', source: '${source}',
   error: '${error}', interrupt: '${is_interrupt}', file: '${tool_input.file_path}', cwd: '${cwd}',
   summary: '${compact_summary}', trigger: '${trigger}',
+  // The enforcement inputs: the directive scan reads the prompt, the Stop
+  // citation check reads the final message, and the receipt checks read the
+  // tool's input and response (sent as JSON text; Reflex decodes it).
+  prompt: '${prompt}', last_assistant_message: '${last_assistant_message}', stop_hook_active: '${stop_hook_active}',
+  tool_input: '${tool_input}', tool_response: '${tool_response}',
   stdout: '${tool_response.stdout}', stderr: '${tool_response.stderr}', interrupted: '${tool_response.interrupted}', background: '${tool_input.run_in_background}',
   host: 'claude' };
 const REFLEX_EVENTS = {
-  claude: [['PreToolUse', '*'], ['PostToolUse', '*'], ['PostToolUseFailure', '*'], ['UserPromptSubmit'], ['SubagentStart'], ['SubagentStop'], ['PreCompact'], ['PostCompact'], ['Stop']],
+  claude: [['PreToolUse', '*'], ['PostToolUse', '*'], ['PostToolUseFailure', '*'], ['UserPromptSubmit'], ['SubagentStart'], ['SubagentStop'], ['PreCompact'], ['PostCompact'], ['Stop'], ['StopFailure'], ['PostToolBatch']],
   codex: [['SessionStart'], ['UserPromptSubmit'], ['PreToolUse', '*'], ['PostToolUse', '*'], ['SubagentStart'], ['PreCompact'], ['Stop']],
   gemini: [['SessionStart'], ['BeforeAgent'], ['BeforeTool', '*'], ['AfterTool', '*'], ['PreCompress'], ['AfterAgent']],
   cursor: [['sessionStart'], ['beforeSubmitPrompt'], ['preToolUse'], ['postToolUse'], ['postToolUseFailure'], ['subagentStart'], ['preCompact'], ['stop']],
 };
-function reflexHooks(dialect, shimCommand) {
-  const shim = matcher => dialect === 'cursor' ? { command: shimCommand, timeout: 2, failClosed: false }
+// Enforcement is on by default. The events that decide fail closed: Cursor's
+// `stop` (failClosed) and Claude Code's one-use PermissionRequest
+// (onFailure: "block" denies the request when Vestige cannot answer).
+// Recall and injection events stay fail-open so a slow store never blocks
+// typing. `--no-enforce` keeps the records and drops every block.
+const CURSOR_FAIL_CLOSED = new Set(['stop']);
+function reflexHooks(dialect, shimCommand, { enforce = true } = {}) {
+  const shim = (event, matcher) => dialect === 'cursor' ? { command: shimCommand, timeout: 2, failClosed: enforce && CURSOR_FAIL_CLOSED.has(event) }
     : { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: shimCommand, timeout: 2 }] };
-  const rows = (REFLEX_EVENTS[dialect] || []).map(([event, matcher]) => [event, dialect === 'claude'
-    ? { ...(matcher ? { matcher } : {}), hooks: [{ type: 'mcp_tool', server: 'vestige', tool: 'session', input: { action: 'reflex', params: REFLEX_INPUT } }] }
-    : shim(matcher)]);
+  const params = enforce ? REFLEX_INPUT : { ...REFLEX_INPUT, enforce: 'off' };
+  const mcp = (matcher, extra = {}) => ({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'mcp_tool', server: 'vestige', tool: 'session', input: { action: 'reflex', params }, ...extra }] });
+  const rows = (REFLEX_EVENTS[dialect] || []).map(([event, matcher]) => [event, dialect === 'claude' ? mcp(matcher) : shim(event, matcher)]);
+  if (dialect === 'claude' && enforce) rows.push(['PermissionRequest', mcp('*', { onFailure: 'block' })]);
   if (dialect === 'claude') {
     rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact|fork', hooks: [{ type: 'command', command: shimCommand, timeout: 2 }] }]);
     rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact|fork', hooks: [{ type: 'command', command: 'vestige capsule --harness claude-code --event session-start', timeout: 8 }] }]);
@@ -165,7 +177,7 @@ function commented(file) {
   try { JSON.parse(raw); return false; } catch {}
   try { JSON.parse(withoutComments(raw)); return true; } catch { return false; }
 }
-function plan({ home = os.homedir(), platform = os.platform(), env = process.env, guard = false, clients, node = process.execPath } = {}) {
+function plan({ home = os.homedir(), platform = os.platform(), env = process.env, guard = false, clients, node = process.execPath, enforce = true } = {}) {
   const found = binary(home, platform, env);
   const handAdd = [];
   const detected = catalog(home, platform, env).filter(c => c.detected && (!clients || clients.includes(c.id))).filter(c => {
@@ -247,7 +259,7 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
       }
       if (reflex) {
         const shimCommand = [node, path.join(base, 'hooks', 'reflex.cjs'), '--config', path.join(base, 'config.json'), '--client', client.dialect].map(p => quote(p, platform)).join(' ');
-        for (const [eventName, entry] of reflexHooks(client.dialect, shimCommand)) add(client.hookFile, ['hooks', eventName], entry, 'merge reflex hooks: every hook firing reaches Vestige', true);
+        for (const [eventName, entry] of reflexHooks(client.dialect, shimCommand, { enforce })) add(client.hookFile, ['hooks', eventName], entry, 'merge reflex hooks: every hook firing reaches Vestige', true);
       }
     }
   }
@@ -258,7 +270,7 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
   if (triggers.before === null) triggers.after = json(defaults);
   const config = change(path.join(base, 'config.json'), 'local memory connection');
   const configValue = config.before === null ? {} : JSON.parse(config.before);
-  config.after = json({ ...configValue, version: VERSION, binary: found, triggers: triggers.file });
+  config.after = json({ ...configValue, version: VERSION, binary: found, triggers: triggers.file, enforce });
   let guardInstall = null;
   if (guard) {
     const python = ['python3', 'python'].map(name => executable(name, home, platform, env)).find(bin => {
@@ -440,7 +452,7 @@ async function main(args = process.argv.slice(2)) {
   const home = os.homedir(); const has = flag => args.includes(flag); const machine = has('--json');
   const say = line => { if (!machine) console.log(line); };
   const command = args[0];
-  if (has('--help') || has('-h')) { console.log('vestige-init [--yes] [--guard] [--dry-run] [--json]\nvestige-init doctor | status | uninstall [--yes] [--dry-run]\nMemory only is the default. --guard requests the optional Operator gate (102 STOP rules).'); return; }
+  if (has('--help') || has('-h')) { console.log('vestige-init [--yes] [--guard] [--no-enforce] [--dry-run] [--json]\nvestige-init doctor | status | uninstall [--yes] [--dry-run]\nMemory only is the default. --guard requests the optional Operator gate (102 STOP rules).\nReflex enforcement (Stop blocks on unsaved directives, unpaired failures and unreceipted commits) is on by default; --no-enforce records without blocking.\nGit backstop: run `vestige init --git-hooks` in a repository.'); return; }
   if (command === 'doctor' || command === 'status') {
     const result = await inspect(home); if (machine) console.log(json(result)); else { say(`Vestige ${VERSION} · ${command}`); for (const check of result.checks) say(`${check.ok ? 'GREEN' : 'RED  '} ${check.name}${check.ok ? '' : ` — fix: ${check.fix}`}`); say(`Memories: ${result.memory_count ?? 'unavailable'}`); say(`Recent Backfill receipts: ${result.last_backfill_receipts.map(r => r.receipt_id).join(', ') || 'none'}`); }
     if (command === 'doctor' && result.checks.some(c => !c.ok)) process.exitCode = 1; return;
@@ -466,7 +478,7 @@ async function main(args = process.argv.slice(2)) {
   for (const c of initial.detected) say(`  ${c.name} — ${c.coverage}`);
   if (!has('--yes') && !has('--dry-run') && !guard) guard = /^2$|guard/i.test(await ask('Memory only [1, default] or Memory plus guard [2]?'));
   const requests = args.flatMap((a, i) => a === '--client' ? (args[i + 1] || '').split(',') : []);
-  const planned = plan({ home, guard, clients: requests.length ? requests : undefined });
+  const planned = plan({ home, guard, clients: requests.length ? requests : undefined, enforce: !has('--no-enforce') });
   say('Preview — these files will change (existing configs get private backups):');
   for (const c of planned.changes) {
     say(`  ${c.before === null ? 'CREATE' : 'MERGE '} ${c.file} — ${c.description}`);

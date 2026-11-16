@@ -143,10 +143,48 @@ enum HookCommands {
         #[arg(long)]
         repo_tag: bool,
     },
+    /// git post-commit hook: write the commit receipt (SHA, parents, branch,
+    /// author, files with `git diff -U0` ranges) into Strata, tagged
+    /// `commit:<sha>`. Never fails the commit.
+    PostCommit {
+        /// Repository (default: the current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// File whose text is recorded as the receipt's gate output
+        /// (default: `$VESTIGE_GATE_OUTPUT_FILE`)
+        #[arg(long)]
+        gate_output: Option<PathBuf>,
+    },
+    /// git pre-commit hook: refuse the commit on a staged secret, an open
+    /// Operator stop, or (when a witness allowlist is configured) no prove
+    /// witness for the staged tree. Exit 1 refuses.
+    PreCommit {
+        /// Repository (default: the current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// How far back an unanswered Operator stop counts as open
+        #[arg(long, default_value = "1h")]
+        stop_window: String,
+    },
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Wire Vestige into a repository. `--git-hooks` installs
+    /// `.git/hooks/pre-commit` and `post-commit`, the backstop for agents and
+    /// runners with no prompt or stop hooks. Client hooks are installed by
+    /// `npx @vestige/init`.
+    Init {
+        /// Install the pre-commit and post-commit git hooks
+        #[arg(long)]
+        git_hooks: bool,
+        /// Repository (default: the current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Move a foreign hook aside to `<name>.pre-vestige` instead of refusing
+        #[arg(long)]
+        force: bool,
+    },
     /// Show store statistics
     Stats {
         /// Show tagging/retention distribution
@@ -1051,7 +1089,16 @@ fn main() -> anyhow::Result<()> {
                 timeout_ms,
                 repo_tag,
             } => run_hook_session_start(max_items, max_bytes, timeout_ms, repo_tag),
+            HookCommands::PostCommit { repo, gate_output } => {
+                run_hook_post_commit(repo, gate_output)
+            }
+            HookCommands::PreCommit { repo, stop_window } => run_hook_pre_commit(repo, stop_window),
         },
+        Commands::Init {
+            git_hooks,
+            repo,
+            force,
+        } => run_init(git_hooks, repo, force),
         Commands::Compose {
             limit,
             lens,
@@ -4320,6 +4367,88 @@ fn run_gc(
 
 /// Ingest a memory via CLI through `smart_ingest` (the duplicate gate, then
 /// auto-connect on a create).
+fn hook_repo(repo: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    let dir = match repo {
+        Some(p) => p,
+        None => env::current_dir()?,
+    };
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!("{} is not inside a git repository", dir.display());
+    }
+    Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
+/// The server that owns the store, else the log opened here.
+fn receipt_store() -> anyhow::Result<vestige_mcp::commit_receipt::ReceiptStore> {
+    let dir = cli_data_dir()?;
+    if vestige_mcp::attach::probe_owner_blocking(&dir).is_some() {
+        return Ok(vestige_mcp::commit_receipt::ReceiptStore::Owner(dir));
+    }
+    Ok(vestige_mcp::commit_receipt::ReceiptStore::Local(
+        open_storage()?,
+    ))
+}
+
+fn run_hook_post_commit(repo: Option<PathBuf>, gate_output: Option<PathBuf>) -> anyhow::Result<()> {
+    // A post-commit hook cannot undo the commit: report and exit 0.
+    let result = (|| -> anyhow::Result<(String, String)> {
+        let repo = hook_repo(repo)?;
+        let gate_file =
+            gate_output.or_else(|| env::var_os("VESTIGE_GATE_OUTPUT_FILE").map(PathBuf::from));
+        let gate = gate_file.and_then(|p| fs::read_to_string(p).ok());
+        let store = receipt_store()?;
+        let (facts, id) = vestige_mcp::commit_receipt::post_commit(&store, &repo, gate.as_deref())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        Ok((facts.sha, id))
+    })();
+    match result {
+        Ok((sha, id)) => {
+            eprintln!("vestige: commit receipt {id} for commit:{sha}");
+        }
+        Err(err) => eprintln!("vestige post-commit: no receipt written: {err}"),
+    }
+    Ok(())
+}
+
+fn run_hook_pre_commit(repo: Option<PathBuf>, stop_window: String) -> anyhow::Result<()> {
+    let repo = hook_repo(repo)?;
+    let dir = cli_data_dir()?;
+    let store = receipt_store().ok();
+    let problems =
+        vestige_mcp::commit_receipt::pre_commit(store.as_ref(), &dir, &repo, &stop_window);
+    if problems.is_empty() {
+        return Ok(());
+    }
+    eprintln!("vestige pre-commit: commit refused");
+    for p in &problems {
+        eprintln!("  - {p}");
+    }
+    eprintln!("  (git commit --no-verify skips this check)");
+    std::process::exit(1);
+}
+
+fn run_init(git_hooks: bool, repo: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
+    if !git_hooks {
+        println!(
+            "vestige init: pass --git-hooks to install the pre-commit and post-commit git hooks. Client hooks (Claude Code, Codex, Cursor, Gemini) are installed by `npx @vestige/init`."
+        );
+        return Ok(());
+    }
+    let repo = hook_repo(repo)?;
+    let exe = env::current_exe()?;
+    let lines = vestige_mcp::commit_receipt::install_git_hooks(&repo, &exe, force)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 fn run_ingest(
     content: String,
     tags: Option<String>,
