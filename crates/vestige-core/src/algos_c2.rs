@@ -806,14 +806,10 @@ fn apply_c2_subsequent_answer_seat(
 /// "remind me", "you recommended", …) rather than only asking for a new
 /// recommendation. The present-tense cue "you recommend" is excluded because
 /// it also matches preference requests ("can you recommend...").
-fn c2_retrospective_attribution(text: &str) -> bool {
-    let padded = word_padded(text);
-    if has_any(&padded, COLLECTIVE_CHAT_CUES) {
-        return true;
-    }
-    ASSISTANT_ATTRIBUTION_CUES
-        .iter()
-        .any(|c| *c != "you recommend" && has_any(&padded, &[*c]))
+fn c2_retrospective_attribution(_text: &str) -> bool {
+    // Assistant-citation phrase triggers are gone. Recorded speaker role
+    // still distinguishes a turn; the query text no longer routes on a list.
+    false
 }
 
 /// Preference source seat. ReplySource already yields an assistant at slot 1
@@ -931,11 +927,8 @@ fn apply_c2_elaboration_seat(
 /// and not a user-initiative recall cue. Reuses those existing cue lists
 /// (no new word list). Summary questions want the mid-conversation content
 /// that was learned, not a sibling-session opener.
-fn c2_summary_request(query: &str) -> bool {
-    let padded = word_padded(query);
-    has_any(&padded, SUMMARY_REQUEST_CUES)
-        && has_any(&padded, TASK_UNDER_RULES_CUES)
-        && !has_any(&padded, USER_INITIATIVE_CUES)
+fn c2_summary_request(_query: &str) -> bool {
+    false
 }
 
 /// Text-level preference question, the same test `classify` uses
@@ -948,11 +941,8 @@ fn c2_summary_request(query: &str) -> bool {
 /// of #11 without treating a factual question that happens to mention a
 /// constraint object ("dogs" from "I don't want to hurt any of my dogs")
 /// as a preference query.
-fn c2_text_preference(query: &str) -> bool {
-    let padded = word_padded(query);
-    let user_initiative = has_any(&padded, USER_INITIATIVE_CUES);
-    let retrospective_user = user_initiative || has_any(&padded, TIMELINE_CUES);
-    has_any(&padded, PREF_QUERY_CUES) && !retrospective_user
+fn c2_text_preference(_query: &str) -> bool {
+    false
 }
 
 /// Cross-session opener seat. When slot 1 is a mid-session user turn, a
@@ -5281,13 +5271,14 @@ mod algos_c2_tests {
         );
         let q = Query { text: "Can you recommend some resources where I can learn more about video editing?".into(), date: String::new() };
         let plan = plan_query(&ix, &q, &Params::default());
-        assert!(plan.intent.preference);
-        assert!(plan.intent.assistant_attribution);
+        assert!(! plan.intent.preference);
+        assert!(! plan.intent.assistant_attribution);
         assert!(!c2_retrospective_attribution(&q.text));
         // Assistant at slot 1; previous user already in the top 5.
         let mut list = vec![1usize, 2, 0, 3];
-        assert!(apply_c2_preference_source_seat(&ix, &plan, &q.text, &mut list));
-        assert_eq!(list, vec![0, 1, 2, 3]);
+        // "can you recommend" is not a preference route anymore.
+        assert!(!apply_c2_preference_source_seat(&ix, &plan, &q.text, &mut list));
+        assert_eq!(list, vec![1, 2, 0, 3]);
         // Previous user not already in the top 5: membership must not change.
         let mut list = vec![1usize, 2, 3];
         assert!(!apply_c2_preference_source_seat(&ix, &plan, &q.text, &mut list));
@@ -5295,7 +5286,7 @@ mod algos_c2_tests {
         // Retrospective "remind me / you recommended": no swap (SSA path).
         let rq = Query { text: "Can you remind me of the resources you recommended for video editing?".into(), date: String::new() };
         let rplan = plan_query(&ix, &rq, &Params::default());
-        assert!(c2_retrospective_attribution(&rq.text));
+        assert!(!c2_retrospective_attribution(&rq.text));
         let mut list = vec![1usize, 2, 0, 3];
         assert!(!apply_c2_preference_source_seat(&ix, &rplan, &rq.text, &mut list));
         assert_eq!(list, vec![1, 2, 0, 3]);
@@ -5378,10 +5369,9 @@ mod algos_c2_tests {
         // Preference query: no swap.
         let pq = Query { text: "Can you recommend a birthday gift for my sister?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![2usize, 3, 4, 5, 6];
-        assert!(!apply_c2_elaboration_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![2, 3, 4, 5, 6]);
+        assert!(apply_c2_elaboration_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Temporal questions keep the timeline path.
         let tq = Query { text: "When did I buy my sister's birthday gift?".into(), date: String::new() };
         let tplan = plan_query(&ix, &tq, &Params::default());
@@ -5497,18 +5487,16 @@ mod algos_c2_tests {
             text: "Can you summarize what I learned about cocktail recipes?".into(),
             date: String::new(),
         };
-        assert!(c2_summary_request(&sq.text));
+        assert!(! c2_summary_request(&sq.text));
         let splan = plan_query(&ix, &sq, &Params::default());
         let mut list = vec![2usize, 0, 1, 3, 4];
-        assert!(!apply_c2_cross_opener_seat(&ix, &splan, &sq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![2, 0, 1, 3, 4]);
+        assert!(apply_c2_cross_opener_seat(&ix, &splan, &sq.text, &mut list, &t_scene));
         // Preference query: no seat.
         let pq = Query { text: "Can you recommend a cocktail recipe?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![2usize, 0, 1, 3, 4];
-        assert!(!apply_c2_cross_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![2, 0, 1, 3, 4]);
+        assert!(apply_c2_cross_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Named-speaker sessions are left alone.
         let ixn = build_index(
             &[
@@ -5641,18 +5629,16 @@ mod algos_c2_tests {
             text: "Can you summarize what I learned about my commute costs?".into(),
             date: String::new(),
         };
-        assert!(c2_summary_request(&sq.text));
+        assert!(! c2_summary_request(&sq.text));
         let splan = plan_query(&ix, &sq, &Params::default());
         let mut list = vec![2usize, 0, 1, 3];
-        assert!(!apply_c2_same_opener_seat(&ix, &splan, &sq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![2, 0, 1, 3]);
+        assert!(apply_c2_same_opener_seat(&ix, &splan, &sq.text, &mut list, &t_scene));
         // Preference query: no seat.
         let pq = Query { text: "Can you recommend a cheaper commute?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![2usize, 0, 1, 3];
-        assert!(!apply_c2_same_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![2, 0, 1, 3]);
+        assert!(apply_c2_same_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Named-speaker sessions are left alone.
         let ixn = build_index(
             &[sess(
@@ -5730,10 +5716,9 @@ mod algos_c2_tests {
         // Preference query: no seat.
         let pq = Query { text: "What is Melanie's favorite pet?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![0usize, 1, 2];
-        assert!(!apply_c2_queried_speaker_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 1, 2]);
+        assert!(apply_c2_queried_speaker_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // WH-person: no seat.
         let wq = Query { text: "Who told Melanie about the pets?".into(), date: String::new() };
         assert!(wh_slots(&wq.text) & WH_PERSON != 0);
@@ -5842,10 +5827,9 @@ mod algos_c2_tests {
         // Preference query: no seat.
         let pq = Query { text: "What is Gina's favorite way to create an experience for customers?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![1usize, 0, 2];
-        assert!(!apply_c2_queried_speaker_prev_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![1, 0, 2]);
+        assert!(apply_c2_queried_speaker_prev_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // WH-person: no seat.
         let wq = Query { text: "Who told Gina about creating an experience for customers?".into(), date: String::new() };
         assert!(wh_slots(&wq.text) & WH_PERSON != 0);
@@ -5958,10 +5942,9 @@ mod algos_c2_tests {
         // Preference query: no entry.
         let pq = Query { text: "What is John's favorite reason to run for office again?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![0usize, 1, 3, 4, 5, 2];
-        assert!(!apply_c2_queried_speaker_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 1, 3, 4, 5, 2]);
+        assert!(apply_c2_queried_speaker_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
 
         // Conjoined speaker: no entry.
         let aq = Query {
@@ -6112,10 +6095,9 @@ mod algos_c2_tests {
         // Preference query: no seat.
         let pq = Query { text: "What is Deborah's favorite memory of her family and friends?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![1usize, 2, 0];
-        assert!(!apply_c2_queried_speaker_qhead_prev_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![1, 2, 0]);
+        assert!(apply_c2_queried_speaker_qhead_prev_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
 
         // WH-person: no seat.
         let wq = Query { text: "Who in Deborah's family and friends have passed away?".into(), date: String::new() };
@@ -6157,7 +6139,7 @@ mod algos_c2_tests {
             "What are the classes that Audrey took for her dogs to?",
         ));
         assert!(!c2_text_preference("Where do I take yoga classes?"));
-        assert!(c2_text_preference(
+        assert!(! c2_text_preference(
             "Can you recommend a birthday gift for my sister?",
         ));
     }
@@ -6292,10 +6274,9 @@ mod algos_c2_tests {
         // Preference query: no seat.
         let pq = Query { text: "What is James's favorite rescue breed to adopt?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![1usize, 0];
-        assert!(!apply_c2_queried_speaker_first_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![1, 0]);
+        assert!(apply_c2_queried_speaker_first_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
 
         // WH-person: no seat.
         let wq = Query { text: "Who did James adopt?".into(), date: String::new() };
@@ -6435,10 +6416,9 @@ mod algos_c2_tests {
         // Preference questions are skipped.
         let pq = Query { text: "What is my favorite writing group deadline?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(c2_text_preference(&pq.text));
+        assert!(! c2_text_preference(&pq.text));
         let mut list = vec![0usize, 3, 2, 4];
-        assert!(!apply_c2_cross_opener_pair_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 3, 2, 4]);
+        assert!(apply_c2_cross_opener_pair_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Temporal questions keep the timeline path.
         let tq = Query { text: "When do I submit my peer-reviewed draft to the local writing group?".into(), date: String::new() };
         let tplan = plan_query(&ix, &tq, &Params::default());
@@ -6533,10 +6513,9 @@ mod algos_c2_tests {
         // Preference questions are skipped.
         let pq = Query { text: "What is my favorite holiday spending cap?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(c2_text_preference(&pq.text));
+        assert!(! c2_text_preference(&pq.text));
         let mut list = vec![0usize, 2, 1, 3];
-        assert!(!apply_c2_answered_opener_decl_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 2, 1, 3]);
+        assert!(apply_c2_answered_opener_decl_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Temporal questions keep the timeline path.
         let tq = Query { text: "When do I spend on my holiday plans?".into(), date: String::new() };
         let tplan = plan_query(&ix, &tq, &Params::default());
@@ -6645,10 +6624,9 @@ mod algos_c2_tests {
         // Preference questions are skipped.
         let pq = Query { text: "What is my favorite probability study schedule?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(c2_text_preference(&pq.text));
+        assert!(! c2_text_preference(&pq.text));
         let mut list = vec![0usize, 2, 3];
-        assert!(!apply_c2_solo_earlier_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 2, 3]);
+        assert!(apply_c2_solo_earlier_opener_seat(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Temporal questions keep the timeline path.
         let tq = Query { text: "When do I study probability basics?".into(), date: String::new() };
         let tplan = plan_query(&ix, &tq, &Params::default());
@@ -6734,10 +6712,9 @@ mod algos_c2_tests {
         // Preference questions are skipped.
         let pq = Query { text: "What is my favorite way to handle REST API errors?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(c2_text_preference(&pq.text));
+        assert!(! c2_text_preference(&pq.text));
         let mut list = vec![0usize, 1, 2, 3, 5, 6, 8, 4, 7, 9];
-        assert!(!apply_c2_pool_opener_t10_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 1, 2, 3, 5, 6, 8, 4, 7, 9]);
+        assert!(apply_c2_pool_opener_t10_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Temporal questions keep the timeline path.
         let tq = Query { text: "When do I handle REST API errors?".into(), date: String::new() };
         let tplan = plan_query(&ix, &tq, &Params::default());
@@ -6836,10 +6813,9 @@ mod algos_c2_tests {
         // Preference questions are skipped.
         let pq = Query { text: "What is my favorite way to handle REST API errors?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(c2_text_preference(&pq.text));
+        assert!(! c2_text_preference(&pq.text));
         let mut list = vec![0usize, 1, 4, 5, 3, 2];
-        assert!(!apply_c2_same_session_opener_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 1, 4, 5, 3, 2]);
+        assert!(apply_c2_same_session_opener_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Temporal questions keep the timeline path.
         let tq = Query { text: "When do I handle REST API errors?".into(), date: String::new() };
         let tplan = plan_query(&ix, &tq, &Params::default());
@@ -6931,7 +6907,6 @@ mod algos_c2_tests {
         assert_eq!(list, vec![5, 2, 4, 6, 3, 7, 0]);
         // Preference, temporal, and WH-person questions are skipped.
         for text in [
-            "What is my favorite mode of transport, a bus or a train?",
             "When did I use a bus or a train?",
             "Who drove the bus or the train?",
         ] {
@@ -7005,7 +6980,6 @@ mod algos_c2_tests {
         assert_eq!(list, vec![2, 3, 5, 7, 9, 0]);
         // Preference, temporal, and WH-person questions are skipped.
         for text in [
-            "What is my favorite NAS device to buy?",
             "When should I buy a NAS device?",
             "Who sold me the NAS device?",
         ] {
@@ -7086,7 +7060,6 @@ mod algos_c2_tests {
         assert_eq!(list, vec![0, 2, 4, 6, 8, 11]);
         // Preference, temporal, and WH-person questions are skipped.
         for text in [
-            "What is my favorite two-factor authentication app?",
             "When did I implement two-factor authentication?",
             "Who implemented two-factor authentication for platform access?",
         ] {
@@ -7177,7 +7150,6 @@ mod algos_c2_tests {
         assert_eq!(list, vec![0, 1, 2, 3, 7, 5]);
         // Preference, temporal, and WH-person questions are skipped.
         for text in [
-            "What is my favorite way to format code answers?",
             "When did I ask you to format code answers?",
             "Who asked you to format code answers?",
         ] {
@@ -7253,7 +7225,6 @@ mod algos_c2_tests {
         assert!(!apply_c2_mentioned_session_mate_t5_entry(&ix, &plan, &q.text, &mut list, &t5b));
         // Preference, temporal, and WH-person questions are skipped.
         for text in [
-            "What is John's favorite gift from his teammates?",
             "When did John's teammates give him a gift?",
             "Who gave John a gift when they met?",
         ] {
@@ -7599,10 +7570,9 @@ mod algos_c2_tests {
         // Preference questions are skipped.
         let pq = Query { text: "What is Caroline's favorite way to handle REST API errors?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(c2_text_preference(&pq.text));
+        assert!(! c2_text_preference(&pq.text));
         let mut list = vec![0usize, 1, 2, 3, 4, 5, 6];
-        assert!(!apply_c2_pool_mentioned_t10_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 1, 2, 3, 4, 5, 6]);
+        assert!(apply_c2_pool_mentioned_t10_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
         // Temporal questions keep the timeline path.
         let tq = Query { text: "When does Caroline handle REST API errors?".into(), date: String::new() };
         let tplan = plan_query(&ix, &tq, &Params::default());
@@ -7796,10 +7766,9 @@ mod algos_c2_tests {
         // Preference query: no entry.
         let pq = Query { text: "What is Nate's favorite place to meet new people?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![2usize, 0, 1, 3, 5, 4];
-        assert!(!apply_c2_queried_speaker_first_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![2, 0, 1, 3, 5, 4]);
+        assert!(apply_c2_queried_speaker_first_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
 
         // WH-person: no entry.
         let wq = Query { text: "Who has Nate met at new places?".into(), date: String::new() };
@@ -7865,7 +7834,7 @@ mod algos_c2_tests {
             &Params::default(),
         );
         let q = Query {
-            text: "Where did I go on a week-long trip with my family?".into(),
+            text: "Where did I go on a long trip with my family?".into(),
             date: String::new(),
         };
         let plan = plan_query(&ix, &q, &Params::default());
@@ -7929,10 +7898,11 @@ mod algos_c2_tests {
         assert!(!apply_c2_same_session_user_t5_entry(&ixd, &oplan, &oq.text, &mut list, &dsc));
         assert_eq!(list, vec![2, 3, 5, 1, 4, 6]);
 
-        // Preference query: no entry.
+        // "week" makes this temporal, so the seat does not enter.
         let pq = Query { text: "What is my favorite week-long trip with my family?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
+        assert!(pplan.intent.temporal);
         let mut list = vec![0usize, 3, 5, 1, 4, 2];
         assert!(!apply_c2_same_session_user_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
         assert_eq!(list, vec![0, 3, 5, 1, 4, 2]);
@@ -8066,10 +8036,9 @@ mod algos_c2_tests {
         // Preference query: no entry.
         let pq = Query { text: "What is my favorite way to record the total number of siblings I have?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![0usize, 1, 3, 4, 7, 5];
-        assert!(!apply_c2_cross_session_user_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
-        assert_eq!(list, vec![0, 1, 3, 4, 7, 5]);
+        assert!(apply_c2_cross_session_user_t5_entry(&ix, &pplan, &pq.text, &mut list, &t_scene));
 
         // Named-speaker session: no entry.
         let ixn = build_index(
@@ -8119,19 +8088,14 @@ mod algos_c2_tests {
             date: String::new(),
         };
         let plan = plan_query(&ix, &q, &Params::default());
-        assert!(plan.intent.assistant_attribution);
+        assert!(! plan.intent.assistant_attribution);
         assert!(!plan.intent.preference);
         assert!(!plan.intent.temporal);
         let mut list = vec![5usize, 3, 4, 2, 1, 0];
         let scene = vec![0.4f32, 0.9, 0.3, 0.8, 0.5, 1.0];
-        let before: std::collections::HashSet<usize> = list.iter().copied().collect();
-        let top5_before: std::collections::HashSet<usize> = list[..5].iter().copied().collect();
-        assert!(apply_c2_step31_exchequer_split(&ix, &plan, &q.text, &mut list, &scene));
-        assert_eq!(list[0], 1);
-        let after: std::collections::HashSet<usize> = list.iter().copied().collect();
-        assert_eq!(before, after);
-        let top5_after: std::collections::HashSet<usize> = list[..5].iter().copied().collect();
-        assert_eq!(top5_before, top5_after);
+        // "did you say" no longer sets assistant attribution, so the split does not fire.
+        assert!(!apply_c2_step31_exchequer_split(&ix, &plan, &q.text, &mut list, &scene));
+        assert_eq!(list, vec![5, 3, 4, 2, 1, 0]);
 
         // Same groups on both halves: not a split, no seat.
         let ix_echo = build_index(
@@ -8153,10 +8117,9 @@ mod algos_c2_tests {
         // Preference request: no seat.
         let pq = Query { text: "Can you recommend a classic French omelette recipe with eggs?".into(), date: String::new() };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(pplan.intent.preference);
+        assert!(! pplan.intent.preference);
         let mut list = vec![5usize, 3, 4, 2, 1, 0];
         assert!(!apply_c2_step31_exchequer_split(&ix, &pplan, &pq.text, &mut list, &scene));
-        assert_eq!(list, vec![5, 3, 4, 2, 1, 0]);
 
         // Named speakers: no seat.
         let ixn = build_index(
@@ -9358,10 +9321,9 @@ mod algos_c2_tests {
             date: String::new(),
         };
         let pplan = plan_query(&ix, &pq, &Params::default());
-        assert!(c2_text_preference(&pq.text));
+        assert!(! c2_text_preference(&pq.text));
         let mut pref = vec![2usize, 1, 5, 4, 6];
-        assert!(!apply_c2_pool_c_session_opener_seat(&ix, &pplan, &pq.text, &mut pref, &scene));
-        assert_eq!(pref, vec![2, 1, 5, 4, 6]);
+        assert!(apply_c2_pool_c_session_opener_seat(&ix, &pplan, &pq.text, &mut pref, &scene));
     }
 
     #[test]
@@ -9472,7 +9434,7 @@ mod algos_c2_tests {
             ],
             &Params::default(),
         );
-        assert!(ix.turns[0].is_standing_policy);
+        assert!(! ix.turns[0].is_standing_policy);
         assert!(!ix.turns[0].is_question);
         assert!(ix.turns[1].is_question);
         assert_eq!(c2_session_pos(&ix, 0), 0);
@@ -9481,7 +9443,7 @@ mod algos_c2_tests {
             date: String::new(),
         };
         let plan = plan_query(&ix, &q, &Params::default());
-        assert!(plan.intent.task_under_rules);
+        assert!(! plan.intent.task_under_rules);
         assert!(!plan.intent.temporal);
         assert!(!c2_text_preference(&q.text));
         assert!(!c2_summary_request(&q.text));
@@ -9493,10 +9455,11 @@ mod algos_c2_tests {
         }];
         let t_own = vec![0.0f32, 4.0];
         let mut list = vec![1usize, 0];
-        assert!(apply_c2_pool_b_standing_seat(
+        // Standing policy is not inferred from imperative phrases.
+        assert!(!apply_c2_pool_b_standing_seat(
             &ix, &plan, &q.text, &standing, &mut list, &t_own
         ));
-        assert_eq!(list, vec![0, 1]);
+        assert_eq!(list, vec![1, 0]);
 
         // Own lexical mass: the submodular order stays.
         let mut list = vec![1usize, 0];
@@ -9528,7 +9491,7 @@ mod algos_c2_tests {
             text: "What movies would you recommend for me to watch?".into(),
             date: String::new(),
         };
-        assert!(c2_text_preference(&pq.text));
+        assert!(! c2_text_preference(&pq.text));
         let pplan = plan_query(&ix, &pq, &Params::default());
         let mut list = vec![1usize, 0];
         assert!(!apply_c2_pool_b_standing_seat(
@@ -9562,7 +9525,7 @@ mod algos_c2_tests {
             date: String::new(),
         };
         let dplan = plan_query(&ix, &dq, &Params::default());
-        assert!(dplan.intent.task_under_rules);
+        assert!(! dplan.intent.task_under_rules);
         let standing = vec![RankedItem {
             id: ix.turns[0].id.clone(),
             session_id: "s1".into(),

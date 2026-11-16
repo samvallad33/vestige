@@ -361,7 +361,6 @@ fn register_standing_policies(storage: &Arc<Storage>, scope: &str, raw: &Value) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vestige_core::intention_graph::Command;
 
     fn open() -> (Arc<Storage>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -377,38 +376,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remember_registers_a_standing_policy_on_the_intention_graph() {
+    async fn remember_does_not_register_a_standing_policy_from_prose() {
         let (storage, _dir) = open();
-        let text = "Always include the receipt hash.";
-        let id = standing_policy_id(text);
-
-        let saved = remember(&storage, text).await;
-        let policies = saved["standing_policies"].as_array().expect("standing_policies");
-        assert_eq!(policies.len(), 1, "{saved}");
-        assert_eq!(policies[0]["id"], id);
-        assert_eq!(policies[0]["lifecycle"], "active");
-        assert!(policies[0].get("error").is_none(), "{saved}");
-
-        let explained = storage
-            .apply_intention_graph("user", Command::Explain { id: id.clone() }, Utc::now())
-            .unwrap_or_else(|err| panic!("explain failed: {err}"));
-        assert_eq!(explained["result"]["plan"]["lifecycle"], "active", "{explained}");
-        assert_eq!(explained["result"]["plan"]["id"], id);
-        assert_eq!(
-            explained["result"]["current"]["description"],
-            text,
-            "{explained}"
-        );
-        assert_eq!(explained["result"]["current"]["priority"], "high");
-
-        let again = remember(&storage, text).await;
-        assert_eq!(again["standing_policies"][0]["id"], id);
-        assert_eq!(again["standing_policies"][0]["lifecycle"], "active");
-        assert!(again["standing_policies"][0].get("error").is_none(), "{again}");
-        let replay = storage.replay_intention_graph("user").unwrap();
-        assert_eq!(replay["matched"], true, "{replay}");
-        assert_eq!(replay["commands"], 1, "{replay}");
-
+        let saved = remember(&storage, "Always include the receipt hash.").await;
+        assert!(saved.get("standing_policies").is_none(), "{saved}");
         let ordinary = remember(&storage, "The cafe serves oat milk.").await;
         assert!(ordinary.get("standing_policies").is_none(), "{ordinary}");
     }
