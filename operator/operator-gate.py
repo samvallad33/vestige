@@ -529,6 +529,10 @@ def emit_folded_input(source, folded_ti):
         payload = {"updated_input": folded_ti}
     elif source == "gemini":
         payload = {"tool_input": folded_ti}
+    elif source in ("claude", "claude-code"):
+        # Claude Code reads a PreToolUse rewrite only inside hookSpecificOutput. No
+        # permissionDecision is sent, so the normal permission flow still applies.
+        payload = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": folded_ti}}
     else:
         payload = {"updatedInput": folded_ti}
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")

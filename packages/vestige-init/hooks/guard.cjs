@@ -42,6 +42,18 @@ function deny(stderr) {
   process.exitCode = 2;
 }
 
+function gateObject(stdout) {
+  const lines = String(stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (!lines.length) return {};
+  if (lines.length !== 1) return undefined;
+  try {
+    const parsed = JSON.parse(lines[0]);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 try {
   const config = JSON.parse(fs.readFileSync(value('--config'), 'utf8'));
   const input = fs.readFileSync(0, 'utf8');
@@ -61,9 +73,20 @@ try {
   });
   // A crashed gate, a missing interpreter, or a non-zero status is a deny.
   // The adapter does not invent a recall handle the gate did not print.
-  if (!result || result.error || result.status !== 0) deny(result && result.stderr);
-  else if (client === 'cursor') process.stdout.write('{"permission":"allow"}\n');
-  else process.stdout.write('{}\n');
+  if (!result || result.error || result.status !== 0) {
+    deny(result && result.stderr);
+    return;
+  }
+  // On an allow the gate may print one JSON object that rewrites the call
+  // (folded bytes, a stripped secret field). Pass it through unchanged: dropping
+  // it would run the original input. Output that is not one object is a deny.
+  const rewrite = gateObject(result.stdout);
+  if (rewrite === undefined) {
+    deny('Operator gate printed output the adapter could not read; the call was not run.');
+    return;
+  }
+  const body = client === 'cursor' ? { ...rewrite, permission: 'allow' } : rewrite;
+  process.stdout.write(`${JSON.stringify(body)}\n`);
 } catch {
   deny('');
 }

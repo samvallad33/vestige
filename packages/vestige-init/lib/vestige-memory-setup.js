@@ -477,7 +477,12 @@ async function main(args = process.argv.slice(2)) {
   }
   for (const c of initial.detected) say(`  ${c.name} — ${c.coverage}`);
   if (!has('--yes') && !has('--dry-run') && !guard) guard = /^2$|guard/i.test(await ask('Memory only [1, default] or Memory plus guard [2]?'));
-  const requests = args.flatMap((a, i) => a === '--client' ? (args[i + 1] || '').split(',') : []);
+  // Same names the top-level --client help lists (claude-code, vscode, jetbrains) map to catalog ids.
+  const ALIAS = { 'claude-code': 'claude', vscode: 'code', 'vs-code': 'code', jetbrains: 'junie' };
+  const requests = args.flatMap((a, i) => a === '--client' ? (args[i + 1] || '').split(',') : [])
+    .map(r => r.trim().toLowerCase()).filter(Boolean).map(r => ALIAS[r] || r);
+  const known = new Set(catalog(home, process.platform).map(c => c.id));
+  for (const r of requests) if (!known.has(r)) say(`  Unknown client "${r}" (known: ${[...known].join(', ')}); it is skipped.`);
   const planned = plan({ home, guard, clients: requests.length ? requests : undefined, enforce: !has('--no-enforce') });
   say('Preview — these files will change (existing configs get private backups):');
   for (const c of planned.changes) {

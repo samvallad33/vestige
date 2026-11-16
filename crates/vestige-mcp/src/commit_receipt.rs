@@ -141,6 +141,35 @@ pub fn read(repo: &Path, rev: &str) -> Option<CommitFacts> {
     })
 }
 
+/// Ranges written right after `path:` in a receipt, as `12-30,41,50-52`.
+/// A bare number `n` is the one-line range `n-n`.
+fn listed_ranges(text: &str, path: &str) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    if path.is_empty() {
+        return out;
+    }
+    let key = format!("{path}:");
+    let mut from = 0;
+    while let Some(i) = text[from..].find(&key) {
+        let start = from + i + key.len();
+        let list: String = text[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-' || *c == ',')
+            .collect();
+        for item in list.split(',').filter(|s| !s.is_empty()) {
+            let pair = match item.split_once('-') {
+                Some((a, b)) => (a.parse::<u32>().ok(), b.parse::<u32>().ok()),
+                None => (item.parse::<u32>().ok(), item.parse::<u32>().ok()),
+            };
+            if let (Some(a), Some(b)) = pair {
+                out.push((a, b));
+            }
+        }
+        from = start;
+    }
+    out
+}
+
 fn contains_ci(hay: &str, needle: &str) -> bool {
     !needle.is_empty()
         && hay
@@ -198,12 +227,14 @@ impl CommitFacts {
             missing.push(format!("author {name}"));
         }
         // Each file with its `git diff -U0` ranges: the path and every
-        // `start-end` must appear.
+        // `start-end` must appear. A one-line range may also be written as
+        // its single line number in the file's own list (`a.txt:2`).
         for (f, line) in self.files.iter().zip(self.file_lines()).take(MAX_FILES) {
+            let listed = listed_ranges(text, &f.path);
             let ranged = f
                 .ranges
                 .iter()
-                .all(|(a, b)| text.contains(&format!("{a}-{b}")));
+                .all(|r| text.contains(&format!("{}-{}", r.0, r.1)) || listed.contains(r));
             if !text.contains(f.path.as_str()) || !ranged {
                 missing.push(format!("file {line}"));
             }
@@ -587,6 +618,29 @@ mod tests {
             vec!["file src/lib.rs:1-2".to_string()]
         );
         assert!(facts.receipt_text(None).contains("src/lib.rs:1-2"));
+        let one = CommitFacts {
+            files: vec![FileRanges {
+                path: "a.txt".into(),
+                ranges: vec![(2, 2), (7, 9)],
+            }],
+            ..facts.clone()
+        };
+        let head = format!(
+            "SHA {} parent bbbbbbb branch feat/x author Sam Valladares gates: cargo test",
+            "a".repeat(40)
+        );
+        assert!(
+            one.missing_in(&format!("{head} files a.txt:2,7-9"), &gates)
+                .is_empty()
+        );
+        assert!(
+            one.missing_in(&format!("{head} files a.txt:2-2,7-9"), &gates)
+                .is_empty()
+        );
+        assert_eq!(
+            one.missing_in(&format!("{head} files a.txt:3,7-9"), &gates),
+            vec!["file a.txt:2-2,7-9".to_string()]
+        );
         assert!(facts.tags(true).contains(&AUTO_TAG.to_string()));
     }
 

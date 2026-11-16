@@ -689,7 +689,10 @@ def canonicalization_checks():
         body = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
     except ValueError:
         body = {}
-    updated = body.get("updatedInput") or {}
+    spec = body.get("hookSpecificOutput") or {}
+    check(spec.get("hookEventName") == "PreToolUse" and "updatedInput" not in body and "permissionDecision" not in spec,
+          "claude rewrite must sit under hookSpecificOutput without a decision: %r" % body)
+    updated = spec.get("updatedInput") or {}
     check(updated.get("command") == "echo hello",
           "executor was not given the folded bytes: stdout=%r" % out[:240])
     check(updated.get("command") == g.fold_command("echo hello\u200b")[0],
@@ -785,7 +788,8 @@ def redaction_checks():
         body = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
     except ValueError:
         body = {}
-    updated = body.get("updatedInput") or body.get("updated_input") or body.get("tool_input") or {}
+    check("updatedInput" not in body, "claude rewrite was printed at the top level: %r" % body)
+    updated = (body.get("hookSpecificOutput") or {}).get("updatedInput") or {}
     check(updated.get("path") == "/tmp/ok.txt" and updated.get("mode") == "read" and updated.get("limit") == 10,
           "rewrite lost a model field: %r" % updated)
     check("api_key" not in updated, "credential field was left in updatedInput: %r" % updated)
