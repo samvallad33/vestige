@@ -3927,6 +3927,10 @@ mod tests {
             repo.path(),
         ))
         .await;
+        // File mtimes come from the kernel's coarse clock (one tick, up to
+        // ~10 ms, behind SystemTime::now()), so a report written in the same
+        // tick as the PreToolUse can look older than the run on a busy box.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         std::fs::create_dir_all(repo.path().join("reports")).unwrap();
         std::fs::write(
             repo.path().join("reports/junit.xml"),
