@@ -28,6 +28,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::OnceLock;
 
+mod graph_walk;
+
 // =========================================================================
 // INPUT / OUTPUT CONTRACT
 // =========================================================================
@@ -241,6 +243,9 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// Memories reached by association (`graph_walk`) from the recalled top-k
+    /// turns. Graph mass only, never word overlap.
+    pub graph_walk_topk: Vec<RankedItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1603,6 +1608,8 @@ struct Index {
     constraint_terms: DetHashSet<u32>,
     /// Compiled SOAR/Rete standing rules for the stratified governing channel (`RankResult.standing_rules`).
     standing_rules: Vec<StandingRule>,
+    /// Undirected adjacency over the existing structural turn links (`graph_walk`).
+    graph_adj: Vec<Vec<usize>>,
     /// Exact `{Header}\\n{Body}` titles, hashed, for the session bridge.
     header_dict: DetHashMap<u64, Vec<HeaderKey>>,
     header_max_words: usize,
@@ -3296,6 +3303,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let (t_postings, turn_bloom) = build_turn_postings_and_bloom(&turn_bags, &turn_own_bags, vocab_len);
     let session_bloom = build_session_bloom(&session_bags);
     let turn_meta = build_turn_meta(&turns, &turn_bloom);
+    let graph_adj = graph_walk::build_adjacency(&turns);
 
     Index {
         vocab,
@@ -3320,6 +3328,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         w_stats,
         constraint_terms,
         standing_rules,
+        graph_adj,
         header_dict,
         header_max_words,
         nicks,
@@ -5917,16 +5926,30 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &s_score,
         &bridge_boost,
     );
-    let turns = final_turn_indices
-        .into_iter()
-        .map(|i| RankedItem {
-            id: ix.turns[i].id.clone(),
-            session_id: ix.session_ids[ix.turns[i].session].clone(),
-            score: t_scene[i],
-            matched: matched_words(&plan, t_mask[i]),
-        })
-        .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    // Sidecar channel (`graph_walk`). Computed after every seat pass, so the
+    // recalled `turns` and `sessions` are unchanged by it.
+    let item = |i: usize, score: f32| RankedItem {
+        id: ix.turns[i].id.clone(),
+        session_id: ix.session_ids[ix.turns[i].session].clone(),
+        score,
+        matched: matched_words(&plan, t_mask[i]),
+    };
+    let topk_seeds: Vec<usize> = final_turn_indices.iter().copied().take(k).collect();
+    let walk_items = |seeds: &[usize]| -> Vec<RankedItem> {
+        graph_walk::walk(&ix.graph_adj, seeds, graph_walk::WALK_CAP)
+            .into_iter()
+            .map(|(i, mass)| item(i, mass))
+            .collect()
+    };
+    let graph_walk_topk = walk_items(&topk_seeds);
+    let turns = final_turn_indices.into_iter().map(|i| item(i, t_scene[i])).collect();
+    RankResult {
+        intent: plan.intent,
+        sessions,
+        turns,
+        standing_rules,
+        graph_walk_topk,
+    }
 }
 
 /// Rank every query against the supplied sessions. Pure, deterministic, no I/O.
