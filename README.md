@@ -40,15 +40,18 @@ Human memory systems solved truth, order, and provenance under hard limits for 5
 
 ## Benchmarks
 
-These numbers measure retrieval: whether the right memory landed in the top k. They do not measure answer accuracy. They are the latest scores merged to `main`, from [PR 709](https://github.com/samvallad33/vestige/pull/709) (RSB v4, commit `5fb269b0`). Runs used the local `retrieval_bench` binary on an Intel Core i5-2520M with 8 GB RAM, CPU only, with no embeddings, no LLM, no GPU, and no API keys.
+These numbers measure retrieval: whether the right memory landed in the top k. They do not measure answer accuracy. They are the latest scores merged to `main` from [PR 758](https://github.com/samvallad33/vestige/pull/758) and [PR 759](https://github.com/samvallad33/vestige/pull/759) (`4de0f6ff`, `retrieval_bench` `sha256=24c3165e0c374c071c02ed5342fd1c7d68e14e108bfff0992862911e716d33ea`), verified with `--hash-check` (`0 / 500` differing questions across hash seeds), CPU only, with no embeddings, no LLM, no GPU, and no API keys.
 
 | Benchmark | Level | Metric | Score |
 | :--- | :--- | :--- | :--- |
-| **LoCoMo-10** CORE (1,536 questions) | Turn | Exact R@1 / R@5 | **736/1536 (47.92%)** / **1030/1536 (67.06%)** |
-| **LongMemEval-S** official (470 non-abstention) | Session | Any@1 / Any@5 / All@5 / NDCG@10 | **423/470 (90.00%)** / **458/470 (97.45%)** / **407/470 (86.60%)** / **0.9229** |
-| **LongMemEval-S** official (470 non-abstention) | Turn | Any@1 / Any@5 | **255/470 (54.26%)** / **364/470 (77.45%)** |
-| **BEAM 100K** (355 scored questions) | Turn | Any@5 / MRR | **203/355 (57.18%)** / **0.4563** |
-| **MemoryAgentBench** QA2 421K (100 questions) | Document | All@5 | **85/100 (85.00%)** |
+| **LoCoMo-10** CORE (1,536 questions) | Session | R@1 / R@5 | **1133/1536 (73.76%)** / **1416/1536 (92.19%)** |
+| **LoCoMo-10** CORE (1,536 questions) | Turn | Exact R@1 / R@5 / R@10 | **817/1536 (53.19%)** / **1129/1536 (73.50%)** / **1232/1536 (80.21%)** |
+| **LongMemEval-S** official (470 non-abstention) | Session | Any@1 / Any@5 / Any@10 | **430/470 (91.49%)** / **463/470 (98.51%)** / **469/470 (99.79%)** |
+| **LongMemEval-S** official (470 non-abstention) | Session | All@5 / All@10 | **422/470 (89.79%)** / **446/470 (94.89%)** |
+| **LongMemEval-S** official (470 non-abstention) | Turn | Any@1 / Any@5 / Any@10 / All@5 | **360/470 (76.60%)** / **428/470 (91.06%)** / **441/470 (93.83%)** / **323/470 (68.72%)** |
+| **BEAM 100K** (355 scored questions) | Session | Any@1 / Any@5 / Any@10 / All@5 | **133/355 (37.46%)** / **249/355 (70.14%)** / **275/355 (77.46%)** / **137/355 (38.59%)** |
+| **BEAM 100K** (355 scored questions) | Turn | Any@1 / Any@5 / Any@10 / All@5 | **164/355 (46.20%)** / **241/355 (67.89%)** / **272/355 (76.62%)** / **125/355 (35.21%)** |
+| **MemoryAgentBench** QA2 421K (100 questions) | Document | All@5 *(PR #695)* | **85/100 (85.00%)** |
 
 Reproduce:
 
