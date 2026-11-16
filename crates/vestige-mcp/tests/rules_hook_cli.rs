@@ -90,9 +90,15 @@ fn context(out: &Hook) -> String {
         .to_string()
 }
 
+/// First line of the pinned-rule block. The default rulebook comes before
+/// it, and its bullets are not memory ids.
+const RULES_HEADER: &str = "Vestige rules for this session";
+
+/// The memory ids listed in the pinned-rule block, in order.
 fn listed_ids(context: &str) -> Vec<String> {
     context
         .lines()
+        .skip_while(|line| !line.starts_with(RULES_HEADER))
         .filter_map(|line| line.strip_prefix("- "))
         .filter_map(|rest| rest.split_whitespace().next())
         .map(str::to_string)
@@ -300,13 +306,28 @@ fn the_rules_file_adds_exact_tags_and_free_text_never_matches() {
         &["x"],
     );
     drop(storage);
-    let out = hook(data.path(), &payload("startup", &elsewhere));
-    assert_eq!(out.code, Some(0));
-    assert_eq!(out.stdout, "", "free text matched: {}", out.stdout);
+    // The default rulebook still loads; no rule block is printed.
+    let text = context(&hook(data.path(), &payload("startup", &elsewhere)));
+    assert_rulebook_only(&text);
+    assert!(!text.contains("DECOY"), "free text matched: {text}");
+}
+
+/// The default rulebook and nothing resolved by tag: no rule block, no ids.
+fn assert_rulebook_only(text: &str) {
+    assert!(
+        text.starts_with("VESTIGE DEFAULT RULEBOOK"),
+        "the default rulebook loads: {text}"
+    );
+    assert!(
+        text.contains(&format!("`{}`", vestige_mcp::rulebook::HANDLE)),
+        "{text}"
+    );
+    assert!(!text.contains(RULES_HEADER), "no rule block: {text}");
+    assert!(listed_ids(text).is_empty(), "{text}");
 }
 
 #[test]
-fn no_store_an_empty_store_or_a_bad_payload_print_nothing_and_exit_zero() {
+fn no_store_or_a_bad_payload_prints_nothing_and_an_empty_store_only_the_rulebook() {
     let work = TempDir::new().unwrap();
     let repo = repo(work.path());
 
@@ -317,12 +338,12 @@ fn no_store_an_empty_store_or_a_bad_payload_print_nothing_and_exit_zero() {
     assert_eq!((out.code, out.stdout.as_str()), (Some(0), ""));
     assert!(!dir.join("log").exists(), "the hook created a store");
 
-    // An empty store.
+    // An empty store: the default rulebook, and no rule block.
     let empty = TempDir::new().unwrap();
     drop(vestige_mcp::strata_memory::open(empty.path()).unwrap());
     for source in SOURCES {
-        let out = hook(empty.path(), &payload(source, &repo));
-        assert_eq!((out.code, out.stdout.as_str()), (Some(0), ""), "{source}");
+        let text = context(&hook(empty.path(), &payload(source, &repo)));
+        assert_rulebook_only(&text);
     }
 
     // Payloads it cannot use.

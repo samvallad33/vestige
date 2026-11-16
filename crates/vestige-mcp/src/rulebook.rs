@@ -187,13 +187,16 @@ pub fn apply_owner<'a>(text: &str, owner: impl IntoIterator<Item = &'a str>) -> 
 }
 
 /// What a session is given: the rulebook (owner sections replaced), then the
-/// pinned-rule block, then rules-file flags. Whole sections drop from the
-/// end to stay inside `max_bytes`. The version handle is never cut.
+/// pinned-rule block, then rules-file flags. To stay inside `max_bytes`,
+/// whole rulebook sections drop from the end first (the rulebook comes back
+/// in full by its handle), then the flags, then the pinned-rule block. The
+/// pinned rules are the part no handle restates, so they outlive every
+/// rulebook section. The version handle is never cut.
 pub fn inject(owner: &[&str], rules: Option<&str>, flags: &[String], max_bytes: usize) -> String {
-    let book = apply_owner(TEXT, owner.iter().copied());
-    let mut parts: Vec<String> = vec![book];
+    let mut book = apply_owner(TEXT, owner.iter().copied());
+    let mut tail: Vec<String> = Vec::new();
     if let Some(rules) = rules.filter(|text| !text.is_empty()) {
-        parts.push(rules.to_string());
+        tail.push(rules.to_string());
     }
     if !flags.is_empty() {
         let mut block = String::from("Rules file check:");
@@ -201,40 +204,47 @@ pub fn inject(owner: &[&str], rules: Option<&str>, flags: &[String], max_bytes: 
             block.push('\n');
             block.push_str(flag);
         }
-        parts.push(block);
+        tail.push(block);
     }
-    let mut text = parts.join("\n\n");
-    if text.len() <= max_bytes {
-        return text;
-    }
-    // Drop trailing sections of the rulebook, then the later parts, keeping
-    // the version handle on its own line when nothing else fits.
-    while text.len() > max_bytes {
-        if let Some(idx) = text.rfind("\n## R") {
-            text.truncate(idx);
+    let compose = |book: &str, omitted: bool, tail: &[String]| {
+        let mut text = book.to_string();
+        if omitted {
             text.push_str("\nomitted: `");
             text.push_str(HANDLE);
             text.push('`');
-            if text.len() <= max_bytes {
-                break;
-            }
-            // The omitted line itself must fit; drop it and truncate further.
-            if let Some(omit) = text.rfind("\nomitted:") {
-                text.truncate(omit);
-            }
+        }
+        for part in tail {
+            text.push_str("\n\n");
+            text.push_str(part);
+        }
+        text
+    };
+    let mut omitted = false;
+    loop {
+        let text = compose(&book, omitted, &tail);
+        if text.len() <= max_bytes {
+            return text;
+        }
+        // Only the rulebook's own sections are cut here: the later parts sit
+        // after its last section and must not go with it.
+        if let Some(idx) = book.rfind("\n## R") {
+            book.truncate(idx);
+            omitted = true;
             continue;
         }
-        if let Some(idx) = text.rfind("\n\n") {
-            text.truncate(idx);
+        // No section left: the preamble shrinks to the handle line before
+        // any later part goes.
+        let handle_line = format!("handle: `{HANDLE}`");
+        if book != handle_line {
+            book = handle_line;
+            omitted = false;
             continue;
         }
-        text = format!("handle: `{HANDLE}`");
-        break;
+        if tail.pop().is_some() {
+            continue;
+        }
+        return format!("handle: `{HANDLE}`");
     }
-    if text.len() > max_bytes {
-        text = format!("handle: `{HANDLE}`");
-    }
-    text
 }
 
 #[cfg(test)]
@@ -367,6 +377,28 @@ mod tests {
         assert!(out.contains("Recognized destructive calls are stopped before they run."));
         let unknown = apply_owner(TEXT, ["R99\nno such section\n"]);
         assert_eq!(unknown, TEXT);
+    }
+
+    #[test]
+    fn inject_cuts_rulebook_sections_before_the_pinned_rules() {
+        let rules = "Vestige rules for this session (source: compact).\n- mem-7 [decision, tag pinned] Never force-push main.";
+        let flags = vec!["CLAUDE.md:3 command `make` failed, receipt `mem-9`".to_string()];
+        let text = inject(&[], Some(rules), &flags, 4096);
+        assert!(text.len() <= 4096, "{}", text.len());
+        assert!(text.contains(HANDLE), "{text}");
+        assert!(
+            text.contains("- mem-7 [decision, tag pinned] Never force-push main."),
+            "{text}"
+        );
+        assert!(text.contains("Rules file check:"), "{text}");
+        assert!(text.contains(&format!("omitted: `{HANDLE}`")), "{text}");
+        assert!(text.contains("## R01 Authority"), "{text}");
+        assert!(!text.contains("## R17"), "{text}");
+        // With room for everything, nothing is cut.
+        let full = inject(&[], Some(rules), &flags, 100_000);
+        assert!(full.contains("## R17 Safe upgrades"), "{full}");
+        assert!(!full.contains("omitted:"), "{full}");
+        assert!(full.ends_with(&flags[0]), "{full}");
     }
 
     #[test]
