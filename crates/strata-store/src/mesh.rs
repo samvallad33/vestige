@@ -502,6 +502,25 @@ impl StrataStore {
         self.project().digest
     }
 
+    /// Admitted `UpsertNode` contents on this writer and on every granted replica.
+    ///
+    /// Peer memories stay in the replica chain. Callers that want the same
+    /// view the mesh fold hashed read them here instead of `nodes()`.
+    pub fn mesh_upsert_contents(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for chain in self.chains(None) {
+            for effect in owned_included(&chain) {
+                // Nested: this crate is edition 2021, so a let-chain will not compile.
+                if let StoreOp::UpsertNode { record } = effect.op {
+                    if record.is_live() {
+                        out.push(record.content);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Writer -> last included frame seq. Reported beside [`Self::mesh_digest`].
     pub fn mesh_frontier(&self) -> BTreeMap<String, u64> {
         self.project().frontier
@@ -1215,6 +1234,10 @@ impl StrataStore {
     }
 
     fn project_with(&self, extra: Option<(String, u64)>) -> MeshProjection {
+        fold_chains(&self.chains(extra))
+    }
+
+    fn chains(&self, extra: Option<(String, u64)>) -> Vec<ChainIn> {
         let local = self.writer_did();
         let mut chains = vec![ChainIn {
             writer: local.clone(),
@@ -1263,7 +1286,7 @@ impl StrataStore {
                 });
             }
         }
-        fold_chains(&chains)
+        chains
     }
 }
 

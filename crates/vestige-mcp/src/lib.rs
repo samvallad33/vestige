@@ -21,6 +21,7 @@ mod intention_graph_log;
 pub mod protocol;
 #[cfg(test)]
 mod protocol_stdio_store;
+pub mod provenance_log;
 pub mod resources;
 pub mod rules_hook;
 pub mod server;

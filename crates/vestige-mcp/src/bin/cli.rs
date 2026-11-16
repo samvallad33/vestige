@@ -723,6 +723,15 @@ enum Commands {
         #[command(subcommand)]
         command: MeshCommands,
     },
+
+    /// Quarantine an orphan memory, or append the anchor frame that frees it.
+    ///
+    /// The quarantine body stays in the log. `status` reads that projection
+    /// and the mesh digest. It opens no socket.
+    Provenance {
+        #[command(subcommand)]
+        command: ProvenanceCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -804,6 +813,26 @@ enum MeshCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum ProvenanceCommands {
+    /// Record an orphan memory under a MissingProvenanceReceipt.
+    Quarantine {
+        /// Single-line memory text, with no session, file, or link anchor.
+        summary: String,
+    },
+    /// Append an anchor frame. The quarantine record is not removed.
+    Release {
+        /// Hex digest of the MissingProvenanceReceipt.
+        #[arg(long)]
+        receipt: String,
+        /// Hex digest of the anchor that frees the memory.
+        #[arg(long)]
+        anchor: String,
+    },
+    /// Quarantined receipts, release frames, and the mesh digest.
+    Status,
+}
+
 /// Zero-lock command router: dispatches over reflex.sock / attach IPC if a server
 /// daemon is live, eliminating .serve.lock file collisions.
 fn route_cli_command(
@@ -867,6 +896,7 @@ fn main() -> anyhow::Result<()> {
         } => run_gc(min_retention, max_age_days, dry_run, yes),
         Commands::Consolidate => run_consolidate(),
         Commands::Mesh { command } => run_mesh(command),
+        Commands::Provenance { command } => run_provenance(command),
         Commands::Restore { file } => run_restore(file),
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
@@ -3010,6 +3040,22 @@ fn run_migrate_to_strata_linked(
     if !report.verify_passed || !report.receipt_verified {
         anyhow::bail!("migration log failed verification");
     }
+    Ok(())
+}
+
+fn run_provenance(command: ProvenanceCommands) -> anyhow::Result<()> {
+    let storage = open_storage()?;
+    let value = match command {
+        ProvenanceCommands::Quarantine { summary } => {
+            vestige_mcp::provenance_log::quarantine(storage.as_ref(), &summary)
+        }
+        ProvenanceCommands::Release { receipt, anchor } => {
+            vestige_mcp::provenance_log::release(storage.as_ref(), &receipt, &anchor)
+        }
+        ProvenanceCommands::Status => vestige_mcp::provenance_log::status(storage.as_ref()),
+    }
+    .map_err(|err| anyhow::anyhow!(err))?;
+    println!("{value}");
     Ok(())
 }
 

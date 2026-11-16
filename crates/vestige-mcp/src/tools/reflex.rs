@@ -52,8 +52,9 @@ use vestige_core::{OutputConfig, Storage};
 
 use crate::cognitive::CognitiveEngine;
 
+pub mod auto_bind;
 mod compaction;
-mod pairing;
+pub mod pairing;
 mod stale;
 mod witness;
 

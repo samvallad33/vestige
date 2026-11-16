@@ -218,8 +218,7 @@ mod enabled {
                     .map_err(|err| err.to_string())?;
                 with_store(storage.as_ref(), |store| {
                     apply_export(store, &response, Some(&ack), false).map_err(|err| err.to_string())
-                })?
-                .map_err(|err| err)?;
+                })??;
             }
         }
         let mut status = status_of(storage)?;

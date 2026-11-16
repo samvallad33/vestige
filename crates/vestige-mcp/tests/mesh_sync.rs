@@ -138,10 +138,10 @@ fn sync_both(left: &Path, right: &Path) {
 fn wait_file(path: &Path, limit: Duration) -> String {
     let start = Instant::now();
     loop {
-        if let Ok(text) = fs::read_to_string(path) {
-            if !text.trim().is_empty() {
-                return text.trim().to_string();
-            }
+        if let Ok(text) = fs::read_to_string(path)
+            && !text.trim().is_empty()
+        {
+            return text.trim().to_string();
         }
         if start.elapsed() > limit {
             panic!("timed out waiting for {}", path.display());
@@ -453,5 +453,83 @@ fn is_foreign_inet(line: &str, peer_port: u16, own_port: u16) -> bool {
         return !line.contains(&peer) && !line.contains(&own);
     }
     false
+}
+
+fn sync_ok(left: &Path, right: &Path) {
+    let mut listening = spawn(right, &["mesh", "sync", "--listen", "--once"], None);
+    let dial = vestige(left, &["mesh", "sync"]);
+    let listen_status = wait_child(&mut listening, Duration::from_secs(60));
+    assert!(
+        dial.status.success(),
+        "dial failed: {}",
+        String::from_utf8_lossy(&dial.stderr)
+    );
+    assert!(listen_status.success(), "listen failed");
+}
+
+fn provenance(dir: &Path, args: &[&str]) -> Value {
+    let mut command = vec!["provenance"];
+    command.extend_from_slice(args);
+    let output = vestige(dir, &command);
+    assert!(
+        output.status.success(),
+        "provenance {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "provenance json ({err}): {}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    })
+}
+
+#[test]
+fn orphan_quarantine_syncs_over_loopback_iroh_and_releases_to_one_mesh_digest() {
+    let left_dir = tempfile::tempdir().unwrap();
+    let right_dir = tempfile::tempdir().unwrap();
+    pair(left_dir.path(), right_dir.path());
+
+    let quarantined = provenance(
+        left_dir.path(),
+        &["quarantine", "orphan memory with no anchor"],
+    );
+    assert_eq!(quarantined["state"], "quarantined");
+    assert_eq!(quarantined["appended"], true);
+    let receipt = quarantined["receipt_digest"].as_str().expect("receipt").to_string();
+
+    sync_ok(left_dir.path(), right_dir.path());
+    let left = provenance(left_dir.path(), &["status"]);
+    let right = provenance(right_dir.path(), &["status"]);
+    assert_eq!(left["mesh_digest"], right["mesh_digest"]);
+    assert_eq!(left["quarantined"][0]["receipt_digest"], receipt);
+    assert_eq!(right["quarantined"][0]["receipt_digest"], receipt);
+    assert_eq!(left["quarantined"][0]["summary"], "orphan memory with no anchor");
+    assert_eq!(right["retained_quarantine_bodies"], 1);
+    assert_eq!(left["retained_quarantine_bodies"], right["retained_quarantine_bodies"]);
+    let quarantined_digest = left["mesh_digest"].as_str().unwrap().to_string();
+
+    let anchor = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
+    let released = provenance(
+        left_dir.path(),
+        &["release", "--receipt", &receipt, "--anchor", anchor],
+    );
+    assert_eq!(released["appended"], true);
+    assert_eq!(released["state"], "released");
+
+    sync_ok(left_dir.path(), right_dir.path());
+    let left = provenance(left_dir.path(), &["status"]);
+    let right = provenance(right_dir.path(), &["status"]);
+    assert_eq!(left["mesh_digest"], right["mesh_digest"]);
+    assert_ne!(left["mesh_digest"], quarantined_digest);
+    assert!(left["quarantined"].as_array().unwrap().is_empty());
+    assert!(right["quarantined"].as_array().unwrap().is_empty());
+    assert_eq!(left["released"][0]["receipt_digest"], receipt);
+    assert_eq!(right["released"][0]["receipt_digest"], receipt);
+    assert_eq!(left["released"][0]["anchor_digest"], anchor);
+    assert_eq!(right["released"][0]["anchor_digest"], anchor);
+    assert_eq!(left["retained_quarantine_bodies"], 1);
+    assert_eq!(right["retained_quarantine_bodies"], 1);
 }
 
