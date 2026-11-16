@@ -1,5 +1,5 @@
 //! Store-level data types: the node registry record, ingest input, the typed
-//! connection record, and the owner-approved 8-type edge vocabulary (same
+//! connection record, and the owner-approved 9-type edge vocabulary (same
 //! vocabulary as `vestige-core`'s V39 edges, re-declared so this crate stays
 //! standalone).
 //!
@@ -22,6 +22,7 @@ pub const TYPED_EDGE_VOCABULARY: &[&str] = &[
     "closed_by",
     "projected_to",
     "evidence_of",
+    "reopened",
 ];
 
 /// A typed edge kind from the owner-approved vocabulary.
@@ -43,11 +44,13 @@ pub enum EdgeKind {
     ProjectedTo,
     /// walk-trail evidence edge
     EvidenceOf,
+    /// later failure on the same exact handle after a closes edge
+    Reopened,
 }
 
 impl EdgeKind {
     /// Every vocabulary member, in [`TYPED_EDGE_VOCABULARY`] order.
-    pub const ALL: [EdgeKind; 8] = [
+    pub const ALL: [EdgeKind; 9] = [
         EdgeKind::Touched,
         EdgeKind::AnchoredTo,
         EdgeKind::DerivedFrom,
@@ -56,6 +59,7 @@ impl EdgeKind {
         EdgeKind::ClosedBy,
         EdgeKind::ProjectedTo,
         EdgeKind::EvidenceOf,
+        EdgeKind::Reopened,
     ];
 
     /// The canonical `link_type` string.
@@ -69,6 +73,7 @@ impl EdgeKind {
             EdgeKind::ClosedBy => "closed_by",
             EdgeKind::ProjectedTo => "projected_to",
             EdgeKind::EvidenceOf => "evidence_of",
+            EdgeKind::Reopened => "reopened",
         }
     }
 
