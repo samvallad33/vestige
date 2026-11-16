@@ -125,6 +125,8 @@ Anything shaped like a credential is masked before the command is saved.
 
 A first-time failure puts nothing in front of the agent.
 
+When a later failure carries the same `fail-<signature>` handle after a recorded fix, Reflex saves a `reopened` edge from the new failure to that fix. `precedent(query='reopen_triangle', repository=…)` renders the chain-ladder triangle of those edges for a repository, with the expected reopen count and the handles most likely to reopen.
+
 Failure, fix, stop and resolution memories also carry `reflex-session-<session id>`, so one exact tag
 lists everything Reflex recorded for a session.
 

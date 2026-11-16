@@ -257,6 +257,24 @@ pub(super) fn git_head(cwd: &str) -> Option<String> {
     None
 }
 
+/// The repository root for a working directory, read from git's own files.
+pub(super) fn git_root(cwd: &str) -> Option<String> {
+    if cwd.is_empty() {
+        return None;
+    }
+    let mut dir = PathBuf::from(cwd);
+    for _ in 0..12 {
+        let dotgit = dir.join(".git");
+        if dotgit.is_file() || dotgit.is_dir() {
+            return Some(dir.to_string_lossy().to_string());
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+    None
+}
+
 fn head_in(gitdir: &Path) -> Option<String> {
     let head = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
     let head = head.trim();
@@ -285,7 +303,31 @@ fn head_in(gitdir: &Path) -> Option<String> {
     (sha.len() >= 12 && is_hex(&sha)).then(|| sha[..12].to_string())
 }
 
-fn failure_item(inp: &Input, f: &Failure, last_write: Option<&str>) -> Value {
+fn pairing_tags(inp: &Input, kind: &str, sig: &str) -> Vec<String> {
+    let mut tags = vec![
+        format!("{kind}-{sig}"),
+        if kind == "fail" {
+            "reflex-failure".to_string()
+        } else {
+            "reflex-fix".to_string()
+        },
+        session_tag(&inp.session),
+    ];
+    if let Some(root) = git_root(&inp.cwd) {
+        tags.push(format!("repo:{root}"));
+    }
+    if !inp.agent.is_empty() {
+        tags.push(format!("agent:{}", inp.agent));
+    }
+    tags
+}
+
+fn failure_item(
+    inp: &Input,
+    f: &Failure,
+    last_write: Option<&str>,
+    reopen_of: Option<&str>,
+) -> Value {
     let mut content = format!(
         "TOOL FAILURE, recorded by Reflex. When: {} UTC. Session {}{}. Tool: {}. Ran: {}. \
          Error: {}. Exit code: {}. Working directory: {}. Git HEAD: {}. Call {}. Signature fail-{}: \
@@ -318,9 +360,16 @@ fn failure_item(inp: &Input, f: &Failure, last_write: Option<&str>) -> Value {
         ));
         links.push(json!({"kind": "derived_from", "to": w}));
     }
+    if let Some(fix) = reopen_of {
+        content.push_str(&format!(
+            " Reopened the fix {fix} on the same exact handle fail-{} after a later failure.",
+            f.sig
+        ));
+        links.push(json!({"kind": "reopened", "to": fix}));
+    }
     json!({
         "node_type": "event",
-        "tags": [format!("fail-{}", f.sig), "reflex-failure", session_tag(&inp.session)],
+        "tags": pairing_tags(inp, "fail", &f.sig),
         "source": format!("reflex {VERSION}, PostToolUseFailure {}", inp.call),
         "links": links,
         "content": content,
@@ -335,7 +384,7 @@ fn fix_item(inp: &Input, open: &OpenFailure) -> Value {
     };
     json!({
         "node_type": "event",
-        "tags": [format!("fix-{}", open.sig), "reflex-fix", session_tag(&inp.session)],
+        "tags": pairing_tags(inp, "fix", &open.sig),
         "source": format!("reflex {VERSION}, PostToolUse {}", inp.call),
         "links": [{"kind": "closes", "to": open.node}],
         "content": format!(
@@ -432,6 +481,7 @@ pub(super) async fn on_event(
                 )),
                 None => stored_fix(ctx, &f.sig).await,
             };
+            let reopen_of = earlier.as_ref().map(|(_, fix, _)| fix.clone());
             if let Some((failure, fix, how)) = earlier {
                 out.tell.push(format!(
                     "Reflex: this exact failure happened before (signature fail-{}). Failure {failure} was fixed, \
@@ -440,7 +490,12 @@ pub(super) async fn on_event(
                     how.trim_end_matches('.')
                 ));
             }
-            match ingest(ctx, failure_item(inp, &f, last_write.as_deref())).await {
+            match ingest(
+                ctx,
+                failure_item(inp, &f, last_write.as_deref(), reopen_of.as_deref()),
+            )
+            .await
+            {
                 Ok(node) => {
                     out.wrote.push(
                         json!({"kind": "failure", "memory": node, "signature": f.sig, "new": true}),
@@ -715,6 +770,46 @@ mod tests {
         let faded = faded_lessons(&walk);
         assert_eq!(faded.len(), 1);
         assert_eq!(faded[0].0, "mem-0000000000000001");
+    }
+
+    #[test]
+    fn a_later_failure_declares_a_reopened_link_to_the_fix() {
+        let inp = Input {
+            session: "sess-1".into(),
+            cwd: "/repo".into(),
+            call: "c1".into(),
+            command: "cargo test -p x".into(),
+            agent: "worker".into(),
+            ..Input::default()
+        };
+        let f = classify(
+            "Bash",
+            "cargo test -p x",
+            "Exit code 101\nerror[E0499]: cannot borrow",
+            false,
+        )
+        .unwrap();
+        let first = failure_item(&inp, &f, None, None);
+        let links = first["links"].as_array().unwrap();
+        assert!(
+            links.iter().all(|link| link["kind"] != "reopened"),
+            "{first}"
+        );
+        let later = failure_item(&inp, &f, None, Some("mem-0000000000000002"));
+        let links = later["links"].as_array().unwrap();
+        assert!(
+            links
+                .iter()
+                .any(|link| { link["kind"] == "reopened" && link["to"] == "mem-0000000000000002" }),
+            "{later}"
+        );
+        assert!(later["content"].as_str().unwrap().contains("fail-"));
+        let tags = later["tags"].as_array().unwrap();
+        assert!(
+            tags.iter()
+                .any(|tag| tag.as_str().unwrap().starts_with("fail-"))
+        );
+        assert!(tags.iter().any(|tag| tag == "agent:worker"));
     }
 }
 
