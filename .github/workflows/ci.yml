@@ -120,6 +120,8 @@ jobs:
 
       - name: strata-verify (migrated-log verification)
         run: cargo test --manifest-path crates/strata-verify/Cargo.toml
+      - name: strata-backtest (replay backtest floor, workspace-excluded)
+        run: cargo test --manifest-path crates/strata-backtest/Cargo.toml
       - name: Test strata-store
         run: cargo test --manifest-path crates/strata-store/Cargo.toml
 
@@ -131,7 +133,7 @@ jobs:
 
       - name: Clippy every workspace-excluded strata crate (warnings are errors)
         run: |
-          for crate in strata strata-kernel strata-gate strata-store strata-verify; do
+          for crate in strata strata-kernel strata-gate strata-store strata-verify strata-backtest; do
             cargo clippy --manifest-path "crates/$crate/Cargo.toml" --all-targets -- -D warnings
           done
 

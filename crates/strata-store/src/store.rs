@@ -1051,6 +1051,32 @@ pub struct StrataStore {
     backfill_history: Vec<(BackfillReceipt, u64)>,
     /// A pair remains used after undo, preventing re-run compounding.
     backfill_pairs: BTreeSet<(String, String)>,
+    /// `Some(bound)` on a prefix fold from [`StrataStore::as_of`]. Live
+    /// opens leave this `None`. Not part of [`StrataStore::state_digest`].
+    replay_bound: Option<u64>,
+    /// Greatest frame seq folded. Live replay records it and does not read
+    /// it back: retrievability on a live store still uses the log head.
+    prefix_head_seq: u64,
+    /// Chain hash of the frame at [`Self::prefix_head_seq`]. Zero when the
+    /// fold saw no frame.
+    prefix_head_frame_hash: [u8; 32],
+    /// Admitted `StoreOp` frames folded into a prefix. Empty on a live open.
+    admitted: Vec<AdmittedFrame>,
+}
+
+/// One admitted `StoreOp` inside a prefix fold, with the log seq of its
+/// data frame and the gate-space seq of the admitting effect.
+///
+/// Populated by [`StrataStore::as_of`] only. A live store's
+/// [`StrataStore::admitted_frames`] is empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmittedFrame {
+    /// Log seq of the `STORE_WRITE` frame.
+    pub frame_seq: u64,
+    /// Gate-space seq of the admitting effect.
+    pub effect_seq: u64,
+    /// The admitted op.
+    pub op: StoreOp,
 }
 
 impl StrataStore {
@@ -1082,10 +1108,35 @@ impl StrataStore {
         log_dir: impl AsRef<Path>,
         policy: Policy,
     ) -> Result<Self, StoreError> {
+        Self::open_at(dir, log_dir, policy, None)
+    }
+
+    /// Open (or create) a store whose signing key and segment ids derive from
+    /// `seed`. Two seeded opens of empty directories that then admit the same
+    /// ops produce byte-identical logs. An existing `strata.key` in the log
+    /// directory wins and the seed is ignored, matching
+    /// [`strata::StrataLog::open_seeded`].
+    ///
+    /// Live [`Self::open`] is unchanged. The backtest harness uses this so a
+    /// run manifest's signed head does not depend on a fresh random key.
+    pub fn open_seeded(dir: impl AsRef<Path>, seed: [u8; 32]) -> Result<Self, StoreError> {
+        let dir = dir.as_ref();
+        Self::open_at(dir, dir.join(LOG_DIR), default_policy(), Some(seed))
+    }
+
+    fn open_at(
+        dir: impl AsRef<Path>,
+        log_dir: impl AsRef<Path>,
+        policy: Policy,
+        seed: Option<[u8; 32]>,
+    ) -> Result<Self, StoreError> {
         let dir = dir.as_ref().to_path_buf();
         let log_dir = log_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
-        let log = StrataLog::open(&log_dir)?;
+        let log = match seed {
+            Some(seed) => StrataLog::open_seeded(&log_dir, seed)?,
+            None => StrataLog::open(&log_dir)?,
+        };
         let gate_log = StrataEventLog::new(log.clone())?;
         // Intent index: legacy snapshot, then the append log. Absent on
         // stores from before this feature, which upgrade in place.
@@ -1119,10 +1170,108 @@ impl StrataStore {
             echo_index: BTreeMap::new(),
             backfill_history: Vec::new(),
             backfill_pairs: BTreeSet::new(),
+            replay_bound: None,
+            prefix_head_seq: 0,
+            prefix_head_frame_hash: [0u8; 32],
+            admitted: Vec::new(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
         Ok(store)
+    }
+
+    /// Read-only scratch fold of the frames with `seq <= bound_seq`.
+    ///
+    /// The receiver is not modified and nothing is appended. The scratch
+    /// shares the open log only as a reader; every mutating method on it
+    /// returns an error. Checkpoint verification against `store.meta` is
+    /// skipped: the anchor names the live head, which may sit past `bound_seq`.
+    ///
+    /// Sequence-distance retrievability uses the greatest folded frame seq,
+    /// not the live log head, so frames after the bound cannot change it.
+    /// A live store's [`Self::retrievability`] is untouched: `replay_bound`
+    /// stays `None` and the fallback seq stays `last_acked_seq`.
+    ///
+    /// A second `as_of` on a scratch cannot see past that scratch's bound.
+    pub fn as_of(&self, bound_seq: u64) -> Result<Self, StoreError> {
+        let bound = self
+            .replay_bound
+            .map_or(bound_seq, |existing| existing.min(bound_seq));
+        let mut scratch = Self {
+            dir: self.dir.clone(),
+            log_dir: self.log_dir.clone(),
+            log: self.log.clone(),
+            gate_log: self.gate_log.clone(),
+            policy: self.policy.clone(),
+            nodes: BTreeMap::new(),
+            origins: BTreeMap::new(),
+            intentions: BTreeMap::new(),
+            edges: Vec::new(),
+            forward: BTreeMap::new(),
+            reverse: BTreeMap::new(),
+            fsrs: State::default(),
+            review_events: Vec::new(),
+            reviewed_at: BTreeMap::new(),
+            checkpoints: Vec::new(),
+            orphan_writes: 0,
+            tool_call_open: false,
+            call_admitted: BTreeSet::new(),
+            retire_rules: BTreeMap::new(),
+            upserts: BTreeMap::new(),
+            anchors: AnchorIndex::default(),
+            effect_index: EffectIndex::default(),
+            node_canonical_index: BTreeMap::new(),
+            intent_index: BTreeMap::new(),
+            intent_log_len: 0,
+            echo_index: BTreeMap::new(),
+            backfill_history: Vec::new(),
+            backfill_pairs: BTreeSet::new(),
+            replay_bound: Some(bound),
+            prefix_head_seq: 0,
+            prefix_head_frame_hash: [0u8; 32],
+            admitted: Vec::new(),
+        };
+        scratch.replay()?;
+        Ok(scratch)
+    }
+
+    /// `true` when this value was built by [`StrataStore::as_of`].
+    pub fn is_prefix_fold(&self) -> bool {
+        self.replay_bound.is_some()
+    }
+
+    /// The bound passed to [`StrataStore::as_of`], after intersecting with a
+    /// parent scratch's bound. `None` on a live store.
+    pub fn replay_bound(&self) -> Option<u64> {
+        self.replay_bound
+    }
+
+    /// Greatest frame seq included in this fold. On a live store this is the
+    /// last frame replayed at open, which retrievability does not consult.
+    pub fn prefix_head_seq(&self) -> u64 {
+        self.prefix_head_seq
+    }
+
+    /// Chain hash (`frame_hash`) of [`Self::prefix_head_seq`]. All zeros when
+    /// the fold included no frame.
+    pub fn prefix_head_frame_hash(&self) -> [u8; 32] {
+        self.prefix_head_frame_hash
+    }
+
+    /// Admitted store ops in this prefix fold, in log order. Empty on a live
+    /// store.
+    pub fn admitted_frames(&self) -> &[AdmittedFrame] {
+        &self.admitted
+    }
+
+    fn ensure_writable(&self) -> Result<(), StoreError> {
+        if self.replay_bound.is_some() {
+            Err(StoreError::InvalidInput(
+                "as_of prefix fold is read-only".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1142,8 +1291,14 @@ impl StrataStore {
         // cards by kernel id; the store keys cards by `handle_of(id)`.
         let mut imported_ids: HashMap<u64, String> = HashMap::new();
 
+        let replay_limit = self.replay_bound;
         for frame in frames {
             let seq = frame.seq;
+            if replay_limit.is_some_and(|limit| seq > limit) {
+                continue;
+            }
+            self.prefix_head_seq = seq;
+            self.prefix_head_frame_hash = frame.frame_hash;
             if let Some(kind) = RecordKind::from_u8(frame.kind) {
                 let gseq = gate_seq_counter;
                 gate_seq_counter += 1;
@@ -1196,6 +1351,13 @@ impl StrataStore {
                             self.apply_op(&op, gseq, seq)?;
                             let rule = self.retire_rules.get(&gseq).copied();
                             self.effect_index.record(&op, gseq, seq, digest, rule);
+                            if self.replay_bound.is_some() {
+                                self.admitted.push(AdmittedFrame {
+                                    frame_seq: seq,
+                                    effect_seq: gseq,
+                                    op,
+                                });
+                            }
                         } else {
                             self.orphan_writes += 1;
                         }
@@ -1600,6 +1762,8 @@ impl StrataStore {
         context: Vec<u64>,
         params_hash: Option<[u8; 32]>,
     ) -> Result<(u64, u64), StoreError> {
+        // A prefix fold shares the live log. Refuse before any lock or append.
+        self.ensure_writable()?;
         // The gate frames below have no error channel: refuse up front when
         // the log has already found damage in acked history.
         self.log.ensure_writable()?;
@@ -1816,6 +1980,9 @@ impl StrataStore {
         effect_seq: u64,
         response_digest: &str,
     ) -> Result<(), StoreError> {
+        // The intent log lives in the store directory, which a prefix fold
+        // shares with the live open.
+        self.ensure_writable()?;
         if intent_id.is_empty() {
             return Err(StoreError::InvalidInput(
                 "intent id must not be empty".into(),
@@ -3012,15 +3179,18 @@ impl StrataStore {
                 .flatten()
                 .filter(|ms| *ms > 0)
         });
-        FsrsFold::retrievability_at_review(
-            card,
-            clock,
-            as_of_ms,
-            self.log.head().last_acked_seq,
-            ALGO_V2,
-        )
-        .map(Some)
-        .map_err(|e| StoreError::Verify(e.to_string()))
+        // A prefix fold measures sequence distance from its own head. The
+        // live log head counts frames after the bound, which this scratch
+        // did not fold. A live store (`replay_bound == None`) keeps the
+        // acked head, the same input this function used before `as_of`.
+        let fallback_seq = if self.replay_bound.is_some() {
+            self.prefix_head_seq
+        } else {
+            self.log.head().last_acked_seq
+        };
+        FsrsFold::retrievability_at_review(card, clock, as_of_ms, fallback_seq, ALGO_V2)
+            .map(Some)
+            .map_err(|e| StoreError::Verify(e.to_string()))
     }
 
     /// Does the stored node read like a failure? (`None` if the id is
@@ -3071,6 +3241,7 @@ impl StrataStore {
     /// `store.meta`. No-op (returns the existing head) when no new reviews
     /// landed since the last seal.
     pub fn seal_checkpoint(&mut self) -> Result<Checkpoint, StoreError> {
+        self.ensure_writable()?;
         let log_seq = self.fsrs.applied_seq;
         if let Some(last) = self.checkpoints.last() {
             if log_seq <= last.log_seq {
@@ -3162,6 +3333,7 @@ impl StrataStore {
     ///
     /// `strata.lock` is deliberately NOT copied (it names this process).
     pub fn backup_to(&self, dest: impl AsRef<Path>) -> Result<(), StoreError> {
+        self.ensure_writable()?;
         let dest = dest.as_ref();
         self.log.verify_log()?;
         self.log.seal()?;
@@ -3317,6 +3489,10 @@ impl StrataStore {
             echo_index: BTreeMap::new(),
             backfill_history: Vec::new(),
             backfill_pairs: BTreeSet::new(),
+            replay_bound: None,
+            prefix_head_seq: 0,
+            prefix_head_frame_hash: [0u8; 32],
+            admitted: Vec::new(),
         };
         scratch.replay()?;
         let mut retrievability = BTreeMap::new();

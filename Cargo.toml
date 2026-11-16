@@ -18,6 +18,7 @@ exclude = [
     "crates/strata-migrate",
     "crates/strata-store",
     "crates/strata-verify",
+    "crates/strata-backtest",
 
 ]
 
