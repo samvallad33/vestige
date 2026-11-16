@@ -171,7 +171,8 @@ impl CommitFacts {
 
     /// The facts a receipt `text` leaves out. A receipt names the full SHA,
     /// each parent (7+ hex prefix), the branch, the author, every changed
-    /// file (up to [`MAX_FILES`]) and every gate command `gates` lists.
+    /// file (up to [`MAX_FILES`]) with its `git diff -U0` ranges, and every
+    /// gate command `gates` lists.
     pub fn missing_in(&self, text: &str, gates: &[String]) -> Vec<String> {
         let mut missing = Vec::new();
         if !contains_ci(text, &self.sha) {
@@ -196,9 +197,15 @@ impl CommitFacts {
         if !name.is_empty() && !text.contains(name) {
             missing.push(format!("author {name}"));
         }
-        for f in self.files.iter().take(MAX_FILES) {
-            if !text.contains(f.path.as_str()) {
-                missing.push(format!("file {}", f.path));
+        // Each file with its `git diff -U0` ranges: the path and every
+        // `start-end` must appear.
+        for (f, line) in self.files.iter().zip(self.file_lines()).take(MAX_FILES) {
+            let ranged = f
+                .ranges
+                .iter()
+                .all(|(a, b)| text.contains(&format!("{a}-{b}")));
+            if !text.contains(f.path.as_str()) || !ranged {
+                missing.push(format!("file {line}"));
             }
         }
         for g in gates {
@@ -574,6 +581,11 @@ mod tests {
             "bbbbbbb"
         );
         assert!(facts.missing_in(&full, &gates).is_empty());
+        let no_ranges = full.replace("src/lib.rs:1-2", "src/lib.rs");
+        assert_eq!(
+            facts.missing_in(&no_ranges, &gates),
+            vec!["file src/lib.rs:1-2".to_string()]
+        );
         assert!(facts.receipt_text(None).contains("src/lib.rs:1-2"));
         assert!(facts.tags(true).contains(&AUTO_TAG.to_string()));
     }
