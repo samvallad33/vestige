@@ -2665,6 +2665,66 @@ pub async fn list_receipts(
     })))
 }
 
+fn hex64(value: Option<&Value>) -> Option<&str> {
+    let text = value?.as_str()?;
+    if text.len() == 64 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+/// One cinema frame for a gate receipt. An ALLOW is not drawn as a STOP.
+/// The view is local: `export_span` stays false, and the handle is the
+/// digest prefix the gate already prints. A break is the chain flag the
+/// receipt reader computed against the predecessor.
+pub(crate) fn cinema_proof_frame(item: &Value) -> Value {
+    let decision = item.get("decision").and_then(Value::as_str).unwrap_or("");
+    if decision != "STOP" {
+        return serde_json::json!({
+            "kind": "not-stop",
+            "stop": false,
+            "decision": decision,
+            "local": true,
+            "export_span": false,
+        });
+    }
+    let digest = hex64(item.get("digest")).unwrap_or("");
+    let proof_handle = if digest.is_empty() {
+        Value::Null
+    } else {
+        Value::String(format!("op-receipt-{}", &digest[..16]))
+    };
+    let rule = item
+        .get("commitment")
+        .and_then(Value::as_str)
+        .or_else(|| item.get("rule").and_then(Value::as_str))
+        .unwrap_or("");
+    serde_json::json!({
+        "kind": "stop",
+        "stop": true,
+        "rule": rule,
+        "proof_handle": proof_handle,
+        "receipt_digest": if digest.is_empty() { Value::Null } else { Value::String(digest.to_string()) },
+        "tool_process_created": false,
+        "chain_break": item.get("chain_break").and_then(Value::as_bool).unwrap_or(false),
+        "local": true,
+        "export_span": false,
+    })
+}
+
+fn attach_cinema_proof_frames(body: &mut Value) {
+    let Some(items) = body.get_mut("items").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in items {
+        let frame = cinema_proof_frame(item);
+        if let Some(obj) = item.as_object_mut() {
+            obj.insert("proof_frame".to_string(), frame);
+        }
+    }
+}
+
 /// Fetch one receipt by id — the payload behind "Open receipt in Cinema".
 pub async fn get_receipt(
     State(state): State<AppState>,
@@ -2675,7 +2735,16 @@ pub async fn get_receipt(
         .get_receipt(&receipt_id)
         .map_err(storage_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(serde_json::to_value(receipt).unwrap_or_default()))
+    let mut value = serde_json::to_value(receipt).unwrap_or_default();
+    // Operator STOP receipts opened from this payload carry the same frame
+    // the playhead uses. A memory receipt is not a STOP and gains no frame.
+    if value.get("decision").and_then(Value::as_str) == Some("STOP") {
+        let frame = cinema_proof_frame(&value);
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("proof_frame".to_string(), frame);
+        }
+    }
+    Ok(Json(value))
 }
 
 // ============================================================================
@@ -2797,7 +2866,10 @@ pub async fn list_stops(
                 format!("stops_failed: {e}"),
             )
         })?
-        .map(Json)
+        .map(|mut body| {
+            attach_cinema_proof_frames(&mut body);
+            Json(body)
+        })
         .map_err(|message| ApiError::reason(StatusCode::BAD_REQUEST, "invalid_input", message))
 }
 
@@ -3726,5 +3798,40 @@ fn audit_action_for(reason_type: &str, from_state: &str, to_state: &str) -> Opti
                 std::cmp::Ordering::Equal => "accessed",
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod cinema_frame_tests {
+    use super::cinema_proof_frame;
+    use serde_json::json;
+
+    #[test]
+    fn stop_frame_names_the_rule_the_handle_and_that_the_tool_did_not_run() {
+        let digest = "a7892fe4b29ca21b".repeat(4);
+        let frame = cinema_proof_frame(&json!({
+            "decision": "STOP",
+            "commitment": "OP-004",
+            "digest": digest,
+            "chain_break": true,
+        }));
+        assert_eq!(frame["stop"], true);
+        assert_eq!(frame["rule"], "OP-004");
+        assert_eq!(frame["proof_handle"], "op-receipt-a7892fe4b29ca21b");
+        assert_eq!(frame["receipt_digest"], digest);
+        assert_eq!(frame["tool_process_created"], false);
+        assert_eq!(frame["chain_break"], true);
+        assert_eq!(frame["export_span"], false);
+        assert_eq!(frame["local"], true);
+        assert!(frame.get("confidence").is_none());
+    }
+
+    #[test]
+    fn an_allow_is_not_drawn_as_a_stop() {
+        let frame = cinema_proof_frame(&json!({"decision": "ALLOW", "digest": "ab".repeat(32)}));
+        assert_eq!(frame["stop"], false);
+        assert_eq!(frame["kind"], "not-stop");
+        assert!(frame.get("proof_handle").is_none());
+        assert_eq!(frame["export_span"], false);
     }
 }
