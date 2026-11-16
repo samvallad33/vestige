@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use strata_store::effect_receipt_id;
 
 use crate::rulebook;
-use crate::strata_memory::{self, with_store};
+use crate::strata_memory::{self, read_store};
 
 /// Claude Code and Codex additionalContext cap, in characters.
 pub const CONTEXT_CAP: usize = 10_000;
@@ -160,9 +160,9 @@ pub fn session_tool(
             "appended": false,
         }));
     }
-    let before = with_store(storage, |store| store.log().head());
-    let body = with_store(storage, |store| render(store, &request)).unwrap_or_default();
-    let after = with_store(storage, |store| store.log().head());
+    let before = read_store(storage, |store| store.log().head());
+    let body = read_store(storage, |store| render(store, &request)).unwrap_or_default();
+    let after = read_store(storage, |store| store.log().head());
     if before != after {
         return Err("capsule render appended a frame".into());
     }
@@ -987,9 +987,9 @@ mod tests {
         );
         assert!(!body.contains("later obligation"), "{body}");
         assert!(body.contains(rulebook::HANDLE), "{body}");
-        let head_before = with_store(storage.as_ref(), |store| store.log().head()).unwrap();
+        let head_before = read_store(storage.as_ref(), |store| store.log().head()).unwrap();
         let _ = session_tool(storage.as_ref(), Some(&args)).unwrap();
-        let head_after = with_store(storage.as_ref(), |store| store.log().head()).unwrap();
+        let head_after = read_store(storage.as_ref(), |store| store.log().head()).unwrap();
         assert_eq!(head_before, head_after);
 
         for handle in first["handles"].as_array().unwrap() {
@@ -1015,11 +1015,11 @@ mod tests {
                     .unwrap_or_else(|err| panic!("{inner}: {err}"));
                 assert_eq!(got["action"], "get", "{got}");
             } else if let Some(anchor_id) = inner.strip_prefix("anchor:") {
-                let found = with_store(storage.as_ref(), |store| store.anchor(anchor_id).is_some())
+                let found = read_store(storage.as_ref(), |store| store.anchor(anchor_id).is_some())
                     .unwrap();
                 assert!(found, "{anchor_id}");
             } else if let Some(intention_id) = inner.strip_prefix("intention:") {
-                let found = with_store(storage.as_ref(), |store| {
+                let found = read_store(storage.as_ref(), |store| {
                     store.get_intention(intention_id).is_some()
                 })
                 .unwrap();
@@ -1055,7 +1055,7 @@ mod tests {
                 ..vestige_core::IngestInput::default()
             })
             .unwrap();
-        let head = with_store(storage.as_ref(), |store| store.log().head().last_acked_seq).unwrap();
+        let head = read_store(storage.as_ref(), |store| store.log().head().last_acked_seq).unwrap();
         storage
             .ingest(vestige_core::IngestInput {
                 content: "second decision".into(),

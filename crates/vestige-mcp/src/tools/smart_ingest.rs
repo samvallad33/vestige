@@ -120,11 +120,11 @@ pub fn schema() -> Value {
             "links": {
                 "type": "array",
                 "maxItems": 16,
-                "description": "Typed links from this memory to existing memories in the same scope, each written through the gate with its own receipt. derived_from: this memory derives from it. evidence_of: this memory is evidence about it. closes: this memory closes it (an issue, a failure). supersedes: this memory fully replaces it (for corrections prefer the review-gated corrects path). Strata only.",
+                "description": "Typed links from this memory to existing memories in the same scope, each written through the gate with its own receipt. derived_from: this memory derives from it. evidence_of: this memory is evidence about it. closes: this memory closes it (an issue, a failure). supersedes: this memory fully replaces it (for corrections prefer the review-gated corrects path). reopened: this memory is a later failure on the same exact handle after a close. Strata only.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "kind": {"type": "string", "enum": ["derived_from", "evidence_of", "closes", "supersedes"]},
+                        "kind": {"type": "string", "enum": ["derived_from", "evidence_of", "closes", "supersedes", "reopened"]},
                         "to": {"type": "string", "description": "Exact id of an existing memory"}
                     },
                     "required": ["kind", "to"]

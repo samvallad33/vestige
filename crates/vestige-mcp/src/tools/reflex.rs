@@ -33,9 +33,13 @@
 //! Every firing appends one hash-chained line to `<data_dir>/reflex/ledger.jsonl`,
 //! the Hook Ledger, which `reflex(action='ledger')` summarizes and verifies.
 //!
-//! The gate decides. Reflex records and tells. It never allows, retries, or
-//! routes around a stop, and nothing here reads or writes the gate's own files
-//! beyond reading its receipts.
+//! The gate decides Operator stops. Reflex records those and tells the agent.
+//! It never allows, retries, or routes around an Operator stop. It does return
+//! the host's own block decision when a ledger invariant fails: `Stop` uses
+//! top-level `decision: "block"`, and `PreToolUse` uses
+//! `hookSpecificOutput.permissionDecision: "deny"` (the current contract;
+//! top-level `decision` on PreToolUse is deprecated). Nothing here reads or
+//! writes the gate's own files beyond reading its receipts.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
@@ -52,8 +56,10 @@ use vestige_core::{OutputConfig, Storage};
 
 use crate::cognitive::CognitiveEngine;
 
+pub mod auto_bind;
 mod compaction;
-mod pairing;
+mod enforce;
+pub mod pairing;
 mod stale;
 mod witness;
 
@@ -112,6 +118,7 @@ fn event_budget(event: &str) -> usize {
     match event {
         "UserPromptSubmit" | "SessionStart" => 2000,
         "SubagentStart" => 1500,
+        "Stop" | "SubagentStop" => 600,
         "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch" => 600,
         _ => 0,
     }
@@ -733,6 +740,83 @@ struct Input {
     error_raw: String,
     /// The shell call ran in the background, so its result is not the command's.
     background: bool,
+    /// UserPromptSubmit text. Never copied into the Hook Ledger.
+    prompt: String,
+    /// Stop / SubagentStop final assistant text. Never copied into the ledger.
+    last_assistant_message: String,
+    /// True when the host is already continuing because a Stop hook blocked.
+    stop_hook_active: bool,
+    tool_input: Value,
+    tool_response: Value,
+    tool_calls: Value,
+    from_model: String,
+    to_model: String,
+    worktree_path: String,
+    /// Structural intention records supplied by the host or a prior tool.
+    open_intentions: Value,
+    /// True when the install opted out with `--no-enforce`: Reflex records
+    /// and injects, and never returns a block or deny.
+    no_enforce: bool,
+}
+
+/// A JSON field that a host may send as an object, as a JSON string (a
+/// template substitution), or as MCP content blocks whose text is JSON.
+fn json_field(args: &Value, key: &str) -> Value {
+    let Some(v) = args.get(key) else {
+        return Value::Null;
+    };
+    decode_json(v, 0)
+}
+
+fn decode_json(v: &Value, depth: u8) -> Value {
+    if depth > 2 {
+        return v.clone();
+    }
+    match v {
+        Value::String(s) => {
+            let t = s.trim();
+            if t.starts_with("${") && t.ends_with('}') {
+                return Value::Null;
+            }
+            if (t.starts_with('{') || t.starts_with('['))
+                && t.len() <= 1 << 20
+                && let Ok(parsed) = serde_json::from_str::<Value>(t)
+            {
+                return decode_json(&parsed, depth + 1);
+            }
+            v.clone()
+        }
+        Value::Array(rows) => {
+            // MCP content blocks: [{"type": "text", "text": "{...}"}].
+            let texts: Vec<&str> = rows
+                .iter()
+                .filter(|r| r.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|r| r.get("text").and_then(Value::as_str))
+                .collect();
+            if texts.len() == 1 && texts.len() == rows.len() {
+                let parsed = decode_json(&Value::String(texts[0].to_string()), depth + 1);
+                if parsed.is_object() {
+                    return parsed;
+                }
+            }
+            v.clone()
+        }
+        Value::Object(map) => {
+            if let Some(inner) = map.get("structuredContent").filter(|x| x.is_object()) {
+                return inner.clone();
+            }
+            if let Some(content) = map.get("content").filter(|x| x.is_array())
+                && map.len() <= 2
+            {
+                let parsed = decode_json(content, depth + 1);
+                if parsed.is_object() {
+                    return parsed;
+                }
+            }
+            v.clone()
+        }
+        _ => v.clone(),
+    }
 }
 
 /// The exact text of one field, untrimmed and uncut: an absent field and a
@@ -767,7 +851,7 @@ impl Input {
     fn parse(args: Option<&Value>) -> Input {
         let empty = json!({});
         let a = args.unwrap_or(&empty);
-        let nested = a.get("tool_input").cloned().unwrap_or(Value::Null);
+        let nested = json_field(a, "tool_input");
         let mut command = field(a, &["command"]);
         if command.is_empty() {
             command = field(&nested, &["command", "cmd"]);
@@ -825,8 +909,38 @@ impl Input {
             background: matches!(a.get("background"), Some(Value::Bool(true)))
                 || field(a, &["background"]) == "true"
                 || nested.get("run_in_background") == Some(&Value::Bool(true)),
+            prompt: clipped_text(a, &["prompt", "user_prompt", "message"], 16_000),
+            last_assistant_message: clipped_text(
+                a,
+                &["last_assistant_message", "lastAssistantMessage"],
+                32_000,
+            ),
+            stop_hook_active: matches!(a.get("stop_hook_active"), Some(Value::Bool(true)))
+                || field(a, &["stop_hook_active", "stopHookActive"]) == "true",
+            tool_input: nested,
+            tool_response: json_field(a, "tool_response"),
+            tool_calls: json_field(a, "tool_calls"),
+            from_model: field(a, &["from_model", "fromModel"]),
+            to_model: field(a, &["to_model", "toModel"]),
+            worktree_path: field(a, &["worktree_path", "worktreePath"]),
+            open_intentions: a.get("open_intentions").cloned().unwrap_or(Value::Null),
+            no_enforce: matches!(a.get("enforce"), Some(Value::Bool(false)))
+                || matches!(field(a, &["enforce"]).as_str(), "off" | "false" | "0"),
         }
     }
+}
+
+fn clipped_text(args: &Value, keys: &[&str], max_chars: usize) -> String {
+    for k in keys {
+        if let Some(s) = args.get(*k).and_then(Value::as_str) {
+            let t = s.trim();
+            if t.is_empty() || (t.starts_with("${") && !t.contains('\n')) {
+                continue;
+            }
+            return s.chars().take(max_chars).collect();
+        }
+    }
+    String::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -855,6 +969,9 @@ struct GateRow {
     stop_receipt: String,
     #[serde(default)]
     tries: u32,
+    /// Owner granted this permit for one exact command.
+    #[serde(default)]
+    single_use: bool,
 }
 
 fn clip(v: Option<&Value>, n: usize) -> String {
@@ -897,6 +1014,11 @@ impl GateRow {
             via: clip(rec.get("via"), 32),
             stop_receipt: clip(rec.get("stop_receipt"), 64),
             tries: 0,
+            single_use: match rec.get("single_use") {
+                Some(Value::Bool(v)) => *v,
+                Some(Value::String(s)) => s.eq_ignore_ascii_case("true"),
+                _ => false,
+            },
         };
         match kind.as_str() {
             "STOP" => is_rule(&row.rule).then_some(row),
@@ -981,6 +1103,9 @@ struct Persisted {
     retired: Vec<stale::Retirement>,
     #[serde(default)]
     retire_seq: u64,
+    /// One-use permits taken from single-use PERMIT_GRANTED receipts.
+    #[serde(default)]
+    permits: Vec<enforce::Permit>,
 }
 
 fn lookup<'a, T>(list: &'a [(String, T)], key: &str) -> Option<&'a T> {
@@ -1113,6 +1238,8 @@ struct SessionState {
     checkpoint: Option<compaction::Checkpoint>,
     /// Allowlisted test commands between their PreToolUse and their result.
     witness_pending: Vec<witness::Pending>,
+    /// Per-session enforcement debts. Not an Operator stop.
+    ledger: enforce::TurnLedger,
 }
 
 impl SessionState {
@@ -1140,6 +1267,7 @@ impl SessionState {
             self.turn += 1;
             self.turn_chars = 0;
             self.turn_started = now;
+            self.ledger.begin_turn();
         }
     }
 
@@ -1173,6 +1301,8 @@ struct SavedSession {
     contexts: HashMap<String, Context>,
     #[serde(default)]
     checkpoint: Option<compaction::Checkpoint>,
+    #[serde(default)]
+    ledger: enforce::TurnLedger,
 }
 
 struct Global {
@@ -1208,6 +1338,7 @@ impl Global {
                         turn: s.turn,
                         touched: s.touched,
                         checkpoint: s.checkpoint,
+                        ledger: s.ledger,
                         ..SessionState::default()
                     },
                 )
@@ -1261,7 +1392,14 @@ impl Global {
         let saved: HashMap<&String, SavedSession> = self
             .sessions
             .iter()
-            .filter(|(_, s)| !s.contexts.is_empty() || s.checkpoint.is_some())
+            .filter(|(_, s)| {
+                !s.contexts.is_empty()
+                    || s.checkpoint.is_some()
+                    || !s.ledger.pending.is_empty()
+                    || !s.ledger.unpaired.is_empty()
+                    || !s.ledger.unreceipted.is_empty()
+                    || s.ledger.stop_failure.is_some()
+            })
             .map(|(id, s)| {
                 (
                     id,
@@ -1270,6 +1408,7 @@ impl Global {
                         touched: s.touched,
                         contexts: s.contexts.clone(),
                         checkpoint: s.checkpoint.clone(),
+                        ledger: s.ledger.clone(),
                     },
                 )
             })
@@ -2062,6 +2201,7 @@ fn apply(g: &mut Global, outcome: Outcome) -> Option<Value> {
                 },
                 1000,
             );
+            enforce::register_single_use(g, &row, &stop.d16);
             g.dirty = true;
             Some(
                 json!({"kind": "resolution", "receipt": row.d16(), "memory": node, "closes": stop.node, "new": wrote}),
@@ -2605,14 +2745,8 @@ fn status_view(g: &Global, home: &Path) -> Value {
 // Entry points
 // ---------------------------------------------------------------------------
 
-fn shape(inp: &Input, text: &str) -> Value {
-    if text.is_empty() {
-        return json!({});
-    }
-    if inp.format == "plain" {
-        return json!({"context": text, "event": inp.event});
-    }
-    json!({"hookSpecificOutput": {"hookEventName": inp.event, "additionalContext": text}})
+fn shape(inp: &Input, text: &str, decision: &enforce::HostDecision) -> Value {
+    enforce::host_json(&inp.event, &inp.format, text, decision)
 }
 
 /// One hook firing, against the gate home at `$OPERATOR_HOME` or `~/.operator`.
@@ -2659,7 +2793,32 @@ pub async fn execute_with(
             let s = g.session(&inp.session);
             // One firing per event: a host that reads the same settings twice
             // reports it twice, and the second copy is only ledgered.
-            let key = format!("{}|{}|{}|{}", inp.event, inp.call, inp.agent, inp.source);
+            // Stop continuations carry a new stop_hook_active / block count, so
+            // they are not the double-installed copy of the firing just answered.
+            // A repeated UserPromptSubmit is the same firing only when the
+            // prompt text is the same.
+            let key = if matches!(inp.event.as_str(), "Stop" | "SubagentStop") {
+                format!(
+                    "{}|{}|{}|{}|{}|{}",
+                    inp.event,
+                    inp.call,
+                    inp.agent,
+                    inp.source,
+                    inp.stop_hook_active,
+                    s.ledger.stop_blocks
+                )
+            } else if inp.event == "UserPromptSubmit" {
+                format!(
+                    "{}|{}|{}|{}|{}",
+                    inp.event,
+                    inp.call,
+                    inp.agent,
+                    inp.source,
+                    &sha256_hex(&inp.prompt)[..12]
+                )
+            } else {
+                format!("{}|{}|{}|{}", inp.event, inp.call, inp.agent, inp.source)
+            };
             let once_per_turn = matches!(
                 inp.event.as_str(),
                 "UserPromptSubmit"
@@ -2746,52 +2905,114 @@ pub async fn execute_with(
     let paired = pairing::on_event(&global, &ctx, &inp).await;
     let witnessed = witness::on_event(&global, &ctx, &inp).await;
     let (compacted, restored) = compaction::on_event(&global, &ctx, &inp).await;
-    let mut g = global.lock().map_err(|e| e.to_string())?;
-    let mut wrote = Vec::new();
-    for o in outcomes {
-        if let Some(entry) = apply(&mut g, o) {
-            wrote.push(entry);
+    // GhostLink is part of the hook, not a tool the model has to remember.
+    // UserPromptSubmit and SessionStart name one never-composed pair.
+    // Stop names one hypothesis weave has not closed. A miss here is silence.
+    // The walk runs before the reflex lock so a large log cannot stall the ledger.
+    // A compaction restart is not a new session: the restore owns that firing.
+    let ghost = if inp.event == "SessionStart" && inp.source == "compact" {
+        None
+    } else {
+        crate::strata_memory::ghostlink::reflex_line(storage.as_ref(), &inp.event)
+    };
+    let (text, decision, overdue) = {
+        let mut g = global.lock().map_err(|e| e.to_string())?;
+        let mut wrote = Vec::new();
+        for o in outcomes {
+            if let Some(entry) = apply(&mut g, o) {
+                wrote.push(entry);
+            }
+        }
+        wrote.extend(paired.wrote);
+        wrote.extend(witnessed.wrote);
+        wrote.extend(compacted);
+        let lead_extra = if inp.session.is_empty() {
+            Vec::new()
+        } else {
+            enforce::observe(&mut g, &inp, storage)
+        };
+        let lead: Vec<String> = ghost
+            .into_iter()
+            .chain(restored)
+            .chain(paired.tell)
+            .chain(witnessed.tell)
+            .chain(lead_extra)
+            .collect();
+        let (text, told) = compose(&mut g, &inp, &lead);
+        let decision = if inp.session.is_empty() {
+            enforce::HostDecision::default()
+        } else {
+            enforce::decide(&mut g, &inp, storage, &text)
+        };
+        let overdue = decision.overdue_item.clone();
+        let extra = if inp.session.is_empty() {
+            json!({})
+        } else {
+            let s = g.session(&inp.session);
+            let turn = s.turn;
+            let held_ctx = s.context(&inp.agent);
+            let mut extra =
+                json!({"turn": turn, "manifest": held_ctx.digest(), "held": held_ctx.held.len()});
+            if let (Some(obj), Value::Object(more)) =
+                (extra.as_object_mut(), decision.ledger.clone())
+            {
+                for (k, v) in more {
+                    obj.insert(k, v);
+                }
+            }
+            extra
+        };
+        append_ledger(
+            &mut g,
+            &inp,
+            text.len(),
+            &told,
+            &wrote,
+            started.elapsed().as_millis(),
+            extra,
+        );
+        // A turn's end and every compaction step are written down at once: the
+        // next firing may come from a new server process.
+        let force = wrote
+            .iter()
+            .any(|w| w.get("new").and_then(Value::as_bool) == Some(true))
+            || matches!(
+                inp.event.as_str(),
+                "Stop"
+                    | "SubagentStop"
+                    | "PreCompact"
+                    | "PostCompact"
+                    | "SessionStart"
+                    | "SessionEnd"
+            );
+        g.dirty = g.dirty || !wrote.is_empty() || overdue.is_some();
+        g.persist(force || overdue.is_some());
+        g.heartbeat();
+        (text, decision, overdue)
+    };
+    if let Some(item) = overdue {
+        match ingest(&ctx, item).await {
+            Ok(id) => {
+                if let Ok(mut g) = global.lock() {
+                    append_ledger(
+                        &mut g,
+                        &inp,
+                        0,
+                        &[],
+                        &[json!({"kind": "overdue", "memory": id, "new": true})],
+                        started.elapsed().as_millis(),
+                        json!({"overdue": true}),
+                    );
+                    g.dirty = true;
+                    g.persist(true);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "reflex could not record an OVERDUE intention")
+            }
         }
     }
-    wrote.extend(paired.wrote);
-    wrote.extend(witnessed.wrote);
-    wrote.extend(compacted);
-    let lead: Vec<String> = restored
-        .into_iter()
-        .chain(paired.tell)
-        .chain(witnessed.tell)
-        .collect();
-    let (text, told) = compose(&mut g, &inp, &lead);
-    let extra = if inp.session.is_empty() {
-        json!({})
-    } else {
-        let s = g.session(&inp.session);
-        let turn = s.turn;
-        let ctx = s.context(&inp.agent);
-        json!({"turn": turn, "manifest": ctx.digest(), "held": ctx.held.len()})
-    };
-    append_ledger(
-        &mut g,
-        &inp,
-        text.len(),
-        &told,
-        &wrote,
-        started.elapsed().as_millis(),
-        extra,
-    );
-    // A turn's end and every compaction step are written down at once: the
-    // next firing may come from a new server process.
-    let force = wrote
-        .iter()
-        .any(|w| w.get("new").and_then(Value::as_bool) == Some(true))
-        || matches!(
-            inp.event.as_str(),
-            "Stop" | "SubagentStop" | "PreCompact" | "PostCompact" | "SessionStart" | "SessionEnd"
-        );
-    g.dirty = g.dirty || !wrote.is_empty();
-    g.persist(force);
-    g.heartbeat();
-    Ok(shape(&inp, &text))
+    Ok(shape(&inp, &text, &decision))
 }
 
 // ---------------------------------------------------------------------------
@@ -3718,6 +3939,10 @@ mod tests {
             repo.path(),
         ))
         .await;
+        // File mtimes come from the kernel's coarse clock (one tick, up to
+        // ~10 ms, behind SystemTime::now()), so a report written in the same
+        // tick as the PreToolUse can look older than the run on a busy box.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         std::fs::create_dir_all(repo.path().join("reports")).unwrap();
         std::fs::write(
             repo.path().join("reports/junit.xml"),
@@ -4422,5 +4647,659 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    async fn plant(fx: &Fixture, item: Value) -> String {
+        let ctx = Ctx {
+            storage: &fx.storage,
+            cognitive: &fx.cog,
+            output_config: &fx.oc,
+        };
+        ingest(&ctx, item).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_unsaved_directive_blocks_stop_until_remember_and_the_third_stop_is_overdue() {
+        let fx = Fixture::new();
+        let first = fx
+            .fire(json!({
+                "event": "UserPromptSubmit",
+                "session": "s-dir",
+                "prompt": "from now on never edit benchmarks/real_engine"
+            }))
+            .await;
+        let text = context(&first);
+        assert!(
+            text.contains(
+                "Vestige ledger: an owner directive (\"from now on\") is unsaved this turn"
+            ),
+            "{first}"
+        );
+        assert!(text.contains("\"never\""), "{first}");
+        let again = fx
+            .fire(json!({
+                "event": "UserPromptSubmit",
+                "session": "s-dir",
+                "prompt": "from now on never edit benchmarks/real_engine, restated"
+            }))
+            .await;
+        assert!(
+            !context(&again).contains("is unsaved this turn"),
+            "the directive line is folded after the first delivery: {again}"
+        );
+        let stop1 = fx.fire(json!({"event": "Stop", "session": "s-dir"})).await;
+        assert_eq!(stop1["decision"], "block", "{stop1}");
+        assert!(
+            stop1["reason"].as_str().unwrap().contains("from now on"),
+            "{stop1}"
+        );
+        let stop2 = fx
+            .fire(json!({"event": "Stop", "session": "s-dir", "stop_hook_active": true}))
+            .await;
+        assert_eq!(stop2["decision"], "block", "{stop2}");
+        let stop3 = fx
+            .fire(json!({"event": "Stop", "session": "s-dir", "stop_hook_active": true}))
+            .await;
+        assert!(stop3.get("decision").is_none(), "{stop3}");
+        let view = fx.fire(json!({"action": "ledger", "since": "1h"})).await;
+        let blocks = view["recent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|row| row["event"] == "Stop" && row["enforce"]["overdue"] == true)
+            .unwrap();
+        assert_eq!(blocks["enforce"]["stopBlocks"], 2, "{blocks}");
+        assert_eq!(view["chain"]["status"], "ok", "{view}");
+        assert!(
+            fx.tag("OVERDUE").await.is_some(),
+            "an OVERDUE intention was saved"
+        );
+    }
+
+    #[tokio::test]
+    async fn remember_clears_the_directive_and_stop_allows() {
+        let fx = Fixture::new();
+        fx.fire(json!({
+            "event": "UserPromptSubmit",
+            "session": "s-ok",
+            "prompt": "remember this: ship from main"
+        }))
+        .await;
+        let blocked = fx.fire(json!({"event": "Stop", "session": "s-ok"})).await;
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        fx.fire(json!({
+            "event": "PostToolUse",
+            "session": "s-ok",
+            "tool": "mcp__vestige__remember",
+            "tool_input": {"action": "save", "content": "ship from main"},
+            "tool_response": {"nodeId": "mem-00000000000000aa"}
+        }))
+        .await;
+        let allowed = fx
+            .fire(json!({"event": "Stop", "session": "s-ok", "stop_hook_active": true}))
+            .await;
+        assert!(allowed.get("decision").is_none(), "{allowed}");
+    }
+
+    #[tokio::test]
+    async fn an_unpaired_failure_blocks_stop_until_a_passing_rerun() {
+        let fx = Fixture::new();
+        fx.fire(failure("s-fail", "toolu_f1")).await;
+        let blocked = fx.fire(json!({"event": "Stop", "session": "s-fail"})).await;
+        let reason = blocked["reason"].as_str().unwrap_or("");
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        assert!(reason.contains("cargo test -p vestige-mcp"), "{blocked}");
+        assert!(reason.contains("101"), "{blocked}");
+        fx.fire(json!({
+            "event": "PostToolUse",
+            "session": "s-fail",
+            "tool": "Bash",
+            "call": "toolu_ok",
+            "command": "cargo test -p vestige-mcp"
+        }))
+        .await;
+        let allowed = fx
+            .fire(json!({"event": "Stop", "session": "s-fail", "stop_hook_active": true}))
+            .await;
+        assert!(allowed.get("decision").is_none(), "{allowed}");
+    }
+
+    #[tokio::test]
+    async fn an_unreceipted_commit_blocks_stop_until_a_receipt_names_the_sha() {
+        let fx = Fixture::new();
+        let repo = git_repo();
+        let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+        let head = &sha[..12];
+        fx.fire(json!({
+            "event": "PostToolUse",
+            "session": "s-commit",
+            "tool": "Bash",
+            "call": "toolu_c1",
+            "command": "git commit -m ship",
+            "cwd": repo.path()
+        }))
+        .await;
+        let blocked = fx
+            .fire(json!({"event": "Stop", "session": "s-commit"}))
+            .await;
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        assert!(
+            blocked["reason"].as_str().unwrap().contains(head),
+            "{blocked}"
+        );
+        fx.fire(json!({
+            "event": "PostToolUse",
+            "session": "s-commit",
+            "tool": "remember",
+            "tool_input": {"action": "save"},
+            "tool_response": {"nodeId": "mem-00000000000000bb", "sha": sha}
+        }))
+        .await;
+        // Naming the SHA alone is not a RULE 6 receipt.
+        let partial = fx
+            .fire(json!({"event": "Stop", "session": "s-commit", "stop_hook_active": true}))
+            .await;
+        assert_eq!(partial["decision"], "block", "{partial}");
+        let reason = partial["reason"].as_str().unwrap();
+        assert!(reason.contains("leaves out"), "{partial}");
+        assert!(reason.contains("branch main"), "{partial}");
+        assert!(reason.contains("file lib.rs"), "{partial}");
+        fx.fire(json!({
+            "event": "PostToolUse",
+            "session": "s-commit",
+            "tool": "mcp__vestige__remember",
+            "tool_input": {"action": "save", "content": format!(
+                "SHA {sha} parent none branch main author Test files lib.rs:1-1 gates none"
+            )},
+            // An MCP content block, as Claude Code echoes a tool result.
+            "tool_response": [{"type": "text", "text": "{\"nodeId\": \"mem-00000000000000bc\"}"}]
+        }))
+        .await;
+        let allowed = fx
+            .fire(json!({"event": "Stop", "session": "s-commit", "stop_hook_active": true}))
+            .await;
+        assert!(allowed.get("decision").is_none(), "{allowed}");
+    }
+
+    #[tokio::test]
+    async fn a_commit_receipt_must_carry_every_gate_the_turn_ran() {
+        let fx = Fixture::new();
+        allow(&fx, &["cargo test -p demo"]);
+        let repo = git_repo();
+        let sha = git(repo.path(), &["rev-parse", "HEAD"]);
+        fx.fire(json!({"event": "UserPromptSubmit", "session": "s-gate", "prompt": "ship"}))
+            .await;
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-gate", "tool": "Bash",
+            "call": "toolu_g1", "command": "cargo test -p demo", "cwd": repo.path()}),
+        )
+        .await;
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-gate", "tool": "Bash",
+            "call": "toolu_g2", "command": "git commit -m ship", "cwd": repo.path()}),
+        )
+        .await;
+        let body = format!("SHA {sha} branch main author Test files lib.rs:1-1");
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-gate", "tool": "remember",
+            "tool_input": {"action": "save", "content": body},
+            "tool_response": "{\"nodeId\": \"mem-00000000000000cd\"}"}),
+        )
+        .await;
+        let blocked = fx.fire(json!({"event": "Stop", "session": "s-gate"})).await;
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        assert!(
+            blocked["reason"]
+                .as_str()
+                .unwrap()
+                .contains("gate `cargo test -p demo`"),
+            "{blocked}"
+        );
+        let body = format!(
+            "SHA {sha} branch main author Test files lib.rs:1-1 gate: cargo test -p demo ok"
+        );
+        fx.fire(
+            json!({"event": "PostToolUse", "session": "s-gate", "tool": "remember",
+            "tool_input": {"action": "save", "content": body},
+            "tool_response": {"nodeId": "mem-00000000000000ce"}}),
+        )
+        .await;
+        let allowed = fx
+            .fire(json!({"event": "Stop", "session": "s-gate", "stop_hook_active": true}))
+            .await;
+        assert!(allowed.get("decision").is_none(), "{allowed}");
+    }
+
+    #[tokio::test]
+    async fn no_enforce_records_the_debt_and_never_blocks() {
+        let fx = Fixture::new();
+        let out = fx
+            .fire(
+                json!({"event": "UserPromptSubmit", "session": "s-off", "enforce": "off",
+                "prompt": "from now on never force-push"}),
+            )
+            .await;
+        assert!(out.to_string().contains("unsaved this turn"), "{out}");
+        let stop = fx
+            .fire(json!({"event": "Stop", "session": "s-off", "enforce": "off"}))
+            .await;
+        assert!(stop.get("decision").is_none(), "{stop}");
+    }
+
+    #[tokio::test]
+    async fn a_stop_cannot_cite_a_missing_memory_commit_file_or_pr() {
+        let fx = Fixture::new();
+        let repo = git_repo();
+        std::fs::write(repo.path().join("lib.rs"), "fn add() {}\n").unwrap();
+        let missing = fx
+            .fire(json!({
+                "event": "Stop",
+                "session": "s-cite",
+                "cwd": repo.path(),
+                "last_assistant_message": "done via mem-00000000000000ff"
+            }))
+            .await;
+        assert_eq!(missing["decision"], "block", "{missing}");
+        assert!(
+            missing["reason"]
+                .as_str()
+                .unwrap()
+                .contains("mem-00000000000000ff")
+                && missing["reason"].as_str().unwrap().contains("missing"),
+            "{missing}"
+        );
+        let sha = fx
+            .fire(json!({
+                "event": "Stop",
+                "session": "s-cite2",
+                "cwd": repo.path(),
+                "last_assistant_message": "shipped commit:deadbeefdeadbeef"
+            }))
+            .await;
+        assert!(
+            sha["reason"]
+                .as_str()
+                .unwrap_or("")
+                .contains("deadbeefdeadbeef"),
+            "{sha}"
+        );
+        let file = fx
+            .fire(json!({
+                "event": "Stop",
+                "session": "s-cite3",
+                "cwd": repo.path(),
+                "last_assistant_message": "edited `src/no-such-file.rs`"
+            }))
+            .await;
+        assert!(
+            file["reason"]
+                .as_str()
+                .unwrap_or("")
+                .contains("src/no-such-file.rs"),
+            "{file}"
+        );
+        let pr = fx
+            .fire(json!({
+                "event": "Stop",
+                "session": "s-cite4",
+                "cwd": repo.path(),
+                "last_assistant_message": "merged PR #99999"
+            }))
+            .await;
+        assert!(
+            pr["reason"].as_str().unwrap_or("").contains("99999"),
+            "{pr}"
+        );
+        let head = git(repo.path(), &["rev-parse", "HEAD"]);
+        let real = fx
+            .fire(json!({
+                "event": "Stop",
+                "session": "s-cite5",
+                "cwd": repo.path(),
+                "last_assistant_message": format!("shipped `{head}` and `./lib.rs`")
+            }))
+            .await;
+        assert!(real.get("decision").is_none(), "{real}");
+    }
+
+    #[tokio::test]
+    async fn a_cited_decision_without_an_execution_receipt_is_an_unverified_claim() {
+        let fx = Fixture::new();
+        let planted = plant(
+            &fx,
+            json!({
+                "node_type": "decision",
+                "tags": ["decision"],
+                "content": "migration already applied"
+            }),
+        )
+        .await;
+        fx.read(
+            "s-forge",
+            "toolu_hold",
+            "",
+            "recall",
+            json!({"id": planted}),
+            json!({"nodes": [{"id": planted, "content": "migration already applied", "tags": ["decision"], "type": "decision"}]}),
+        )
+        .await;
+        let shown = fx
+            .fire(json!({"event": "UserPromptSubmit", "session": "s-forge", "prompt": "status"}))
+            .await;
+        assert!(
+            context(&shown).contains(&planted) && context(&shown).contains("unverified claim"),
+            "{shown}"
+        );
+        let blocked = fx
+            .fire(json!({
+                "event": "Stop",
+                "session": "s-forge",
+                "last_assistant_message": format!("the migration is done, see {planted}")
+            }))
+            .await;
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        assert!(
+            blocked["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no execution receipt"),
+            "{blocked}"
+        );
+        let witness = plant(
+            &fx,
+            json!({
+                "node_type": "event",
+                "tags": ["reflex-witness"],
+                "content": "witness of the migration run"
+            }),
+        )
+        .await;
+        let done = plant(
+            &fx,
+            json!({
+                "node_type": "decision",
+                "tags": ["decision", format!("execution-receipt:{witness}")],
+                "content": "migration ran"
+            }),
+        )
+        .await;
+        fx.read(
+            "s-forge2",
+            "toolu_hold2",
+            "",
+            "recall",
+            json!({"id": done}),
+            json!({"nodes": [{"id": done, "content": "migration ran", "tags": ["decision"], "type": "decision"}]}),
+        )
+        .await;
+        let allowed = fx
+            .fire(json!({
+                "event": "Stop",
+                "session": "s-forge2",
+                "last_assistant_message": format!("migration done, receipt on {done}")
+            }))
+            .await;
+        assert!(allowed.get("decision").is_none(), "{allowed}");
+    }
+
+    #[tokio::test]
+    async fn a_prompt_handle_and_a_first_touch_scope_are_injected_once() {
+        let fx = Fixture::new();
+        let path = "crates/vestige-mcp/src/tools/reflex.rs";
+        let landmine = plant(
+            &fx,
+            json!({
+                "node_type": "fact",
+                "tags": [path],
+                "content": "landmine on the reflex path"
+            }),
+        )
+        .await;
+        let first = fx
+            .fire(json!({
+                "event": "UserPromptSubmit",
+                "session": "s-scan",
+                "prompt": format!("open {path} and read it")
+            }))
+            .await;
+        assert!(context(&first).contains(&landmine), "{first}");
+        let second = fx
+            .fire(json!({
+                "event": "UserPromptSubmit",
+                "session": "s-scan",
+                "prompt": format!("open {path} once more")
+            }))
+            .await;
+        assert!(!context(&second).contains(&landmine), "{second}");
+        let scope = plant(
+            &fx,
+            json!({
+                "node_type": "fact",
+                "tags": ["scope:crates/strata-kernel"],
+                "content": "kernel landmine"
+            }),
+        )
+        .await;
+        let touch = fx
+            .fire(json!({
+                "event": "PreToolUse",
+                "session": "s-scope",
+                "call": "toolu_rg1",
+                "tool": "Bash",
+                "command": "rg foo crates/strata-kernel"
+            }))
+            .await;
+        assert!(context(&touch).contains(&scope), "{touch}");
+        let repeat = fx
+            .fire(json!({
+                "event": "PreToolUse",
+                "session": "s-scope",
+                "call": "toolu_rg2",
+                "tool": "Bash",
+                "command": "rg foo crates/strata-kernel"
+            }))
+            .await;
+        assert!(!context(&repeat).contains(&scope), "{repeat}");
+    }
+
+    #[tokio::test]
+    async fn subagent_start_names_parent_debts_inside_the_budget() {
+        let fx = Fixture::new();
+        fx.fire(json!({
+            "event": "UserPromptSubmit",
+            "session": "s-sub",
+            "prompt": "from now on never force-push"
+        }))
+        .await;
+        let out = fx
+            .fire(json!({"event": "SubagentStart", "session": "s-sub", "agent": "child"}))
+            .await;
+        let text = context(&out);
+        assert!(text.contains("open debts"), "{out}");
+        assert!(text.contains("from now on"), "{out}");
+        assert!(text.chars().count() <= 1500, "{}", text.chars().count());
+    }
+
+    #[tokio::test]
+    async fn pre_tool_use_denies_a_commit_while_an_edit_is_unsaved() {
+        let fx = Fixture::new();
+        fx.fire(json!({
+            "event": "PostToolUse",
+            "session": "s-pre",
+            "tool": "Edit",
+            "call": "toolu_e",
+            "file": "src/app.rs"
+        }))
+        .await;
+        let denied = fx
+            .fire(json!({
+                "event": "PreToolUse",
+                "session": "s-pre",
+                "call": "toolu_g",
+                "tool": "Bash",
+                "command": "git commit -m save"
+            }))
+            .await;
+        assert_eq!(
+            denied["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{denied}"
+        );
+        assert!(denied.get("decision").is_none(), "{denied}");
+        assert!(
+            denied["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .unwrap()
+                .contains("src/app.rs"),
+            "{denied}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_one_use_permit_allows_one_permission_request_and_the_next_asks_again() {
+        let mut fx = Fixture::new();
+        let first = fx.receipt(stop("s-permit", "OP-011", "toolu_1", "git reset --hard"));
+        fx.fire(json!({"event": "PostToolUse", "session": "s-permit"}))
+            .await;
+        fx.receipt(json!({
+            "v": "1", "decision": "PERMIT_GRANTED", "source": "owner-tty", "session": "s-permit",
+            "action_digest": "act-toolu_1", "stop_receipt": first, "single_use": "True"
+        }));
+        fx.fire(json!({"event": "UserPromptSubmit", "session": "s-permit", "prompt": "go"}))
+            .await;
+        let allow = fx
+            .fire(json!({
+                "event": "PermissionRequest",
+                "session": "s-permit",
+                "tool": "Bash",
+                "command": "git reset --hard"
+            }))
+            .await;
+        assert_eq!(
+            allow["hookSpecificOutput"]["decision"]["behavior"], "allow",
+            "{allow}"
+        );
+        assert!(!allow.to_string().contains("updatedPermissions"), "{allow}");
+        let again = fx
+            .fire(json!({
+                "event": "PermissionRequest",
+                "session": "s-permit",
+                "tool": "Bash",
+                "command": "git reset --hard"
+            }))
+            .await;
+        assert!(again.get("hookSpecificOutput").is_none(), "{again}");
+    }
+
+    #[tokio::test]
+    async fn pre_model_switch_blocks_a_downgrade_while_a_migration_intention_is_open() {
+        let fx = Fixture::new();
+        fx.fire(json!({
+            "event": "UserPromptSubmit",
+            "session": "s-model",
+            "prompt": "continue",
+            "open_intentions": [{"id": "int-mig", "tags": ["migration"]}]
+        }))
+        .await;
+        let blocked = fx
+            .fire(json!({
+                "event": "PreModelSwitch",
+                "session": "s-model",
+                "from_model": "claude-opus-5",
+                "to_model": "claude-haiku-5"
+            }))
+            .await;
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        assert_eq!(
+            blocked["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{blocked}"
+        );
+        assert!(
+            blocked["hookSpecificOutput"]
+                .get("additionalContext")
+                .is_none(),
+            "{blocked}"
+        );
+        let upgrade = fx
+            .fire(json!({
+                "event": "PreModelSwitch",
+                "session": "s-model",
+                "from_model": "claude-haiku-5",
+                "to_model": "claude-opus-5"
+            }))
+            .await;
+        assert!(upgrade.get("decision").is_none(), "{upgrade}");
+    }
+
+    #[tokio::test]
+    async fn worktree_remove_refuses_uncommitted_files() {
+        let fx = Fixture::new();
+        let repo = git_repo();
+        std::fs::write(repo.path().join("dirty.rs"), "changed\n").unwrap();
+        let blocked = fx
+            .fire(json!({
+                "event": "WorktreeRemove",
+                "session": "s-wt",
+                "worktree_path": repo.path()
+            }))
+            .await;
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        assert_eq!(blocked["exitCode"], 2, "{blocked}");
+        git(repo.path(), &["add", "-A"]);
+        git(repo.path(), &["commit", "-q", "-m", "save dirty"]);
+        let clean = fx
+            .fire(json!({
+                "event": "WorktreeRemove",
+                "session": "s-wt",
+                "worktree_path": repo.path()
+            }))
+            .await;
+        assert!(clean.get("decision").is_none(), "{clean}");
+    }
+
+    #[tokio::test]
+    async fn post_tool_batch_blocks_overlapping_edits() {
+        let fx = Fixture::new();
+        let blocked = fx
+            .fire(json!({
+                "event": "PostToolBatch",
+                "session": "s-batch",
+                "tool_calls": [
+                    {"tool_name": "Edit", "tool_input": {"file_path": "src/a.rs", "start_line": 1, "end_line": 8}},
+                    {"tool_name": "Edit", "tool_input": {"file_path": "src/a.rs", "start_line": 8, "end_line": 12}}
+                ]
+            }))
+            .await;
+        assert_eq!(blocked["decision"], "block", "{blocked}");
+        assert!(
+            blocked["reason"].as_str().unwrap().contains("src/a.rs"),
+            "{blocked}"
+        );
+        let apart = fx
+            .fire(json!({
+                "event": "PostToolBatch",
+                "session": "s-batch",
+                "tool_calls": [
+                    {"tool_name": "Edit", "tool_input": {"file_path": "src/a.rs", "start_line": 1, "end_line": 3}},
+                    {"tool_name": "Edit", "tool_input": {"file_path": "src/b.rs", "start_line": 1, "end_line": 3}}
+                ]
+            }))
+            .await;
+        assert!(apart.get("decision").is_none(), "{apart}");
+    }
+
+    #[tokio::test]
+    async fn stop_failure_snapshots_a_rate_limit_for_the_next_prompt() {
+        let fx = Fixture::new();
+        let ignored = fx
+            .fire(json!({"event": "StopFailure", "session": "s-snap", "error": "rate_limit"}))
+            .await;
+        assert_eq!(ignored, json!({}), "{ignored}");
+        let next = fx
+            .fire(json!({"event": "UserPromptSubmit", "session": "s-snap", "prompt": "continue"}))
+            .await;
+        assert!(context(&next).contains("rate_limit"), "{next}");
+        let view = fx.fire(json!({"action": "ledger", "since": "1h"})).await;
+        assert_eq!(view["chain"]["status"], "ok", "{view}");
     }
 }

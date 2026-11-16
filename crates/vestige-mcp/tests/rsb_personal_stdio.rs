@@ -293,11 +293,18 @@ fn coding_failure_autofires_without_similarity_and_manual_never_updates_future()
         json!([]),
     );
     let before = s.get(&cause)["stability"].as_f64().unwrap();
-    let trigger = s.save(
-        "Failure: panic while starting the application",
-        json!(["file:cache.rs"]),
-        json!([]),
+    // A failure is an explicit recorded label (the `failure` tag), not a content word.
+    std::thread::sleep(Duration::from_millis(3));
+    let saved = s.tool(
+        "smart_ingest",
+        json!({"content":"Failure: panic while starting the application","entities":["file:cache.rs"],"attributes":[],"tags":["failure"]}),
     );
+    let trigger: String = saved
+        .get("nodeId")
+        .or_else(|| saved.get("echoNodeId"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing node: {saved}"))
+        .into();
     assert!(s.get(&cause)["stability"].as_f64().unwrap() > before);
     let future = s.save(
         "A later note about cache.rs",

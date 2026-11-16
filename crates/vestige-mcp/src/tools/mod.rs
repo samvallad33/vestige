@@ -126,6 +126,7 @@ pub mod selftest;
 // precedent: what the Operator gate stopped, and why — a read-only view
 // of ~/.operator receipts and permits. Touches no store state.
 pub mod precedent;
+pub mod reopen_triangle;
 // Hook-only tool: hooks call it, tools/list never lists it (#519).
 pub mod reflex;
 

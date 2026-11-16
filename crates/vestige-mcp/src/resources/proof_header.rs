@@ -7,12 +7,12 @@
 
 use vestige_core::Storage;
 
-use crate::strata_memory::with_store;
+use crate::strata_memory::read_store;
 
 /// Clock and due-count fields are zero-padded so two headers of the same
 /// token shape have the same length.
 pub fn line(storage: &Storage) -> Option<String> {
-    with_store(storage, header_from_store)
+    read_store(storage, header_from_store)
 }
 
 pub fn read(storage: &Storage) -> Result<String, String> {
@@ -81,7 +81,7 @@ mod tests {
         let header = line(storage.as_ref()).expect("strata header");
         let again = line(storage.as_ref()).unwrap();
         assert_eq!(header, again, "a read appends no frame");
-        let head = with_store(storage.as_ref(), |store| store.log().head()).unwrap();
+        let head = read_store(storage.as_ref(), |store| store.log().head()).unwrap();
         let seq = format!("{:016x}", head.last_acked_seq);
         assert!(header.contains(&seq), "{header}");
         assert!(header.contains(&crate::capsule::hex(&head.last_frame_hash)));
@@ -101,7 +101,7 @@ mod tests {
     fn an_ingest_advances_the_seq_and_the_shape_stays_fixed_width() {
         let (storage, _dir) = open();
         let before = line(storage.as_ref()).unwrap();
-        let before_head = with_store(storage.as_ref(), |store| store.log().head()).unwrap();
+        let before_head = read_store(storage.as_ref(), |store| store.log().head()).unwrap();
         storage
             .ingest(vestige_core::IngestInput {
                 content: "proof header advances".into(),
@@ -111,7 +111,7 @@ mod tests {
             })
             .unwrap();
         let after = line(storage.as_ref()).unwrap();
-        let after_head = with_store(storage.as_ref(), |store| store.log().head()).unwrap();
+        let after_head = read_store(storage.as_ref(), |store| store.log().head()).unwrap();
         assert_ne!(before, after);
         assert!(after_head.last_acked_seq > before_head.last_acked_seq);
         assert_eq!(
@@ -160,7 +160,7 @@ mod tests {
             })),
         ))
         .unwrap();
-        let (clock, independent) = with_store(storage.as_ref(), |store| {
+        let (clock, independent) = read_store(storage.as_ref(), |store| {
             let clock = store.head_clock_ms();
             let n = due_count(store, clock);
             (clock, n)

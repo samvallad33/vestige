@@ -30,7 +30,7 @@ use vestige_core::Storage;
 use crate::cognitive::CognitiveEngine;
 
 /// Discriminated-union schema for the unified `maintain` tool.
-const ACTIONS: [&str; 8] = [
+const ACTIONS: [&str; 10] = [
     "consolidate",
     "dream",
     "dream_compile",
@@ -39,6 +39,8 @@ const ACTIONS: [&str; 8] = [
     "backup",
     "export",
     "restore",
+    "mesh_status",
+    "mesh_sync",
 ];
 
 fn action_schema(action: &str) -> Option<Value> {
@@ -51,6 +53,15 @@ fn action_schema(action: &str) -> Option<Value> {
         "backup" => super::maintenance::backup_schema(),
         "export" => super::maintenance::export_schema(),
         "restore" => super::restore::schema(),
+        "mesh_status" => serde_json::json!({"type":"object","properties":{}}),
+        "mesh_sync" => serde_json::json!({
+            "type":"object",
+            "properties":{
+                "listen":{"type":"boolean","description":"Accept a paired peer instead of dialing."},
+                "once":{"type":"boolean","description":"Accept one connection, then return."},
+                "handle":{"type":"string","description":"Qualified handle to count as demand. Does not change what is admitted."}
+            }
+        }),
         _ => return None,
     })
 }
@@ -83,7 +94,7 @@ pub fn schema() -> Value {
         branches.push(branch);
     }
     properties.insert("action".into(), serde_json::json!({"type":"string", "enum":ACTIONS,
-        "description":"Store-wide maintenance: dream, dream_compile (replays recorded edges; the legacy engine also files reviewable PRs), gc (preview by default), importance_score, backup, export; legacy engine only: consolidate, restore. Inspect the selected action's schema. Export uses since; start/end are unsupported."}));
+        "description":"Store-wide maintenance: dream, dream_compile (replays recorded edges; the legacy engine also files reviewable PRs), gc (preview by default), importance_score, backup, export, mesh_status, mesh_sync; legacy engine only: consolidate, restore. mesh_sync reaches already-paired peers and does not pair. Inspect the selected action's schema. Export uses since; start/end are unsupported."}));
     // path has different meanings in export and restore; do not hide either.
     properties.get_mut("path").unwrap()["description"] = "[export] Confined filename inside exports/. [restore; legacy engine only] JSON archive path, confined unless allowAnyPath=true for a trusted file.".into();
     serde_json::json!({"type":"object", "properties":properties, "required":["action"], "oneOf":branches})
@@ -101,7 +112,7 @@ pub async fn execute(
         .and_then(|a| a.get("action"))
         .and_then(|v| v.as_str())
         .ok_or(
-            "Missing 'action'. Use consolidate|dream|dream_compile|gc|importance_score|backup|export|restore.",
+            "Missing 'action'. Use consolidate|dream|dream_compile|gc|importance_score|backup|export|restore|mesh_status|mesh_sync.",
         )?
         .to_string();
 
@@ -136,8 +147,26 @@ pub async fn execute(
         "backup" => super::maintenance::execute_backup(storage, args).await,
         "export" => super::maintenance::execute_export(storage, args).await,
         "restore" => super::restore::execute(storage, args).await,
+        "mesh_status" => crate::mesh::status(storage).await,
+        "mesh_sync" => {
+            let listen = args
+                .as_ref()
+                .and_then(|value| value.get("listen"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let once = args
+                .as_ref()
+                .and_then(|value| value.get("once"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(listen);
+            let handle = args
+                .as_ref()
+                .and_then(|value| value.get("handle"))
+                .and_then(|value| value.as_str());
+            crate::mesh::sync(storage, listen, once, handle).await
+        }
         other => Err(format!(
-            "Unknown maintain action '{other}'. Use consolidate|dream|dream_compile|gc|importance_score|backup|export|restore."
+            "Unknown maintain action '{other}'. Use consolidate|dream|dream_compile|gc|importance_score|backup|export|restore|mesh_status|mesh_sync."
         )),
     }
 }

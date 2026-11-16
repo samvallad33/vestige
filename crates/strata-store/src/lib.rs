@@ -78,6 +78,8 @@ mod ghostlink_tests;
 #[cfg(test)]
 mod import_tests;
 #[cfg(test)]
+mod mesh_tests;
+#[cfg(test)]
 mod tests;
 
 pub use backfill::{BackfillAdjustment, BackfillReceipt};
@@ -89,19 +91,25 @@ pub use canonical::{
 pub use error::StoreError;
 pub use gate_log::StrataEventLog;
 pub use ghostlink::{
-    composition_pair, parse_weave_source, weave_source, BridgeCandidate, BridgeReport,
+    composition_pair, hypothesis_record, parse_weave_source, weave_source, BridgeCandidate,
+    BridgeReport,
     CompositionRecord, DivergentEval, DivergentPage, DivergentSummary, GhostSnapshot, Lane,
     PathStep, PathVia, PoolFilter, ADMITTING_KINDS, BEYOND_RADIUS, BRIDGE_MAX_HOPS,
     COMPOSITION_NODE_TYPE, DEFAULT_PER_MEMORY_CAP, DIVERGENT_RADIUS, GHOSTLINK_TAG,
+    HYPOTHESIS_NODE_TYPE, HYPOTHESIS_SOURCE_PREFIX, HYPOTHESIS_TAG,
     LEGACY_INFERRED, LENS_TAG_PREFIX, MEASURED_MEMBER_CAP, OUTCOME_TAG_PREFIX, WEAVE_SOURCE_PREFIX,
     WEAVE_TAG, W_CLOSED_BY, W_DERIVED_FROM, W_TOUCHED_ARTIFACT, W_TOUCHED_ASSOCIATION,
 };
 pub use op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
+pub use store::mesh::{
+    canonical_handle, check_peer_range, fingerprint, mesh_grant_context, writer_did, ChainManifest,
+    ImportReport, MeshProjection, OpenConflict, PinnedWriter, Reinforcement,
+};
 pub use store::{
     default_policy, effect_receipt_id, permissive_policy, retire_rule_id, AdmissionContext,
     EffectAction, EffectProof, NodeWrite, RecordedOrigin, Refold, RetireReceipt, StrataStore,
-    SupersedeHop, MAX_LIVE_ECHOES_PER_ORIGINAL, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE,
-    RULE_SUPPRESS,
+    SupersedeHop, MAX_LIVE_ECHOES_PER_ORIGINAL, RULE_EDIT, RULE_INTENTIONS, RULE_MESH_GRANT,
+    RULE_PURGE, RULE_SUPPRESS,
 };
 pub use types::{
     looks_like_failure, AnchorRecord, ConnectionRecord, EdgeDirection, EdgeKind, IngestInput,

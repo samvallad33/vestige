@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/synthesis-preflight.sh", "timeout": 8 },
+          { "type": "command", "command": "$HOME/.claude/hooks/cwd-state-injector.sh", "timeout": 8 },
+          { "type": "command", "command": "$HOME/.claude/hooks/vestige-pulse-daemon.sh", "timeout": 6 },
+          { "type": "command", "command": "$HOME/.claude/hooks/preflight-swarm.sh", "timeout": 45 }
+        ]
+      }
+    ]
+  }
+}

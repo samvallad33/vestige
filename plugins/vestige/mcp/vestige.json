@@ -1,0 +1,6 @@
+{
+  "vestige": {
+    "command": "node",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/bin/vestige-mcp.js"]
+  }
+}

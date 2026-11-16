@@ -62,6 +62,7 @@ const HANDLE_PREFIXES: [&str; 3] = ["mem-", "eff-", "wr_"];
 const SESSION_WORDS: [&str; 4] = ["session", "session_id", "session-id", "sessionid"];
 
 /// Units that make a bare two-part number a measurement, lowercase.
+// hardcode-scan: closed-class (unit symbols)
 const MEASURE_UNITS: [&str; 18] = [
     "ns", "us", "µs", "ms", "s", "sec", "secs", "second", "seconds", "min", "mins", "minute",
     "minutes", "h", "hr", "hrs", "hour", "hours",

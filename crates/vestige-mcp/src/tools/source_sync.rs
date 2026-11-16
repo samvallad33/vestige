@@ -254,6 +254,7 @@ async fn execute_github(
 
 /// GitHub's issue-closing keywords ("Linking a pull request to an issue"),
 /// matched case-insensitively as whole words.
+// hardcode-scan: protocol (GitHub documented issue-closing keywords)
 const CLOSING_KEYWORDS: &[&str] = &[
     "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
 ];
