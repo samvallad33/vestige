@@ -63,7 +63,7 @@
 @@ -0,0 +1,629 @@
 +++ b/tools/c2_hashcheck.py
 @@ -0,0 +1,76 @@
-== step2
+== 34ce4102
 +++ b/C2_STEP2_LOG.md
 @@ -0,0 +1,39 @@
 +++ b/EXPERIMENT_LOG.md
