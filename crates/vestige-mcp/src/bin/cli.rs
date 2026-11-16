@@ -5456,6 +5456,10 @@ fn session_start_output(
         return None;
     }
     let mut tags = rules_hook::rule_tags(&cwd, repo_tag);
+    // The rule block lists only the session's rule tags. The two below feed
+    // the rulebook's owner sections and the rules-file flags; they are read
+    // in the same pass but are not rules to restate.
+    let rule_tag_count = tags.len();
     for extra in [
         vestige_mcp::rulebook::OWNER_TAG,
         vestige_mcp::rulebook::RUN_FAILED_TAG,
@@ -5479,7 +5483,7 @@ fn session_start_output(
                 .map(|node| (node.content.trim().to_string(), node.id.clone()))
         })
         .collect();
-    let rules = rules_hook::render_context(&resolved, &input.source, limits);
+    let rules = rules_hook::render_context(&resolved[..rule_tag_count], &input.source, limits);
     let flags = rules_hook::rules_file_flags(&cwd, &failed);
     let context = vestige_mcp::rulebook::inject(&owner, rules.as_deref(), &flags, limits.max_bytes);
     serde_json::to_string(&rules_hook::hook_output(&context)).ok()
