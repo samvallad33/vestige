@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Blocks a commit when the engine carries a hand-typed open-class word list,
+# a benchmark-specific condition, or a hardcoded user path.
+# Enable once per clone:  git config core.hooksPath .githooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if ! bash scripts/hardcode_scan.sh; then
+  echo "pre-commit: hardcode_scan failed; commit blocked." >&2
+  exit 1
+fi

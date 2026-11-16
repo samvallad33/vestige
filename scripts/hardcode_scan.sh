@@ -19,7 +19,8 @@ cd "$(dirname "$0")/.."
 python3 - <<'PY'
 import os, re, sys
 
-ROOT = "crates"
+# HARDCODE_SCAN_ROOT lets the self-test point the scan at a fixture tree.
+ROOT = os.environ.get("HARDCODE_SCAN_ROOT", "crates")
 SKIP_DIRS = ("/tests", "/benches", "/target", "/data/wordnet-3.1")
 # Paths the owner excluded from this pass (benchmark harness).
 SKIP_PATHS = ("crates/vestige-core/src/rungs.rs", "benchmarks/real_engine")
