@@ -678,9 +678,7 @@ pub fn propose_with(memory: &StrataMemory, request: &ProposeRequest) -> Result<V
 /// store that is not a Strata log, yields nothing. Errors yield nothing: the
 /// hook must not fail.
 pub fn reflex_line(storage: &Storage, event: &str) -> Option<String> {
-    if live_memory(storage).is_none() {
-        return None;
-    }
+    live_memory(storage)?;
     let line = match event {
         "UserPromptSubmit" | "SessionStart" => propose_reflex_line(storage),
         "Stop" | "SubagentStop" => unclosed_reflex_line(storage),
@@ -770,9 +768,7 @@ fn card_field(name: &str, value: &str) -> Result<String, String> {
     let value = value.trim();
     let chars = value.chars().count();
     if chars == 0 || chars > CARD_MAX_CHARS {
-        return Err(format!(
-            "{name} must be 1 to {CARD_MAX_CHARS} characters"
-        ));
+        return Err(format!("{name} must be 1 to {CARD_MAX_CHARS} characters"));
     }
     if value.chars().any(|c| c.is_control()) {
         return Err(format!("{name} must not contain control characters"));
@@ -793,7 +789,12 @@ fn hypothesis_parents(record: &strata_store::NodeRecord) -> Option<(String, Stri
     Some((first?, second?))
 }
 
-fn commitment_hash(a: &str, b: &str, card: &HypothesisCard, path: Option<&[strata_store::PathStep]>) -> String {
+fn commitment_hash(
+    a: &str,
+    b: &str,
+    card: &HypothesisCard,
+    path: Option<&[strata_store::PathStep]>,
+) -> String {
     let mut body = format!(
         "v1\n{a}\n{b}\n{}\n{}\n{}\n{}\n{}\n",
         card.claim, card.bridge, card.discriminator, card.predict_if_true, card.predict_if_false
@@ -889,7 +890,9 @@ pub fn open(
     }
     let snapshot = store.ghost_snapshot(PoolFilter::default());
     if snapshot.is_woven(a, b) {
-        return Err("this pair is already woven; open seals a pair that has not been tested".into());
+        return Err(
+            "this pair is already woven; open seals a pair that has not been tested".into(),
+        );
     }
     let path = snapshot.admitting_path(a, b);
     let hash = commitment_hash(a, b, &card, path.as_deref());
@@ -898,11 +901,15 @@ pub fn open(
         .get_node(a)
         .map(|record| record.scope)
         .unwrap_or_else(|| vestige_core::DEFAULT_MEMORY_SCOPE.to_string());
-    if let Some(existing) = store.get_all_nodes_in_scope(&scope).into_iter().find(|node| {
-        node.is_live()
-            && strata_store::hypothesis_record(node)
-            && node.tags.iter().any(|tag| tag == &commit_tag)
-    }) {
+    if let Some(existing) = store
+        .get_all_nodes_in_scope(&scope)
+        .into_iter()
+        .find(|node| {
+            node.is_live()
+                && strata_store::hypothesis_record(node)
+                && node.tags.iter().any(|tag| tag == &commit_tag)
+        })
+    {
         return Ok(json!({
             "mode": "open",
             "decision": "already_open",
@@ -1140,10 +1147,7 @@ fn parse_span(entry: &Value, url: &str) -> Result<Option<(String, u64, u64)>, St
     if sha.is_none() && start.is_none() && end.is_none() {
         return Ok(None);
     }
-    let sha = sha
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
+    let sha = sha.unwrap_or("").trim().to_ascii_lowercase();
     if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!(
             "evidence spanSha256 must be 64 hex characters for {url}"
@@ -1183,8 +1187,7 @@ fn composition_content(
                 "\n- {} sha256:{} retrieved {when}",
                 e.url, e.sha256
             ));
-            if let (Some(span), Some(start), Some(end)) =
-                (&e.span_sha256, e.span_start, e.span_end)
+            if let (Some(span), Some(start), Some(end)) = (&e.span_sha256, e.span_start, e.span_end)
             {
                 content.push_str(&format!(" span:{span} [{start},{end})"));
             }
@@ -1276,9 +1279,8 @@ pub fn weave_with(
         if !strata_store::hypothesis_record(&record) {
             return Err(format!("{id} is not a sealed GhostLink hypothesis"));
         }
-        let parents = hypothesis_parents(&record).ok_or_else(|| {
-            format!("{id} does not name the pair it was sealed for")
-        })?;
+        let parents = hypothesis_parents(&record)
+            .ok_or_else(|| format!("{id} does not name the pair it was sealed for"))?;
         if parents != (a.to_string(), b.to_string()) {
             return Err(format!(
                 "hypothesis {id} was sealed for {} and {}, not {a} and {b}",
@@ -2102,11 +2104,15 @@ mod open_tests {
         let (low, high) = if a <= b { (&a, &b) } else { (&b, &a) };
         let candidates = proposed["candidates"].as_array().unwrap();
         assert!(
-            candidates.iter().any(|c| c["firstId"] == json!(low) && c["secondId"] == json!(high)),
+            candidates
+                .iter()
+                .any(|c| c["firstId"] == json!(low) && c["secondId"] == json!(high)),
             "the sealed pair is still proposed: {proposed}"
         );
         assert!(
-            candidates.iter().all(|c| c["firstId"] != json!(hid) && c["secondId"] != json!(hid)),
+            candidates
+                .iter()
+                .all(|c| c["firstId"] != json!(hid) && c["secondId"] != json!(hid)),
             "the hypothesis is not an idea"
         );
         let woven = weave_closing(
@@ -2129,9 +2135,11 @@ mod open_tests {
         );
         let after = propose(storage.as_ref(), &request).expect("after");
         assert!(
-            after["candidates"].as_array().unwrap().iter().all(|c| {
-                !(c["firstId"] == json!(low) && c["secondId"] == json!(high))
-            }),
+            after["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| { !(c["firstId"] == json!(low) && c["secondId"] == json!(high)) }),
             "closing removes the pair: {after}"
         );
         let second = weave_closing(
@@ -2150,7 +2158,10 @@ mod open_tests {
             "a woven pair is not injected again: {prompt:?}"
         );
         let stop = reflex_line(storage.as_ref(), "Stop");
-        assert!(stop.is_none(), "a closed hypothesis is not named on Stop: {stop:?}");
+        assert!(
+            stop.is_none(),
+            "a closed hypothesis is not named on Stop: {stop:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

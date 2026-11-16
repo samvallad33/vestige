@@ -2909,7 +2909,12 @@ pub async fn execute_with(
     // UserPromptSubmit and SessionStart name one never-composed pair.
     // Stop names one hypothesis weave has not closed. A miss here is silence.
     // The walk runs before the reflex lock so a large log cannot stall the ledger.
-    let ghost = crate::strata_memory::ghostlink::reflex_line(storage.as_ref(), &inp.event);
+    // A compaction restart is not a new session: the restore owns that firing.
+    let ghost = if inp.event == "SessionStart" && inp.source == "compact" {
+        None
+    } else {
+        crate::strata_memory::ghostlink::reflex_line(storage.as_ref(), &inp.event)
+    };
     let (text, decision, overdue) = {
         let mut g = global.lock().map_err(|e| e.to_string())?;
         let mut wrote = Vec::new();
