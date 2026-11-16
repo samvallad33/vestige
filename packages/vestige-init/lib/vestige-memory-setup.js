@@ -57,7 +57,10 @@ function reflexHooks(dialect, shimCommand) {
   const rows = (REFLEX_EVENTS[dialect] || []).map(([event, matcher]) => [event, dialect === 'claude'
     ? { ...(matcher ? { matcher } : {}), hooks: [{ type: 'mcp_tool', server: 'vestige', tool: 'session', input: { action: 'reflex', params: REFLEX_INPUT } }] }
     : shim(matcher)]);
-  if (dialect === 'claude') rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact', hooks: [{ type: 'command', command: shimCommand, timeout: 2 }] }]);
+  if (dialect === 'claude') {
+    rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact|fork', hooks: [{ type: 'command', command: shimCommand, timeout: 2 }] }]);
+    rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact|fork', hooks: [{ type: 'command', command: 'vestige capsule --harness claude-code --event session-start', timeout: 8 }] }]);
+  }
   return rows;
 }
 const read = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;

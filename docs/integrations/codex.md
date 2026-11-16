@@ -159,6 +159,22 @@ codex mcp add vestige -- "$(which vestige-mcp)"
 
 ---
 
+## Session capsule
+
+Codex SessionStart uses the same hook JSON this repo records in `packages/vestige-init/hooks/reflex.cjs` (`hostOutput` for every non-cursor host):
+
+```json
+{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}
+```
+
+The command is a binary, not a shell wrapper:
+
+```bash
+vestige capsule --harness codex --event session-start
+```
+
+Register it for `startup`, `resume`, `clear`, `compact` and `fork`. It reads the payload on stdin, prints nothing and exits 0 when there is no store.
+
 ## Also Works With
 
 | IDE | Guide |

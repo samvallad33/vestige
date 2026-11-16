@@ -79,6 +79,11 @@ struct SandwichInstallOptions {
     #[arg(long)]
     include_memory_loader: bool,
 
+    /// Append the SessionStart capsule command hook. A reinstall without this
+    /// flag removes only that command.
+    #[arg(long)]
+    enable_capsule: bool,
+
     /// OpenAI-compatible chat completions endpoint for optional Sanhedrin.
     #[arg(long, value_name = "URL")]
     sanhedrin_endpoint: Option<String>,
@@ -210,6 +215,24 @@ enum Commands {
     Restore {
         /// Path to the JSON file
         file: PathBuf,
+    },
+
+    /// Session capsule: the log head, pinned decisions, due obligations and the
+    /// default rulebook, by exact handle.
+    ///
+    /// Reads the harness payload on stdin. With an owner running, the read goes
+    /// through that server and this process does not open the log. It fails
+    /// open: empty stdout and exit 0.
+    Capsule {
+        /// claude-code, codex, or plain
+        #[arg(long)]
+        harness: String,
+        /// session-start
+        #[arg(long, default_value = "session-start")]
+        event: String,
+        /// normal, merge, rebase, or bisect. Default: git's own state files.
+        #[arg(long)]
+        mode: Option<String>,
     },
 
     /// Back up the live store
@@ -898,6 +921,20 @@ fn main() -> anyhow::Result<()> {
         Commands::Mesh { command } => run_mesh(command),
         Commands::Provenance { command } => run_provenance(command),
         Commands::Restore { file } => run_restore(file),
+        Commands::Capsule {
+            harness,
+            event,
+            mode,
+        } => {
+            let dir = match cli_data_dir() {
+                Ok(dir) => dir,
+                Err(err) => {
+                    eprintln!("capsule: {err}");
+                    std::process::exit(0);
+                }
+            };
+            vestige_mcp::capsule::run_cli(&dir, &harness, &event, mode.as_deref())
+        }
         Commands::Backup { output } => run_backup(output),
         Commands::MigrateToStrata {
             from,
@@ -1283,6 +1320,10 @@ fn home_dir() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("failed to locate home directory"))
 }
 
+fn is_scrubbed_hook_command(command: &str) -> bool {
+    is_vestige_hook_command(command) || vestige_mcp::capsule::is_capsule_command(command)
+}
+
 fn is_vestige_hook_command(command: &str) -> bool {
     const NEEDLES: &[&str] = &[
         "synthesis-preflight.sh",
@@ -1306,7 +1347,13 @@ fn scrub_vestige_hooks(settings: &mut serde_json::Value) {
         return;
     };
 
-    for event_name in ["UserPromptSubmit", "Stop"] {
+    for event_name in [
+        "UserPromptSubmit",
+        "Stop",
+        "SessionStart",
+        "PreCompact",
+        "PostCompact",
+    ] {
         let Some(groups) = hooks
             .get_mut(event_name)
             .and_then(|groups| groups.as_array_mut())
@@ -1323,7 +1370,7 @@ fn scrub_vestige_hooks(settings: &mut serde_json::Value) {
                     !hook
                         .get("command")
                         .and_then(|command| command.as_str())
-                        .is_some_and(is_vestige_hook_command)
+                        .is_some_and(is_scrubbed_hook_command)
                 });
             }
         }
@@ -1718,6 +1765,15 @@ fn install_sandwich_from_source(
                 .join("settings.sanhedrin.fragment.json"),
         )?;
     }
+    if options.enable_capsule {
+        let fragment = vestige_mcp::capsule::load_fragment(
+            &source_root
+                .join("hooks")
+                .join("settings.capsule.fragment.json"),
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        vestige_mcp::capsule::append_fragment(&mut settings, &fragment);
+    }
 
     let mut rendered = serde_json::to_vec_pretty(&settings)?;
     rendered.push(b'\n');
@@ -1769,7 +1825,8 @@ fn run_sandwich_install(
     let optional_layers_enabled = options.enable_preflight
         || options.enable_sandwich
         || options.enable_sanhedrin
-        || options.with_launchd;
+        || options.with_launchd
+        || options.enable_capsule;
     let message = if optional_layers_enabled {
         "Cognitive Sandwich files updated. Restart Claude Code to use enabled optional hooks."
     } else {
@@ -5661,14 +5718,38 @@ fn session_start_output(
         .ok()?;
     let input = rules_hook::parse_input(&raw)?;
     let cwd = input.cwd.clone().or_else(|| env::current_dir().ok())?;
-    let tags = rules_hook::rule_tags(&cwd, repo_tag);
     let data_dir = cli_data_dir().ok()?;
     // Never create a store: no log, no rules.
     if !data_dir.join("log").is_dir() {
         return None;
     }
+    let mut tags = rules_hook::rule_tags(&cwd, repo_tag);
+    for extra in [
+        vestige_mcp::rulebook::OWNER_TAG,
+        vestige_mcp::rulebook::RUN_FAILED_TAG,
+    ] {
+        if !tags.iter().any(|tag| tag == extra) {
+            tags.push(extra.to_string());
+        }
+    }
     let resolved = resolve_rule_tags(&data_dir, &tags, deadline)?;
-    let context = rules_hook::render_context(&resolved, &input.source, limits)?;
+    let owner: Vec<&str> = resolved
+        .iter()
+        .filter(|(tag, _)| tag == vestige_mcp::rulebook::OWNER_TAG)
+        .flat_map(|(_, nodes)| nodes.iter().map(|node| node.content.as_str()))
+        .collect();
+    let failed: Vec<(String, String)> = resolved
+        .iter()
+        .filter(|(tag, _)| tag == vestige_mcp::rulebook::RUN_FAILED_TAG)
+        .flat_map(|(_, nodes)| {
+            nodes
+                .iter()
+                .map(|node| (node.content.trim().to_string(), node.id.clone()))
+        })
+        .collect();
+    let rules = rules_hook::render_context(&resolved, &input.source, limits);
+    let flags = rules_hook::rules_file_flags(&cwd, &failed);
+    let context = vestige_mcp::rulebook::inject(&owner, rules.as_deref(), &flags, limits.max_bytes);
     serde_json::to_string(&rules_hook::hook_output(&context)).ok()
 }
 

@@ -24,7 +24,7 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           { "type": "command", "command": "python3 ~/.vestige/hooks/operator-stop-memory.py", "timeout": 30 }
         ]

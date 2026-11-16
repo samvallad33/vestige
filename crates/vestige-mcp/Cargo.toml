@@ -74,6 +74,8 @@ strata-verify = { path = "../strata-verify" }
 strata-store = { path = "../strata-store" }
 # iroh transport. Only the `mesh` feature links it, so a default boot has no endpoint.
 strata-mesh = { path = "../strata-mesh", optional = true }
+strata = { path = "../strata" }
+strata-kernel = { path = "../strata-kernel" }
 # Gate policy type for projection admission. No SQLite.
 strata-gate = { path = "../strata-gate" }
 blake3 = "1"

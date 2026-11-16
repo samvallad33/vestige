@@ -146,6 +146,17 @@ pub fn with_store<R>(
     Ok(f(&mut guard))
 }
 
+/// Read the open Strata log. `None` when this process is not holding one.
+/// The closure runs under the store lock and must not re-enter it.
+pub fn read_store<T>(
+    storage: &Storage,
+    f: impl FnOnce(&strata_store::StrataStore) -> T,
+) -> Option<T> {
+    let memory = live_memory(storage)?;
+    let store = memory.lock();
+    Some(f(&store))
+}
+
 fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
     if !is_strata_backend(storage) {
         return None;
