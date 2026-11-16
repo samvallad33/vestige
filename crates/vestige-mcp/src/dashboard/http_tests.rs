@@ -803,6 +803,33 @@ async fn a_script_with_the_bearer_token_can_write() {
     assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.body);
 }
 
+/// #370 B31. The token file follows the data directory (#442). The refusal
+/// must not send a script looking in the platform default.
+#[tokio::test]
+async fn a_script_is_told_the_token_lives_beside_the_data_directory() {
+    let (_dir, storage) = strata();
+    let target = remember(&storage, "needs a token", &[]);
+    let app = router(&storage);
+    let reply = send(
+        &app,
+        "POST",
+        &format!("/api/memories/{target}/promote"),
+        &[("host", HOST)],
+        None,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{}", reply.body);
+    let message = reply.json()["error"].as_str().unwrap_or("").to_string();
+    assert!(
+        message.contains("beside this process's data directory"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("default Vestige data directory"),
+        "{message}"
+    );
+}
+
 #[tokio::test]
 async fn a_strata_suppression_does_not_claim_it_can_be_undone() {
     let (_dir, storage) = strata();
