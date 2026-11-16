@@ -80,6 +80,7 @@ fn truncate(s: &str, limit: usize) -> String {
 }
 
 /// Keywords a union node keeps from its own schema.
+// hardcode-scan: protocol (JSON-schema keywords)
 const UNION_OWN_KEYWORDS: &[&str] = &[
     "type",
     "properties",
@@ -441,6 +442,7 @@ pub fn full_schema(name: &str) -> Option<Value> {
 
 /// Every tool name `full_schema` knows, for the guards below.
 #[cfg(test)]
+// hardcode-scan: protocol (MCP tool names)
 const ALL_TOOLS: &[&str] = &[
     "session",
     "remember",

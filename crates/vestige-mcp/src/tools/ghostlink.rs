@@ -44,6 +44,7 @@ use crate::strata_memory::ghostlink::{self as engine, HardenSeed, Lens, ProposeR
 use vestige_core::Storage;
 
 /// Every GhostLink mode, in schema order.
+// hardcode-scan: protocol (tool mode names)
 pub const MODES: &[&str] = &[
     "propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden", "heal",
 ];
@@ -216,80 +217,45 @@ fn law(id: &str, name: &str, text: &str, signals: &[&str]) -> InvariantLaw {
 }
 
 /// The six laws distilled from four root-caused bugs across four frameworks
-/// (the 2026-09-25 harden set).
+/// (the 2026-09-25 harden set). No keyword signals ship with them: a law is
+/// reading material, and signals were never used for matching.
 pub fn embedded_laws() -> Vec<InvariantLaw> {
     vec![
         law(
             "LAW-REPLAY",
             "Claim-Before-Execute (Replay Class)",
             "Wherever retries and side-effecting tools co-occur without a claim-before-execute ledger, duplicate execution exists. Fix: durable action ledger keyed on (run_id, operation, normalized_args_hash), claimed BEFORE execution, settled AFTER, returning prior receipt on any retry.",
-            &[
-                "retry",
-                "re-execut",
-                "idempoten",
-                "nonce",
-                "claim",
-                "ledger",
-                "replay",
-                "duplicate",
-            ],
+            &[],
         ),
         law(
             "LAW-EPOCH",
             "Attempt Epoch + Fencing Token",
             "Wherever a supervisor re-dispatches work from a checkpoint, the task identity must include an attempt epoch. Without it, a duplicate is byte-identical to the original and storage cannot distinguish them. Heartbeat must be bidirectional: the worker must be able to learn it lost the lease.",
-            &[
-                "checkpoint",
-                "resume",
-                "heartbeat",
-                "fencing",
-                "lease",
-                "epoch",
-                "attempt",
-                "sweep",
-                "timeout",
-            ],
+            &[],
         ),
         law(
             "LAW-ANCHOR",
             "Ground-Truth State Anchor",
             "Any state the agent believes (cwd, balance, nonce, context) must be re-verified against ground truth before destructive operations. Belief stored in conversational transcript is lossy: compaction/restart loses it.",
-            &["cwd", "compaction", "context loss", "anchor", "reset"],
+            &[],
         ),
         law(
             "LAW-SUPERSEDE",
             "Supersession + Validity Windows",
             "Wherever new facts are added without marking old contradicting facts as superseded, the context becomes contradictory. Fix: every write must emit ADD/UPDATE/DELETE/NONE events; every stored fact carries validFrom/validUntil; superseded facts are demoted and excluded from recall.",
-            &[
-                "supersede",
-                "contradict",
-                "stale",
-                "valid_from",
-                "valid_until",
-                "accumulat",
-                "pollut",
-            ],
+            &[],
         ),
         law(
             "LAW-RECEIPT",
             "Success Receipts Bound to Verified Outcomes",
             "Every success signal must be a receipt bound to a verified outcome, not a status flag. An index that reports success but has unembedded chunks is a green-badge failure. Fix: coverage watermarks and verify-anchors.",
-            &["coverage", "watermark", "verify", "receipt"],
+            &[],
         ),
         law(
             "LAW-SETTLE",
             "Settlement Identity Uniqueness",
             "Wherever multiple flows can produce the same settlement (mint, redeem, claim, distribution), each settlement must carry a unique identity that prevents duplicates.",
-            &[
-                "settle",
-                "settlement",
-                "identity",
-                "duplicate",
-                "double",
-                "mint",
-                "redeem",
-                "distribution",
-            ],
+            &[],
         ),
     ]
 }

@@ -31,6 +31,7 @@ pub fn schema() -> Value {
     // Adapter commands have disjoint action tags and never accept caller values
     // for the reserved local-memory source namespace.
     if let Some(variants) = schema["properties"]["command"]["oneOf"].as_array_mut() {
+        // hardcode-scan: protocol (JSON-RPC / JSON-schema keys)
         variants.extend([
             json!({"type":"object","properties":{"action":{"const":"replay"}},"required":["action"],"additionalProperties":false}),
             json!({"type":"object","properties":{"action":{"const":"memory_snapshot"},"memory_id":{"type":"string"}},"required":["action","memory_id"],"additionalProperties":false}),

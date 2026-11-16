@@ -389,6 +389,7 @@ const STRATA_WITHHELD_TOOLS: &[&str] = &["purge", "delete_knowledge"];
 /// `(tool, action, why)` a Strata log cannot honor in 4.0. `None` is erasure
 /// (shared wording with the store). Each is dropped from the advertised
 /// schema and refused on call, so every advertised action works.
+// hardcode-scan: protocol (MCP tool/action names)
 const STRATA_WITHHELD_ACTIONS: &[(&str, &str, Option<&str>)] = &[
     ("memory", "purge", None),
     ("memory", "delete", None),

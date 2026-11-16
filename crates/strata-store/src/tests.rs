@@ -562,29 +562,21 @@ fn reads_append_nothing() {
 }
 
 #[test]
-fn failure_marker_port_matches_vestige_semantics() {
-    // Same canary cases vestige-core tests for.
-    assert!(looks_like_failure("connection pool saturated at 100%", &[]));
+fn failure_label_matches_vestige_semantics() {
+    // Same canary cases vestige-core tests for: a recorded label, never a content word.
+    assert!(!looks_like_failure("connection pool saturated at 100%", &[]));
     assert!(!looks_like_failure(
         "pinned rails to 5.2 for the tz workaround",
         &[]
     ));
-    assert!(looks_like_failure(
-        "deploy went fine",
-        &["incident-postmortem".to_string()]
-    ));
-    assert!(!looks_like_failure("the migration added a column", &[]));
-    // Whole-word, not substring.
-    assert!(!looks_like_failure(
-        "slowly but surely the index warmed",
-        &[]
-    ));
-    assert!(looks_like_failure("the replica lag grew unbounded", &[]));
+    assert!(looks_like_failure("deploy went fine", &["failure".to_string()]));
+    assert!(looks_like_failure("deploy went fine", &["failure:postmortem".to_string()]));
+    assert!(!looks_like_failure("deploy went fine", &["incident-postmortem".to_string()]));
 
     let dir = temp_dir("failure");
     let mut store = StrataStore::open(&dir).expect("open");
     let f = store
-        .ingest(input("api returned 502 after the release", &[]))
+        .ingest(input("api returned 502 after the release", &["failure"]))
         .expect("f");
     let q = store
         .ingest(input("a quiet architectural note", &[]))

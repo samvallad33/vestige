@@ -324,103 +324,19 @@ pub struct AnchorRecord {
     pub last_status: Option<String>,
 }
 
-/// Whole-word failure markers, ported from vestige-core's
-/// `advanced::retroactive_backfill::FAILURE_MARKERS` (same list, same
-/// semantics: bare "500" and bare "pinned" stay removed).
-pub const FAILURE_MARKERS: &[&str] = &[
-    "error",
-    "bug",
-    "crash",
-    "crashed",
-    "regression",
-    "broke",
-    "broken",
-    "failure",
-    "failed",
-    "panic",
-    "exception",
-    "fault",
-    "outage",
-    "incident",
-    "timeout",
-    "deadlock",
-    "leak",
-    "corrupt",
-    "stack overflow",
-    "spiked",
-    "latency",
-    "degraded",
-    "slow",
-    "hang",
-    "hung",
-    "throttled",
-    "oom",
-    "502",
-    "503",
-    "504",
-    "rejected",
-    "denied",
-    "flaky",
-    "saturated",
-    "saturation",
-    "stalled",
-    "exhausted",
-    "exhaustion",
-    "overload",
-    "overloaded",
-    "backlog",
-    "fell behind",
-    "lag",
-    "lagging",
-    "unavailable",
-    "down",
-    "dropped",
-    "reset",
-    "refused",
-    "stampede",
-    "thrashing",
-    "starved",
-    "starvation",
-    "expired",
-    "expiry",
-    "overflow",
-];
-
-/// Whole-word (not substring) marker match, boundary-safe over UTF-8.
-fn contains_marker_word(hay: &str, marker: &str) -> bool {
-    let mut from = 0usize;
-    while let Some(pos) = hay[from..].find(marker) {
-        let start = from + pos;
-        let end = start + marker.len();
-        let before_ok = hay[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        let after_ok = hay[end..]
-            .chars()
-            .next()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        if before_ok && after_ok {
-            return true;
-        }
-        from = start + 1;
-    }
-    false
-}
-
-/// Does this content/tags pair read like a failure? Compatible with
-/// vestige-core's `looks_like_failure` so failure detection does not drift
-/// between the SQLite store and this store.
-pub fn looks_like_failure(content: &str, tags: &[String]) -> bool {
-    let hay = content.to_lowercase();
-    if FAILURE_MARKERS
-        .iter()
-        .any(|m| contains_marker_word(&hay, m))
-    {
-        return true;
-    }
+/// Does this memory carry a recorded failure label?
+///
+/// Failure is recorded structure, not a vocabulary guess: the writer tags the
+/// memory `failure` (case-insensitive, or a namespaced `failure:<detail>` tag).
+/// Content words are never scanned, so a quiet cause that happens to say
+/// "timeout" or "error" is not misread as the failure itself. Callers that hold
+/// a full node also honour `node_type == "failure"` and recorded
+/// `corrects`/`supersedes`/`closes` links.
+pub fn looks_like_failure(_content: &str, tags: &[String]) -> bool {
     tags.iter().any(|t| {
-        let tl = t.to_lowercase();
-        FAILURE_MARKERS.iter().any(|m| contains_marker_word(&tl, m))
+        let t = t.trim();
+        t.eq_ignore_ascii_case("failure")
+            || t.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("failure:"))
     })
 }
+

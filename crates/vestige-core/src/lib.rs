@@ -117,10 +117,11 @@ pub mod projection;
 /// - Spreading activation networks
 pub mod neuroscience;
 /// Zero-LLM, zero-vector, deterministic lexical retrieval engine (Total-Recall).
-/// Audited on LongMemEval_S (98.60% R@5) and LoCoMo-10 (91.93% Session R@5 / 75.46% Turn Soft R@5).
 #[allow(clippy::all)]
 pub mod retrieval;
 pub(crate) mod zero_overlap;
+/// Princeton WordNet 3.1 noun hypernyms (bundled data file, WordNet license).
+pub mod wordnet;
 
 // ============================================================================
 // PUBLIC API RE-EXPORTS

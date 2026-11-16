@@ -3636,17 +3636,13 @@ fn infer_project(node: &vestige_core::KnowledgeNode) -> Option<String> {
         }
     }
 
-    // `codebase` tool sets source to the bare codebase name. Reject paths,
-    // URLs, and generic provenance labels.
+    // `codebase` tool sets source to the bare codebase name. Reject paths and
+    // URLs by shape; no list of generic labels.
     if let Some(source) = node.source.as_deref().map(str::trim)
         && !source.is_empty()
         && !source.contains('/')
         && !source.contains(':')
         && !source.contains(char::is_whitespace)
-        && !matches!(
-            source.to_lowercase().as_str(),
-            "conversation" | "chat" | "manual" | "user" | "unknown" | "file"
-        )
     {
         return Some(source.to_string());
     }
@@ -3654,46 +3650,14 @@ fn infer_project(node: &vestige_core::KnowledgeNode) -> Option<String> {
     None
 }
 
-/// Map a memory's tags + content onto a `PatternCategory` via the keyword
-/// conventions the dashboard tracks. First match wins; memories with no
-/// category return None and are skipped by the learner.
+/// Map a memory onto a `PatternCategory` only through an explicit tag equal to
+/// a category's canonical name. No keyword list over content.
 fn infer_category(
     node: &vestige_core::KnowledgeNode,
 ) -> Option<vestige_core::advanced::cross_project::PatternCategory> {
-    use vestige_core::advanced::cross_project::PatternCategory;
-
-    let haystack = format!("{} {}", node.tags.join(" "), node.content).to_lowercase();
-    let rules: &[(&[&str], PatternCategory)] = &[
-        (
-            &["error", "panic", "result", "unwrap"],
-            PatternCategory::ErrorHandling,
-        ),
-        (
-            &["async", "tokio", "race", "concurrency", "deadlock"],
-            PatternCategory::AsyncConcurrency,
-        ),
-        (
-            &["test", "vitest", "cargo test", "playwright"],
-            PatternCategory::Testing,
-        ),
-        (
-            &["architecture", "module", "design"],
-            PatternCategory::Architecture,
-        ),
-        (
-            &["perf", "latency", "optimize", "benchmark"],
-            PatternCategory::Performance,
-        ),
-        (
-            &["security", "auth", "secret", "vulnerability"],
-            PatternCategory::Security,
-        ),
-    ];
-
-    rules
+    node.tags
         .iter()
-        .find(|(keywords, _)| keywords.iter().any(|k| haystack.contains(k)))
-        .map(|(_, category)| category.clone())
+        .find_map(|t| vestige_core::advanced::cross_project::PatternCategory::from_tag(t))
 }
 
 #[derive(Debug, Deserialize)]

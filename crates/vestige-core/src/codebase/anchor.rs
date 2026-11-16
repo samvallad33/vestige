@@ -92,6 +92,7 @@ const BRACE_LOOKAHEAD: usize = 6;
 /// Tokens that make a line containing `symbol` look like a *definition* rather
 /// than a call site. Deliberately cross-language: this module must work on a
 /// repository it has never seen without a parser for every language in it.
+// hardcode-scan: protocol (programming-language definition keywords)
 const DEFINITION_KEYWORDS: &[&str] = &[
     "fn",
     "func",
@@ -392,6 +393,7 @@ fn symbol_offsets<'a>(haystack: &'a str, needle: &'a str) -> impl Iterator<Item 
 
 /// Statement keywords that make `<word> symbol(` a *call*, not a definition.
 /// Without these, `return load_config(path)` reads as a C-style signature.
+// hardcode-scan: protocol (programming-language control keywords)
 const CALL_LEAD_KEYWORDS: &[&str] = &[
     "return", "await", "yield", "if", "while", "for", "new", "throw", "raise", "assert", "print",
     "else", "elif", "match", "case", "in", "and", "or", "not",
