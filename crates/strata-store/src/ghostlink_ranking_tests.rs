@@ -718,3 +718,29 @@ fn equal_divergent_scores_go_to_the_better_measured_pair() {
     assert!(thin.len() == 3);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn a_sealed_hypothesis_is_not_a_pool_member() {
+    let dir = temp_dir("hypothesis-not-pool");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let a = node(&mut store, "alpha");
+    let b = node(&mut store, "beta");
+    store
+        .ingest_in_scope(
+            IngestInput {
+                content: format!("GhostLink hypothesis {a} {b}"),
+                node_type: "hypothesis".into(),
+                tags: vec!["ghostlink".into(), "ghostlink-hypothesis".into()],
+                created_at_ms: Some(BASE_MS),
+                ..IngestInput::default()
+            },
+            "user",
+        )
+        .expect("hypothesis");
+    let report = store.ghost_snapshot(user()).bridge();
+    assert_eq!(
+        report.pool_size, 2,
+        "the conjecture is not a third idea the lens may pair"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

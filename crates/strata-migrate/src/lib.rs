@@ -978,7 +978,9 @@ fn table_rows(snapshot: &source::SourceSnapshot, table: &str) -> u64 {
 #[cfg(feature = "sqlite-reader")]
 fn skipped_tables_for(snapshot: &source::SourceSnapshot) -> Vec<String> {
     // Driven by sqlite_master (audit finding): every nonempty table without
-    // a STRATA mapping is named, so the receipt never overclaims.
+    // a STRATA mapping is named, so the receipt never overclaims. A table
+    // whose COUNT(*) failed is still named (`None` count): dropping the
+    // error used to erase it from this list.
     snapshot
         .all_nonempty_tables
         .iter()

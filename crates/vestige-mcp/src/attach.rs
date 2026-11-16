@@ -19,7 +19,10 @@
 //! replaced by rename; the socket is 0600 too. Whoever can read the endpoint
 //! file can already read the log, so the token adds no access beyond that;
 //! it keeps other local users, and local processes that merely find the
-//! port, from speaking MCP to the store.
+//! port, from speaking MCP to the store. The proxy also checks it reached
+//! that owner: on a Unix socket the kernel's peer credentials must name
+//! this user and that pid, and the welcome line's pid must match the
+//! endpoint. A listener that answers as a different pid is not the owner.
 //!
 //! FAILOVER. The owner is usually some agent's own server process, and that
 //! agent's client kills it when the agent exits. Each proxy then answers the
@@ -51,7 +54,7 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::protocol::stdio::run_io;
+use crate::protocol::stdio::{CappedLines, CappedRead, MAX_REQUEST_LINE, run_io};
 use crate::server::McpServer;
 
 /// The OS lock that elects the owner. `vestige-upgrade` holds it too.
@@ -252,26 +255,74 @@ impl Listener {
         Ok((Self::Tcp(listener), Addr::Tcp(port)))
     }
 
-    async fn accept(&self) -> io::Result<(ReadHalf, WriteHalf)> {
+    async fn accept(&self) -> io::Result<Option<(ReadHalf, WriteHalf)>> {
         match self {
             Self::Tcp(listener) => {
                 let (stream, _) = listener.accept().await?;
                 stream.set_nodelay(true)?;
                 let (read, write) = stream.into_split();
-                Ok((Box::new(read), Box::new(write)))
+                Ok(Some((Box::new(read), Box::new(write))))
             }
             #[cfg(unix)]
             Self::Unix(listener) => {
                 let (stream, _) = listener.accept().await?;
+                if !unix_peer_is_us(&stream) {
+                    debug!("attach refused: the connecting process is another user");
+                    return Ok(None);
+                }
                 let (read, write) = stream.into_split();
-                Ok((Box::new(read), Box::new(write)))
+                Ok(Some((Box::new(read), Box::new(write))))
             }
         }
     }
 }
 
-async fn connect(data_dir: &Path, addr: Addr) -> io::Result<(ReadHalf, WriteHalf)> {
-    match addr {
+/// This user's uid. The attach socket is not a capability for other accounts.
+#[cfg(unix)]
+fn our_uid() -> u32 {
+    // Safety: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+/// The process on the other end of a Unix socket is this user.
+#[cfg(unix)]
+fn unix_peer_is_us(stream: &tokio::net::UnixStream) -> bool {
+    match stream.peer_cred() {
+        Ok(cred) => cred.uid() == our_uid(),
+        Err(err) => {
+            debug!("attach refused: peer credentials are unreadable: {err}");
+            false
+        }
+    }
+}
+
+/// The process on the other end is the owner named in the endpoint file.
+///
+/// `pid()` is `None` on platforms that do not report a peer pid. The welcome
+/// line is still checked against the endpoint pid.
+#[cfg(unix)]
+fn unix_peer_is_owner(stream: &tokio::net::UnixStream, owner_pid: u32) -> bool {
+    if !unix_peer_is_us(stream) {
+        return false;
+    }
+    match stream.peer_cred() {
+        Ok(cred) => match cred.pid() {
+            Some(pid) if u32::try_from(pid).ok() == Some(owner_pid) => true,
+            Some(pid) => {
+                debug!("attach refused: socket peer pid {pid} is not the owner pid {owner_pid}");
+                false
+            }
+            None => true,
+        },
+        Err(err) => {
+            debug!("attach refused: peer credentials are unreadable: {err}");
+            false
+        }
+    }
+}
+
+async fn connect(data_dir: &Path, endpoint: &Endpoint) -> io::Result<(ReadHalf, WriteHalf)> {
+    match endpoint.addr {
         Addr::Tcp(port) => {
             let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await?;
             stream.set_nodelay(true)?;
@@ -281,6 +332,12 @@ async fn connect(data_dir: &Path, addr: Addr) -> io::Result<(ReadHalf, WriteHalf
         #[cfg(unix)]
         Addr::Unix => {
             let stream = UnixStream::connect(data_dir.join(SOCKET_FILE)).await?;
+            if !unix_peer_is_owner(&stream, endpoint.pid) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "the socket is not held by the owner named in the endpoint file",
+                ));
+            }
             let (read, write) = stream.into_split();
             Ok((Box::new(read), Box::new(write)))
         }
@@ -603,7 +660,8 @@ async fn accept_loop(
     let mut next_id: u64 = 0;
     loop {
         let (read, write) = match listener.accept().await {
-            Ok(halves) => halves,
+            Ok(Some(halves)) => halves,
+            Ok(None) => continue,
             Err(err) => {
                 warn!("attach listener could not accept a connection: {err}");
                 tokio::time::sleep(ELECTION_POLL).await;
@@ -755,19 +813,31 @@ pub struct Attachment {
     pub owner_pid: u32,
 }
 
+/// The welcome names the owner the endpoint file published.
+///
+/// A listener that answers with any other pid is not that owner. The check
+/// is the whole of owner authentication on TCP, where the kernel does not
+/// report a peer pid; on a Unix socket [`connect`] has already required the
+/// peer pid as well.
+fn authenticated_owner_pid(endpoint: &Endpoint, welcome: &str) -> Option<u32> {
+    let rest = welcome.strip_prefix(WELCOME)?.strip_prefix(' ')?;
+    let pid = rest.split_whitespace().next()?.parse().ok()?;
+    (pid == endpoint.pid).then_some(pid)
+}
+
 /// Connect to the published endpoint, send the token plus `request` (empty
-/// for an MCP session), and return the owner's one-line answer.
+/// for an MCP session), and return the owner's one-line answer plus the
+/// endpoint the answer has to match.
 async fn greet(
     data_dir: &Path,
     request: &str,
     answer_within: Duration,
-) -> Option<(BufReader<ReadHalf>, WriteHalf, String)> {
+) -> Option<(BufReader<ReadHalf>, WriteHalf, String, Endpoint)> {
     let endpoint = read_endpoint(data_dir)?;
-    let (read, mut writer) =
-        tokio::time::timeout(HANDSHAKE_TIMEOUT, connect(data_dir, endpoint.addr))
-            .await
-            .ok()?
-            .ok()?;
+    let (read, mut writer) = tokio::time::timeout(HANDSHAKE_TIMEOUT, connect(data_dir, &endpoint))
+        .await
+        .ok()?
+        .ok()?;
     let hello = format!("{HELLO} {}{request}\n", endpoint.token);
     writer.write_all(hello.as_bytes()).await.ok()?;
     writer.flush().await.ok()?;
@@ -782,19 +852,15 @@ async fn greet(
     .await;
     match read {
         Ok(Ok(n)) if n > 0 && answer.ends_with('\n') => {
-            Some((reader, writer, answer.trim_end().to_string()))
+            Some((reader, writer, answer.trim_end().to_string(), endpoint))
         }
         _ => None,
     }
 }
 
 async fn attach(data_dir: &Path) -> Option<Attachment> {
-    let (reader, writer, welcome) = greet(data_dir, "", HANDSHAKE_TIMEOUT).await?;
-    let owner_pid = welcome
-        .strip_prefix(WELCOME)?
-        .strip_prefix(' ')?
-        .parse()
-        .ok()?;
+    let (reader, writer, welcome, endpoint) = greet(data_dir, "", HANDSHAKE_TIMEOUT).await?;
+    let owner_pid = authenticated_owner_pid(&endpoint, &welcome)?;
     Some(Attachment {
         lines: reader.lines(),
         writer,
@@ -928,45 +994,48 @@ pub enum ProxyEnd {
     Promoted { lock: File, client: PromotedClient },
 }
 
-/// Lines from stdin that survive cancellation. `read_until` appends into
-/// `pending`, which outlives a cancelled call, so a line the relay's other
-/// branches interrupt is completed on the next call, or handed whole to a
-/// promoted server. (`Lines::into_inner` would discard it.)
+/// Lines from stdin that survive cancellation. Bytes already taken live in
+/// [`CappedLines`], which outlives a cancelled call, so a line the relay's
+/// other branches interrupt is completed on the next call, or handed whole
+/// to a promoted server. A line over [`MAX_REQUEST_LINE`] is discarded
+/// through its newline instead of being buffered.
 struct StdinLines {
-    reader: BufReader<tokio::io::Stdin>,
-    pending: Vec<u8>,
+    lines: CappedLines<BufReader<tokio::io::Stdin>>,
+}
+
+enum StdinEvent {
+    Line(String),
+    Eof,
+    TooLong,
 }
 
 impl StdinLines {
     fn new() -> Self {
         Self {
-            reader: BufReader::new(tokio::io::stdin()),
-            pending: Vec::new(),
+            lines: CappedLines::new(BufReader::new(tokio::io::stdin())),
         }
     }
 
-    /// The next line without its line ending, `None` at EOF. A line that is
-    /// not UTF-8 is consumed and returned as an `InvalidData` error, which
+    /// The next stdin event. Invalid UTF-8 is an `InvalidData` error, which
     /// the relay counts and skips, as `run_io` does for its own stdin.
-    async fn next_line(&mut self) -> io::Result<Option<String>> {
-        loop {
-            let read = self.reader.read_until(b'\n', &mut self.pending).await?;
-            if read == 0 && self.pending.is_empty() {
-                return Ok(None);
-            }
-            if read == 0 || self.pending.last() == Some(&b'\n') {
-                let mut bytes = std::mem::take(&mut self.pending);
-                if bytes.last() == Some(&b'\n') {
-                    bytes.pop();
-                }
-                if bytes.last() == Some(&b'\r') {
-                    bytes.pop();
-                }
-                return String::from_utf8(bytes)
-                    .map(Some)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err));
-            }
-        }
+    async fn next_line(&mut self) -> io::Result<StdinEvent> {
+        Ok(match self.lines.next().await? {
+            CappedRead::Line(line) => StdinEvent::Line(line),
+            CappedRead::Eof => StdinEvent::Eof,
+            CappedRead::TooLong => StdinEvent::TooLong,
+        })
+    }
+
+    async fn finish_discard(&mut self) -> io::Result<()> {
+        self.lines.finish_discard().await
+    }
+
+    fn take_pending(&mut self) -> Vec<u8> {
+        self.lines.take_pending()
+    }
+
+    fn into_inner(self) -> BufReader<tokio::io::Stdin> {
+        self.lines.into_inner()
     }
 }
 
@@ -1033,12 +1102,17 @@ pub async fn proxy_stdio(
                         attachment = next;
                     }
                     Role::Owner(lock) => {
+                        if let Err(err) = stdin.finish_discard().await {
+                            warn!(
+                                "could not finish an oversized stdin line before taking over: {err}"
+                            );
+                        }
                         let mut prefix = session.replay().concat().into_bytes();
-                        prefix.append(&mut stdin.pending);
+                        prefix.append(&mut stdin.take_pending());
                         return Ok(ProxyEnd::Promoted {
                             lock,
                             client: PromotedClient {
-                                stdin: stdin.reader,
+                                stdin: stdin.into_inner(),
                                 prefix,
                                 replay_id: session.replay_id.clone(),
                                 stdout,
@@ -1078,7 +1152,7 @@ async fn relay(
     let outcome = loop {
         tokio::select! {
             line = stdin.next_line(), if blocked.is_none() => match line {
-                Ok(Some(line)) => {
+                Ok(StdinEvent::Line(line)) => {
                     read_errors = 0;
                     if line.trim().is_empty() {
                         continue;
@@ -1096,7 +1170,27 @@ async fn relay(
                         }
                     }
                 }
-                Ok(None) => break Relayed::ClientClosed,
+                Ok(StdinEvent::Eof) => break Relayed::ClientClosed,
+                Ok(StdinEvent::TooLong) => {
+                    read_errors = 0;
+                    warn!("refusing a proxied request line longer than {MAX_REQUEST_LINE} bytes");
+                    let notice = format!(
+                        "{}\n",
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": null,
+                            "error": {
+                                "code": -32600,
+                                "message": format!(
+                                    "request line exceeds {MAX_REQUEST_LINE} bytes"
+                                ),
+                            }
+                        })
+                    );
+                    if stdout.send(notice).await.is_err() {
+                        break Relayed::ClientClosed;
+                    }
+                }
                 Err(err) => {
                     read_errors += 1;
                     warn!("reading stdin failed ({read_errors}/{MAX_STDIN_ERRORS}): {err}");
@@ -1243,7 +1337,8 @@ impl DashboardLease {
 /// to name the one it already runs). The lease keeps that process serving.
 pub async fn request_dashboard(data_dir: &Path, port: u16) -> io::Result<DashboardLease> {
     let request = format!(" dashboard {port}");
-    let Some((reader, writer, answer)) = greet(data_dir, &request, Duration::from_secs(30)).await
+    let Some((reader, writer, answer, endpoint)) =
+        greet(data_dir, &request, Duration::from_secs(30)).await
     else {
         return Err(io::Error::new(
             io::ErrorKind::NotConnected,
@@ -1260,13 +1355,14 @@ pub async fn request_dashboard(data_dir: &Path, port: u16) -> io::Result<Dashboa
         // A definite answer: callers stop asking instead of retrying.
         return Err(io::Error::new(io::ErrorKind::ConnectionRefused, reason));
     }
-    let mut words = answer
+    let owner_pid = authenticated_owner_pid(&endpoint, &answer);
+    let url = answer
         .strip_prefix(WELCOME)
         .and_then(|rest| rest.strip_prefix(' '))
         .unwrap_or("")
-        .split(' ');
-    let owner_pid = words.next().and_then(|pid| pid.parse().ok());
-    let url = words.next().map(str::to_string);
+        .split_whitespace()
+        .nth(1)
+        .map(str::to_string);
     match (owner_pid, url) {
         (Some(owner_pid), Some(url)) => Ok(DashboardLease {
             url,
@@ -1274,21 +1370,20 @@ pub async fn request_dashboard(data_dir: &Path, port: u16) -> io::Result<Dashboa
             reader,
             _writer: writer,
         }),
-        _ => Err(io::Error::other(format!(
-            "unexpected answer from the Vestige server: {answer}"
-        ))),
+        _ => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "the process that answered is not the owner named by the endpoint file: {answer}"
+            ),
+        )),
     }
 }
 
 /// The pid of the process serving `data_dir`, when it answers the attach
 /// handshake. The endpoint file alone can name a process that is gone.
 pub async fn probe_owner(data_dir: &Path) -> Option<u32> {
-    let (_reader, _writer, welcome) = greet(data_dir, "", HANDSHAKE_TIMEOUT).await?;
-    welcome
-        .strip_prefix(WELCOME)?
-        .strip_prefix(' ')?
-        .parse()
-        .ok()
+    let (_reader, _writer, welcome, endpoint) = greet(data_dir, "", HANDSHAKE_TIMEOUT).await?;
+    authenticated_owner_pid(&endpoint, &welcome)
 }
 
 /// [`probe_owner`] for synchronous code, on its own thread and runtime so it
@@ -1425,6 +1520,7 @@ fn tool_result(name: &str, answer: Value) -> io::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn token() -> String {
         "ab".repeat(32)
@@ -1590,5 +1686,97 @@ mod tests {
             .expect("closes once idle")
             .unwrap();
         assert!(gate.try_enter().is_none(), "closed gate admits nobody");
+    }
+
+    #[test]
+    fn welcome_pid_must_be_the_endpoint_pid() {
+        let endpoint = Endpoint {
+            addr: Addr::Tcp(9),
+            token: token(),
+            pid: 4242,
+        };
+        assert_eq!(
+            authenticated_owner_pid(&endpoint, "vestige-attached/1 4242"),
+            Some(4242)
+        );
+        assert_eq!(
+            authenticated_owner_pid(&endpoint, "vestige-attached/1 4242 http://127.0.0.1:1"),
+            Some(4242)
+        );
+        assert_eq!(
+            authenticated_owner_pid(&endpoint, "vestige-attached/1 99999"),
+            None,
+            "a different pid is not the published owner"
+        );
+        assert_eq!(
+            authenticated_owner_pid(&endpoint, "vestige-refused/1 no dashboard"),
+            None
+        );
+    }
+
+    /// #370 B18. The proxy used to trust whatever pid the listener wrote
+    /// into the welcome line.
+    #[tokio::test]
+    async fn attach_refuses_a_welcome_from_a_different_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let endpoint = Endpoint {
+            addr: Addr::Tcp(port),
+            token: token(),
+            pid: 4242,
+        };
+        publish_endpoint(dir.path(), &endpoint).unwrap();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 512];
+            let _ = sock.read(&mut buf).await.unwrap();
+            sock.write_all(b"vestige-attached/1 99999\n").await.unwrap();
+            let _ = done_tx.send(());
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+        let attached = attach(dir.path()).await;
+        done_rx.await.expect("the impostor did answer");
+        assert!(
+            attached.is_none(),
+            "a welcome pid that is not the endpoint's pid is not the owner"
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_accepts_the_published_owner_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let owner_pid = 4242u32;
+        let endpoint = Endpoint {
+            addr: Addr::Tcp(port),
+            token: token(),
+            pid: owner_pid,
+        };
+        publish_endpoint(dir.path(), &endpoint).unwrap();
+        let expect = endpoint.token.clone();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 512];
+            let n = sock.read(&mut buf).await.unwrap();
+            let hello = std::str::from_utf8(&buf[..n]).unwrap();
+            assert!(
+                hello.contains(&expect),
+                "the proxy presents the endpoint token: {hello}"
+            );
+            let line = format!("vestige-attached/1 {owner_pid}\n");
+            sock.write_all(line.as_bytes()).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+        let attached = attach(dir.path())
+            .await
+            .expect("the published pid is the owner");
+        assert_eq!(attached.owner_pid, owner_pid);
     }
 }

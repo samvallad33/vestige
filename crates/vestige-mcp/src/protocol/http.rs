@@ -42,7 +42,9 @@ const REAPER_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const CONCURRENCY_LIMIT: usize = 50;
 
 /// Maximum request body size (256 KB — JSON-RPC requests should be small).
-const MAX_BODY_SIZE: usize = 256 * 1024;
+///
+/// The stdio and attach line cap is this same number (`stdio::MAX_REQUEST_LINE`).
+pub(crate) const MAX_BODY_SIZE: usize = 256 * 1024;
 
 /// A per-client session holding its own McpServer instance.
 struct Session {

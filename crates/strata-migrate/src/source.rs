@@ -70,6 +70,11 @@ pub struct SourceSnapshot {
     /// `vestige portable-export` path produces).
     pub archive: PortableArchive,
     /// Highest `schema_version.version` row.
+    ///
+    /// `0` only when the file has no `schema_version` table and no other
+    /// user table, or an empty `schema_version` and no other user table.
+    /// A bad value, or a missing version on a database that has other
+    /// tables, is [`MigrationError::Corrupt`] — never reported as `0`.
     pub schema_version: u32,
     /// Last verified `receipt_envelopes` entry digest (`None` = no
     /// envelopes / legacy-unsigned store). The chain is fully verified
@@ -81,10 +86,15 @@ pub struct SourceSnapshot {
     pub walk_receipts: Vec<WalkReceiptRow>,
     /// Row count per snapshot table (sorted by table name).
     pub table_counts: Vec<(String, u64)>,
-    /// EVERY user table with rows, from sqlite_master (audit finding:
-    /// skipped_tables must be driven by the schema, not by a hand list, so
-    /// the receipt never claims a fuller copy than it is).
-    pub all_nonempty_tables: Vec<(String, u64)>,
+    /// EVERY user table the receipt must account for, from sqlite_master
+    /// (audit finding: skipped_tables must be driven by the schema, not by
+    /// a hand list, so the receipt never claims a fuller copy than it is).
+    ///
+    /// The count is `Some(rows)` when `COUNT(*)` succeeded and was greater
+    /// than zero. `None` means the table is in the schema but its row count
+    /// could not be read: it is still named, so a skipped-tables list cannot
+    /// drop it by swallowing the error.
+    pub all_nonempty_tables: Vec<(String, Option<u64>)>,
 }
 
 /// One V40 `walk_receipts` row; becomes a reference node in the log.
@@ -421,23 +431,24 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
             .filter(|t| !t.rows.is_empty())
             .map(|t| (t.name.clone(), t.rows.len() as u64))
             .collect::<Vec<_>>();
+        let all_nonempty_tables = table_counts
+            .iter()
+            .cloned()
+            .map(|(name, rows)| (name, Some(rows)))
+            .collect();
         return Ok(SourceSnapshot {
             schema_version: archive.schema_version,
             archive,
             envelope_head: None,
             dropped_vectors: 0,
             walk_receipts: Vec::new(),
-            table_counts: table_counts.clone(),
-            all_nonempty_tables: table_counts,
+            table_counts,
+            all_nonempty_tables,
         });
     }
 
     let conn = open_readonly(&files.db)?;
-    let schema_version = conn
-        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
-            row.get::<_, u32>(0)
-        })
-        .unwrap_or(0);
+    let schema_version = read_schema_version(&conn)?;
 
     let envelope_head = verify_envelope_chain(&conn)?;
 
@@ -501,31 +512,135 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
     )
 }
 
-/// Every user table with at least one row, per sqlite_master.
-fn all_nonempty_tables(conn: &rusqlite::Connection) -> Vec<(String, u64)> {
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table'
-         AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'knowledge_fts%'
-         ORDER BY name",
-    ) else {
-        return Vec::new();
-    };
-    let names: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map(|rows| rows.filter_map(Result::ok).collect())
-        .unwrap_or_default();
-    names
-        .into_iter()
-        .filter_map(|name| {
-            let quoted = format!("\"{name}\"");
-            conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .ok()
-            .filter(|n| *n > 0)
-            .map(|n| (name, n as u64))
+/// Double-quote a SQLite identifier. A name from `sqlite_master` is data,
+/// not a token we trust.
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// `true` when any user table other than `schema_version` exists.
+fn other_user_tables(conn: &rusqlite::Connection) -> Result<bool, MigrationError> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table'
+               AND name NOT LIKE 'sqlite_%'
+               AND name != 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| MigrationError::Corrupt(format!("sqlite_master lookup: {e}")))?;
+    Ok(n > 0)
+}
+
+/// Highest `schema_version.version`, or `0` for a database with no user
+/// tables and no version row.
+///
+/// A missing table, a NULL aggregate, a negative or non-integer value, a
+/// value above `u32`, or a read error used to become `0` and then get
+/// signed into the receipt. Only the truly empty case is `0`. Everything
+/// else is [`MigrationError::Corrupt`] and names the value.
+fn read_schema_version(conn: &rusqlite::Connection) -> Result<u32, MigrationError> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|e| MigrationError::Corrupt(format!("schema_version lookup: {e}")))?;
+    if !exists {
+        return if other_user_tables(conn)? {
+            Err(MigrationError::Corrupt(
+                "schema_version table is missing and the database has other tables".to_string(),
+            ))
+        } else {
+            Ok(0)
+        };
+    }
+
+    let value: rusqlite::types::Value = conn
+        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get(0)
         })
-        .collect()
+        .map_err(|e| MigrationError::Corrupt(format!("schema_version read: {e}")))?;
+    match value {
+        rusqlite::types::Value::Null => {
+            if other_user_tables(conn)? {
+                Err(MigrationError::Corrupt(
+                    "schema_version has no version row and the database has other tables"
+                        .to_string(),
+                ))
+            } else {
+                Ok(0)
+            }
+        }
+        rusqlite::types::Value::Integer(version) => match u32::try_from(version) {
+            Ok(version) => Ok(version),
+            Err(_) => Err(MigrationError::Corrupt(format!(
+                "schema_version value {version} is not a u32"
+            ))),
+        },
+        other => Err(MigrationError::Corrupt(format!(
+            "schema_version value {} is not a u32",
+            sqlite_value_text(&other)
+        ))),
+    }
+}
+
+fn sqlite_value_text(value: &rusqlite::types::Value) -> String {
+    match value {
+        rusqlite::types::Value::Null => "NULL".to_string(),
+        rusqlite::types::Value::Integer(n) => n.to_string(),
+        rusqlite::types::Value::Real(n) => n.to_string(),
+        rusqlite::types::Value::Text(text) => format!("{text:?}"),
+        rusqlite::types::Value::Blob(bytes) => format!("blob({} bytes)", bytes.len()),
+    }
+}
+
+/// Every user table the receipt must name, per sqlite_master.
+///
+/// A `COUNT(*)` that fails keeps the table with a `None` count. Dropping
+/// that error used to erase the table from `skipped_tables`. A failure to
+/// read the name list itself is [`MigrationError::Corrupt`]: there is no
+/// honest receipt without those names.
+fn all_nonempty_tables(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<(String, Option<u64>)>, MigrationError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table'
+             AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'knowledge_fts%'
+             ORDER BY name",
+        )
+        .map_err(|e| MigrationError::Corrupt(format!("sqlite_master names: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| MigrationError::Corrupt(format!("sqlite_master names: {e}")))?;
+    let mut names = Vec::new();
+    for row in rows {
+        names.push(row.map_err(|e| MigrationError::Corrupt(format!("sqlite_master name: {e}")))?);
+    }
+    drop(stmt);
+    let mut tables = Vec::new();
+    for name in names {
+        let quoted = quote_ident(&name);
+        match conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
+            row.get::<_, i64>(0)
+        }) {
+            Ok(n) if n > 0 => {
+                let rows = u64::try_from(n).unwrap_or(u64::MAX);
+                tables.push((name, Some(rows)));
+            }
+            Ok(_) => {}
+            // Keep the name. The receipt lists this table so a failed
+            // COUNT(*) cannot hide it. The error text stays on the count
+            // (`None`) rather than aborting a migration whose memories are
+            // still readable.
+            Err(_) => tables.push((name, None)),
+        }
+    }
+    Ok(tables)
 }
 
 /// Build the SourceSnapshot from the already-read scalars: the portable
@@ -537,7 +652,7 @@ fn finish_snapshot(
     dropped_vectors: u64,
     walk_receipts: Vec<WalkReceiptRow>,
 ) -> Result<SourceSnapshot, MigrationError> {
-    let all_nonempty = all_nonempty_tables(conn);
+    let all_nonempty = all_nonempty_tables(conn)?;
     let mut tables = Vec::new();
     let mut table_counts = Vec::new();
     for table_name in PORTABLE_TABLES {
