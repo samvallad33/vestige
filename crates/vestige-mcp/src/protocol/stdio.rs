@@ -7,15 +7,25 @@
 
 use serde_json::Value;
 use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
+use super::http::MAX_BODY_SIZE;
 use super::types::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 use crate::server::McpServer;
+
+/// One JSON-RPC line on stdio or an attach socket, not counting the newline.
+///
+/// The same ceiling as the HTTP transport's request body. A longer line is
+/// refused and discarded through its newline; it is not buffered and it is
+/// not parsed.
+pub(crate) const MAX_REQUEST_LINE: usize = MAX_BODY_SIZE;
 
 /// Maximum consecutive I/O errors before giving up
 const MAX_CONSECUTIVE_ERRORS: u32 = 5;
@@ -82,6 +92,154 @@ const EOF_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Emitted when a response cannot be serialized and the id is unrecoverable.
 const FALLBACK_INTERNAL_ERROR: &str = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}\n";
 
+/// What [`CappedLines::next`] read.
+#[derive(Debug)]
+pub(crate) enum CappedRead {
+    /// One line, without its line ending.
+    Line(String),
+    /// The reader is at EOF and no partial line remains.
+    Eof,
+    /// The line was longer than [`MAX_REQUEST_LINE`]. Its bytes were
+    /// discarded through the newline (or through EOF).
+    TooLong,
+}
+
+/// Newline-delimited reader with a hard cap, and the cancel-safety of
+/// `tokio::io::Lines`.
+///
+/// Every byte already taken from the inner reader lives in `pending` or has
+/// been discarded under `discarding`. Dropping the future `next` returns
+/// does not drop those bytes, so a `select!` that picks another branch does
+/// not lose the start of a line. `read_line` into a future-local buffer does.
+pub(crate) struct CappedLines<R> {
+    inner: R,
+    pending: Vec<u8>,
+    discarding: bool,
+}
+
+impl<R> CappedLines<R> {
+    pub(crate) fn new(inner: R) -> Self {
+        Self {
+            inner,
+            pending: Vec::new(),
+            discarding: false,
+        }
+    }
+
+    pub(crate) fn get_mut(&mut self) -> &mut R {
+        &mut self.inner
+    }
+
+    /// Bytes of the current line already taken, not yet ended by a newline.
+    pub(crate) fn take_pending(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending)
+    }
+
+    pub(crate) fn into_inner(self) -> R {
+        self.inner
+    }
+}
+
+impl<R: AsyncBufRead + Unpin> CappedLines<R> {
+    pub(crate) async fn next(&mut self) -> io::Result<CappedRead> {
+        std::future::poll_fn(|cx| self.poll_next(cx)).await
+    }
+
+    /// Finish throwing away an oversized line so the following bytes are the
+    /// next line. A no-op when this reader is not mid-discard.
+    pub(crate) async fn finish_discard(&mut self) -> io::Result<()> {
+        if !self.discarding {
+            return Ok(());
+        }
+        match self.next().await? {
+            CappedRead::TooLong => Ok(()),
+            CappedRead::Eof => Ok(()),
+            CappedRead::Line(line) => Err(io::Error::other(format!(
+                "discard ended on a line of {} bytes",
+                line.len()
+            ))),
+        }
+    }
+
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<CappedRead>> {
+        loop {
+            if let Some(pos) = self.pending.iter().position(|byte| *byte == b'\n') {
+                return Poll::Ready(self.take_line(pos));
+            }
+            let (chunk, consume_n) = match Pin::new(&mut self.inner).poll_fill_buf(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                Poll::Ready(Ok([])) => (Vec::new(), 0),
+                Poll::Ready(Ok(data)) => match data.iter().position(|byte| *byte == b'\n') {
+                    Some(pos) => (data[..=pos].to_vec(), pos + 1),
+                    None => {
+                        let owned = data.to_vec();
+                        let n = owned.len();
+                        (owned, n)
+                    }
+                },
+            };
+            if consume_n > 0 {
+                Pin::new(&mut self.inner).consume(consume_n);
+            }
+            if chunk.is_empty() {
+                if self.discarding {
+                    self.discarding = false;
+                    return Poll::Ready(Ok(CappedRead::TooLong));
+                }
+                if self.pending.is_empty() {
+                    return Poll::Ready(Ok(CappedRead::Eof));
+                }
+                let bytes = std::mem::take(&mut self.pending);
+                return Poll::Ready(decode_line(bytes));
+            }
+            if self.discarding {
+                if chunk.ends_with(b"\n") {
+                    self.discarding = false;
+                    return Poll::Ready(Ok(CappedRead::TooLong));
+                }
+                continue;
+            }
+            let newline = chunk.last() == Some(&b'\n');
+            let body = if newline {
+                chunk.len() - 1
+            } else {
+                chunk.len()
+            };
+            if self.pending.len() + body > MAX_REQUEST_LINE {
+                self.pending.clear();
+                if newline {
+                    return Poll::Ready(Ok(CappedRead::TooLong));
+                }
+                self.discarding = true;
+                continue;
+            }
+            self.pending.extend_from_slice(&chunk);
+            if newline {
+                let pos = self.pending.len() - 1;
+                return Poll::Ready(self.take_line(pos));
+            }
+        }
+    }
+
+    fn take_line(&mut self, newline_pos: usize) -> io::Result<CappedRead> {
+        let mut bytes: Vec<u8> = self.pending.drain(..=newline_pos).collect();
+        if bytes.last() == Some(&b'\n') {
+            bytes.pop();
+        }
+        if bytes.last() == Some(&b'\r') {
+            bytes.pop();
+        }
+        decode_line(bytes)
+    }
+}
+
+fn decode_line(bytes: Vec<u8>) -> io::Result<CappedRead> {
+    String::from_utf8(bytes)
+        .map(CappedRead::Line)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
 /// One response, serialized into the single line this transport writes.
 fn response_line(response: JsonRpcResponse) -> String {
     match serde_json::to_string(&response) {
@@ -133,7 +291,7 @@ enum InlineQueue {
 async fn queue_line<R>(
     tx: &mpsc::Sender<String>,
     line: String,
-    lines: &mut tokio::io::Lines<R>,
+    lines: &mut CappedLines<R>,
 ) -> InlineQueue
 where
     R: AsyncBufRead + Unpin,
@@ -429,7 +587,7 @@ where
     // polls a finished `JoinHandle` again nor awaits it twice.
     let mut writer_outcome: Option<Result<(), io::Error>> = None;
 
-    let mut lines = reader.lines();
+    let mut lines = CappedLines::new(reader);
     let permits = Arc::new(Semaphore::new(MAX_INFLIGHT));
     let mut tasks: JoinSet<()> = JoinSet::new();
     let mut consecutive_errors: u32 = 0;
@@ -448,16 +606,37 @@ where
                 error!("stdout writer stopped; ending the read loop");
                 break;
             }
-            result = lines.next_line() => {
+            result = lines.next() => {
                 match result {
-                    Ok(None) => {
+                    Ok(CappedRead::Eof) => {
                         // Clean EOF — stdin closed
                         // Also an attached session's socket closing, where
                         // the serving process itself keeps running.
                         info!("client input closed (EOF); ending this session");
                         break;
                     }
-                    Ok(Some(raw)) => {
+                    Ok(CappedRead::TooLong) => {
+                        consecutive_errors = 0;
+                        warn!(
+                            "refusing a request line longer than {MAX_REQUEST_LINE} bytes"
+                        );
+                        let queued = queue_line(
+                            &tx,
+                            response_line(JsonRpcResponse::error(
+                                None,
+                                JsonRpcError::invalid_request(&format!(
+                                    "request line exceeds {MAX_REQUEST_LINE} bytes"
+                                )),
+                            )),
+                            &mut lines,
+                        )
+                        .await;
+                        if let InlineQueue::Eof = queued {
+                            info!("stdin closed (EOF) while queueing a request-size error");
+                            break 'read;
+                        }
+                    }
+                    Ok(CappedRead::Line(raw)) => {
                         consecutive_errors = 0;
                         let line = raw.trim();
 
@@ -1874,5 +2053,90 @@ mod tests {
         );
         assert!(!message.contains("not implemented"), "{message}");
         assert!(!message.contains(&isolated), "{message}");
+    }
+
+    #[tokio::test]
+    async fn capped_lines_accepts_the_limit_and_keeps_the_next_line() {
+        let mut at_limit = vec![b'x'; MAX_REQUEST_LINE];
+        at_limit.extend(b"\nnext\n");
+        let mut lines = CappedLines::new(BufReader::new(std::io::Cursor::new(at_limit)));
+        match lines.next().await.unwrap() {
+            CappedRead::Line(line) => assert_eq!(line.len(), MAX_REQUEST_LINE),
+            other => panic!("a line of exactly the cap is a line: {other:?}"),
+        }
+        match lines.next().await.unwrap() {
+            CappedRead::Line(line) => assert_eq!(line, "next"),
+            other => panic!("the following line was lost: {other:?}"),
+        }
+        assert!(matches!(lines.next().await.unwrap(), CappedRead::Eof));
+    }
+
+    #[tokio::test]
+    async fn capped_lines_discards_one_past_the_limit_without_merging_it() {
+        let mut over = vec![b'y'; MAX_REQUEST_LINE + 1];
+        over.extend(b"\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n");
+        let mut lines = CappedLines::new(BufReader::new(std::io::Cursor::new(over)));
+        assert!(matches!(lines.next().await.unwrap(), CappedRead::TooLong));
+        match lines.next().await.unwrap() {
+            CappedRead::Line(line) => {
+                assert!(
+                    line.contains("\"id\":2"),
+                    "the next request survived: {line}"
+                );
+            }
+            other => panic!("the line after an oversized one was lost: {other:?}"),
+        }
+    }
+
+    /// #370 C10. A line one byte over the cap is refused, and the next
+    /// request on the same stdio stream is still served. Before the cap,
+    /// the oversized line was buffered and parsed.
+    #[tokio::test]
+    async fn a_request_line_over_the_cap_is_refused_and_the_next_line_still_runs() {
+        let (server, _dir) = test_server();
+        let (client_w, server_r) = tokio::io::duplex(64 * 1024);
+        let (server_w, client_r) = tokio::io::duplex(1 << 20);
+        let handle =
+            tokio::spawn(
+                async move { run_io(server, None, BufReader::new(server_r), server_w).await },
+            );
+
+        let mut reader = BufReader::new(client_r);
+        let writer = tokio::spawn(async move {
+            let mut client_w = client_w;
+            client_w.write_all(init_line().as_bytes()).await.unwrap();
+            let mut huge = br#"{"jsonrpc":"2.0","id":7,"method":"ping","pad":""#.to_vec();
+            huge.resize(MAX_REQUEST_LINE + 1, b'z');
+            huge.push(b'\n');
+            client_w.write_all(&huge).await.unwrap();
+            let ping = json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}).to_string() + "\n";
+            client_w.write_all(ping.as_bytes()).await.unwrap();
+        });
+
+        let init = read_one(&mut reader).await;
+        assert_eq!(init["id"], json!(0), "initialize answered: {init}");
+        let refused = read_one(&mut reader).await;
+        assert!(
+            refused.get("id").is_none() || refused["id"].is_null(),
+            "an oversized line has no id to echo: {refused}"
+        );
+        assert_eq!(refused["error"]["code"], json!(-32600), "{refused}");
+        let message = refused["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains(&MAX_REQUEST_LINE.to_string()),
+            "the refusal names the cap: {refused}"
+        );
+        assert_ne!(
+            refused["id"],
+            json!(7),
+            "id 7 must not be executed: {refused}"
+        );
+        let ping = read_one(&mut reader).await;
+        assert_eq!(ping["id"], json!(2), "the next request still runs: {ping}");
+        assert!(ping.get("error").is_none(), "{ping}");
+
+        drop(reader);
+        writer.await.unwrap();
+        handle.await.unwrap().unwrap();
     }
 }

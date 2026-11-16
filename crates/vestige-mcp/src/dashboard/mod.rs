@@ -382,7 +382,7 @@ impl AccessGuard {
         }
         // No Origin on a write: not the dashboard's page (a browser always
         // sends one), so a script, which needs the token.
-        const HOW: &str = "a request that changes memory must come from the dashboard's own page or carry Authorization: Bearer <token> (VESTIGE_AUTH_TOKEN, else the auth_token file in the default Vestige data directory)";
+        const HOW: &str = "a request that changes memory must come from the dashboard's own page or carry Authorization: Bearer <token> (VESTIGE_AUTH_TOKEN, else the auth_token file beside this process's data directory)";
         if !headers.contains_key(header::AUTHORIZATION) {
             return Err(Refusal {
                 status: StatusCode::UNAUTHORIZED,
