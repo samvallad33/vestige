@@ -29,6 +29,7 @@ use std::io::Write;
 use std::sync::OnceLock;
 
 mod graph_walk;
+mod self_statement;
 
 // =========================================================================
 // INPUT / OUTPUT CONTRACT
@@ -243,8 +244,14 @@ pub struct RankResult {
     /// Stratified governing channel: standing imperative policies that apply to the query
     /// without consuming episodic `sessions` or `turns` top-k slots.
     pub standing_rules: Vec<RankedItem>,
+    /// Self-statement channel: what the user told us about themselves and the
+    /// assistant only acknowledged, ordered by salience (`self_statement`).
+    /// Never consumes `sessions` or `turns` slots.
+    pub self_statements: Vec<RankedItem>,
     /// Memories reached by association (`graph_walk`) from the recalled top-k
-    /// turns. Graph mass only, never word overlap.
+    /// turns plus `self_statements`. Graph mass only, never word overlap.
+    pub graph_walk: Vec<RankedItem>,
+    /// The same association walk seeded by the recalled top-k turns alone.
     pub graph_walk_topk: Vec<RankedItem>,
 }
 
@@ -1608,6 +1615,8 @@ struct Index {
     constraint_terms: DetHashSet<u32>,
     /// Compiled SOAR/Rete standing rules for the stratified governing channel (`RankResult.standing_rules`).
     standing_rules: Vec<StandingRule>,
+    /// Self-statement channel members in channel order (`self_statement`).
+    self_statements: Vec<usize>,
     /// Undirected adjacency over the existing structural turn links (`graph_walk`).
     graph_adj: Vec<Vec<usize>>,
     /// Exact `{Header}\\n{Body}` titles, hashed, for the session bridge.
@@ -3303,6 +3312,11 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
     let (t_postings, turn_bloom) = build_turn_postings_and_bloom(&turn_bags, &turn_own_bags, vocab_len);
     let session_bloom = build_session_bloom(&session_bags);
     let turn_meta = build_turn_meta(&turns, &turn_bloom);
+    let self_statements = self_statement::detect(&turns, &session_turns, &session_ts, |id| {
+        let n = t_own_stats.n;
+        let df = t_own_stats.df.get(&id).copied().unwrap_or(0) as f32;
+        (1.0 + (n - df + 0.5) / (df + 0.5)).ln()
+    });
     let graph_adj = graph_walk::build_adjacency(&turns);
 
     Index {
@@ -3328,6 +3342,7 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         w_stats,
         constraint_terms,
         standing_rules,
+        self_statements,
         graph_adj,
         header_dict,
         header_max_words,
@@ -5926,28 +5941,45 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
         &s_score,
         &bridge_boost,
     );
-    // Sidecar channel (`graph_walk`). Computed after every seat pass, so the
-    // recalled `turns` and `sessions` are unchanged by it.
+    // Sidecar channels (`self_statement`, `graph_walk`). Computed after every
+    // seat pass, so the recalled `turns` and `sessions` are unchanged by them.
     let item = |i: usize, score: f32| RankedItem {
         id: ix.turns[i].id.clone(),
         session_id: ix.session_ids[ix.turns[i].session].clone(),
         score,
         matched: matched_words(&plan, t_mask[i]),
     };
+    let self_idx: Vec<usize> = ix
+        .self_statements
+        .iter()
+        .copied()
+        .take(self_statement::SELF_STATEMENT_CAP)
+        .collect();
     let topk_seeds: Vec<usize> = final_turn_indices.iter().copied().take(k).collect();
+    let mut all_seeds = topk_seeds.clone();
+    all_seeds.extend(
+        self_idx
+            .iter()
+            .copied()
+            .filter(|ti| !topk_seeds.contains(ti)),
+    );
     let walk_items = |seeds: &[usize]| -> Vec<RankedItem> {
         graph_walk::walk(&ix.graph_adj, seeds, graph_walk::WALK_CAP)
             .into_iter()
             .map(|(i, mass)| item(i, mass))
             .collect()
     };
+    let graph_walk = walk_items(&all_seeds);
     let graph_walk_topk = walk_items(&topk_seeds);
+    let self_statements = self_idx.iter().map(|&i| item(i, 1.0)).collect();
     let turns = final_turn_indices.into_iter().map(|i| item(i, t_scene[i])).collect();
     RankResult {
         intent: plan.intent,
         sessions,
         turns,
         standing_rules,
+        self_statements,
+        graph_walk,
         graph_walk_topk,
     }
 }
