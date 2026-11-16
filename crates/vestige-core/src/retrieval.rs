@@ -1987,6 +1987,182 @@ struct Index {
     cue_vocab: DetHashMap<String, u32>,
     /// Cue ids that occur in any turn's role / speaker field (structural metadata, not a list).
     role_cues: DetHashSet<u32>,
+    /// Sedgewick dense `u32` TokenId inverted postings (sessions, windows, turns).
+    s_postings: Vec<Vec<u32>>,
+    w_postings: Vec<Vec<u32>>,
+    t_postings: Vec<Vec<u32>>,
+    /// Burton Bloom 64-bit membership filters per session and per turn.
+    #[allow(dead_code)]
+    session_bloom: Vec<u64>,
+    #[allow(dead_code)]
+    turn_bloom: Vec<u64>,
+    /// Cache-aligned `<= 24B` turn metadata (20,000 turns <= 480 KB, fits in Sandy Bridge L3).
+    #[allow(dead_code)]
+    turn_meta: Vec<TurnMeta>,
+}
+
+/// Compact cache-aligned turn metadata (`<= 24 bytes`) for L3-resident linear scans.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TurnMeta {
+    bloom: u64,
+    session: u32,
+    content_len: u16,
+    entity_len: u16,
+    flags: u16,
+    field: u8,
+    _pad: u8,
+}
+
+const _: () = assert!(std::mem::size_of::<TurnMeta>() <= 24);
+
+const TM_QUESTION: u16 = 1 << 0;
+const TM_PURE_INFO_Q: u16 = 1 << 1;
+const TM_ANSWERS_Q: u16 = 1 << 2;
+const TM_SHORT_REPLY: u16 = 1 << 3;
+const TM_BACKCHANNEL: u16 = 1 << 4;
+const TM_ANAPHORIC: u16 = 1 << 5;
+const TM_CONSTRAINT: u16 = 1 << 6;
+const TM_USER_SCHEMA: u16 = 1 << 7;
+const TM_STANDING_POLICY: u16 = 1 << 8;
+
+fn build_turn_meta(turns: &[TurnIx], turn_bloom: &[u64]) -> Vec<TurnMeta> {
+    turns
+        .iter()
+        .zip(turn_bloom.iter())
+        .map(|(t, &bloom)| {
+            let mut flags = 0u16;
+            if t.is_question { flags |= TM_QUESTION; }
+            if t.is_pure_info_question { flags |= TM_PURE_INFO_Q; }
+            if t.answers_question { flags |= TM_ANSWERS_Q; }
+            if t.is_short_reply { flags |= TM_SHORT_REPLY; }
+            if t.is_backchannel { flags |= TM_BACKCHANNEL; }
+            if t.anaphoric { flags |= TM_ANAPHORIC; }
+            if t.is_personal_constraint { flags |= TM_CONSTRAINT; }
+            if t.is_user_schema { flags |= TM_USER_SCHEMA; }
+            if t.is_standing_policy { flags |= TM_STANDING_POLICY; }
+            TurnMeta {
+                bloom,
+                session: t.session as u32,
+                content_len: t.content.len().min(u16::MAX as usize) as u16,
+                entity_len: t.entities.len().min(u16::MAX as usize) as u16,
+                flags,
+                field: t.field as u8,
+                _pad: 0,
+            }
+        })
+        .collect()
+}
+
+/// Burton Bloom (1970) 64-bit 2-hash bitmask for a dense `u32` TokenId.
+#[inline]
+fn bloom_mask64(id: u32) -> u64 {
+    let mut x = (id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    let b1 = (x & 63) as u32;
+    let b2 = ((x >> 6) & 63) as u32;
+    (1u64 << b1) | (1u64 << b2)
+}
+
+#[allow(dead_code)]
+#[inline]
+fn session_may_contain_token(ix: &Index, si: usize, id: u32) -> bool {
+    let m = bloom_mask64(id);
+    (ix.session_bloom[si] & m) == m
+}
+
+fn build_postings(bags: &[Bag], vocab_len: usize) -> Vec<Vec<u32>> {
+    let mut postings = vec![Vec::new(); vocab_len];
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    for (doc_idx, b) in bags.iter().enumerate() {
+        seen.clear();
+        for f in 0..3 {
+            for (&t, &v) in &b.tf[f] {
+                if v > 0.0 {
+                    seen.insert(t);
+                }
+            }
+        }
+        let d = doc_idx as u32;
+        for &t in &seen {
+            if let Some(list) = postings.get_mut(t as usize) {
+                list.push(d);
+            }
+        }
+    }
+    postings
+}
+
+fn build_turn_postings_and_bloom(
+    turn_bags: &[Bag],
+    turn_own_bags: &[Bag],
+    vocab_len: usize,
+) -> (Vec<Vec<u32>>, Vec<u64>) {
+    let mut postings = vec![Vec::new(); vocab_len];
+    let mut blooms = vec![0u64; turn_bags.len()];
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    for (ti, (tb, ob)) in turn_bags.iter().zip(turn_own_bags.iter()).enumerate() {
+        seen.clear();
+        for f in 0..3 {
+            for (&t, &v) in &tb.tf[f] {
+                if v > 0.0 {
+                    seen.insert(t);
+                }
+            }
+            for (&t, &v) in &ob.tf[f] {
+                if v > 0.0 {
+                    seen.insert(t);
+                }
+            }
+        }
+        let d = ti as u32;
+        let mut mask = 0u64;
+        for &t in &seen {
+            mask |= bloom_mask64(t);
+            if let Some(list) = postings.get_mut(t as usize) {
+                list.push(d);
+            }
+        }
+        blooms[ti] = mask;
+    }
+    (postings, blooms)
+}
+
+fn build_session_bloom(bags: &[Bag]) -> Vec<u64> {
+    bags.iter()
+        .map(|b| {
+            let mut mask = 0u64;
+            for f in 0..3 {
+                for (&t, &v) in &b.tf[f] {
+                    if v > 0.0 {
+                        mask |= bloom_mask64(t);
+                    }
+                }
+            }
+            mask
+        })
+        .collect()
+}
+
+fn collect_posting_candidates(postings: &[Vec<u32>], plan: &QueryPlan, total_docs: usize) -> Vec<usize> {
+    if total_docs == 0 || plan.terms.is_empty() {
+        return Vec::new();
+    }
+    let mut seen = vec![0u8; total_docs];
+    let mut out = Vec::new();
+    for qt in &plan.terms {
+        if let Some(list) = postings.get(qt.id as usize) {
+            for &doc in list {
+                let idx = doc as usize;
+                if seen[idx] == 0 {
+                    seen[idx] = 1;
+                    out.push(idx);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
@@ -3830,6 +4006,13 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         });
     }
 
+    let vocab_len = vocab.names.len();
+    let s_postings = build_postings(&session_bags, vocab_len);
+    let w_postings = build_postings(&window_bags, vocab_len);
+    let (t_postings, turn_bloom) = build_turn_postings_and_bloom(&turn_bags, &turn_own_bags, vocab_len);
+    let session_bloom = build_session_bloom(&session_bags);
+    let turn_meta = build_turn_meta(&turns, &turn_bloom);
+
     Index {
         vocab,
         session_ids,
@@ -3860,6 +4043,12 @@ fn build_index(sessions: &[Session], p: &Params) -> Index {
         turn_cues,
         cue_vocab,
         role_cues,
+        s_postings,
+        w_postings,
+        t_postings,
+        session_bloom,
+        turn_bloom,
+        turn_meta,
     }
 }
 
@@ -4261,20 +4450,51 @@ struct Fields {
 /// 3-Field BM25F (`user`, `assistant`, `blip_caption`) with IDF power law, IDF-weighted
 /// distinct-term coverage, and separate `(any_mask, exact_mask)` so 0.45 hypernym hits
 /// never poison submodular coverage masks (`covered_mask` / `covered_query_terms`).
-fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f32, u64, u64) {
+struct PreparedPlan {
+    /// `Some(idf)` when `qt.id` exists in `st.df`, else `None`.
+    term_idf: Vec<Option<f32>>,
+    g_idf: Vec<f32>,
+    g_total: f32,
+}
+
+fn prepare_plan(plan: &QueryPlan, st: &Stats, p: &Params) -> PreparedPlan {
+    let ng = plan.groups.len();
+    let mut g_idf = vec![0.0f32; ng];
+    let mut term_idf = Vec::with_capacity(plan.terms.len());
+    for qt in &plan.terms {
+        if let Some(&df) = st.df.get(&qt.id) {
+            let df = df as f32;
+            let idf = ((st.n - df + 0.5) / (df + 0.5) + 1.0).ln().max(0.0).powf(p.idf_power);
+            if let Some(g) = qt.group {
+                g_idf[g] = g_idf[g].max(idf * qt.weight);
+            }
+            term_idf.push(Some(idf));
+        } else {
+            term_idf.push(None);
+        }
+    }
+    let g_total: f32 = g_idf.iter().sum();
+    PreparedPlan { term_idf, g_idf, g_total }
+}
+
+fn bm25f_prepared(
+    bag: &Bag,
+    plan: &QueryPlan,
+    prep: &PreparedPlan,
+    st: &Stats,
+    p: &Params,
+    fl: &Fields,
+) -> (f32, u64, u64) {
     let mut score = 0.0f32;
     let mut mask = 0u64;
     let mut exact_mask = 0u64;
     let ng = plan.groups.len();
-    let mut g_idf = vec![0.0f32; ng];
-    let mut g_hit = vec![false; ng];
-    for qt in &plan.terms {
-        let Some(&df) = st.df.get(&qt.id) else { continue };
-        let df = df as f32;
-        let idf = ((st.n - df + 0.5) / (df + 0.5) + 1.0).ln().max(0.0).powf(p.idf_power);
-        if let Some(g) = qt.group {
-            g_idf[g] = g_idf[g].max(idf * qt.weight);
-        }
+    let mut g_hit_stack = [false; 64];
+    let mut g_hit_heap = if ng > 64 { vec![false; ng] } else { Vec::new() };
+    let g_hit: &mut [bool] = if ng <= 64 { &mut g_hit_stack[..ng] } else { &mut g_hit_heap };
+
+    for (qt, &maybe_idf) in plan.terms.iter().zip(prep.term_idf.iter()) {
+        let Some(idf) = maybe_idf else { continue };
         let mut tfp = 0.0f32;
         for f in 0..3 {
             let tf = bag.tf[f].get(&qt.id).copied().unwrap_or(0.0);
@@ -4297,15 +4517,18 @@ fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f
             }
         }
     }
-    if p.enable_coverage && score > 0.0 {
-        let total: f32 = g_idf.iter().sum();
-        if total > 0.0 {
-            let hit: f32 = g_idf.iter().zip(&g_hit).filter(|(_, h)| **h).map(|(i, _)| *i).sum();
-            let cov = hit / total;
-            score *= p.coverage_floor + (1.0 - p.coverage_floor) * cov * cov;
-        }
+    if p.enable_coverage && score > 0.0 && prep.g_total > 0.0 {
+        let hit: f32 = prep.g_idf.iter().zip(g_hit.iter()).filter(|(_, h)| **h).map(|(i, _)| *i).sum();
+        let cov = hit / prep.g_total;
+        score *= p.coverage_floor + (1.0 - p.coverage_floor) * cov * cov;
     }
     (score, mask, exact_mask)
+}
+
+#[allow(dead_code)]
+fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f32, u64, u64) {
+    let prep = prepare_plan(plan, st, p);
+    bm25f_prepared(bag, plan, &prep, st, p, fl)
 }
 
 /// True when two distinct query words land within `span` content tokens of each other.
@@ -4578,16 +4801,19 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let mut s_base = vec![0.0f32; ns];
     let mut s_mask = vec![0u64; ns];
     let mut s_exact_mask = vec![0u64; ns];
-    for si in 0..ns {
-        let (sc, m, em) = bm25f(&ix.session_bags[si], &plan, &ix.s_stats, p, &fl);
+    let s_prep = prepare_plan(&plan, &ix.s_stats, p);
+    for si in collect_posting_candidates(&ix.s_postings, &plan, ns) {
+        let (sc, m, em) = bm25f_prepared(&ix.session_bags[si], &plan, &s_prep, &ix.s_stats, p, &fl);
         s_base[si] = sc;
         s_mask[si] = m;
         s_exact_mask[si] = em;
     }
     let mut s_win = vec![0.0f32; ns];
     if p.enable_window {
-        for (wi, &(si, a, b)) in ix.windows.iter().enumerate() {
-            let (mut sc, m, em) = bm25f(&ix.window_bags[wi], &plan, &ix.w_stats, p, &fl);
+        let w_prep = prepare_plan(&plan, &ix.w_stats, p);
+        for wi in collect_posting_candidates(&ix.w_postings, &plan, ix.windows.len()) {
+            let (si, a, b) = ix.windows[wi];
+            let (mut sc, m, em) = bm25f_prepared(&ix.window_bags[wi], &plan, &w_prep, &ix.w_stats, p, &fl);
             if sc <= 0.0 {
                 continue;
             }
@@ -4712,10 +4938,12 @@ fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
             q_bigrams.insert((pair[0], pair[1]));
         }
     }
-    for ti in 0..nt {
+    let t_own_prep = prepare_plan(&plan, &ix.t_own_stats, p);
+    let t_prep = prepare_plan(&plan, &ix.t_stats, p);
+    for ti in collect_posting_candidates(&ix.t_postings, &plan, nt) {
         let t = &ix.turns[ti];
-        let (mut sc_own, _, em_own) = bm25f(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, p, &fl);
-        let (mut sc, m, _) = bm25f(&ix.turn_bags[ti], &plan, &ix.t_stats, p, &fl);
+        let (mut sc_own, _, em_own) = bm25f_prepared(&ix.turn_own_bags[ti], &plan, &t_own_prep, &ix.t_own_stats, p, &fl);
+        let (mut sc, m, _) = bm25f_prepared(&ix.turn_bags[ti], &plan, &t_prep, &ix.t_stats, p, &fl);
         if sc <= 0.0 && sc_own <= 0.0 {
             continue;
         }
