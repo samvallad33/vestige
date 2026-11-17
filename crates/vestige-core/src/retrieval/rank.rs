@@ -2084,10 +2084,55 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         .collect();
 
     // #801/#806/#807 Generalized k-hop (k=3..6) Integer Viterbi + #802 6-Step Damped Integer RWR:
-    // Decode highest-potential multi-hop chain & conductance-flow complements across distant
-    // sessions and admit an unseated hop into a redundant tail slot (keeping 0..5 sealed).
+    // - For `it.multi_hop`, unseal Slots 1..3 when a decoded chain improves query-mask coverage
+    //   and displace only redundant questions or duplicate-session covered turns.
+    // - For literal / single-hop queries (`!it.multi_hop`), keep Slots 0..5 sealed and admit into
+    //   redundant tail slots in 5..k.
     if k >= 6 {
-        let chain_turn = super::viterbi::decode_viterbi_chain(ix, &plan, &final_turn_indices, &base_q16, &t_mask)
+        let viterbi_chain = super::viterbi::decode_viterbi_chain(ix, &plan, &final_turn_indices, &base_q16, &t_mask);
+        if it.multi_hop {
+            if let Some(ref chain) = viterbi_chain {
+                if chain.score_q16 > 0
+                    && chain.path.len() >= 2
+                    && !final_turn_indices.is_empty()
+                    && chain.union_mask.count_ones() > t_mask[final_turn_indices[0]].count_ones()
+                {
+                    for &hop_ti in &chain.path {
+                        if ix.turns[hop_ti].is_question
+                            || ix.turns[hop_ti].is_backchannel
+                            || turn_is_superseded(ix, hop_ti)
+                            || final_turn_indices.contains(&hop_ti)
+                        {
+                            continue;
+                        }
+                        let seat_end = 3.min(final_turn_indices.len());
+                        let mut target_slot: Option<usize> = None;
+                        for s in 1..seat_end {
+                            let inc_ti = final_turn_indices[s];
+                            let inc_sess = ix.turns[inc_ti].session;
+                            let dup_sess = final_turn_indices[..s].iter().any(|&p_ti| ix.turns[p_ti].session == inc_sess);
+                            let mut earlier_mask = 0u64;
+                            for &p_ti in &final_turn_indices[..s] {
+                                earlier_mask |= t_exact_mask[p_ti];
+                            }
+                            let covered_dup = dup_sess && (t_exact_mask[inc_ti] & !earlier_mask) == 0;
+                            if ix.turns[inc_ti].is_question || covered_dup {
+                                target_slot = Some(s);
+                                break;
+                            }
+                        }
+                        if let Some(slot) = target_slot {
+                            final_turn_indices.insert(slot, hop_ti);
+                            if final_turn_indices.len() > k {
+                                final_turn_indices.truncate(k);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let chain_turn = viterbi_chain
             .and_then(|chain| {
                 if chain.score_q16 == 0 || chain.union_mask == 0 {
                     return None;
@@ -2130,7 +2175,20 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                         let vti = final_turn_indices[idx];
                         let vs = ix.turns[vti].session;
                         let dup = final_turn_indices[..idx].iter().any(|&e| ix.turns[e].session == vs);
-                        (dup && ix.turns[vti].field == 1) || (t_scene[vti] <= 0.0 && t_bridge[vti] <= 0.0)
+                        let mut earlier_mask = 0u64;
+                        for &e in &final_turn_indices[..idx] {
+                            earlier_mask |= t_exact_mask[e];
+                        }
+                        let covered_q = !it.multi_hop
+                            && dup
+                            && ix.turns[vti].is_question
+                            && t_own[vti] <= 0.0
+                            && (t_exact_mask[vti] & !earlier_mask) == 0
+                            && !ix.turns[cand_ti].is_question
+                            && t_own[cand_ti] > 0.0;
+                        (dup && ix.turns[vti].field == 1)
+                            || (t_scene[vti] <= 0.0 && t_bridge[vti] <= 0.0)
+                            || covered_q
                     }) {
                         final_turn_indices[slot] = cand_ti;
                     }
@@ -2145,9 +2203,19 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // #798/#799/#800/#826/#767 Block-Max WAND + Fagin TA bitpacked posting scan verification
     let wand_stats = super::wand::verify_query_block_max_wand(ix, &plan, &base_q16, k);
 
+    // #814/#815/#816/#818/#819/#820/#822 Cycle E Taxonomic & Experiencer Preference Register +
     // #806 Mackworth AC-3 Arc Consistency + #827 ACT-R Base-Level Activation + #830 LockeLedger 256-Bucket Attribution
     {
         super::ac3::apply_ac3_consistency(ix, &it, &base_q16, &mut final_turn_indices, k);
+        let pref_reg = super::taxa::PrefRegister::build(ix);
+        let q_wilkins = plan
+            .terms
+            .iter()
+            .find(|qt| qt.group.is_some())
+            .and_then(|qt| ix.vocab.names.get(qt.id as usize))
+            .map(|w| super::taxa::wilkins_term_code_u64(w))
+            .unwrap_or(0);
+        let q_zato = super::taxa::zatocode_u128(plan.terms.iter().map(|qt| qt.id));
         let ref_ts_sec = ix.session_ts.iter().copied().max().unwrap_or(0);
         let mut ledger = super::locke_ledger::build_turn_attribution_ledger(ix, &final_turn_indices, &base_q16);
         for &ti in &final_turn_indices {
@@ -2167,6 +2235,17 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             ledger.record_channel(tid, super::locke_ledger::CH_PSL_ILP, 1 << 16);
             if let Some(&(_, wsc)) = wand_stats.top_k.iter().find(|&&(wti, _)| wti == ti) {
                 ledger.record_channel(tid, super::locke_ledger::CH_WAND, wsc);
+            }
+            let (taxa_q16, _isa_mask, _is_def) = super::taxa::evaluate_turn_taxa_q16(
+                ix,
+                &plan,
+                &pref_reg,
+                q_wilkins,
+                q_zato,
+                ti,
+            );
+            if taxa_q16 > 0 {
+                ledger.record_channel(tid, super::locke_ledger::CH_TAXA, taxa_q16);
             }
         }
         let _attribution_root = ledger.finalize_root();

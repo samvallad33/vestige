@@ -37,6 +37,7 @@ mod rst;
 mod scoring;
 mod seating;
 mod supersession;
+mod taxa;
 mod temporal_allen;
 mod tokens;
 mod viterbi;
