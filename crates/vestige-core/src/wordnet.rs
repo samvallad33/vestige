@@ -150,6 +150,42 @@ pub fn expansion_lemmas(word: &str) -> Vec<&'static str> {
     out
 }
 
+/// Eduard Hovy upward-only hypernym expansion: walks `@`/`@i` parent pointers up to `max_hops`
+/// (never downward `children`) so concrete facts ("asthma") meet category queries ("condition", "disease")
+/// without downward candidate explosion.
+pub fn upward_hypernyms(word: &str, max_hops: usize) -> Vec<&'static str> {
+    let t = table();
+    let mut visited: Vec<u32> = Vec::new();
+    let mut frontier: Vec<u32> = senses(word).to_vec();
+    for &s in &frontier {
+        push_unique(&mut visited, s);
+    }
+    for _ in 0..max_hops {
+        let mut next = Vec::new();
+        for s in frontier {
+            for &p in t.parents.get(&s).map(Vec::as_slice).unwrap_or(&[]) {
+                if !visited.contains(&p) {
+                    visited.push(p);
+                    next.push(p);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    let mut out: Vec<&'static str> = visited
+        .iter()
+        .flat_map(|s| t.lemmas.get(s).map(Vec::as_slice).unwrap_or(&[]))
+        .map(String::as_str)
+        .filter(|l| *l != word)
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

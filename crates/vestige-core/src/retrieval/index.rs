@@ -1946,6 +1946,19 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
                     }
                 }
             }
+            // Hovy 3-hop upward-only `@` hypernyms (zero downward explosion)
+            for lemma in crate::wordnet::upward_hypernyms(word, 3) {
+                let lid = bridge_vocab.intern(lemma);
+                if !bids.contains(&lid) {
+                    bids.push(lid);
+                }
+                if p.enable_stemming {
+                    let sid = bridge_vocab.intern(&stem_term(&stem(lemma)));
+                    if !bids.contains(&sid) {
+                        bids.push(sid);
+                    }
+                }
+            }
             if !bids.is_empty() {
                 cid_to_bridge.insert(cid, bids);
             }

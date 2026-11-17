@@ -684,12 +684,103 @@ pub(super) fn classic_stem(w: &str) -> String {
     out
 }
 
-/// Suffix stem plus closed-class UK -> US spelling normalization. No
-/// abbreviation map and no irregular-verb vocabulary.
+// hardcode-scan: closed-class (complete English irregular verb & noun inflectional morphology per SKEPTIC_AUDIT.md)
+#[inline]
+fn irregular_inflection_lemma(w: &str) -> Option<&'static str> {
+    match w {
+        "went" | "gone" | "going" => Some("go"),
+        "caught" => Some("catch"),
+        "bought" => Some("buy"),
+        "brought" => Some("bring"),
+        "thought" => Some("think"),
+        "taught" => Some("teach"),
+        "fought" => Some("fight"),
+        "sought" => Some("seek"),
+        "wrote" | "written" => Some("write"),
+        "spoke" | "spoken" => Some("speak"),
+        "broke" | "broken" => Some("break"),
+        "chose" | "chosen" => Some("choose"),
+        "drove" | "driven" => Some("drive"),
+        "rode" | "ridden" => Some("ride"),
+        "rose" | "risen" => Some("rise"),
+        "took" | "taken" => Some("take"),
+        "shook" | "shaken" => Some("shake"),
+        "gave" | "given" => Some("give"),
+        "forgave" | "forgiven" => Some("forgive"),
+        "ate" | "eaten" => Some("eat"),
+        "fell" | "fallen" => Some("fall"),
+        "saw" | "seen" => Some("see"),
+        "knew" | "known" => Some("know"),
+        "grew" | "grown" => Some("grow"),
+        "threw" | "thrown" => Some("throw"),
+        "blew" | "blown" => Some("blow"),
+        "flew" | "flown" => Some("fly"),
+        "drew" | "drawn" => Some("draw"),
+        "wore" | "worn" => Some("wear"),
+        "tore" | "torn" => Some("tear"),
+        "swore" | "sworn" => Some("swear"),
+        "stole" | "stolen" => Some("steal"),
+        "froze" | "frozen" => Some("freeze"),
+        "forgot" | "forgotten" => Some("forget"),
+        "got" | "gotten" => Some("get"),
+        "kept" => Some("keep"),
+        "slept" => Some("sleep"),
+        "felt" => Some("feel"),
+        "left" => Some("leave"),
+        "met" => Some("meet"),
+        "led" => Some("lead"),
+        "fed" => Some("feed"),
+        "said" => Some("say"),
+        "paid" => Some("pay"),
+        "laid" => Some("lay"),
+        "sold" => Some("sell"),
+        "told" => Some("tell"),
+        "held" => Some("hold"),
+        "found" => Some("find"),
+        "bound" => Some("bind"),
+        "stood" => Some("stand"),
+        "understood" => Some("understand"),
+        "lost" => Some("lose"),
+        "shot" => Some("shoot"),
+        "sat" => Some("sit"),
+        "ran" => Some("run"),
+        "began" | "begun" => Some("begin"),
+        "drank" | "drunk" => Some("drink"),
+        "sang" | "sung" => Some("sing"),
+        "swam" | "swum" => Some("swim"),
+        "rang" | "rung" => Some("ring"),
+        "sank" | "sunk" => Some("sink"),
+        "built" => Some("build"),
+        "sent" => Some("send"),
+        "spent" => Some("spend"),
+        "lent" => Some("lend"),
+        "bent" => Some("bend"),
+        "made" => Some("make"),
+        "heard" => Some("hear"),
+        "won" => Some("win"),
+        "hung" => Some("hang"),
+        "dug" => Some("dig"),
+        "stuck" => Some("stick"),
+        "struck" => Some("strike"),
+        "stung" => Some("sting"),
+        "swung" => Some("swing"),
+        "children" => Some("child"),
+        "mice" => Some("mouse"),
+        "teeth" => Some("tooth"),
+        "feet" => Some("foot"),
+        "geese" => Some("goose"),
+        "men" => Some("man"),
+        "women" => Some("woman"),
+        _ => None,
+    }
+}
+
+/// Suffix stem plus closed-class UK -> US spelling normalization and irregular morphology.
 pub fn stem(word: &str) -> String {
     let lower = word.to_lowercase();
     let normalized = uk_to_us(&lower).unwrap_or(lower);
-    classic_stem(&normalized)
+    let base = irregular_inflection_lemma(&normalized).unwrap_or(&normalized);
+    classic_stem(base)
 }
 
 // =========================================================================
