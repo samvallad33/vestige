@@ -1,11 +1,12 @@
-//! Issue #801: McCallum-Style Integer Viterbi Chain Decoding anchored in
-//! GhostLink Divergent Graph Synthesis (Path_min(G_bar) * (1 - Ochiai)).
+//! Issues #801, #806, #807: Generalized k-Hop (k=3..6) Integer Viterbi Chain Decoding
+//! anchored in GhostLink Divergent Graph Synthesis (Path_min(G_bar) * (1 - Ochiai)),
+//! Mackworth AC-3 information-gain arc consistency pruning (#806), and
+//! negation / contradiction supersession invalidation (#807).
 //!
 //! Pure integer / Q16.16 fixed-point dynamic programming (zero floats, zero
-//! word lists). Decodes the highest-probability multi-hop chain across
-//! turns/sessions (`seed -> hop1 -> hop2`) where edge transitions are scored by
-//! carrier conductance (`Q16 / df`) weighted by complement-graph Ochiai divergence
-//! plus newly covered query-group bits.
+//! open-class word lists). Decodes the highest-probability multi-hop chain across
+//! 2 to 6 turns/sessions (`t_0 -> t_1 -> ... -> t_{h}`), pruning exponential
+//! branching via strict query-bitmask information gain and unvisited-session bounds.
 
 use std::collections::BTreeMap;
 
@@ -15,9 +16,22 @@ use super::is_technical_handle;
 use super::scoring::QueryPlan;
 use super::supersession::turn_is_superseded;
 
-/// Decoded multi-hop chain returned by integer Viterbi.
+/// Maximum chain node length (`k = 6` turns / 5 transitions).
+pub(super) const MAX_CHAIN_LEN: usize = 6;
+
+/// Damping factor alpha = 0.85 in Q16.16 fixed-point (`55705 / 65536`).
+pub(super) const ALPHA_Q16: u64 = 55_705;
+
+/// Wave-1 node cap (matching 2-hop baseline) and extended wave-2..3 cap (`96`).
+const WAVE1_NODE_CAP: usize = 64;
+const MAX_GRAPH_NODES: usize = 96;
+
+/// Closed-class negation markers (`< 8` literals, zero open-class words) for #807 polarity guard.
+const NEG_POLARITY_TOKENS: [&str; 6] = ["not", "no", "never", "dont", "didnt", "isnt"];
+
+/// Decoded multi-hop chain returned by generalized k-hop integer Viterbi.
 pub(super) struct ViterbiChain {
-    /// Ordered sequence of turn indices `(t_0, t_1[, t_2])` forming the winning path.
+    /// Ordered sequence of turn indices `(t_0, ..., t_{m-1})` (`2 <= m <= 6`).
     pub(super) path: Vec<usize>,
     /// Total Q16.16 log/potential path score.
     pub(super) score_q16: u64,
@@ -25,13 +39,60 @@ pub(super) struct ViterbiChain {
     pub(super) union_mask: u64,
 }
 
-/// Run 2-hop / 3-hop Integer Viterbi over candidate nodes seeded from `seed_turns`
-/// and connected via rare bridge entities (`2 <= df <= max_df`).
+#[inline]
+fn turn_has_neg_polarity(ix: &Index, ti: usize) -> bool {
+    for tok in NEG_POLARITY_TOKENS {
+        if let Some(id) = ix.vocab.get(tok) {
+            if ix.turns[ti].content.contains(&id) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[inline]
+fn shares_entity_or_role_obj(ix: &Index, u_ti: usize, v_ti: usize) -> bool {
+    let tu = &ix.turns[u_ti];
+    let tv = &ix.turns[v_ti];
+    if tu.entities.iter().any(|e| tv.entities.contains(e)) {
+        return true;
+    }
+    tu.role_objs.iter().any(|o| tv.role_objs.contains(o))
+}
+
+/// #807 Contradiction & Negation Invalidation Guard:
+/// Reject transitions between turns linked by causal supersession or opposing
+/// closed-class negation polarity over the same entity/constraint subject.
+#[inline]
+pub(super) fn transition_contradicts(ix: &Index, u_ti: usize, v_ti: usize) -> bool {
+    let tu = &ix.turns[u_ti];
+    let tv = &ix.turns[v_ti];
+    if tu.supersedes_turns.contains(&v_ti) || tv.supersedes_turns.contains(&u_ti) {
+        return true;
+    }
+    if ix.session_supersedes_back[tu.session].contains(&tv.session)
+        || ix.session_supersedes_back[tv.session].contains(&tu.session)
+    {
+        return true;
+    }
+    if tu.speaker == tv.speaker
+        && (turn_has_neg_polarity(ix, u_ti) ^ turn_has_neg_polarity(ix, v_ti))
+        && shares_entity_or_role_obj(ix, u_ti, v_ti)
+    {
+        return true;
+    }
+    false
+}
+
+/// Run generalized k-hop (`k = 2..=6`) Integer Viterbi over candidate nodes seeded from
+/// `seed_turns`, preserving the exact Wave-1 pool order in `nodes[..64]` and extending
+/// multi-hop bridges into `nodes[64..96]`.
 pub(super) fn decode_viterbi_chain(
     ix: &Index,
     plan: &QueryPlan,
     seed_turns: &[usize],
-    t_scene: &[f32],
+    t_scene_q16: &[u64],
     t_mask: &[u64],
 ) -> Option<ViterbiChain> {
     let nt = ix.turns.len();
@@ -39,15 +100,15 @@ pub(super) fn decode_viterbi_chain(
         return None;
     }
 
-    let t_max = t_scene[seed_turns[0]];
-    if t_max <= 0.0 {
+    let t_max_q16 = t_scene_q16[seed_turns[0]];
+    if t_max_q16 == 0 {
         return None;
     }
 
-    let max_df = ((ix.t_stats.n * 0.12).max(4.0)) as u32;
-    let mut nodes: Vec<usize> = Vec::with_capacity(64);
+    let max_df = ((nt as u64 * 12) / 100).max(4) as u32;
+    let mut nodes: Vec<usize> = Vec::with_capacity(MAX_GRAPH_NODES);
     for &s in seed_turns.iter().take(12) {
-        if t_scene[s] > 0.0 && !turn_is_superseded(ix, s) && !nodes.contains(&s) {
+        if t_scene_q16[s] > 0 && !turn_is_superseded(ix, s) && !nodes.contains(&s) {
             nodes.push(s);
         }
     }
@@ -55,7 +116,7 @@ pub(super) fn decode_viterbi_chain(
         return None;
     }
 
-    // Expand 1-hop & 2-hop candidate pool via rare bridge entities from top seeds.
+    // Wave 1: preserve exact BTreeMap<u32, u64> carrier order up to WAVE1_NODE_CAP (64).
     let mut carrier_posts: BTreeMap<u32, u64> = BTreeMap::new();
     for &s in nodes.iter().take(6) {
         for &e in &ix.turns[s].entities {
@@ -70,6 +131,7 @@ pub(super) fn decode_viterbi_chain(
         }
     }
 
+    let mut wave1_start = nodes.len();
     for (&e, _) in &carrier_posts {
         if let Some(post) = ix.t_postings.get(e as usize) {
             for &ti_u32 in post {
@@ -80,14 +142,56 @@ pub(super) fn decode_viterbi_chain(
                     && !nodes.contains(&ti)
                 {
                     nodes.push(ti);
-                    if nodes.len() >= 64 {
+                    if nodes.len() >= WAVE1_NODE_CAP {
                         break;
                     }
                 }
             }
         }
-        if nodes.len() >= 64 {
+        if nodes.len() >= WAVE1_NODE_CAP {
             break;
+        }
+    }
+
+    // Wave 2..3: append distant multi-hop bridge turns into slots `64..96`.
+    for _wave in 0..2 {
+        if nodes.len() >= MAX_GRAPH_NODES || wave1_start >= nodes.len() {
+            break;
+        }
+        let wave_end = nodes.len();
+        let mut ext_carriers: BTreeMap<u32, u64> = BTreeMap::new();
+        for &s in &nodes[wave1_start..wave_end] {
+            for &e in &ix.turns[s].entities {
+                if plan.group_of.contains_key(&e) || is_technical_handle(&ix.vocab, e) {
+                    continue;
+                }
+                if let Some(&df) = ix.t_stats.df.get(&e) {
+                    if df >= 2 && df <= max_df {
+                        ext_carriers.entry(e).or_insert(df as u64);
+                    }
+                }
+            }
+        }
+        wave1_start = wave_end;
+        for (&e, _) in &ext_carriers {
+            if let Some(post) = ix.t_postings.get(e as usize) {
+                for &ti_u32 in post {
+                    let ti = ti_u32 as usize;
+                    if ti < nt
+                        && !ix.turns[ti].is_backchannel
+                        && !turn_is_superseded(ix, ti)
+                        && !nodes.contains(&ti)
+                    {
+                        nodes.push(ti);
+                        if nodes.len() >= MAX_GRAPH_NODES {
+                            break;
+                        }
+                    }
+                }
+            }
+            if nodes.len() >= MAX_GRAPH_NODES {
+                break;
+            }
         }
     }
 
@@ -96,90 +200,202 @@ pub(super) fn decode_viterbi_chain(
         return None;
     }
 
-    // Emission potential (step 0..2) in Q16.16
+    // Emission potential in Q16.16
     let mut emit_q16 = vec![0u64; n];
     for (idx, &ti) in nodes.iter().enumerate() {
-        let base = ((t_scene[ti] / t_max).clamp(0.0, 1.0) * (Q16 as f32)) as u64;
+        let base = ((t_scene_q16[ti] as u128 * Q16 as u128) / (t_max_q16.max(1) as u128))
+            .min(Q16 as u128) as u64;
         let cov = (t_mask[ti].count_ones() as u64) * (Q16 / 8);
         emit_q16[idx] = base.saturating_add(cov);
     }
 
-    // Precompute transition weights: trans[u][v] in Q16.16
-    // Weighted by GhostLink complement divergence (1 - Ochiai(c, e_div)) * (Q16 / df_c)
-    // plus joint coverage gain when moving to a distinct session.
-    let mut dp1 = vec![0u64; n];
-    let mut back1 = vec![usize::MAX; n];
-
-    for (vi, &v_ti) in nodes.iter().enumerate() {
-        let tv = &ix.turns[v_ti];
-        if tv.entities.is_empty() || tv.is_backchannel {
+    // Directed transition matrix in Q16.16 with #807 contradiction invalidation
+    let mut edges = vec![vec![0u64; n]; n];
+    for (ui, &u_ti) in nodes.iter().enumerate() {
+        let tu = &ix.turns[u_ti];
+        if tu.entities.is_empty() || tu.is_backchannel {
             continue;
         }
-        for (ui, &u_ti) in nodes.iter().enumerate() {
-            if u_ti == v_ti || emit_q16[ui] == 0 {
+        for (vi, &v_ti) in nodes.iter().enumerate() {
+            if ui == vi {
                 continue;
             }
-            let tu = &ix.turns[u_ti];
-            let trans = viterbi_edge_q16(ix, plan, tu, tv, u_ti, v_ti, t_mask, max_df);
+            let tv = &ix.turns[v_ti];
+            if tv.entities.is_empty() || tv.is_backchannel || transition_contradicts(ix, u_ti, v_ti)
+            {
+                continue;
+            }
+            edges[ui][vi] = viterbi_edge_q16(ix, plan, tu, tv, u_ti, v_ti, t_mask, max_df);
+        }
+    }
+
+    // DP tables across hops `step in 0..MAX_CHAIN_LEN`
+    let mut dp = vec![vec![0u64; n]; MAX_CHAIN_LEN];
+    let mut prev = vec![vec![usize::MAX; n]; MAX_CHAIN_LEN];
+    let mut mask_acc = vec![vec![0u64; n]; MAX_CHAIN_LEN];
+    let mut sess_mask = vec![vec![0u64; n]; MAX_CHAIN_LEN];
+
+    for (ui, &u_ti) in nodes.iter().enumerate() {
+        if emit_q16[ui] > 0 {
+            dp[0][ui] = emit_q16[ui];
+            mask_acc[0][ui] = t_mask[u_ti];
+            sess_mask[0][ui] = 1u64 << (ix.turns[u_ti].session & 63);
+        }
+    }
+
+    let mut best_score = 0u64;
+    let mut best_path: Vec<usize> = Vec::new();
+    let mut best_mask = 0u64;
+
+    // Step 1 (2-node chain `u -> v`)
+    for vi in 0..n {
+        let v_ti = nodes[vi];
+        for ui in 0..n {
+            if ui == vi || emit_q16[ui] == 0 {
+                continue;
+            }
+            let trans = edges[ui][vi];
             if trans == 0 {
                 continue;
             }
             let cand = emit_q16[ui]
                 .saturating_add(trans)
                 .saturating_add(emit_q16[vi] >> 1);
-            if cand > dp1[vi] {
-                dp1[vi] = cand;
-                back1[vi] = ui;
+            if cand > dp[1][vi] {
+                dp[1][vi] = cand;
+                prev[1][vi] = ui;
+                mask_acc[1][vi] = t_mask[nodes[ui]] | t_mask[v_ti];
+                sess_mask[1][vi] = (1u64 << (ix.turns[nodes[ui]].session & 63))
+                    | (1u64 << (ix.turns[v_ti].session & 63));
             }
         }
-    }
-
-    // 2-hop DP step (len=3 chain: u -> v -> w) when a valid hop-1 endpoint exists.
-    let mut best_score = 0u64;
-    let mut best_path: Vec<usize> = Vec::new();
-    let mut best_mask = 0u64;
-
-    // Best length-2 chain
-    for (vi, &v_ti) in nodes.iter().enumerate() {
-        if dp1[vi] > best_score && back1[vi] != usize::MAX {
-            let u_ti = nodes[back1[vi]];
-            let um = t_mask[u_ti] | t_mask[v_ti];
-            if ix.turns[u_ti].session != ix.turns[v_ti].session || um.count_ones() > t_mask[u_ti].count_ones() {
-                best_score = dp1[vi];
+        if dp[1][vi] > best_score && prev[1][vi] != usize::MAX {
+            let u_ti = nodes[prev[1][vi]];
+            let v_ti = nodes[vi];
+            let um = mask_acc[1][vi];
+            if ix.turns[u_ti].session != ix.turns[v_ti].session
+                || um.count_ones() > t_mask[u_ti].count_ones()
+            {
+                best_score = dp[1][vi];
                 best_path = vec![u_ti, v_ti];
                 best_mask = um;
             }
         }
     }
 
-    // Try extending to 3rd hop w across distinct turn/session
-    for (wi, &w_ti) in nodes.iter().enumerate() {
-        let tw = &ix.turns[w_ti];
-        if tw.entities.is_empty() || tw.is_backchannel {
-            continue;
-        }
+    // Generalized k-hop extension (`step = 2..MAX_CHAIN_LEN`, lengths 3..=6)
+    let mut alpha_pow_q16 = Q16;
+    for step in 2..MAX_CHAIN_LEN {
+        alpha_pow_q16 = ((alpha_pow_q16 as u128 * ALPHA_Q16 as u128) >> 16) as u64;
+
         for (vi, &v_ti) in nodes.iter().enumerate() {
-            if back1[vi] == usize::MAX || v_ti == w_ti || nodes[back1[vi]] == w_ti {
-                continue;
+            let tv_sess = ix.turns[v_ti].session;
+            let tv_sess_bit = 1u64 << (tv_sess & 63);
+            let tv_mask = t_mask[v_ti];
+
+            let mut best_vi_score = 0u64;
+            let mut best_ui = usize::MAX;
+            let mut best_vi_mask = 0u64;
+            let mut best_vi_sess = 0u64;
+
+            for ui in 0..n {
+                if dp[step - 1][ui] == 0 || prev[step - 1][ui] == usize::MAX {
+                    continue;
+                }
+                let trans = edges[ui][vi];
+                if trans == 0 {
+                    continue;
+                }
+
+                // #806 Strict Mackworth AC-3 Information-Gain Pruning on k >= 3 hops:
+                // Every hop past step 1 MUST strictly cover at least one NEW query-group bit
+                // AND bridge into an unvisited session.
+                let info_gain = (tv_mask & !mask_acc[step - 1][ui]) != 0;
+                let new_sess = (sess_mask[step - 1][ui] & tv_sess_bit) == 0;
+                if step == 2 {
+                    // Preserve 3rd-hop semantics when crossing out of u's session with positive transition
+                    let u_root = nodes[prev[1][ui]];
+                    if !info_gain && !(tv_sess != ix.turns[u_root].session && new_sess && tv_mask != 0) {
+                        continue;
+                    }
+                } else if !info_gain || !new_sess {
+                    continue;
+                }
+
+                // Cycle check along backpointer chain
+                let mut cur = ui;
+                let mut s = step - 1;
+                let mut cycle = cur == vi;
+                while !cycle && s > 0 {
+                    cur = prev[s][cur];
+                    if cur == usize::MAX || cur == vi {
+                        cycle = true;
+                        break;
+                    }
+                    s -= 1;
+                }
+                if cycle {
+                    continue;
+                }
+
+                let step_trans = if step == 2 {
+                    trans >> 1
+                } else {
+                    ((trans as u128 * alpha_pow_q16 as u128) >> 17) as u64
+                };
+                let step_emit = if step == 2 {
+                    emit_q16[vi] >> 2
+                } else {
+                    ((emit_q16[vi] as u128 * alpha_pow_q16 as u128) >> 18) as u64
+                };
+                let cand = dp[step - 1][ui]
+                    .saturating_add(step_trans)
+                    .saturating_add(step_emit);
+
+                if cand > best_vi_score {
+                    best_vi_score = cand;
+                    best_ui = ui;
+                    best_vi_mask = mask_acc[step - 1][ui] | tv_mask;
+                    best_vi_sess = sess_mask[step - 1][ui] | tv_sess_bit;
+                }
             }
-            let tv = &ix.turns[v_ti];
-            let trans2 = viterbi_edge_q16(ix, plan, tv, tw, v_ti, w_ti, t_mask, max_df);
-            if trans2 == 0 {
-                continue;
-            }
-            let u_ti = nodes[back1[vi]];
-            let cand = dp1[vi]
-                .saturating_add(trans2 >> 1)
-                .saturating_add(emit_q16[wi] >> 2);
-            if cand > best_score && tw.session != ix.turns[u_ti].session {
-                best_score = cand;
-                best_path = vec![u_ti, v_ti, w_ti];
-                best_mask = t_mask[u_ti] | t_mask[v_ti] | t_mask[w_ti];
+
+            if best_ui != usize::MAX {
+                dp[step][vi] = best_vi_score;
+                prev[step][vi] = best_ui;
+                mask_acc[step][vi] = best_vi_mask;
+                sess_mask[step][vi] = best_vi_sess;
+
+                let strictly_more_groups = best_vi_mask.count_ones() > best_mask.count_ones();
+                let same_or_better_step2 = step == 2
+                    && best_vi_mask.count_ones() >= best_mask.count_ones()
+                    && best_vi_score > best_score;
+
+                if strictly_more_groups || same_or_better_step2 {
+                    best_score = best_vi_score;
+                    best_mask = best_vi_mask;
+                    let mut rev_path = Vec::with_capacity(step + 1);
+                    let mut cur = vi;
+                    let mut s = step;
+                    loop {
+                        rev_path.push(nodes[cur]);
+                        if s == 0 {
+                            break;
+                        }
+                        cur = prev[s][cur];
+                        if cur == usize::MAX {
+                            break;
+                        }
+                        s -= 1;
+                    }
+                    rev_path.reverse();
+                    best_path = rev_path;
+                }
             }
         }
     }
 
-    if best_path.is_empty() || best_score == 0 {
+    if best_path.len() < 2 || best_score == 0 {
         None
     } else {
         Some(ViterbiChain {
@@ -247,9 +463,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn viterbi_empty_seeds_returns_none() {
-        // Pure structural invariant check for integer constants
-        assert_eq!(Q16, 65536);
+    fn viterbi_constants_are_integer_q16() {
+        assert_eq!(Q16, 65_536);
+        assert_eq!(ALPHA_Q16, 55_705);
+        assert_eq!(MAX_CHAIN_LEN, 6);
         assert_eq!(integer_sqrt(9), 3);
     }
 }

@@ -2078,11 +2078,16 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // is a duplicate-session assistant echo or unfilled tail.
     admit_protected_tail(ix, p, k, nt, &t_bridge, &t_bridge_hits, &t_exact_mask, &t_scene, &mut final_turn_indices);
 
-    // #801 Integer Viterbi Chain Decoding anchored with #802 GhostLink Divergent Graph Synthesis:
-    // Decode highest-potential multi-hop entity chain across sessions and admit unseated chain hops
-    // into redundant tail slots (keeping slots 0..5 sealed so top literal precision has 0 regression).
+    let base_q16: Vec<u64> = t_scene
+        .iter()
+        .map(|&v| if v > 0.0 { (v * 65536.0).min(u64::MAX as f32) as u64 } else { 0 })
+        .collect();
+
+    // #801/#806/#807 Generalized k-hop (k=3..6) Integer Viterbi + #802 6-Step Damped Integer RWR:
+    // Decode highest-potential multi-hop chain & conductance-flow complements across distant
+    // sessions and admit an unseated hop into a redundant tail slot (keeping 0..5 sealed).
     if k >= 6 {
-        let chain_turn = super::viterbi::decode_viterbi_chain(ix, &plan, &final_turn_indices, &t_scene, &t_mask)
+        let chain_turn = super::viterbi::decode_viterbi_chain(ix, &plan, &final_turn_indices, &base_q16, &t_mask)
             .and_then(|chain| {
                 if chain.score_q16 == 0 || chain.union_mask == 0 {
                     return None;
@@ -2092,7 +2097,17 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                     .into_iter()
                     .find(|ti| !final_turn_indices.contains(ti))
             })
-            .or_else(|| super::ghostlink_dgs::synthesize_complement_turn(ix, &plan, &final_turn_indices));
+            .or_else(|| super::ghostlink_dgs::synthesize_complement_turn(ix, &plan, &final_turn_indices))
+            .or_else(|| {
+                super::ghostlink_dgs::synthesize_multihop_rwr_turns(
+                    ix,
+                    &plan,
+                    &final_turn_indices,
+                    &t_mask,
+                )
+                .into_iter()
+                .next()
+            });
 
         if let Some(cand_ti) = chain_turn {
             if final_turn_indices.len() < k {
@@ -2105,7 +2120,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                         let vti = final_turn_indices[idx];
                         let vs = ix.turns[vti].session;
                         let dup = final_turn_indices[..idx].iter().any(|&e| ix.turns[e].session == vs);
-                        (dup && ix.turns[vti].field == 1) || t_scene[vti] <= 0.0
+                        (dup && ix.turns[vti].field == 1) || (t_scene[vti] <= 0.0 && t_bridge[vti] <= 0.0)
                     }) {
                         final_turn_indices[slot] = cand_ti;
                     }
@@ -2114,12 +2129,11 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         }
     }
 
+    // #805 Allen Interval Algebra + #808 Temporal Contradiction Pruner + #812 Box-Cox Stabilization
+    super::temporal_allen::apply_allen_boxcox_tail_refinement(ix, &it, &base_q16, &mut final_turn_indices, k);
+
     // #806 Mackworth AC-3 Arc Consistency + #827 ACT-R Base-Level Activation + #830 LockeLedger 256-Bucket Attribution
     {
-        let base_q16: Vec<u64> = t_scene
-            .iter()
-            .map(|&v| if v > 0.0 { (v * 65536.0).min(u64::MAX as f32) as u64 } else { 0 })
-            .collect();
         super::ac3::apply_ac3_consistency(ix, &it, &base_q16, &mut final_turn_indices, k);
         let ref_ts_sec = ix.session_ts.iter().copied().max().unwrap_or(0);
         let mut ledger = super::locke_ledger::build_turn_attribution_ledger(ix, &final_turn_indices, &base_q16);
