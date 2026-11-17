@@ -1959,6 +1959,19 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
                     }
                 }
             }
+            // #817: sha256-pinned ConceptNet 5.7.0 (AtLocation, UsedFor, CapableOf, HasA)
+            for (cn_lemma, _w) in crate::conceptnet::two_hop_neighbors(word, 4) {
+                let lid = bridge_vocab.intern(cn_lemma);
+                if !bids.contains(&lid) {
+                    bids.push(lid);
+                }
+                if p.enable_stemming {
+                    let sid = bridge_vocab.intern(&stem_term(&stem(cn_lemma)));
+                    if !bids.contains(&sid) {
+                        bids.push(sid);
+                    }
+                }
+            }
             if !bids.is_empty() {
                 cid_to_bridge.insert(cid, bids);
             }

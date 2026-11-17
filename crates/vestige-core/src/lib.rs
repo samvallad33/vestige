@@ -127,6 +127,8 @@ pub mod retrieval;
 pub(crate) mod zero_overlap;
 /// Princeton WordNet 3.1 noun hypernyms (bundled data file, WordNet license).
 pub mod wordnet;
+/// Packed ConceptNet 5.7.0 2-hop commonsense bridge (sha256-pinned, Issue #817).
+pub mod conceptnet;
 
 // ============================================================================
 // PUBLIC API RE-EXPORTS

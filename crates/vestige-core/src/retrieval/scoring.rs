@@ -243,6 +243,16 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                     }
                 }
             }
+            for (cn_lemma, _cn_w) in crate::conceptnet::two_hop_neighbors(w, 8) {
+                let surface = ix.vocab.get(cn_lemma);
+                let stemmed = if p.enable_stemming { ix.vocab.get(&stem_term(&stem(cn_lemma))) } else { None };
+                for id in [surface, stemmed].into_iter().flatten() {
+                    if corpus_df(id) > 0 && hyp_added.insert(id) {
+                        terms.push(QTerm { id, weight: p.hypernym_weight * 0.85, group: Some(*g), exact_hit: false });
+                        group_of.insert(id, *g);
+                    }
+                }
+            }
         }
     }
 
