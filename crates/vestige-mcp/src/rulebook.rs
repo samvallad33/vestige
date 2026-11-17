@@ -247,6 +247,265 @@ pub fn inject(owner: &[&str], rules: Option<&str>, flags: &[String], max_bytes: 
     }
 }
 
+// =========================================================================
+// Cycle F (#542, #544, #547, #548, #549, #555, #776, #777):
+// Deterministic Reflex Enforcement & Verification Primitives
+// =========================================================================
+
+/// Recorded command failure attempt for `#542` Loop Breaker & `#549` Dead Ends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FailureAttempt {
+    pub signature: String,
+    pub tree_hash: String,
+    pub attempt_summary: String,
+    pub receipt_id: String,
+    pub resolved_fix: Option<String>,
+}
+
+/// Outcome of `#542` Loop Breaker check before running a command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoopBreakerDecision {
+    pub blocked: bool,
+    pub repeat_count: usize,
+    pub recorded_fix: Option<String>,
+    pub dead_ends: Vec<String>,
+}
+
+/// `#542` Loop Breaker + `#549` Dead-End Lookup:
+/// Blocks a command when `signature` has already failed `>= max_retries` times with
+/// the exact same `tree_hash` (no code change between tries), and surfaces any recorded
+/// fix or prior failed fix attempts (`dead_ends`).
+pub fn check_failure_loop(
+    signature: &str,
+    current_tree_hash: &str,
+    prior: &[FailureAttempt],
+    max_retries: usize,
+) -> LoopBreakerDecision {
+    let mut same_tree_count = 0usize;
+    let mut recorded_fix: Option<String> = None;
+    let mut dead_ends: Vec<String> = Vec::new();
+
+    for att in prior {
+        if att.signature != signature {
+            continue;
+        }
+        if let Some(fix) = &att.resolved_fix {
+            recorded_fix = Some(fix.clone());
+        } else if !att.attempt_summary.is_empty() && !dead_ends.contains(&att.attempt_summary) {
+            dead_ends.push(att.attempt_summary.clone());
+        }
+        if att.tree_hash == current_tree_hash && att.resolved_fix.is_none() {
+            same_tree_count += 1;
+        }
+    }
+
+    LoopBreakerDecision {
+        blocked: same_tree_count >= max_retries.max(1),
+        repeat_count: same_tree_count,
+        recorded_fix,
+        dead_ends,
+    }
+}
+
+/// Anchored correction memory for `#544` Point-of-Action Corrections.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CorrectionAnchor {
+    pub memory_id: String,
+    pub anchor_target: String,
+    pub rule_text: String,
+}
+
+/// `#544` Corrections at the Point of Action:
+/// Returns all correction memories whose exact `anchor_target` matches `tool_name`,
+/// `command`, or `file_path` (silence on unrelated actions).
+pub fn match_action_corrections<'a>(
+    tool_name: &str,
+    command: Option<&str>,
+    file_path: Option<&str>,
+    corrections: &'a [CorrectionAnchor],
+) -> Vec<&'a CorrectionAnchor> {
+    corrections
+        .iter()
+        .filter(|c| {
+            let t = c.anchor_target.trim();
+            if t.is_empty() {
+                return false;
+            }
+            t == tool_name
+                || command.is_some_and(|cmd| cmd.trim() == t || cmd.contains(t))
+                || file_path.is_some_and(|fp| fp.trim() == t || fp.ends_with(t))
+        })
+        .collect()
+}
+
+/// `#547` Done Check:
+/// Verifies that every `mem-<hex>` handle, 7..40-char hex commit SHA prefix (tagged
+/// `commit <sha>`), and relative file path (`path:<rel>`) cited in `final_message`
+/// resolves against `known_shas`, `known_mem_ids`, and `repo_root`. Returns unresolved citations.
+pub fn verify_done_citations(
+    final_message: &str,
+    known_shas: &[&str],
+    known_mem_ids: &[&str],
+    repo_root: Option<&std::path::Path>,
+) -> Vec<String> {
+    let mut unresolved: Vec<String> = Vec::new();
+    for tok in final_message.split(|c: char| c.is_whitespace() || matches!(c, '`' | ',' | ';' | ')' | '(' | '[' | ']')) {
+        let t = tok.trim_matches(|c: char| c == '.' || c == ':' || c == '"' || c == '\'');
+        if t.is_empty() {
+            continue;
+        }
+        if t.starts_with("mem-") && t.len() >= 8 {
+            if !known_mem_ids.iter().any(|k| *k == t || k.starts_with(t)) {
+                unresolved.push(t.to_string());
+            }
+        }
+    }
+    let words: Vec<&str> = final_message.split_whitespace().collect();
+    for pair in words.windows(2) {
+        if pair[0].eq_ignore_ascii_case("commit") {
+            let sha = pair[1].trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            if (7..=40).contains(&sha.len()) && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                if !known_shas.iter().any(|k| k.starts_with(sha) || sha.starts_with(*k)) {
+                    unresolved.push(sha.to_string());
+                }
+            }
+        }
+    }
+    if let Some(root) = repo_root {
+        for tok in final_message.split('`').skip(1).step_by(2) {
+            if (tok.starts_with("crates/") || tok.starts_with("src/") || tok.starts_with("scripts/"))
+                && !tok.contains(' ')
+                && !root.join(tok).exists()
+            {
+                unresolved.push(tok.to_string());
+            }
+        }
+    }
+    unresolved.sort();
+    unresolved.dedup();
+    unresolved
+}
+
+/// `#548` Postmortem Pack Entry: ordered timeline record with BLAKE3 chain link.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PostmortemEntry {
+    pub seq: u64,
+    pub timestamp_ms: u64,
+    pub kind: String,
+    pub summary: String,
+    pub receipt_id: String,
+    pub prev_hash_hex: String,
+    pub entry_hash_hex: String,
+}
+
+fn hash_postmortem_step(
+    seq: u64,
+    timestamp_ms: u64,
+    kind: &str,
+    summary: &str,
+    receipt_id: &str,
+    prev_hash_hex: &str,
+) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(&seq.to_le_bytes());
+    h.update(&timestamp_ms.to_le_bytes());
+    h.update(kind.as_bytes());
+    h.update(&[0]);
+    h.update(summary.as_bytes());
+    h.update(&[0]);
+    h.update(receipt_id.as_bytes());
+    h.update(&[0]);
+    h.update(prev_hash_hex.as_bytes());
+    h.finalize().to_hex().to_string()
+}
+
+/// `#548` Build an ordered, hash-chained postmortem pack from raw `(timestamp_ms, kind, summary, receipt_id)` events.
+pub fn build_postmortem_pack(events: &[(u64, &str, &str, &str)]) -> Vec<PostmortemEntry> {
+    let mut sorted: Vec<(u64, &str, &str, &str)> = events.to_vec();
+    sorted.sort_by_key(|e| e.0);
+    let mut out = Vec::with_capacity(sorted.len());
+    let mut prev = "0".repeat(64);
+    for (idx, &(ts, kind, summary, receipt)) in sorted.iter().enumerate() {
+        let seq = idx as u64;
+        let hash = hash_postmortem_step(seq, ts, kind, summary, receipt, &prev);
+        out.push(PostmortemEntry {
+            seq,
+            timestamp_ms: ts,
+            kind: kind.to_string(),
+            summary: summary.to_string(),
+            receipt_id: receipt.to_string(),
+            prev_hash_hex: prev,
+            entry_hash_hex: hash.clone(),
+        });
+        prev = hash;
+    }
+    out
+}
+
+/// `#548` Verify offline integrity of a postmortem pack; returns `Err(seq)` on the first tampered or out-of-order entry.
+pub fn verify_postmortem_pack(pack: &[PostmortemEntry]) -> Result<(), u64> {
+    let mut prev = "0".repeat(64);
+    let mut last_ts = 0u64;
+    for (idx, e) in pack.iter().enumerate() {
+        if e.seq != idx as u64 || e.timestamp_ms < last_ts || e.prev_hash_hex != prev {
+            return Err(e.seq);
+        }
+        let expected = hash_postmortem_step(
+            e.seq,
+            e.timestamp_ms,
+            &e.kind,
+            &e.summary,
+            &e.receipt_id,
+            &e.prev_hash_hex,
+        );
+        if e.entry_hash_hex != expected {
+            return Err(e.seq);
+        }
+        prev = e.entry_hash_hex.clone();
+        last_ts = e.timestamp_ms;
+    }
+    Ok(())
+}
+
+/// `#555` Jepsen Elle File Access Operation for concurrent agent lost-update detection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentFileWrite {
+    pub agent_id: String,
+    pub path: String,
+    pub read_hash: String,
+    pub write_hash: String,
+    pub receipt_id: String,
+}
+
+/// `#555` Detect lost updates where two distinct agents read the same base `read_hash`
+/// on `path` and both write different `write_hash` states without chaining (`w2.read_hash != w1.write_hash`).
+pub fn detect_elle_lost_updates(writes: &[AgentFileWrite]) -> Vec<(String, String, String)> {
+    let mut anomalies: Vec<(String, String, String)> = Vec::new();
+    for i in 0..writes.len() {
+        for j in (i + 1)..writes.len() {
+            let a = &writes[i];
+            let b = &writes[j];
+            if a.path == b.path
+                && a.agent_id != b.agent_id
+                && a.read_hash == b.read_hash
+                && a.write_hash != b.write_hash
+            {
+                anomalies.push((a.path.clone(), a.receipt_id.clone(), b.receipt_id.clone()));
+            }
+        }
+    }
+    anomalies
+}
+
+/// `#777` R04 Commit-Before-Save Gate: denies a `remember(save)` when `has_commit_receipt` is false.
+pub fn enforce_save_after_commit(has_commit_receipt: bool) -> Result<(), &'static str> {
+    if has_commit_receipt {
+        Ok(())
+    } else {
+        Err("R04 violation (#777): No save until there is a commit receipt.")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +665,95 @@ mod tests {
         let text = inject(&[], None, &[], 80);
         assert!(text.contains(HANDLE), "{text}");
         assert!(text.len() <= 80, "{}", text.len());
+    }
+
+    #[test]
+    fn cycle_f_loop_breaker_corrections_done_check_postmortem_and_elle_work() {
+        // #542 & #549: Loop breaker stops on unchanged tree hash and surfaces dead ends + fix
+        let attempts = vec![
+            FailureAttempt {
+                signature: "E0308".into(),
+                tree_hash: "tree-a".into(),
+                attempt_summary: "cast to u32".into(),
+                receipt_id: "r1".into(),
+                resolved_fix: None,
+            },
+            FailureAttempt {
+                signature: "E0308".into(),
+                tree_hash: "tree-a".into(),
+                attempt_summary: "cast to usize".into(),
+                receipt_id: "r2".into(),
+                resolved_fix: None,
+            },
+        ];
+        let dec = check_failure_loop("E0308", "tree-a", &attempts, 2);
+        assert!(dec.blocked);
+        assert_eq!(dec.dead_ends.len(), 2);
+        let after_edit = check_failure_loop("E0308", "tree-b", &attempts, 2);
+        assert!(!after_edit.blocked);
+
+        // #544: Point-of-action corrections match command or path and stay quiet otherwise
+        let corrs = vec![CorrectionAnchor {
+            memory_id: "mem-42".into(),
+            anchor_target: "git push --force".into(),
+            rule_text: "Never force push".into(),
+        }];
+        assert_eq!(
+            match_action_corrections("Bash", Some("git push --force origin"), None, &corrs).len(),
+            1
+        );
+        assert!(match_action_corrections("Bash", Some("cargo test"), None, &corrs).is_empty());
+
+        // #547: Done check flags fabricated SHA and missing mem-id
+        let bad = verify_done_citations(
+            "Landed in commit deadbeef1234 and saved mem-99999999.",
+            &["70851594abcd"],
+            &["mem-0000166a"],
+            None,
+        );
+        assert_eq!(bad, vec!["deadbeef1234".to_string(), "mem-99999999".to_string()]);
+        let good = verify_done_citations(
+            "Landed in commit 70851594 and saved mem-0000166a.",
+            &["70851594abcd"],
+            &["mem-0000166a"],
+            None,
+        );
+        assert!(good.is_empty());
+
+        // #548: Postmortem pack orders events and rejects tampered entry
+        let mut pack = build_postmortem_pack(&[
+            (200, "stop", "blocked rm", "eff-2"),
+            (100, "call", "read file", "eff-1"),
+        ]);
+        assert_eq!(pack[0].timestamp_ms, 100);
+        assert!(verify_postmortem_pack(&pack).is_ok());
+        pack[1].summary = "edited".into();
+        assert_eq!(verify_postmortem_pack(&pack), Err(1));
+
+        // #555: Elle lost update anomaly detection
+        let writes = vec![
+            AgentFileWrite {
+                agent_id: "a1".into(),
+                path: "src/config.rs".into(),
+                read_hash: "h0".into(),
+                write_hash: "h1".into(),
+                receipt_id: "eff-a".into(),
+            },
+            AgentFileWrite {
+                agent_id: "a2".into(),
+                path: "src/config.rs".into(),
+                read_hash: "h0".into(),
+                write_hash: "h2".into(),
+                receipt_id: "eff-b".into(),
+            },
+        ];
+        let lost = detect_elle_lost_updates(&writes);
+        assert_eq!(lost.len(), 1);
+        assert_eq!(lost[0].1, "eff-a");
+        assert_eq!(lost[0].2, "eff-b");
+
+        // #777: Save-after-commit gate
+        assert!(enforce_save_after_commit(true).is_ok());
+        assert!(enforce_save_after_commit(false).is_err());
     }
 }

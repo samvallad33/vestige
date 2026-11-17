@@ -13,7 +13,7 @@ use super::index::Index;
 use super::is_technical_handle;
 use super::scoring::QueryPlan;
 use super::supersession::turn_is_superseded;
-use super::viterbi::transition_contradicts;
+use super::viterbi::{transition_contradicts, turn_carriers};
 
 pub(super) const Q16: u64 = 1 << 16;
 pub(super) const ALPHA_Q16: u64 = 55_705; // 0.85 in Q16.16
@@ -93,10 +93,7 @@ pub(super) fn synthesize_multihop_rwr_turns(
         let wave_end = nodes.len();
         let mut carriers: BTreeMap<(u32, u32), ()> = BTreeMap::new();
         for &ti in &nodes[wave_start..wave_end] {
-            for &e in &ix.turns[ti].entities {
-                if plan.group_of.contains_key(&e) || is_technical_handle(&ix.vocab, e) {
-                    continue;
-                }
+            for e in turn_carriers(ix, plan, ti, max_df) {
                 if let Some(&df) = ix.t_stats.df.get(&e) {
                     if df >= 2 && df <= max_df {
                         carriers.insert((df, e), ());
@@ -134,11 +131,16 @@ pub(super) fn synthesize_multihop_rwr_turns(
     }
 
     // Column-normalized integer transition conductance matrix `adj[u] = [(v, weight_q16)]`
+    let node_carriers: Vec<Vec<u32>> = nodes
+        .iter()
+        .map(|&ti| turn_carriers(ix, plan, ti, max_df))
+        .collect();
     let mut adj: Vec<Vec<(usize, u64)>> = vec![Vec::new(); n];
     for ui in 0..n {
         let u_ti = nodes[ui];
         let tu = &ix.turns[u_ti];
-        if tu.entities.is_empty() {
+        let u_carr = &node_carriers[ui];
+        if u_carr.is_empty() {
             continue;
         }
         let mut row_raw: Vec<(usize, u64)> = Vec::new();
@@ -153,12 +155,10 @@ pub(super) fn synthesize_multihop_rwr_turns(
                 continue;
             }
             let tv = &ix.turns[v_ti];
+            let v_carr = &node_carriers[vi];
             let mut cond_best: u64 = 0;
-            for &c in &tu.entities {
-                if plan.group_of.contains_key(&c)
-                    || is_technical_handle(&ix.vocab, c)
-                    || !tv.entities.contains(&c)
-                {
+            for &c in u_carr {
+                if !v_carr.contains(&c) {
                     continue;
                 }
                 let df_c = ix.t_stats.df.get(&c).copied().unwrap_or(0);
@@ -168,8 +168,8 @@ pub(super) fn synthesize_multihop_rwr_turns(
                 let base_cond = Q16 / (df_c as u64);
                 let post_c = ix.t_postings.get(c as usize).map(|p| p.as_slice()).unwrap_or(&[]);
                 let mut div_best = Q16 / 2;
-                for &e_div in &tv.entities {
-                    if e_div == c || tu.entities.contains(&e_div) {
+                for &e_div in v_carr {
+                    if e_div == c || u_carr.contains(&e_div) {
                         continue;
                     }
                     let post_d = ix

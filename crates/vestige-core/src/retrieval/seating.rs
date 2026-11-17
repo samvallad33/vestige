@@ -6742,3 +6742,89 @@ pub(super) fn apply_w2_standing_register_seat(
         }
     }
 }
+
+/// Slot-1 Assertion & Exact-Superset Promotion (`0..5` membership 100% invariant):
+/// When `list[0]` in a user/assistant dialogue (`!c2_named_session`) was hoisted by
+/// opener/elaboration heuristics despite having strictly weaker exact query-group coverage
+/// and strictly lower `t_own` than a same-session user declarative in `list[1..5]`,
+/// or when `list[0]` is a zero-exact-match assistant filler, swap `0` and `best_slot`.
+pub(super) fn apply_assertion_and_superset_slot1_promotion(
+    ix: &Index,
+    plan: &QueryPlan,
+    list: &mut Vec<usize>,
+    t_own: &[f32],
+    t_scene: &[f32],
+    t_exact_mask: &[u64],
+) {
+    if list.len() < 2
+        || plan.intent.is_event_sequence
+        || plan.intent.assistant_attribution
+    {
+        return;
+    }
+    let head = list[0];
+    if c2_named_session(ix, head) {
+        return;
+    }
+    let head_t = &ix.turns[head];
+    let head_sess = head_t.session;
+    let head_exact = t_exact_mask.get(head).copied().unwrap_or(0);
+    let head_own = t_own.get(head).copied().unwrap_or(0.0);
+    let head_sc = t_scene.get(head).copied().unwrap_or(0.0);
+    if head_sc <= 0.0 {
+        return;
+    }
+
+    let window = list.len().min(5);
+    let mut best_slot: Option<(usize, u32, f32)> = None;
+    for slot in 1..window {
+        let cand = list[slot];
+        let cand_t = &ix.turns[cand];
+        if cand_t.session != head_sess
+            || cand_t.field != 0
+            || cand_t.is_question
+            || cand_t.is_backchannel
+            || turn_is_superseded(ix, cand)
+        {
+            continue;
+        }
+        if head_t.form_digit && !cand_t.form_digit {
+            continue;
+        }
+        let cand_exact = t_exact_mask.get(cand).copied().unwrap_or(0);
+        let cand_own = t_own.get(cand).copied().unwrap_or(0.0);
+        let cand_sc = t_scene.get(cand).copied().unwrap_or(0.0);
+
+        // 1. Zero-exact-match assistant filler at Slot 0 yields to same-session user assertion
+        let asst_zero_filler = head_t.field == 1 && head_exact == 0 && cand_exact != 0 && cand_own > 0.0;
+        // 2. Same-session user declarative with strict exact-group superset & stronger t_own
+        let strict_superset = head_t.field == 0
+            && head_exact != 0
+            && (cand_exact & head_exact) == head_exact
+            && cand_exact.count_ones() > head_exact.count_ones()
+            && cand_own > 1.15 * head_own
+            && cand_sc >= 0.78 * head_sc;
+        // 3. Same-session user question opener yields to declarative covering all its exact groups
+        let question_yields = head_t.field == 0
+            && head_t.is_question
+            && cand_exact != 0
+            && (cand_exact & head_exact) == head_exact
+            && cand_own >= 0.95 * head_own
+            && cand_sc >= 0.85 * head_sc;
+
+        if asst_zero_filler || strict_superset || question_yields {
+            let bits = cand_exact.count_ones();
+            let better = match best_slot {
+                None => true,
+                Some((_, b_bits, b_own)) => bits > b_bits || (bits == b_bits && cand_own > b_own),
+            };
+            if better {
+                best_slot = Some((slot, bits, cand_own));
+            }
+        }
+    }
+
+    if let Some((slot, _, _)) = best_slot {
+        list.swap(0, slot);
+    }
+}

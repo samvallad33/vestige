@@ -342,6 +342,84 @@ pub(super) fn evaluate_turn_taxa_q16(
     (combined, isa_mask, is_def)
 }
 
+/// Conditional Deficit-Gated Corpus Rescue (`Deficit A` / `Deficit B` / `preference`):
+/// Scans unseated corpus turns `0..nt` (not just `final_turn_indices`) and seats the strongest
+/// taxonomic (`isa_mask != 0`) or Durable Experiencer Preference (`PrefRegister`) turn into
+/// a redundant slot when the query has a zero-overlap or preference coverage deficit.
+pub(super) fn apply_deficit_taxa_and_pref_rescue(
+    ix: &Index,
+    plan: &QueryPlan,
+    pref_reg: &PrefRegister,
+    q_wilkins: u64,
+    q_zato: u128,
+    base_q16: &[u64],
+    t_exact_mask: &[u64],
+    final_turn_indices: &mut Vec<usize>,
+    k: usize,
+    deficit_a: bool,
+    deficit_b: bool,
+) {
+    if k < 6 || (!deficit_a && !deficit_b && !plan.intent.preference) {
+        return;
+    }
+    let nt = ix.turns.len();
+    let mut best_cand: Option<(usize, u64)> = None;
+    for ti in 0..nt {
+        let t = &ix.turns[ti];
+        if t.is_question
+            || t.is_backchannel
+            || turn_is_superseded(ix, ti)
+            || final_turn_indices.contains(&ti)
+        {
+            continue;
+        }
+        let pref_res = if plan.intent.preference {
+            pref_reg.resonance_q16(q_zato, ti)
+        } else {
+            0
+        };
+        let isa_mask = if deficit_a {
+            isa_part_of_bitmask_u64(ix, plan, ti)
+        } else {
+            0
+        };
+        if pref_res == 0 && isa_mask == 0 {
+            continue;
+        }
+        let (taxa_q16, _, _) = evaluate_turn_taxa_q16(ix, plan, pref_reg, q_wilkins, q_zato, ti);
+        let score = taxa_q16.saturating_add(pref_res);
+        if score > (Q16 >> 1) && best_cand.map_or(true, |(_, bs)| score > bs) {
+            best_cand = Some((ti, score));
+        }
+    }
+
+    let Some((cand_ti, _)) = best_cand else {
+        return;
+    };
+    if final_turn_indices.len() < k {
+        final_turn_indices.push(cand_ti);
+        return;
+    }
+    let cand_sess = ix.turns[cand_ti].session;
+    if final_turn_indices[..5].iter().any(|&t| ix.turns[t].session == cand_sess) {
+        return;
+    }
+    if let Some(slot) = (5..final_turn_indices.len()).rev().find(|&idx| {
+        let vti = final_turn_indices[idx];
+        let vs = ix.turns[vti].session;
+        let dup = final_turn_indices[..idx].iter().any(|&e| ix.turns[e].session == vs);
+        let mut earlier_mask = 0u64;
+        for &e in &final_turn_indices[..idx] {
+            earlier_mask |= t_exact_mask[e];
+        }
+        (dup && ix.turns[vti].field == 1)
+            || base_q16[vti] == 0
+            || (dup && ix.turns[vti].is_question && (t_exact_mask[vti] & !earlier_mask) == 0)
+    }) {
+        final_turn_indices[slot] = cand_ti;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

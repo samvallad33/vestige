@@ -80,8 +80,8 @@ pub(super) fn ilp_psl_chain_utility_q16(
     ((cand_score_q16 as u128 * net_mult_q16 as u128) >> 16) as u64
 }
 
-/// Apply Roth 0-1 ILP + PSL closure refinement over tail slots `5..k` for multi-hop
-/// queries (keeping `0..5` 100% sealed so literal Top-5 precision never regresses).
+/// Apply Roth 0-1 ILP + PSL closure refinement over tail slots `5..k` whenever Top-5
+/// has a Multi-Hop Partial Coverage Deficit (`covered_mask != mask_limit`, keeping `0..5` sealed).
 pub(super) fn apply_psl_ilp_tail_closure(
     ix: &Index,
     plan: &QueryPlan,
@@ -90,7 +90,7 @@ pub(super) fn apply_psl_ilp_tail_closure(
     final_turn_indices: &mut Vec<usize>,
     k: usize,
 ) {
-    if !plan.intent.multi_hop || k < 6 || final_turn_indices.len() < 6 {
+    if k < 6 || final_turn_indices.len() < 6 {
         return;
     }
     let total_groups = plan.groups.len().min(64);
@@ -108,8 +108,8 @@ pub(super) fn apply_psl_ilp_tail_closure(
     for &ti in head {
         covered_mask |= t_exact_mask[ti] & mask_limit;
     }
-    // Check if head leaves at least 1 query group uncovered (`ILP closure needed`)
-    if (covered_mask & mask_limit) == mask_limit {
+    // Check if head leaves at least 1 query group uncovered (`Deficit B`)
+    if (covered_mask & mask_limit) == mask_limit && !plan.intent.multi_hop {
         return;
     }
 
@@ -123,7 +123,9 @@ pub(super) fn apply_psl_ilp_tail_closure(
         {
             continue;
         }
-        if ((t_exact_mask[ti] & !covered_mask) & mask_limit) == 0 {
+        let has_uncovered_group = ((t_exact_mask[ti] & !covered_mask) & mask_limit) != 0;
+        let has_bridge_entities = !ix.turns[ti].entities.is_empty() || !ix.turns[ti].role_objs.is_empty();
+        if !has_uncovered_group && !(plan.intent.multi_hop && has_bridge_entities) {
             continue;
         }
         let util = ilp_psl_chain_utility_q16(

@@ -61,6 +61,51 @@ fn shares_entity_or_role_obj(ix: &Index, u_ti: usize, v_ti: usize) -> bool {
     tu.role_objs.iter().any(|o| tv.role_objs.contains(o))
 }
 
+/// Collect unified multi-hop bridge carriers for turn `ti`:
+/// `entities ∪ role_objs ∪ rare lowercase content tokens (2 <= df <= rare_content_max_df)`
+/// excluding direct query-group tokens and technical handles.
+pub(super) fn turn_carriers(
+    ix: &Index,
+    plan: &QueryPlan,
+    ti: usize,
+    max_df: u32,
+) -> Vec<u32> {
+    let t = &ix.turns[ti];
+    let rare_content_max_df = (max_df >> 1).clamp(3, 12);
+    let mut out: Vec<u32> = Vec::with_capacity(t.entities.len() + t.role_objs.len() + 4);
+    for &e in &t.entities {
+        if plan.group_of.contains_key(&e) || is_technical_handle(&ix.vocab, e) {
+            continue;
+        }
+        if let Some(&df) = ix.t_stats.df.get(&e) {
+            if df >= 2 && df <= max_df && !out.contains(&e) {
+                out.push(e);
+            }
+        }
+    }
+    for &r in &t.role_objs {
+        if plan.group_of.contains_key(&r) || is_technical_handle(&ix.vocab, r) {
+            continue;
+        }
+        if let Some(&df) = ix.t_stats.df.get(&r) {
+            if df >= 2 && df <= max_df && !out.contains(&r) {
+                out.push(r);
+            }
+        }
+    }
+    for &w in &t.content {
+        if plan.group_of.contains_key(&w) || is_technical_handle(&ix.vocab, w) {
+            continue;
+        }
+        if let Some(&df) = ix.t_stats.df.get(&w) {
+            if df >= 2 && df <= rare_content_max_df && !out.contains(&w) {
+                out.push(w);
+            }
+        }
+    }
+    out
+}
+
 /// #807 Contradiction & Negation Invalidation Guard:
 /// Reject transitions between turns linked by causal supersession or opposing
 /// closed-class negation polarity over the same entity/constraint subject.
@@ -116,17 +161,13 @@ pub(super) fn decode_viterbi_chain(
         return None;
     }
 
-    // Wave 1: preserve exact BTreeMap<u32, u64> carrier order up to WAVE1_NODE_CAP (64).
+    // Wave 1: preserve deterministic BTreeMap<u32, u64> carrier order up to WAVE1_NODE_CAP (64)
+    // across entities, role_objs, and rare content tokens.
     let mut carrier_posts: BTreeMap<u32, u64> = BTreeMap::new();
     for &s in nodes.iter().take(6) {
-        for &e in &ix.turns[s].entities {
-            if plan.group_of.contains_key(&e) || is_technical_handle(&ix.vocab, e) {
-                continue;
-            }
+        for e in turn_carriers(ix, plan, s, max_df) {
             if let Some(&df) = ix.t_stats.df.get(&e) {
-                if df >= 2 && df <= max_df {
-                    carrier_posts.entry(e).or_insert(df as u64);
-                }
+                carrier_posts.entry(e).or_insert(df as u64);
             }
         }
     }
@@ -161,14 +202,9 @@ pub(super) fn decode_viterbi_chain(
         let wave_end = nodes.len();
         let mut ext_carriers: BTreeMap<u32, u64> = BTreeMap::new();
         for &s in &nodes[wave1_start..wave_end] {
-            for &e in &ix.turns[s].entities {
-                if plan.group_of.contains_key(&e) || is_technical_handle(&ix.vocab, e) {
-                    continue;
-                }
+            for e in turn_carriers(ix, plan, s, max_df) {
                 if let Some(&df) = ix.t_stats.df.get(&e) {
-                    if df >= 2 && df <= max_df {
-                        ext_carriers.entry(e).or_insert(df as u64);
-                    }
+                    ext_carriers.entry(e).or_insert(df as u64);
                 }
             }
         }
@@ -213,7 +249,7 @@ pub(super) fn decode_viterbi_chain(
     let mut edges = vec![vec![0u64; n]; n];
     for (ui, &u_ti) in nodes.iter().enumerate() {
         let tu = &ix.turns[u_ti];
-        if tu.entities.is_empty() || tu.is_backchannel {
+        if (tu.entities.is_empty() && tu.role_objs.is_empty()) || tu.is_backchannel {
             continue;
         }
         for (vi, &v_ti) in nodes.iter().enumerate() {
@@ -221,7 +257,9 @@ pub(super) fn decode_viterbi_chain(
                 continue;
             }
             let tv = &ix.turns[v_ti];
-            if tv.entities.is_empty() || tv.is_backchannel || transition_contradicts(ix, u_ti, v_ti)
+            if (tv.entities.is_empty() && tv.role_objs.is_empty())
+                || tv.is_backchannel
+                || transition_contradicts(ix, u_ti, v_ti)
             {
                 continue;
             }
@@ -519,11 +557,10 @@ fn viterbi_edge_q16(
     max_df: u32,
 ) -> u64 {
     let mut best_trans: u64 = 0;
-    for &c in &tu.entities {
-        if plan.group_of.contains_key(&c) || is_technical_handle(&ix.vocab, c) {
-            continue;
-        }
-        if !tv.entities.contains(&c) {
+    let u_carriers = turn_carriers(ix, plan, u_ti, max_df);
+    let v_carriers = turn_carriers(ix, plan, v_ti, max_df);
+    for &c in &u_carriers {
+        if !v_carriers.contains(&c) {
             continue;
         }
         let df_c = ix.t_stats.df.get(&c).copied().unwrap_or(0);
@@ -533,8 +570,8 @@ fn viterbi_edge_q16(
         let cond_q16 = Q16 / (df_c as u64);
         let post_c = ix.t_postings.get(c as usize).map(|v| v.as_slice()).unwrap_or(&[]);
         let mut max_div_q16 = Q16 / 2;
-        for &e_div in &tv.entities {
-            if e_div == c || tu.entities.contains(&e_div) {
+        for &e_div in &v_carriers {
+            if e_div == c || u_carriers.contains(&e_div) {
                 continue;
             }
             let post_div = ix.t_postings.get(e_div as usize).map(|v| v.as_slice()).unwrap_or(&[]);

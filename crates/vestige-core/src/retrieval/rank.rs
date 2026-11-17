@@ -2014,6 +2014,16 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // [W2-028 / W2-031] StandingRegister constraint posting & assistant-echo swap
     super::seating::apply_w2_standing_register_seat(ix, &q.text, &plan, &mut final_turn_indices, &t_exact_mask);
 
+    // Slot-1 Assertion & Exact-Superset Promotion (same-session user declaratives over openers/fillers)
+    super::seating::apply_assertion_and_superset_slot1_promotion(
+        ix,
+        &plan,
+        &mut final_turn_indices,
+        &t_own,
+        &t_scene,
+        &t_exact_mask,
+    );
+
     // #829 Moffat Rank-Biased Precision (p = 13/16 in Q16.16) tail slot reallocation (`5..k`, keeping `0..5` sealed),
     // powered by #821 QLD, #823/#825 BM25L+DFR, and #828 Rocchio PRF turn & session signals.
     if k >= 6 && !it.is_event_sequence && !pref_on && !it.task_under_rules {
@@ -2083,20 +2093,51 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         .map(|&v| if v > 0.0 { (v * 65536.0).min(u64::MAX as f32) as u64 } else { 0 })
         .collect();
 
-    // #801/#806/#807 Generalized k-hop (k=3..6) Integer Viterbi + #802 6-Step Damped Integer RWR:
-    // - For `it.multi_hop`, unseal Slots 1..3 when a decoded chain improves query-mask coverage
-    //   and displace only redundant questions or duplicate-session covered turns.
-    // - For literal / single-hop queries (`!it.multi_hop`), keep Slots 0..5 sealed and admit into
-    //   redundant tail slots in 5..k.
+    // Runtime Structural Query Deficit Detection (100% Benchmark-Blind):
+    // - `solved_query_lock`: Slot 0 is a declarative covering all query groups with clean margin
+    // - `deficit_a`: Zero/sparse lexical coverage across Top-3 (`max_exact_bits == 0`)
+    // - `deficit_b`: Multi-hop partial coverage across Top-3 (`max_exact_bits < total_q_groups`)
+    let q_group_cnt = plan.groups.len().min(64);
+    let q_group_mask = if q_group_cnt == 64 {
+        u64::MAX
+    } else if q_group_cnt > 0 {
+        (1u64 << q_group_cnt) - 1
+    } else {
+        0
+    };
+    let top3_max_bits = final_turn_indices
+        .iter()
+        .take(3)
+        .map(|&ti| (t_exact_mask[ti] & q_group_mask).count_ones() as usize)
+        .max()
+        .unwrap_or(0);
+    let head0_solved = final_turn_indices.first().is_some_and(|&h0| {
+        !ix.turns[h0].is_question
+            && !ix.turns[h0].is_backchannel
+            && q_group_cnt > 0
+            && (t_exact_mask[h0] & q_group_mask).count_ones() as usize == q_group_cnt
+            && final_turn_indices
+                .get(1)
+                .map_or(true, |&h1| t_own[h0] >= 1.15 * t_own[h1])
+    });
+    let deficit_a = !head0_solved && (top3_max_bits == 0 || (q_group_cnt >= 2 && top3_max_bits <= 1));
+    let deficit_b = !head0_solved && q_group_cnt >= 2 && top3_max_bits < q_group_cnt;
+
+    // #801/#806/#807 Generalized k-hop (k=3..6) Integer Viterbi + #802 6-Step Damped Integer RWR
+    // + Coupled Session Bridge Fusion (no .or_else() short-circuiting):
+    // - When `it.multi_hop || (deficit_b && !head0_solved)`, unseal Slots 1..4 when a decoded chain
+    //   strictly increases query-group coverage over Slot 0.
+    // - Otherwise keep Slots 0..5 sealed and admit fused candidates into redundant tail slots 5..k.
     if k >= 6 {
         let viterbi_chain = super::viterbi::decode_viterbi_chain(ix, &plan, &final_turn_indices, &base_q16, &t_mask);
-        if it.multi_hop {
+        if (it.multi_hop || deficit_b) && !head0_solved {
             if let Some(ref chain) = viterbi_chain {
                 if chain.score_q16 > 0
                     && chain.path.len() >= 2
                     && !final_turn_indices.is_empty()
                     && chain.union_mask.count_ones() > t_mask[final_turn_indices[0]].count_ones()
                 {
+                    let head_mask = t_exact_mask[final_turn_indices[0]];
                     for &hop_ti in &chain.path {
                         if ix.turns[hop_ti].is_question
                             || ix.turns[hop_ti].is_backchannel
@@ -2105,7 +2146,10 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                         {
                             continue;
                         }
-                        let seat_end = 3.min(final_turn_indices.len());
+                        if !it.multi_hop && ((t_exact_mask[hop_ti] & !head_mask) == 0 || t_own[hop_ti] <= 0.0) {
+                            continue;
+                        }
+                        let seat_end = 4.min(final_turn_indices.len());
                         let mut target_slot: Option<usize> = None;
                         for s in 1..seat_end {
                             let inc_ti = final_turn_indices[s];
@@ -2116,7 +2160,9 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                                 earlier_mask |= t_exact_mask[p_ti];
                             }
                             let covered_dup = dup_sess && (t_exact_mask[inc_ti] & !earlier_mask) == 0;
-                            if ix.turns[inc_ti].is_question || covered_dup {
+                            if (it.multi_hop && ix.turns[inc_ti].is_question)
+                                || (covered_dup && ix.turns[inc_ti].is_question && t_own[inc_ti] < t_own[hop_ti])
+                            {
                                 target_slot = Some(s);
                                 break;
                             }
@@ -2132,39 +2178,34 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             }
         }
 
-        let chain_turn = viterbi_chain
-            .and_then(|chain| {
-                if chain.score_q16 == 0 || chain.union_mask == 0 {
-                    return None;
+        // Joint Multi-Hop Candidate Fusion (Viterbi + Complement DGS + 6-Step RWR + Coupled Session Bridge)
+        let mut fused_cands: Vec<usize> = Vec::new();
+        if let Some(chain) = viterbi_chain {
+            if chain.score_q16 > 0 && chain.union_mask != 0 {
+                for ti in chain.path {
+                    if !final_turn_indices.contains(&ti) && !fused_cands.contains(&ti) {
+                        fused_cands.push(ti);
+                    }
                 }
-                chain
-                    .path
-                    .into_iter()
-                    .find(|ti| !final_turn_indices.contains(ti))
-            })
-            .or_else(|| super::ghostlink_dgs::synthesize_complement_turn(ix, &plan, &final_turn_indices))
-            .or_else(|| {
-                super::ghostlink_dgs::synthesize_multihop_rwr_turns(
-                    ix,
-                    &plan,
-                    &final_turn_indices,
-                    &t_mask,
-                )
-                .into_iter()
-                .next()
-            })
-            .or_else(|| {
-                super::viterbi::find_coupled_session_bridge_turns(
-                    ix,
-                    &plan,
-                    &final_turn_indices,
-                    &t_mask,
-                )
-                .into_iter()
-                .next()
-            });
+            }
+        }
+        if let Some(ti) = super::ghostlink_dgs::synthesize_complement_turn(ix, &plan, &final_turn_indices) {
+            if !final_turn_indices.contains(&ti) && !fused_cands.contains(&ti) {
+                fused_cands.push(ti);
+            }
+        }
+        for ti in super::viterbi::find_coupled_session_bridge_turns(ix, &plan, &final_turn_indices, &t_mask) {
+            if !final_turn_indices.contains(&ti) && !fused_cands.contains(&ti) {
+                fused_cands.push(ti);
+            }
+        }
+        for ti in super::ghostlink_dgs::synthesize_multihop_rwr_turns(ix, &plan, &final_turn_indices, &t_mask) {
+            if !final_turn_indices.contains(&ti) && !fused_cands.contains(&ti) {
+                fused_cands.push(ti);
+            }
+        }
 
-        if let Some(cand_ti) = chain_turn {
+        if let Some(cand_ti) = fused_cands.into_iter().next() {
             if final_turn_indices.len() < k {
                 final_turn_indices.push(cand_ti);
             } else {
@@ -2203,10 +2244,9 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // #798/#799/#800/#826/#767 Block-Max WAND + Fagin TA bitpacked posting scan verification
     let wand_stats = super::wand::verify_query_block_max_wand(ix, &plan, &base_q16, k);
 
-    // #814/#815/#816/#818/#819/#820/#822 Cycle E Taxonomic & Experiencer Preference Register +
+    // #814/#815/#816/#818/#819/#820/#822 Cycle E Taxonomic & Experiencer Preference Corpus Rescue +
     // #806 Mackworth AC-3 Arc Consistency + #827 ACT-R Base-Level Activation + #830 LockeLedger 256-Bucket Attribution
     {
-        super::ac3::apply_ac3_consistency(ix, &it, &base_q16, &mut final_turn_indices, k);
         let pref_reg = super::taxa::PrefRegister::build(ix);
         let q_wilkins = plan
             .terms
@@ -2216,6 +2256,20 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             .map(|w| super::taxa::wilkins_term_code_u64(w))
             .unwrap_or(0);
         let q_zato = super::taxa::zatocode_u128(plan.terms.iter().map(|qt| qt.id));
+        super::taxa::apply_deficit_taxa_and_pref_rescue(
+            ix,
+            &plan,
+            &pref_reg,
+            q_wilkins,
+            q_zato,
+            &base_q16,
+            &t_exact_mask,
+            &mut final_turn_indices,
+            k,
+            deficit_a,
+            deficit_b,
+        );
+        super::ac3::apply_ac3_consistency(ix, &it, &base_q16, &mut final_turn_indices, k);
         let ref_ts_sec = ix.session_ts.iter().copied().max().unwrap_or(0);
         let mut ledger = super::locke_ledger::build_turn_attribution_ledger(ix, &final_turn_indices, &base_q16);
         for &ti in &final_turn_indices {
