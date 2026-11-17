@@ -3,6 +3,50 @@
 
 use super::*;
 
+#[inline]
+fn bag_to_q8_into(
+    bag: &Bag,
+    plan: &QueryPlan,
+    st: &Stats,
+    terms: &mut Vec<super::qld::QldTermInput>,
+) -> super::qld::QldBagInput {
+    let mut dl_q8 = [0u64; 3];
+    let mut avdl_q8 = [0u64; 3];
+    for f in 0..3 {
+        dl_q8[f] = (bag.len[f] * 256.0).round().max(0.0) as u64;
+        avdl_q8[f] = (st.avg[f] * 256.0).round().max(256.0) as u64;
+    }
+    terms.clear();
+    for qt in &plan.terms {
+        let df = st.df.get(&qt.id).copied().unwrap_or(0);
+        let w_q8 = (qt.weight * 256.0).round().max(0.0) as u64;
+        if df == 0 || w_q8 == 0 {
+            continue;
+        }
+        let mut tf_q8 = [0u64; 3];
+        let mut any = false;
+        for f in 0..3 {
+            let tf = bag.tf[f].get(&qt.id).copied().unwrap_or(0.0);
+            if tf > 0.0 {
+                tf_q8[f] = (tf * 256.0).round().max(1.0) as u64;
+                any = true;
+            }
+        }
+        if any {
+            terms.push(super::qld::QldTermInput {
+                tf_q8,
+                w_q8,
+                df_doc: df as u64,
+            });
+        }
+    }
+    super::qld::QldBagInput {
+        dl_q8,
+        avdl_q8,
+        n_docs: (st.n as u64).max(1),
+    }
+}
+
 pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankResult {
     let plan = plan_query(ix, q, p);
     let it = &plan.intent;
@@ -1969,6 +2013,55 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
 
     // [W2-028 / W2-031] StandingRegister constraint posting & assistant-echo swap
     super::seating::apply_w2_standing_register_seat(ix, &q.text, &plan, &mut final_turn_indices, &t_exact_mask);
+
+    // #829 Moffat Rank-Biased Precision (p = 13/16 in Q16.16) tail slot reallocation (`5..k`, keeping `0..5` sealed),
+    // powered by #821 QLD, #823/#825 BM25L+DFR, and #828 Rocchio PRF turn & session signals.
+    if k >= 6 && !it.is_event_sequence && !pref_on && !it.task_under_rules {
+        let prf_seeds: Vec<usize> = final_turn_indices
+            .iter()
+            .take(4)
+            .copied()
+            .filter(|&ti| !ix.turns[ti].is_question && !ix.turns[ti].is_backchannel)
+            .collect();
+        let prf_negs: Vec<usize> = final_turn_indices.iter().skip(5).copied().collect();
+        let prf_centroid = super::rocchio::build_rocchio_centroid_q16(ix, &plan, &prf_seeds, &prf_negs);
+        let mut qld_terms_buf: Vec<super::qld::QldTermInput> = Vec::with_capacity(plan.terms.len());
+        let s_rocchio_q16: Vec<u64> = (0..ns)
+            .map(|si| super::rocchio::score_session_rocchio_q16(ix, si, &prf_centroid))
+            .collect();
+        let t_scene_q16: Vec<u64> = (0..nt)
+            .map(|ti| {
+                let v = t_scene[ti];
+                if v <= 0.0 {
+                    return 0;
+                }
+                let base_q16 = (v * 65536.0).min(u64::MAX as f32) as u64;
+                let s_r = s_rocchio_q16[ix.turns[ti].session] >> 5;
+                base_q16.saturating_add(s_r)
+            })
+            .collect();
+        let t_own_q16: Vec<u64> = (0..nt)
+            .map(|ti| {
+                let v = t_own[ti];
+                if v <= 0.0 {
+                    return 0;
+                }
+                let base_q16 = (v * 65536.0).min(u64::MAX as f32) as u64;
+                let q_bag = bag_to_q8_into(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, &mut qld_terms_buf);
+                let bm25l_q16 = super::bm25l_dfr::bm25l_dfr_score_q16(&q_bag, &qld_terms_buf);
+                let qld_q16 = super::qld::qld_score_q16(&q_bag, &qld_terms_buf, super::qld::MU_TURN_Q8);
+                base_q16.saturating_add((bm25l_q16 + qld_q16) >> 6)
+            })
+            .collect();
+        super::rbp::apply_rbp_tail_allocation(
+            ix,
+            &prf_centroid,
+            &t_scene_q16,
+            &t_own_q16,
+            &mut final_turn_indices,
+            k,
+        );
+    }
 
     // Post-Gatekeeper Sealed-Head Bridge Tail Admission:
     // Slots `0..5` (`@1..@5`) stay 100% SEALED whenever exact matches fill them.
