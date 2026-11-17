@@ -21,6 +21,7 @@ mod ac3;
 mod actr;
 mod bm25l_dfr;
 mod bridge;
+mod causal;
 mod coref;
 mod dph;
 mod focus;

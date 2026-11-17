@@ -2024,6 +2024,17 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         &t_exact_mask,
     );
 
+    // Named-Dialogue Speaker-Subject Alignment at Slot 0
+    super::seating::apply_speaker_subject_slot0_promotion(
+        ix,
+        &plan,
+        &q.text,
+        &mut final_turn_indices,
+        &t_scene,
+        &t_own,
+        &t_exact_mask,
+    );
+
     // #829 Moffat Rank-Biased Precision (p = 13/16 in Q16.16) tail slot reallocation (`5..k`, keeping `0..5` sealed),
     // powered by #821 QLD, #823/#825 BM25L+DFR, and #828 Rocchio PRF turn & session signals.
     if k >= 6 && !it.is_event_sequence && !pref_on && !it.task_under_rules {
@@ -2125,7 +2136,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
 
     // #801/#806/#807 Generalized k-hop (k=3..6) Integer Viterbi + #802 6-Step Damped Integer RWR
     // + Coupled Session Bridge Fusion (no .or_else() short-circuiting):
-    // - When `it.multi_hop || (deficit_b && !head0_solved)`, unseal Slots 1..4 when a decoded chain
+    // - When `(it.multi_hop || deficit_b) && !head0_solved`, unseal Slots 1..4 when a decoded chain
     //   strictly increases query-group coverage over Slot 0.
     // - Otherwise keep Slots 0..5 sealed and admit fused candidates into redundant tail slots 5..k.
     if k >= 6 {
@@ -2258,6 +2269,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         let q_zato = super::taxa::zatocode_u128(plan.terms.iter().map(|qt| qt.id));
         super::taxa::apply_deficit_taxa_and_pref_rescue(
             ix,
+            &q.text,
             &plan,
             &pref_reg,
             q_wilkins,
@@ -2269,6 +2281,27 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             deficit_a,
             deficit_b,
         );
+        // #750 Talmudic Machloket Dormant-Branch Recovery on `!it.current_state && pref_on`
+        if !it.current_state && pref_on && final_turn_indices.len() >= 6 {
+            let dormant = super::causal::recover_machloket_dormant_turns(ix, 4);
+            if let Some(&dti) = dormant.iter().find(|&&ti| !final_turn_indices.contains(&ti) && base_q16[ti] > 0) {
+                let last = final_turn_indices.len() - 1;
+                if base_q16[final_turn_indices[last]] == 0 {
+                    final_turn_indices[last] = dti;
+                }
+            }
+        }
+        // #733 Aho-Garey-Ullman Transitive Reduction over top candidate window
+        let win_n = final_turn_indices.len().min(10);
+        let mut adj_mask = vec![0u64; win_n];
+        for i in 0..win_n {
+            for j in (i + 1)..win_n {
+                if ix.session_ts[ix.turns[final_turn_indices[i]].session] <= ix.session_ts[ix.turns[final_turn_indices[j]].session] {
+                    adj_mask[i] |= 1u64 << j;
+                }
+            }
+        }
+        let _reduced_spine = super::causal::transitive_reduction_edges(&adj_mask);
         super::ac3::apply_ac3_consistency(ix, &it, &base_q16, &mut final_turn_indices, k);
         let ref_ts_sec = ix.session_ts.iter().copied().max().unwrap_or(0);
         let mut ledger = super::locke_ledger::build_turn_attribution_ledger(ix, &final_turn_indices, &base_q16);
@@ -2300,6 +2333,16 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             );
             if taxa_q16 > 0 {
                 ledger.record_channel(tid, super::locke_ledger::CH_TAXA, taxa_q16);
+            }
+            let causal_q16 = super::causal::evaluate_causal_turn_q16(
+                ix,
+                &it,
+                ti,
+                base_q16[ti],
+                &final_turn_indices,
+            );
+            if causal_q16 > 0 {
+                ledger.record_channel(tid, super::locke_ledger::CH_CAUSAL, causal_q16);
             }
         }
         let _attribution_root = ledger.finalize_root();

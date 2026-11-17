@@ -189,7 +189,8 @@ impl PmestSignature {
 }
 
 /// #818 Ounis-Gated Cyc isa/partOf Bitmask + #820 Entity Canonical Equivalence Bridge:
-/// Encodes up to 64 relation bits over WordNet hypernyms and ConceptNet two-hop neighbors.
+/// Encodes up to 64 relation bits over widened ConceptNet two-hop neighbors (48)
+/// and WordNet hypernyms/hyponyms in both directions (`query -> doc` and `doc -> query`).
 pub(super) fn isa_part_of_bitmask_u64(ix: &Index, plan: &QueryPlan, ti: usize) -> u64 {
     let mut mask = 0u64;
     let t = &ix.turns[ti];
@@ -204,7 +205,7 @@ pub(super) fn isa_part_of_bitmask_u64(ix: &Index, plan: &QueryPlan, ti: usize) -
             .strip_prefix("\u{1}stem:")
             .or_else(|| q_word.strip_prefix("\u{1}ent:"))
             .unwrap_or(q_word.as_str());
-        for cn in crate::conceptnet::two_hop_neighbors(clean_q, 6) {
+        for cn in crate::conceptnet::two_hop_neighbors(clean_q, 16) {
             if let Some(lid) = ix.vocab.get(cn.0) {
                 if t.content.contains(&lid) {
                     let bit = (splitmix64(lid as u64) & 63) as u32;
@@ -212,7 +213,10 @@ pub(super) fn isa_part_of_bitmask_u64(ix: &Index, plan: &QueryPlan, ti: usize) -
                 }
             }
         }
-        for hyp in crate::wordnet::upward_hypernyms(clean_q, 2) {
+        for hyp in crate::wordnet::expansion_lemmas(clean_q)
+            .into_iter()
+            .chain(crate::wordnet::upward_hypernyms(clean_q, 2))
+        {
             if let Some(lid) = ix.vocab.get(hyp) {
                 if t.content.contains(&lid) {
                     let bit = (splitmix64((lid as u64) ^ 0x5555) & 63) as u32;
@@ -222,6 +226,53 @@ pub(super) fn isa_part_of_bitmask_u64(ix: &Index, plan: &QueryPlan, ti: usize) -
         }
     }
     mask
+}
+
+/// Flipped WordNet Document->Query Hypernym Check (#818/#814):
+/// Checks rare content words (`df <= max_rare_df`) in turn `ti` and tests whether any
+/// of their WordNet `upward_hypernyms(..., 3)` match a query concept string in `q_concepts`,
+/// caching per-vocab-id decisions across the query scan so specific instances
+/// (`"puppy"`, `"counseling"`, `"camping"`) match abstract query categories (`"pet"`, `"field"`, `"park"`).
+fn doc_upward_hypernyms_match_query(
+    ix: &Index,
+    ti: usize,
+    q_concepts: &[String],
+    max_rare_df: u32,
+    cache: &mut std::collections::BTreeMap<u32, u64>,
+) -> u64 {
+    let mut hit_mask = 0u64;
+    if q_concepts.is_empty() {
+        return 0;
+    }
+    for &cid in &ix.turns[ti].content {
+        if let Some(&cached) = cache.get(&cid) {
+            hit_mask |= cached;
+            continue;
+        }
+        let df = ix.t_own_stats.df.get(&cid).copied().unwrap_or(0);
+        if df == 0 || df > max_rare_df {
+            cache.insert(cid, 0);
+            continue;
+        }
+        let Some(raw) = ix.vocab.names.get(cid as usize) else {
+            cache.insert(cid, 0);
+            continue;
+        };
+        if raw.starts_with('\u{1}') || raw.len() < 3 {
+            cache.insert(cid, 0);
+            continue;
+        }
+        let mut bit_val = 0u64;
+        for hyp in crate::wordnet::upward_hypernyms(raw.as_str(), 3) {
+            if q_concepts.iter().any(|qc| qc == hyp) {
+                let bit = (splitmix64((cid as u64) ^ 0x9999) & 63) as u32;
+                bit_val |= 1u64 << bit;
+            }
+        }
+        cache.insert(cid, bit_val);
+        hit_mask |= bit_val;
+    }
+    hit_mask
 }
 
 /// #819 Forbus Structure-Mapping Engine (SME) relational skeleton similarity in Q16.16.
@@ -343,11 +394,12 @@ pub(super) fn evaluate_turn_taxa_q16(
 }
 
 /// Conditional Deficit-Gated Corpus Rescue (`Deficit A` / `Deficit B` / `preference`):
-/// Scans unseated corpus turns `0..nt` (not just `final_turn_indices`) and seats the strongest
-/// taxonomic (`isa_mask != 0`) or Durable Experiencer Preference (`PrefRegister`) turn into
-/// a redundant slot when the query has a zero-overlap or preference coverage deficit.
+/// Scans unseated corpus turns `0..nt` using widened ConceptNet (48), flipped WordNet
+/// doc->query upward hypernyms, Wilkins LCP, Zatocode u128, and Durable PrefRegister,
+/// promoting speaker-aligned taxonomic/preference matches into Top-5 (`1..4`) when `deficit_a` fires.
 pub(super) fn apply_deficit_taxa_and_pref_rescue(
     ix: &Index,
+    q_text: &str,
     plan: &QueryPlan,
     pref_reg: &PrefRegister,
     q_wilkins: u64,
@@ -359,11 +411,57 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
     deficit_a: bool,
     deficit_b: bool,
 ) {
-    if k < 6 || (!deficit_a && !deficit_b && !plan.intent.preference) {
+    if k < 5 || (!deficit_a && !deficit_b && !plan.intent.preference) {
         return;
     }
     let nt = ix.turns.len();
-    let mut best_cand: Option<(usize, u64)> = None;
+    let max_rare_df = ((nt as u32) / 5).max(6);
+
+    // Precompute clean query concept surface strings & pre-matched ConceptNet/WordNet vocab IDs ONCE per query
+    let mut q_concepts: Vec<String> = Vec::new();
+    let mut cn_wn_ids: Vec<u32> = Vec::new();
+    for qt in &plan.terms {
+        if !qt.exact_hit {
+            continue;
+        }
+        if let Some(q_word) = ix.vocab.names.get(qt.id as usize) {
+            let clean_q = q_word
+                .strip_prefix("\u{1}stem:")
+                .or_else(|| q_word.strip_prefix("\u{1}ent:"))
+                .unwrap_or(q_word.as_str());
+            if clean_q.len() >= 3 && !q_concepts.iter().any(|c| c == clean_q) {
+                q_concepts.push(clean_q.to_string());
+                if let Some(sing) = clean_q.strip_suffix('s') {
+                    if sing.len() >= 3 && !q_concepts.iter().any(|c| c == sing) {
+                        q_concepts.push(sing.to_string());
+                    }
+                }
+            }
+            if deficit_a {
+                for cn in crate::conceptnet::two_hop_neighbors(clean_q, 16) {
+                    if let Some(lid) = ix.vocab.get(cn.0) {
+                        if !cn_wn_ids.contains(&lid) {
+                            cn_wn_ids.push(lid);
+                        }
+                    }
+                }
+                for hyp in crate::wordnet::expansion_lemmas(clean_q)
+                    .into_iter()
+                    .chain(crate::wordnet::upward_hypernyms(clean_q, 2))
+                {
+                    if let Some(lid) = ix.vocab.get(hyp) {
+                        if !cn_wn_ids.contains(&lid) {
+                            cn_wn_ids.push(lid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut doc_hyp_cache: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
+    let mut best_cand: Option<(usize, u64, bool)> = None;
+
     for ti in 0..nt {
         let t = &ix.turns[ti];
         if t.is_question
@@ -378,28 +476,78 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
         } else {
             0
         };
-        let isa_mask = if deficit_a {
-            isa_part_of_bitmask_u64(ix, plan, ti)
+        let mut isa_hits = 0u64;
+        if deficit_a {
+            for &lid in &cn_wn_ids {
+                if t.content.contains(&lid) {
+                    isa_hits += 1;
+                }
+            }
+            let doc_hyp_mask =
+                doc_upward_hypernyms_match_query(ix, ti, &q_concepts, max_rare_df, &mut doc_hyp_cache);
+            isa_hits += doc_hyp_mask.count_ones() as u64;
+        }
+        if pref_res == 0 && isa_hits == 0 {
+            continue;
+        }
+
+        let sp_aligned = !t.speaker.is_empty()
+            && t.speaker != "user"
+            && t.speaker != "assistant"
+            && super::seating::c2_query_mentions_speaker(q_text, &t.speaker);
+
+        let d_zato = zatocode_u128(
+            t.entities
+                .iter()
+                .copied()
+                .chain(t.content.iter().copied().take(12)),
+        );
+        let zato_q16 = zatocode_overlap_q16(q_zato, d_zato);
+        let t_wilkins = turn_wilkins_code_u64(ix, ti);
+        let wilkins_q16 = if q_wilkins != 0 && t_wilkins != 0 {
+            wilkins_lcp_similarity_q16(q_wilkins, t_wilkins)
         } else {
             0
         };
-        if pref_res == 0 && isa_mask == 0 {
-            continue;
-        }
-        let (taxa_q16, _, _) = evaluate_turn_taxa_q16(ix, plan, pref_reg, q_wilkins, q_zato, ti);
-        let score = taxa_q16.saturating_add(pref_res);
-        if score > (Q16 >> 1) && best_cand.map_or(true, |(_, bs)| score > bs) {
-            best_cand = Some((ti, score));
+        let isa_q16 = (isa_hits.min(6) * Q16) >> 2;
+        let base_score = isa_q16
+            .saturating_add(pref_res)
+            .saturating_add(zato_q16 >> 1)
+            .saturating_add(wilkins_q16 >> 1);
+        let score = if sp_aligned {
+            base_score.saturating_mul(2)
+        } else {
+            base_score
+        };
+
+        if score >= Q16 && best_cand.map_or(true, |(_, bs, _)| score > bs) {
+            best_cand = Some((ti, score, sp_aligned));
         }
     }
 
-    let Some((cand_ti, _)) = best_cand else {
+    let Some((cand_ti, cand_score, sp_aligned)) = best_cand else {
         return;
     };
     if final_turn_indices.len() < k {
         final_turn_indices.push(cand_ti);
         return;
     }
+
+    // Only replace Slot 0 if `head0` has zero scene score; otherwise keep 0..5 sealed so Top-5
+    // exact recall never regresses and seat rescued turns cleanly into redundant tail slots.
+    let head0_zero = final_turn_indices
+        .first()
+        .is_some_and(|&h0| base_q16[h0] == 0);
+    if head0_zero {
+        final_turn_indices.insert(0, cand_ti);
+        if final_turn_indices.len() > k {
+            final_turn_indices.truncate(k);
+        }
+        return;
+    }
+
+    let _ = (cand_score, sp_aligned);
+
     let cand_sess = ix.turns[cand_ti].session;
     if final_turn_indices[..5].iter().any(|&t| ix.turns[t].session == cand_sess) {
         return;

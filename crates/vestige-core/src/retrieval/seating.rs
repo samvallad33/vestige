@@ -6788,31 +6788,47 @@ pub(super) fn apply_assertion_and_superset_slot1_promotion(
         {
             continue;
         }
-        if head_t.form_digit && !cand_t.form_digit {
+        if head_t.form_digit
+            && !cand_t.form_digit
+            && (plan.intent.sniper_how_many || plan.intent.sniper_when || head_exact == 0)
+        {
             continue;
         }
         let cand_exact = t_exact_mask.get(cand).copied().unwrap_or(0);
         let cand_own = t_own.get(cand).copied().unwrap_or(0.0);
         let cand_sc = t_scene.get(cand).copied().unwrap_or(0.0);
 
-        // 1. Zero-exact-match assistant filler at Slot 0 yields to same-session user assertion
-        let asst_zero_filler = head_t.field == 1 && head_exact == 0 && cand_exact != 0 && cand_own > 0.0;
-        // 2. Same-session user declarative with strict exact-group superset & stronger t_own
+        // 1. Assistant turn at Slot 0 yields to same-session user declarative assertion
+        //    covering all exact groups of Slot 0.
+        let asst_yields = head_t.field == 1
+            && cand_exact != 0
+            && (cand_exact & head_exact) == head_exact
+            && cand_own > 0.0
+            && cand_own >= 0.75 * head_own
+            && cand_sc >= 0.80 * head_sc;
+        // 2. Same-session user declarative with strict exact-group superset
         let strict_superset = head_t.field == 0
             && head_exact != 0
             && (cand_exact & head_exact) == head_exact
             && cand_exact.count_ones() > head_exact.count_ones()
-            && cand_own > 1.15 * head_own
-            && cand_sc >= 0.78 * head_sc;
+            && cand_own >= 0.90 * head_own
+            && cand_sc >= 0.72 * head_sc;
         // 3. Same-session user question opener yields to declarative covering all its exact groups
         let question_yields = head_t.field == 0
             && head_t.is_question
             && cand_exact != 0
             && (cand_exact & head_exact) == head_exact
-            && cand_own >= 0.95 * head_own
-            && cand_sc >= 0.85 * head_sc;
+            && cand_own >= 0.90 * head_own
+            && cand_sc >= 0.80 * head_sc;
+        // 4. Equal-bitmask user declarative tie: promote entity-richer or higher own-score assertion
+        let eq_mask_better = head_t.field == 0
+            && cand_exact == head_exact
+            && cand_exact != 0
+            && cand_sc >= 0.88 * head_sc
+            && ((cand_t.slot_entities_clean > head_t.slot_entities_clean && cand_own >= 0.92 * head_own)
+                || cand_own > 1.03 * head_own);
 
-        if asst_zero_filler || strict_superset || question_yields {
+        if asst_yields || strict_superset || question_yields || eq_mask_better {
             let bits = cand_exact.count_ones();
             let better = match best_slot {
                 None => true,
@@ -6826,5 +6842,91 @@ pub(super) fn apply_assertion_and_superset_slot1_promotion(
 
     if let Some((slot, _, _)) = best_slot {
         list.swap(0, slot);
+    }
+}
+
+/// Speaker-Subject Alignment at Slot 0 for Named-Speaker Dialogues:
+/// When the query names a single subject speaker `S` (not conjoined and not `WH_PERSON`),
+/// if Slot 0 is spoken by a different speaker NOT named in the query (conversational mirror)
+/// while a declarative turn in `list[1..]` is spoken by `S` and covers equal/higher exact
+/// non-speaker groups with strong lexical grounding, promote `S`'s turn to Slot 0.
+pub(super) fn apply_speaker_subject_slot0_promotion(
+    ix: &Index,
+    plan: &QueryPlan,
+    query: &str,
+    list: &mut Vec<usize>,
+    t_scene: &[f32],
+    t_own: &[f32],
+    t_exact_mask: &[u64],
+) {
+    if list.len() < 2
+        || plan.intent.is_event_sequence
+        || plan.intent.temporal
+        || plan.intent.assistant_attribution
+        || c2_text_preference(query)
+        || c2_summary_request(query)
+        || (wh_slots(query) & WH_PERSON) != 0
+    {
+        return;
+    }
+    let head0 = list[0];
+    if !c2_named_session(ix, head0) {
+        return;
+    }
+    let head_sp = ix.turns[head0].speaker.as_str();
+    if c2_query_mentions_speaker(query, head_sp) {
+        return;
+    }
+    let head_own = t_own.get(head0).copied().unwrap_or(0.0);
+    let head_sc = t_scene.get(head0).copied().unwrap_or(0.0);
+    if head_sc <= 0.0 {
+        return;
+    }
+
+    // Build bitmask of non-speaker query groups so we preserve literal subject-predicate matches
+    let mut non_sp_mask = 0u64;
+    for (g_idx, g_name) in plan.groups.iter().enumerate() {
+        if g_idx >= 64 {
+            break;
+        }
+        if !ix.turns.iter().any(|t| t.speaker.eq_ignore_ascii_case(g_name)) {
+            non_sp_mask |= 1u64 << g_idx;
+        }
+    }
+    let head_non_sp = t_exact_mask.get(head0).copied().unwrap_or(0) & non_sp_mask;
+
+    let mut best: Option<(usize, u32, f32)> = None;
+    for slot in 1..list.len().min(5) {
+        let cand = list[slot];
+        let ct = &ix.turns[cand];
+        if ct.is_question
+            || ct.is_backchannel
+            || turn_is_superseded(ix, cand)
+            || !c2_query_mentions_speaker(query, &ct.speaker)
+            || c2_speaker_conjoined(query, &ct.speaker)
+        {
+            continue;
+        }
+        let cand_own = t_own.get(cand).copied().unwrap_or(0.0);
+        let cand_sc = t_scene.get(cand).copied().unwrap_or(0.0);
+        let cand_non_sp = t_exact_mask.get(cand).copied().unwrap_or(0) & non_sp_mask;
+        if (cand_non_sp & head_non_sp) != head_non_sp {
+            continue;
+        }
+        if cand_own >= 0.50 * head_own && cand_sc >= 0.45 * head_sc {
+            let bits = cand_non_sp.count_ones();
+            let better = match best {
+                None => true,
+                Some((_, bb, bs)) => bits > bb || (bits == bb && cand_sc > bs),
+            };
+            if better {
+                best = Some((slot, bits, cand_sc));
+            }
+        }
+    }
+
+    if let Some((slot, _, _)) = best {
+        let cand = list.remove(slot);
+        list.insert(0, cand);
     }
 }

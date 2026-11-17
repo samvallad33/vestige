@@ -19,6 +19,7 @@ pub(super) const CH_PSL_ILP: u8 = 6;
 pub(super) const CH_ACTR: u8 = 7;
 pub(super) const CH_WAND: u8 = 8;
 pub(super) const CH_TAXA: u8 = 9;
+pub(super) const CH_CAUSAL: u8 = 10;
 
 /// Deterministic 256-bucket cryptographic attribution accumulator backed by BLAKE3.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
