@@ -16,8 +16,32 @@ const atomic = (file, value) => {
   fs.writeFileSync(temp, JSON.stringify(value), { mode: 0o600 });
   fs.renameSync(temp, file);
 };
+function resolveSpawn(binary, args = []) {
+  if (typeof binary === 'string' && /\.(?:c|m)?js$/i.test(binary)) return [process.execPath, [binary, ...args]];
+  if (process.platform === 'win32' && typeof binary === 'string' && !/\.(?:exe|cmd|bat|com)$/i.test(binary)) {
+    try {
+      const fd = fs.openSync(binary, 'r');
+      const buf = Buffer.alloc(256);
+      const n = fs.readSync(fd, buf, 0, 256, 0);
+      fs.closeSync(fd);
+      const head = buf.subarray(0, n).toString('utf8').split(/\r?\n/)[0] || '';
+      if (head.startsWith('#!')) {
+        if (/node(?:\.exe)?\s*$/i.test(head)) return [process.execPath, [binary, ...args]];
+        if (/(?:^|[\\/])(?:ba)?sh\s*$/i.test(head)) {
+          const dirs = (process.env.PATH || '').split(';').concat(['C:\\Program Files\\Git\\bin', 'C:\\Program Files\\Git\\usr\\bin']);
+          for (const dir of dirs.filter(Boolean)) {
+            const sh = path.join(dir, 'sh.exe');
+            if (fs.existsSync(sh)) return [sh, [binary, ...args]];
+          }
+        }
+      }
+    } catch {}
+  }
+  return [binary, args];
+}
 function rpc(binary, args = [], timeoutMs = 210, env = process.env) {
-  const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'], env });
+  const [cmd, cmdArgs] = resolveSpawn(binary, args);
+  const child = spawn(cmd, cmdArgs, { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: true });
   let diagnostics = '';
   child.stderr.on('data', chunk => { if (env.VESTIGE_HOOK_DIAGNOSTICS === '1') diagnostics = (diagnostics + chunk).slice(-2000); });
   const pending = new Map(); let seq = 0; let closed = false; let disposed = false; let timer;
@@ -548,12 +572,21 @@ function ingestItem(fact) {
   return item;
 }
 
-async function run({ event, client, configFile, input, deadlineMs = 190 }) {
+async function run({ event, client, configFile, input, deadlineMs }) {
+  const envDeadline = Number(process.env.VESTIGE_HOOK_DEADLINE_MS);
+  const baseDeadline = Number.isFinite(deadlineMs) && deadlineMs > 0
+    ? deadlineMs
+    : (Number.isFinite(envDeadline) && envDeadline > 0 ? envDeadline : (process.platform === 'win32' ? 650 : 190));
   const started = performance.now(); let transport;
   const dir = path.dirname(configFile);
   const log = message => { try { const file = path.join(dir, 'errors.log'); if (fs.existsSync(file) && fs.statSync(file).size > 128 * 1024) fs.renameSync(file, `${file}.previous`); fs.appendFileSync(file, `${new Date().toISOString()} ${event}: ${message}\n`, { mode: 0o600 }); } catch {} };
   try {
     const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    const effectiveDeadline = Number.isFinite(deadlineMs) && deadlineMs > 0
+      ? deadlineMs
+      : (Number.isFinite(envDeadline) && envDeadline > 0
+        ? envDeadline
+        : (Number.isFinite(config.deadlineMs) && config.deadlineMs > 0 ? config.deadlineMs : baseDeadline));
     const session = input.session_id || input.conversation_id;
     if (!session || typeof session !== 'string') throw new Error('missing session identifier');
     const queue = path.join(dir, 'pending', digest(`${client}:${session}`));
@@ -568,7 +601,7 @@ async function run({ event, client, configFile, input, deadlineMs = 190 }) {
         if (!fs.existsSync(file)) atomic(file, { ...fact, intent_id, queued_at: Date.now() });
       }
     }
-    transport = rpc(config.binary, config.binaryArgs || [], Math.max(1, deadlineMs - (performance.now() - started)), { ...process.env, VESTIGE_HTTP_ENABLED: '0', VESTIGE_DASHBOARD_ENABLED: 'false', VESTIGE_AUTOPILOT_ENABLED: '0' });
+    transport = rpc(config.binary, config.binaryArgs || [], Math.max(1, effectiveDeadline - (performance.now() - started)), { ...process.env, VESTIGE_HTTP_ENABLED: '0', VESTIGE_DASHBOARD_ENABLED: 'false', VESTIGE_AUTOPILOT_ENABLED: '0' });
     await transport.ready();
     let saved = [];
     if (['turn', 'compact', 'end'].includes(event)) {
@@ -617,10 +650,12 @@ async function run({ event, client, configFile, input, deadlineMs = 190 }) {
 }
 async function main() {
   const args = process.argv.slice(2); const value = flag => args[args.indexOf(flag) + 1];
-  const failOpen = setTimeout(() => { process.stdout.write('{}\n'); process.exit(0); }, 205);
+  const envDeadline = Number(process.env.VESTIGE_HOOK_DEADLINE_MS);
+  const cliCeiling = Number.isFinite(envDeadline) && envDeadline > 0 ? envDeadline + 120 : (process.platform === 'win32' ? 850 : 205);
+  const failOpen = setTimeout(() => { process.stdout.write('{}\n', () => process.exit(0)); }, cliCeiling);
   let raw = ''; for await (const chunk of process.stdin) { raw += chunk; if (raw.length > 65536) throw new Error('hook input too large'); }
   const result = await run({ event: value('--event'), client: value('--client'), configFile: value('--config'), input: JSON.parse(raw || '{}') });
-  clearTimeout(failOpen); process.stdout.write(JSON.stringify(result) + '\n');
+  clearTimeout(failOpen); process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0));
 }
-module.exports = { thingWords, thingKey, thingKeys, dayOfText, yearlyOfText, indexTags, run, rpc, explicitFact, extractFacts, sentences, formatContext, output, admissionOf, linksFor, drainQueue, ingestItem };
-if (require.main === module) main().catch(() => { process.stdout.write('{}\n'); process.exit(0); });
+module.exports = { thingWords, thingKey, thingKeys, dayOfText, yearlyOfText, indexTags, run, rpc, resolveSpawn, explicitFact, extractFacts, sentences, formatContext, output, admissionOf, linksFor, drainQueue, ingestItem };
+if (require.main === module) main().catch(() => { process.stdout.write('{}\n', () => process.exit(0)); });

@@ -255,7 +255,8 @@ for (const responds of [true, false]) {
       { input: JSON.stringify({ session_id: 'slow-shutdown' }), encoding: 'utf8', timeout: 2000 });
     const elapsed = performance.now() - start;
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
-    assert(elapsed < 300, `complete hook process took ${elapsed}ms`);
+    const maxMs = process.platform === 'win32' ? 1200 : 300;
+    assert(elapsed < maxMs, `complete hook process took ${elapsed}ms`);
     const value = JSON.parse(result.stdout);
     if (responds) assert(value.hookSpecificOutput?.additionalContext, result.stdout);
     else {

@@ -6,8 +6,12 @@ const crypto = require('crypto');
 const readline = require('readline');
 const { spawnSync } = require('child_process');
 const { defaults } = require('./memory-triggers.cjs');
-const { rpc } = require('../hooks/memory.cjs');
+const { rpc, resolveSpawn } = require('../hooks/memory.cjs');
 const VERSION = require('../package.json').version;
+function spawnBinarySync(binaryPath, args, options = {}) {
+  const [cmd, cmdArgs] = resolveSpawn(binaryPath, args);
+  return spawnSync(cmd, cmdArgs, { windowsHide: true, ...options });
+}
 const hash = text => crypto.createHash('sha256').update(text).digest('hex');
 const json = value => JSON.stringify(value, null, 2) + '\n';
 function supportedVersion(text) {
@@ -23,7 +27,7 @@ const REFLEX_MIN = [6, 2, 0];
 function reflexReady(binaryPath, env) {
   if (!binaryPath) return false;
   let out = '';
-  try { out = spawnSync(binaryPath, ['--version'], { timeout: 2000, env, encoding: 'utf8' }).stdout || ''; } catch { return false; }
+  try { out = spawnBinarySync(binaryPath, ['--version'], { timeout: 2000, env, encoding: 'utf8' }).stdout || ''; } catch { return false; }
   const match = /\b(\d+)\.(\d+)\.(\d+)\b/.exec(out);
   if (!match) return false;
   const have = match.slice(1).map(Number);
@@ -62,7 +66,7 @@ const REFLEX_EVENTS = {
 // Recall and injection events stay fail-open so a slow store never blocks
 // typing. `--no-enforce` keeps the records and drops every block.
 const CURSOR_FAIL_CLOSED = new Set(['stop']);
-function reflexHooks(dialect, shimCommand, { enforce = true } = {}) {
+function reflexHooks(dialect, shimCommand, { enforce = true, vestigeCommand = 'vestige' } = {}) {
   const shim = (event, matcher) => dialect === 'cursor' ? { command: shimCommand, timeout: 2, failClosed: enforce && CURSOR_FAIL_CLOSED.has(event) }
     : { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: shimCommand, timeout: 2 }] };
   const params = enforce ? REFLEX_INPUT : { ...REFLEX_INPUT, enforce: 'off' };
@@ -71,7 +75,7 @@ function reflexHooks(dialect, shimCommand, { enforce = true } = {}) {
   if (dialect === 'claude' && enforce) rows.push(['PermissionRequest', mcp('*', { onFailure: 'block' })]);
   if (dialect === 'claude') {
     rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact|fork', hooks: [{ type: 'command', command: shimCommand, timeout: 2 }] }]);
-    rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact|fork', hooks: [{ type: 'command', command: 'vestige capsule --harness claude-code --event session-start', timeout: 8 }] }]);
+    rows.push(['SessionStart', { matcher: 'startup|resume|clear|compact|fork', hooks: [{ type: 'command', command: `${vestigeCommand} capsule --harness claude-code --event session-start`, timeout: 8 }] }]);
   }
   return rows;
 }
@@ -259,7 +263,9 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
       }
       if (reflex) {
         const shimCommand = [node, path.join(base, 'hooks', 'reflex.cjs'), '--config', path.join(base, 'config.json'), '--client', client.dialect].map(p => quote(p, platform)).join(' ');
-        for (const [eventName, entry] of reflexHooks(client.dialect, shimCommand, { enforce })) add(client.hookFile, ['hooks', eventName], entry, 'merge reflex hooks: every hook firing reaches Vestige', true);
+        const siblingVestige = path.join(path.dirname(found), platform === 'win32' ? 'vestige.exe' : 'vestige');
+        const vestigeCommand = fs.existsSync(siblingVestige) ? quote(siblingVestige, platform) : 'vestige';
+        for (const [eventName, entry] of reflexHooks(client.dialect, shimCommand, { enforce, vestigeCommand })) add(client.hookFile, ['hooks', eventName], entry, 'merge reflex hooks: every hook firing reaches Vestige', true);
       }
     }
   }
@@ -273,9 +279,22 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
   config.after = json({ ...configValue, version: VERSION, binary: found, triggers: triggers.file, enforce });
   let guardInstall = null;
   if (guard) {
-    const python = ['python3', 'python'].map(name => executable(name, home, platform, env)).find(bin => {
-      if (!bin) return false;
-      const result = spawnSync(bin, ['-c', 'import sys; raise SystemExit(0 if sys.version_info >= (3,9) else 1)'], { timeout: 2000, env });
+    const pyNames = platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+    const pySuffixes = platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
+    const pyDirs = (env.PATH || '').split(platform === 'win32' ? ';' : ':').filter(Boolean);
+    const pyCandidates = [];
+    for (const name of pyNames) {
+      for (const dir of pyDirs) {
+        for (const suffix of pySuffixes) {
+          const cand = path.resolve(dir, name + suffix);
+          try { if (fs.statSync(cand).isFile() && !pyCandidates.includes(cand)) pyCandidates.push(cand); } catch {}
+        }
+      }
+      const fallback = executable(name, home, platform, env);
+      if (fallback && !pyCandidates.includes(fallback)) pyCandidates.push(fallback);
+    }
+    const python = pyCandidates.find(bin => {
+      const result = spawnSync(bin, ['-c', 'import sys; raise SystemExit(0 if sys.version_info >= (3,9) else 1)'], { timeout: 2000, env, windowsHide: true });
       return result.status === 0;
     });
     if (!python) throw new Error('Memory plus guard needs Python 3.9+. Install Python, then rerun with --guard.');
@@ -416,7 +435,7 @@ async function inspect(home = os.homedir(), timeout = 2000) {
   const checks = []; const add = (name, ok, fix = '') => checks.push({ name, ok: Boolean(ok), fix });
   add('installation manifest', manifest, 'Run npx @vestige/init');
   const bin = manifest?.binary || binary(home, os.platform(), process.env);
-  const version = bin && spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 2000 });
+  const version = bin && spawnBinarySync(bin, ['--version'], { encoding: 'utf8', timeout: 2000 });
   add('vestige-mcp v6.2.0+', version?.status === 0 && supportedVersion(version.stdout), 'Install v6.2.0 or newer from GitHub Releases, then rerun init');
   for (const client of manifest?.clients || []) if (client.hookFile) {
     for (const event of Object.keys(EVENTS[client.id] || {})) {
@@ -470,7 +489,7 @@ async function main(args = process.argv.slice(2)) {
   const initial = plan({ home });
   if (initial.missing) { const instructions = 'Install vestige-mcp from https://github.com/samvallad33/vestige/releases (choose your platform, extract the archive, put vestige-mcp on PATH), then rerun npx @vestige/init.'; say(instructions); if (machine) console.log(json({ status: 'binary-missing', instructions, changed: [] })); return; }
   say(`FOUND ${initial.binary}`);
-  const installed = spawnSync(initial.binary, ['--version'], { encoding: 'utf8', timeout: 2000 });
+  const installed = spawnBinarySync(initial.binary, ['--version'], { encoding: 'utf8', timeout: 2000 });
   if (installed.status !== 0 || !supportedVersion(installed.stdout)) {
     const instructions = 'Unified memory hooks require vestige-mcp v6.2.0+. Install it from https://github.com/samvallad33/vestige/releases, then rerun init.';
     say(instructions); if (machine) console.log(json({ status: 'binary-upgrade-required', instructions, changed: [] })); return;

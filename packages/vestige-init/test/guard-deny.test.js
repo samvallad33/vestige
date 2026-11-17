@@ -19,9 +19,11 @@ function homeFor(name) {
 }
 
 function python() {
-  const found = spawnSync('python3', ['-c', 'print(1)'], { encoding: 'utf8' });
-  assert.equal(found.status, 0);
-  return 'python3';
+  for (const cand of ['python3', 'python']) {
+    const found = spawnSync(cand, ['-c', 'print(1)'], { encoding: 'utf8', windowsHide: true });
+    if (found.status === 0) return cand;
+  }
+  assert.fail('Python 3 interpreter not found');
 }
 
 function run(client, input, options = {}) {
@@ -109,7 +111,7 @@ test('a huge stderr cannot become the whole prompt', () => {
     'sys.exit(2)',
     '',
   ].join('\n'));
-  const huge = run('cursor', JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo hello' } }), { python: 'python3', gate: script });
+  const huge = run('cursor', JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo hello' } }), { python: python(), gate: script });
   const body = JSON.parse(huge.stdout);
   assert.equal(body.permission, 'deny');
   assert.ok(body.agent_message.length <= 1200, body.agent_message.length);
@@ -143,7 +145,7 @@ test('an allow passes the gate rewrite through, so a stripped secret stays strip
 test('an allow with unreadable gate stdout is a deny', () => {
   const script = path.join(os.tmpdir(), `vestige-noisy-gate-${process.pid}.py`);
   fs.writeFileSync(script, 'import sys\nsys.stdout.write("not json\\n")\nsys.exit(0)\n');
-  const noisy = run('claude', JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo hello' } }), { python: 'python3', gate: script });
+  const noisy = run('claude', JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo hello' } }), { python: python(), gate: script });
   assert.equal(noisy.status, 2);
   assert.match(noisy.stderr, /could not read/);
 });

@@ -121,12 +121,14 @@ async function run({ client, configFile, eventFlag, input, deadlineMs = 450 }) {
 
 async function main() {
   const argv = process.argv.slice(2); const value = flag => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
-  const failOpen = setTimeout(() => { process.stdout.write('{}\n'); process.exit(0); }, 1500);
+  const envDeadline = Number(process.env.VESTIGE_HOOK_DEADLINE_MS);
+  const cliCeiling = Number.isFinite(envDeadline) && envDeadline > 0 ? Math.max(1500, envDeadline + 100) : 1500;
+  const failOpen = setTimeout(() => { process.stdout.write('{}\n', () => process.exit(0)); }, cliCeiling);
   let raw = ''; for await (const chunk of process.stdin) { raw += chunk; if (raw.length > 262144) break; }
   let input = {}; try { input = JSON.parse(raw || '{}'); } catch {}
-  const out = await run({ client: value('--client') || 'claude', configFile: value('--config'), eventFlag: value('--event'), input });
-  clearTimeout(failOpen); process.stdout.write(JSON.stringify(out) + '\n');
+  const out = await run({ client: value('--client') || 'claude', configFile: value('--config'), eventFlag: value('--event'), input, deadlineMs: Number.isFinite(envDeadline) && envDeadline > 0 ? envDeadline : undefined });
+  clearTimeout(failOpen); process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));
 }
 
 module.exports = { run, argumentsFor, hostOutput, canonical };
-if (require.main === module) main().catch(() => { process.stdout.write('{}\n'); process.exit(0); });
+if (require.main === module) main().catch(() => { process.stdout.write('{}\n', () => process.exit(0)); });
