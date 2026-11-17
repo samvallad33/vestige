@@ -240,6 +240,9 @@ pub(super) struct Index {
     /// Cache-aligned `<= 24B` turn metadata (20,000 turns <= 480 KB, fits in Sandy Bridge L3).
     #[allow(dead_code)]
     pub(super) turn_meta: Vec<TurnMeta>,
+    /// [W2-028/031] 64-bit bloom register over durable user-directive turns & their turn indices.
+    pub(super) standing_register: u64,
+    pub(super) standing_directive_turns: Vec<usize>,
 }
 
 /// Compact cache-aligned turn metadata (`<= 24 bytes`) for L3-resident linear scans.
@@ -510,6 +513,33 @@ pub fn utterance_is_standing_policy(text: &str) -> bool {
     let Some(next) = words.get(1) else { return false };
     let opens_np = is_content(next) || DETERMINERS.contains(&next.as_str());
     opens_np && words.iter().filter(|w| is_content(w)).count() >= 2
+}
+
+/// [W2-028/031] Closed-class durable user-directive detector (superset of `utterance_is_standing_policy`
+/// catching first-person modal/negation constraints mid-utterance such as "I never...", "From now on...").
+// hardcode-scan: closed-class (durable user directive grammar)
+pub(super) fn is_durable_user_directive(text: &str) -> bool {
+    if utterance_is_standing_policy(text) {
+        return true;
+    }
+    let prose = text.split("```").next().unwrap_or(text).trim();
+    if prose.is_empty() || prose.ends_with('?') {
+        return false;
+    }
+    let lower = prose.to_lowercase();
+    let has_trigger = [
+        "i always ", "i never ", "i cannot ", "i can't ", "i can\u{2019}t ",
+        "i won't ", "i won\u{2019}t ", "i must ", "i don't ", "i don\u{2019}t ",
+        "we always ", "we never ", "from now on ", "please always ", "please never ",
+    ]
+    .iter()
+    .any(|pat| {
+        lower.starts_with(pat)
+            || lower.contains(&format!(". {pat}"))
+            || lower.contains(&format!(", {pat}"))
+            || lower.contains(&format!("; {pat}"))
+    });
+    has_trigger && raw_tokens(prose).iter().filter(|w| is_content(w)).count() >= 3
 }
 
 /// Closed-class English determiners (articles, demonstratives, possessives, quantifiers).
@@ -1143,6 +1173,8 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut turn_cues: Vec<Vec<u32>> = Vec::new();
     let mut role_cues: DetHashSet<u32> = DetHashSet::default();
     let mut constraint_terms: DetHashSet<u32> = DetHashSet::default();
+    let mut standing_register: u64 = 0;
+    let mut standing_directive_turns: Vec<usize> = Vec::new();
     let mut header_dict: DetHashMap<u64, Vec<HeaderKey>> = DetHashMap::default();
     let mut header_max_words = 0usize;
     for (si, s) in sessions.iter().enumerate() {
@@ -1431,6 +1463,12 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
                 && !is_short_question
                 && content.len() >= 4;
             let turn_idx = turns.len();
+            if field == 0 && (is_standing_policy || is_personal_constraint || is_durable_user_directive(prose_body)) {
+                for &cid in &content {
+                    standing_register |= 1u64 << (cid % 64);
+                }
+                standing_directive_turns.push(turn_idx);
+            }
             if is_standing_policy {
                 let (has_explicit_scope, scope_words) = extract_rule_scope(prose_body);
                 raw_standing_rules.push((
@@ -2092,5 +2130,7 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
         session_bloom,
         turn_bloom,
         turn_meta,
+        standing_register,
+        standing_directive_turns,
     }
 }

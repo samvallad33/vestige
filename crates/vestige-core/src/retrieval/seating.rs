@@ -6642,3 +6642,103 @@ pub(super) fn apply_w2_quantile_trajectory_seating(
     rebuilt.truncate(final_turn_indices.len().max(rebuilt.len().min(10)));
     *final_turn_indices = rebuilt;
 }
+
+/// [W2-028 / W2-031] Constraint Posting & Assistant Echo (`StandingRegister` 64-bit Bloom):
+/// For closed-class planning/recommendation queries, checks the 64-bit `standing_register`
+/// in O(1) and promotes a topic-matched durable user directive (`field == 0`) ahead of
+/// same-session assistant echoes (`field == 1`) or zero-exact-match occupants in Slot 2 or 3.
+pub(super) fn apply_w2_standing_register_seat(
+    ix: &Index,
+    q_text: &str,
+    plan: &QueryPlan,
+    final_turn_indices: &mut Vec<usize>,
+    t_exact_mask: &[u64],
+) {
+    if ix.standing_register == 0
+        || ix.standing_directive_turns.is_empty()
+        || final_turn_indices.len() < 3
+    {
+        return;
+    }
+    let ql = q_text.to_ascii_lowercase();
+    // hardcode-scan: closed-class (modal recommendation & planning question openings)
+    let is_planning_or_rec = [
+        "what should", "how should", "where should", "which should",
+        "can you", "could you", "would you", "should i", "should we",
+    ]
+    .iter()
+    .any(|cue| ql.contains(cue));
+    if !is_planning_or_rec {
+        return;
+    }
+
+    let n_docs = (ix.t_own_stats.n as u32).max(1);
+    let max_df = (n_docs / 4).max(3);
+    let q_domain: Vec<u32> = plan
+        .terms
+        .iter()
+        .filter(|qt| qt.exact_hit)
+        .filter_map(|qt| {
+            let df = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(0);
+            (df > 0 && df <= max_df).then_some(qt.id)
+        })
+        .collect();
+    if q_domain.is_empty() {
+        return;
+    }
+
+    let mut q_bloom = 0u64;
+    for &id in &q_domain {
+        q_bloom |= 1u64 << (id % 64);
+    }
+    if (ix.standing_register & q_bloom) == 0 {
+        return;
+    }
+
+    let mut best_dir: Option<(usize, usize)> = None;
+    for &dti in ix.standing_directive_turns.iter().rev() {
+        if turn_is_superseded(ix, dti) || final_turn_indices[..3].contains(&dti) {
+            continue;
+        }
+        let hits = q_domain
+            .iter()
+            .filter(|id| ix.turns[dti].content.contains(id))
+            .count();
+        if hits == 0 {
+            continue;
+        }
+        if best_dir.map_or(true, |(bh, _)| hits > bh) {
+            best_dir = Some((hits, dti));
+        }
+    }
+
+    let Some((_, dir_ti)) = best_dir else { return };
+    let dir_sess = ix.turns[dir_ti].session;
+
+    // Assistant echo swap: if slots 1 or 2 hold a same-session assistant echo (`field == 1`), swap it.
+    if let Some(echo_slot) = (1..3usize).find(|&s| {
+        let vti = final_turn_indices[s];
+        ix.turns[vti].field == 1 && ix.turns[vti].session == dir_sess
+    }) {
+        if let Some(existing) = final_turn_indices.iter().position(|&t| t == dir_ti) {
+            final_turn_indices.swap(echo_slot, existing);
+        } else {
+            final_turn_indices[echo_slot] = dir_ti;
+        }
+        return;
+    }
+
+    // Otherwise admit into Slot 2 (or Slot 1) only if current occupant is an assistant turn
+    // or lacks exact query-term hits.
+    for slot in [2usize, 1usize] {
+        let vti = final_turn_indices[slot];
+        if ix.turns[vti].field == 1 || t_exact_mask.get(vti).copied().unwrap_or(0) == 0 {
+            if let Some(existing) = final_turn_indices.iter().position(|&t| t == dir_ti) {
+                final_turn_indices.swap(slot, existing);
+            } else {
+                final_turn_indices[slot] = dir_ti;
+            }
+            return;
+        }
+    }
+}
