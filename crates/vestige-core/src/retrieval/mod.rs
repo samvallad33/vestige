@@ -18,9 +18,11 @@
 
 
 mod bridge;
+mod coref;
 mod dph;
 mod focus;
 mod ghostlink_dgs;
+mod hobbs;
 mod index;
 mod rank;
 mod rst;

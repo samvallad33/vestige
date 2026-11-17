@@ -360,21 +360,32 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         t_scene_sess = t_raw.clone();
     }
 
-    // #809: Sidner FocusStack<EntityId> anaphoric antecedent resolution in Q16.16
+    // #809: Sidner FocusStack<EntityId>, #811: Hobbs Pronoun Walk, #813: Union-Find Coref
     if nt > 2 && !plan.focal_ids.is_empty() {
         let focus_q16 = super::focus::compute_anaphoric_focus_q16(ix, &plan);
+        let hobbs_res = super::hobbs::resolve_hobbs_pronouns(ix, &plan);
+        let coref_q16 = super::coref::coref_class_affinity_q16(ix, &plan);
         let t_max_sc = t_scene.iter().cloned().fold(0.0f32, f32::max);
         if t_max_sc > 0.0 {
             for ti in 0..nt {
+                if t_scene[ti] <= 0.0 {
+                    continue;
+                }
                 let fq = focus_q16[ti];
-                if fq > 0 && t_scene[ti] > 0.0 {
-                    let frac = (fq as f32) / (super::focus::Q16 as f32);
-                    let boost = t_max_sc * 0.05 * frac;
+                let hq = hobbs_res.turn_score_q16[ti];
+                let cq = coref_q16[ti];
+                if fq > 0 || hq > 0 || cq > 0 {
+                    let f_frac = (fq as f32) / (super::focus::Q16 as f32);
+                    let h_frac = (hq as f32) / (super::hobbs::Q16 as f32);
+                    let c_frac = (cq as f32) / (super::coref::Q16 as f32);
+                    let ana_boost = 0.05 * f_frac.max(h_frac);
+                    let boost = t_max_sc * (ana_boost + 0.03 * c_frac);
                     t_scene[ti] += boost;
                     t_scene_sess[ti] += boost;
                 }
             }
         }
+        let _ = hobbs_res.bindings;
     }
 
     // Named-speaker boost (never a filter): 1.06x tie-breaker gated on t_own[ti] > 0 or t_raw[ti] > 0.
