@@ -6477,3 +6477,36 @@ pub(super) fn apply_step15_comparative_dual_slot_seat(
         final_turn_indices.truncate(k);
     }
 }
+
+/// Issue #810: Stede RST Nucleus/Satellite preference at Rank 1 (`0..5` membership unchanged).
+/// If slot 0 is a structural Satellite (backchannel, short reply, or zero-rare-payload turn)
+/// and a Nucleus within slots `1..5` covers at least the same exact query groups with
+/// `t_scene >= 0.72 * t_scene[0]`, promote that Nucleus to slot 0.
+pub(super) fn apply_rst_nucleus_preference(
+    ix: &Index,
+    list: &mut [usize],
+    t_scene: &[f32],
+    t_exact_mask: &[u64],
+) {
+    if list.len() < 2 {
+        return;
+    }
+    let head = list[0];
+    if super::rst::classify_rst_role(ix, head) != super::rst::RstRole::Satellite {
+        return;
+    }
+    let head_sc = t_scene.get(head).copied().unwrap_or(0.0);
+    let head_exact = t_exact_mask.get(head).copied().unwrap_or(0);
+    if head_sc <= 0.0 {
+        return;
+    }
+    let search_end = list.len().min(5);
+    if let Some(pos) = (1..search_end).find(|&idx| {
+        let cand = list[idx];
+        super::rst::classify_rst_role(ix, cand) == super::rst::RstRole::Nucleus
+            && (t_exact_mask.get(cand).copied().unwrap_or(0) & head_exact) == head_exact
+            && t_scene.get(cand).copied().unwrap_or(0.0) >= 0.90 * head_sc
+    }) {
+        list.swap(0, pos);
+    }
+}

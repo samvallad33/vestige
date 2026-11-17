@@ -19,9 +19,11 @@
 
 mod bridge;
 mod dph;
+mod focus;
 mod ghostlink_dgs;
 mod index;
 mod rank;
+mod rst;
 mod scoring;
 mod seating;
 mod supersession;

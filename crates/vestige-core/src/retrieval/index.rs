@@ -1316,7 +1316,10 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
             }
             for ent in proper_entity_tokens(prose_body) {
                 if let Some(body) = ent.strip_prefix("\u{1}ent:") {
-                    if !body.contains('_') && vocative_partners.is_some_and(|vp| vp.contains(body)) {
+                    if !body.contains('_')
+                        && (vocative_partners.is_some_and(|vp| vp.contains(body))
+                            || raw_tokens(&speaker).iter().any(|sw| sw == body))
+                    {
                         continue;
                     }
                 }

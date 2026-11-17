@@ -280,7 +280,9 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         }
         if let Some(id) = ix.vocab.get(&ent) {
             let parts_body = ent.strip_prefix("\u{1}ent:").unwrap_or("");
-            let any_erased = parts_body.split('_').any(|part| !groups.iter().any(|g| g == part));
+            let any_erased = parts_body
+                .split('_')
+                .any(|part| !groups.iter().any(|g| g == part) && !frame_token(part));
             if any_erased {
                 let g = groups.len();
                 groups.push(ent);

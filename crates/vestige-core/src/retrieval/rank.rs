@@ -360,6 +360,23 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         t_scene_sess = t_raw.clone();
     }
 
+    // #809: Sidner FocusStack<EntityId> anaphoric antecedent resolution in Q16.16
+    if nt > 2 && !plan.focal_ids.is_empty() {
+        let focus_q16 = super::focus::compute_anaphoric_focus_q16(ix, &plan);
+        let t_max_sc = t_scene.iter().cloned().fold(0.0f32, f32::max);
+        if t_max_sc > 0.0 {
+            for ti in 0..nt {
+                let fq = focus_q16[ti];
+                if fq > 0 && t_scene[ti] > 0.0 {
+                    let frac = (fq as f32) / (super::focus::Q16 as f32);
+                    let boost = t_max_sc * 0.05 * frac;
+                    t_scene[ti] += boost;
+                    t_scene_sess[ti] += boost;
+                }
+            }
+        }
+    }
+
     // Named-speaker boost (never a filter): 1.06x tie-breaker gated on t_own[ti] > 0 or t_raw[ti] > 0.
     for t_sc in [&mut t_scene[..], &mut t_scene_sess[..]] {
         for ti in 0..nt {
@@ -1930,6 +1947,9 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // session is absent from the top 5. Slot 0 and the session list stay.
     // Does not touch rsb_seat_behind.
     apply_c2_unseated_session_peak(ix, &mut final_turn_indices, &t_own, k);
+    // #810: Stede RST Nucleus/Satellite preference at Rank 1 (0..5 membership unchanged)
+    super::seating::apply_rst_nucleus_preference(ix, &mut final_turn_indices, &t_scene, &t_exact_mask);
+
     // Post-Gatekeeper Sealed-Head Bridge Tail Admission:
     // Slots `0..5` (`@1..@5`) stay 100% SEALED whenever exact matches fill them.
     // Slot `k - 1` admits the top zero-exact-overlap `t_bridge` turn only when slot `k - 1`
