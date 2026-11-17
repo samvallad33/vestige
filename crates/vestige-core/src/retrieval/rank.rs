@@ -1964,6 +1964,9 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // [W2-033] Milestone Admission: ascending timestamp lattice for event sequences
     super::seating::apply_w2_milestone_admission(ix, &it, &mut final_turn_indices, &t_scene);
 
+    // [W2-083 / W2-084] Summary Lead & Breadth Seats (Quantile Trajectory Pooling)
+    super::seating::apply_w2_quantile_trajectory_seating(ix, &q.text, &it, &mut final_turn_indices, &t_scene);
+
     // Post-Gatekeeper Sealed-Head Bridge Tail Admission:
     // Slots `0..5` (`@1..@5`) stay 100% SEALED whenever exact matches fill them.
     // Slot `k - 1` admits the top zero-exact-overlap `t_bridge` turn only when slot `k - 1`

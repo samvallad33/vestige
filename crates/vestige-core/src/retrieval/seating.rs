@@ -6572,3 +6572,73 @@ pub(super) fn apply_w2_milestone_admission(
         });
     }
 }
+
+/// [W2-083 / W2-084] Summary Lead Seat & Breadth Seats (Quantile Trajectory Pooling):
+/// For broad overview/summarization queries over long multi-session conversations (`ns >= 10`),
+/// sample the highest-salience RST Nucleus from each timeline quintile (20%, 40%, 60%, 80%, 100%)
+/// into Slots `0..5` so coverage spans the entire conversation arc instead of crowding one episode.
+pub(super) fn apply_w2_quantile_trajectory_seating(
+    ix: &Index,
+    q_text: &str,
+    it: &QueryIntent,
+    final_turn_indices: &mut Vec<usize>,
+    t_scene: &[f32],
+) {
+    let ns = ix.session_turns.len();
+    if ns < 10 || it.is_event_sequence || it.sniper_when || it.sniper_how_many || it.sniper_where {
+        return;
+    }
+    let is_overview_query = raw_tokens(q_text).into_iter().any(|w| {
+        matches!(
+            w.as_str(),
+            "summary" | "summarize" | "summarized" | "overview" | "recap" | "highlights"
+        )
+    });
+    if !is_overview_query {
+        return;
+    }
+
+    let mut quantile_picks: Vec<usize> = Vec::with_capacity(5);
+    for q_idx in 0..5usize {
+        let s_lo = (q_idx * ns) / 5;
+        let s_hi = (((q_idx + 1) * ns) / 5).max(s_lo + 1).min(ns);
+        let mut best_ti: Option<usize> = None;
+        let mut best_key: (u8, i32, i32) = (0, i32::MIN, i32::MIN);
+        for si in s_lo..s_hi {
+            for &ti in &ix.session_turns[si] {
+                if quantile_picks.contains(&ti) {
+                    continue;
+                }
+                let t = &ix.turns[ti];
+                if t.is_backchannel || t.is_question {
+                    continue;
+                }
+                let is_nuc = u8::from(
+                    super::rst::classify_rst_role(ix, ti) == super::rst::RstRole::Nucleus,
+                );
+                let sc_q = (t_scene.get(ti).copied().unwrap_or(0.0) * 1000.0) as i32;
+                let len_q = t.content.len() as i32;
+                let key = (is_nuc, sc_q, len_q);
+                if key > best_key {
+                    best_key = key;
+                    best_ti = Some(ti);
+                }
+            }
+        }
+        if let Some(ti) = best_ti {
+            quantile_picks.push(ti);
+        }
+    }
+
+    if quantile_picks.len() < 3 {
+        return;
+    }
+    let mut rebuilt = quantile_picks;
+    for &ti in final_turn_indices.iter() {
+        if !rebuilt.contains(&ti) {
+            rebuilt.push(ti);
+        }
+    }
+    rebuilt.truncate(final_turn_indices.len().max(rebuilt.len().min(10)));
+    *final_turn_indices = rebuilt;
+}
