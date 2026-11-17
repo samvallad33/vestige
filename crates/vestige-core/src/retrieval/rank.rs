@@ -1936,6 +1936,42 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // is a duplicate-session assistant echo or unfilled tail.
     admit_protected_tail(ix, p, k, nt, &t_bridge, &t_bridge_hits, &t_exact_mask, &t_scene, &mut final_turn_indices);
 
+    // #801 Integer Viterbi Chain Decoding anchored with #802 GhostLink Divergent Graph Synthesis:
+    // Decode highest-potential multi-hop entity chain across sessions and admit unseated chain hops
+    // into redundant tail slots (keeping slots 0..5 sealed so top literal precision has 0 regression).
+    if k >= 6 {
+        let chain_turn = super::viterbi::decode_viterbi_chain(ix, &plan, &final_turn_indices, &t_scene, &t_mask)
+            .and_then(|chain| {
+                if chain.score_q16 == 0 || chain.union_mask == 0 {
+                    return None;
+                }
+                chain
+                    .path
+                    .into_iter()
+                    .find(|ti| !final_turn_indices.contains(ti))
+            })
+            .or_else(|| super::ghostlink_dgs::synthesize_complement_turn(ix, &plan, &final_turn_indices));
+
+        if let Some(cand_ti) = chain_turn {
+            if final_turn_indices.len() < k {
+                final_turn_indices.push(cand_ti);
+            } else {
+                let cand_sess = ix.turns[cand_ti].session;
+                let already_has_sess = final_turn_indices[..5].iter().any(|&x| ix.turns[x].session == cand_sess);
+                if !already_has_sess {
+                    if let Some(slot) = (5..final_turn_indices.len()).rev().find(|&idx| {
+                        let vti = final_turn_indices[idx];
+                        let vs = ix.turns[vti].session;
+                        let dup = final_turn_indices[..idx].iter().any(|&e| ix.turns[e].session == vs);
+                        (dup && ix.turns[vti].field == 1) || t_scene[vti] <= 0.0
+                    }) {
+                        final_turn_indices[slot] = cand_ti;
+                    }
+                }
+            }
+        }
+    }
+
     maybe_dump_replay(
         ix,
         q,

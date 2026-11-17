@@ -19,12 +19,14 @@
 
 mod bridge;
 mod dph;
+mod ghostlink_dgs;
 mod index;
 mod rank;
 mod scoring;
 mod seating;
 mod supersession;
 mod tokens;
+mod viterbi;
 #[cfg(test)]
 mod tests;
 
