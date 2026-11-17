@@ -8,22 +8,32 @@ use super::*;
 /// resolve to their canonical WordNet synsets.
 pub(super) fn wordnet_lemmas_with_morph(word: &str) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = crate::wordnet::expansion_lemmas(word).to_vec();
-    if let Some(sing) = word.strip_suffix("es").or_else(|| word.strip_suffix('s')) {
-        if sing.len() >= 3 {
-            for l in crate::wordnet::expansion_lemmas(sing) {
-                if !out.contains(&l) {
-                    out.push(l);
-                }
-            }
-        }
-    }
-    let st = stem(word);
-    if st != word && st.len() >= 3 {
-        for l in crate::wordnet::expansion_lemmas(&st) {
+    let mut push_all = |cand: &str| {
+        for l in crate::wordnet::expansion_lemmas(cand) {
             if !out.contains(&l) {
                 out.push(l);
             }
         }
+        for l in crate::wordnet::upward_hypernyms(cand, 3) {
+            if !out.contains(&l) {
+                out.push(l);
+            }
+        }
+        for (l, _) in crate::conceptnet::two_hop_neighbors(cand, 8) {
+            if !out.contains(&l) {
+                out.push(l);
+            }
+        }
+    };
+    push_all(word);
+    if let Some(sing) = word.strip_suffix("es").or_else(|| word.strip_suffix('s')) {
+        if sing.len() >= 3 {
+            push_all(sing);
+        }
+    }
+    let st = stem(word);
+    if st != word && st.len() >= 3 {
+        push_all(&st);
     }
     out
 }

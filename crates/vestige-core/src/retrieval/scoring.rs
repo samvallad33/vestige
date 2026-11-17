@@ -231,25 +231,56 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     // (2) an expansion term weighs `hypernym_weight` (0.5) of an original term;
     // (3) only expansion lemmas whose corpus document frequency is > 0 are kept.
     // Nothing is added to documents; a query with any overlap is untouched.
-    if p.enable_hypernyms && crate::zero_overlap::ounis_zero_overlap_gate(terms.iter().map(|t| corpus_df(t.id))) {
+    let has_domain_groups = terms.iter().any(|t| t.group.is_some());
+    let gate_open = if has_domain_groups {
+        crate::zero_overlap::ounis_zero_overlap_gate(
+            terms.iter().filter(|t| t.group.is_some()).map(|t| corpus_df(t.id)),
+        )
+    } else {
+        crate::zero_overlap::ounis_zero_overlap_gate(terms.iter().map(|t| corpus_df(t.id)))
+    };
+    if p.enable_hypernyms && gate_open {
         for (w, g) in &expandable {
-            for lemma in crate::wordnet::expansion_lemmas(w) {
-                let surface = ix.vocab.get(lemma);
-                let stemmed = if p.enable_stemming { ix.vocab.get(&stem_term(&stem(lemma))) } else { None };
-                for id in [surface, stemmed].into_iter().flatten() {
-                    if corpus_df(id) > 0 && hyp_added.insert(id) {
-                        terms.push(QTerm { id, weight: p.hypernym_weight, group: Some(*g), exact_hit: false });
-                        group_of.insert(id, *g);
-                    }
+            let mut morph_cands: Vec<String> = vec![w.clone()];
+            if let Some(sing) = w.strip_suffix("es").or_else(|| w.strip_suffix('s')) {
+                if sing.len() >= 3 && !morph_cands.iter().any(|c| c == sing) {
+                    morph_cands.push(sing.to_string());
                 }
             }
-            for (cn_lemma, _cn_w) in crate::conceptnet::two_hop_neighbors(w, 8) {
-                let surface = ix.vocab.get(cn_lemma);
-                let stemmed = if p.enable_stemming { ix.vocab.get(&stem_term(&stem(cn_lemma))) } else { None };
-                for id in [surface, stemmed].into_iter().flatten() {
-                    if corpus_df(id) > 0 && hyp_added.insert(id) {
-                        terms.push(QTerm { id, weight: p.hypernym_weight * 0.85, group: Some(*g), exact_hit: false });
-                        group_of.insert(id, *g);
+            let st = stem(w);
+            if st != *w && st.len() >= 3 && !morph_cands.iter().any(|c| c == &st) {
+                morph_cands.push(st);
+            }
+            for cand in &morph_cands {
+                for lemma in crate::wordnet::expansion_lemmas(cand)
+                    .into_iter()
+                    .chain(crate::wordnet::upward_hypernyms(cand, 3))
+                {
+                    let surface = ix.vocab.get(lemma);
+                    let stemmed = if p.enable_stemming {
+                        ix.vocab.get(&stem_term(&stem(lemma)))
+                    } else {
+                        None
+                    };
+                    for id in [surface, stemmed].into_iter().flatten() {
+                        if corpus_df(id) > 0 && hyp_added.insert(id) {
+                            terms.push(QTerm { id, weight: p.hypernym_weight, group: Some(*g), exact_hit: false });
+                            group_of.insert(id, *g);
+                        }
+                    }
+                }
+                for (cn_lemma, _cn_w) in crate::conceptnet::two_hop_neighbors(cand, 10) {
+                    let surface = ix.vocab.get(cn_lemma);
+                    let stemmed = if p.enable_stemming {
+                        ix.vocab.get(&stem_term(&stem(cn_lemma)))
+                    } else {
+                        None
+                    };
+                    for id in [surface, stemmed].into_iter().flatten() {
+                        if corpus_df(id) > 0 && hyp_added.insert(id) {
+                            terms.push(QTerm { id, weight: p.hypernym_weight * 0.85, group: Some(*g), exact_hit: false });
+                            group_of.insert(id, *g);
+                        }
                     }
                 }
             }

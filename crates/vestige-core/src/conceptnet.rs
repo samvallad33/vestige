@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 const DATA_TSV: &str = include_str!("../data/conceptnet-5.7-4rel.tsv");
 
 pub const DATA_SHA256: &str =
-    "904689fc48023e784eca135d9e944a5cafc5d7a0a09ce4351c792d68bd8b9b5a";
+    "440bab391f707506677d24236ace7ba17cb7905c6e56c11ae4bb0ed83d2d766f";
 
 struct Graph {
     fwd: HashMap<&'static str, Vec<(&'static str, u16)>>,

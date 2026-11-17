@@ -23,7 +23,7 @@ RELS = {
     "/r/HasA": "H",
 }
 WORD_RE = re.compile(r"^[a-z]{3,20}$")
-MAX_PER_SRC = 6
+MAX_PER_SRC = 12
 TARGET_BYTES = 480 * 1024
 
 
