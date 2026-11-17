@@ -7,6 +7,7 @@ const defaults = {
   planning: ['should we', 'recommend', 'plan', 'pick', 'choose', 'what about', 'ideas for'],
   preferences: ['my favorite', 'I like', 'I hate', 'allergic', 'I prefer'],
   references: ['her', 'him', 'them', 'that place', 'that one', 'the usual'],
+  engineering: ['regression', 'root cause', 'invariant', 'architecture', 'supersede', 'deprecated', 'failing test', 'deadlock', 'migration', 'schema', 'latency', 'postmortem'],
 };
 function contains(text, phrase) {
   const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

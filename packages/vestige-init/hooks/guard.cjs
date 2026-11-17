@@ -10,7 +10,7 @@ const MESSAGE_CAP = 1200;
 
 function proofText(stderr) {
   const lines = String(stderr || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const wanted = lines.filter(line => /^(OPERATOR: STOPPED|Why:|Proof:|Rule:|Forbids:|Your law:|Observed:)/.test(line));
+  const wanted = lines.filter(line => /^(OPERATOR: STOPPED|Why:|Proof:|Rule:|Forbids:|Your law:|Observed:|Action ID:|Receipt:|Approve:)/.test(line));
   const chosen = (wanted.length ? wanted : lines).map(line => line.slice(0, 400));
   let text = '';
   for (const line of chosen) {
@@ -22,6 +22,11 @@ function proofText(stderr) {
   if (proof && !text.includes(proof)) {
     const room = MESSAGE_CAP - proof.length - 1;
     text = `${text.slice(0, Math.max(0, room))}\n${proof}`.trim();
+  }
+  const receiptMatch = /\b(?:op-receipt-|Action ID:\s*|Receipt:\s*)([0-9a-f]{16,64})\b/i.exec(text);
+  if (receiptMatch && !/precedent\(/.test(text)) {
+    const hint = `Precedent: call precedent(action="get", receipt_id="op-receipt-${receiptMatch[1].slice(0, 16)}")`;
+    if (text.length + hint.length + 1 <= MESSAGE_CAP) text = `${text}\n${hint}`;
   }
   return text;
 }
@@ -69,7 +74,7 @@ try {
     return;
   }
   const result = spawnSync(config.python, ['-I', config.gate, 'hook', '--source', client], {
-    input, encoding: 'utf8', timeout: 10000, maxBuffer: 256 * 1024,
+    input, encoding: 'utf8', timeout: 10000, maxBuffer: 256 * 1024, windowsHide: true,
   });
   // A crashed gate, a missing interpreter, or a non-zero status is a deny.
   // The adapter does not invent a recall handle the gate did not print.

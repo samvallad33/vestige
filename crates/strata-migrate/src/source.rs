@@ -229,6 +229,7 @@ impl LiveScratch {
             if !matches!(lock.try_lock(), Ok(())) {
                 continue;
             }
+            #[cfg_attr(not(unix), allow(unused_mut))]
             let mut builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {

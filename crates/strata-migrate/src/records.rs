@@ -377,7 +377,7 @@ pub fn load_or_create_receipt_key(
         f.write_all(&seed)?;
     }
     #[cfg(not(unix))]
-    std::fs::write(&path, &seed)?;
+    std::fs::write(&path, seed)?;
     Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
 }
 

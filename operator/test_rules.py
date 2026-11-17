@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -18,7 +19,10 @@ from pathlib import Path
 REAL_HOME = Path(os.environ.get("HOME") or str(Path.home()))
 BASE = REAL_HOME / "operator-full-gate-test"
 if BASE.exists():
-    shutil.rmtree(BASE)
+    def _clear_readonly(fn, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        fn(p)
+    shutil.rmtree(BASE, onexc=_clear_readonly)
 HOME = BASE / "home"
 WORK = BASE / "work"
 REPO = BASE / "repo"
