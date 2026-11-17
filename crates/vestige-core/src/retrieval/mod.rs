@@ -18,6 +18,7 @@
 
 
 mod bridge;
+mod dph;
 mod index;
 mod rank;
 mod scoring;

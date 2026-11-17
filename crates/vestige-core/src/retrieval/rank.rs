@@ -189,6 +189,12 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             sc *= 1.40;
             sc_own *= 1.40;
         }
+        if sc_own > 0.0 {
+            let dph_bonus = (super::dph::dph_bag_q16(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats) as f32) / 65536.0;
+            let add = 0.02 * dph_bonus;
+            sc_own += add;
+            sc += add;
+        }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
         // Content-token count: TurnIx.content is DetHashSet<u32> of content term ids
