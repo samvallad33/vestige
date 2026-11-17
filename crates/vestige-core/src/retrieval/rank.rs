@@ -2107,6 +2107,16 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                 )
                 .into_iter()
                 .next()
+            })
+            .or_else(|| {
+                super::viterbi::find_coupled_session_bridge_turns(
+                    ix,
+                    &plan,
+                    &final_turn_indices,
+                    &t_mask,
+                )
+                .into_iter()
+                .next()
             });
 
         if let Some(cand_ti) = chain_turn {
@@ -2132,6 +2142,9 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // #805 Allen Interval Algebra + #808 Temporal Contradiction Pruner + #812 Box-Cox Stabilization
     super::temporal_allen::apply_allen_boxcox_tail_refinement(ix, &it, &base_q16, &mut final_turn_indices, k);
 
+    // #798/#799/#800/#826/#767 Block-Max WAND + Fagin TA bitpacked posting scan verification
+    let wand_stats = super::wand::verify_query_block_max_wand(ix, &plan, &base_q16, k);
+
     // #806 Mackworth AC-3 Arc Consistency + #827 ACT-R Base-Level Activation + #830 LockeLedger 256-Bucket Attribution
     {
         super::ac3::apply_ac3_consistency(ix, &it, &base_q16, &mut final_turn_indices, k);
@@ -2152,6 +2165,9 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             ledger.record_channel(tid, super::locke_ledger::CH_RBP, 1 << 16);
             ledger.record_channel(tid, super::locke_ledger::CH_AC3, 1 << 16);
             ledger.record_channel(tid, super::locke_ledger::CH_PSL_ILP, 1 << 16);
+            if let Some(&(_, wsc)) = wand_stats.top_k.iter().find(|&&(wti, _)| wti == ti) {
+                ledger.record_channel(tid, super::locke_ledger::CH_WAND, wsc);
+            }
         }
         let _attribution_root = ledger.finalize_root();
     }

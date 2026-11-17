@@ -406,6 +406,108 @@ pub(super) fn decode_viterbi_chain(
     }
 }
 
+/// Coupled Session Cluster Expansion (`BridgeSessions = Sessions(u) ∩ Sessions(w)`):
+/// Finds declarative intermediate bridge turns in unseated sessions `sb` that share
+/// rare carrier entities with BOTH top seed sessions `u` and `w` (pure Q16.16 integer).
+pub(super) fn find_coupled_session_bridge_turns(
+    ix: &Index,
+    plan: &QueryPlan,
+    seed_turns: &[usize],
+    t_mask: &[u64],
+) -> Vec<usize> {
+    let ns = ix.session_turns.len();
+    let nt = ix.turns.len();
+    if ns < 3 || nt <= 5 || seed_turns.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut head_sessions: Vec<usize> = Vec::with_capacity(5);
+    for &ti in seed_turns.iter().take(5) {
+        let s = ix.turns[ti].session;
+        if !head_sessions.contains(&s) {
+            head_sessions.push(s);
+        }
+    }
+    if head_sessions.len() < 2 {
+        return Vec::new();
+    }
+    let u_sess = head_sessions[0];
+    let w_sess = head_sessions[1];
+    let max_df = ((nt as u64 * 10) / 100).max(4) as u32;
+
+    let collect_carriers = |sess: usize| -> Vec<(u32, u64)> {
+        let mut out = Vec::new();
+        for &e in &ix.session_entities[sess] {
+            if plan.group_of.contains_key(&e) || is_technical_handle(&ix.vocab, e) {
+                continue;
+            }
+            if let Some(&df) = ix.t_stats.df.get(&e) {
+                if df >= 2 && df <= max_df {
+                    out.push((e, Q16 / (df as u64)));
+                }
+            }
+        }
+        out
+    };
+
+    let u_carriers = collect_carriers(u_sess);
+    let w_carriers = collect_carriers(w_sess);
+    if u_carriers.is_empty() || w_carriers.is_empty() {
+        return Vec::new();
+    }
+
+    let mut covered_mask = 0u64;
+    for &ti in seed_turns.iter().take(5) {
+        covered_mask |= t_mask[ti];
+    }
+
+    let mut best: Option<(usize, u64)> = None;
+    for si in 0..ns {
+        if head_sessions.contains(&si) {
+            continue;
+        }
+        let u_cond: u64 = u_carriers
+            .iter()
+            .filter(|(e, _)| ix.session_entities[si].contains(e))
+            .map(|(_, c)| *c)
+            .sum();
+        if u_cond == 0 {
+            continue;
+        }
+        let w_cond: u64 = w_carriers
+            .iter()
+            .filter(|(e, _)| ix.session_entities[si].contains(e))
+            .map(|(_, c)| *c)
+            .sum();
+        if w_cond == 0 {
+            continue;
+        }
+        let sess_couple_q16 = u_cond.min(w_cond).saturating_add((u_cond + w_cond) >> 2);
+        for &ti in &ix.session_turns[si] {
+            let t = &ix.turns[ti];
+            if t.is_question
+                || t.is_backchannel
+                || turn_is_superseded(ix, ti)
+                || seed_turns.contains(&ti)
+            {
+                continue;
+            }
+            let hits_u = u_carriers.iter().any(|(e, _)| t.entities.contains(e));
+            let hits_w = w_carriers.iter().any(|(e, _)| t.entities.contains(e));
+            let info_bits = (t_mask[ti] & !covered_mask).count_ones() as u64;
+            let turn_mult = if hits_u && hits_w { 3 } else if hits_u || hits_w { 2 } else { 1 };
+            let score_q16 = sess_couple_q16
+                .saturating_mul(turn_mult)
+                .saturating_add(info_bits * (Q16 / 4));
+            if best.map_or(true, |(_, bs)| score_q16 > bs) {
+                best = Some((ti, score_q16));
+            }
+        }
+    }
+
+    best.map(|(ti, _)| vec![ti]).unwrap_or_default()
+}
+
 fn viterbi_edge_q16(
     ix: &Index,
     plan: &QueryPlan,

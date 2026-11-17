@@ -49,8 +49,8 @@ mod tests {
 
     #[test]
     fn actr_recency_activation_monotone_in_elapsed_days() {
-        let recent = (((Q16 as u128) << 8) / integer_sqrt(1 << 16)) as u64;
-        let stale = (((Q16 as u128) << 8) / integer_sqrt(100 << 16)) as u64;
+        let recent = (((Q16 as u128) << 8) / (integer_sqrt(1 << 16) as u128)) as u64;
+        let stale = (((Q16 as u128) << 8) / (integer_sqrt(100 << 16) as u128)) as u64;
         assert!(log2_q16(recent) > log2_q16(stale));
     }
 }

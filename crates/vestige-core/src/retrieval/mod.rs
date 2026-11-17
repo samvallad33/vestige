@@ -40,6 +40,7 @@ mod supersession;
 mod temporal_allen;
 mod tokens;
 mod viterbi;
+mod wand;
 #[cfg(test)]
 mod tests;
 

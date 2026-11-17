@@ -17,6 +17,7 @@ pub(super) const CH_RBP: u8 = 4;
 pub(super) const CH_AC3: u8 = 5;
 pub(super) const CH_PSL_ILP: u8 = 6;
 pub(super) const CH_ACTR: u8 = 7;
+pub(super) const CH_WAND: u8 = 8;
 
 /// Deterministic 256-bucket cryptographic attribution accumulator backed by BLAKE3.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
