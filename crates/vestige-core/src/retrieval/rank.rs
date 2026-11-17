@@ -2061,6 +2061,15 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             &mut final_turn_indices,
             k,
         );
+        // #804 Getoor PSL Hinge + #803 Roth 0-1 ILP multi-hop tail closure (`5..k`, keeping `0..5` sealed)
+        super::psl_ilp::apply_psl_ilp_tail_closure(
+            ix,
+            &plan,
+            &t_scene_q16,
+            &t_exact_mask,
+            &mut final_turn_indices,
+            k,
+        );
     }
 
     // Post-Gatekeeper Sealed-Head Bridge Tail Admission:
@@ -2103,6 +2112,34 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                 }
             }
         }
+    }
+
+    // #806 Mackworth AC-3 Arc Consistency + #827 ACT-R Base-Level Activation + #830 LockeLedger 256-Bucket Attribution
+    {
+        let base_q16: Vec<u64> = t_scene
+            .iter()
+            .map(|&v| if v > 0.0 { (v * 65536.0).min(u64::MAX as f32) as u64 } else { 0 })
+            .collect();
+        super::ac3::apply_ac3_consistency(ix, &it, &base_q16, &mut final_turn_indices, k);
+        let ref_ts_sec = ix.session_ts.iter().copied().max().unwrap_or(0);
+        let mut ledger = super::locke_ledger::build_turn_attribution_ledger(ix, &final_turn_indices, &base_q16);
+        for &ti in &final_turn_indices {
+            let stab_days = ix.turns[ti].stability.max(0.0).round() as u64;
+            let actr_q16 = super::actr::actr_base_level_q16(ix, ti, ref_ts_sec, stab_days);
+            let tid = &ix.turns[ti].id;
+            if actr_q16 > 0 {
+                ledger.record_channel(tid, super::locke_ledger::CH_ACTR, actr_q16 as u64);
+            }
+            if t_exact_mask[ti] > 0 {
+                ledger.record_channel(tid, super::locke_ledger::CH_QLD, base_q16[ti]);
+                ledger.record_channel(tid, super::locke_ledger::CH_BM25L_DFR, base_q16[ti]);
+            }
+            ledger.record_channel(tid, super::locke_ledger::CH_ROCCHIO, base_q16[ti] >> 4);
+            ledger.record_channel(tid, super::locke_ledger::CH_RBP, 1 << 16);
+            ledger.record_channel(tid, super::locke_ledger::CH_AC3, 1 << 16);
+            ledger.record_channel(tid, super::locke_ledger::CH_PSL_ILP, 1 << 16);
+        }
+        let _attribution_root = ledger.finalize_root();
     }
 
     maybe_dump_replay(

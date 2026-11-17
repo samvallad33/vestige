@@ -17,6 +17,8 @@
 #![allow(clippy::all)]
 
 
+mod ac3;
+mod actr;
 mod bm25l_dfr;
 mod bridge;
 mod coref;
@@ -25,6 +27,8 @@ mod focus;
 mod ghostlink_dgs;
 mod hobbs;
 mod index;
+mod locke_ledger;
+mod psl_ilp;
 mod qld;
 mod rank;
 mod rbp;

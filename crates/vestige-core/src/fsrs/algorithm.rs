@@ -334,6 +334,56 @@ pub fn apply_sentiment_boost(stability: f64, sentiment_intensity: f64, max_boost
 }
 
 // ============================================================================
+// WAVE 5 EPIGENETIC FSRS DYNAMICS (#413, #414, #415, #416)
+// ============================================================================
+
+/// #413: Supersession-weighted decay floor. Discounts retrievability cleanly when
+/// later `supersedes`, `corrects`, or `closed_by` edges contest this record.
+pub fn apply_supersession_decay_floor(retrievability: f64, superseding_edges: u32) -> f64 {
+    let r = clamp(retrievability, 0.0, 1.0);
+    if superseding_edges == 0 {
+        return r;
+    }
+    let discounted = r / (1.0 + 0.35 * (superseding_edges as f64));
+    discounted.max(0.05_f64.min(r))
+}
+
+/// #414: Lock ingest-time arousal axis deterministically from explicit severity (`0..=3`).
+pub fn lock_arousal_from_severity(explicit_severity: u8) -> f64 {
+    match explicit_severity {
+        0 => 0.0,
+        1 => 0.35,
+        2 => 0.70,
+        _ => 1.0,
+    }
+}
+
+/// #415: Modulate FSRS stability gain by retrieval effort (Bjork desirable difficulty).
+pub fn modulate_stability_by_effort(base_stability: f64, rank_position: usize, hops: u8) -> f64 {
+    let s = clamp(base_stability, MIN_STABILITY, MAX_STABILITY);
+    let rank_term = 0.08 * (rank_position.min(10) as f64);
+    let hop_term = 0.12 * (hops.min(3) as f64);
+    clamp(s * (1.0 + rank_term + hop_term), MIN_STABILITY, MAX_STABILITY)
+}
+
+/// #416: Apply exposure-ledger retrieval dividend: strengthens memories cited via
+/// `derived_from` / `evidence_of`, and accelerates decay for repeatedly ignored exposures.
+pub fn apply_exposure_dividend(
+    stability: f64,
+    cited_after_exposure: bool,
+    ignored_streak: u32,
+) -> f64 {
+    let s = clamp(stability, MIN_STABILITY, MAX_STABILITY);
+    if cited_after_exposure {
+        clamp(s * 1.15, MIN_STABILITY, MAX_STABILITY)
+    } else if ignored_streak > 0 {
+        clamp(s * 0.90_f64.powi(ignored_streak.min(10) as i32), MIN_STABILITY, MAX_STABILITY)
+    } else {
+        s
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -474,5 +524,21 @@ mod tests {
 
         let partial = apply_sentiment_boost(stability, 0.5, 2.0);
         assert_eq!(partial, 15.0); // 50% boost = 1.5x
+    }
+
+    #[test]
+    fn test_wave5_epigenetic_fsrs_functions() {
+        assert!((apply_supersession_decay_floor(0.9, 0) - 0.9).abs() < 1e-9);
+        assert!(apply_supersession_decay_floor(0.9, 2) < 0.9);
+        assert!((apply_supersession_decay_floor(0.9, 100) - 0.05).abs() < 1e-9);
+
+        assert_eq!(lock_arousal_from_severity(0), 0.0);
+        assert_eq!(lock_arousal_from_severity(1), 0.35);
+        assert_eq!(lock_arousal_from_severity(2), 0.70);
+        assert_eq!(lock_arousal_from_severity(3), 1.0);
+
+        assert!(modulate_stability_by_effort(10.0, 5, 2) > 10.0);
+        assert!(apply_exposure_dividend(10.0, true, 0) > 10.0);
+        assert!(apply_exposure_dividend(10.0, false, 3) < 10.0);
     }
 }
