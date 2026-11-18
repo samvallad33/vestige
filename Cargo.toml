@@ -21,6 +21,7 @@ exclude = [
     "crates/strata-kernel",
     "crates/strata-migrate",
     "crates/strata-passport",
+    "crates/strata-runtime",
     "crates/strata-store",
     "crates/strata-verify",
 
