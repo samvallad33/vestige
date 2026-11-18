@@ -58,6 +58,9 @@ impl Bag {
     }
 }
 
+/// (policy_key, turn, session, ts, has_explicit_scope, scope_words, condition_words)
+type RawStandingRule = (String, usize, usize, i64, bool, Vec<String>, Vec<String>);
+
 pub(super) struct StandingRule {
     pub(super) policy_key: String,
     pub(super) turn: usize,
@@ -66,6 +69,10 @@ pub(super) struct StandingRule {
     pub(super) has_explicit_scope: bool,
     pub(super) scope: DetHashSet<u32>,
     pub(super) assistant_nouns: DetHashSet<u32>,
+    /// Exact + stem ids of the rule's own condition clause (empty = unconditional).
+    pub(super) condition: DetHashSet<u32>,
+    /// Surface words of the condition clause (for WordNet lemma matching).
+    pub(super) condition_words: Vec<String>,
 }
 
 pub(super) struct TurnIx {
@@ -613,6 +620,31 @@ pub(super) fn extract_rule_scope(text: &str) -> (bool, Vec<String>) {
         false,
         raw_tokens(prose).into_iter().filter(|w| is_content(w)).collect(),
     )
+}
+
+/// Condition clause of a standing rule ("Always X when I ask about Y" -> Y).
+/// Splits the imperative into action + condition at the first closed-class
+/// subordinator, then (if present) after the first closed-class preposition, so
+/// only the topic the rule is conditioned on can gate rule promotion.
+/// Rules with no subordinate condition return an empty list (unconditional).
+pub(super) fn extract_rule_condition(text: &str) -> Vec<String> {
+    let (prose, _) = split_blip_caption(text);
+    let first = prose.split("->").next().unwrap_or(prose);
+    let first = first.split(['.', '!', ';', '\n']).next().unwrap_or(first);
+    let toks = raw_tokens(first);
+    // hardcode-scan: closed-class (subordinating conjunctions)
+    const SUBORD: &[&str] = &["when", "whenever", "if", "while", "during", "once"];
+    // hardcode-scan: closed-class (topic prepositions)
+    const TOPIC_PREP: &[&str] = &["about", "regarding", "on", "for", "with", "of", "concerning", "involving"];
+    let Some(sp) = toks.iter().position(|w| SUBORD.contains(&w.as_str())) else {
+        return Vec::new();
+    };
+    let cond = &toks[sp + 1..];
+    let cond = match cond.iter().position(|w| TOPIC_PREP.contains(&w.as_str())) {
+        Some(pp) if pp + 1 < cond.len() => &cond[pp + 1..],
+        _ => cond,
+    };
+    cond.iter().filter(|w| is_content(w)).cloned().collect()
 }
 
 /// Pure byte-exact technical handle extractor for Retroactive Salience Backfill (RSB):
@@ -1225,7 +1257,7 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut session_turns = Vec::new();
     let mut session_entities = Vec::with_capacity(sessions.len());
     let mut session_content = Vec::with_capacity(sessions.len());
-    let mut raw_standing_rules: Vec<(String, usize, usize, i64, bool, Vec<String>)> = Vec::new();
+    let mut raw_standing_rules: Vec<RawStandingRule> = Vec::new();
     let mut turn_tech_handles: Vec<Vec<u32>> = Vec::new();
     let mut turn_prose_cache: Vec<String> = Vec::new();
     let mut cue_vocab: DetHashMap<String, u32> = DetHashMap::default();
@@ -1547,6 +1579,7 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
                     ts,
                     has_explicit_scope,
                     scope_words,
+                    extract_rule_condition(prose_body),
                 ));
             }
             let id = if t.id.is_empty() { format!("{}#{}", s.id, ti) } else { t.id.clone() };
@@ -1985,7 +2018,16 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
         u32::MAX
     };
     let mut standing_rules = Vec::with_capacity(raw_standing_rules.len());
-    for (policy_key, turn_idx, sess_idx, ts, has_explicit_scope, scope_words) in raw_standing_rules {
+    for (policy_key, turn_idx, sess_idx, ts, has_explicit_scope, scope_words, condition_words) in raw_standing_rules {
+        let mut condition = DetHashSet::default();
+        for w in &condition_words {
+            if let Some(id) = vocab.get(w.as_str()) {
+                condition.insert(id);
+            }
+            if let Some(sid) = vocab.get(&stem_term(&stem(w))) {
+                condition.insert(sid);
+            }
+        }
         let mut scope = DetHashSet::default();
         for w in &scope_words {
             if let Some(id) = vocab.get(w.as_str()) {
@@ -2054,6 +2096,8 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
             has_explicit_scope,
             scope,
             assistant_nouns,
+            condition,
+            condition_words,
         });
     }
 

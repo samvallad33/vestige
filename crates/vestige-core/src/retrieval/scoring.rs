@@ -781,6 +781,35 @@ pub(super) fn rank_standing_rules(
         .collect()
 }
 
+/// Rule-condition gate: does this standing rule's own "when I ask about X"
+/// condition match the query? Exact/stem id overlap with the query focal ids,
+/// a shared stem, or one WordNet relation (synonym / direct hypernym / hyponym)
+/// between a condition word and a query content word. Unconditional rules never match.
+pub(super) fn rule_condition_matches(r: &StandingRule, plan: &QueryPlan, q_toks: &[String]) -> bool {
+    // Two or more rare elicitation-context hits (rule scope enriched from the
+    // turns around the rule) are as specific as a condition match.
+    if r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() >= 2 {
+        return true;
+    }
+    if r.condition_words.is_empty() {
+        return false;
+    }
+    if r.condition.iter().any(|id| plan.focal_ids.contains(id)) {
+        return true;
+    }
+    let q_content: Vec<&str> = q_toks.iter().map(String::as_str).filter(|w| is_content(w)).collect();
+    r.condition_words.iter().any(|cw| {
+        let cst = stem(cw);
+        let c_lemmas = crate::wordnet::expansion_lemmas(cw);
+        q_content.iter().any(|&qw| {
+            qw == cw
+                || (cst.len() >= 4 && stem(qw) == cst)
+                || c_lemmas.contains(&qw)
+                || crate::wordnet::expansion_lemmas(qw).contains(&cw.as_str())
+        })
+    })
+}
+
 pub(super) fn policy_spec_winner_floor(lexical_max: f32) -> f32 {
     if lexical_max > 0.0 {
         0.715 * lexical_max

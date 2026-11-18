@@ -816,6 +816,13 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         && super::scoring::step14_is_rec_request(&q.text);
     let q_trim_low = q.text.trim().to_ascii_lowercase();
     let has_compact_rule_register = (1..=8).contains(&ix.standing_rules.len());
+    // Rule-condition gate: a compact rule register only marks the query as a
+    // task-under-rules consultation when some live rule's own condition clause
+    // ("when I ask about X") matches the query.
+    let rule_condition_live = has_compact_rule_register
+        && ix.standing_rules.iter().any(|r| {
+            super::scoring::rule_condition_matches(r, &plan, &q_toks_eff)
+        });
     let task_live_eff = !is_monologue_corpus
         && !has_named_speakers_eff
         && ix.turns.len() >= 64
@@ -826,7 +833,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         && !seq_mode_eff
         && (!q_trim_low.ends_with('?')
             || q_trim_low.starts_with("please ")
-            || (has_compact_rule_register
+            || (rule_condition_live
                 && !q_trim_low.contains("did i ")
                 && !q_trim_low.contains("did we ")
                 && !q_trim_low.contains("was my ")
