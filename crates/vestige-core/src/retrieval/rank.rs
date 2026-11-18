@@ -3567,6 +3567,27 @@ const NAMED_SPEAKER_PREFIX: usize = 32;
 /// hard-lock its session at rank 1. Names the previous `nt >= 24` threshold.
 const TAXA_SESSION_LOCK_MIN_TURNS: usize = 24;
 
+/// Width of the late session list fused by 4-voter Kemeny-Young (replaces W2-006).
+const SESSION_FUSION_TOP_K: usize = 5;
+
+/// Number of Kemeny session-fusion voters on named-speaker corpora: sight,
+/// current list, head-turn order, and session query-cue coverage. User/assistant
+/// (monologue-style) streams keep the 3-voter set (no cue voter).
+const SESSION_FUSION_VOTERS_NAMED: i32 = 4;
+
+/// Majority of the 4 named-speaker fusion voters required to demote the current
+/// #1. A 2-2 tie is broken by `sight`.
+const SESSION_FUSION_OVERRIDE_VOTES_NAMED: i32 = 3;
+
+/// Majority of the 3 monologue fusion voters (sight + current list + head-turn)
+/// required to demote the current #1. Current-list votes for the incumbent, so
+/// this requires both `sight` and head-turn order.
+const SESSION_FUSION_OVERRIDE_VOTES_MONOLOGUE: i32 = 2;
+
+/// 5:4 best-turn scene margin used by the post-fusion closer (`cand * den >= inc * num`).
+const SESSION_SCENE_MARGIN_NUM: f32 = 5.0;
+const SESSION_SCENE_MARGIN_DEN: f32 = 4.0;
+
 fn corpus_has_named_speakers(ix: &Index) -> bool {
     ix.turns.iter().take(NAMED_SPEAKER_PREFIX).any(|t| {
         !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant"
@@ -3736,16 +3757,63 @@ fn apply_session_late_sync_and_margin_swap(
             }
         }
 
-        // 2. `W2-006`: 5:4 Witness margin session swap across Ranks 2..=5 (`1..5` vs `0`):
-        if final_session_indices.len() >= 2 {
-            let cur_top = final_session_indices[0];
-            let sc_inc = best_turn_in_sess(cur_top).map_or(0.0, |(sc, _)| sc);
-            let q_cues_w2 = query_cues(ix, q_text);
+        // 2. Kemeny-Young session fusion over Top-5 (replaces W2-006 single-turn 5:4 swap):
+        //    Voters: (a) session-score rank (`sight`), (b) current session list,
+        //    (c) head-turn session order, and on named-speaker corpora (d) session
+        //    query-cue coverage. User/assistant streams stay on the 3-voter set.
+        //    Pairwise majority with `sight` rank as deterministic tie-breaker (`seating::kemeny_young`).
+        //    A session-score-guarded 5:4 best-turn closer can still lift a session
+        //    that ties or beats the fused #1 on `sight` and wins the scene margin.
+        let n = final_session_indices.len().min(SESSION_FUSION_TOP_K);
+        if n >= 2 {
+            let pool: Vec<usize> = final_session_indices[..n].to_vec();
+            let mut sight_order: Vec<usize> = (0..n).collect();
+            sight_order.sort_by(|&a, &b| {
+                let (sa, sb) = (pool[a], pool[b]);
+                sight(sb)
+                    .partial_cmp(&sight(sa))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| ix.session_ts[sb].cmp(&ix.session_ts[sa]))
+                    .then_with(|| sa.cmp(&sb))
+            });
+            let mut sight_rank = vec![0usize; n];
+            for (r, &idx) in sight_order.iter().enumerate() {
+                sight_rank[idx] = r;
+            }
+            let turn_first_pos: Vec<usize> = pool
+                .iter()
+                .map(|&si| {
+                    final_turn_indices
+                        .iter()
+                        .position(|&ti| ix.turns[ti].session == si)
+                        .unwrap_or(usize::MAX)
+                })
+                .collect();
+            let best_scene: Vec<f32> = pool
+                .iter()
+                .map(|&si| best_turn_in_sess(si).map_or(0.0, |(sc, _)| sc))
+                .collect();
+            let mut turn_order: Vec<usize> = (0..n).collect();
+            turn_order.sort_by(|&a, &b| {
+                turn_first_pos[a]
+                    .cmp(&turn_first_pos[b])
+                    .then_with(|| {
+                        best_scene[b]
+                            .partial_cmp(&best_scene[a])
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| sight_rank[a].cmp(&sight_rank[b]))
+            });
+            let mut turn_rank = vec![0usize; n];
+            for (r, &idx) in turn_order.iter().enumerate() {
+                turn_rank[idx] = r;
+            }
+            let q_cues_fuse = query_cues(ix, q_text);
             let sess_cue_cnt = |si: usize| -> usize {
                 let mut u: Vec<u32> = Vec::new();
                 if let Some(members) = ix.session_turns.get(si) {
                     for &ti in members {
-                        for c in turn_query_cues(ix, &q_cues_w2, ti) {
+                        for c in turn_query_cues(ix, &q_cues_fuse, ti) {
                             if !u.contains(&c) {
                                 u.push(c);
                             }
@@ -3754,22 +3822,97 @@ fn apply_session_late_sync_and_margin_swap(
                 }
                 u.len()
             };
-            let inc_cues = sess_cue_cnt(cur_top);
-            let check_limit = final_session_indices.len().min(5);
-            let mut best_cand: Option<(usize, usize, f32)> = None;
+            let cue_cnt: Vec<usize> = pool.iter().map(|&si| sess_cue_cnt(si)).collect();
+            // Cue coverage is a dialogue overlap signal; user/assistant streams
+            // keep the 3-voter fusion used on BEAM.
+            let cue_voter = corpus_has_named_speakers(ix);
+            let mut net = vec![vec![0i64; n]; n];
+            for a in 0..n {
+                for b in (a + 1)..n {
+                    let mut margin = 1i64; // Voter (b): current session list ranks a < b
+                    margin += if sight_rank[a] < sight_rank[b] { 1 } else { -1 }; // Voter (a)
+                    margin += if turn_rank[a] < turn_rank[b] { 1 } else { -1 }; // Voter (c)
+                    // Voter (d): session query-cue coverage, named-speaker corpora only.
+                    if cue_voter {
+                        margin += match cue_cnt[a].cmp(&cue_cnt[b]) {
+                            std::cmp::Ordering::Greater => 1,
+                            std::cmp::Ordering::Less => -1,
+                            std::cmp::Ordering::Equal => 0,
+                        };
+                    }
+                    net[a][b] = margin;
+                    net[b][a] = -margin;
+                }
+            }
+            let ord = super::seating::kemeny_young(&net, &sight_rank);
+            if ord.len() == n {
+                // Keep the current #1 unless a majority of the 4 voters prefer the
+                // Kemeny winner (2-2 ties broken by sight). The tail still follows the fused order.
+                let winner = ord[0];
+                let incumbent = 0;
+                // Current-list voter prefers the incumbent (pool[0]) whenever the
+                // winner is some other pool index, so only sight, turn, and cue
+                // coverage can add votes. A 2-2 tie is broken by sight.
+                let votes_for_winner = i32::from(sight_rank[winner] < sight_rank[incumbent])
+                    + i32::from(turn_rank[winner] < turn_rank[incumbent])
+                    + i32::from(cue_voter && cue_cnt[winner] > cue_cnt[incumbent]);
+                let (override_votes, tie_break_sight) = if cue_voter {
+                    (
+                        SESSION_FUSION_OVERRIDE_VOTES_NAMED,
+                        votes_for_winner == SESSION_FUSION_VOTERS_NAMED / 2
+                            && sight_rank[winner] < sight_rank[incumbent],
+                    )
+                } else {
+                    (SESSION_FUSION_OVERRIDE_VOTES_MONOLOGUE, false)
+                };
+                // On named-speaker corpora, do not demote a current #1 whose
+                // best turn is strictly stronger than the Kemeny winner's.
+                // User/assistant streams skip this veto so BEAM keeps the
+                // un-vetoed fusion head. The closer below can still lift a
+                // 5:4 scene winner that ties or beats the incumbent on sight.
+                let scene_veto = winner != incumbent
+                    && corpus_has_named_speakers(ix)
+                    && best_scene[incumbent] > best_scene[winner];
+                let apply_head = (winner == incumbent
+                    || votes_for_winner >= override_votes
+                    || tie_break_sight)
+                    && !scene_veto;
+                if apply_head {
+                    for i in 0..n {
+                        final_session_indices[i] = pool[ord[i]];
+                    }
+                } else {
+                    final_session_indices[0] = pool[incumbent];
+                    let mut slot = 1;
+                    for &idx in &ord {
+                        if idx != incumbent {
+                            final_session_indices[slot] = pool[idx];
+                            slot += 1;
+                        }
+                    }
+                }
+            }
+
+            // Session-score-guarded 5:4 scene closer: lift a fused top-k session
+            // to #1 only when it ties or beats the incumbent on `sight` and its
+            // best turn wins the 5:4 scene margin. Unlike W2-006, a weaker
+            // session cannot overwrite a stronger one.
+            let cur_top = final_session_indices[0];
+            let sc_inc = best_turn_in_sess(cur_top).map_or(0.0, |(sc, _)| sc);
+            let sight_inc = sight(cur_top);
+            let check_limit = final_session_indices.len().min(SESSION_FUSION_TOP_K);
+            let mut best_cand: Option<(usize, f32, f32)> = None;
             for pos in 1..check_limit {
                 let cand_s = final_session_indices[pos];
                 let sc_cand = best_turn_in_sess(cand_s).map_or(0.0, |(sc, _)| sc);
-                let cand_cues = sess_cue_cnt(cand_s);
-                let wins_margin = (sc_cand > 0.0 && sc_cand * 4.0 >= sc_inc * 5.0)
-                    || (cand_cues > inc_cues
-                        && sc_cand * 5.0 >= sc_inc * 4.0
-                        && sight(cand_s) * 5.0 >= sight(cur_top) * 4.0);
-                if wins_margin {
-                    if best_cand.is_none_or(|(_, bc, bsc)| {
-                        cand_cues > bc || (cand_cues == bc && sc_cand > bsc)
+                if sc_cand > 0.0
+                    && sc_cand * SESSION_SCENE_MARGIN_DEN >= sc_inc * SESSION_SCENE_MARGIN_NUM
+                    && sight(cand_s) >= sight_inc
+                {
+                    if best_cand.is_none_or(|(_, bsc, bsi)| {
+                        sc_cand > bsc || (sc_cand == bsc && sight(cand_s) > bsi)
                     }) {
-                        best_cand = Some((pos, cand_cues, sc_cand));
+                        best_cand = Some((pos, sc_cand, sight(cand_s)));
                     }
                 }
             }
