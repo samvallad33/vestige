@@ -262,6 +262,15 @@ fn compact(node: &Value, depth: usize, keep_desc: bool) -> Value {
                             }
                         }
                     }
+                    // Anthropic rejects a tool `inputSchema` whose ROOT carries
+                    // `oneOf`/`anyOf`/`allOf` (400 invalid_request_error:
+                    // "input_schema does not support oneOf, allOf, or anyOf at
+                    // the top level"). A root union is already flattened by
+                    // `compact_union` above; a root `allOf` holds only the
+                    // per-action `params` guides, and those stay in the full
+                    // schema served by `session status view='tools'
+                    // tool='<name>'`, so dropping it here loses nothing.
+                    "oneOf" | "anyOf" | "allOf" if depth == 0 => {}
                     // Defaults, examples, formats, and shared definition
                     // blocks are full-schema material. A `$ref` into a dropped
                     // `$defs` block becomes a plain object; the full schema
@@ -531,6 +540,24 @@ mod wire_tests {
                 assert!(
                     present.contains(&want),
                     "{tool}: {want} is in the full schema but not on the wire"
+                );
+            }
+        }
+    }
+
+    /// Anthropic refuses a tool `inputSchema` whose ROOT carries
+    /// `oneOf`/`anyOf`/`allOf`: the whole request fails with
+    /// `400 invalid_request_error`. The advertised catalog must never ship
+    /// one, whatever a tool's full schema does internally.
+    #[test]
+    fn no_advertised_schema_has_a_top_level_combinator() {
+        for tool in ALL_TOOLS {
+            let full = full_schema(tool).expect("known tool");
+            let compact = of(&full);
+            for comb in ["oneOf", "anyOf", "allOf"] {
+                assert!(
+                    compact.get(comb).is_none(),
+                    "{tool}: compact inputSchema still carries a top-level {comb}: {compact}"
                 );
             }
         }

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### MCP wire compatibility
+
+- The advertised `inputSchema` no longer carries a root-level `oneOf`, `anyOf` or `allOf`. Anthropic's Messages API rejects the whole request with `400 invalid_request_error: input_schema does not support oneOf, allOf, or anyOf at the top level`, so one bad schema in the catalog failed every turn for Claude clients. `curate`, `remember` and `session` each shipped a root `allOf` of per-action `if`/`then` branches from 6.2.0 onward; compaction already flattened every branch body to `{"type":"object"}`, so the block carried no information on the wire. The branches stay in the full schema served by `session(action='status', view='tools', tool='<name>')`, which is a tool result and never validated as an `inputSchema`.
+
 ### Memory the hook can actually find
 
 - `recall` ranks a free-text query by exact-token BM25 over stored memory text and tags. An exact id, unique prefix, or exact tag still resolves as a handle. There are no embeddings, no stemmer, and no edit distance. `reason` and `contradictions` still return `similarity_disabled`.
